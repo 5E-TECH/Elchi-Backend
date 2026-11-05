@@ -439,11 +439,15 @@ type ApprovalRow = {
           now: when,
           limit,
         });
-      /** So'rov vaqti / muddat boshi / keyingi urinish — SQL bilan. */
+      /** Muddatdan 10 daqiqa oldin (skaner eslatmani shu paytda yuboradi). */
+      const remindedFor = (createdAt: Date) =>
+        new Date(createdAt.getTime() + 24 * H - 10 * 60_000);
+      /** So'rov vaqti / muddat boshi / eslatma / keyingi urinish — SQL bilan. */
       const seed = async (row: {
         createdAt: Date;
         /** `null` — skaner hali belgilamagan. */
         from?: Date | null;
+        remindedAt?: Date | null;
         retryAt?: Date;
         status?: string;
         isDeleted?: boolean;
@@ -451,7 +455,8 @@ type ApprovalRow = {
         const saved = await insert({ status: row.status });
         await db.query(
           `UPDATE order_schema.order_extra_cost_approvals
-              SET "createdAt" = $2, auto_approve_from = $3, auto_retry_at = $4, is_deleted = $5
+              SET "createdAt" = $2, auto_approve_from = $3, auto_retry_at = $4, is_deleted = $5,
+                  reminder_sent_at = $6
             WHERE id = $1`,
           [
             saved.id,
@@ -459,6 +464,7 @@ type ApprovalRow = {
             'from' in row ? row.from : row.createdAt,
             row.retryAt ?? null,
             row.isDeleted ?? false,
+            row.remindedAt ?? null,
           ],
         );
         return saved;
@@ -480,8 +486,11 @@ type ApprovalRow = {
       });
 
       it('⭐ TC1/TC3/TC5/TC6: 24 soat o‘tgani tasdiqlanadi; yoqilgan paytdan sanalayotgan eski so‘rov, yopilgan va o‘chirilgan — yo‘q', async () => {
-        const expired = await seed({ createdAt: at(-25 * H) });
-        // Migratsiya 208: 3 kunlik so'rov, muddat 1 soat oldin yoqilgan.
+        const expired = await seed({
+          createdAt: at(-25 * H),
+          remindedAt: remindedFor(at(-25 * H)),
+        });
+        // 3 kunlik so'rov: skaner muddat boshini 1 soat oldin (yoqilganda) belgilagan.
         const anchored = await seed({
           createdAt: at(-72 * H),
           from: at(-1 * H),
@@ -516,7 +525,11 @@ type ApprovalRow = {
         expect((await readAuto(voided.id)).status).toBe('void');
         expect((await readAuto(deleted.id)).status).toBe('pending');
 
-        // Yoqilgan paytdan 24 soat o'tdi — endi tasdiqlanadi.
+        // Yoqilgan paytdan 24 soat o'tdi — eslatma 10 daqiqa oldin, keyin tasdiq.
+        expect(await run(svc, at(23 * H - 10 * 60_000))).toMatchObject({
+          reminded: 1,
+          approved: 0,
+        });
         expect(await run(svc, at(23 * H + 1000))).toMatchObject({
           approved: 1,
         });
@@ -572,15 +585,21 @@ type ApprovalRow = {
         expect((await readAuto(closed.id)).auto_approve_from).toBeNull();
         expect((await readAuto(deleted.id)).auto_approve_from).toBeNull();
 
-        // Keyingi tik muddat boshini o'zgartirmaydi; 5 daqiqadan keyin
-        // yosh (24 soati to'lgan) so'rov tasdiqlanadi, eskisi — yo'q.
-        expect(await run(svc, at(5 * 60_000))).toMatchObject({ approved: 1 });
+        // Keyingi tik muddat boshini o'zgartirmaydi. 5 daqiqadan keyin
+        // 24 soat to'ldi, lekin eslatmaga 10 daqiqa bo'lmagan — tasdiq yo'q;
+        // 10 daqiqadan keyin — tasdiq, eskisi — yo'q.
+        expect(await run(svc, at(5 * 60_000))).toMatchObject({ approved: 0 });
+        expect(await run(svc, at(10 * 60_000))).toMatchObject({ approved: 1 });
         expect(executed).toEqual([nearDue.orderId]);
         expect(await readAuto(stale.id)).toMatchObject({
           status: 'pending',
           auto_approve_from: now,
         });
-        // Eskisi — belgilangan paytdan 24 soat (yoshi ham — o'z vaqtidan).
+        // Eskisi — belgilangan paytdan 24 soat (eslatma 10 daqiqa oldin).
+        expect(await run(svc, at(24 * H - 10 * 60_000))).toMatchObject({
+          reminded: 2,
+          approved: 0,
+        });
         expect(await run(svc, at(24 * H))).toMatchObject({ approved: 2 });
         expect(executed).toEqual([
           nearDue.orderId,
@@ -605,7 +624,10 @@ type ApprovalRow = {
       });
 
       it('⭐ infratuzilma xatosi: so‘rov pending, keyingi urinish 15 → 30 daqiqadan keyin, oraliqda urinilmaydi', async () => {
-        const { id, orderId } = await seed({ createdAt: at(-25 * H) });
+        const { id, orderId } = await seed({
+          createdAt: at(-25 * H),
+          remindedAt: remindedFor(at(-25 * H)),
+        });
         const { svc: down } = makeService(new Error('RMQ timeout'));
 
         expect(await run(down)).toMatchObject({ approved: 0, deferred: 1 });
@@ -613,7 +635,7 @@ type ApprovalRow = {
           status: 'pending',
           auto_approved: false,
           auto_approve_from: at(-25 * H),
-          reminder_sent_at: null,
+          reminder_sent_at: remindedFor(at(-25 * H)),
           auto_attempts: 1,
           auto_retry_at: at(15 * 60_000),
         });
@@ -645,7 +667,10 @@ type ApprovalRow = {
       });
 
       it('⭐ TC7: biznes xatosi — void, keyingi daqiqalarda qayta urinilmaydi', async () => {
-        const { id } = await seed({ createdAt: at(-25 * H) });
+        const { id } = await seed({
+          createdAt: at(-25 * H),
+          remindedAt: remindedFor(at(-25 * H)),
+        });
         const { svc, sellOrder } = makeService(
           new RpcException({ statusCode: 400, message: 'Kuryer bloklangan' }),
         );
@@ -663,14 +688,46 @@ type ApprovalRow = {
       it('kechiktirilgan so‘rov navbat boshini egallamaydi (limit 1)', async () => {
         const waiting = await seed({
           createdAt: at(-30 * H),
+          remindedAt: remindedFor(at(-30 * H)),
           retryAt: at(30 * 60_000),
         });
-        const next = await seed({ createdAt: at(-25 * H) });
+        const next = await seed({
+          createdAt: at(-25 * H),
+          remindedAt: remindedFor(at(-25 * H)),
+        });
         const { svc, executed } = makeService();
 
         expect(await run(svc, now, 1)).toMatchObject({ approved: 1 });
         expect(executed).toEqual([next.orderId]);
         expect((await readAuto(waiting.id)).status).toBe('pending');
+      });
+
+      it('⭐ muddati o‘tgan, eslatma olmagan so‘rov (eski kodga qaytib, keyin qayta yoqilganda) — avval eslatma, tasdiq 10 daqiqadan keyin', async () => {
+        const { id, orderId } = await seed({
+          createdAt: at(-72 * H),
+          from: at(-48 * H),
+        });
+        const { svc, executed } = makeService();
+
+        expect(await run(svc)).toEqual({
+          reminded: 1,
+          approved: 0,
+          failed: 0,
+          deferred: 0,
+        });
+        expect(await readAuto(id)).toMatchObject({
+          status: 'pending',
+          reminder_sent_at: now,
+        });
+        expect(await run(svc, at(9 * 60_000))).toMatchObject({
+          reminded: 0,
+          approved: 0,
+        });
+        expect(executed).toEqual([]);
+        expect(await run(svc, at(10 * 60_000))).toMatchObject({
+          approved: 1,
+        });
+        expect(executed).toEqual([orderId]);
       });
     });
   },

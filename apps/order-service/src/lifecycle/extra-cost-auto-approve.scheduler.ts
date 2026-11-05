@@ -5,7 +5,10 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { resolveExtraCostAutoApproveMinutes } from '@app/common';
+import {
+  resolveExtraCostAutoApproveMinutes,
+  resolveExtraCostAutoApproveReminderMinutes,
+} from '@app/common';
 import { OrderLifecycleService } from './order-lifecycle.service';
 
 /**
@@ -32,28 +35,30 @@ export class ExtraCostAutoApproveScheduler
     private readonly config: ConfigService,
   ) {}
 
-  private readInt(key: string, fallback: number): number {
-    const raw = this.config.get<unknown>(key);
-    const value =
-      typeof raw === 'number'
-        ? raw
-        : typeof raw === 'string' && raw.trim()
-          ? Number(raw.trim())
-          : NaN;
-    return Number.isInteger(value) && value > 0 ? value : fallback;
-  }
-
   private minutes(): number {
     return resolveExtraCostAutoApproveMinutes(
       this.config.get<unknown>('EXTRA_COST_AUTO_APPROVE_MINUTES'),
     );
   }
 
+  private reminderMinutes(): number {
+    return resolveExtraCostAutoApproveReminderMinutes(
+      this.config.get<unknown>('EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES'),
+    );
+  }
+
   /** order-service'da ScheduleModule yo'q — oddiy interval (unref). */
   onModuleInit(): void {
+    const minutes = this.minutes();
+    const reminderMinutes = this.reminderMinutes();
     this.logger.log(
-      `Extra-cost avtomatik tasdiq yoqilgan: ${this.minutes()} daqiqa`,
+      `Extra-cost avtomatik tasdiq yoqilgan: ${minutes} daqiqa, eslatma ${reminderMinutes} daqiqa oldin`,
     );
+    if (reminderMinutes >= minutes) {
+      this.logger.warn(
+        `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES (${reminderMinutes}) muddatdan (${minutes}) kichik emas — eslatma yuborilmaydi`,
+      );
+    }
     this.timer = setInterval(() => void this.tick(), 60_000);
     this.timer.unref?.();
   }
@@ -68,10 +73,7 @@ export class ExtraCostAutoApproveScheduler
     this.running = true;
     try {
       const minutes = this.minutes();
-      const reminderMinutes = this.readInt(
-        'EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES',
-        10,
-      );
+      const reminderMinutes = this.reminderMinutes();
       const stats = await this.lifecycle.runExtraCostAutoApproval({
         minutes,
         reminderMinutes,

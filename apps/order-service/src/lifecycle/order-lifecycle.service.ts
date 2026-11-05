@@ -72,6 +72,7 @@ import {
   RMQ_SERVICE_TIMEOUT,
   resolvePartnerMoneyFields,
   resolveExtraCostAutoApproveMinutes,
+  resolveExtraCostAutoApproveReminderMinutes,
   WAREHOUSE_ERROR_CODES,
 } from '@app/common';
 
@@ -2746,18 +2747,29 @@ export class OrderLifecycleService {
    * (ExtraCostAutoApproveScheduler bilan bitta qoida: bo'sh — 1440). Muddat
    * boshi — `auto_approve_from`; skaner hali belgilamagan bo'lsa (NULL) —
    * u qanday belgilasa shunday: muddatdan eski so'rov — hozir (yoqilgan
-   * payt), qolgani — `createdAt`. Infratuzilma xatosidan keyin urinish
-   * kechiktirilgan bo'lsa — keyingi urinish vaqti.
+   * payt), qolgani — `createdAt`. Skaner tasdiqni eslatmadan kamida
+   * `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` keyin qiladi: eslatma kech
+   * ketgan (yoki hali ketmagan, muddat esa o'tgan) bo'lsa — eslatma + shu
+   * daqiqalar (bir tikdan kam farq ko'rsatilmaydi — oddiy holatda muddat
+   * so'rov vaqti + 24 soat bo'lib qoladi). Infratuzilma xatosidan keyin
+   * urinish kechiktirilgan bo'lsa — keyingi urinish vaqti.
    */
   private extraCostAutoApproveAt(
     approval: Pick<
       OrderExtraCostApproval,
-      'status' | 'createdAt' | 'auto_approve_from' | 'auto_retry_at'
+      | 'status'
+      | 'createdAt'
+      | 'auto_approve_from'
+      | 'auto_retry_at'
+      | 'reminder_sent_at'
     >,
   ): string | null {
     if (approval.status !== 'pending') return null;
     const minutes = resolveExtraCostAutoApproveMinutes(
       process.env.EXTRA_COST_AUTO_APPROVE_MINUTES,
+    );
+    const reminderMinutes = resolveExtraCostAutoApproveReminderMinutes(
+      process.env.EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES,
     );
     const now = Date.now();
     let from = new Date(approval.auto_approve_from ?? NaN).getTime();
@@ -2766,7 +2778,13 @@ export class OrderLifecycleService {
       if (!Number.isFinite(createdAt)) return null;
       from = createdAt <= now - minutes * 60_000 ? now : createdAt;
     }
-    const due = from + minutes * 60_000;
+    let due = from + minutes * 60_000;
+    if (reminderMinutes < minutes) {
+      const reminded = new Date(approval.reminder_sent_at ?? NaN).getTime();
+      const afterReminder =
+        (Number.isFinite(reminded) ? reminded : now) + reminderMinutes * 60_000;
+      if (afterReminder > due + 60_000) due = afterReminder;
+    }
     const retry = approval.auto_retry_at
       ? new Date(approval.auto_retry_at).getTime()
       : NaN;
@@ -3366,7 +3384,10 @@ export class OrderLifecycleService {
    * har daqiqada chaqiradi. `minutes` — EXTRA_COST_AUTO_APPROVE_MINUTES (sukut
    * 1440), `auto_approve_from` dan sanaladi (avval `anchorExtraCostAutoApproval`
    * belgilaydi); `reminderMinutes` qolganda marketga oxirgi eslatma (bir marta,
-   * `reminder_sent_at` shartli UPDATE bilan).
+   * `reminder_sent_at` shartli UPDATE bilan). Eslatma yoqilgan bo'lsa tasdiq
+   * faqat eslatmadan kamida `reminderMinutes` keyin: eslatmasiz qolgan muddati
+   * o'tgan so'rov (masalan, eski kodga qaytib, keyin qayta yoqilganda) avval
+   * eslatma oladi — marketga va'da qilingan vaqt doim beriladi.
    *
    * Tasdiq qo'lda tasdiq bilan bitta yo'l (`approveExtraCostApproval`):
    * darvoza, sotuv bilan bir tranzaksiya, biznes xatosida `void`. So'rov
@@ -3394,17 +3415,16 @@ export class OrderLifecycleService {
       now.getTime() -
         Math.max(0, params.minutes - params.reminderMinutes) * 60_000,
     );
-    if (params.reminderMinutes > 0 && params.reminderMinutes < params.minutes) {
+    const remind =
+      params.reminderMinutes > 0 && params.reminderMinutes < params.minutes;
+    if (remind) {
       const due = await this.extraCostApprovalRepo
         .createQueryBuilder('a')
         .where('a.status = :pending AND a.is_deleted = false', {
           pending: 'pending',
         })
         .andWhere('a.reminder_sent_at IS NULL')
-        .andWhere(
-          'a.auto_approve_from <= :reminderAt AND a.auto_approve_from > :deadline',
-          { reminderAt, deadline },
-        )
+        .andWhere('a.auto_approve_from <= :reminderAt', { reminderAt })
         .orderBy('a.auto_approve_from', 'ASC')
         .take(params.limit ?? 100)
         .getMany();
@@ -3437,7 +3457,7 @@ export class OrderLifecycleService {
         );
       }
     }
-    const expired = await this.extraCostApprovalRepo
+    const expiredQuery = this.extraCostApprovalRepo
       .createQueryBuilder('a')
       .where('a.status = :pending AND a.is_deleted = false', {
         pending: 'pending',
@@ -3445,7 +3465,15 @@ export class OrderLifecycleService {
       .andWhere('a.auto_approve_from <= :deadline', { deadline })
       .andWhere('(a.auto_retry_at IS NULL OR a.auto_retry_at <= :now)', {
         now,
-      })
+      });
+    if (remind) {
+      expiredQuery.andWhere('a.reminder_sent_at <= :remindedBefore', {
+        remindedBefore: new Date(
+          now.getTime() - params.reminderMinutes * 60_000,
+        ),
+      });
+    }
+    const expired = await expiredQuery
       .orderBy('a.auto_approve_from', 'ASC')
       .take(params.limit ?? 100)
       .getMany();

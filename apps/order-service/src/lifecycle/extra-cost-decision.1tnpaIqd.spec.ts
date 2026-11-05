@@ -510,7 +510,11 @@ describe('1tnpaIqd — ega qarori: muddat o‘tsa avtomatik tasdiq', () => {
 
   it('⭐ muddati o‘tgan — avtomatik tasdiq: decided_by NULL, auto_approved, sabab, audit, marketga xabar', async () => {
     const { svc, repo, sellOrder, activityLog, outbox } = makeService([
-      pending({ id: '7', createdAt: new Date('2026-10-16T10:00:00Z') }),
+      pending({
+        id: '7',
+        createdAt: new Date('2026-10-16T10:00:00Z'),
+        reminder_sent_at: new Date('2026-10-16T10:20:00Z'),
+      }),
       // Boshqa buyurtma: bitta buyurtmada bittadan ortiq ochiq so'rov yo'q (hwTkXsGi).
       pending({
         id: '8',
@@ -640,7 +644,11 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
 
   it('⭐ TC1: javobsiz 24 soat — avtomatik tasdiq: auto_approved, sotuv BIR marta; 24 soat to‘lmagan — kutadi', async () => {
     const { svc, repo, sellOrder } = makeService([
-      pending({ id: '7', createdAt: minutesAgo(DAY + 1) }),
+      pending({
+        id: '7',
+        createdAt: minutesAgo(DAY + 1),
+        reminder_sent_at: minutesAgo(11),
+      }),
       pending({ id: '8', order_id: '7002', createdAt: minutesAgo(DAY - 60) }),
     ]);
 
@@ -742,7 +750,7 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
     await run(svc, later);
     expect(repo.row('15')!.auto_approve_from).toEqual(now);
 
-    const reminderTime = new Date(now.getTime() + (DAY - 9) * 60_000);
+    const reminderTime = new Date(now.getTime() + (DAY - 10) * 60_000);
     expect((await run(svc, reminderTime)).reminded).toBe(1);
     expect(repo.row('15')!.status).toBe('pending');
 
@@ -777,8 +785,11 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
     });
     expect(repo.row('19')!.auto_approve_from).toEqual(minutesAgo(120));
 
+    // 24 soat to'ldi, lekin eslatmada va'da qilingan 10 daqiqa hali o'tmagan.
     const due = new Date(now.getTime() + 5 * 60_000);
-    expect(await run(svc, due)).toMatchObject({ approved: 1 });
+    expect(await run(svc, due)).toMatchObject({ approved: 0 });
+    const afterReminder = new Date(now.getTime() + 10 * 60_000);
+    expect(await run(svc, afterReminder)).toMatchObject({ approved: 1 });
     expect(repo.row('18')).toMatchObject({
       status: 'approved',
       auto_approved: true,
@@ -789,7 +800,11 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
 
   it('⭐ TC7: biznes xatosi (buyurtma o‘zgargan) — so‘rov void, keyingi daqiqalarda qayta urinilmaydi', async () => {
     const { svc, repo, order, sellOrder } = makeService([
-      pending({ id: '16', createdAt: minutesAgo(DAY + 5) }),
+      pending({
+        id: '16',
+        createdAt: minutesAgo(DAY + 5),
+        reminder_sent_at: minutesAgo(15),
+      }),
     ]);
     order.status = Order_status.SOLD;
 
@@ -815,7 +830,11 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
 
   it('⭐ infratuzilma xatosi — so‘rov pending, keyingi urinish 15 → 30 daqiqadan keyin (har daqiqa emas)', async () => {
     const { svc, repo, failures, sellOrder } = makeService([
-      pending({ id: '17', createdAt: minutesAgo(DAY + 5) }),
+      pending({
+        id: '17',
+        createdAt: minutesAgo(DAY + 5),
+        reminder_sent_at: minutesAgo(15),
+      }),
     ]);
     failures.push(new Error('Timeout has occurred'));
 
@@ -860,7 +879,11 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
     });
     try {
       const { svc, repo } = makeService([
-        pending({ id: '20', createdAt: minutesAgo(DAY + 5) }),
+        pending({
+          id: '20',
+          createdAt: minutesAgo(DAY + 5),
+          reminder_sent_at: minutesAgo(15),
+        }),
       ]);
       // Urinish 20 daqiqa davom etib, timeout bilan tugadi.
       jest.spyOn(svc, 'approveExtraCostApproval').mockImplementation(() => {
@@ -887,10 +910,16 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
       pending({
         id: '18',
         createdAt: minutesAgo(5 * DAY),
+        reminder_sent_at: minutesAgo(4 * DAY),
         auto_attempts: 3,
         auto_retry_at: new Date(now.getTime() + 60 * 60_000),
       }),
-      pending({ id: '19', order_id: '7019', createdAt: minutesAgo(DAY + 1) }),
+      pending({
+        id: '19',
+        order_id: '7019',
+        createdAt: minutesAgo(DAY + 1),
+        reminder_sent_at: minutesAgo(11),
+      }),
     ]);
 
     expect(await run(svc, now, 1)).toMatchObject({ approved: 1 });
@@ -903,6 +932,7 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
       pending({
         id: '20',
         createdAt: minutesAgo(10 * DAY),
+        reminder_sent_at: minutesAgo(9 * DAY),
         auto_attempts: 9,
       }),
     ]);
@@ -918,7 +948,11 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
 
   it('⭐ TC8: boshqa muddat (60 daqiqa) — o‘sha ishlatiladi', async () => {
     const { svc, repo } = makeService([
-      pending({ id: '21', createdAt: minutesAgo(61) }),
+      pending({
+        id: '21',
+        createdAt: minutesAgo(61),
+        reminder_sent_at: minutesAgo(11),
+      }),
       pending({ id: '22', order_id: '7022', createdAt: minutesAgo(59) }),
     ]);
 
@@ -930,5 +964,56 @@ describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
 
     expect(repo.row('21')!.status).toBe('approved');
     expect(repo.row('22')!.status).toBe('pending');
+  });
+
+  it('⭐ muddati o‘tgan, lekin eslatma olmagan so‘rov (masalan, eski kodga qaytib qayta yoqilganda) — avval eslatma, tasdiq 10 daqiqadan keyin', async () => {
+    const { svc, repo, outbox, sellOrder } = makeService([
+      pending({
+        id: '23',
+        createdAt: minutesAgo(3 * DAY),
+        // Skaner ilgari belgilagan, keyin servis to'xtab turgan.
+        auto_approve_from: minutesAgo(2 * DAY),
+      }),
+    ]);
+
+    expect(await run(svc)).toMatchObject({ reminded: 1, approved: 0 });
+    expect(repo.row('23')).toMatchObject({
+      status: 'pending',
+      reminder_sent_at: now,
+    });
+    expect(
+      outbox.enqueue.mock.calls.filter(
+        ([, , payload]) => payload.type === 'order.extra_cost_reminder',
+      ),
+    ).toHaveLength(1);
+
+    expect(await run(svc, new Date(now.getTime() + 9 * 60_000))).toMatchObject({
+      reminded: 0,
+      approved: 0,
+    });
+    expect(sellOrder).not.toHaveBeenCalled();
+
+    expect(await run(svc, new Date(now.getTime() + 10 * 60_000))).toMatchObject(
+      { reminded: 0, approved: 1 },
+    );
+    expect(repo.row('23')).toMatchObject({
+      status: 'approved',
+      auto_approved: true,
+    });
+  });
+
+  it('eslatma o‘chiq (muddatdan kichik emas) — tasdiq eslatma kutmaydi', async () => {
+    const { svc, repo } = makeService([
+      pending({ id: '24', createdAt: minutesAgo(61) }),
+    ]);
+
+    expect(
+      await svc.runExtraCostAutoApproval({
+        minutes: 60,
+        reminderMinutes: 60,
+        now,
+      }),
+    ).toMatchObject({ reminded: 0, approved: 1 });
+    expect(repo.row('24')!.status).toBe('approved');
   });
 });

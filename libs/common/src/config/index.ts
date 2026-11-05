@@ -364,6 +364,19 @@ export const identityValidationSchema = Joi.object({
  */
 export const EXTRA_COST_AUTO_APPROVE_DEFAULT_MINUTES = 1440;
 
+/** Avtomatik tasdiqdan shuncha daqiqa oldin marketga eslatma (sukut). */
+export const EXTRA_COST_AUTO_APPROVE_REMINDER_DEFAULT_MINUTES = 10;
+
+const positiveIntegerOr = (raw: unknown, fallback: number): number => {
+  const value =
+    typeof raw === 'number'
+      ? raw
+      : typeof raw === 'string' && raw.trim()
+        ? Number(raw.trim())
+        : NaN;
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+};
+
 /**
  * Avtomatik tasdiq muddati — ConfigService qiymati yoki xom `process.env`.
  * Ikkalasi bitta qoidada: env fayldagi `KEY=` (bo'sh satr) `process.env` da
@@ -371,15 +384,17 @@ export const EXTRA_COST_AUTO_APPROVE_DEFAULT_MINUTES = 1440;
  * esa faqat ConfigService'ga yetadi. Musbat butun son — o'sha, aks holda sukut.
  */
 export function resolveExtraCostAutoApproveMinutes(raw: unknown): number {
-  const value =
-    typeof raw === 'number'
-      ? raw
-      : typeof raw === 'string' && raw.trim()
-        ? Number(raw.trim())
-        : NaN;
-  return Number.isInteger(value) && value > 0
-    ? value
-    : EXTRA_COST_AUTO_APPROVE_DEFAULT_MINUTES;
+  return positiveIntegerOr(raw, EXTRA_COST_AUTO_APPROVE_DEFAULT_MINUTES);
+}
+
+/** Eslatma vaqti — `resolveExtraCostAutoApproveMinutes` bilan bir qoida. */
+export function resolveExtraCostAutoApproveReminderMinutes(
+  raw: unknown,
+): number {
+  return positiveIntegerOr(
+    raw,
+    EXTRA_COST_AUTO_APPROVE_REMINDER_DEFAULT_MINUTES,
+  );
 }
 
 export const orderValidationSchema = Joi.object({
@@ -396,7 +411,7 @@ export const orderValidationSchema = Joi.object({
     .integer()
     .min(1)
     .empty('')
-    .default(10),
+    .default(EXTRA_COST_AUTO_APPROVE_REMINDER_DEFAULT_MINUTES),
   // (vNKGbg5q BG7) HQ/filialda turib qolgan bekorlar: eslatma/eskalatsiya.
   // Qiymatlar kodda yumshoq o'qiladi (noto'g'risi — sukut), shuning uchun
   // bu yerda faqat satr: noto'g'ri yozuv order-service'ni yiqitmasin.

@@ -36,7 +36,7 @@ type Row = {
 };
 
 (localTestDatabase ? describe : describe.skip)(
-  'migratsiya 208 — avtomatik tasdiq muddati yoqilgan paytdan (haqiqiy Postgres)',
+  'migratsiya 208 — muddat boshi ustunlari, qatorlar o‘zgarmaydi (haqiqiy Postgres)',
   () => {
     jest.setTimeout(30_000);
     const dbName = `spec_xc_auto_${randomUUID().replace(/-/g, '').slice(0, 12)}`;

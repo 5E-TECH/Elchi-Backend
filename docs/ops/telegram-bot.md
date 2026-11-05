@@ -229,8 +229,10 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   bilan; rad etish sababi — yopiq ro'yxat (`ExtraCostRejectReason`:
   TOO_EXPENSIVE, NOT_AGREED, NO_PROOF, DUPLICATE; boshqasi 400).
 - Qaror ATOMIK (`UPDATE … WHERE status='pending'`): ikki bosish / panel bilan
-  bir vaqtda → bittasi o'tadi, ikkinchisi "allaqachon yakunlangan"; biznes amali
-  xato bersa so'rov `pending` ga qaytadi. Qarordan keyin DM tugmalari olinadi.
+  bir vaqtda → bittasi o'tadi, ikkinchisi "allaqachon yakunlangan"; biznes
+  xatosi (darvoza: buyurtma o'zgargan va h.k.) bo'lsa so'rov `void` bo'ladi,
+  faqat texnik xatoda (timeout / 5xx) `pending` ga qaytadi. Qarordan keyin DM
+  tugmalari olinadi.
 - EGA QARORI — avtomatik tasdiq (AFZaUUi5, 2026-11-05: 24 soat):
   `EXTRA_COST_AUTO_APPROVE_MINUTES` (bo'sh — sukut 1440, boshqa qiymat
   almashtiradi), `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` (sukut 10) qolganda
@@ -240,7 +242,11 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   yangi so'rov — yaratilgan vaqt; muddatdan eski ochiq so'rov (avtomatik
   tasdiq yoqilgan paytda ochiq turgan, yoki deploy orqaga qaytarilganda eski
   kod yozgan) — o'sha tik vaqti, eslatma qaytadan (birinchi daqiqada
-  tasdiqlanib ketmaydi). Tasdiq qo'lda tasdiq bilan bir yo'l (darvoza, sotuv
+  tasdiqlanib ketmaydi). Tasdiq eslatmadan kamida
+  `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` keyin: muddati o'tgan, lekin
+  eslatma olmagan so'rov (masalan, servis uzoq to'xtab turgan) avval eslatma
+  oladi — eslatmadagi "10 daqiqada" va'dasi doim bajariladi; `auto_approve_at`
+  ham shu vaqtni ko'rsatadi. Tasdiq qo'lda tasdiq bilan bir yo'l (darvoza, sotuv
   bilan bitta tranzaksiya); biznes xatosida so'rov `void`, qayta urinilmaydi;
   texnik xatoda (timeout / 5xx) `pending` qoladi, keyingi urinish
   `auto_retry_at` — 15 → 30 → … ≤ 360 daqiqa. Avtomatik tasdiq:

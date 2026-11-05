@@ -67,9 +67,17 @@ const TERMS: Array<
         row[field(c)] == null,
   ],
   [
+    /^([\w."]+) IS NOT NULL$/,
+    ([, c]) =>
+      (row) =>
+        row[field(c)] != null,
+  ],
+  [
     /^([\w."]+) (<=|<|>=|>) :(\w+)$/,
     ([, c, op, p], params) =>
       (row) => {
+        // SQL kabi: NULL bilan solishtirish — rost emas.
+        if (row[field(c)] == null || params[p] == null) return false;
         const a = comparable(row[field(c)]);
         const b = comparable(params[p]);
         return op === '<='
