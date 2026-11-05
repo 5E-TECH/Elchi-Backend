@@ -61,6 +61,8 @@ export type SelfInvestorProfile = {
   name: string;
   phone_number: string;
   status: Status;
+  /** «Ulush (%)» — kiritilmagan bo'lsa `null`. */
+  share_percent: number | null;
   created_at: Date;
 };
 
@@ -192,6 +194,23 @@ export class InvestorServiceService {
   }
 
   /**
+   * «Ulush (%)»: `undefined` — tegilmaydi; `null` / '' — tozalanadi; aks holda
+   * 0..100, ko'pi bilan 2 kasr (numeric(5,2)). RMQ'da ValidationPipe yo'q.
+   */
+  private normalizeSharePercent(raw: unknown): number | null | undefined {
+    if (raw === undefined) return undefined;
+    if (raw === null || raw === '') return null;
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      this.badRequest("Ulush 0 dan 100 gacha bo'lishi kerak");
+    }
+    if (Math.round(value * 100) / 100 !== value) {
+      this.badRequest("Ulush ko'pi bilan 2 kasr xonali bo'lishi kerak");
+    }
+    return value;
+  }
+
+  /**
    * vpKijXce: investor yozuvini login (users.id) bilan bog'lash qiymati.
    * Faqat musbat butun son; '0' / bo'sh / boshqa narsa → null.
    */
@@ -319,6 +338,7 @@ export class InvestorServiceService {
       phone_number: phoneNumber,
       status: (dto.status as Status) ?? Status.ACTIVE,
       description: dto.description ? String(dto.description).trim() : null,
+      share_percent: this.normalizeSharePercent(dto.share_percent) ?? null,
     });
 
     const saved = await this.investorRepo.save(investor);
@@ -350,6 +370,7 @@ export class InvestorServiceService {
       user_id?: unknown;
       name?: unknown;
       phone_number?: unknown;
+      share_percent?: unknown;
       dry_run?: boolean;
     },
     requester?: Requester,
@@ -357,6 +378,8 @@ export class InvestorServiceService {
     const phoneNumber =
       typeof dto?.phone_number === 'string' ? dto.phone_number.trim() : '';
     this.validateUzPhoneNumber(phoneNumber);
+    // dry_run da ham — noto'g'ri ulush login yaratilishidan OLDIN 400.
+    const sharePercent = this.normalizeSharePercent(dto?.share_percent);
 
     const existing = await this.investorRepo.findOne({
       where: { phone_number: phoneNumber, isDeleted: false },
@@ -379,11 +402,16 @@ export class InvestorServiceService {
     await this.assertUserIdFree(userId, existing?.id);
 
     if (existing) {
-      if (linkedTo === userId) {
+      const shareChanged =
+        sharePercent !== undefined && sharePercent !== existing.share_percent;
+      if (linkedTo === userId && !shareChanged) {
         return successRes(existing, 200, 'investor already linked');
       }
       const before = { ...existing };
       existing.user_id = userId;
+      if (sharePercent !== undefined) {
+        existing.share_percent = sharePercent;
+      }
       const saved = await this.investorRepo.save(existing);
       await this.activityLog.logChange({
         entity_type: 'Investor',
@@ -401,6 +429,7 @@ export class InvestorServiceService {
         name: typeof dto?.name === 'string' ? dto.name : '',
         phone_number: phoneNumber,
         user_id: userId,
+        share_percent: sharePercent ?? undefined,
       },
       requester,
     );
@@ -541,6 +570,10 @@ export class InvestorServiceService {
         this.badRequest("status active yoki inactive bo'lishi kerak");
       }
       investor.status = dto.status;
+    }
+    if (dto.share_percent !== undefined) {
+      investor.share_percent =
+        this.normalizeSharePercent(dto.share_percent) ?? null;
     }
     // vpKijXce: login bilan bog'lash / uzish (null yoki '' → '0').
     if (dto.user_id !== undefined) {
@@ -1205,6 +1238,10 @@ export class InvestorServiceService {
       name: investor.name,
       phone_number: investor.phone_number,
       status: investor.status,
+      share_percent:
+        investor.share_percent === null || investor.share_percent === undefined
+          ? null
+          : Number(investor.share_percent),
       created_at: investor.createdAt,
     };
   }

@@ -1,5 +1,13 @@
 import { Status } from '@app/common';
-import { IsEnum, IsOptional, IsPhoneNumber, IsString } from 'class-validator';
+import {
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsPhoneNumber,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class CreateInvestorDto {
   @IsString()
@@ -15,6 +23,13 @@ export class CreateInvestorDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  /** «Ulush (%)» — 0..100, ko'pi bilan 2 kasr. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  share_percent?: number;
 
   @IsOptional()
   @IsString()

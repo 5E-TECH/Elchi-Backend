@@ -22,6 +22,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-05 — Investor: «Ulush (%)» (BeePost investor formasi, migratsiya 1716000000209)
+
+BeePost «Investor yaratish» formasidagidek investor yozuvida kelishilgan ulush saqlanadi. Foyda hisobi o'zgarmadi (avtomatik foyda hisobi — alohida ish).
+
+✏️ **Kontrakt:**
+- 🟢 [investor] `POST /investor-users` — ixtiyoriy `share_percent` (0..100, ko'pi bilan 2 kasr). Login'ga emas, shu telefondagi investor yozuviga yoziladi; noto'g'ri qiymat (101, -1, 12.345) → **400, login yaratilmaydi**.
+- 🟢 [investor] `POST /investors` — ixtiyoriy `share_percent`; `PATCH /investors/:id` — `share_percent` (`null` — tozalash).
+- 🟢 [investor] `GET /investors`, `GET /investors/:id` — yozuvda `share_percent` (son yoki `null`).
+- 🟢 [investor] `GET /investors/me`, `GET /investors/me/dashboard` — `data.investor.share_percent` (son yoki `null`). Investor o'z ulushini ko'radi.
+
+**Migratsiya `1716000000209-InvestorSharePercent`:** `investor_schema.investors.share_percent NUMERIC(5,2) NULL`. Mavjud investorlarda `null`, qayta yurgizish hech narsani o'zgartirmaydi; `down()` ustunni olib tashlaydi.
+
+→ **Frontendda:** «Foydalanuvchi qo'shish» → Investor formasida «Ulush (%)» maydoni, sana maydoni nomi «Boshlanish sanasi»; kabinetdagi «Ulush» kartasi kelishilgan ulushni ko'rsatadi (yo'q bo'lsa — oxirgi davr stavkasi); OPS → Investorlar ro'yxatida «Ulush» ustuni.
+
 ### 2026-11-05 — Qo'shimcha xarajat: market 24 soat javob bermasa avtomatik tasdiqlanadi (AFZaUUi5, migratsiya 1716000000208)
 
 Ilgari avtomatik tasdiq faqat `EXTRA_COST_AUTO_APPROVE_MINUTES` to'ldirilganda ishlardi; bo'sh (test va prod) — o'chiq edi va javobsiz so'rov cheksiz «kutilmoqda» qolardi. Endi sukut 24 soat (Dilshod qarori 2026-11-05), env bilan o'zgartiriladi.

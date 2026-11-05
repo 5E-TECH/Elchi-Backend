@@ -90,6 +90,7 @@ export class InvestorServiceController {
         user_id?: unknown;
         name?: unknown;
         phone_number?: unknown;
+        share_percent?: unknown;
         dry_run?: boolean;
       };
       requester?: { id?: string; roles?: string[] };

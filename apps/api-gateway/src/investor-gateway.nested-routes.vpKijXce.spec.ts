@@ -257,6 +257,40 @@ describe('vpKijXce — ichki investor marshrutlari va login bog‘lash', () => {
     expect(investor.send).toHaveBeenCalledTimes(2);
   });
 
+  it('«Ulush (%)»: POST/PATCH /investors share_percent servisga yetadi, null — tozalash', async () => {
+    await http().post('/investors').set(as(ADMIN)).send({
+      name: 'Vali',
+      phone_number: '+998901234567',
+      share_percent: 7.5,
+    });
+    expect(lastCall()[1].dto.share_percent).toBe(7.5);
+
+    await http()
+      .patch('/investors/5')
+      .set(as(ADMIN))
+      .send({ share_percent: null });
+    expect(lastCall()[1].dto).toEqual({ share_percent: null });
+  });
+
+  it.each([[101], [-1], [1.234], ['abc']])(
+    '«Ulush (%)» %p → 400, servisga yetmaydi',
+    async (share) => {
+      const created = await http().post('/investors').set(as(ADMIN)).send({
+        name: 'Vali',
+        phone_number: '+998901234567',
+        share_percent: share,
+      });
+      const patched = await http()
+        .patch('/investors/5')
+        .set(as(ADMIN))
+        .send({ share_percent: share });
+
+      expect(created.status).toBe(400);
+      expect(patched.status).toBe(400);
+      expect(investor.send).not.toHaveBeenCalled();
+    },
+  );
+
   it('identity ulanmagan bo‘lsa user_id bog‘lash RAD (fail-closed, 503)', async () => {
     const controller = new InvestorGatewayController(investor as any);
 
@@ -397,6 +431,58 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
       }),
     );
   });
+
+  it('⭐ «Ulush (%)» investor yozuviga ketadi (tekshiruv va bog‘lash), login’ga emas', async () => {
+    const requester = { id: '1', roles: ['superadmin'] };
+
+    const res = await request(app.getHttpServer())
+      .post('/investor-users')
+      .send({ ...body, share_percent: 12.5 });
+
+    expect(res.status).toBe(201);
+    expect(identitySend).toHaveBeenCalledWith(
+      { cmd: 'identity.investor_user.create' },
+      { dto: body, requester },
+    );
+    expect(investorSend).toHaveBeenNthCalledWith(
+      1,
+      { cmd: 'investor.login.attach' },
+      {
+        dto: {
+          phone_number: '+998901234567',
+          share_percent: 12.5,
+          dry_run: true,
+        },
+        requester,
+      },
+    );
+    expect(investorSend).toHaveBeenNthCalledWith(
+      2,
+      { cmd: 'investor.login.attach' },
+      {
+        dto: {
+          user_id: '31',
+          name: 'Ali Investor',
+          phone_number: '+998901234567',
+          share_percent: 12.5,
+        },
+        requester,
+      },
+    );
+  });
+
+  it.each([[101], [-0.5], [3.333]])(
+    '«Ulush (%)» %p → 400, login yaratilmaydi',
+    async (share) => {
+      const res = await request(app.getHttpServer())
+        .post('/investor-users')
+        .send({ ...body, share_percent: share });
+
+      expect(res.status).toBe(400);
+      expect(identitySend).not.toHaveBeenCalled();
+      expect(investorSend).not.toHaveBeenCalled();
+    },
+  );
 
   it('SMS rejimi (parolsiz) ham qabul qilinadi', async () => {
     const withoutPassword = {

@@ -13,6 +13,7 @@ type Row = {
   name: string;
   phone_number: string;
   isDeleted: boolean;
+  share_percent?: number | null;
 };
 
 function makeService(rows: Row[] = []) {
@@ -168,4 +169,83 @@ describe('investor.login.attach — login ↔ investor yozuvi', () => {
     expect(statusOf(phone)).toBe(400);
     expect(statusOf(user)).toBe(400);
   });
+});
+
+describe('«Ulush (%)» — share_percent (BeePost investor formasi)', () => {
+  it('⭐ yangi investor ulush bilan yaratiladi', async () => {
+    const { service, investorRepo } = makeService();
+
+    await service.attachLogin(
+      { user_id: '31', name: 'Ali', phone_number: PHONE, share_percent: 12.5 },
+      SA,
+    );
+
+    expect(investorRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: '31', share_percent: 12.5 }),
+    );
+  });
+
+  it('ulush kiritilmasa — null', async () => {
+    const { service, investorRepo } = makeService();
+
+    await service.attachLogin(
+      { user_id: '31', name: 'Ali', phone_number: PHONE },
+      SA,
+    );
+
+    expect(investorRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ share_percent: null }),
+    );
+  });
+
+  it('⭐ loginsiz yozuvga bog‘langanda ulush ham yoziladi', async () => {
+    const { service, investorRepo } = makeService([{ ...unlinked }]);
+
+    await service.attachLogin(
+      { user_id: '31', phone_number: PHONE, share_percent: 30 },
+      SA,
+    );
+
+    expect(investorRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '5', user_id: '31', share_percent: 30 }),
+    );
+  });
+
+  it('shu loginga bog‘langan yozuv — ulush o‘zgarsa saqlanadi, o‘zgarmasa yo‘q', async () => {
+    const linked = { ...unlinked, user_id: '31', share_percent: 10 };
+    const same = makeService([{ ...linked }]);
+    const changed = makeService([{ ...linked }]);
+
+    const sameRes: any = await same.service.attachLogin(
+      { user_id: '31', phone_number: PHONE, share_percent: 10 },
+      SA,
+    );
+    await changed.service.attachLogin(
+      { user_id: '31', phone_number: PHONE, share_percent: 15 },
+      SA,
+    );
+
+    expect(sameRes.message).toBe('investor already linked');
+    expect(same.investorRepo.save).not.toHaveBeenCalled();
+    expect(changed.investorRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '5', share_percent: 15 }),
+    );
+  });
+
+  it.each([[101], [-1], ['abc'], [12.345]])(
+    'noto‘g‘ri ulush %p — dry_run da ham 400, hech narsa yozilmaydi',
+    async (share) => {
+      const { service, investorRepo } = makeService();
+
+      const dry = await service
+        .attachLogin(
+          { phone_number: PHONE, share_percent: share, dry_run: true },
+          SA,
+        )
+        .catch((e: unknown) => e);
+
+      expect(statusOf(dry)).toBe(400);
+      expect(investorRepo.save).not.toHaveBeenCalled();
+    },
+  );
 });

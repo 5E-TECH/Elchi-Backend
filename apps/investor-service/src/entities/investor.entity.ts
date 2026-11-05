@@ -1,5 +1,5 @@
 import { Column, Entity, Index, OneToMany } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 import { Status } from '@app/common';
 import { Investment } from './investment.entity';
 import { ProfitShare } from './profit-share.entity';
@@ -26,6 +26,19 @@ export class Investor extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   description!: string | null;
+
+  /**
+   * «Ulush (%)» — 0..100 (migratsiya 1716000000209). NULL — kiritilmagan.
+   * Kabinetdagi «Ulush» kartasi shuni ko'rsatadi.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  share_percent!: number | null;
 
   @OneToMany(() => Investment, (investment) => investment.investor)
   investments!: Investment[];

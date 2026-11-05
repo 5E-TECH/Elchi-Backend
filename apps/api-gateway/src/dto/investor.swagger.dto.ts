@@ -58,6 +58,18 @@ export class CreateInvestorDto {
   @IsString()
   @Matches(LINKED_USER_ID_RE, { message: 'user_id must be a positive integer' })
   user_id?: string;
+
+  @ApiPropertyOptional({
+    example: 5,
+    minimum: 0,
+    maximum: 100,
+    description: "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr",
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  share_percent?: number;
 }
 
 export class UpdateInvestorDto {
@@ -92,6 +104,20 @@ export class UpdateInvestorDto {
   @IsString()
   @Matches(LINKED_USER_ID_RE, { message: 'user_id must be a positive integer' })
   user_id?: string | null;
+
+  @ApiPropertyOptional({
+    example: 5,
+    minimum: 0,
+    maximum: 100,
+    type: Number,
+    nullable: true,
+    description: "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr (null — tozalash)",
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  share_percent?: number | null;
 }
 
 export class CreateInvestmentDto {
@@ -280,4 +306,15 @@ export class CreateInvestorUserRequestDto {
   @IsOptional()
   @IsBoolean()
   must_change_password?: boolean;
+  @ApiPropertyOptional({
+    example: 5,
+    minimum: 0,
+    maximum: 100,
+    description: "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr",
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  share_percent?: number;
 }

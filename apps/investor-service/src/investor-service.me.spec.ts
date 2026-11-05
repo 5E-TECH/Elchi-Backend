@@ -208,11 +208,30 @@ describe('vpKijXce — GET /investors/me: profil + kartalar', () => {
     const res: any = await service.getMyProfile(INVESTOR_REQ);
 
     expect(Object.keys(res.data.investor).sort()).toEqual(
-      ['created_at', 'id', 'name', 'phone_number', 'status'].sort(),
+      [
+        'created_at',
+        'id',
+        'name',
+        'phone_number',
+        'share_percent',
+        'status',
+      ].sort(),
     );
+    // «Ulush (%)» investorga ko'rinadi; kiritilmagan bo'lsa — null.
+    expect(res.data.investor.share_percent).toBeNull();
     const json = JSON.stringify(res.data);
     expect(json).not.toContain('ICHKI');
     expect(json).not.toContain('user_id');
+  });
+
+  it('«Ulush (%)» numeric qatordan son bo‘lib qaytadi', async () => {
+    const { service } = makeService({
+      linked: [{ ...ME, share_percent: '12.50' }],
+    });
+
+    const res: any = await service.getMyProfile(INVESTOR_REQ);
+
+    expect(res.data.investor.share_percent).toBe(12.5);
   });
 
   it('⭐ kartalar: investitsiya, foiz, to`langan va kutilayotgan foyda', async () => {

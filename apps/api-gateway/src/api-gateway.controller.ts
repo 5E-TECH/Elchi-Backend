@@ -552,11 +552,20 @@ export class ApiGatewayController {
           .pipe(timeout(8000)),
       );
 
-    await attach({ phone_number: dto.phone_number, dry_run: true });
+    // «Ulush (%)» — investor yozuviga; identity (login) uni bilmaydi.
+    const { share_percent: sharePercent, ...loginDto } = dto;
+    await attach({
+      phone_number: dto.phone_number,
+      share_percent: sharePercent,
+      dry_run: true,
+    });
 
     const created = await firstValueFrom(
       this.identityClient
-        .send({ cmd: 'identity.investor_user.create' }, { dto, requester })
+        .send(
+          { cmd: 'identity.investor_user.create' },
+          { dto: loginDto, requester },
+        )
         .pipe(timeout(8000)),
     );
     const user = (created as { data?: Record<string, unknown> } | null)?.data;
@@ -576,6 +585,7 @@ export class ApiGatewayController {
         user_id: userId,
         name: user?.name,
         phone_number: user?.phone_number,
+        share_percent: sharePercent,
       });
       return {
         ...(created as Record<string, unknown>),

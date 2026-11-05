@@ -24426,6 +24426,13 @@
             "type": "boolean",
             "example": true,
             "description": "Faqat `manual` da: birinchi kirishda parolni almashtirish majburiy. `generate_sms` da doim true."
+          },
+          "share_percent": {
+            "type": "number",
+            "example": 5,
+            "minimum": 0,
+            "maximum": 100,
+            "description": "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr"
           }
         },
         "required": [
@@ -32187,6 +32194,13 @@
             "type": "string",
             "example": "25",
             "description": "users.id (investor)"
+          },
+          "share_percent": {
+            "type": "number",
+            "example": 5,
+            "minimum": 0,
+            "maximum": 100,
+            "description": "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr"
           }
         },
         "required": [
@@ -32218,6 +32232,14 @@
             "example": "25",
             "nullable": true,
             "description": "users.id (investor); null — uzish"
+          },
+          "share_percent": {
+            "type": "number",
+            "example": 5,
+            "minimum": 0,
+            "maximum": 100,
+            "nullable": true,
+            "description": "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr (null — tozalash)"
           }
         }
       },
