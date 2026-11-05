@@ -913,6 +913,61 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * (GykuOz8f) «Qo'shimcha xarajatli buyurtmalar» sahifasi (kuryer, filial
+   * menejeri, market, market operatori). `requester` — gateway tokendan
+   * (`branch_id`; operator uchun `market_id` identity'dan).
+   */
+  @MessagePattern({ cmd: 'order.extra_cost.page' })
+  pageExtraCosts(
+    @Payload()
+    data: {
+      requester: {
+        id: string;
+        roles?: string[];
+        branch_id?: string | null;
+        market_id?: string | null;
+      };
+      tab?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.pageExtraCosts(data.requester, {
+        tab: data.tab,
+        page: data.page,
+        limit: data.limit,
+      }),
+    );
+  }
+
+  /** (GykuOz8f) So'rov isbotining fayl kaliti — ro'yxat bilan AYNI ko'rish qoidasi. */
+  @MessagePattern({ cmd: 'order.extra_cost.proof' })
+  extraCostProof(
+    @Payload()
+    data: {
+      requester: {
+        id: string;
+        roles?: string[];
+        branch_id?: string | null;
+        market_id?: string | null;
+      };
+      id: string;
+      index: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.extraCostProofKey(
+        data.requester,
+        data.id,
+        data.index,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.extra_cost_approval.approve' })
   approveExtraCostApproval(
     @Payload()

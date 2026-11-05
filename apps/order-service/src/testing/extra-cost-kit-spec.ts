@@ -224,8 +224,10 @@ export function extraCostApprovalTable(
           ),
           ids: hit.map((row) => row.id),
         });
+        // RETURNING — Postgres kabi yangilangan qator (GykuOz8f: kuryerga
+        // xabar matni shu qatordan yasaladi).
         return Promise.resolve({
-          raw: hit.map((row) => ({ id: row.id })),
+          raw: hit.map((row) => clone(row)),
           affected: hit.length,
         });
       }),
@@ -335,6 +337,20 @@ export function extraCostManager(params: {
 }
 
 /**
+ * (GykuOz8f) `dataSource.transaction(work)` — rad etish va yopilish xabari
+ * bilan bitta tranzaksiya: `work` shu menejer bilan; xato bo'lsa jadval
+ * holati qaytadi.
+ */
+export function extraCostTransaction(
+  manager: ReturnType<typeof extraCostManager>,
+  table: ExtraCostApprovalTable,
+) {
+  return jest.fn(<T>(work: (tx: unknown) => Promise<T>) =>
+    table.transaction(() => work(manager)),
+  );
+}
+
+/**
  * `DataSource`: `createQueryRunner()` shu menejer bilan; rollback jadvalni
  * tranzaksiya boshidagi holatiga qaytaradi. `manager` — qulfsiz o'qishlar
  * (tasdiq darvozasining tezkor yo'li).
@@ -359,7 +375,12 @@ export function extraCostDataSource(
     }),
     release: jest.fn(),
   };
-  return { manager, runner, createQueryRunner: jest.fn(() => runner) };
+  return {
+    manager,
+    runner,
+    createQueryRunner: jest.fn(() => runner),
+    transaction: extraCostTransaction(manager, table),
+  };
 }
 
 /**

@@ -18,6 +18,14 @@ describe('OrderGatewayController — marshrut tartibi (PINtZcLj)', () => {
   let app: INestApplication;
   const orderSend = jest.fn();
   const noop = { send: jest.fn(() => of({ data: {} })) };
+  const fileSend = jest.fn(() =>
+    of({
+      data: {
+        body_base64: Buffer.from('isbot').toString('base64'),
+        mime_type: 'image/png',
+      },
+    }),
+  );
   let user: { sub: string; roles: string[] } = {
     sub: '1',
     roles: ['superadmin'],
@@ -31,6 +39,8 @@ describe('OrderGatewayController — marshrut tartibi (PINtZcLj)', () => {
         { provide: 'IDENTITY', useValue: noop },
         { provide: 'LOGISTICS', useValue: noop },
         { provide: 'BRANCH', useValue: noop },
+        // (GykuOz8f) isbot baytlari — `file.read`.
+        { provide: 'FILE', useValue: { send: fileSend } },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -84,6 +94,45 @@ describe('OrderGatewayController — marshrut tartibi (PINtZcLj)', () => {
       expect.objectContaining({
         requester: expect.objectContaining({ id: '16', roles: ['market'] }),
       }),
+    );
+  });
+
+  it('⭐ GykuOz8f: GET /orders/extra-costs?tab=pending — sahifa handleri, :id ga TUSHMAYDI', async () => {
+    user = { sub: '301', roles: ['courier'] };
+    orderSend.mockReturnValue(
+      of({
+        statusCode: 200,
+        data: { items: [], total: 0, page: 1, limit: 10, counts: {} },
+      }),
+    );
+
+    const res = await request(http()).get('/orders/extra-costs?tab=pending');
+
+    expect(res.status).toBe(200);
+    expect(cmds()).toEqual(['order.extra_cost.page']);
+    expect(orderSend.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        tab: 'pending',
+        requester: expect.objectContaining({ id: '301' }),
+      }),
+    );
+  });
+
+  it('⭐ GykuOz8f: GET /orders/extra-costs/7/proofs/0 — isbot baytlari (marshrut `:id` ga tushmaydi)', async () => {
+    user = { sub: '501', roles: ['market'] };
+    orderSend.mockReturnValue(
+      of({ statusCode: 200, data: { key: 'proofs/a.png', index: 0 } }),
+    );
+
+    const res = await request(http()).get('/orders/extra-costs/7/proofs/0');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['cache-control']).toBe('private, max-age=300');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(cmds()).toEqual(['order.extra_cost.proof']);
+    expect(orderSend.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ id: '7', index: 0 }),
     );
   });
 

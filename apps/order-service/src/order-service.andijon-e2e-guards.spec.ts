@@ -245,6 +245,8 @@ describe('T0UGh8bL / PUvKXWVw / pLmAsEsj — bekor qilish', () => {
       '7001',
       requester,
       undefined,
+      // (GykuOz8f) xarajatsiz bekor — tasdiqsiz xarajat qatori yozilmaydi.
+      undefined,
     );
     const lock = (s as unknown as { lockWaitingOrder: jest.Mock })
       .lockWaitingOrder;

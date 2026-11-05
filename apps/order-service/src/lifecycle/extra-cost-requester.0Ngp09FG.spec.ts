@@ -69,6 +69,7 @@ function makeService(
       return qb;
     }),
   };
+  const manager = extraCostManager({ table: repo as never });
   const svc = Object.create(
     OrderLifecycleService.prototype,
   ) as OrderLifecycleService;
@@ -82,7 +83,11 @@ function makeService(
         isDeleted: false,
       }),
     },
-    dataSource: { manager: extraCostManager({ table: repo as never }) },
+    dataSource: {
+      manager,
+      // (GykuOz8f) rad etish qarori va kuryerga xabar — bitta tranzaksiyada.
+      transaction: (work: (tx: unknown) => Promise<unknown>) => work(manager),
+    },
     identityClient: { send: identitySend },
     outbox: { enqueue: jest.fn().mockResolvedValue(undefined) },
     activityLog: { log: jest.fn().mockResolvedValue(undefined) },

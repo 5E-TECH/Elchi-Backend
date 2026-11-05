@@ -561,6 +561,51 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
         NotificationChannel.TELEGRAM,
       ],
     }),
+    // (GykuOz8f) So'rov yozgan kuryer / menejerga: market tasdiqladi
+    // (yoki muddat o'tib avtomatik), rad etdi, so'rov yopildi (void).
+    // Havola — «Qo'shimcha xarajatli buyurtmalar» sahifasi.
+    def({
+      key: 'order.extra_cost_approved',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'extra_cost:{{approval_id}}',
+      label_uz: "Qo'shimcha xarajat tasdiqlandi",
+      default_audience: [Roles.COURIER, Roles.MANAGER],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    def({
+      key: 'order.extra_cost_rejected',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'extra_cost:{{approval_id}}',
+      label_uz: "Qo'shimcha xarajat rad etildi",
+      default_audience: [Roles.COURIER, Roles.MANAGER],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    def({
+      key: 'order.extra_cost_voided',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'extra_cost:{{approval_id}}',
+      label_uz: "Qo'shimcha xarajat so'rovi yopildi",
+      default_audience: [Roles.COURIER, Roles.MANAGER],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     // (4BirMSVp) Kuryerning kunlik hisoboti — /kun yoki avtomatik; Telegram
     // DM sukut kanallardan biri (bot o'zi xabar yasamaydi — yadro orqali).
     def({

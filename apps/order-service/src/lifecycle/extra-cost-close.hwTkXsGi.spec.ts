@@ -10,6 +10,7 @@ import {
 import {
   extraCostApprovalTable,
   extraCostManager,
+  extraCostTransaction,
 } from '../testing/extra-cost-kit-spec';
 
 /**
@@ -63,10 +64,13 @@ function setup(rows: Row[], changedTo: string | null = null) {
   const manager = extraCostManager({ table, changedTo });
   const svc = Object.create(OrderLifecycleService.prototype) as Helpers &
     Record<string, unknown>;
+  // (GykuOz8f) yopilgan so'rov — yozgan xodimga xabar (outbox, shu tranzaksiyada).
+  const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
   Object.assign(svc, {
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
+    outbox,
   });
-  return { svc, table, manager };
+  return { svc, table, manager, outbox };
 }
 
 const states = (table: ReturnType<typeof extraCostApprovalTable>) =>
@@ -328,6 +332,20 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
   const COURIER = { id: '289', roles: ['courier'], branch_id: '77' };
   const ORDER = { branch_id: '77' };
   const timeout = () => Promise.reject(new Error('Timeout has occurred'));
+
+  /** (GykuOz8f) Yopilish va kuryerga xabar — `dataSource.transaction` da. */
+  function useTable(
+    svc: Record<string, unknown>,
+    table: ReturnType<typeof extraCostApprovalTable>,
+  ) {
+    Object.assign(svc, {
+      extraCostApprovalRepo: table,
+      dataSource: {
+        transaction: extraCostTransaction(extraCostManager({ table }), table),
+      },
+      outbox: { enqueue: jest.fn().mockResolvedValue(undefined) },
+    });
+  }
 
   function infra(lookup: Row = {}) {
     const svc = Object.create(OrderLifecycleService.prototype) as Infra &
@@ -668,7 +686,7 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
   it('⭐ qayta ijroda 503 — so‘rov pending qoladi, xato o‘zgarmay qaytadi; 403 — void + 409', async () => {
     const table = extraCostApprovalTable([request()]);
     const svc = infra();
-    Object.assign(svc, { extraCostApprovalRepo: table });
+    useTable(svc, table);
     const unavailable = new RpcException({
       statusCode: 503,
       message: "Filial ma'lumotini o'qib bo'lmadi",
@@ -703,7 +721,7 @@ describe('hwTkXsGi — infratuzilma xatosi biznes xatosi bo‘lib ko‘rinmaydi'
     const replay = (getUserByIdStrict: jest.Mock) => {
       const table = extraCostApprovalTable([request()]);
       const svc = infra({ getUserByIdStrict });
-      Object.assign(svc, { extraCostApprovalRepo: table });
+      useTable(svc, table);
       return { svc, table };
     };
 

@@ -9,6 +9,7 @@ import {
 import {
   extraCostApprovalTable,
   extraCostManager,
+  extraCostTransaction,
 } from '../testing/extra-cost-kit-spec';
 import { ExtraCostAutoApproveScheduler } from './extra-cost-auto-approve.scheduler';
 
@@ -79,7 +80,7 @@ function makeService(rows: Row[]) {
   Object.assign(svc, {
     extraCostApprovalRepo: repo,
     orderRepo,
-    dataSource: { manager },
+    dataSource: { manager, transaction: extraCostTransaction(manager, repo) },
     outbox,
     activityLog,
     lookup,

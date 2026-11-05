@@ -26,6 +26,13 @@ export const EXTRA_COST_PENDING_UNIQUE_INDEX =
   unique: true,
   where: `"status" = 'pending' AND "is_deleted" = false`,
 })
+// (GykuOz8f) «Qo'shimcha xarajatli buyurtmalar»: kuryer (o'z so'rovlari) va
+// filial menejeri (filial kuryerlari) ro'yxati — migratsiya 210.
+@Index('IDX_EXTRA_COST_REQUESTER_CREATED', [
+  'requested_by_user_id',
+  'createdAt',
+])
+@Index('IDX_EXTRA_COST_BRANCH_CREATED', ['requester_branch_id', 'createdAt'])
 export class OrderExtraCostApproval extends BaseEntity {
   @Column({ type: 'bigint' })
   order_id!: string;
@@ -79,6 +86,17 @@ export class OrderExtraCostApproval extends BaseEntity {
    */
   @Column({ type: 'boolean', default: false })
   auto_approved!: boolean;
+
+  /**
+   * (GykuOz8f) Market tasdig'isiz DARHOL yozilgan xarajat (tasdiq o'chiq
+   * market yoki qayta ijro bo'lmagan har qanday yo'l): sotish / bekor qilish /
+   * qisman sotish pul yozuvi bilan bitta tranzaksiyada `approved` bo'lib
+   * yoziladi, `decided_by_user_id` NULL, `auto_approved` false. Orqaga
+   * qaytarishda boshqa tasdiqlanganlar kabi `reversed`. Kuryerga xabar
+   * yuborilmaydi (u o'zi yozgan).
+   */
+  @Column({ type: 'boolean', default: false })
+  immediate!: boolean;
 
   /** Avtomatik tasdiqdan oldingi oxirgi eslatma (bir marta). */
   @Column({ type: 'timestamptz', nullable: true })

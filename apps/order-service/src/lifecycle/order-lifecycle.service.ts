@@ -72,7 +72,6 @@ import {
   RMQ_SERVICE_TIMEOUT,
   resolvePartnerMoneyFields,
   resolveExtraCostAutoApproveMinutes,
-  resolveExtraCostAutoApproveReminderMinutes,
   WAREHOUSE_ERROR_CODES,
 } from '@app/common';
 
@@ -126,9 +125,22 @@ import {
   orderNumberOf,
 } from '../notification/order-notification.service';
 import {
+  enqueueExtraCostDecisionNotification,
   enqueueExtraCostNotification,
+  type ExtraCostDecisionApproval,
+  type ExtraCostDecisionKind,
   formatSom,
 } from '../notification/extra-cost-notifications';
+import {
+  buildExtraCostCounts,
+  computeExtraCostAutoApproveAt,
+  EXTRA_COST_TAB_STATUSES,
+  type ExtraCostPageRequester,
+  type ExtraCostScope,
+  extraCostScopeWhere,
+  parseExtraCostTab,
+  resolveExtraCostScope,
+} from './extra-cost-page';
 import {
   matchPartlySellItems,
   type PartlySellRequestItem,
@@ -491,6 +503,34 @@ export type ExtraCostApprovalClaim = {
 export type ExtraCostExecutionOptions = {
   extraCostApproval?: ExtraCostApprovalClaim;
 };
+
+/**
+ * (GykuOz8f) Tasdiqsiz DARHOL yozilayotgan xarajat (tasdiq o'chiq market
+ * yoki qayta ijro bo'lmagan har qanday yo'l) — sotish / bekor qilish /
+ * qisman sotish tranzaksiyasi `approved` + `immediate` qatorini yozadi.
+ */
+type ExtraCostImmediateWrite = {
+  action: ExtraCostApprovalAction;
+  amount: number;
+  marketId: string | null | undefined;
+  proofFiles: string[];
+  payload: Record<string, unknown>;
+};
+
+/**
+ * (GykuOz8f) So'rov yozgan xodimga xabar uchun UPDATE … RETURNING ustunlari
+ * (tranzaksiya ichida RPC yo'q — matn shu qatordan yasaladi).
+ */
+const EXTRA_COST_NOTICE_COLUMNS = [
+  'id',
+  'order_id',
+  'market_id',
+  'requested_by_user_id',
+  'action',
+  'amount',
+  'status',
+  'closed_reason',
+];
 
 /**
  * (hwTkXsGi) So'rov yopilgan: `closeReason` bor — tasdiqlab bo'lmaydi va
@@ -2110,14 +2150,11 @@ export class OrderLifecycleService {
 
     // (hwTkXsGi) Qoldiq buyurtma o'chiriladi — undagi ochiq qo'shimcha
     // xarajat so'rovi ham yopiladi (aks holda o'chgan buyurtmada osilib qolardi).
-    await this.voidOpenExtraCostApprovals(
-      manager.getRepository(OrderExtraCostApproval),
-      {
-        orderIds: children.map((child) => String(child.id)),
-        reason: EXTRA_COST_CLOSE_REASON.rolledBack,
-        actorId: requester.id,
-      },
-    );
+    await this.voidOpenExtraCostApprovals(manager, {
+      orderIds: children.map((child) => String(child.id)),
+      reason: EXTRA_COST_CLOSE_REASON.rolledBack,
+      actorId: requester.id,
+    });
 
     const parentItems = await itemRepo.find({
       where: { order_id: String(parentOrder.id) },
@@ -2378,11 +2415,15 @@ export class OrderLifecycleService {
   /**
    * (hwTkXsGi) Ochiq (`pending`) so'rovlarni `void` qiladi. Shartli UPDATE —
    * shu payt boshqa qaror yozilgan qatorga tegmaydi. Yopilgan id'lar qaytadi.
-   * `repo` — tranzaksiya ichida `tx.getRepository(...)`, tashqarida
-   * `extraCostApprovalRepo`.
+   * `manager` — chaqiruvchining tranzaksiyasi.
+   *
+   * (GykuOz8f) Har bir yopilgan so'rov — uni yozgan kuryer / menejerga
+   * «⚪ so'rov yopildi» xabari, SHU tranzaksiyada (outbox): yopilish qaytsa,
+   * xabar ham qaytadi. So'rov yozuvchining o'z amali bilan yopilsa ham
+   * (yangi so'rov, o'zi sotgan) — xabar boradi (kartadagi qoida).
    */
   private async voidOpenExtraCostApprovals(
-    repo: Repository<OrderExtraCostApproval>,
+    manager: EntityManager,
     params: {
       reason: string;
       orderIds?: string[];
@@ -2395,7 +2436,8 @@ export class OrderLifecycleService {
   ): Promise<string[]> {
     const orderIds = (params.orderIds ?? []).map(String).filter(Boolean);
     if (!orderIds.length && !params.approvalId) return [];
-    const qb = repo
+    const qb = manager
+      .getRepository(OrderExtraCostApproval)
       .createQueryBuilder()
       .update(OrderExtraCostApproval)
       .set({
@@ -2416,10 +2458,57 @@ export class OrderLifecycleService {
     if (params.exceptId) {
       qb.andWhere('id <> :exceptId', { exceptId: params.exceptId });
     }
-    const result = await qb.returning(['id']).execute();
-    return (Array.isArray(result.raw) ? result.raw : []).map(
-      (row: { id: unknown }) => String(row.id),
+    const result = await qb.returning(EXTRA_COST_NOTICE_COLUMNS).execute();
+    const closed = (
+      Array.isArray(result.raw) ? result.raw : []
+    ) as ExtraCostDecisionApproval[];
+    await this.notifyExtraCostRequesters(manager, closed, 'voided');
+    return closed.map((row) => String(row.id));
+  }
+
+  /**
+   * (GykuOz8f) So'rov yozgan kuryer / menejerga xabar (in-app + realtime +
+   * Telegram DM) — tasdiqlandi (qo'lda yoki avtomatik), rad etildi, yopildi.
+   * `manager` — qaror tranzaksiyasi: xabar qaror bilan birga commit bo'ladi;
+   * navbatga qo'yib bo'lmasa — xato, tranzaksiya qaytadi (holat
+   * bildirishnomasi bilan bir qoida). Tasdiqsiz yozilgan (`immediate`) va
+   * teskari qaytarilgan (`reversed`) xarajat uchun chaqirilmaydi.
+   */
+  private async notifyExtraCostRequesters(
+    manager: EntityManager,
+    approvals: ExtraCostDecisionApproval[],
+    kind: ExtraCostDecisionKind,
+    extra: {
+      autoApproved?: boolean;
+      rejectLabel?: string | null;
+      comment?: string | null;
+    } = {},
+  ): Promise<void> {
+    if (!approvals.length) return;
+    const autoApproveMinutes = resolveExtraCostAutoApproveMinutes(
+      process.env.EXTRA_COST_AUTO_APPROVE_MINUTES,
     );
+    for (const approval of approvals) {
+      const requestedBy = approval.requested_by_user_id;
+      const recipientId = this.numericActorId(
+        typeof requestedBy === 'number' || typeof requestedBy === 'string'
+          ? requestedBy
+          : null,
+      );
+      if (!recipientId) continue;
+      await enqueueExtraCostDecisionNotification(
+        this.outbox,
+        {
+          kind,
+          approval,
+          autoApproved: extra.autoApproved,
+          autoApproveMinutes,
+          rejectLabel: extra.rejectLabel,
+          comment: extra.comment,
+        },
+        { manager },
+      );
+    }
   }
 
   /**
@@ -2463,8 +2552,10 @@ export class OrderLifecycleService {
   private async applyExtraCostApprovalsOnExecution(
     tx: EntityManager,
     orderId: string,
-    requester: { id: string },
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
     options?: ExtraCostExecutionOptions,
+    /** (GykuOz8f) Tasdiqsiz yozilayotgan xarajat (qayta ijroda e'tiborsiz). */
+    immediate?: ExtraCostImmediateWrite,
   ): Promise<void> {
     const repo = tx.getRepository(OrderExtraCostApproval);
     const claim = options?.extraCostApproval;
@@ -2483,13 +2574,68 @@ export class OrderLifecycleService {
       if (!claimed) {
         throw new ExtraCostRequestClosedError();
       }
+      // (GykuOz8f) So'rov yozgan xodimga «tasdiqlandi» (avtomatik ham) —
+      // sotuv bilan birga commit bo'ladi.
+      await this.notifyExtraCostRequesters(tx, [claimed], 'approved', {
+        autoApproved: Boolean(claim.patch.auto_approved),
+      });
     }
-    await this.voidOpenExtraCostApprovals(repo, {
+    await this.voidOpenExtraCostApprovals(tx, {
       orderIds: [String(orderId)],
       reason: EXTRA_COST_CLOSE_REASON.executed,
       actorId: requester.id,
       exceptId: claim?.id,
     });
+    // (GykuOz8f) Qayta ijroda tasdiqlangan so'rovning o'zi bor — qo'shimcha
+    // qator yozilmaydi.
+    if (!claim && immediate) {
+      await this.recordImmediateExtraCost(tx, orderId, requester, immediate);
+    }
+  }
+
+  /**
+   * (GykuOz8f) Tasdiqsiz yozilgan xarajat — `approved` + `immediate` qatori,
+   * pul yozuvlari bilan BITTA tranzaksiyada (sotuv qaytsa, qator ham
+   * qaytadi). Qaror maydonlari: `decided_by_user_id` NULL, `auto_approved`
+   * false, `decided_at` hozir. Orqaga qaytarishda boshqa tasdiqlanganlar kabi
+   * `reversed` bo'ladi. Hamkor / tizim amali (id raqam emas) yoki marketsiz
+   * buyurtma — yozilmaydi (ustunlar bigint NOT NULL).
+   */
+  private async recordImmediateExtraCost(
+    tx: EntityManager,
+    orderId: string,
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
+    write: ExtraCostImmediateWrite,
+  ): Promise<void> {
+    const amount = this.wholeExtraCost(write.amount);
+    if (!(amount > 0)) return;
+    const requesterId = this.numericActorId(requester.id);
+    const marketId = this.numericActorId(write.marketId);
+    if (!requesterId || !marketId) {
+      this.logger.warn(
+        `buyurtma #${orderId}: tasdiqsiz qo'shimcha xarajat ro'yxatga yozilmadi (yozuvchi ${String(requester.id)}, market ${String(write.marketId)})`,
+      );
+      return;
+    }
+    const repo = tx.getRepository(OrderExtraCostApproval);
+    await repo.save(
+      repo.create({
+        order_id: String(orderId),
+        market_id: marketId,
+        requested_by_user_id: requesterId,
+        requested_by_role: this.requesterPrimaryRole(requester),
+        requester_branch_id: this.numericActorId(requester.branch_id),
+        action: write.action,
+        amount,
+        proof_file_keys: write.proofFiles ?? [],
+        operation_payload: write.payload ?? {},
+        status: 'approved',
+        immediate: true,
+        auto_approved: false,
+        decided_by_user_id: null,
+        decided_at: new Date(),
+      }),
+    );
   }
 
   /**
@@ -2505,11 +2651,13 @@ export class OrderLifecycleService {
     requester: { id: string },
   ): Promise<void> {
     const repo = tx.getRepository(OrderExtraCostApproval);
-    await this.voidOpenExtraCostApprovals(repo, {
+    await this.voidOpenExtraCostApprovals(tx, {
       orderIds: [String(orderId)],
       reason: EXTRA_COST_CLOSE_REASON.rolledBack,
       actorId: requester.id,
     });
+    // (GykuOz8f) Tasdiqsiz yozilgan (`immediate`) xarajat ham shu yerda
+    // `reversed`; teskari qaytarishga xabar yuborilmaydi.
     await repo
       .createQueryBuilder()
       .update(OrderExtraCostApproval)
@@ -2581,9 +2729,13 @@ export class OrderLifecycleService {
         reason = EXTRA_COST_CLOSE_REASON.failed(message);
       }
     }
-    const closed = await this.voidOpenExtraCostApprovals(
-      this.extraCostApprovalRepo,
-      { approvalId: String(approval.id), reason, actorId },
+    // (GykuOz8f) Yopilish va kuryerga xabar — bitta tranzaksiyada.
+    const closed = await this.dataSource.transaction((manager) =>
+      this.voidOpenExtraCostApprovals(manager, {
+        approvalId: String(approval.id),
+        reason,
+        actorId,
+      }),
     );
     if (!closed.length) {
       throw new ExtraCostRequestClosedError();
@@ -2686,6 +2838,8 @@ export class OrderLifecycleService {
       decision_comment: approval.decision_comment,
       // (1tnpaIqd) avtomatik tasdiq qo'lda tasdiqdan ajratiladi.
       auto_approved: Boolean(approval.auto_approved),
+      // (GykuOz8f) market tasdig'isiz darhol yozilgan (`approved` bo'lib).
+      immediate: Boolean(approval.immediate),
       // (1tnpaIqd → AFZaUUi5) muddat: kutilayotgan so'rov shu vaqtgacha
       // javobsiz qolsa avtomatik tasdiqlanadi (sukut 24 soat). So'rov
       // yopilgan — null.
@@ -2708,32 +2862,9 @@ export class OrderLifecycleService {
   private async withExtraCostRequesterNames(
     approvals: OrderExtraCostApproval[],
   ) {
-    const ids = [
-      ...new Set(
-        approvals
-          .map((approval) => String(approval.requested_by_user_id ?? '').trim())
-          .filter(Boolean),
-      ),
-    ];
-    const names = new Map<string, string | null>();
-    if (ids.length) {
-      const response = await rmqSend<{
-        data?: Array<{ id?: unknown; name?: unknown }>;
-      }>(
-        this.identityClient,
-        { cmd: 'identity.user.find_by_ids' },
-        { ids },
-        { timeoutMs: 3000, retries: 0 },
-      ).catch(() => ({ data: [] }));
-      for (const user of Array.isArray(response?.data) ? response.data : []) {
-        const id =
-          typeof user?.id === 'string' || typeof user?.id === 'number'
-            ? String(user.id)
-            : '';
-        const name = typeof user?.name === 'string' ? user.name.trim() : '';
-        if (id) names.set(id, name || null);
-      }
-    }
+    const names = await this.loadExtraCostUserNames(
+      approvals.map((approval) => approval.requested_by_user_id),
+    );
     return approvals.map((approval) =>
       this.serializeExtraCostApproval(
         approval,
@@ -2743,16 +2874,87 @@ export class OrderLifecycleService {
   }
 
   /**
-   * (AFZaUUi5) Avtomatik tasdiq vaqti: muddat boshi + `EXTRA_COST_AUTO_APPROVE_MINUTES`
-   * (ExtraCostAutoApproveScheduler bilan bitta qoida: bo'sh — 1440). Muddat
-   * boshi — `auto_approve_from`; skaner hali belgilamagan bo'lsa (NULL) —
-   * u qanday belgilasa shunday: muddatdan eski so'rov — hozir (yoqilgan
-   * payt), qolgani — `createdAt`. Skaner tasdiqni eslatmadan kamida
-   * `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` keyin qiladi: eslatma kech
-   * ketgan (yoki hali ketmagan, muddat esa o'tgan) bo'lsa — eslatma + shu
-   * daqiqalar (bir tikdan kam farq ko'rsatilmaydi — oddiy holatda muddat
-   * so'rov vaqti + 24 soat bo'lib qoladi). Infratuzilma xatosidan keyin
-   * urinish kechiktirilgan bo'lsa — keyingi urinish vaqti.
+   * Foydalanuvchi ismlari (so'rovchi kuryer / menejer, GykuOz8f: market nomi
+   * ham) — BITTA `identity.user.find_by_ids`, 3 s, qayta urinishsiz;
+   * javob bo'lmasa — bo'sh xarita (ism `null`).
+   */
+  private async loadExtraCostUserNames(
+    rawIds: unknown[],
+  ): Promise<Map<string, string | null>> {
+    const ids = [
+      ...new Set(
+        rawIds
+          .map((id) =>
+            typeof id === 'string' || typeof id === 'number'
+              ? String(id).trim()
+              : '',
+          )
+          .filter(Boolean),
+      ),
+    ];
+    const names = new Map<string, string | null>();
+    if (!ids.length) return names;
+    const response = await rmqSend<{
+      data?: Array<{ id?: unknown; name?: unknown }>;
+    }>(
+      this.identityClient,
+      { cmd: 'identity.user.find_by_ids' },
+      { ids },
+      { timeoutMs: 3000, retries: 0 },
+    ).catch(() => ({ data: [] }));
+    for (const user of Array.isArray(response?.data) ? response.data : []) {
+      const id =
+        typeof user?.id === 'string' || typeof user?.id === 'number'
+          ? String(user.id)
+          : '';
+      const name = typeof user?.name === 'string' ? user.name.trim() : '';
+      if (id) names.set(id, name || null);
+    }
+    return names;
+  }
+
+  /**
+   * (GykuOz8f) Buyurtma mijozlari — BITTA `identity.customer.find_by_ids`,
+   * 3 s, qayta urinishsiz; javob bo'lmasa — bo'sh xarita.
+   */
+  private async loadExtraCostCustomers(
+    rawIds: string[],
+  ): Promise<Map<string, { name: string | null; phone: string | null }>> {
+    const ids = [...new Set(rawIds.filter((id) => /^\d+$/.test(id)))];
+    const customers = new Map<
+      string,
+      { name: string | null; phone: string | null }
+    >();
+    if (!ids.length) return customers;
+    const response = await rmqSend<{
+      data?: Array<{ id?: unknown; name?: unknown; phone_number?: unknown }>;
+    }>(
+      this.identityClient,
+      { cmd: 'identity.customer.find_by_ids' },
+      { ids },
+      { timeoutMs: 3000, retries: 0 },
+    ).catch(() => ({ data: [] }));
+    const textOf = (value: unknown) =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
+    for (const customer of Array.isArray(response?.data) ? response.data : []) {
+      const id =
+        typeof customer?.id === 'string' || typeof customer?.id === 'number'
+          ? String(customer.id)
+          : '';
+      if (id) {
+        customers.set(id, {
+          name: textOf(customer.name),
+          phone: textOf(customer.phone_number),
+        });
+      }
+    }
+    return customers;
+  }
+
+  /**
+   * (AFZaUUi5) Avtomatik tasdiq vaqti — qoida `computeExtraCostAutoApproveAt`
+   * da (GykuOz8f: buyurtma javobidagi `pending_extra_cost_approval` ham
+   * shundan).
    */
   private extraCostAutoApproveAt(
     approval: Pick<
@@ -2764,33 +2966,7 @@ export class OrderLifecycleService {
       | 'reminder_sent_at'
     >,
   ): string | null {
-    if (approval.status !== 'pending') return null;
-    const minutes = resolveExtraCostAutoApproveMinutes(
-      process.env.EXTRA_COST_AUTO_APPROVE_MINUTES,
-    );
-    const reminderMinutes = resolveExtraCostAutoApproveReminderMinutes(
-      process.env.EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES,
-    );
-    const now = Date.now();
-    let from = new Date(approval.auto_approve_from ?? NaN).getTime();
-    if (!Number.isFinite(from)) {
-      const createdAt = new Date(approval.createdAt ?? NaN).getTime();
-      if (!Number.isFinite(createdAt)) return null;
-      from = createdAt <= now - minutes * 60_000 ? now : createdAt;
-    }
-    let due = from + minutes * 60_000;
-    if (reminderMinutes < minutes) {
-      const reminded = new Date(approval.reminder_sent_at ?? NaN).getTime();
-      const afterReminder =
-        (Number.isFinite(reminded) ? reminded : now) + reminderMinutes * 60_000;
-      if (afterReminder > due + 60_000) due = afterReminder;
-    }
-    const retry = approval.auto_retry_at
-      ? new Date(approval.auto_retry_at).getTime()
-      : NaN;
-    return new Date(
-      Number.isFinite(retry) ? Math.max(due, retry) : due,
-    ).toISOString();
+    return computeExtraCostAutoApproveAt(approval);
   }
 
   private requesterPrimaryRole(requester: { roles?: string[] }) {
@@ -2940,7 +3116,7 @@ export class OrderLifecycleService {
             "Market tasdig'i kutilmoqda",
           );
         }
-        await this.voidOpenExtraCostApprovals(repo, {
+        await this.voidOpenExtraCostApprovals(tx, {
           orderIds: [String(order.id)],
           reason: changedTo
             ? EXTRA_COST_CLOSE_REASON.statusChanged(changedTo)
@@ -3131,6 +3307,209 @@ export class OrderLifecycleService {
       200,
       'Extra cost approvals',
     );
+  }
+
+  /**
+   * (GykuOz8f) «Qo'shimcha xarajatli buyurtmalar» sahifasi —
+   * `GET /orders/extra-costs`. Kuryer, filial menejeri, market va market
+   * operatori (faqat o'qish); admin / superadmin — 403. Doira faqat token
+   * ma'lumotidan (`resolveExtraCostScope`), tablar `EXTRA_COST_TABS`.
+   *
+   * Haqiqiy sahifalash: `"createdAt" DESC, id DESC`, `total` — tanlangan tab
+   * soni; `counts` — doiradagi har tab soni (BITTA `GROUP BY status`).
+   * O'chirilgan so'rov va o'chirilgan buyurtmaniki ko'rinmaydi. Qatorga
+   * buyurtma holati, mijoz, market nomi (telefonsiz), isbotlar soni va rad
+   * sababi yorlig'i qo'shiladi: ismlar BITTA identity chaqiruvida, mijozlar
+   * BITTA chaqiruvda (javob bo'lmasa — `null`).
+   */
+  async pageExtraCosts(
+    requester: ExtraCostPageRequester,
+    query: {
+      tab?: string | null;
+      page?: number | string | null;
+      limit?: number | string | null;
+    } = {},
+  ) {
+    const scope = resolveExtraCostScope(requester);
+    const tab = parseExtraCostTab(query?.tab);
+    if (!tab) {
+      this.badRequest("Noto'g'ri tab");
+    }
+    const page = Math.max(Math.floor(Number(query?.page) || 1), 1);
+    const limit = Math.min(
+      Math.max(Math.floor(Number(query?.limit) || 10), 1),
+      100,
+    );
+    const grouped = await this.visibleExtraCostQuery(scope)
+      .select('a.status', 'status')
+      .addSelect('COUNT(*)::int', 'count')
+      .groupBy('a.status')
+      .getRawMany<{ status: string; count: number }>();
+    const counts = buildExtraCostCounts(grouped);
+    const total = counts[tab];
+    const offset = (page - 1) * limit;
+    let items: Array<Record<string, unknown>> = [];
+    if (offset < total) {
+      const statuses = EXTRA_COST_TAB_STATUSES[tab];
+      const qb = this.visibleExtraCostQuery(scope)
+        .addSelect('o.status', 'order_status')
+        .addSelect('o.customer_id', 'order_customer_id')
+        .addSelect('o.extra_number', 'order_extra_number');
+      if (statuses) {
+        qb.andWhere('a.status IN (:...tabStatuses)', {
+          tabStatuses: [...statuses],
+        });
+      }
+      const { entities, raw } = await qb
+        .orderBy('a.createdAt', 'DESC')
+        .addOrderBy('a.id', 'DESC')
+        .offset(offset)
+        .limit(limit)
+        .getRawAndEntities();
+      items = await this.extraCostPageItems(
+        entities,
+        raw as Array<Record<string, unknown>>,
+      );
+    }
+    return successRes(
+      { items, total, page, limit, counts },
+      200,
+      'Extra costs',
+    );
+  }
+
+  /**
+   * (GykuOz8f) So'rov isboti (rasm / video) — `GET
+   * /orders/extra-costs/:id/proofs/:index`. Ro'yxat bilan AYNI ko'rish
+   * qoidasi: ko'rinmaydigan so'rov — 404 «So'rov topilmadi», raqam
+   * oralig'idan tashqari — 404. Kutilayotgan / rad etilgan / yopilgan
+   * so'rov isboti ham (u `orders.proof_files` da yo'q) va market operatori
+   * uchun ham ishlaydi. Faqat fayl kaliti qaytadi — baytlarni gateway beradi.
+   */
+  async extraCostProofKey(
+    requester: ExtraCostPageRequester,
+    approvalId: unknown,
+    index: unknown,
+  ) {
+    const scope = resolveExtraCostScope(requester);
+    const id =
+      typeof approvalId === 'string' || typeof approvalId === 'number'
+        ? String(approvalId).trim()
+        : '';
+    if (!/^\d+$/.test(id)) {
+      this.notFound("So'rov topilmadi");
+    }
+    const approval = await this.visibleExtraCostQuery(scope)
+      .andWhere('a.id = :approvalId', { approvalId: id })
+      .getOne();
+    if (!approval) {
+      this.notFound("So'rov topilmadi");
+    }
+    const keys = (
+      Array.isArray(approval.proof_file_keys) ? approval.proof_file_keys : []
+    ).filter(
+      (key): key is string => typeof key === 'string' && key.trim() !== '',
+    );
+    const position =
+      typeof index === 'number' ||
+      (typeof index === 'string' && /^\d+$/.test(index.trim()))
+        ? Number(index)
+        : NaN;
+    if (
+      !Number.isInteger(position) ||
+      position < 0 ||
+      position >= keys.length
+    ) {
+      this.notFound('Isbot fayli topilmadi');
+    }
+    return successRes(
+      { key: keys[position], index: position, count: keys.length },
+      200,
+      'Extra cost proof',
+    );
+  }
+
+  /** (GykuOz8f) Doiradagi ko'rinadigan so'rovlar (buyurtmasi o'chirilmagan). */
+  private visibleExtraCostQuery(scope: ExtraCostScope) {
+    const where = extraCostScopeWhere(scope, 'a');
+    return this.extraCostApprovalRepo
+      .createQueryBuilder('a')
+      .innerJoin(Order, 'o', 'o.id = a.order_id AND o.is_deleted = false')
+      .where('a.is_deleted = false')
+      .andWhere(where.sql, where.params);
+  }
+
+  /** (GykuOz8f) Sahifa qatorlari — so'rov maydonlari + buyurtma ma'lumoti. */
+  private async extraCostPageItems(
+    approvals: OrderExtraCostApproval[],
+    raw: Array<Record<string, unknown>>,
+  ) {
+    const textOf = (value: unknown) =>
+      (typeof value === 'string' || typeof value === 'number') &&
+      String(value).trim()
+        ? String(value).trim()
+        : null;
+    const orderOf = new Map<
+      string,
+      {
+        status: string | null;
+        customerId: string | null;
+        extraNumber: string | null;
+      }
+    >();
+    for (const row of raw) {
+      orderOf.set(String(row.a_id), {
+        status: textOf(row.order_status),
+        customerId: textOf(row.order_customer_id),
+        extraNumber: textOf(row.order_extra_number),
+      });
+    }
+    const [names, customers] = await Promise.all([
+      this.loadExtraCostUserNames(
+        approvals.flatMap((approval) => [
+          approval.requested_by_user_id,
+          approval.market_id,
+        ]),
+      ),
+      this.loadExtraCostCustomers(
+        [...orderOf.values()]
+          .map((order) => order.customerId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ]);
+    return approvals.map((approval) => {
+      const order = orderOf.get(String(approval.id));
+      const customer = order?.customerId
+        ? customers.get(order.customerId)
+        : undefined;
+      const marketId = textOf(approval.market_id);
+      const reason = approval.reject_reason as ExtraCostRejectReason | null;
+      return {
+        ...this.serializeExtraCostApproval(
+          approval,
+          names.get(String(approval.requested_by_user_id)) ?? null,
+        ),
+        order_status: order?.status ?? null,
+        // Mijoz kartasi; shu buyurtma uchun kiritilgan qo'shimcha raqam —
+        // kartada telefon bo'lmasa.
+        customer:
+          order?.customerId || order?.extraNumber
+            ? {
+                name: customer?.name ?? null,
+                phone: customer?.phone ?? order?.extraNumber ?? null,
+              }
+            : null,
+        // Faqat nom — market telefoni kuryer / menejerga chiqmaydi.
+        market: marketId
+          ? { id: marketId, name: names.get(marketId) ?? null }
+          : null,
+        proof_count: Array.isArray(approval.proof_file_keys)
+          ? approval.proof_file_keys.length
+          : 0,
+        reject_reason_label:
+          (reason && EXTRA_COST_REJECT_REASON_LABELS[reason]) || null,
+      };
+    });
   }
 
   /**
@@ -3328,13 +3707,28 @@ export class OrderLifecycleService {
     const comment =
       [label, dto?.comment?.trim()].filter(Boolean).join(' — ') || null;
     const decidedAt = new Date();
-    const claimed = await this.claimExtraCostDecision(approval.id, {
-      status: 'rejected',
-      decided_by_user_id: String(requester.id),
-      decided_at: decidedAt,
-      decision_comment: comment,
-      auto_approved: false,
-      reject_reason: reason,
+    // (GykuOz8f) Qaror va so'rov yozgan xodimga «rad etildi» xabari — bitta
+    // tranzaksiyada.
+    const claimed = await this.dataSource.transaction(async (manager) => {
+      const row = await this.claimExtraCostDecision(
+        approval.id,
+        {
+          status: 'rejected',
+          decided_by_user_id: String(requester.id),
+          decided_at: decidedAt,
+          decision_comment: comment,
+          auto_approved: false,
+          reject_reason: reason,
+        },
+        manager.getRepository(OrderExtraCostApproval),
+      );
+      if (row) {
+        await this.notifyExtraCostRequesters(manager, [row], 'rejected', {
+          rejectLabel: label,
+          comment: dto?.comment?.trim() || null,
+        });
+      }
+      return row;
     });
     if (!claimed) {
       throw new ExtraCostRequestClosedError();
@@ -3358,14 +3752,15 @@ export class OrderLifecycleService {
 
   /**
    * `UPDATE … WHERE id AND status = 'pending' AND is_deleted = false
-   * RETURNING id` — affected=0 → boshqa qaror allaqachon yozilgan.
-   * `repo` — tasdiqda sotuv tranzaksiyasining repozitoriysi (hwTkXsGi).
+   * RETURNING …` — affected=0 → boshqa qaror allaqachon yozilgan (`null`).
+   * `repo` — qaror tranzaksiyasining repozitoriysi (hwTkXsGi). (GykuOz8f)
+   * Qaytgan qator — so'rov yozgan xodimga xabar uchun.
    */
   private async claimExtraCostDecision(
     approvalId: string,
     patch: Partial<OrderExtraCostApproval>,
     repo: Repository<OrderExtraCostApproval> = this.extraCostApprovalRepo,
-  ): Promise<boolean> {
+  ): Promise<ExtraCostDecisionApproval | null> {
     const result = await repo
       .createQueryBuilder()
       .update(OrderExtraCostApproval)
@@ -3374,9 +3769,13 @@ export class OrderLifecycleService {
         id: String(approvalId),
         pending: 'pending',
       })
-      .returning(['id'])
+      .returning(EXTRA_COST_NOTICE_COLUMNS)
       .execute();
-    return (result.affected ?? 0) > 0;
+    if (!((result.affected ?? 0) > 0)) return null;
+    const [row] = (
+      Array.isArray(result.raw) ? result.raw : []
+    ) as ExtraCostDecisionApproval[];
+    return row ?? ({ id: String(approvalId) } as ExtraCostDecisionApproval);
   }
 
   /**
@@ -9537,8 +9936,23 @@ export class OrderLifecycleService {
       const tx = queryRunner.manager;
       await this.lockWaitingOrder(tx, id);
       // (hwTkXsGi) Ochiq so'rovlar yopiladi yoki tasdiq shu tranzaksiyada
-      // yoziladi — pul yozuvlaridan OLDIN.
-      await this.applyExtraCostApprovalsOnExecution(tx, id, requester, options);
+      // yoziladi — pul yozuvlaridan OLDIN. (GykuOz8f) Tasdiqsiz xarajat —
+      // `immediate` qatori ham shu yerda.
+      await this.applyExtraCostApprovalsOnExecution(
+        tx,
+        id,
+        requester,
+        options,
+        extraCost > 0
+          ? {
+              action: 'sell',
+              amount: extraCost,
+              marketId: order.market_id,
+              proofFiles,
+              payload: { ...(dto ?? {}), extraCost, proofFileKeys: proofFiles },
+            }
+          : undefined,
+      );
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
@@ -10094,8 +10508,23 @@ export class OrderLifecycleService {
       const tx = queryRunner.manager;
       await this.lockWaitingOrder(tx, id);
       // (hwTkXsGi) Ochiq so'rovlar yopiladi yoki tasdiq shu tranzaksiyada
-      // yoziladi — pul yozuvlaridan OLDIN.
-      await this.applyExtraCostApprovalsOnExecution(tx, id, requester, options);
+      // yoziladi — pul yozuvlaridan OLDIN. (GykuOz8f) Tasdiqsiz xarajat —
+      // `immediate` qatori ham shu yerda.
+      await this.applyExtraCostApprovalsOnExecution(
+        tx,
+        id,
+        requester,
+        options,
+        extraCost > 0
+          ? {
+              action: 'cancel',
+              amount: extraCost,
+              marketId: order.market_id,
+              proofFiles,
+              payload: { ...(dto ?? {}), extraCost, proofFileKeys: proofFiles },
+            }
+          : undefined,
+      );
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
@@ -11211,8 +11640,23 @@ export class OrderLifecycleService {
       const tx = queryRunner.manager;
       const lockedOrder = await this.lockWaitingOrder(tx, id);
       // (hwTkXsGi) Ochiq so'rovlar yopiladi yoki tasdiq shu tranzaksiyada
-      // yoziladi — pul yozuvlaridan OLDIN.
-      await this.applyExtraCostApprovalsOnExecution(tx, id, requester, options);
+      // yoziladi — pul yozuvlaridan OLDIN. (GykuOz8f) Tasdiqsiz xarajat —
+      // `immediate` qatori ham shu yerda.
+      await this.applyExtraCostApprovalsOnExecution(
+        tx,
+        id,
+        requester,
+        options,
+        extraCost > 0
+          ? {
+              action: 'partly_sell',
+              amount: extraCost,
+              marketId: order.market_id,
+              proofFiles,
+              payload: { ...(dto ?? {}), extraCost, proofFileKeys: proofFiles },
+            }
+          : undefined,
+      );
       const txOrderItemRepo = tx.getRepository(OrderItem);
       const pay = (
         // `typeof this.…` bu yerda TS 5.9 da hal bo'lmaydi (metodda boshqa

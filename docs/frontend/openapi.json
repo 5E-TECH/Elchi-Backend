@@ -5089,6 +5089,118 @@
         ]
       }
     },
+    "/orders/extra-costs": {
+      "get": {
+        "description": "(GykuOz8f) Qo'shimcha xarajatli buyurtmalar — haqiqiy sahifalash, eng yangisi tepada. Ko'rish doirasi tokendan: kuryer — o'z so'rovlari; menejer — o'z filiali kuryerlarining so'rovlari (so'rov paytidagi filial) va o'zi yozganlari; market — o'z marketi; market operatori — biriktirilgan marketi, faqat o'qish (biriktirilmagan — 403). Admin / superadmin — 403. Tablar: `all` — hammasi (tasdiqsiz yozilgan va teskari qaytarilgan ham), `pending` — market qaror qilmagan, `approved` — tasdiqlangan, avtomatik tasdiqlangan va tasdiqsiz yozilgan (`immediate: true`), `cancelled` — rad etilgan (`rejected`) va yopilgan (`void`). Javob: `data.items` (so`rov maydonlari + `immediate`, `order_status`, `customer {name, phone}`, `market {id, name}`, `proof_count`, `reject_reason_label`), `total` (tanlangan tab), `page`, `limit`, sahifalash meta, `counts {all, pending, approved, cancelled}`. Isbot fayli — `GET /orders/extra-costs/:id/proofs/:index`.",
+        "operationId": "OrderGatewayController_pageExtraCosts",
+        "parameters": [
+          {
+            "name": "tab",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "all",
+                "pending",
+                "approved",
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 1,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 10,
+              "enum": [
+                10,
+                25,
+                50,
+                100
+              ],
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Extra-cost orders page (courier, branch manager, market)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager",
+          "market",
+          "market_operator"
+        ]
+      }
+    },
+    "/orders/extra-costs/{id}/proofs/{index}": {
+      "get": {
+        "description": "(GykuOz8f) `GET /orders/extra-costs` qatoridagi isbot (`proof_count` ta, 0 dan). Ko'rinmaydigan so'rov — 404 «So'rov topilmadi», raqam oraliqdan tashqari — 404. Javob — fayl baytlari (`Content-Type` fayl turi, `Cache-Control: private, max-age=300`).",
+        "operationId": "OrderGatewayController_getExtraCostProof",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "So'rov id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "index",
+            "required": true,
+            "in": "path",
+            "description": "Isbot raqami (0 dan)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fayl baytlari"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Extra-cost request proof file bytes",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager",
+          "market",
+          "market_operator"
+        ]
+      }
+    },
     "/orders/{id}": {
       "get": {
         "description": "5Yy6r6UI (BG1): every order row has `return_stage` (`courier` | `in_transit` | `branch` | `hq` | `market` | null) and `cancel_return` (null unless the order is cancelled / returned to market): `{ stage, place_type: \"COURIER\" | \"BRANCH\" | \"HQ\" | null, place_id, place_name, received_at, sent_at, handed_over_at, handover_method: \"qr\" | \"manual\" | \"no_qr\" | \"pin\" | null }`. Place = where the parcel is now (courier name / branch or HQ name); `in_transit` — destination; `market` — where it was handed over. `received_at` (branch/hq) — since when it is at that place (last cancelled-post receipt, else custody time); `sent_at` (in_transit); `handed_over_at` + `handover_method` (market, fL79tFbs BG2; null method = legacy/unknown). Cancelled before intake (never left the market) — both null. No money fields; same for every role. vNKGbg5q (BG7): rows also carry `handover_notified_at` (market «pick up» reminder sent, D+3) and `handover_escalated_at` (escalated to the admin queue, D+7) — ISO or null; FE warns on `received_at` age ≥ 3 / ≥ 7 days.\n\n4BftLLnc — LOGIST: buyurtma o'z viloyatida bo'lsa (aks holda 403), pul maydonlarisiz.",

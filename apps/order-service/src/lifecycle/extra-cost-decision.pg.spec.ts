@@ -6,6 +6,7 @@ import { CreateOrderExtraCostApprovals1716000000026 } from '../../../../migratio
 import { ExtraCostAutoApprove1716000000123 } from '../../../../migrations/1716000000123-ExtraCostAutoApprove';
 import { ExtraCostApprovalVoidReversed1716000000206 } from '../../../../migrations/1716000000206-ExtraCostApprovalVoidReversed';
 import { ExtraCostAutoApproveFrom1716000000208 } from '../../../../migrations/1716000000208-ExtraCostAutoApproveFrom';
+import { ExtraCostImmediateRows1716000000210 } from '../../../../migrations/1716000000210-ExtraCostImmediateRows';
 import { Branch } from '../entities/branch.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import {
@@ -22,7 +23,7 @@ import {
 
 /**
  * 1tnpaIqd + hwTkXsGi + AFZaUUi5 — atomik qaror HAQIQIY Postgres'da (faqat
- * lokal test bazasi): migratsiya 026 + 123 + 206 + 208.
+ * lokal test bazasi): migratsiya 026 + 123 + 206 + 208 (+ 210, GykuOz8f).
  *
  *  - ikki parallel approve / approve+reject — faqat bittasi o'tadi, sotuv
  *    bir marta;
@@ -99,13 +100,16 @@ type ApprovalRow = {
       await db.query(
         `CREATE TYPE order_schema.orders_status_enum AS ENUM (${statuses})`,
       );
-      // Prod'dagi ustun turlari (enum) bilan, faqat migratsiya 206 va
+      // Prod'dagi ustun turlari (enum) bilan, faqat migratsiya 206 / 210 va
       // darvoza o'qiydigan ustunlar.
       await db.query(`
         CREATE TABLE order_schema.orders (
           id bigint PRIMARY KEY,
           status order_schema.orders_status_enum NOT NULL DEFAULT 'waiting',
-          is_deleted boolean NOT NULL DEFAULT false
+          is_deleted boolean NOT NULL DEFAULT false,
+          market_id bigint NULL,
+          extra_cost int NOT NULL DEFAULT 0,
+          proof_files jsonb NULL
         )`);
       await db.query(`
         CREATE TABLE order_schema.order_tracking (
@@ -113,6 +117,10 @@ type ApprovalRow = {
           order_id bigint NOT NULL,
           from_status order_schema.orders_status_enum,
           to_status order_schema.orders_status_enum NOT NULL,
+          action varchar(64) NULL,
+          changed_by varchar(64) NOT NULL DEFAULT 'system',
+          changed_by_role varchar(32) NOT NULL DEFAULT 'system',
+          note text NULL,
           created_at timestamptz NOT NULL DEFAULT now()
         )`);
       const runner = db.createQueryRunner();
@@ -122,6 +130,8 @@ type ApprovalRow = {
         await new ExtraCostAutoApprove1716000000123().up(runner);
         await new ExtraCostApprovalVoidReversed1716000000206().up(runner);
         await new ExtraCostAutoApproveFrom1716000000208().up(runner);
+        // (GykuOz8f) entity'dagi `immediate` ustuni.
+        await new ExtraCostImmediateRows1716000000210().up(runner);
       } finally {
         await runner.release();
       }

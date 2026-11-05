@@ -160,6 +160,7 @@ import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { fileOwnerOf } from './file-ownership';
+import { sendPrivateFileBytes } from './private-file-bytes';
 import {
   ORDER_QR_LOOKUP_ROLES,
   assertQrOrderVisible,
@@ -6654,6 +6655,179 @@ export class OrderGatewayController {
       },
     );
     return response;
+  }
+
+  /**
+   * (GykuOz8f) Ko'rish doirasi uchun so'rovchi — FAQAT tokendan: `id`, rollar,
+   * JWT `branch_id` (menejer filiali); market operatori — biriktirilgan
+   * market identity'dan (so'rovdagi id'ga ishonilmaydi), biriktirilmagan —
+   * 403.
+   */
+  private async extraCostPageRequester(user: JwtUser) {
+    const roles = this.normalizeRoles(user?.roles);
+    let operatorMarketId: string | undefined;
+    if (
+      roles.includes(RoleEnum.MARKET_OPERATOR) &&
+      !roles.includes(RoleEnum.MARKET)
+    ) {
+      operatorMarketId = await this.resolveMarketOperatorMarketId(user);
+      if (!operatorMarketId) {
+        throw new ForbiddenException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+    }
+    return {
+      id: user.sub,
+      roles,
+      branch_id: user.branch_id ? String(user.branch_id) : null,
+      ...(operatorMarketId ? { market_id: operatorMarketId } : {}),
+    };
+  }
+
+  /**
+   * (GykuOz8f) «Qo'shimcha xarajatli buyurtmalar» sahifasi. ⚠️ `@Get(':id')`
+   * dan OLDIN (PINtZcLj). Mavjud `GET /orders/extra-cost-approvals`
+   * (market dashboard) o'zgarmagan.
+   */
+  @Get('extra-costs')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.COURIER,
+    RoleEnum.MANAGER,
+    RoleEnum.MARKET,
+    // Faqat o'qish (tasdiqlash/rad etish — `extra-cost-approvals/:id/*`, operatorga yopiq).
+    RoleEnum.MARKET_OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Extra-cost orders page (courier, branch manager, market)',
+    description:
+      "(GykuOz8f) Qo'shimcha xarajatli buyurtmalar — haqiqiy sahifalash, eng yangisi tepada. " +
+      "Ko'rish doirasi tokendan: kuryer — o'z so'rovlari; menejer — o'z filiali kuryerlarining " +
+      "so'rovlari (so'rov paytidagi filial) va o'zi yozganlari; market — o'z marketi; " +
+      "market operatori — biriktirilgan marketi, faqat o'qish (biriktirilmagan — 403). " +
+      'Admin / superadmin — 403. Tablar: `all` — hammasi (tasdiqsiz yozilgan va teskari ' +
+      'qaytarilgan ham), `pending` — market qaror qilmagan, `approved` — tasdiqlangan, ' +
+      'avtomatik tasdiqlangan va tasdiqsiz yozilgan (`immediate: true`), `cancelled` — ' +
+      'rad etilgan (`rejected`) va yopilgan (`void`). Javob: `data.items` (so`rov maydonlari + ' +
+      '`immediate`, `order_status`, `customer {name, phone}`, `market {id, name}`, `proof_count`, ' +
+      '`reject_reason_label`), `total` (tanlangan tab), `page`, `limit`, sahifalash meta, ' +
+      '`counts {all, pending, approved, cancelled}`. Isbot fayli — ' +
+      '`GET /orders/extra-costs/:id/proofs/:index`.',
+  })
+  @ApiQuery({
+    name: 'tab',
+    required: false,
+    enum: ['all', 'pending', 'approved', 'cancelled'],
+    example: 'all',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    schema: { default: 1, minimum: 1 },
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [10, 25, 50, 100],
+    schema: { default: 10 },
+  })
+  async pageExtraCosts(
+    @Req() req: { user: JwtUser },
+    @Query('tab') tab?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const normalizedTab =
+      String(tab ?? '')
+        .trim()
+        .toLowerCase() || 'all';
+    if (!['all', 'pending', 'approved', 'cancelled'].includes(normalizedTab)) {
+      throw new BadRequestException("Noto'g'ri tab");
+    }
+    const pagination = this.parsePaginationQuery(page, limit);
+    const requester = await this.extraCostPageRequester(req.user);
+    const response = (await this.sendOrderWithTimeout(
+      { cmd: 'order.extra_cost.page' },
+      {
+        tab: normalizedTab,
+        page: pagination.page,
+        limit: pagination.limit,
+        requester,
+      },
+    )) as { data?: Record<string, unknown> } & Record<string, unknown>;
+    const data: Record<string, unknown> =
+      response?.data && typeof response.data === 'object' ? response.data : {};
+    const total = Number(data.total ?? 0);
+    return {
+      ...response,
+      data: {
+        ...data,
+        ...this.buildPaginationMeta(
+          total,
+          Number(data.page ?? pagination.page),
+          Number(data.limit ?? pagination.limit),
+        ),
+      },
+    };
+  }
+
+  /**
+   * (GykuOz8f) So'rov isboti (rasm / video) baytlari — ro'yxat bilan AYNI
+   * ko'rish qoidasi (order-service): ko'rinmaydigan so'rov yoki oraliqdan
+   * tashqari raqam — 404. Kutilayotgan / rad etilgan / yopilgan so'rov
+   * isboti ham va market operatori uchun ham ochiladi (`files/:key/content`
+   * ular uchun 403 berardi). Sarlavhalar `files/:key/content` bilan bir xil.
+   */
+  @Get('extra-costs/:id/proofs/:index')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.COURIER,
+    RoleEnum.MANAGER,
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Extra-cost request proof file bytes',
+    description:
+      '(GykuOz8f) `GET /orders/extra-costs` qatoridagi isbot (`proof_count` ta, 0 dan). ' +
+      "Ko'rinmaydigan so'rov — 404 «So'rov topilmadi», raqam oraliqdan tashqari — 404. " +
+      'Javob — fayl baytlari (`Content-Type` fayl turi, `Cache-Control: private, max-age=300`).',
+  })
+  @ApiParam({ name: 'id', description: "So'rov id" })
+  @ApiParam({ name: 'index', description: 'Isbot raqami (0 dan)' })
+  @ApiOkResponse({ description: 'Fayl baytlari' })
+  async getExtraCostProof(
+    @Param('id') id: string,
+    @Param('index') index: string,
+    @Req() req: { user: JwtUser },
+    @Res() res: Response,
+  ) {
+    const approvalId = String(id ?? '').trim();
+    const position = String(index ?? '').trim();
+    if (!/^\d+$/.test(approvalId)) {
+      throw new NotFoundException("So'rov topilmadi");
+    }
+    if (!/^\d+$/.test(position)) {
+      throw new NotFoundException('Isbot fayli topilmadi');
+    }
+    const requester = await this.extraCostPageRequester(req.user);
+    const response = (await this.sendOrderWithTimeout(
+      { cmd: 'order.extra_cost.proof' },
+      { id: approvalId, index: Number(position), requester },
+    )) as { data?: { key?: unknown } } | null;
+    const key = this.asStr(response?.data?.key).trim();
+    if (!key) {
+      throw new NotFoundException('Isbot fayli topilmadi');
+    }
+    if (!this.fileClient) {
+      throw new ServiceUnavailableException('Fayl xizmati sozlanmagan');
+    }
+    return sendPrivateFileBytes(this.fileClient, key, res);
   }
 
   @Get(':id')

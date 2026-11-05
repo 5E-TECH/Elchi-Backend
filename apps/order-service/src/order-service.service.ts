@@ -19,6 +19,11 @@ import { OrderSettlement } from './entities/order-settlement.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
+import type { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import {
+  pendingExtraCostApprovalView,
+  type PendingExtraCostApprovalView,
+} from './lifecycle/extra-cost-page';
 import {
   ActivityLogService,
   ActivityLogQuery,
@@ -2956,6 +2961,7 @@ export class OrderServiceService {
       couriers,
       warehouseRefs,
       cancelReturnContext,
+      pendingExtraCosts,
     ] = await Promise.all([
       marketIds.length
         ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
@@ -3000,6 +3006,7 @@ export class OrderServiceService {
           )
         : Promise.resolve(new Map<string, WarehouseRef>()),
       this.loadCancelReturnContext(rows),
+      this.loadPendingExtraCostApprovals(rows),
     ]);
 
     const toMap = (arr: Array<{ id: string; [key: string]: any }>) =>
@@ -3133,7 +3140,71 @@ export class OrderServiceService {
       // 6kHnNH9j: `fulfillment_source` — ustun (HQ | WAREHOUSE); ombor — ref.
       warehouse: warehouseRefOf(row, warehouseRefs),
       ...this.cancelReturnFields(row, cancelReturnContext, couriers),
+      // (GykuOz8f) «Tasdiq kutilmoqda» belgisi serverdan (har qurilmada bir
+      // xil): faqat «kutilmoqda» buyurtmada ochiq so'rov bo'lsa.
+      pending_extra_cost_approval:
+        pendingExtraCosts.get(String(row.id)) ?? null,
     }));
+  }
+
+  /**
+   * (GykuOz8f) `pending_extra_cost_approval` — sahifadagi «kutilmoqda»
+   * buyurtmalarning ochiq qo'shimcha xarajat so'rovlari, BITTA so'rov
+   * (partial unique indeks: bitta buyurtmada bittadan ortiq ochiq so'rov
+   * yo'q). Boshqa holatdagi buyurtma — so'ralmaydi (belgi yo'q). Xato
+   * boyitishni yiqitmaydi — belgi `null`.
+   */
+  private async loadPendingExtraCostApprovals(
+    rows: Order[],
+  ): Promise<Map<string, PendingExtraCostApprovalView>> {
+    const result = new Map<string, PendingExtraCostApprovalView>();
+    const ids = [
+      ...new Set(
+        rows
+          .filter((row) => row.status === Order_status.WAITING)
+          .map((row) => String(row.id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    ];
+    if (!ids.length) return result;
+    try {
+      const approvals: Array<
+        Pick<
+          OrderExtraCostApproval,
+          | 'id'
+          | 'action'
+          | 'amount'
+          | 'status'
+          | 'createdAt'
+          | 'auto_approve_from'
+          | 'auto_retry_at'
+          | 'reminder_sent_at'
+        > & { order_id: unknown }
+      > = await this.dataSource.query(
+        `SELECT "id"::text AS "id", "order_id"::text AS "order_id", "action",
+                "amount", "status", "createdAt", "auto_approve_from",
+                "auto_retry_at", "reminder_sent_at"
+           FROM "order_schema"."order_extra_cost_approvals"
+          WHERE "order_id" = ANY($1::bigint[])
+            AND "status" = 'pending'
+            AND "is_deleted" = false
+          ORDER BY "createdAt" ASC`,
+        [ids],
+      );
+      for (const approval of approvals ?? []) {
+        result.set(
+          String(approval.order_id),
+          pendingExtraCostApprovalView(approval),
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `enrichOrders: kutilayotgan qo'shimcha xarajat so'rovlarini o'qib bo'lmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return result;
   }
 
   /**
