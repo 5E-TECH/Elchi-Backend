@@ -574,29 +574,271 @@ describe('1tnpaIqd — ega qarori: muddat o‘tsa avtomatik tasdiq', () => {
     ).toHaveLength(1);
   });
 
-  it('scheduler: EXTRA_COST_AUTO_APPROVE_MINUTES berilmasa — o‘chiq (kodga qotirilmagan)', async () => {
-    const lifecycle = { runExtraCostAutoApproval: jest.fn() };
-    const off = new ExtraCostAutoApproveScheduler(
-      lifecycle as never,
+  it('⭐ (AFZaUUi5) scheduler: env berilmasa yoki bo‘sh — 1440 daqiqa (24 soat); env qiymati — o‘sha', async () => {
+    const stats = { reminded: 0, approved: 0, failed: 0, deferred: 0 };
+    const tick = async (env: Record<string, unknown>) => {
+      const lifecycle = {
+        runExtraCostAutoApproval: jest.fn().mockResolvedValue(stats),
+      };
+      await new ExtraCostAutoApproveScheduler(
+        lifecycle as never,
+        { get: (key: string) => env[key] } as never,
+      ).tick();
+      return lifecycle.runExtraCostAutoApproval;
+    };
+
+    expect(await tick({})).toHaveBeenCalledWith({
+      minutes: 1440,
+      reminderMinutes: 10,
+    });
+    expect(
+      await tick({ EXTRA_COST_AUTO_APPROVE_MINUTES: '' }),
+    ).toHaveBeenCalledWith({ minutes: 1440, reminderMinutes: 10 });
+    // Joi sukuti ConfigService'dan son bo'lib keladi.
+    expect(
+      await tick({ EXTRA_COST_AUTO_APPROVE_MINUTES: 1440 }),
+    ).toHaveBeenCalledWith({ minutes: 1440, reminderMinutes: 10 });
+    expect(
+      await tick({ EXTRA_COST_AUTO_APPROVE_MINUTES: '45' }),
+    ).toHaveBeenCalledWith({ minutes: 45, reminderMinutes: 10 });
+    expect(
+      await tick({
+        EXTRA_COST_AUTO_APPROVE_MINUTES: '60',
+        EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES: '5',
+      }),
+    ).toHaveBeenCalledWith({ minutes: 60, reminderMinutes: 5 });
+  });
+
+  it('(AFZaUUi5) scheduler env bo‘sh bo‘lsa ham ishga tushadi (interval)', () => {
+    const setIntervalSpy = jest.spyOn(global, 'setInterval');
+    const scheduler = new ExtraCostAutoApproveScheduler(
+      { runExtraCostAutoApproval: jest.fn() } as never,
       { get: () => undefined } as never,
     );
-    await off.tick();
-    expect(lifecycle.runExtraCostAutoApproval).not.toHaveBeenCalled();
-    const on = new ExtraCostAutoApproveScheduler(
-      lifecycle as never,
-      {
-        get: (key: string) => ({ EXTRA_COST_AUTO_APPROVE_MINUTES: '45' })[key],
-      } as never,
+    try {
+      scheduler.onModuleInit();
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+    } finally {
+      scheduler.onModuleDestroy();
+      setIntervalSpy.mockRestore();
+    }
+  });
+});
+
+describe('AFZaUUi5 — market 24 soatda javob bermasa avtomatik tasdiq', () => {
+  const DAY = 1440;
+  const now = new Date('2026-11-06T12:00:00Z');
+  const minutesAgo = (minutes: number) =>
+    new Date(now.getTime() - minutes * 60_000);
+  const run = (svc: OrderLifecycleService, at: Date = now, limit?: number) =>
+    svc.runExtraCostAutoApproval({
+      minutes: DAY,
+      reminderMinutes: 10,
+      now: at,
+      limit,
+    });
+
+  it('⭐ TC1: javobsiz 24 soat — avtomatik tasdiq: auto_approved, sotuv BIR marta; 24 soat to‘lmagan — kutadi', async () => {
+    const { svc, repo, sellOrder } = makeService([
+      pending({ id: '7', createdAt: minutesAgo(DAY + 1) }),
+      pending({ id: '8', order_id: '7002', createdAt: minutesAgo(DAY - 60) }),
+    ]);
+
+    const stats = await run(svc);
+
+    expect(stats).toMatchObject({ approved: 1, failed: 0, deferred: 0 });
+    expect(repo.row('7')).toMatchObject({
+      status: 'approved',
+      auto_approved: true,
+      decided_by_user_id: null,
+    });
+    expect(repo.row('8')!.status).toBe('pending');
+    expect(sellOrder).toHaveBeenCalledTimes(1);
+    expect(await run(svc)).toMatchObject({ approved: 0 });
+    expect(sellOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('⭐ TC2: tasdiqdan 10 daqiqa oldin marketga BITTA eslatma', async () => {
+    const { svc, repo, outbox } = makeService([
+      pending({ id: '9', createdAt: minutesAgo(DAY - 9) }),
+    ]);
+
+    expect((await run(svc)).reminded).toBe(1);
+    expect((await run(svc)).reminded).toBe(0);
+    expect(repo.row('9')!.status).toBe('pending');
+    const reminders = outbox.enqueue.mock.calls.filter(
+      ([, , payload]) => payload.type === 'order.extra_cost_reminder',
     );
-    lifecycle.runExtraCostAutoApproval.mockResolvedValue({
+    expect(reminders).toHaveLength(1);
+    expect(reminders[0][2]).toMatchObject({ recipient_id: '501' });
+  });
+
+  it('⭐ TC3/TC6: market qaror qilgan yoki so‘rov yopilgan (approved / rejected / void / reversed) — avtomatik tasdiq tegmaydi', async () => {
+    const old = minutesAgo(3 * DAY);
+    const { svc, repo, sellOrder } = makeService([
+      pending({ id: '11', status: 'approved', createdAt: old }),
+      pending({
+        id: '12',
+        order_id: '7012',
+        status: 'rejected',
+        createdAt: old,
+      }),
+      pending({ id: '13', order_id: '7013', status: 'void', createdAt: old }),
+      pending({
+        id: '14',
+        order_id: '7014',
+        status: 'reversed',
+        createdAt: old,
+      }),
+    ]);
+
+    expect(await run(svc)).toEqual({
       reminded: 0,
       approved: 0,
       failed: 0,
+      deferred: 0,
     });
-    await on.tick();
-    expect(lifecycle.runExtraCostAutoApproval).toHaveBeenCalledWith({
-      minutes: 45,
+    expect(sellOrder).not.toHaveBeenCalled();
+    expect(repo.updates).toEqual([]);
+  });
+
+  it('⭐ TC5: yoqilgan paytda ochiq turgan 3 kunlik so‘rov darhol tasdiqlanmaydi — yoqilgan paytdan 24 soat (eslatma 10 daqiqa oldin)', async () => {
+    const enabledAt = minutesAgo(5);
+    const { svc, repo, sellOrder } = makeService([
+      pending({
+        id: '15',
+        createdAt: minutesAgo(3 * DAY),
+        auto_approve_from: enabledAt,
+      }),
+    ]);
+
+    expect(await run(svc)).toMatchObject({ approved: 0, reminded: 0 });
+    expect(sellOrder).not.toHaveBeenCalled();
+
+    const reminderTime = new Date(enabledAt.getTime() + (DAY - 9) * 60_000);
+    expect((await run(svc, reminderTime)).reminded).toBe(1);
+    expect(repo.row('15')!.status).toBe('pending');
+
+    const due = new Date(enabledAt.getTime() + DAY * 60_000);
+    expect((await run(svc, due)).approved).toBe(1);
+    expect(repo.row('15')).toMatchObject({
+      status: 'approved',
+      auto_approved: true,
+    });
+  });
+
+  it('⭐ TC7: biznes xatosi (buyurtma o‘zgargan) — so‘rov void, keyingi daqiqalarda qayta urinilmaydi', async () => {
+    const { svc, repo, order, sellOrder } = makeService([
+      pending({ id: '16', createdAt: minutesAgo(DAY + 5) }),
+    ]);
+    order.status = Order_status.SOLD;
+
+    expect(await run(svc)).toMatchObject({
+      approved: 0,
+      failed: 1,
+      deferred: 0,
+    });
+    expect(repo.row('16')).toMatchObject({
+      status: 'void',
+      closed_reason: expect.stringContaining('kutilmoqda'),
+    });
+
+    const later = new Date(now.getTime() + 60_000);
+    expect(await run(svc, later)).toEqual({
+      reminded: 0,
+      approved: 0,
+      failed: 0,
+      deferred: 0,
+    });
+    expect(sellOrder).not.toHaveBeenCalled();
+  });
+
+  it('⭐ infratuzilma xatosi — so‘rov pending, keyingi urinish 15 → 30 daqiqadan keyin (har daqiqa emas)', async () => {
+    const { svc, repo, failures, sellOrder } = makeService([
+      pending({ id: '17', createdAt: minutesAgo(DAY + 5) }),
+    ]);
+    failures.push(new Error('Timeout has occurred'));
+
+    expect(await run(svc)).toMatchObject({ approved: 0, deferred: 1 });
+    expect(repo.row('17')).toMatchObject({
+      status: 'pending',
+      auto_attempts: 1,
+      auto_retry_at: new Date(now.getTime() + 15 * 60_000),
+    });
+    expect(sellOrder).toHaveBeenCalledTimes(1);
+
+    // Keyingi daqiqalarda — urinilmaydi.
+    for (const minutes of [1, 2, 14]) {
+      await run(svc, new Date(now.getTime() + minutes * 60_000));
+    }
+    expect(sellOrder).toHaveBeenCalledTimes(1);
+
+    // 15 daqiqadan keyin — yana; yana xato — 30 daqiqa.
+    const second = new Date(now.getTime() + 15 * 60_000);
+    failures.push(new Error('Timeout has occurred'));
+    expect(await run(svc, second)).toMatchObject({ deferred: 1 });
+    expect(sellOrder).toHaveBeenCalledTimes(2);
+    expect(repo.row('17')).toMatchObject({
+      auto_attempts: 2,
+      auto_retry_at: new Date(second.getTime() + 30 * 60_000),
+    });
+
+    // Navbat kelganda xato bo'lmasa — tasdiqlanadi.
+    const third = new Date(second.getTime() + 30 * 60_000);
+    expect(await run(svc, third)).toMatchObject({ approved: 1 });
+    expect(repo.row('17')).toMatchObject({
+      status: 'approved',
+      auto_approved: true,
+    });
+  });
+
+  it('kechiktirilgan so‘rovlar navbat boshini egallamaydi (take limit)', async () => {
+    const { svc, repo } = makeService([
+      pending({
+        id: '18',
+        createdAt: minutesAgo(5 * DAY),
+        auto_attempts: 3,
+        auto_retry_at: new Date(now.getTime() + 60 * 60_000),
+      }),
+      pending({ id: '19', order_id: '7019', createdAt: minutesAgo(DAY + 1) }),
+    ]);
+
+    expect(await run(svc, now, 1)).toMatchObject({ approved: 1 });
+    expect(repo.row('18')!.status).toBe('pending');
+    expect(repo.row('19')!.status).toBe('approved');
+  });
+
+  it('kechiktirish oralig‘i 360 daqiqadan oshmaydi', async () => {
+    const { svc, repo, failures } = makeService([
+      pending({
+        id: '20',
+        createdAt: minutesAgo(10 * DAY),
+        auto_attempts: 9,
+      }),
+    ]);
+    failures.push(new Error('Timeout has occurred'));
+
+    await run(svc);
+
+    expect(repo.row('20')).toMatchObject({
+      auto_attempts: 10,
+      auto_retry_at: new Date(now.getTime() + 360 * 60_000),
+    });
+  });
+
+  it('⭐ TC8: boshqa muddat (60 daqiqa) — o‘sha ishlatiladi', async () => {
+    const { svc, repo } = makeService([
+      pending({ id: '21', createdAt: minutesAgo(61) }),
+      pending({ id: '22', order_id: '7022', createdAt: minutesAgo(59) }),
+    ]);
+
+    await svc.runExtraCostAutoApproval({
+      minutes: 60,
       reminderMinutes: 10,
+      now,
     });
+
+    expect(repo.row('21')!.status).toBe('approved');
+    expect(repo.row('22')!.status).toBe('pending');
   });
 });

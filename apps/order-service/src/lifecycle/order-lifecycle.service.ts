@@ -71,6 +71,7 @@ import {
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
   resolvePartnerMoneyFields,
+  resolveExtraCostAutoApproveMinutes,
   WAREHOUSE_ERROR_CODES,
 } from '@app/common';
 
@@ -2684,8 +2685,9 @@ export class OrderLifecycleService {
       decision_comment: approval.decision_comment,
       // (1tnpaIqd) avtomatik tasdiq qo'lda tasdiqdan ajratiladi.
       auto_approved: Boolean(approval.auto_approved),
-      // (1tnpaIqd) muddat: kutilayotgan so'rov shu vaqtgacha javobsiz qolsa avtomatik
-      // tasdiqlanadi. Avtomatik tasdiq o'chiq (env yo'q) yoki so'rov yopilgan — null.
+      // (1tnpaIqd → AFZaUUi5) muddat: kutilayotgan so'rov shu vaqtgacha
+      // javobsiz qolsa avtomatik tasdiqlanadi (sukut 24 soat). So'rov
+      // yopilgan — null.
       auto_approve_at: this.extraCostAutoApproveAt(approval),
       reject_reason: approval.reject_reason ?? null,
       // (hwTkXsGi) `void` / `reversed` sababi va vaqti (boshqa holatlarda null).
@@ -2740,22 +2742,33 @@ export class OrderLifecycleService {
   }
 
   /**
-   * `EXTRA_COST_AUTO_APPROVE_MINUTES` — ExtraCostAutoApproveScheduler bilan bir
-   * xil o'qiladi (musbat butun son, aks holda o'chiq). Konfiguratsiya
-   * process.env'ga ConfigModule orqali yuklanadi.
+   * (AFZaUUi5) Avtomatik tasdiq vaqti: `auto_approve_from` (yangi so'rovda —
+   * yaratilgan vaqt, yoqilgan paytda ochiq turganida — yoqilgan vaqt) +
+   * `EXTRA_COST_AUTO_APPROVE_MINUTES` (ExtraCostAutoApproveScheduler bilan
+   * bitta qoida: bo'sh yoki noto'g'ri — 1440). Infratuzilma xatosidan keyin
+   * urinish kechiktirilgan bo'lsa — keyingi urinish vaqti.
    */
   private extraCostAutoApproveAt(
-    approval: Pick<OrderExtraCostApproval, 'status' | 'createdAt'>,
+    approval: Pick<
+      OrderExtraCostApproval,
+      'status' | 'createdAt' | 'auto_approve_from' | 'auto_retry_at'
+    >,
   ): string | null {
-    const raw = String(
-      process.env.EXTRA_COST_AUTO_APPROVE_MINUTES ?? '',
-    ).trim();
-    const minutes = raw ? Number(raw) : NaN;
-    if (!Number.isInteger(minutes) || minutes <= 0) return null;
-    if (approval.status !== 'pending' || !approval.createdAt) return null;
-    const created = new Date(approval.createdAt).getTime();
-    if (!Number.isFinite(created)) return null;
-    return new Date(created + minutes * 60_000).toISOString();
+    if (approval.status !== 'pending') return null;
+    const from = new Date(
+      approval.auto_approve_from ?? approval.createdAt ?? NaN,
+    ).getTime();
+    if (!Number.isFinite(from)) return null;
+    const minutes = resolveExtraCostAutoApproveMinutes(
+      process.env.EXTRA_COST_AUTO_APPROVE_MINUTES,
+    );
+    const due = from + minutes * 60_000;
+    const retry = approval.auto_retry_at
+      ? new Date(approval.auto_retry_at).getTime()
+      : NaN;
+    return new Date(
+      Number.isFinite(retry) ? Math.max(due, retry) : due,
+    ).toISOString();
   }
 
   private requesterPrimaryRole(requester: { roles?: string[] }) {
@@ -3345,19 +3358,30 @@ export class OrderLifecycleService {
   }
 
   /**
-   * (1tnpaIqd, ega qarori) Avtomatik tasdiq skaneri — `ExtraCostAutoApproveScheduler`
-   * har daqiqada chaqiradi. `minutes` — EXTRA_COST_AUTO_APPROVE_MINUTES
-   * (kodga qotirilmagan); `reminderMinutes` qolganda marketga oxirgi eslatma
-   * (bir marta, `reminder_sent_at` shartli UPDATE bilan).
+   * (1tnpaIqd → AFZaUUi5) Avtomatik tasdiq skaneri — `ExtraCostAutoApproveScheduler`
+   * har daqiqada chaqiradi. `minutes` — EXTRA_COST_AUTO_APPROVE_MINUTES (sukut
+   * 1440), `auto_approve_from` dan sanaladi; `reminderMinutes` qolganda marketga
+   * oxirgi eslatma (bir marta, `reminder_sent_at` shartli UPDATE bilan).
+   *
+   * Tasdiq qo'lda tasdiq bilan bitta yo'l (`approveExtraCostApproval`):
+   * darvoza, sotuv bilan bir tranzaksiya, biznes xatosida `void`. So'rov
+   * `pending` qolgan (infratuzilma) xatoda keyingi urinish kechiktiriladi —
+   * `auto_retry_at` (15 → 30 → … ≤ 360 daqiqa), har daqiqa qayta urinilmaydi
+   * va kechiktirilganlar navbat boshini egallamaydi.
    */
   async runExtraCostAutoApproval(params: {
     minutes: number;
     reminderMinutes: number;
     now?: Date;
     limit?: number;
-  }): Promise<{ reminded: number; approved: number; failed: number }> {
+  }): Promise<{
+    reminded: number;
+    approved: number;
+    failed: number;
+    deferred: number;
+  }> {
     const now = params.now ?? new Date();
-    const stats = { reminded: 0, approved: 0, failed: 0 };
+    const stats = { reminded: 0, approved: 0, failed: 0, deferred: 0 };
     if (!(params.minutes > 0)) return stats;
     const deadline = new Date(now.getTime() - params.minutes * 60_000);
     const reminderAt = new Date(
@@ -3371,11 +3395,11 @@ export class OrderLifecycleService {
           pending: 'pending',
         })
         .andWhere('a.reminder_sent_at IS NULL')
-        .andWhere('a.createdAt <= :reminderAt AND a.createdAt > :deadline', {
-          reminderAt,
-          deadline,
-        })
-        .orderBy('a.createdAt', 'ASC')
+        .andWhere(
+          'a.auto_approve_from <= :reminderAt AND a.auto_approve_from > :deadline',
+          { reminderAt, deadline },
+        )
+        .orderBy('a.auto_approve_from', 'ASC')
         .take(params.limit ?? 100)
         .getMany();
       for (const approval of due) {
@@ -3412,8 +3436,11 @@ export class OrderLifecycleService {
       .where('a.status = :pending AND a.is_deleted = false', {
         pending: 'pending',
       })
-      .andWhere('a.createdAt <= :deadline', { deadline })
-      .orderBy('a.createdAt', 'ASC')
+      .andWhere('a.auto_approve_from <= :deadline', { deadline })
+      .andWhere('(a.auto_retry_at IS NULL OR a.auto_retry_at <= :now)', {
+        now,
+      })
+      .orderBy('a.auto_approve_from', 'ASC')
       .take(params.limit ?? 100)
       .getMany();
     for (const approval of expired) {
@@ -3431,13 +3458,50 @@ export class OrderLifecycleService {
           body: `${formatSom(approval.amount)} — muddat ichida javob berilmadi. E'tiroz bo'lsa admin bilan bog'laning.`,
         }).catch(() => undefined);
       } catch (error) {
-        stats.failed += 1;
+        const retryAt = await this.deferExtraCostAutoApproval(approval, now);
+        if (retryAt) stats.deferred += 1;
+        else stats.failed += 1;
         this.logger.warn(
-          `extra cost #${approval.id} avtomatik tasdiqlanmadi: ${error instanceof Error ? error.message : String(error)}`,
+          `extra cost #${approval.id} avtomatik tasdiqlanmadi: ${error instanceof Error ? error.message : String(error)}` +
+            (retryAt
+              ? ` — so'rov kutilmoqda, keyingi urinish ${retryAt.toISOString()}`
+              : ''),
         );
       }
     }
     return stats;
+  }
+
+  /**
+   * (AFZaUUi5) Avtomatik tasdiq urinishi so'rovni yopmagan bo'lsa (hali
+   * `pending` — infratuzilma xatosi), keyingi urinish kechiktiriladi:
+   * 15, 30, 60, 120, 240, keyin har 360 daqiqada. So'rov yopilgan (`void`,
+   * boshqa qaror) — hech narsa yozilmaydi, `null`.
+   */
+  private async deferExtraCostAutoApproval(
+    approval: OrderExtraCostApproval,
+    now: Date,
+  ): Promise<Date | null> {
+    const attempts = Number(approval.auto_attempts ?? 0) + 1;
+    const delayMinutes = Math.min(15 * 2 ** (attempts - 1), 360);
+    const retryAt = new Date(now.getTime() + delayMinutes * 60_000);
+    try {
+      const result = await this.extraCostApprovalRepo
+        .createQueryBuilder()
+        .update(OrderExtraCostApproval)
+        .set({ auto_attempts: attempts, auto_retry_at: retryAt })
+        .where('id = :id AND status = :pending AND is_deleted = false', {
+          id: approval.id,
+          pending: 'pending',
+        })
+        .execute();
+      return result.affected ? retryAt : null;
+    } catch (error) {
+      this.logger.warn(
+        `extra cost #${approval.id} keyingi avtomatik urinish yozilmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
   }
 
   /**

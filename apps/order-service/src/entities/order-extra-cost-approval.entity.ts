@@ -84,6 +84,27 @@ export class OrderExtraCostApproval extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   reminder_sent_at!: Date | null;
 
+  /**
+   * (AFZaUUi5) Avtomatik tasdiq muddati shu vaqtdan sanaladi. Yangi so'rovda —
+   * yaratilgan vaqt (DB sukuti `now()`); avtomatik tasdiq yoqilgan paytda
+   * ochiq turgan so'rovlarda — yoqilgan vaqt (migratsiya 208), aks holda
+   * 24 soatdan eskilari birinchi daqiqada birdan tasdiqlanib ketardi. Tasdiq
+   * darvozasi (holat o'zgarganmi) esa avvalgidek `createdAt` dan sanaladi.
+   */
+  @Column({ type: 'timestamptz', default: () => 'now()' })
+  auto_approve_from!: Date;
+
+  /**
+   * (AFZaUUi5) Avtomatik tasdiq infratuzilma xatosi bilan tugagan urinishlar
+   * soni; keyingi urinish `auto_retry_at` dan oldin bo'lmaydi (har daqiqa
+   * qayta urinilmaydi). Biznes xatosida so'rov `void` — bular kerak emas.
+   */
+  @Column({ type: 'int', default: 0 })
+  auto_attempts!: number;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  auto_retry_at!: Date | null;
+
   /** (DuST9k8j) Rad etish sababi — ExtraCostRejectReason (yopiq ro'yxat). */
   @Column({ type: 'varchar', length: 40, nullable: true })
   reject_reason!: string | null;

@@ -219,7 +219,7 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   Timeout / 502–504 → "Natija noma'lum" va «✅ Ha» tugmasi qaytariladi: qayta bosish
   ayni kalit bilan ketadi, backend amalni ikkinchi marta bajarmaydi (keshdagi javob).
 
-## 8. Qo'shimcha xarajat tasdig'i (DuST9k8j, 1tnpaIqd)
+## 8. Qo'shimcha xarajat tasdig'i (DuST9k8j, 1tnpaIqd, AFZaUUi5)
 
 - So'rov yaratilganda order-service `order.extra_cost_requested` ni outbox
   orqali ko'taradi (best-effort — kuryerning 202 javobi o'zgarmaydi):
@@ -231,9 +231,16 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 - Qaror ATOMIK (`UPDATE … WHERE status='pending'`): ikki bosish / panel bilan
   bir vaqtda → bittasi o'tadi, ikkinchisi "allaqachon yakunlangan"; biznes amali
   xato bersa so'rov `pending` ga qaytadi. Qarordan keyin DM tugmalari olinadi.
-- EGA QARORI — avtomatik tasdiq: `EXTRA_COST_AUTO_APPROVE_MINUTES` (bo'sh —
-  o'chiq), `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` (sukut 10) qolganda
-  eslatma (`order.extra_cost_reminder`, bir marta). Avtomatik tasdiq:
+- EGA QARORI — avtomatik tasdiq (AFZaUUi5, 2026-11-05: 24 soat):
+  `EXTRA_COST_AUTO_APPROVE_MINUTES` (bo'sh — sukut 1440, boshqa qiymat
+  almashtiradi), `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` (sukut 10) qolganda
+  eslatma (`order.extra_cost_reminder`, bir marta). Muddat
+  `auto_approve_from` dan sanaladi — yangi so'rovda yaratilgan vaqt, yoqilgan
+  paytda ochiq turganlarida migratsiya 208 vaqti (birinchi daqiqada
+  tasdiqlanib ketmaydi). Tasdiq qo'lda tasdiq bilan bir yo'l (darvoza, sotuv
+  bilan bitta tranzaksiya); biznes xatosida so'rov `void`, qayta urinilmaydi;
+  texnik xatoda (timeout / 5xx) `pending` qoladi, keyingi urinish
+  `auto_retry_at` — 15 → 30 → … ≤ 360 daqiqa. Avtomatik tasdiq:
   `auto_approved=true`, `decided_by_user_id=NULL`, sabab matni, audit
   (`order.extra_cost_auto_approved`), marketga xabar. Ro'yxat filtri:
   `GET /orders/extra-cost-approvals?status=approved&auto_approved=true`;

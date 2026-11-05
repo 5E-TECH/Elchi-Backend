@@ -5,6 +5,7 @@ import { Order_status } from '@app/common';
 import { CreateOrderExtraCostApprovals1716000000026 } from '../../../../migrations/1716000000026-CreateOrderExtraCostApprovals';
 import { ExtraCostAutoApprove1716000000123 } from '../../../../migrations/1716000000123-ExtraCostAutoApprove';
 import { ExtraCostApprovalVoidReversed1716000000206 } from '../../../../migrations/1716000000206-ExtraCostApprovalVoidReversed';
+import { ExtraCostAutoApproveFrom1716000000208 } from '../../../../migrations/1716000000208-ExtraCostAutoApproveFrom';
 import { Branch } from '../entities/branch.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import {
@@ -20,15 +21,17 @@ import {
 } from './order-lifecycle.service';
 
 /**
- * 1tnpaIqd + hwTkXsGi — atomik qaror HAQIQIY Postgres'da (faqat lokal test
- * bazasi): migratsiya 026 + 123 + 206.
+ * 1tnpaIqd + hwTkXsGi + AFZaUUi5 — atomik qaror HAQIQIY Postgres'da (faqat
+ * lokal test bazasi): migratsiya 026 + 123 + 206 + 208.
  *
  *  - ikki parallel approve / approve+reject — faqat bittasi o'tadi, sotuv
  *    bir marta;
  *  - «tasdiqlandi» (claim) sotuv bilan BITTA tranzaksiyada: sotuv yiqilsa
  *    claim ham qaytadi (real ROLLBACK);
  *  - darvoza `order_tracking` dan (so'rovdan keyin holat o'zgargan) — void;
- *  - void / reversed SQL'i, partial unique indeks (23505).
+ *  - void / reversed SQL'i, partial unique indeks (23505);
+ *  - avtomatik tasdiq skanerining SQL'i: `auto_approve_from` dan sanash,
+ *    `auto_retry_at` kechiktirish, eslatma.
  *
  * Qayta ijro (`sellOrder`) soxta, lekin uning tranzaksiyasi HAQIQIY:
  * haqiqiy `applyExtraCostApprovalsOnExecution` + (soxta) pul, so'ng COMMIT.
@@ -54,7 +57,7 @@ type ApprovalRow = {
 };
 
 (localTestDatabase ? describe : describe.skip)(
-  'extra-cost qarori — lokal Postgres (1tnpaIqd + hwTkXsGi)',
+  'extra-cost qarori — lokal Postgres (1tnpaIqd + hwTkXsGi + AFZaUUi5)',
   () => {
     jest.setTimeout(30_000);
     let db: DataSource;
@@ -118,6 +121,7 @@ type ApprovalRow = {
         await new ExtraCostAutoApprove1716000000123().up(runner);
         await new ExtraCostAutoApprove1716000000123().up(runner);
         await new ExtraCostApprovalVoidReversed1716000000206().up(runner);
+        await new ExtraCostAutoApproveFrom1716000000208().up(runner);
       } finally {
         await runner.release();
       }
@@ -414,6 +418,190 @@ type ApprovalRow = {
       await expect(
         insert({ orderId: Number(first.orderId) }),
       ).resolves.toBeDefined();
+    });
+
+    describe('AFZaUUi5 — avtomatik tasdiq skaneri (haqiqiy SQL)', () => {
+      type AutoRow = {
+        status: string;
+        auto_approved: boolean;
+        reminder_sent_at: Date | null;
+        auto_attempts: number;
+        auto_retry_at: Date | null;
+      };
+      const H = 60 * 60_000;
+      const now = new Date();
+      const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
+      const run = (svc: OrderLifecycleService, when = now, limit?: number) =>
+        svc.runExtraCostAutoApproval({
+          minutes: 1440,
+          reminderMinutes: 10,
+          now: when,
+          limit,
+        });
+      /** So'rov vaqti / muddat boshi / keyingi urinish — SQL bilan. */
+      const seed = async (row: {
+        createdAt: Date;
+        from?: Date;
+        retryAt?: Date;
+        status?: string;
+        isDeleted?: boolean;
+      }) => {
+        const saved = await insert({ status: row.status });
+        await db.query(
+          `UPDATE order_schema.order_extra_cost_approvals
+              SET "createdAt" = $2, auto_approve_from = $3, auto_retry_at = $4, is_deleted = $5
+            WHERE id = $1`,
+          [
+            saved.id,
+            row.createdAt,
+            row.from ?? row.createdAt,
+            row.retryAt ?? null,
+            row.isDeleted ?? false,
+          ],
+        );
+        return saved;
+      };
+      const readAuto = async (id: string): Promise<AutoRow> => {
+        const [row]: AutoRow[] = await db.query(
+          `SELECT status, auto_approved, reminder_sent_at, auto_attempts, auto_retry_at
+             FROM order_schema.order_extra_cost_approvals WHERE id = $1`,
+          [id],
+        );
+        return row;
+      };
+      /** Oldingi testlar qoldirgan ochiq so'rovlar skanerga aralashmasin. */
+      beforeEach(async () => {
+        await db.query(
+          `UPDATE order_schema.order_extra_cost_approvals SET status = 'void'
+            WHERE status = 'pending'`,
+        );
+      });
+
+      it('⭐ TC1/TC3/TC5/TC6: 24 soat o‘tgani tasdiqlanadi; yoqilgan paytdan sanalayotgan eski so‘rov, yopilgan va o‘chirilgan — yo‘q', async () => {
+        const expired = await seed({ createdAt: at(-25 * H) });
+        // Migratsiya 208: 3 kunlik so'rov, muddat 1 soat oldin yoqilgan.
+        const anchored = await seed({
+          createdAt: at(-72 * H),
+          from: at(-1 * H),
+        });
+        const rejected = await seed({
+          createdAt: at(-25 * H),
+          status: 'rejected',
+        });
+        const voided = await seed({ createdAt: at(-25 * H), status: 'void' });
+        const deleted = await seed({
+          createdAt: at(-25 * H),
+          isDeleted: true,
+        });
+        const { svc, executed } = makeService();
+
+        expect(await run(svc)).toEqual({
+          reminded: 0,
+          approved: 1,
+          failed: 0,
+          deferred: 0,
+        });
+        expect(executed).toEqual([expired.orderId]);
+        expect(await readAuto(expired.id)).toMatchObject({
+          status: 'approved',
+          auto_approved: true,
+        });
+        expect(await readAuto(anchored.id)).toMatchObject({
+          status: 'pending',
+          reminder_sent_at: null,
+        });
+        expect((await readAuto(rejected.id)).status).toBe('rejected');
+        expect((await readAuto(voided.id)).status).toBe('void');
+        expect((await readAuto(deleted.id)).status).toBe('pending');
+
+        // Yoqilgan paytdan 24 soat o'tdi — endi tasdiqlanadi.
+        expect(await run(svc, at(23 * H + 1000))).toMatchObject({
+          approved: 1,
+        });
+        expect(await readAuto(anchored.id)).toMatchObject({
+          status: 'approved',
+          auto_approved: true,
+        });
+      });
+
+      it('⭐ TC2: eslatma muddatdan 10 daqiqa oldin, bir marta', async () => {
+        const soon = await seed({ createdAt: at(-(24 * H - 9 * 60_000)) });
+        const early = await seed({ createdAt: at(-(24 * H - 11 * 60_000)) });
+        const { svc } = makeService();
+
+        expect(await run(svc)).toMatchObject({ reminded: 1, approved: 0 });
+        expect((await readAuto(soon.id)).reminder_sent_at).toEqual(now);
+        expect((await readAuto(early.id)).reminder_sent_at).toBeNull();
+        expect(await run(svc)).toMatchObject({ reminded: 0 });
+      });
+
+      it('⭐ infratuzilma xatosi: so‘rov pending, keyingi urinish 15 → 30 daqiqadan keyin, oraliqda urinilmaydi', async () => {
+        const { id, orderId } = await seed({ createdAt: at(-25 * H) });
+        const { svc: down } = makeService(new Error('RMQ timeout'));
+
+        expect(await run(down)).toMatchObject({ approved: 0, deferred: 1 });
+        expect(await readAuto(id)).toEqual({
+          status: 'pending',
+          auto_approved: false,
+          reminder_sent_at: null,
+          auto_attempts: 1,
+          auto_retry_at: at(15 * 60_000),
+        });
+        // Keyingi daqiqalar — urinish yo'q.
+        for (const minute of [1, 5, 14]) {
+          expect(await run(down, at(minute * 60_000))).toEqual({
+            reminded: 0,
+            approved: 0,
+            failed: 0,
+            deferred: 0,
+          });
+        }
+        expect(await run(down, at(15 * 60_000))).toMatchObject({
+          deferred: 1,
+        });
+        expect(await readAuto(id)).toMatchObject({
+          auto_attempts: 2,
+          auto_retry_at: at(45 * 60_000),
+        });
+
+        // Tizim tiklandi — navbatdagi urinishda tasdiqlanadi.
+        const { svc: up, executed } = makeService();
+        expect(await run(up, at(45 * 60_000))).toMatchObject({ approved: 1 });
+        expect(executed).toEqual([orderId]);
+        expect(await readAuto(id)).toMatchObject({
+          status: 'approved',
+          auto_approved: true,
+        });
+      });
+
+      it('⭐ TC7: biznes xatosi — void, keyingi daqiqalarda qayta urinilmaydi', async () => {
+        const { id } = await seed({ createdAt: at(-25 * H) });
+        const { svc, sellOrder } = makeService(
+          new RpcException({ statusCode: 400, message: 'Kuryer bloklangan' }),
+        );
+
+        expect(await run(svc)).toMatchObject({ approved: 0, failed: 1 });
+        expect(await readAuto(id)).toMatchObject({
+          status: 'void',
+          auto_attempts: 0,
+          auto_retry_at: null,
+        });
+        expect(await run(svc, at(60_000))).toMatchObject({ failed: 0 });
+        expect(sellOrder).toHaveBeenCalledTimes(1);
+      });
+
+      it('kechiktirilgan so‘rov navbat boshini egallamaydi (limit 1)', async () => {
+        const waiting = await seed({
+          createdAt: at(-30 * H),
+          retryAt: at(30 * 60_000),
+        });
+        const next = await seed({ createdAt: at(-25 * H) });
+        const { svc, executed } = makeService();
+
+        expect(await run(svc, now, 1)).toMatchObject({ approved: 1 });
+        expect(executed).toEqual([next.orderId]);
+        expect((await readAuto(waiting.id)).status).toBe('pending');
+      });
     });
   },
 );

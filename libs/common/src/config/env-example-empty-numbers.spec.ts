@@ -7,6 +7,7 @@ import {
   financeValidationSchema,
   notificationValidationSchema,
   orderValidationSchema,
+  resolveExtraCostAutoApproveMinutes,
 } from './index';
 
 /**
@@ -102,24 +103,36 @@ describe(".env.example — qiymatsiz son kalitlari boot'ni yiqitmaydi", () => {
 });
 
 /**
- * Har bir bo'sh son kaliti alohida: bo'sh — o'chiq (xatosiz), aniq qiymat
- * songa aylanadi, noto'g'ri qiymat esa AVVALGIDEK rad etiladi (`.empty('')`
- * tekshiruvni bo'shashtirmasin).
+ * Har bir bo'sh son kaliti alohida: bo'sh — o'chiq yoki sukut (xatosiz),
+ * aniq qiymat songa aylanadi, noto'g'ri qiymat esa AVVALGIDEK rad etiladi
+ * (`.empty('')` tekshiruvni bo'shashtirmasin).
  */
-describe("bo'sh = o'chiq son kalitlari", () => {
+describe("bo'sh son kalitlari — o'chiq yoki sukut", () => {
   const CASES: Array<{
     key: string;
     service: string;
     schema: Joi.ObjectSchema;
     valid: [string, number];
     invalid: string[];
+    /** Bo'sh / yozilmagan kalit qiymati; berilmasa — qiymat yo'q (o'chiq). */
+    whenEmpty?: number;
   }> = [
     {
+      // (AFZaUUi5) bo'sh — o'chiq EMAS, 1440 daqiqa (24 soat).
       key: 'EXTRA_COST_AUTO_APPROVE_MINUTES',
       service: 'order',
       schema: orderValidationSchema,
       valid: ['30', 30],
       invalid: ['0', '1.5', 'abc'],
+      whenEmpty: 1440,
+    },
+    {
+      key: 'EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES',
+      service: 'order',
+      schema: orderValidationSchema,
+      valid: ['15', 15],
+      invalid: ['0', 'abc'],
+      whenEmpty: 10,
     },
     {
       key: 'COURIER_CASH_REMINDER_THRESHOLD',
@@ -165,25 +178,50 @@ describe("bo'sh = o'chiq son kalitlari", () => {
     },
   ];
 
-  describe.each(CASES)('$key ($service)', ({ key, schema, valid, invalid }) => {
-    it("`KEY=` (bo'sh) — xatosiz, qiymat yo'q (o'chiq)", () => {
-      expect(errorsFor(schema, { [key]: '' }, key)).toEqual([]);
-      expect([undefined, '']).toContain(valueOf(schema, { [key]: '' }, key));
-    });
+  describe.each(CASES)(
+    '$key ($service)',
+    ({ key, schema, valid, invalid, whenEmpty }) => {
+      it("`KEY=` (bo'sh) — xatosiz, qiymat yo'q (o'chiq) yoki sukut", () => {
+        expect(errorsFor(schema, { [key]: '' }, key)).toEqual([]);
+        expect(
+          whenEmpty === undefined ? [undefined, ''] : [whenEmpty],
+        ).toContain(valueOf(schema, { [key]: '' }, key));
+      });
 
-    it('kalit umuman yozilmagan — xatosiz', () => {
-      expect(errorsFor(schema, {}, key)).toEqual([]);
-      expect(valueOf(schema, {}, key)).toBeUndefined();
-    });
+      it('kalit umuman yozilmagan — xatosiz', () => {
+        expect(errorsFor(schema, {}, key)).toEqual([]);
+        expect(valueOf(schema, {}, key)).toBe(whenEmpty);
+      });
 
-    it('aniq qiymat songa aylanadi', () => {
-      const [raw, parsed] = valid;
-      expect(errorsFor(schema, { [key]: raw }, key)).toEqual([]);
-      expect(valueOf(schema, { [key]: raw }, key)).toBe(parsed);
-    });
+      it('aniq qiymat songa aylanadi', () => {
+        const [raw, parsed] = valid;
+        expect(errorsFor(schema, { [key]: raw }, key)).toEqual([]);
+        expect(valueOf(schema, { [key]: raw }, key)).toBe(parsed);
+      });
 
-    it.each(invalid)('noto`g`ri qiymat %p — avvalgidek rad etiladi', (raw) => {
-      expect(errorsFor(schema, { [key]: raw }, key)).not.toEqual([]);
-    });
+      it.each(invalid)(
+        'noto`g`ri qiymat %p — avvalgidek rad etiladi',
+        (raw) => {
+          expect(errorsFor(schema, { [key]: raw }, key)).not.toEqual([]);
+        },
+      );
+    },
+  );
+});
+
+describe('resolveExtraCostAutoApproveMinutes (AFZaUUi5)', () => {
+  it.each([
+    [undefined, 1440],
+    ['', 1440],
+    ['  ', 1440],
+    ['0', 1440],
+    ['abc', 1440],
+    ['1.5', 1440],
+    [1440, 1440],
+    ['60', 60],
+    [' 90 ', 90],
+    [45, 45],
+  ])('%p → %p', (raw, expected) => {
+    expect(resolveExtraCostAutoApproveMinutes(raw)).toBe(expected);
   });
 });

@@ -357,19 +357,45 @@ export const identityValidationSchema = Joi.object({
   OTP_DAILY_LIMIT: Joi.number().integer().min(1).default(10),
 });
 
+/**
+ * (AFZaUUi5, Dilshod qarori 2026-11-05) Market qo'shimcha xarajat so'roviga
+ * javob bermasa — shuncha daqiqadan keyin AVTOMATIK tasdiqlanadi: env bo'sh
+ * bo'lsa ham 24 soat, env bilan boshqa qiymat berish mumkin.
+ */
+export const EXTRA_COST_AUTO_APPROVE_DEFAULT_MINUTES = 1440;
+
+/**
+ * Avtomatik tasdiq muddati — ConfigService qiymati yoki xom `process.env`.
+ * Ikkalasi bitta qoidada: env fayldagi `KEY=` (bo'sh satr) `process.env` da
+ * bo'sh qoladi (ConfigModule mavjud kalitni ustidan yozmaydi), Joi sukuti
+ * esa faqat ConfigService'ga yetadi. Musbat butun son — o'sha, aks holda sukut.
+ */
+export function resolveExtraCostAutoApproveMinutes(raw: unknown): number {
+  const value =
+    typeof raw === 'number'
+      ? raw
+      : typeof raw === 'string' && raw.trim()
+        ? Number(raw.trim())
+        : NaN;
+  return Number.isInteger(value) && value > 0
+    ? value
+    : EXTRA_COST_AUTO_APPROVE_DEFAULT_MINUTES;
+}
+
 export const orderValidationSchema = Joi.object({
   ...observabilityKeys,
-  // (1tnpaIqd, ega qarori) market javob bermasa qo'shimcha xarajat shuncha
-  // daqiqadan keyin AVTOMATIK tasdiqlanadi; berilmasa — o'chiq. `.empty('')`:
-  // `.env.example` dagi `KEY=` (bo'sh — o'chiq) boot'ni yiqitmasin.
+  // (1tnpaIqd → AFZaUUi5) market javob bermasa qo'shimcha xarajat shuncha
+  // daqiqadan keyin AVTOMATIK tasdiqlanadi; bo'sh yoki yozilmagan — 1440
+  // (24 soat). `.empty('')`: `.env.example` dagi `KEY=` boot'ni yiqitmasin.
   EXTRA_COST_AUTO_APPROVE_MINUTES: Joi.number()
     .integer()
     .min(1)
     .empty('')
-    .optional(),
+    .default(EXTRA_COST_AUTO_APPROVE_DEFAULT_MINUTES),
   EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES: Joi.number()
     .integer()
     .min(1)
+    .empty('')
     .default(10),
   // (vNKGbg5q BG7) HQ/filialda turib qolgan bekorlar: eslatma/eskalatsiya.
   // Qiymatlar kodda yumshoq o'qiladi (noto'g'risi — sukut), shuning uchun

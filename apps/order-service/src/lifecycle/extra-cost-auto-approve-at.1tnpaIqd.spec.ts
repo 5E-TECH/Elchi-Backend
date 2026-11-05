@@ -39,18 +39,47 @@ describe('1tnpaIqd — extra-cost auto_approve_at', () => {
     );
   });
 
-  it('o‘chiq yoki noto‘g‘ri qiymat — null', () => {
-    delete process.env.EXTRA_COST_AUTO_APPROVE_MINUTES;
-    expect(serialize({ status: 'pending' }).auto_approve_at).toBeNull();
-    process.env.EXTRA_COST_AUTO_APPROVE_MINUTES = '0';
-    expect(serialize({ status: 'pending' }).auto_approve_at).toBeNull();
-    process.env.EXTRA_COST_AUTO_APPROVE_MINUTES = 'abc';
-    expect(serialize({ status: 'pending' }).auto_approve_at).toBeNull();
+  it('⭐ (AFZaUUi5) env yo‘q, bo‘sh yoki noto‘g‘ri — sukut 24 soat', () => {
+    for (const raw of [undefined, '', '0', 'abc']) {
+      if (raw === undefined) delete process.env.EXTRA_COST_AUTO_APPROVE_MINUTES;
+      else process.env.EXTRA_COST_AUTO_APPROVE_MINUTES = raw;
+      expect(serialize({ status: 'pending' }).auto_approve_at).toBe(
+        '2026-10-18T12:42:00.000Z',
+      );
+    }
   });
 
-  it('yopilgan so‘rov (approved / rejected) — null', () => {
+  it('⭐ (AFZaUUi5) muddat `auto_approve_from` dan sanaladi (yoqilgan paytda ochiq turgan so‘rov)', () => {
+    delete process.env.EXTRA_COST_AUTO_APPROVE_MINUTES;
+    expect(
+      serialize({
+        status: 'pending',
+        auto_approve_from: new Date('2026-11-05T05:00:00.000Z'),
+      }).auto_approve_at,
+    ).toBe('2026-11-06T05:00:00.000Z');
+  });
+
+  it('(AFZaUUi5) avtomatik urinish kechiktirilgan — keyingi urinish vaqti', () => {
     process.env.EXTRA_COST_AUTO_APPROVE_MINUTES = '30';
-    expect(serialize({ status: 'approved' }).auto_approve_at).toBeNull();
-    expect(serialize({ status: 'rejected' }).auto_approve_at).toBeNull();
+    expect(
+      serialize({
+        status: 'pending',
+        auto_retry_at: new Date('2026-10-17T14:00:00.000Z'),
+      }).auto_approve_at,
+    ).toBe('2026-10-17T14:00:00.000Z');
+    // Kechiktirish muddatdan oldin bo'lsa — muddat.
+    expect(
+      serialize({
+        status: 'pending',
+        auto_retry_at: new Date('2026-10-17T13:00:00.000Z'),
+      }).auto_approve_at,
+    ).toBe('2026-10-17T13:12:00.000Z');
+  });
+
+  it('yopilgan so‘rov (approved / rejected / void / reversed) — null', () => {
+    process.env.EXTRA_COST_AUTO_APPROVE_MINUTES = '30';
+    for (const status of ['approved', 'rejected', 'void', 'reversed']) {
+      expect(serialize({ status }).auto_approve_at).toBeNull();
+    }
   });
 });

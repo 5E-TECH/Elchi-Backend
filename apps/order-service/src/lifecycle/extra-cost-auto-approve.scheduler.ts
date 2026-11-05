@@ -5,14 +5,16 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { resolveExtraCostAutoApproveMinutes } from '@app/common';
 import { OrderLifecycleService } from './order-lifecycle.service';
 
 /**
- * (1tnpaIqd, EGA QARORI 2026-09-20) Market qo'shimcha xarajat so'roviga
- * `EXTRA_COST_AUTO_APPROVE_MINUTES` ichida javob bermasa — so'rov AVTOMATIK
- * tasdiqlanadi (kuryer kutib qolmaydi). Qiymat ENV'dan (kodga qotirilmagan);
- * berilmasa — o'chiq. `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` (sukut 10)
- * qolganda marketga oxirgi eslatma.
+ * (1tnpaIqd, EGA QARORI 2026-09-20; AFZaUUi5, 2026-11-05) Market qo'shimcha
+ * xarajat so'roviga `EXTRA_COST_AUTO_APPROVE_MINUTES` ichida javob bermasa —
+ * so'rov AVTOMATIK tasdiqlanadi (kuryer kutib qolmaydi). Env bo'sh yoki
+ * yozilmagan — 1440 daqiqa (24 soat), env bilan boshqa qiymat berish mumkin.
+ * `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` (sukut 10) qolganda marketga
+ * oxirgi eslatma.
  *
  * Har daqiqa; ko'p replikada xavfsiz — eslatma ham, tasdiq ham shartli
  * UPDATE bilan band qilinadi (bitta so'rov ikki marta tasdiqlanmaydi).
@@ -30,7 +32,7 @@ export class ExtraCostAutoApproveScheduler
     private readonly config: ConfigService,
   ) {}
 
-  private readInt(key: string, fallback: number | null): number | null {
+  private readInt(key: string, fallback: number): number {
     const raw = this.config.get<unknown>(key);
     const value =
       typeof raw === 'number'
@@ -41,11 +43,17 @@ export class ExtraCostAutoApproveScheduler
     return Number.isInteger(value) && value > 0 ? value : fallback;
   }
 
+  private minutes(): number {
+    return resolveExtraCostAutoApproveMinutes(
+      this.config.get<unknown>('EXTRA_COST_AUTO_APPROVE_MINUTES'),
+    );
+  }
+
   /** order-service'da ScheduleModule yo'q — oddiy interval (unref). */
   onModuleInit(): void {
-    const minutes = this.readInt('EXTRA_COST_AUTO_APPROVE_MINUTES', null);
-    if (!minutes) return;
-    this.logger.log(`Extra-cost avtomatik tasdiq yoqilgan: ${minutes} daqiqa`);
+    this.logger.log(
+      `Extra-cost avtomatik tasdiq yoqilgan: ${this.minutes()} daqiqa`,
+    );
     this.timer = setInterval(() => void this.tick(), 60_000);
     this.timer.unref?.();
   }
@@ -56,19 +64,21 @@ export class ExtraCostAutoApproveScheduler
   }
 
   async tick(): Promise<void> {
-    const minutes = this.readInt('EXTRA_COST_AUTO_APPROVE_MINUTES', null);
-    if (!minutes || this.running) return;
+    if (this.running) return;
     this.running = true;
     try {
-      const reminderMinutes =
-        this.readInt('EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES', 10) ?? 10;
+      const minutes = this.minutes();
+      const reminderMinutes = this.readInt(
+        'EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES',
+        10,
+      );
       const stats = await this.lifecycle.runExtraCostAutoApproval({
         minutes,
         reminderMinutes,
       });
-      if (stats.reminded || stats.approved || stats.failed) {
+      if (stats.reminded || stats.approved || stats.failed || stats.deferred) {
         this.logger.log(
-          `Extra-cost avtomatik: eslatma ${stats.reminded}, tasdiq ${stats.approved}, xato ${stats.failed}`,
+          `Extra-cost avtomatik: eslatma ${stats.reminded}, tasdiq ${stats.approved}, yopildi/xato ${stats.failed}, kechiktirildi ${stats.deferred}`,
         );
       }
     } catch (error) {

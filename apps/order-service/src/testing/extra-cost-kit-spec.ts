@@ -83,17 +83,34 @@ const TERMS: Array<
   ],
 ];
 
+function termMatcher(term: string, params: Params): RowFilter {
+  // (AFZaUUi5) `(x IS NULL OR x <= :p)` — qavs ichida OR bilan oddiy shartlar.
+  const group = /^\((.+)\)$/.exec(term);
+  if (group && /\s+OR\s+/.test(group[1])) {
+    const parts = group[1]
+      .split(/\s+OR\s+/)
+      .map((part) => termMatcher(part.trim(), params));
+    return (row) => parts.some((part) => part(row));
+  }
+  for (const [pattern, build] of TERMS) {
+    const m = pattern.exec(term);
+    if (m) return build(m, params);
+  }
+  throw new Error(`extra-cost-kit: tanilmagan shart «${term}»`);
+}
+
 function whereMatcher(sql: string, params: Params): RowFilter {
-  const terms = sql.split(/\s+AND\s+/).map((raw) => {
-    const term = raw.trim();
-    for (const [pattern, build] of TERMS) {
-      const m = pattern.exec(term);
-      if (m) return build(m, params);
-    }
-    throw new Error(`extra-cost-kit: tanilmagan shart «${term}»`);
-  });
+  const terms = sql
+    .split(/\s+AND\s+/)
+    .map((raw) => termMatcher(raw.trim(), params));
   return (row) => terms.every((t) => t(row));
 }
+
+/** DB sukutlari: `auto_approve_from` — yaratilgan vaqt (AFZaUUi5). */
+const withDefaults = (row: Params): Params => ({
+  ...row,
+  auto_approve_from: row.auto_approve_from ?? row.createdAt,
+});
 
 /** TypeORM `find({ where })` — oddiy tenglik (`isDeleted`, `status`, ...). */
 function findMatcher(where?: Params): RowFilter {
@@ -107,11 +124,13 @@ export function extraCostApprovalTable(
   initial: Array<Partial<ExtraCostApprovalRow>> = [],
 ) {
   let seq = 0;
-  const rows: ExtraCostApprovalRow[] = initial.map((row) => ({
-    isDeleted: false,
-    createdAt: new Date('2026-09-10T10:00:00.000Z'),
-    ...clone(row),
-  })) as ExtraCostApprovalRow[];
+  const rows: ExtraCostApprovalRow[] = initial.map((row) =>
+    withDefaults({
+      isDeleted: false,
+      createdAt: new Date('2026-09-10T10:00:00.000Z'),
+      ...clone(row),
+    }),
+  ) as ExtraCostApprovalRow[];
   /** Har bir UPDATE: nima yozildi, qaysi qatorlarga tegdi. */
   const updates: Array<{ patch: Params; ids: string[] }> = [];
 
@@ -185,13 +204,13 @@ export function extraCostApprovalTable(
         Object.assign(existing, entity);
         return Promise.resolve(clone(existing));
       }
-      const row = {
+      const row = withDefaults({
         id: ++seq === 1 ? 'approval-new' : `approval-new-${seq}`,
         createdAt: new Date('2026-09-10T10:00:00.000Z'),
         updatedAt: new Date('2026-09-10T10:00:00.000Z'),
         isDeleted: false,
         ...entity,
-      } as unknown as ExtraCostApprovalRow;
+      }) as unknown as ExtraCostApprovalRow;
       rows.push(row);
       return Promise.resolve(clone(row));
     }),

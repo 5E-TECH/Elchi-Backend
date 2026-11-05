@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-05 — Qo'shimcha xarajat: market 24 soat javob bermasa avtomatik tasdiqlanadi (AFZaUUi5, migratsiya 1716000000208)
+
+Ilgari avtomatik tasdiq faqat `EXTRA_COST_AUTO_APPROVE_MINUTES` to'ldirilganda ishlardi; bo'sh (test va prod) — o'chiq edi va javobsiz so'rov cheksiz «kutilmoqda» qolardi. Endi sukut 24 soat (Dilshod qarori 2026-11-05), env bilan o'zgartiriladi.
+
+✏️ **Kontrakt:**
+- ✏️ [order] `auto_approve_at` endi kutilayotgan (`pending`) so'rovda doim to'ldirilgan: so'rov vaqti + 24 soat. Avtomatik tasdiq yoqilgan paytda (migratsiya 208) ochiq turgan so'rovlarda — yoqilgan paytdan + 24 soat. Avtomatik urinish texnik xato bilan kechiktirilgan bo'lsa — keyingi urinish vaqti. Yopilgan so'rovda `null` (avvalgidek).
+- 🟢 [order] Muddatdan 10 daqiqa oldin eslatma (`order.extra_cost_reminder`) va tasdiqdan keyin `order.extra_cost_auto_approved` — avvalgidek; `auto_approved=true` bilan `GET /orders/extra-cost-approvals?auto_approved=true` da chiqadi.
+- 🟢 [order] Avtomatik tasdiq qo'lda tasdiq bilan bir yo'l (darvoza, sotuv bilan bitta tranzaksiya): amalni bajarib bo'lmasa so'rov sababi bilan `void`, qayta urinilmaydi; texnik xatoda (timeout / 5xx) so'rov `pending` qoladi, keyingi urinish 15 → 30 → … ≤ 360 daqiqadan keyin.
+
+**Migratsiya `1716000000208-ExtraCostAutoApproveFrom`:** ustunlar `auto_approve_from` (muddat boshi), `auto_attempts`, `auto_retry_at`. Ochiq so'rovlarda `auto_approve_from` = migratsiya vaqti va eslatma qaytadan yuboriladi; qolgan qatorlarda — `createdAt`. Nechta ochiq so'rov ekani logga yoziladi, qayta yurgizish hech narsani o'zgartirmaydi; `down()` indeks va ustunlarni olib tashlaydi.
+
+→ **Frontendda:** 🟢 o'zgarish shart emas — market dashboard'idagi «… gacha javob berilmasa — avtomatik tasdiqlanadi» qatori (`ExtraCostApprovals`) endi har bir kutilayotgan so'rovda chiqadi.
+
 ### 2026-11-05 — Market kassasi qarzga ishlashi: market bo'yicha toggle (migratsiya 1716000000207)
 
 Ilgari marketga qarzdan ortiq to'lab bo'lmasdi: «To'lov miqdori marketga qarzdan oshib ketdi» (400). Endi admin/superadmin market sozlamasida «Kassa qarzga ishlaydi» ni yoqsa, shu marketga qarzdan ortiq to'lash mumkin — market kassasi manfiyga tushadi (market bizga qarzdor), ortig'i keyingi buyurtmalarga hisoblanadi. Sukut — hamma market uchun o'chiq, avvalgi xulq.
