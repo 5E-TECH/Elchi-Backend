@@ -24,6 +24,8 @@ describe('1tnpaIqd — extra-cost auto_approve_at', () => {
       amount: 3000,
       createdAt: new Date('2026-10-17T12:42:00.000Z'),
       updatedAt: new Date('2026-10-17T12:42:00.000Z'),
+      // Skaner belgilagan muddat boshi (yangi so'rov — createdAt).
+      auto_approve_from: new Date('2026-10-17T12:42:00.000Z'),
       ...approval,
     });
   const saved = process.env.EXTRA_COST_AUTO_APPROVE_MINUTES;
@@ -57,6 +59,26 @@ describe('1tnpaIqd — extra-cost auto_approve_at', () => {
         auto_approve_from: new Date('2026-11-05T05:00:00.000Z'),
       }).auto_approve_at,
     ).toBe('2026-11-06T05:00:00.000Z');
+  });
+
+  it('⭐ (AFZaUUi5) skaner hali belgilamagan (NULL): yosh so‘rov — createdAt dan, muddatdan eski — hozirdan', () => {
+    delete process.env.EXTRA_COST_AUTO_APPROVE_MINUTES;
+    jest.useFakeTimers({ now: new Date('2026-10-17T14:00:00.000Z') });
+    try {
+      expect(
+        serialize({ status: 'pending', auto_approve_from: null })
+          .auto_approve_at,
+      ).toBe('2026-10-18T12:42:00.000Z');
+      expect(
+        serialize({
+          status: 'pending',
+          auto_approve_from: null,
+          createdAt: new Date('2026-10-14T12:42:00.000Z'),
+        }).auto_approve_at,
+      ).toBe('2026-10-18T14:00:00.000Z');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('(AFZaUUi5) avtomatik urinish kechiktirilgan — keyingi urinish vaqti', () => {

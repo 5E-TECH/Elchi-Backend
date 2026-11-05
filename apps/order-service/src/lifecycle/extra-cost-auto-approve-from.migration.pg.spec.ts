@@ -10,12 +10,11 @@ import { ExtraCostAutoApproveFrom1716000000208 } from '../../../../migrations/17
  * AFZaUUi5 — migratsiya 208 haqiqiy Postgres'da (BOT_PG_TEST_URI — faqat
  * lokal baza). O'z vaqtinchalik bazasini yaratadi va oxirida o'chiradi.
  *
- *  • ochiq (`pending`, o'chirilmagan) so'rov: `auto_approve_from` = migratsiya
- *    vaqti (avtomatik tasdiq yoqilgan payt), `reminder_sent_at` tozalanadi;
- *    `createdAt` (tasdiq darvozasi) tegilmaydi;
- *  • qolgan qatorlar: `auto_approve_from` = `createdAt`, boshqasi o'zgarmaydi;
- *  • yangi qator: `auto_approve_from` = yaratilgan vaqt (sukut `now()`),
- *    `auto_attempts` 0, `auto_retry_at` NULL; ustun NOT NULL;
+ *  • faqat ustun va indeks qo'shiladi — mavjud qatorlar (ochiq so'rovlar,
+ *    eslatma, `createdAt`) o'zgarmaydi; `auto_approve_from` NULL: muddat
+ *    boshini skaner birinchi tikda belgilaydi (extra-cost-decision.pg.spec);
+ *  • `auto_approve_from` da sukut yo'q — eski kod yozgan qator ham NULL;
+ *    `auto_attempts` 0, `auto_retry_at` NULL;
  *  • qayta yurgizish hech narsani o'zgartirmaydi; down() — indeks va ustunlar.
  */
 const uri = process.env.BOT_PG_TEST_URI;
@@ -122,7 +121,6 @@ type Row = {
       const ids: Record<string, string> = {};
       let before: Record<string, Row>;
       let after: Record<string, Row>;
-      let migratedAt: Date;
 
       beforeAll(async () => {
         const statuses = Object.values(Order_status)
@@ -169,63 +167,50 @@ type Row = {
 
       it('migratsiya o‘tadi', async () => {
         before = await rows(false);
-        const startedAt = new Date();
         await run('up');
         after = await rows();
-        migratedAt = after[ids.oldPending].auto_approve_from!;
-        expect(migratedAt.getTime()).toBeGreaterThanOrEqual(
-          startedAt.getTime() - 5_000,
-        );
       });
 
-      it('⭐ ochiq so‘rov (3 kunlik): muddat yoqilgan paytdan, eslatma qaytadan; createdAt tegilmaydi', () => {
-        expect(after[ids.oldPending]).toMatchObject({
-          status: 'pending',
-          createdAt: OLD,
-          reminder_sent_at: null,
-          auto_attempts: 0,
-          auto_retry_at: null,
-        });
-        expect(migratedAt.getTime()).toBeGreaterThan(OLD.getTime());
-      });
-
-      it('⭐ yopilgan / o‘chirilgan qatorlar: auto_approve_from = createdAt, boshqasi o‘zgarmaydi', () => {
-        for (const key of [
-          'deletedPending',
-          'approved',
-          'voided',
-          'rejected',
-        ]) {
+      it('⭐ mavjud qatorlar o‘zgarmaydi (ochiq 3 kunlik so‘rov ham): muddat boshi NULL — skaner belgilaydi', () => {
+        expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+        for (const key of Object.keys(ids)) {
           expect(after[ids[key]]).toEqual({
             ...before[ids[key]],
-            auto_approve_from: OLD,
+            auto_approve_from: null,
             auto_attempts: 0,
             auto_retry_at: null,
           });
         }
+        expect(after[ids.oldPending]).toMatchObject({
+          status: 'pending',
+          createdAt: OLD,
+          reminder_sent_at: new Date('2026-11-01T10:20:00Z'),
+        });
       });
 
-      it('⭐ yangi so‘rov: auto_approve_from = yaratilgan vaqt (sukut), NOT NULL', async () => {
+      it('⭐ yangi so‘rov (eski kod ham): auto_approve_from sukutsiz — NULL; auto_attempts 0', async () => {
         const [row]: Array<{
-          created: Date;
-          from: Date;
+          from: Date | null;
           attempts: number;
           retry: Date | null;
         }> = await db.query(
           `INSERT INTO order_schema.order_extra_cost_approvals
              (order_id, market_id, requested_by_user_id, action, amount, operation_payload, status)
            VALUES (4, 501, 289, 'sell', 10000, '{}'::jsonb, 'pending')
-           RETURNING "createdAt" AS created, auto_approve_from AS "from",
+           RETURNING auto_approve_from AS "from",
                      auto_attempts AS attempts, auto_retry_at AS retry`,
         );
-        expect(row.from).toEqual(row.created);
-        expect(row).toMatchObject({ attempts: 0, retry: null });
-        await expect(
-          db.query(
-            `UPDATE order_schema.order_extra_cost_approvals SET auto_approve_from = NULL WHERE id = $1`,
-            [ids.oldPending],
-          ),
-        ).rejects.toThrow(/null value/);
+        expect(row).toEqual({ from: null, attempts: 0, retry: null });
+        const [column]: Array<{
+          is_nullable: string;
+          column_default: unknown;
+        }> = await db.query(
+          `SELECT is_nullable, column_default FROM information_schema.columns
+              WHERE table_schema = 'order_schema'
+                AND table_name = 'order_extra_cost_approvals'
+                AND column_name = 'auto_approve_from'`,
+        );
+        expect(column).toEqual({ is_nullable: 'YES', column_default: null });
       });
 
       it('skaner indeksi qo‘yiladi', async () => {

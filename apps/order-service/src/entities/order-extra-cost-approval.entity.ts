@@ -85,14 +85,16 @@ export class OrderExtraCostApproval extends BaseEntity {
   reminder_sent_at!: Date | null;
 
   /**
-   * (AFZaUUi5) Avtomatik tasdiq muddati shu vaqtdan sanaladi. Yangi so'rovda —
-   * yaratilgan vaqt (DB sukuti `now()`); avtomatik tasdiq yoqilgan paytda
-   * ochiq turgan so'rovlarda — yoqilgan vaqt (migratsiya 208), aks holda
-   * 24 soatdan eskilari birinchi daqiqada birdan tasdiqlanib ketardi. Tasdiq
-   * darvozasi (holat o'zgarganmi) esa avvalgidek `createdAt` dan sanaladi.
+   * (AFZaUUi5) Avtomatik tasdiq muddati shu vaqtdan sanaladi. NULL — skaner
+   * hali ko'rmagan; birinchi tikda bir marta belgilanadi: yangi so'rov —
+   * `createdAt`, muddatdan eski so'rov (avtomatik tasdiq yoqilgan paytda
+   * ochiq turgan) — o'sha tik vaqti, aks holda ular birinchi daqiqada birdan
+   * tasdiqlanib ketardi. DB sukuti yo'q — eski kod yozgan qator ham NULL
+   * bo'lib qoladi. Tasdiq darvozasi (holat o'zgarganmi) esa avvalgidek
+   * `createdAt` dan sanaladi.
    */
-  @Column({ type: 'timestamptz', default: () => 'now()' })
-  auto_approve_from!: Date;
+  @Column({ type: 'timestamptz', nullable: true })
+  auto_approve_from!: Date | null;
 
   /**
    * (AFZaUUi5) Avtomatik tasdiq infratuzilma xatosi bilan tugagan urinishlar

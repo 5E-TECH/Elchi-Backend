@@ -2742,11 +2742,12 @@ export class OrderLifecycleService {
   }
 
   /**
-   * (AFZaUUi5) Avtomatik tasdiq vaqti: `auto_approve_from` (yangi so'rovda —
-   * yaratilgan vaqt, yoqilgan paytda ochiq turganida — yoqilgan vaqt) +
-   * `EXTRA_COST_AUTO_APPROVE_MINUTES` (ExtraCostAutoApproveScheduler bilan
-   * bitta qoida: bo'sh yoki noto'g'ri — 1440). Infratuzilma xatosidan keyin
-   * urinish kechiktirilgan bo'lsa — keyingi urinish vaqti.
+   * (AFZaUUi5) Avtomatik tasdiq vaqti: muddat boshi + `EXTRA_COST_AUTO_APPROVE_MINUTES`
+   * (ExtraCostAutoApproveScheduler bilan bitta qoida: bo'sh — 1440). Muddat
+   * boshi — `auto_approve_from`; skaner hali belgilamagan bo'lsa (NULL) —
+   * u qanday belgilasa shunday: muddatdan eski so'rov — hozir (yoqilgan
+   * payt), qolgani — `createdAt`. Infratuzilma xatosidan keyin urinish
+   * kechiktirilgan bo'lsa — keyingi urinish vaqti.
    */
   private extraCostAutoApproveAt(
     approval: Pick<
@@ -2755,13 +2756,16 @@ export class OrderLifecycleService {
     >,
   ): string | null {
     if (approval.status !== 'pending') return null;
-    const from = new Date(
-      approval.auto_approve_from ?? approval.createdAt ?? NaN,
-    ).getTime();
-    if (!Number.isFinite(from)) return null;
     const minutes = resolveExtraCostAutoApproveMinutes(
       process.env.EXTRA_COST_AUTO_APPROVE_MINUTES,
     );
+    const now = Date.now();
+    let from = new Date(approval.auto_approve_from ?? NaN).getTime();
+    if (!Number.isFinite(from)) {
+      const createdAt = new Date(approval.createdAt ?? NaN).getTime();
+      if (!Number.isFinite(createdAt)) return null;
+      from = createdAt <= now - minutes * 60_000 ? now : createdAt;
+    }
     const due = from + minutes * 60_000;
     const retry = approval.auto_retry_at
       ? new Date(approval.auto_retry_at).getTime()
@@ -3360,8 +3364,9 @@ export class OrderLifecycleService {
   /**
    * (1tnpaIqd → AFZaUUi5) Avtomatik tasdiq skaneri — `ExtraCostAutoApproveScheduler`
    * har daqiqada chaqiradi. `minutes` — EXTRA_COST_AUTO_APPROVE_MINUTES (sukut
-   * 1440), `auto_approve_from` dan sanaladi; `reminderMinutes` qolganda marketga
-   * oxirgi eslatma (bir marta, `reminder_sent_at` shartli UPDATE bilan).
+   * 1440), `auto_approve_from` dan sanaladi (avval `anchorExtraCostAutoApproval`
+   * belgilaydi); `reminderMinutes` qolganda marketga oxirgi eslatma (bir marta,
+   * `reminder_sent_at` shartli UPDATE bilan).
    *
    * Tasdiq qo'lda tasdiq bilan bitta yo'l (`approveExtraCostApproval`):
    * darvoza, sotuv bilan bir tranzaksiya, biznes xatosida `void`. So'rov
@@ -3384,6 +3389,7 @@ export class OrderLifecycleService {
     const stats = { reminded: 0, approved: 0, failed: 0, deferred: 0 };
     if (!(params.minutes > 0)) return stats;
     const deadline = new Date(now.getTime() - params.minutes * 60_000);
+    await this.anchorExtraCostAutoApproval(now, deadline);
     const reminderAt = new Date(
       now.getTime() -
         Math.max(0, params.minutes - params.reminderMinutes) * 60_000,
@@ -3458,7 +3464,11 @@ export class OrderLifecycleService {
           body: `${formatSom(approval.amount)} — muddat ichida javob berilmadi. E'tiroz bo'lsa admin bilan bog'laning.`,
         }).catch(() => undefined);
       } catch (error) {
-        const retryAt = await this.deferExtraCostAutoApproval(approval, now);
+        // Kechiktirish xato bo'lgan paytdan (uzun tikda `now` eskirgan bo'ladi).
+        const retryAt = await this.deferExtraCostAutoApproval(
+          approval,
+          params.now ? now : new Date(),
+        );
         if (retryAt) stats.deferred += 1;
         else stats.failed += 1;
         this.logger.warn(
@@ -3470,6 +3480,40 @@ export class OrderLifecycleService {
       }
     }
     return stats;
+  }
+
+  /**
+   * (AFZaUUi5) Muddat boshini belgilash — skaner so'rovni BIRINCHI ko'rgan
+   * paytda (`auto_approve_from IS NULL`), bir marta:
+   *  - muddatdan eski (avtomatik tasdiq yoqilgan paytda ochiq turgan, yoki
+   *    skaner ishlamagan paytda yaratilgan) — hozir, ya'ni yoqilgan payt;
+   *    eslatma qaytadan yuboriladi. Aks holda ular birinchi daqiqada
+   *    ogohlantirishsiz birdan tasdiqlanib ketardi;
+   *  - qolgani (yangi so'rov) — `createdAt`: muddat so'rov vaqtidan.
+   * Migratsiyada emas, skanerda: deploy orqaga qaytarilib, keyin qayta
+   * chiqarilsa ham «yoqilgan payt» — yangi kod haqiqatan ishlagan payt.
+   */
+  private async anchorExtraCostAutoApproval(now: Date, deadline: Date) {
+    const stale = await this.extraCostApprovalRepo
+      .createQueryBuilder()
+      .update(OrderExtraCostApproval)
+      .set({ auto_approve_from: now, reminder_sent_at: null })
+      .where('status = :pending AND is_deleted = false', { pending: 'pending' })
+      .andWhere('auto_approve_from IS NULL')
+      .andWhere('"createdAt" <= :deadline', { deadline })
+      .execute();
+    await this.extraCostApprovalRepo
+      .createQueryBuilder()
+      .update(OrderExtraCostApproval)
+      .set({ auto_approve_from: () => '"createdAt"' })
+      .where('status = :pending AND is_deleted = false', { pending: 'pending' })
+      .andWhere('auto_approve_from IS NULL')
+      .execute();
+    if (stale.affected) {
+      this.logger.log(
+        `qo'shimcha xarajat: ${stale.affected} ta eski ochiq so'rov uchun avtomatik tasdiq muddati hozirdan (${now.toISOString()}) sanaladi`,
+      );
+    }
   }
 
   /**

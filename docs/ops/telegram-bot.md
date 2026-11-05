@@ -234,9 +234,12 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
 - EGA QARORI — avtomatik tasdiq (AFZaUUi5, 2026-11-05: 24 soat):
   `EXTRA_COST_AUTO_APPROVE_MINUTES` (bo'sh — sukut 1440, boshqa qiymat
   almashtiradi), `EXTRA_COST_AUTO_APPROVE_REMINDER_MINUTES` (sukut 10) qolganda
-  eslatma (`order.extra_cost_reminder`, bir marta). Muddat
-  `auto_approve_from` dan sanaladi — yangi so'rovda yaratilgan vaqt, yoqilgan
-  paytda ochiq turganlarida migratsiya 208 vaqti (birinchi daqiqada
+  eslatma (`order.extra_cost_reminder`, bir marta). 0 / noto'g'ri qiymat —
+  order-service ishga tushmaydi (Joi). Muddat `auto_approve_from` dan
+  sanaladi; uni skaner so'rovni birinchi ko'rganda bir marta belgilaydi:
+  yangi so'rov — yaratilgan vaqt; muddatdan eski ochiq so'rov (avtomatik
+  tasdiq yoqilgan paytda ochiq turgan, yoki deploy orqaga qaytarilganda eski
+  kod yozgan) — o'sha tik vaqti, eslatma qaytadan (birinchi daqiqada
   tasdiqlanib ketmaydi). Tasdiq qo'lda tasdiq bilan bir yo'l (darvoza, sotuv
   bilan bitta tranzaksiya); biznes xatosida so'rov `void`, qayta urinilmaydi;
   texnik xatoda (timeout / 5xx) `pending` qoladi, keyingi urinish

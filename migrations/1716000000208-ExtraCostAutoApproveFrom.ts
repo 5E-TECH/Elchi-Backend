@@ -5,20 +5,19 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * avtomatik tasdiq (env `EXTRA_COST_AUTO_APPROVE_MINUTES` bo'sh bo'lsa ham).
  *
  *  1. `auto_approve_from` — avtomatik tasdiq muddati shu vaqtdan sanaladi.
- *     Shu paytda OCHIQ turgan so'rovlar uchun — hozirgi vaqt (avtomatik
- *     tasdiq yoqilgan payt): ilgari muddat bo'lmagan, 24 soatdan eski so'rovlar
- *     birinchi daqiqada birdan tasdiqlanib ketmasin, har biriga 10 daqiqa
- *     oldin eslatma ham borsin (`reminder_sent_at` tozalanadi). Yopilgan
- *     so'rovlar — `createdAt` (faqat ma'lumot uchun). Yangi so'rovlar — DB
- *     sukuti `now()`, ya'ni yaratilgan vaqt. `createdAt` ga TEGILMAYDI: tasdiq
- *     darvozasi (so'rovdan keyin holat o'zgarganmi) undan sanaladi.
+ *     Migratsiya uni TO'LDIRMAYDI va sukut qo'ymaydi (NULL): muddat boshini
+ *     skaner so'rovni birinchi ko'rganda belgilaydi — muddatdan eski ochiq
+ *     so'rov (avtomatik tasdiq yoqilgan paytda ochiq turgan) uchun o'sha payt,
+ *     yangisi uchun `createdAt`. Deploy orqaga qaytarilib keyin qayta
+ *     chiqarilsa ham «yoqilgan payt» — yangi kod haqiqatan ishlagan payt
+ *     (migratsiya yurgan payt emas). `createdAt` ga TEGILMAYDI.
  *  2. `auto_attempts`, `auto_retry_at` — avtomatik urinish infratuzilma xatosi
  *     bilan tugasa, keyingisi kechiktiriladi (har daqiqa qayta urinilmaydi).
  *  3. Skaner uchun partial indeks.
  *
- * Nechta ochiq so'rov yoqilgan paytdan sanalishi db-prepare logiga yoziladi.
- * Qayta yurgizish hech narsani o'zgartirmaydi. Jadval yo'q — hech narsa
- * qilinmaydi. down(): indeks va ustunlar olib tashlanadi.
+ * Ochiq so'rovlar soni db-prepare logiga yoziladi. Faqat ustun va indeks
+ * qo'shiladi — mavjud qatorlar o'zgarmaydi; qayta yurgizish xavfsiz. Jadval
+ * yo'q — hech narsa qilinmaydi. down(): indeks va ustunlar olib tashlanadi.
  */
 export class ExtraCostAutoApproveFrom1716000000208 implements MigrationInterface {
   name = 'ExtraCostAutoApproveFrom1716000000208';
@@ -36,43 +35,20 @@ export class ExtraCostAutoApproveFrom1716000000208 implements MigrationInterface
         ADD COLUMN IF NOT EXISTS "auto_retry_at" timestamptz NULL
     `);
 
-    const count = (rows: unknown): number =>
-      Array.isArray(rows) && Array.isArray(rows[0])
-        ? rows[0].length
-        : Array.isArray(rows)
-          ? rows.length
-          : 0;
-
-    // 1. Ochiq so'rovlar — muddat yoqilgan paytdan.
-    const anchored = await queryRunner.query(`
-      UPDATE "order_schema"."order_extra_cost_approvals"
-         SET "auto_approve_from" = now(),
-             "reminder_sent_at" = NULL
-       WHERE "auto_approve_from" IS NULL
-         AND "status" = 'pending'
-         AND "is_deleted" = false
-      RETURNING "id"
-    `);
-    await queryRunner.query(`
-      UPDATE "order_schema"."order_extra_cost_approvals"
-         SET "auto_approve_from" = "createdAt"
-       WHERE "auto_approve_from" IS NULL
-    `);
-    await queryRunner.query(`
-      ALTER TABLE "order_schema"."order_extra_cost_approvals"
-        ALTER COLUMN "auto_approve_from" SET DEFAULT now(),
-        ALTER COLUMN "auto_approve_from" SET NOT NULL
-    `);
-
-    // 3. Skaner: ochiq so'rovlar muddati bo'yicha.
+    // Skaner: ochiq so'rovlar muddati bo'yicha.
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_EXTRA_COST_PENDING_AUTO_FROM"
         ON "order_schema"."order_extra_cost_approvals" ("auto_approve_from")
         WHERE "status" = 'pending' AND "is_deleted" = false
     `);
 
+    const [open] = (await queryRunner.query(`
+      SELECT count(*)::int AS "count"
+        FROM "order_schema"."order_extra_cost_approvals"
+       WHERE "status" = 'pending' AND "is_deleted" = false
+    `)) as Array<{ count: number }>;
     console.log(
-      `[migration 208] extra-cost: avtomatik tasdiq muddati yoqilgan paytdan sanaladigan ochiq so'rovlar ${count(anchored)}`,
+      `[migration 208] extra-cost: ochiq so'rovlar ${open?.count ?? 0} — avtomatik tasdiq muddati boshini skaner birinchi tikda belgilaydi`,
     );
   }
 

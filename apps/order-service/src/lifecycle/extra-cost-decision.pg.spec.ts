@@ -424,6 +424,7 @@ type ApprovalRow = {
       type AutoRow = {
         status: string;
         auto_approved: boolean;
+        auto_approve_from: Date | null;
         reminder_sent_at: Date | null;
         auto_attempts: number;
         auto_retry_at: Date | null;
@@ -441,7 +442,8 @@ type ApprovalRow = {
       /** So'rov vaqti / muddat boshi / keyingi urinish — SQL bilan. */
       const seed = async (row: {
         createdAt: Date;
-        from?: Date;
+        /** `null` — skaner hali belgilamagan. */
+        from?: Date | null;
         retryAt?: Date;
         status?: string;
         isDeleted?: boolean;
@@ -454,7 +456,7 @@ type ApprovalRow = {
           [
             saved.id,
             row.createdAt,
-            row.from ?? row.createdAt,
+            'from' in row ? row.from : row.createdAt,
             row.retryAt ?? null,
             row.isDeleted ?? false,
           ],
@@ -463,7 +465,7 @@ type ApprovalRow = {
       };
       const readAuto = async (id: string): Promise<AutoRow> => {
         const [row]: AutoRow[] = await db.query(
-          `SELECT status, auto_approved, reminder_sent_at, auto_attempts, auto_retry_at
+          `SELECT status, auto_approved, auto_approve_from, reminder_sent_at, auto_attempts, auto_retry_at
              FROM order_schema.order_extra_cost_approvals WHERE id = $1`,
           [id],
         );
@@ -524,6 +526,73 @@ type ApprovalRow = {
         });
       });
 
+      it('⭐ TC5 muddat boshi skanerda (haqiqiy SQL): eski ochiq so‘rov — tik vaqti, eslatma qaytadan; yoshi — createdAt; bir marta', async () => {
+        const stale = await seed({ createdAt: at(-72 * H), from: null });
+        await db.query(
+          `UPDATE order_schema.order_extra_cost_approvals SET reminder_sent_at = $2 WHERE id = $1`,
+          [stale.id, at(-48 * H)],
+        );
+        const nearDue = await seed({
+          createdAt: at(-(24 * H - 5 * 60_000)),
+          from: null,
+        });
+        const young = await seed({ createdAt: at(-2 * H), from: null });
+        // Yopilgan / o'chirilgan qatorlar belgilanmaydi.
+        const closed = await seed({
+          createdAt: at(-72 * H),
+          from: null,
+          status: 'rejected',
+        });
+        const deleted = await seed({
+          createdAt: at(-72 * H),
+          from: null,
+          isDeleted: true,
+        });
+        const { svc, executed } = makeService();
+
+        expect(await run(svc)).toEqual({
+          reminded: 1,
+          approved: 0,
+          failed: 0,
+          deferred: 0,
+        });
+        expect(executed).toEqual([]);
+        expect(await readAuto(stale.id)).toMatchObject({
+          status: 'pending',
+          auto_approve_from: now,
+          reminder_sent_at: null,
+        });
+        expect(await readAuto(nearDue.id)).toMatchObject({
+          auto_approve_from: at(-(24 * H - 5 * 60_000)),
+          reminder_sent_at: now,
+        });
+        expect((await readAuto(young.id)).auto_approve_from).toEqual(
+          at(-2 * H),
+        );
+        expect((await readAuto(closed.id)).auto_approve_from).toBeNull();
+        expect((await readAuto(deleted.id)).auto_approve_from).toBeNull();
+
+        // Keyingi tik muddat boshini o'zgartirmaydi; 5 daqiqadan keyin
+        // yosh (24 soati to'lgan) so'rov tasdiqlanadi, eskisi — yo'q.
+        expect(await run(svc, at(5 * 60_000))).toMatchObject({ approved: 1 });
+        expect(executed).toEqual([nearDue.orderId]);
+        expect(await readAuto(stale.id)).toMatchObject({
+          status: 'pending',
+          auto_approve_from: now,
+        });
+        // Eskisi — belgilangan paytdan 24 soat (yoshi ham — o'z vaqtidan).
+        expect(await run(svc, at(24 * H))).toMatchObject({ approved: 2 });
+        expect(executed).toEqual([
+          nearDue.orderId,
+          young.orderId,
+          stale.orderId,
+        ]);
+        expect(await readAuto(stale.id)).toMatchObject({
+          status: 'approved',
+          auto_approved: true,
+        });
+      });
+
       it('⭐ TC2: eslatma muddatdan 10 daqiqa oldin, bir marta', async () => {
         const soon = await seed({ createdAt: at(-(24 * H - 9 * 60_000)) });
         const early = await seed({ createdAt: at(-(24 * H - 11 * 60_000)) });
@@ -543,6 +612,7 @@ type ApprovalRow = {
         expect(await readAuto(id)).toEqual({
           status: 'pending',
           auto_approved: false,
+          auto_approve_from: at(-25 * H),
           reminder_sent_at: null,
           auto_attempts: 1,
           auto_retry_at: at(15 * 60_000),

@@ -41,11 +41,11 @@ BeePost «Investor yaratish» formasidagidek investor yozuvida kelishilgan ulush
 Ilgari avtomatik tasdiq faqat `EXTRA_COST_AUTO_APPROVE_MINUTES` to'ldirilganda ishlardi; bo'sh (test va prod) — o'chiq edi va javobsiz so'rov cheksiz «kutilmoqda» qolardi. Endi sukut 24 soat (Dilshod qarori 2026-11-05), env bilan o'zgartiriladi.
 
 ✏️ **Kontrakt:**
-- ✏️ [order] `auto_approve_at` endi kutilayotgan (`pending`) so'rovda doim to'ldirilgan: so'rov vaqti + 24 soat. Avtomatik tasdiq yoqilgan paytda (migratsiya 208) ochiq turgan so'rovlarda — yoqilgan paytdan + 24 soat. Avtomatik urinish texnik xato bilan kechiktirilgan bo'lsa — keyingi urinish vaqti. Yopilgan so'rovda `null` (avvalgidek).
+- ✏️ [order] `auto_approve_at` endi kutilayotgan (`pending`) so'rovda doim to'ldirilgan: so'rov vaqti + 24 soat. Avtomatik tasdiq yoqilgan paytda 24 soatdan eski bo'lib ochiq turgan so'rovlarda — yoqilgan paytdan + 24 soat. Avtomatik urinish texnik xato bilan kechiktirilgan bo'lsa — keyingi urinish vaqti. Yopilgan so'rovda `null` (avvalgidek).
 - 🟢 [order] Muddatdan 10 daqiqa oldin eslatma (`order.extra_cost_reminder`) va tasdiqdan keyin `order.extra_cost_auto_approved` — avvalgidek; `auto_approved=true` bilan `GET /orders/extra-cost-approvals?auto_approved=true` da chiqadi.
 - 🟢 [order] Avtomatik tasdiq qo'lda tasdiq bilan bir yo'l (darvoza, sotuv bilan bitta tranzaksiya): amalni bajarib bo'lmasa so'rov sababi bilan `void`, qayta urinilmaydi; texnik xatoda (timeout / 5xx) so'rov `pending` qoladi, keyingi urinish 15 → 30 → … ≤ 360 daqiqadan keyin.
 
-**Migratsiya `1716000000208-ExtraCostAutoApproveFrom`:** ustunlar `auto_approve_from` (muddat boshi), `auto_attempts`, `auto_retry_at`. Ochiq so'rovlarda `auto_approve_from` = migratsiya vaqti va eslatma qaytadan yuboriladi; qolgan qatorlarda — `createdAt`. Nechta ochiq so'rov ekani logga yoziladi, qayta yurgizish hech narsani o'zgartirmaydi; `down()` indeks va ustunlarni olib tashlaydi.
+**Migratsiya `1716000000208-ExtraCostAutoApproveFrom`:** ustunlar `auto_approve_from` (muddat boshi, sukutsiz NULL), `auto_attempts`, `auto_retry_at` va indeks; mavjud qatorlar o'zgarmaydi. Muddat boshini order-service skaneri so'rovni birinchi ko'rganda bir marta belgilaydi: 24 soatdan eski ochiq so'rov — o'sha payt (eslatma qaytadan yuboriladi), qolgani — `createdAt`. Nechta ochiq so'rov ekani logga yoziladi, qayta yurgizish hech narsani o'zgartirmaydi; `down()` indeks va ustunlarni olib tashlaydi.
 
 → **Frontendda:** 🟢 o'zgarish shart emas — market dashboard'idagi «… gacha javob berilmasa — avtomatik tasdiqlanadi» qatori (`ExtraCostApprovals`) endi har bir kutilayotgan so'rovda chiqadi.
 

@@ -23,9 +23,9 @@ type Params = Record<string, unknown>;
 type RowFilter = (row: ExtraCostApprovalRow) => boolean;
 
 const COLUMN: Record<string, string> = { is_deleted: 'isDeleted' };
-/** `a.status` / `status` / `is_deleted` → qatordagi maydon. */
+/** `a.status` / `status` / `is_deleted` / `"createdAt"` → qatordagi maydon. */
 const field = (column: string) => {
-  const name = column.replace(/^\w+\./, '');
+  const name = column.replace(/^\w+\./, '').replace(/"/g, '');
   return COLUMN[name] ?? name;
 };
 const clone = <T>(value: T): T => structuredClone(value);
@@ -36,38 +36,38 @@ const TERMS: Array<
   [RegExp, (m: RegExpExecArray, params: Params) => RowFilter]
 > = [
   [
-    /^([\w.]+) = :(\w+)$/,
+    /^([\w."]+) = :(\w+)$/,
     ([, c, p], params) =>
       (row) =>
         String(row[field(c)]) === String(params[p]),
   ],
   [
-    /^([\w.]+) = (true|false)$/,
+    /^([\w."]+) = (true|false)$/,
     ([, c, v]) =>
       (row) =>
         Boolean(row[field(c)]) === (v === 'true'),
   ],
   [
-    /^([\w.]+) <> :(\w+)$/,
+    /^([\w."]+) <> :(\w+)$/,
     ([, c, p], params) =>
       (row) =>
         String(row[field(c)]) !== String(params[p]),
   ],
   [
-    /^([\w.]+) IN \(:\.\.\.(\w+)\)$/,
+    /^([\w."]+) IN \(:\.\.\.(\w+)\)$/,
     ([, c, p], params) => {
       const values = (params[p] as unknown[]).map(String);
       return (row) => values.includes(String(row[field(c)]));
     },
   ],
   [
-    /^([\w.]+) IS NULL$/,
+    /^([\w."]+) IS NULL$/,
     ([, c]) =>
       (row) =>
         row[field(c)] == null,
   ],
   [
-    /^([\w.]+) (<=|<|>=|>) :(\w+)$/,
+    /^([\w."]+) (<=|<|>=|>) :(\w+)$/,
     ([, c, op, p], params) =>
       (row) => {
         const a = comparable(row[field(c)]);
@@ -106,10 +106,15 @@ function whereMatcher(sql: string, params: Params): RowFilter {
   return (row) => terms.every((t) => t(row));
 }
 
-/** DB sukutlari: `auto_approve_from` — yaratilgan vaqt (AFZaUUi5). */
+/**
+ * (AFZaUUi5) `auto_approve_from` berilmasa — `createdAt`: skaner yangi so'rovni
+ * birinchi tikda shunday belgilaydi. Belgilanmagan (NULL) qator kerak bo'lsa —
+ * `auto_approve_from: null` aniq beriladi.
+ */
 const withDefaults = (row: Params): Params => ({
   ...row,
-  auto_approve_from: row.auto_approve_from ?? row.createdAt,
+  auto_approve_from:
+    'auto_approve_from' in row ? row.auto_approve_from : row.createdAt,
 });
 
 /** TypeORM `find({ where })` — oddiy tenglik (`isDeleted`, `status`, ...). */
@@ -138,11 +143,19 @@ export function extraCostApprovalTable(
   const queryBuilder = () => {
     let patch: Params | null = null;
     let limit = Infinity;
+    let order: { key: string; direction: number } = {
+      key: 'createdAt',
+      direction: 1,
+    };
     const conditions: RowFilter[] = [];
     const matching = () =>
       rows
         .filter((row) => conditions.every((c) => c(row)))
-        .sort((a, b) => comparable(a.createdAt) - comparable(b.createdAt));
+        .sort(
+          (a, b) =>
+            (comparable(a[order.key]) - comparable(b[order.key])) *
+            order.direction,
+        );
     const qb = {
       update: () => qb,
       set: (value: Params) => {
@@ -158,7 +171,13 @@ export function extraCostApprovalTable(
         return qb;
       },
       returning: () => qb,
-      orderBy: () => qb,
+      orderBy: (column: string, direction: 'ASC' | 'DESC' = 'ASC') => {
+        order = {
+          key: field(column),
+          direction: direction === 'DESC' ? -1 : 1,
+        };
+        return qb;
+      },
       take: (n: number) => {
         limit = n;
         return qb;
@@ -166,14 +185,37 @@ export function extraCostApprovalTable(
       getMany: () => Promise.resolve(matching().slice(0, limit).map(clone)),
       execute: jest.fn(() => {
         const hit = matching();
+        // Xom SQL qiymati: `() => '"createdAt"'` — shu qatorning ustuni,
+        // boshqasi (`now()`) — hozirgi vaqt.
+        const raw = (value: () => string) => {
+          const column = /^"(\w+)"$/.exec(value());
+          return column
+            ? (row: ExtraCostApprovalRow) => row[field(column[1])]
+            : () => new Date();
+        };
         const resolved = Object.fromEntries(
           Object.entries(patch ?? {}).map(([key, value]) => [
             key,
-            typeof value === 'function' ? new Date() : value,
+            typeof value === 'function' ? raw(value as () => string) : value,
           ]),
         );
-        for (const row of hit) Object.assign(row, resolved);
-        updates.push({ patch: resolved, ids: hit.map((row) => row.id) });
+        for (const row of hit) {
+          for (const [key, value] of Object.entries(resolved)) {
+            row[key] =
+              typeof value === 'function'
+                ? (value as (r: ExtraCostApprovalRow) => unknown)(row)
+                : value;
+          }
+        }
+        updates.push({
+          patch: Object.fromEntries(
+            Object.entries(patch ?? {}).map(([key, value]) => [
+              key,
+              typeof value === 'function' ? (value as () => string)() : value,
+            ]),
+          ),
+          ids: hit.map((row) => row.id),
+        });
         return Promise.resolve({
           raw: hit.map((row) => ({ id: row.id })),
           affected: hit.length,
