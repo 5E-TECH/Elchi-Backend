@@ -790,32 +790,74 @@ describe('R6 (QTCUUgjA) — filial (BRANCH) kassasi smenasi: FINANCE_REQUIRE_OPE
     });
   });
 
-  it('filialdan HQ ga: MAIN smenasi bor, filial smenasi yo`q → 400 (pul filialdan chiqadi); ikkalasi bor → o`tadi', async () => {
+  it('⭐ (2026-11-07) filialdan HQ ga: filial smenasi YOPIQ, MAIN smenasi ochiq → o`tadi, pul filialdan MAIN ga ko`chadi', async () => {
     process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
     const onlyMain = makeEnv({
       cashboxes: [mainCashbox(), branchCashbox(500_000)],
       openShifts: { '0': openMainShift() },
     });
-    const error = await rpcErrorOf(
-      onlyMain.service.paymentFromBranchToMain({
-        branch_id: '15',
-        amount: 1_000,
-        payment_method: 'cash' as any,
-      }),
-    );
-    expect(error.message).toMatch(/filial kassasida/);
-    expect(onlyMain.manager.save).not.toHaveBeenCalled();
+    const warn = jest
+      .spyOn((onlyMain.service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
 
+    const res: any = await onlyMain.service.paymentFromBranchToMain({
+      branch_id: '15',
+      amount: 1_000,
+      payment_method: 'cash' as any,
+    });
+
+    expect(res.statusCode).toBeLessThan(300);
+    expect(savedCashbox(onlyMain.manager, 'br-15')).toMatchObject({
+      balance_cash: 499_000,
+    });
+    expect(
+      warn.mock.calls.some((call) =>
+        String(call[0]).includes('shift_gate_blocked'),
+      ),
+    ).toBe(false);
+  });
+
+  it('filialdan HQ ga: filial smenasi OCHIQ bo`lsa qatori FOR SHARE bilan o`qiladi (closeShift chiqimni kutadi)', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
     const both = makeEnv({
       cashboxes: [mainCashbox(), branchCashbox(500_000)],
       openShifts: { '0': openMainShift(), '15': branchShift() },
     });
+
     const res: any = await both.service.paymentFromBranchToMain({
       branch_id: '15',
       amount: 1_000,
       payment_method: 'cash' as any,
     });
+
     expect(res.statusCode).toBeLessThan(300);
+    const branchShiftCall = both.manager.findOne.mock.calls.find(
+      (call) => call[0] === Shift && call[1]?.where?.cashbox_user_id === '15',
+    );
+    expect(branchShiftCall?.[1]).toMatchObject({
+      where: { cashbox_user_id: '15', status: 'open', isDeleted: false },
+      lock: { mode: 'pessimistic_read' },
+    });
+  });
+
+  it('filialdan HQ ga: MAIN (HQ) smenasi yopiq → avvalgidek 400 «asosiy kassada», pul ko`chmaydi', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const onlyBranch = makeEnv({
+      cashboxes: [mainCashbox(), branchCashbox(500_000)],
+      openShifts: { '15': branchShift() },
+    });
+
+    const error = await rpcErrorOf(
+      onlyBranch.service.paymentFromBranchToMain({
+        branch_id: '15',
+        amount: 1_000,
+        payment_method: 'cash' as any,
+      }),
+    );
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toMatch(/asosiy kassada/);
+    expect(onlyBranch.manager.save).not.toHaveBeenCalled();
   });
 
   it('32Sw3DfC kuzatuv: darvoza rad etsa `shift_gate_blocked` WARN qatori (kod, kassa, qamrov)', async () => {

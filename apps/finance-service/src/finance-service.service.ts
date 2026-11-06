@@ -5212,14 +5212,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      // (QTCUUgjA) Pul filial kassasidan CHIQADI (R6: `all` qamrovida filial
-      // smenasi shart — chiqim filial smenasi hisobotidan tashqarida
-      // qolmasin) va HQ (MAIN) kassasiga tushadi — u yerda ham ochiq smena
-      // bo'lishi shart (darvoza yoqilgan bo'lsa).
-      await this.requireOpenShift(queryRunner.manager, {
-        user_id: String(data.branch_id),
-        cashbox_type: Cashbox_type.BRANCH,
-      });
+      // (2026-11-07, Dilshod) HQ filial pulini filial smenasi YOPIQ bo'lsa
+      // ham qabul qiladi — filial smenasi bu yo'lda endi SHART EMAS (avval
+      // R6 `all` qamrovida 400 BRANCH_SHIFT_REQUIRED edi). Filial smenasi
+      // OCHIQ bo'lsa qatori baribir FOR SHARE bilan o'qiladi: shu payt
+      // yopilayotgan `closeShift` (FOR UPDATE) bu chiqim commit bo'lishini
+      // kutadi — chiqim smena hisobotidan tashqarida qolmaydi. Smena yopiq
+      // bo'lsa chiqim ikki smena orasiga tushadi (kassa tarixida bor;
+      // keyingi smenaning boshlang'ich qoldig'i qo'lda sanab kiritiladi).
+      await this.findOpenShiftForCashbox(
+        queryRunner.manager,
+        String(data.branch_id),
+        'pessimistic_read',
+      );
+      // (QTCUUgjA) Pul HQ (MAIN) kassasiga tushadi — u yerda ochiq smena
+      // avvalgidek shart (darvoza yoqilgan bo'lsa).
       await this.requireOpenShift(queryRunner.manager, {
         user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         cashbox_type: Cashbox_type.MAIN,

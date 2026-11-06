@@ -2525,6 +2525,8 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary:
       'HQ receives branch cashbox money into the main cashbox (superadmin/admin only — owner decision #7: managers do not remit to HQ)',
+    description:
+      "(2026-11-07) Filial smenasi YOPIQ bo'lsa ham ishlaydi — filial menejeri smenasini yopgan bo'lsa ham HQ filial pulini qabul qiladi (`BRANCH_SHIFT_REQUIRED` bu yo'lda qaytmaydi). HQ asosiy kassasida ochiq smena avvalgidek shart (FINANCE_REQUIRE_OPEN_SHIFT yoqilgan bo'lsa; yo'q — 400 `SHIFT_REQUIRED`).",
   })
   @ApiBody({ type: PaymentBranchToMainRequestDto })
   async paymentBranchToMain(

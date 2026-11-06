@@ -328,6 +328,59 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
     });
   });
 
+  it('(2026-11-07) `all`: HQ filial pulini filial smenasi YOPIQ bo`lsa ham qabul qiladi; filial smenasi ochiq bo`lsa chiqim uning hisobotiga tushadi; HQ smenasi yopiq — 400', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const branchCashbox = () =>
+      cashboxRepo().findOneByOrFail({
+        user_id: '15',
+        cashbox_type: Cashbox_type.BRANCH,
+      });
+    const receive = (amount: number, token: string) =>
+      service.paymentFromBranchToMain({
+        branch_id: '15',
+        amount,
+        payment_method: PaymentMethod.CASH,
+        created_by: '1',
+        dedup_epoch: token,
+      });
+
+    // HQ (MAIN) smenasi yopiq — avvalgidek 400, pul ko'chmaydi.
+    await expect(receive(10_000, 'b2m-0')).rejects.toMatchObject({
+      error: {
+        statusCode: 400,
+        message: expect.stringMatching(/asosiy kassada/),
+      },
+    });
+    expect((await branchCashbox()).balance_cash).toBe(100_000);
+
+    // HQ smenasi ochiq, filial smenasi hech ochilmagan — o'tadi.
+    await service.openShift({ opened_by: '1' });
+    const ok: any = await receive(10_000, 'b2m-1');
+    expect(ok.statusCode).toBeLessThan(300);
+    expect((await branchCashbox()).balance_cash).toBe(90_000);
+    expect((await mainCashbox()).balance_cash).toBe(510_000);
+
+    // Filial smenasi ochiq — chiqim shu smena hisobotiga tushadi.
+    await service.openShift({ opened_by: '25', cashbox_user_id: '15' });
+    await receive(20_000, 'b2m-2');
+    const closed: any = await service.closeShift({
+      closed_by: '25',
+      cashbox_user_id: '15',
+      closing_balance_cash: 70_000,
+    });
+    expect(closed.data).toMatchObject({
+      opening_balance_cash: 90_000,
+      total_expense_cash: 20_000,
+      expected_balance_cash: 70_000,
+      discrepancy_cash: 0,
+    });
+
+    // Menejer smenasini yopgandan keyin ham — o'tadi.
+    await receive(5_000, 'b2m-3');
+    expect((await branchCashbox()).balance_cash).toBe(65_000);
+    expect((await mainCashbox()).balance_cash).toBe(535_000);
+  });
+
   it('REGRESSIYA QTCUUgjA: sotuv oyog`i (outbox → updateBalance) smenasiz ham o`tadi', async () => {
     const res: any = await service.updateBalance({
       user_id: '0',
