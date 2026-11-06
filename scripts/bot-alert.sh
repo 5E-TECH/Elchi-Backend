@@ -105,13 +105,35 @@ cfg() {
   esac
   printf '%s' "$v"
 }
-# Decimal integer or the default ("08" is 8, not an octal error under set -u). More than 15
-# digits is capped (bash arithmetic would wrap to a negative number).
+# Decimal integer or the default ("08" is 8, not an octal error under set -u). Leading zeros
+# are dropped first; more than 15 significant digits is capped (bash arithmetic would wrap).
 num() {
+  local v
   case "$1" in
     '' | *[!0-9]*) printf '%s' "$2" ;;
-    *) if [ "${#1}" -gt 15 ]; then printf '999999999999999'; else printf '%s' "$((10#$1))"; fi ;;
+    *)
+      v="${1#"${1%%[!0]*}"}"
+      v="${v:-0}"
+      if [ "${#v}" -gt 15 ]; then printf '999999999999999'; else printf '%s' "$v"; fi
+      ;;
   esac
+}
+# Integer config knob: knob NAME DEFAULT MIN MAX [RAW [SOURCE]]. Unset/empty → DEFAULT
+# silently; not a decimal integer or outside MIN..MAX → WARN with the raw value (other than
+# printable ASCII shown as '?', so a rejected value never looks valid; 40 chars, plus its source when not the config file; to stderr, so the $(...)
+# capture stays clean) and DEFAULT.
+knob() {
+  local raw v src=""
+  if [ "$#" -ge 5 ]; then raw="$5"; else raw="$(cfg "$1")"; fi
+  [ -n "${6:-}" ] && src=" ($6)"
+  [ -n "$raw" ] || { printf '%s' "$2"; return; }
+  v="$(num "$raw" "")"
+  if [ -z "$v" ] || [ "$v" -lt "$3" ] || [ "$v" -gt "$4" ]; then
+    log "WARN: $1=$(printf '%s' "$raw" | LC_ALL=C tr -c '[:print:]' '?' | cut -c1-40)$src rad etildi ($3..$4) — $2 ishlatiladi" >&2
+    printf '%s' "$2"
+    return
+  fi
+  printf '%s' "$v"
 }
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
@@ -119,32 +141,33 @@ HOST_LABEL="${BOT_ALERT_HOST_LABEL:-$(cfg BOT_ALERT_HOST_LABEL)}"
 HOST_LABEL="${HOST_LABEL:-$(hostname 2>/dev/null || echo server)}"
 TG_API="${BOT_ALERT_TELEGRAM_API:-$(cfg BOT_ALERT_TELEGRAM_API)}"
 TG_API="${TG_API:-https://api.telegram.org}"
-CMD_TIMEOUT="$(num "${BOT_ALERT_CMD_TIMEOUT:-$(cfg BOT_ALERT_CMD_TIMEOUT)}" 30)"
-RESTART_WINDOW_MIN="$(num "$(cfg BOT_ALERT_RESTART_WINDOW_MIN)" 30)"
-if [ "$RESTART_WINDOW_MIN" -eq 0 ] || [ "$RESTART_WINDOW_MIN" -gt 10080 ]; then
-  # 0 would silently disable crash-loop detection; a huge value overflows the arithmetic.
-  log "WARN: BOT_ALERT_RESTART_WINDOW_MIN=$RESTART_WINDOW_MIN rad etildi (1..10080) — 30 ishlatiladi"
-  RESTART_WINDOW_MIN=30
+# Bounded: 0 or a huge value would disable the hang protection (a hung docker keeps the lock
+# and every later cron run exits silently).
+if [ -n "${BOT_ALERT_CMD_TIMEOUT:-}" ]; then
+  CMD_TIMEOUT="$(knob BOT_ALERT_CMD_TIMEOUT 30 1 600 "$BOT_ALERT_CMD_TIMEOUT" env)"
+else
+  CMD_TIMEOUT="$(knob BOT_ALERT_CMD_TIMEOUT 30 1 600)"
 fi
+# 0 would silently disable crash-loop detection; a huge value overflows the arithmetic.
+RESTART_WINDOW_MIN="$(knob BOT_ALERT_RESTART_WINDOW_MIN 30 1 10080)"
 RESTART_WINDOW_S=$((RESTART_WINDOW_MIN * 60))
 # One cron interval: a restart is dated by StartedAt but seen only on the next run, so a loop
 # with a period equal to the window is still caught.
 CRON_SLACK_S=300
-FLAP_WINDOW_MIN="$(num "$(cfg BOT_ALERT_FLAP_WINDOW_MIN)" 60)"
-if [ "$FLAP_WINDOW_MIN" -lt 10 ] || [ "$FLAP_WINDOW_MIN" -gt 10080 ]; then
-  # < 10 would silently disable the flapping protection (one cron interval is 5 min); a
-  # huge value overflows the arithmetic.
-  log "WARN: BOT_ALERT_FLAP_WINDOW_MIN=$FLAP_WINDOW_MIN rad etildi (10..10080) — 60 ishlatiladi"
-  FLAP_WINDOW_MIN=60
-fi
+# A new incident is usually confirmed 2 runs (600 s) after "tiklandi" and the check is strict
+# (<): 10 would apply only when a crash-loop (ns_restart, joins at once) returns right away.
+# 11 is a policy choice so the window always covers a debounced re-failure.
+FLAP_WINDOW_MIN="$(knob BOT_ALERT_FLAP_WINDOW_MIN 60 11 10080)"
 FLAP_WINDOW_S=$((FLAP_WINDOW_MIN * 60))
 
-PENDING_UPDATES_MAX="$(num "$(cfg BOT_ALERT_PENDING_UPDATES_MAX)" 100)"
-WEBHOOK_ERROR_MIN="$(num "$(cfg BOT_ALERT_WEBHOOK_ERROR_MIN)" 15)"
-OUTBOX_PENDING_MIN="$(num "$(cfg BOT_ALERT_OUTBOX_PENDING_MIN)" 10)"
-OUTBOX_DEAD_MAX="$(num "$(cfg BOT_ALERT_OUTBOX_DEAD_MAX)" 20)"
-NS_START_GRACE_S="$(num "$(cfg BOT_ALERT_NS_START_GRACE_S)" 90)"
-REPEAT_H="$(num "$(cfg BOT_ALERT_REPEAT_HOURS)" 6)"
+# 0 would alert on a healthy system (pending/updates) or disable the check (webhook error).
+PENDING_UPDATES_MAX="$(knob BOT_ALERT_PENDING_UPDATES_MAX 100 1 100000000)"
+WEBHOOK_ERROR_MIN="$(knob BOT_ALERT_WEBHOOK_ERROR_MIN 15 1 10080)"
+OUTBOX_PENDING_MIN="$(knob BOT_ALERT_OUTBOX_PENDING_MIN 10 1 10080)"
+OUTBOX_DEAD_MAX="$(knob BOT_ALERT_OUTBOX_DEAD_MAX 20 0 100000000)"
+NS_START_GRACE_S="$(knob BOT_ALERT_NS_START_GRACE_S 90 0 86400)"
+# 0 would repeat the message every run (spam).
+REPEAT_H="$(knob BOT_ALERT_REPEAT_HOURS 6 1 720)"
 BOT_TOKEN="$(cfg TELEGRAM_BOT_TOKEN)"
 BOT_SLUG="$(lower "$(cfg TELEGRAM_BOT_SLUG)")"
 printf '%s' "$BOT_SLUG" | grep -Eq '^[a-z0-9_-]{1,32}$' || BOT_SLUG=elchi
@@ -378,16 +401,28 @@ if [ -n "$NS_RESTARTS" ] && [ "$NS_ID" = "$PREV_NS_ID" ] && [ -n "$PREV_NS_RESTA
 fi
 [ "$NS_ID" = "$PREV_NS_ID" ] || RESTART_TIMES=""
 kept=""
+future=0
 for t in ${RESTART_TIMES//,/ }; do
-  t="$(num "$t" 0)"
-  [ $((NOW - t)) -lt $((RESTART_WINDOW_S + CRON_SLACK_S)) ] && kept="${kept:+$kept,}$t"
+  # No subshell per entry (a long crash-loop with a 7-day window has thousands).
+  # Junk, 16+ digits, or dated in the future (broken state / clock went back) is dropped.
+  case "$t" in '' | *[!0-9]* | ????????????????*) continue ;; esac
+  if [ $((10#$t)) -gt $((NOW + CRON_SLACK_S)) ]; then
+    future=$((future + 1))
+    continue
+  fi
+  [ $((NOW - 10#$t)) -lt $((RESTART_WINDOW_S + CRON_SLACK_S)) ] && kept="${kept:+$kept,}$t"
 done
-RESTART_TIMES="$kept"
-restarts_in_window="$(printf '%s' "$RESTART_TIMES" | tr ',' '\n' | grep -c . || true)"
+[ "$future" -gt 0 ] && log "WARN: restart_times: $future ta kelajak yozuvi tashlandi (soat orqaga ketdimi?)"
+restarts_in_window="$(printf '%s' "$kept" | tr ',' '\n' | grep -c . || true)"
+# Only ">= 2" / ">= 1" matters: keep the newest 100 entries so the state stays small (the
+# message then says "100+": the real count is no longer known).
+RESTART_TIMES="$(printf '%s' "$kept" | tr ',' '\n' | tail -n 100 | tr '\n' ',' | sed 's/,$//')"
+restarts_label="$restarts_in_window"
+[ "$restarts_in_window" -ge 100 ] && restarts_label="100+"
 # >= 2 restarts in the window → crash-loop; while it is active, >= 1 keeps it (hysteresis,
 # so a loop with a period close to the window does not flap alert/"tiklandi").
 if [ "$restarts_in_window" -ge 2 ] || { has "$PREV_SIG" ns_restart && [ "$restarts_in_window" -ge 1 ]; }; then
-  problem ns_restart "notification-service: qayta ishga tushmoqda (${restarts_in_window} marta $((RESTART_WINDOW_S / 60)) daq ichida, RestartCount ${NS_RESTARTS:-?})"
+  problem ns_restart "notification-service: qayta ishga tushmoqda (${restarts_label} marta $((RESTART_WINDOW_S / 60)) daq ichida, RestartCount ${NS_RESTARTS:-?})"
 fi
 
 RAW="$(printf '%s\n' "${CODES[@]:-}" | grep . | sort -u | tr '\n' ',' | sed 's/,$//')"
