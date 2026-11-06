@@ -103,6 +103,13 @@ export interface HqCourierScanInput {
    * Chaqiruvchi hisoblaydi (bu fayl I/O qilmaydi).
    */
   orderRegionId: IdLike;
+  /**
+   * HQ ning shu buyurtma uchun amaldagi qamrov imtiyozi bor («eski filialda
+   * tugasin»: tuman HQ viloyatidan ko'chgan yoki deploy paytida HQ
+   * kuryerida bo'lgan — migratsiya 1716000000211). Chaqiruvchi faqat 8-qoida
+   * `OUT_OF_HQ_REGION` bilan rad etganda so'raydi (bu fayl I/O qilmaydi).
+   */
+  coverageExempt?: boolean;
 }
 
 const normalizeId = (value: IdLike): string => String(value ?? '').trim();
@@ -143,11 +150,13 @@ const reject = (
  * 8. RECEIVED, WAITING yoki WAITING_CUSTOMER (6qypMFeT: WAITING —
  *    menejerning assign-to-courier yo'li bilan bir xil) → viloyat qoidasi
  *    (anKpzwxk, 6-band): HQ viloyati yo'q — 400 `branch_region_missing`
- *    (fail-closed); buyurtma xizmat viloyati HQ viloyatiga teng emas — 403
- *    `hq_courier_region_only`; teng — ruxsat. O'z buyurtmasini qayta
- *    skanlash (ON_THE_ROAD — 6-qoida, o'z WAITING buyurtmasi — shu yerda)
- *    yangi biriktirish emas — viloyat tekshirilmaydi, `scanAssignOrder`
- *    idempotent javob qaytaradi (filial kuryeri bilan bir xil).
+ *    (fail-closed, imtiyozdan OLDIN); buyurtma xizmat viloyati HQ viloyatiga
+ *    teng emas va HQ qamrov imtiyozi yo'q (`coverageExempt`: «eski filialda
+ *    tugasin») — 403 `hq_courier_region_only`; teng yoki imtiyozli — ruxsat.
+ *    O'z buyurtmasini qayta skanlash (ON_THE_ROAD — 6-qoida, o'z WAITING
+ *    buyurtmasi — shu yerda) yangi biriktirish emas — viloyat
+ *    tekshirilmaydi, `scanAssignOrder` idempotent javob qaytaradi (filial
+ *    kuryeri bilan bir xil).
  * 9. Qolgan hamma holat → noto'g'ri holat.
  */
 export function assessHqCourierScan(
@@ -252,7 +261,10 @@ export function assessHqCourierScan(
         'branch_region_missing',
       );
     }
-    if (normalizeId(input.orderRegionId) !== hqRegionId) {
+    if (
+      normalizeId(input.orderRegionId) !== hqRegionId &&
+      !input.coverageExempt
+    ) {
       return reject(
         403,
         SCAN_ASSIGN_MESSAGES.OUT_OF_HQ_REGION,

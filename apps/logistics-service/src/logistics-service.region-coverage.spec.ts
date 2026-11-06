@@ -3,6 +3,7 @@ import { DataSource, FindOperator } from 'typeorm';
 import { of, throwError, type Observable } from 'rxjs';
 import { Order_status, Post_status, publicErrorData } from '@app/common';
 import {
+  COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE,
   LogisticsServiceService,
   NEW_POSTS_ACCESS_UNAVAILABLE_MESSAGE,
   NEW_POSTS_HQ_ONLY_MESSAGE,
@@ -25,7 +26,10 @@ import { District } from './entities/district.entity';
  *     superadmin qabuli jurnalga yoziladi;
  *  4) kuryer kelayotgan pochtani ro'yxatda ko'rmaydi; boshqa filial menejeri
  *     «Yangi pochtalar»ni ko'rmaydi;
- *  5) HQ kuryeri boshqa viloyat (Samarqand) buyurtmasini ololmaydi;
+ *  5) HQ kuryeri boshqa viloyat (Samarqand) buyurtmasini ololmaydi — HQ
+ *     qamrov imtiyozi bor buyurtmadan tashqari («eski filialda tugasin»:
+ *     tuman HQ viloyatidan ko'chgan yoki deploy paytida HQ kuryerida bo'lgan,
+ *     migratsiya 1716000000211);
  *  6) «Eski filialda tugasin» (coverage_exemptions) viloyat ko'chishida ishlaydi.
  *
  * Viloyatlar: 14 — Toshkent (HQ), 8 — Samarqand, 3 — Buxoro.
@@ -336,6 +340,7 @@ function setup(
     postRepo,
     branchClient,
     orderClient,
+    exemptionRepo,
     activityLog,
     orderUpdates,
     expectNothingWritten,
@@ -1095,6 +1100,223 @@ describe('anKpzwxk 6-band — HQ kuryeri faqat HQ viloyati buyurtmasini oladi', 
       details: { branch_id: '1' },
     });
     ctx.expectNothingWritten();
+  });
+
+  describe('«Eski filialda tugasin» — HQ qamrov imtiyozi', () => {
+    const hqExemption = (orderId: string, districtId: string | null): Row => ({
+      order_id: orderId,
+      branch_id: '1',
+      district_id: districtId,
+      revoked_at: null,
+    });
+    const assignToHqCourier = (
+      ctx: ReturnType<typeof setup>,
+      orderIds: string[],
+    ) =>
+      ctx.service.assignOrdersToCourier(USERS.hqRegistrator, {
+        order_ids: orderIds,
+        courier_id: '91',
+      });
+
+    it('⭐ qaytarilgan (WAITING, kuryersiz) Samarqand buyurtmasi, HQ imtiyozi bor — HQ registratori HQ kuryeriga beradi (200)', async () => {
+      // Deploy'dan oldin HQ kuryeriga berilgan, mijoz javob bermadi — qaytish
+      // tasdiqlandi (WAITING, courier_id/post_id null, filial HQ).
+      const ctx = setup({
+        orders: [
+          hqOrder({
+            id: '205',
+            status: Order_status.WAITING,
+            district_id: '50',
+          }),
+        ],
+        exemptions: [hqExemption('205', '50')],
+      });
+
+      const res = (await assignToHqCourier(ctx, ['205'])) as {
+        data: { assigned_count: number };
+      };
+
+      expect(res.data.assigned_count).toBe(1);
+      expect(ctx.orders.get('205')).toMatchObject({ courier_id: '91' });
+    });
+
+    it('⭐ HQ kuryeri imtiyozli Samarqand buyurtmasini skan qilib oladi (200); tumansiz imtiyoz (NULL) ham', async () => {
+      const ctx = setup({
+        orders: [
+          hqOrder({
+            id: '206',
+            status: Order_status.WAITING,
+            district_id: '50',
+            qr_code_token: 'H6',
+          }),
+          hqOrder({
+            id: '207',
+            status: Order_status.RECEIVED,
+            region_id: SAMARQAND,
+            qr_code_token: 'H7',
+          }),
+        ],
+        exemptions: [hqExemption('206', '50'), hqExemption('207', null)],
+      });
+
+      const first = (await ctx.service.scanAssignOrder(USERS.hqCourier, {
+        qr_token: 'H6',
+      })) as { data: Row };
+      const second = (await ctx.service.scanAssignOrder(USERS.hqCourier, {
+        qr_token: 'H7',
+      })) as { data: Row };
+
+      expect(first.data).toMatchObject({ idempotent: false, order_id: '206' });
+      expect(second.data).toMatchObject({
+        idempotent: false,
+        order_id: '207',
+      });
+      expect(ctx.orders.get('206')).toMatchObject({ courier_id: '91' });
+    });
+
+    it('⭐ imtiyozsizi avvalgidek 403 (aralashda faqat o‘zi); boshqa filial imtiyozi HQ ga yordam bermaydi', async () => {
+      const ctx = setup({
+        orders: [
+          hqOrder({
+            id: '205',
+            status: Order_status.WAITING,
+            district_id: '50',
+          }),
+          hqOrder({
+            id: '208',
+            status: Order_status.WAITING,
+            district_id: '50',
+            qr_code_token: 'H8',
+          }),
+        ],
+        exemptions: [
+          hqExemption('205', '50'),
+          { ...hqExemption('208', '50'), branch_id: '10' },
+        ],
+      });
+
+      const assignError = await rpcError(
+        assignToHqCourier(ctx, ['205', '208']),
+      );
+      const scanError = await rpcError(
+        ctx.service.scanAssignOrder(USERS.hqCourier, { qr_token: 'H8' }),
+      );
+
+      expect(assignError.statusCode).toBe(403);
+      expect(assignError.message).toBe(
+        `${SCAN_ASSIGN_MESSAGES.OUT_OF_HQ_REGION}: #208`,
+      );
+      expect(gatewayData(assignError)).toEqual({
+        reason: 'hq_courier_region_only',
+        details: { order_ids: ['208'] },
+      });
+      expect(scanError.statusCode).toBe(403);
+      expect(gatewayData(scanError)).toEqual({
+        reason: 'hq_courier_region_only',
+        details: { order_ids: ['208'] },
+      });
+      ctx.expectNothingWritten();
+    });
+
+    it('⭐ imtiyoz boshqa tumanda (buyurtma tumani keyin tahrirlangan) — baribir 403', async () => {
+      const ctx = setup({
+        orders: [
+          hqOrder({
+            id: '209',
+            status: Order_status.WAITING,
+            district_id: '50',
+            qr_code_token: 'H9',
+          }),
+        ],
+        exemptions: [hqExemption('209', '60')],
+      });
+
+      const assignError = await rpcError(assignToHqCourier(ctx, ['209']));
+      const scanError = await rpcError(
+        ctx.service.scanAssignOrder(USERS.hqCourier, { qr_token: 'H9' }),
+      );
+
+      expect(assignError.statusCode).toBe(403);
+      expect(gatewayData(assignError)).toEqual({
+        reason: 'hq_courier_region_only',
+        details: { order_ids: ['209'] },
+      });
+      expect(scanError.statusCode).toBe(403);
+      expect(scanError.message).toBe(SCAN_ASSIGN_MESSAGES.OUT_OF_HQ_REGION);
+      ctx.expectNothingWritten();
+    });
+
+    it('⭐ imtiyoz jadvalini o‘qib bo‘lmadi — 503 (fail closed), hech narsa yozilmaydi; HQ viloyati buyurtmasi uchun imtiyoz so‘ralmaydi', async () => {
+      const ctx = setup({
+        orders: [
+          hqOrder({
+            id: '205',
+            status: Order_status.WAITING,
+            district_id: '50',
+            qr_code_token: 'H5',
+          }),
+        ],
+        exemptions: [hqExemption('205', '50')],
+      });
+      ctx.exemptionRepo.find.mockRejectedValue(new Error('DB yiqildi'));
+
+      const assignError = await rpcError(assignToHqCourier(ctx, ['205']));
+      const scanError = await rpcError(
+        ctx.service.scanAssignOrder(USERS.hqCourier, { qr_token: 'H5' }),
+      );
+
+      expect(assignError.statusCode).toBe(503);
+      expect(assignError.message).toBe(COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE);
+      expect(scanError.statusCode).toBe(503);
+      expect(scanError.message).toBe(COVERAGE_EXEMPTION_UNAVAILABLE_MESSAGE);
+      ctx.expectNothingWritten();
+
+      // Toshkent buyurtmasi — imtiyoz jadvali umuman o'qilmaydi.
+      const inRegion = setup({
+        orders: [
+          hqOrder({ id: '202', region_id: TOSHKENT, qr_code_token: 'H2' }),
+        ],
+      });
+      inRegion.exemptionRepo.find.mockRejectedValue(new Error('DB yiqildi'));
+      const res = (await inRegion.service.scanAssignOrder(USERS.hqCourier, {
+        qr_token: 'H2',
+      })) as { data: Row };
+      expect(res.data).toMatchObject({ idempotent: false, order_id: '202' });
+      expect(inRegion.exemptionRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('HQ viloyati yo‘q — imtiyoz bo‘lsa ham 400 branch_region_missing (birinchi), imtiyoz so‘ralmaydi', async () => {
+      const branches = baseBranches();
+      branches['1'].region_id = null;
+      const ctx = setup({
+        branches,
+        orders: [
+          hqOrder({
+            id: '205',
+            status: Order_status.WAITING,
+            district_id: '50',
+            qr_code_token: 'H5',
+          }),
+        ],
+        exemptions: [hqExemption('205', '50')],
+      });
+
+      const assignError = await rpcError(assignToHqCourier(ctx, ['205']));
+      const scanError = await rpcError(
+        ctx.service.scanAssignOrder(USERS.hqCourier, { qr_token: 'H5' }),
+      );
+
+      expect(gatewayData(assignError)).toEqual({
+        reason: 'branch_region_missing',
+        details: { branch_id: '1' },
+      });
+      expect(gatewayData(scanError)).toEqual({
+        reason: 'branch_region_missing',
+        details: { order_ids: ['205'], branch_id: '1' },
+      });
+      expect(ctx.exemptionRepo.find).not.toHaveBeenCalled();
+      ctx.expectNothingWritten();
+    });
   });
 });
 

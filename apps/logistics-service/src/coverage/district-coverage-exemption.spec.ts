@@ -16,9 +16,11 @@ import {
 /**
  * Tuman qamrovi imtiyozi (ega qarori, 2026-11-02) — sof qoida: ko'chish
  * paytida eski filial / uning kuryeri qo'lidagi ochiq buyurtma eski filialda
- * tugaydi; HQ, MARKET, marketga jo'natilgan bekor va yakunlangan holatlar,
+ * tugaydi; MARKET, marketga jo'natilgan bekor va yakunlangan holatlar,
  * ko'chishdan keyin ham xizmat qiladigan filial va noma'lum filial —
- * imtiyozsiz. Yo'ldagi (SENT) partiya — borayotgan filialniki.
+ * imtiyozsiz. Yo'ldagi (SENT) partiya — borayotgan filialniki. HQ ham (ega
+ * qarori 6: HQ kuryeri faqat HQ viloyati buyurtmasini oladi) — tuman HQ
+ * viloyatidan ko'chsa; viloyatsiz HQ — imtiyozsiz.
  *
  * Viloyat qoidasi (anKpzwxk, 2026-11-03): imtiyoz faqat tumanning XIZMAT
  * VILOYATI o'zgarganda paydo bo'ladi; `serving_branch_id` o'zgarishi
@@ -283,7 +285,8 @@ describe('computeCoverageExemptions', () => {
     ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
   });
 
-  it('⭐ eski filial → HQ partiyasi yo‘lda — eski filialga imtiyoz yo‘q (HQ — hech qachon)', () => {
+  it('⭐ eski filial → HQ partiyasi yo‘lda — eski filialga imtiyoz yo‘q; HQ (viloyat 1) imtiyozli', () => {
+    // Buyurtma HQ ga ketyapti — mas'ul HQ; tuman HQ viloyatidan (1) ko'chdi.
     expect(
       compute(
         [
@@ -296,7 +299,7 @@ describe('computeCoverageExemptions', () => {
         regionMoveBefore,
         regionMoveAfter,
       ),
-    ).toEqual([]);
+    ).toEqual([{ order_id: '101', branch_id: '1', district_id: '5' }]);
   });
 
   it('jo‘natilmagan (PENDING) partiya — buyurtma hali manba filialda: imtiyoz', () => {
@@ -364,22 +367,184 @@ describe('computeCoverageExemptions', () => {
     },
   );
 
-  it('HQ filiali — hech qachon imtiyozli emas', () => {
-    expect(
-      compute(
-        [row({ holder_type: 'HQ', holder_branch_id: null, branch_id: '1' })],
-        district5({ region_id: '1' }),
-        district5({ region_id: '1', assigned_region: '2' }),
-      ),
-    ).toEqual([]);
-    // HQ BRANCH sifatida ko'rsatilgan bo'lsa ham.
-    expect(
-      compute(
-        [row({ holder_branch_id: '1', branch_id: '1' })],
-        district5(),
-        district5({ assigned_region: '2' }),
-      ),
-    ).toEqual([]);
+  describe('HQ (ega qarori 6: HQ kuryeri faqat HQ viloyati buyurtmasini oladi)', () => {
+    const hqRows = () => [
+      // HQ da turgan (qaytarilgan) WAITING.
+      row({
+        id: '101',
+        status: Order_status.WAITING,
+        holder_type: 'HQ',
+        holder_branch_id: null,
+        branch_id: '1',
+      }),
+      // HQ kuryeri qo'lida.
+      row({
+        id: '102',
+        status: Order_status.ON_THE_ROAD,
+        holder_type: 'COURIER',
+        holder_branch_id: '1',
+        holder_courier_id: '91',
+        courier_id: '91',
+        branch_id: '1',
+      }),
+      // HQ qabul qilgan, hali jo'natilmagan (NEW pochtada) RECEIVED — u ham
+      // «eski filialda tugasin».
+      row({
+        id: '103',
+        status: Order_status.RECEIVED,
+        holder_type: 'HQ',
+        holder_branch_id: null,
+        branch_id: '1',
+      }),
+    ];
+
+    it('⭐ tuman HQ viloyatidan (1) ko‘chdi — HQ qo‘lidagi va HQ kuryeridagi ochiq buyurtmalar HQ ga imtiyozli', () => {
+      expect(
+        compute(hqRows(), district5(), district5({ assigned_region: '2' })),
+      ).toEqual([
+        { order_id: '101', branch_id: '1', district_id: '5' },
+        { order_id: '102', branch_id: '1', district_id: '5' },
+        { order_id: '103', branch_id: '1', district_id: '5' },
+      ]);
+      // HQ BRANCH sifatida ko'rsatilgan bo'lsa ham — HQ.
+      expect(
+        compute(
+          [row({ holder_branch_id: '1', branch_id: '1' })],
+          district5(),
+          district5({ assigned_region: '2' }),
+        ),
+      ).toEqual([{ order_id: '101', branch_id: '1', district_id: '5' }]);
+    });
+
+    it('⭐ tuman HQ viloyatiga ko‘chdi (2 → 1) — imtiyoz yo‘q (endi HQ kuryeri oladi)', () => {
+      expect(
+        compute(
+          hqRows(),
+          district5({ region_id: '2' }),
+          district5({ region_id: '2', assigned_region: '1' }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('HQ viloyatiga aloqasiz ko‘chish (2 → 3) — imtiyoz yo‘q (oldin ham xizmat qilmasdi)', () => {
+      expect(
+        compute(
+          hqRows(),
+          district5({ region_id: '2' }),
+          district5({ region_id: '2', assigned_region: '3' }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('⭐ viloyatsiz HQ — imtiyoz yo‘q (fail-closed: oldin ham kuryerga bera olmasdi)', () => {
+      const branches = new Map(branchesById).set(
+        '1',
+        branch('1', { type: 'HQ', region_id: null }),
+      );
+      expect(
+        compute(
+          hqRows(),
+          district5(),
+          district5({ assigned_region: '2' }),
+          branches,
+        ),
+      ).toEqual([]);
+      expect(
+        isCoverageExemptionEligible({
+          row: hqRows()[0],
+          before: district5(),
+          after: district5({ assigned_region: '2' }),
+          branch: branch('1', { type: 'HQ', region_id: null }),
+        }),
+      ).toBe(false);
+    });
+
+    it('⭐ hali HQ qabul qilmagan NEW (market yaratgan: holder HQ / yo‘q, partiyasiz) — imtiyoz yo‘q', () => {
+      // Market/hamkor buyurtmasi: branch_id — HQ fallback'i, holder HQ;
+      // posilka hali marketda — ko'chishdan keyin keladi (yangi qoida).
+      const preIntake = (overrides: Partial<OpenCustodyRow> = {}) =>
+        row({
+          status: Order_status.NEW,
+          holder_type: 'HQ',
+          holder_branch_id: null,
+          branch_id: '1',
+          ...overrides,
+        });
+      expect(
+        compute(
+          [preIntake(), preIntake({ id: '102', holder_type: null })],
+          district5(),
+          district5({ assigned_region: '2' }),
+        ),
+      ).toEqual([]);
+      expect(
+        isCoverageExemptionEligible({
+          row: preIntake(),
+          before: district5(),
+          after: district5({ assigned_region: '2' }),
+          branch: branch('1', { type: 'HQ', region_id: '1' }),
+        }),
+      ).toBe(false);
+    });
+
+    it('⭐ HQ da tranzit qabul qilingan (holder BRANCH) yoki HQ ga SENT partiyada ketayotgan NEW — HQ ga imtiyozli', () => {
+      expect(
+        compute(
+          [
+            row({
+              status: Order_status.NEW,
+              holder_type: 'BRANCH',
+              holder_branch_id: '1',
+              branch_id: '1',
+            }),
+            row({
+              id: '102',
+              status: Order_status.NEW,
+              current_batch_id: '901',
+              batch_destination_branch_id: '1',
+            }),
+          ],
+          district5(),
+          district5({ assigned_region: '2' }),
+        ),
+      ).toEqual([
+        { order_id: '101', branch_id: '1', district_id: '5' },
+        { order_id: '102', branch_id: '1', district_id: '5' },
+      ]);
+    });
+
+    it('HQ bo‘lmagan filial NEW (filialga qabul qilingan) — avvalgidek imtiyozli', () => {
+      expect(
+        compute(
+          [row({ status: Order_status.NEW })],
+          district5(),
+          district5({ assigned_region: '2' }),
+        ),
+      ).toEqual([{ order_id: '101', branch_id: '10', district_id: '5' }]);
+    });
+
+    it('HQ qatori MARKET qo‘lida / yakunlangan — imtiyoz yo‘q', () => {
+      expect(
+        compute(
+          [
+            row({
+              holder_type: 'MARKET',
+              holder_branch_id: null,
+              branch_id: '1',
+            }),
+            row({
+              id: '102',
+              status: Order_status.PAID,
+              holder_type: 'HQ',
+              holder_branch_id: null,
+              branch_id: '1',
+            }),
+          ],
+          district5(),
+          district5({ assigned_region: '2' }),
+        ),
+      ).toEqual([]);
+    });
   });
 
   it('ko‘chishdan keyin ham xizmat qiladigan filial — imtiyoz yo‘q', () => {
@@ -567,6 +732,21 @@ describe('coverageExemptionCandidateBranchIds', () => {
         row({ id: '6', batch_destination_branch_id: '20' }),
       ]),
     ).toEqual(['10', '11', '20']);
+  });
+
+  it('HQ mas‘ul qatorlar — HQ ham (uning qatori ham o‘qiladi: ega qarori 6)', () => {
+    expect(
+      coverageExemptionCandidateBranchIds([
+        row({
+          id: '1',
+          holder_type: 'HQ',
+          holder_branch_id: null,
+          branch_id: '1',
+        }),
+        row({ id: '2', holder_type: 'COURIER', holder_branch_id: '1' }),
+        row({ id: '3', batch_destination_branch_id: '1' }),
+      ]),
+    ).toEqual(['1']);
   });
 });
 

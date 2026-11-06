@@ -6963,7 +6963,7 @@ export class OrderGatewayController {
     summary:
       "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number }, special_categories (T8) } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
     description:
-      "anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi — 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`). O'z WAITING / ON_THE_ROAD buyurtmasini qayta skanlash — idempotent 200.",
+      "anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi (va «eski filialda tugasin» imtiyozli buyurtmalar — tuman HQ viloyatidan ko'chganda yoki deploy paytida HQ kuryerlarida bo'lganlar) — aks holda 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`). O'z WAITING / ON_THE_ROAD buyurtmasini qayta skanlash — idempotent 200.",
   })
   @ApiBody({ type: ScanAssignOrderRequestDto })
   async scanAssignOrder(
@@ -7031,7 +7031,7 @@ export class OrderGatewayController {
       "(1gxmqLj5) SUPERADMIN/ADMIN ham biriktiradi: barcha orderlar BITTA filialda bo'lishi, kuryer shu filialning " +
       "COURIER a'zosi bo'lishi shart (aks holda 400). `branch_id` (ixtiyoriy) — UI'dagi filial tanlovi: berilsa " +
       "orderlar filialiga mos bo'lishi kerak (400). Menejer/registrator uchun o'zgarishsiz (o'z filiali, `branch_id` e'tiborsiz). " +
-      "anKpzwxk — filial o'z viloyati buyurtmasini ISTAGAN kuryeriga beradi. 409 `data.reason = order_in_outgoing_batch` — buyurtma partiyada; 403 `district_not_served_by_branch` — boshqa viloyat (tranzit) buyurtmasi; HQ da: 403 `hq_courier_region_only` — buyurtma HQ viloyatidan emas, 400 `branch_region_missing` — HQ viloyatsiz (`details.branch_id`). Qolgan kodlarda buyurtma id'lari `details.order_ids` da; hech narsa yozilmaydi.",
+      "anKpzwxk — filial o'z viloyati buyurtmasini ISTAGAN kuryeriga beradi. 409 `data.reason = order_in_outgoing_batch` — buyurtma partiyada; 403 `district_not_served_by_branch` — boshqa viloyat (tranzit) buyurtmasi; HQ da: 403 `hq_courier_region_only` — buyurtma HQ viloyatidan emas va imtiyozi yo'q («eski filialda tugasin»), 400 `branch_region_missing` — HQ viloyatsiz (`details.branch_id`). Qolgan kodlarda buyurtma id'lari `details.order_ids` da; hech narsa yozilmaydi.",
   })
   @ApiBody({ type: AssignOrdersToCourierRequestDto })
   assignOrdersToCourier(

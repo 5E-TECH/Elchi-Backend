@@ -3,6 +3,7 @@ import {
   effectiveDistrictRegionId,
   effectiveOrderRegionId,
   isHqBranch,
+  isOrderCourierServedByBranch,
   isOrderServedByBranch,
 } from './district-coverage';
 
@@ -58,6 +59,67 @@ describe('district-coverage — buyurtma ↔ filial qamrovi (viloyat qoidasi)', 
       true,
     );
     expect(isOrderServedByBranch({ district: null }, hq)).toBe(true);
+  });
+
+  it('⭐ kuryerga berish (6-band): HQ — faqat HQ viloyati buyurtmasi; viloyatsiz HQ — hech narsa', () => {
+    const hq14 = { id: '1', type: 'HQ', region_id: '14' };
+    // Tuman qatori bor — tumanning XIZMAT viloyati.
+    expect(
+      isOrderCourierServedByBranch({ district: { region_id: '14' } }, hq14),
+    ).toBe(true);
+    expect(
+      isOrderCourierServedByBranch(
+        { district: { region_id: '14', assigned_region: '10' } },
+        hq14,
+      ),
+    ).toBe(false);
+    expect(
+      isOrderCourierServedByBranch(
+        { district: { region_id: '10', assigned_region: '14' } },
+        hq14,
+      ),
+    ).toBe(true);
+    // Tumansiz — buyurtma viloyati; aniqlanmasa — yo'q (fail-closed).
+    expect(
+      isOrderCourierServedByBranch(
+        { district: null, orderRegionId: '014' },
+        hq14,
+      ),
+    ).toBe(true);
+    expect(
+      isOrderCourierServedByBranch({ district: null, orderRegionId: 10 }, hq14),
+    ).toBe(false);
+    expect(isOrderCourierServedByBranch({ district: null }, hq14)).toBe(false);
+    // Viloyatsiz HQ — fail-closed (jo'natishda esa cheklanmaydi).
+    expect(
+      isOrderCourierServedByBranch({ district: { region_id: '99' } }, hq),
+    ).toBe(false);
+    expect(isOrderServedByBranch({ district: { region_id: '99' } }, hq)).toBe(
+      true,
+    );
+    expect(
+      isOrderCourierServedByBranch({ district: { region_id: '5' } }, null),
+    ).toBe(false);
+  });
+
+  it('kuryerga berish: HQ bo‘lmagan filial — isOrderServedByBranch bilan aynan bir xil', () => {
+    const noRegion = { id: '12', type: 'REGIONAL', region_id: null };
+    const inputs = [
+      { district: { region_id: '5' } },
+      { district: { region_id: '5', assigned_region: '6' } },
+      { district: { region_id: '6', assigned_region: '5' } },
+      { district: { id: '1' }, orderRegionId: '5' },
+      { district: null, orderRegionId: '5' },
+      { district: null, orderRegionId: 6 },
+      { district: null },
+    ];
+    for (const input of inputs) {
+      for (const branch of [branchX, branchY, branchZ, noRegion]) {
+        expect(isOrderCourierServedByBranch(input, branch)).toBe(
+          isOrderServedByBranch(input, branch),
+        );
+      }
+    }
   });
 
   it('⭐ bir viloyatdagi HAR QANDAY filial xizmat qiladi; boshqa viloyat filiali — yo‘q', () => {

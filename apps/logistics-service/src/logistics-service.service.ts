@@ -2158,7 +2158,10 @@ export class LogisticsServiceService implements OnModuleInit {
    *  2. HQ (kuryeri — HQ kuryeri): buyurtma XIZMAT viloyati
    *     (`effectiveOrderRegionId`) HQ viloyatiga teng bo'lishi shart — 403
    *     `hq_courier_region_only`; HQ viloyati yo'q — 400
-   *     `branch_region_missing` (fail closed);
+   *     `branch_region_missing` (fail closed, imtiyozdan OLDIN). HQ qamrov
+   *     imtiyozi bor buyurtma («eski filialda tugasin»: tuman HQ viloyatidan
+   *     ko'chgan yoki deploy paytida HQ kuryerida bo'lgan — migratsiya
+   *     1716000000211) ham beriladi;
    *  3. boshqa filial: `isOrderServedByBranch` (viloyat qoidasi) — boshqa
    *     viloyat (tranzit) buyurtmasi 403 `district_not_served_by_branch`
    *     («Boshqa viloyat buyurtmasi»). Qamrov imtiyozi (#619, «eski filialda
@@ -2199,15 +2202,29 @@ export class LogisticsServiceService implements OnModuleInit {
           rejectionData('branch_region_missing', { branch_id: branch.id }),
         );
       }
-      const outOfRegionIds = orders
-        .filter(
-          (order) =>
-            effectiveOrderRegionId({
-              district: districtOf(order),
-              orderRegionId: order.region_id,
-            }) !== branch.region_id,
-        )
-        .map((order) => String(order.id));
+      const outOfRegion = orders.filter(
+        (order) =>
+          effectiveOrderRegionId({
+            district: districtOf(order),
+            orderRegionId: order.region_id,
+          }) !== branch.region_id,
+      );
+      let outOfRegionIds = outOfRegion.map((order) => String(order.id));
+      // «Eski filialda tugasin» HQ uchun ham: tuman HQ viloyatidan ko'chgan
+      // paytda (yoki deploy paytida — migratsiya 1716000000211) HQ / HQ
+      // kuryeri qo'lida bo'lgan buyurtma HQ kuryeriga beriladi. Imtiyoz faqat
+      // viloyatdan tashqari buyurtmalar uchun so'raladi; o'qib bo'lmasa — 503.
+      if (outOfRegion.length) {
+        const exemptIds = await this.findCoverageExemptOrderIds(
+          outOfRegion,
+          branch.id,
+        );
+        if (exemptIds.size) {
+          outOfRegionIds = outOfRegionIds.filter(
+            (id) => !exemptIds.has(canonicalBigintId(id) ?? id),
+          );
+        }
+      }
       if (outOfRegionIds.length) {
         this.forbidden(
           `${SCAN_ASSIGN_MESSAGES.OUT_OF_HQ_REGION}: ${coverageOrderIdList(outOfRegionIds)}`,
@@ -6705,7 +6722,7 @@ export class LogisticsServiceService implements OnModuleInit {
         courierAssignment.branch ??
         (await this.findBranchCoverageRow(courierBranchId));
       const districtOf = await this.loadOrderDistricts([order]);
-      const rejection = assessHqCourierScan({
+      const scanInput = {
         order,
         orderPost,
         hqBranchId: courierBranchId,
@@ -6715,7 +6732,20 @@ export class LogisticsServiceService implements OnModuleInit {
           district: districtOf(order),
           orderRegionId: order.region_id,
         }),
-      });
+      };
+      let rejection = assessHqCourierScan(scanInput);
+      // «Eski filialda tugasin» HQ uchun ham: HQ qamrov imtiyozi bor
+      // buyurtma (tuman HQ viloyatidan ko'chgan / deploy paytida HQ kuryerida
+      // bo'lgan — migratsiya 1716000000211) HQ kuryeriga beriladi. Imtiyoz
+      // faqat 8-qoida rad etganda so'raladi (HQ viloyati bor, buyurtma
+      // viloyati boshqa; boshqa rad javoblari va qayta skan DB'ga bormaydi);
+      // o'qib bo'lmasa — 503 (fail closed).
+      if (
+        rejection?.reason === 'OUT_OF_HQ_REGION' &&
+        (await this.findCoverageExemptOrderIds([order], courierBranchId)).size
+      ) {
+        rejection = assessHqCourierScan({ ...scanInput, coverageExempt: true });
+      }
       if (rejection) {
         const code = rejection.details?.reason;
         const fields: Record<string, string | string[]> = {

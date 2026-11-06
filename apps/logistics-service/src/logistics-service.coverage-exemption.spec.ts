@@ -25,6 +25,9 @@ import type { OpenCustodyRow } from './coverage/district-coverage-exemption';
  *    ko'chish COMMIT bo'lgach QAYTA yozadi (best-effort; oraliqda custody'ga
  *    kirganlar ham); imtiyozda ko'chishdan keyingi tuman saqlanadi;
  *  - yo'ldagi (SENT) partiya — borayotgan filialniki;
+ *  - HQ ham (ega qarori 6: HQ kuryeri faqat HQ viloyati buyurtmasini
+ *    oladi): tuman HQ viloyatidan ko'chsa HQ / HQ kuryeri qo'lidagilar HQ ga
+ *    imtiyozli; viloyatsiz HQ va hali HQ qabul qilmagan NEW — imtiyozsiz;
  *  - assertOrdersServedByBranch: imtiyozli buyurtma eski filial kuryeriga
  *    beriladi (kuryer qaytargach ham), faqat buyurtma hozir imtiyoz
  *    tumanida bo'lsa; qolganlari — 403.
@@ -289,9 +292,13 @@ const branch = (id: string, overrides: Row = {}): Row => ({
   ...overrides,
 });
 
-/** Viloyat 1: filiallar 10 (P) va 11 (B); viloyat 2: 20; HQ — 1. */
+/**
+ * Viloyat 1: filiallar 10 (P) va 11 (B); viloyat 2: 20; HQ — 1 (o'z
+ * viloyati 9: ega qarori 6 — HQ kuryeri faqat HQ viloyati buyurtmasini
+ * oladi, shuning uchun HQ ham faqat tuman HQ viloyatidan ko'chsa imtiyozli).
+ */
 const BRANCHES: Record<string, BranchReply> = {
-  '1': branch('1', { type: 'HQ' }),
+  '1': branch('1', { type: 'HQ', region_id: '9' }),
   '10': branch('10'),
   '11': branch('11'),
   '20': branch('20', { region_id: '2' }),
@@ -960,6 +967,130 @@ describe('updateDistrict — viloyat ko‘chishida imtiyoz (tuman saqlanishidan 
     await ok(ctx.service.updateDistrict('5', { assigned_region: '2' }, SA));
 
     expect(ctx.pairs()).toEqual(['601@10', '603@10']);
+  });
+
+  describe('ega qarori 6 — HQ (viloyat 9) ham «eski filialda tugasin»', () => {
+    const regions = {
+      '1': { id: '1', name: 'Toshkent' },
+      '2': { id: '2', name: 'Namangan' },
+      '9': { id: '9', name: 'Toshkent shahri' },
+    };
+    // Tuman 8 — HQ viloyatida (9).
+    const hqDistrictRows = () => [
+      // HQ da turgan (qaytarilgan) WAITING.
+      custodyRow({
+        id: '701',
+        district_id: '8',
+        region_id: '9',
+        status: Order_status.WAITING,
+        holder_type: 'HQ',
+        holder_branch_id: null,
+        branch_id: '1',
+      }),
+      // HQ kuryeri qo'lida.
+      custodyRow({
+        id: '702',
+        district_id: '8',
+        region_id: '9',
+        status: Order_status.ON_THE_ROAD,
+        holder_type: 'COURIER',
+        holder_branch_id: '1',
+        holder_courier_id: '91',
+        courier_id: '91',
+        branch_id: '1',
+      }),
+      // 10 → HQ partiyasi yo'lda — mas'ul HQ.
+      custodyRow({
+        id: '703',
+        district_id: '8',
+        region_id: '9',
+        status: Order_status.WAITING,
+        current_batch_id: '901',
+        batch_destination_branch_id: '1',
+      }),
+      // Filial 10 (viloyat 1) — tuman oldin ham unga xizmat qilmasdi.
+      custodyRow({ id: '704', district_id: '8', region_id: '9' }),
+      // Hali HQ qabul qilmagan market buyurtmasi (NEW, holder HQ) — HQ
+      // qo'lida emas, imtiyozsiz.
+      custodyRow({
+        id: '705',
+        district_id: '8',
+        region_id: '9',
+        status: Order_status.NEW,
+        holder_type: 'HQ',
+        holder_branch_id: null,
+        branch_id: '1',
+      }),
+    ];
+
+    it('⭐ tuman HQ viloyatidan ko‘chdi (9 → 2) — HQ / HQ kuryeri qo‘lidagi va HQ ga ketayotgan ochiq buyurtmalar HQ ga imtiyozli (hali qabul qilinmagan NEW — yo‘q)', async () => {
+      const ctx = districtSetup({
+        districts: [district({ id: '8', region_id: '9' })],
+        custody: { rows: hqDistrictRows() },
+        regions,
+      });
+
+      const res = await ok(
+        ctx.service.updateDistrict('8', { assigned_region: '2' }, SA),
+      );
+
+      expect(ctx.pairs()).toEqual(['701@1', '702@1', '703@1']);
+      expect(ctx.exemptions.rows[0]).toMatchObject({
+        district_id: '8',
+        source: 'district_update',
+        revoked_at: null,
+      });
+      expect(res.data.coverage_exemptions).toEqual({
+        created: 3,
+        by_branch: [{ branch_id: '1', count: 3 }],
+      });
+    });
+
+    it('tuman HQ viloyatiga ko‘chdi (2 → 9) — HQ ga imtiyoz yo‘q (endi HQ kuryeri oladi); viloyat 2 filiali (20) — imtiyozli', async () => {
+      const ctx = districtSetup({
+        districts: [district({ id: '8', region_id: '2' })],
+        custody: {
+          rows: [
+            custodyRow({
+              id: '801',
+              district_id: '8',
+              region_id: '2',
+              holder_type: 'HQ',
+              holder_branch_id: null,
+              branch_id: '1',
+            }),
+            custodyRow({
+              id: '802',
+              district_id: '8',
+              region_id: '2',
+              holder_branch_id: '20',
+              branch_id: '20',
+            }),
+          ],
+        },
+        regions,
+      });
+
+      await ok(ctx.service.updateDistrict('8', { assigned_region: '9' }, SA));
+
+      expect(ctx.pairs()).toEqual(['802@20']);
+    });
+
+    it('viloyatsiz HQ — imtiyoz yo‘q (oldin ham HQ kuryeriga berib bo‘lmasdi)', async () => {
+      const ctx = districtSetup({
+        districts: [district({ id: '8', region_id: '9' })],
+        custody: { rows: hqDistrictRows() },
+        branches: {
+          ...BRANCHES,
+          '1': branch('1', { type: 'HQ', region_id: null }),
+        },
+        regions,
+      });
+
+      await ok(ctx.service.updateDistrict('8', { assigned_region: '2' }, SA));
+
+      expect(ctx.pairs()).toEqual([]);
+    });
   });
 
   it('⭐ saqlangach qayta snapshot: oraliqda 10 custody‘siga kirgan buyurtma ham imtiyozli, son ikkala yurishdan', async () => {

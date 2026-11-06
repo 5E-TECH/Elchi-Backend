@@ -15,6 +15,10 @@
  *  3. Filial viloyati yo'q — hech narsaga xizmat qilmaydi (fail-closed).
  *  Buyurtma viloyati aniqlanmasa — `false` (fail-closed).
  *
+ * Kuryerga berish (`isOrderCourierServedByBranch`): yuqoridagi bilan bir
+ * xil, faqat HQ ham cheklanadi — HQ kuryeri faqat HQ viloyati buyurtmasini
+ * oladi (ega qarori 6; HQ viloyati yo'q — `false`).
+ *
  * `districts.serving_branch_id` endi HISOBGA OLINMAYDI (ustun qoladi;
  * `PUT /branches/:id/districts` chaqirilaveradi, lekin qamrovga ta'sir
  * qilmaydi — keyin tozalanadi).
@@ -111,4 +115,24 @@ export function isOrderServedByBranch(
   if (!branchRegionId) return false;
   const regionId = effectiveOrderRegionId(input);
   return !!regionId && regionId === branchRegionId;
+}
+
+/**
+ * KURYERGA BERISH qamrovi (ega qarori 6, anKpzwxk): HQ kuryeri faqat HQ
+ * viloyati buyurtmasini oladi — HQ viloyati bo'lishi va buyurtma XIZMAT
+ * viloyati (`effectiveOrderRegionId`) unga teng bo'lishi shart (HQ viloyati
+ * yo'q — `false`, fail-closed). Boshqa filial — `isOrderServedByBranch`
+ * bilan aynan bir xil. Jo'natish (dispatch) uchun EMAS: u yerda HQ
+ * cheklanmaydi (`isOrderServedByBranch`).
+ */
+export function isOrderCourierServedByBranch(
+  input: { district?: CoverageDistrict | null; orderRegionId?: unknown },
+  branch: CoverageBranch | null | undefined,
+): boolean {
+  if (!branch) return false;
+  if (!isHqBranch(branch)) return isOrderServedByBranch(input, branch);
+  const hqRegionId = asId(branch.region_id);
+  if (!hqRegionId) return false;
+  const regionId = effectiveOrderRegionId(input);
+  return !!regionId && regionId === hqRegionId;
 }

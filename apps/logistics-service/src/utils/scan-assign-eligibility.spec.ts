@@ -17,7 +17,11 @@ describe('assessHqCourierScan', () => {
   const assess = (
     order: HqCourierScanInput['order'],
     orderPost: HqCourierScanInput['orderPost'] = null,
-    regions: { hqRegionId?: string | null; orderRegionId?: string | null } = {},
+    regions: {
+      hqRegionId?: string | null;
+      orderRegionId?: string | null;
+      coverageExempt?: boolean;
+    } = {},
   ) =>
     assessHqCourierScan({
       order,
@@ -27,6 +31,7 @@ describe('assessHqCourierScan', () => {
       hqRegionId: regions.hqRegionId === undefined ? '14' : regions.hqRegionId,
       orderRegionId:
         regions.orderRegionId === undefined ? '14' : regions.orderRegionId,
+      coverageExempt: regions.coverageExempt,
     });
 
   it('matnlar kelishilgan shartnomadagi kabi (aniq)', () => {
@@ -507,6 +512,82 @@ describe('assessHqCourierScan', () => {
           orderRegionId: '8',
         })?.reason,
       ).toBe('WRONG_STATUS');
+    });
+
+    describe('HQ qamrov imtiyozi (coverageExempt — «eski filialda tugasin»)', () => {
+      const exempt = {
+        hqRegionId: '14',
+        orderRegionId: '8',
+        coverageExempt: true,
+      };
+
+      it.each([
+        Order_status.RECEIVED,
+        Order_status.WAITING,
+        Order_status.WAITING_CUSTOMER,
+      ])('⭐ boshqa viloyat, imtiyozli %s — ruxsat', (status) => {
+        expect(assess({ status, branch_id: '1' }, null, exempt)).toBeNull();
+      });
+
+      it('imtiyoz yo‘q (false / berilmagan) — avvalgidek 403 hq_courier_region_only', () => {
+        expect(
+          assess({ status: Order_status.WAITING, branch_id: '1' }, null, {
+            ...exempt,
+            coverageExempt: false,
+          })?.details,
+        ).toEqual({ reason: 'hq_courier_region_only' });
+        expect(
+          assess({ status: Order_status.WAITING, branch_id: '1' }, null, {
+            hqRegionId: '14',
+            orderRegionId: '8',
+          })?.reason,
+        ).toBe('OUT_OF_HQ_REGION');
+      });
+
+      it('⭐ HQ viloyati yo‘q — imtiyoz bo‘lsa ham 400 branch_region_missing (fail closed, birinchi)', () => {
+        expect(
+          assess({ status: Order_status.WAITING, branch_id: '1' }, null, {
+            ...exempt,
+            hqRegionId: null,
+          }),
+        ).toEqual({
+          statusCode: 400,
+          message: SCAN_ASSIGN_MESSAGES.HQ_REGION_MISSING,
+          reason: 'HQ_REGION_MISSING',
+          details: { reason: 'branch_region_missing' },
+        });
+      });
+
+      it('imtiyoz oldingi qoidalarni ochmaydi: NEW / yakunlangan / boshqa kuryer / paket / HQ da emas / noto‘g‘ri holat', () => {
+        const reasonOf = (order: HqCourierScanInput['order']) =>
+          assess(order, null, exempt)?.reason;
+        expect(reasonOf({ status: Order_status.NEW, branch_id: '1' })).toBe(
+          'NOT_ACCEPTED',
+        );
+        expect(reasonOf({ status: Order_status.SOLD, branch_id: '1' })).toBe(
+          'FINISHED',
+        );
+        expect(
+          reasonOf({
+            status: Order_status.WAITING,
+            branch_id: '1',
+            courier_id: 'c2',
+          }),
+        ).toBe('WITH_OTHER_COURIER');
+        expect(
+          reasonOf({
+            status: Order_status.RECEIVED,
+            branch_id: '1',
+            current_batch_id: 'b1',
+          }),
+        ).toBe('IN_BATCH');
+        expect(
+          reasonOf({ status: Order_status.RECEIVED, branch_id: '20' }),
+        ).toBe('NOT_AT_HQ');
+        expect(reasonOf({ status: Order_status.CREATED, branch_id: '1' })).toBe(
+          'WRONG_STATUS',
+        );
+      });
     });
   });
 });

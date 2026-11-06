@@ -1,7 +1,7 @@
 import {
   Order_status,
   isHqBranch,
-  isOrderServedByBranch,
+  isOrderCourierServedByBranch,
   type CoverageBranch,
   type CoverageDistrict,
 } from '@app/common';
@@ -29,9 +29,16 @@ import {
  * BRANCH/COURIER va `holder_branch_id` bor — o'sha filial (HQ → filial
  * pochtasi: custody jo'natishda filialga o'tadi); aks holda `branch_id`.
  *
- * Imtiyoz (buyurtma o, filial b): b = mas'ul filial, HQ emas, ko'chishdan
- * OLDIN b xizmat qilardi va KEYIN xizmat qilmaydi (`isOrderServedByBranch`,
- * ya'ni eski xizmat viloyati = b viloyati ≠ yangi xizmat viloyati).
+ * Imtiyoz (buyurtma o, filial b): b = mas'ul filial, ko'chishdan OLDIN b
+ * kuryerga berishda xizmat qilardi va KEYIN xizmat qilmaydi
+ * (`isOrderCourierServedByBranch`, ya'ni eski xizmat viloyati = b viloyati ≠
+ * yangi xizmat viloyati). HQ ham (ega qarori 6: HQ kuryeri faqat HQ
+ * viloyati buyurtmasini oladi) — tuman HQ viloyatidan ko'chsa HQ / HQ
+ * kuryeri qo'lidagi ochiq buyurtmalar HQ da tugaydi; viloyatsiz HQ —
+ * imtiyozsiz (oldin ham kuryerga bera olmasdi). Hali HQ qabul qilmagan
+ * (NEW, holder HQ / yo'q, yo'ldagi partiyasiz) market buyurtmasi HQ qo'lida
+ * emas — imtiyoz olmaydi (u ko'chishdan keyin keladi). Imtiyoz faqat kuryerga
+ * berishda hisobga olinadi, jo'natishda (dispatch) emas.
  * Faqat ochiq custody holatlari va MARKET qo'lida bo'lmagan buyurtmalar.
  * Imtiyozda ko'chishdan KEYINGI buyurtma tumani saqlanadi: qamrov to'sig'i
  * imtiyozni faqat buyurtma hozir o'sha tumanda bo'lsa hisobga oladi.
@@ -184,7 +191,9 @@ export function isOpenCustodyRow(
 /**
  * Imtiyoz shartlari (yuqoridagi qoida). `before` / `after` — buyurtma
  * tumanining ko'chishdan oldingi va keyingi qatori; `branch` — mas'ul
- * filial qatori (noma'lum — `null`, imtiyoz yo'q).
+ * filial qatori (noma'lum — `null`, imtiyoz yo'q). HQ bo'lmagan filial uchun
+ * `isOrderCourierServedByBranch` = `isOrderServedByBranch` (avvalgidek). HQ
+ * uchun hali qabul qilinmagan NEW (pastda) — imtiyozsiz.
  */
 export function isCoverageExemptionEligible(input: {
   row: OpenCustodyRow;
@@ -193,19 +202,34 @@ export function isCoverageExemptionEligible(input: {
   branch: CoverageBranch | null | undefined;
 }): boolean {
   const { row, before, after, branch } = input;
-  if (!branch || isHqBranch(branch) || !isOpenCustodyRow(row)) {
+  if (!branch || !isOpenCustodyRow(row)) {
     return false;
   }
   const branchId = canonicalId(branch.id);
   if (!branchId || branchId !== responsibleBranchId(row)) {
     return false;
   }
+  // HQ: hali qabul qilinmagan buyurtma (market/hamkor yaratgan NEW — branch_id
+  // HQ fallback'i, holder HQ, yo'ldagi partiyasiz) HQ qo'lida emas: ko'chishdan
+  // keyin HQ ga keladi — imtiyozsiz (yangi qoida). HQ ga SENT partiyada
+  // ketayotgan yoki HQ da tranzit sifatida qabul qilingan (holder BRANCH) NEW —
+  // imtiyozli bo'lib qoladi.
+  if (
+    isHqBranch(branch) &&
+    String(row.status ?? '')
+      .trim()
+      .toLowerCase() === String(Order_status.NEW) &&
+    !canonicalId(row.batch_destination_branch_id) &&
+    !['BRANCH', 'COURIER'].includes(upperText(row.holder_type))
+  ) {
+    return false;
+  }
   return (
-    isOrderServedByBranch(
+    isOrderCourierServedByBranch(
       { district: before, orderRegionId: row.region_id },
       branch,
     ) &&
-    !isOrderServedByBranch(
+    !isOrderCourierServedByBranch(
       { district: after, orderRegionId: row.region_id },
       branch,
     )
