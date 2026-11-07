@@ -22,6 +22,37 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-07 — Narx tushirib qisman sotish (BeePost'dagidek): mahsulot sonini kamaytirmasdan faqat summani tushirish, «Buyurtma arzonroq sotildi» xabari (migratsiya 1716000000212)
+
+**Muammo:** mijoz 500 000 lik mahsulotni 350 000 ga olaman desa, kuryer market bilan telefonda kelishib ham uni sota olmasdi. «Qisman sotish» faqat mahsulot sonini kamaytirganda ishlardi. Bitta mahsulotli buyurtmada umuman yopiq edi (FE «Buyurtmada bitta mahsulot — qisman sotib bo'lmaydi», BE 400). BeePost'da esa bu mumkin.
+
+**Ega qarorlari (2026-11-07):** izoh ixtiyoriy; market tasdig'i hozircha shart emas; 2+ mahsulotli buyurtmada ham sonini tushirmasdan narxni tushirish mumkin; marketga Telegram xabari yuboriladi. 0 so'm ham mumkin.
+
+**Endpointlar:**
+- ✏️ [order] `POST /orders/partly-sell/:id` (kuryer, menejer): `order_item_info` dagi soni buyurtmadagidek qolsa ham endi 400 emas, agar `totalPrice` buyurtma summasidan **kam** bo'lsa:
+  - buyurtma `sold` bo'ladi, `total_price` = yangi summa;
+  - bekor qilingan «bola» buyurtma **ochilmaydi** (qaytariladigan mahsulot yo'q);
+  - asl summa yangi `partly_sell_original_total_price` maydonida saqlanadi.
+  
+  Kassa hisobi oddiy qisman sotuvdagidek (market: summa − market tarifi, kuryer: summa − kuryer tarifi).
+  - Soni ham, summa ham o'zgarmasa — 400 «Mahsulot soni ham, summa ham o'zgarmagan — oddiy «Sotish» dan foydalaning».
+  - Soni kamaygan qisman sotuv avvalgidek ishlaydi.
+- ✏️ [order] Rollback: narx tushirilgan buyurtmada `total_price` asl summaga **aniq** qaytadi va `partly_sell_original_total_price` = `null` bo'ladi.
+- 🟢 [order] Buyurtma javobida yangi maydon `partly_sell_original_total_price` (`number | null`). U faqat narx tushirib sotilgan buyurtmada to'ldiriladi. Logist ko'rmaydi (pul maydoni). API orqali o'zgartirib bo'lmaydi.
+- 🆕 [notification] Yangi tur `order.sold_cheaper` («Buyurtma arzonroq sotildi»): shu sotuvda `order.sold` **o'rniga** keladi, ikkalasi birga kelmaydi.
+  - Kanallar: in_app, realtime va market Telegram guruhi (create). Telegram'da asl narx, sotilgan narx va farq ko'rsatiladi.
+  - in_app tanasi: `Buyurtma #EL-… arzonroq sotildi.` — summasiz, `data` ham boshqa buyurtma turlaridagidek. Bu xabar viloyat logistiga ham boradi, logist esa pulni ko'rmaydi (4BftLLnc). Eski va yangi narx faqat market Telegram guruhi matnida.
+  - Telegram matnida «↩️ Sabab» qatori endi faqat bekor qilish, qaytarish va «yetkazilmadi» xabarlarida chiqadi.
+
+→ **Frontendda:**
+- SellModal «Qisman sotish»:
+  - bitta mahsulotli buyurtmada ham ochiq bo'lsin;
+  - soni o'zgarmasa, summa buyurtma summasidan kam bo'lishi shart;
+  - izoh ixtiyoriy.
+- Bildirishnoma ro'yxati `order.sold_cheaper` ni boshqa turlar kabi ko'rsatadi (yorliq katalogdan).
+
+**Migratsiya `1716000000212-OrderPartlySellOriginalTotalPrice`** — `orders.partly_sell_original_total_price numeric(14,2) NULL`, default va backfill yo'q (faqat katalog o'zgarishi), `IF NOT EXISTS`. Deploy: order-service, logistics-service, notification-service (katalog), api-gateway.
+
 ### 2026-11-06 — anKpzwxk davomi (#620 tekshiruvi): HQ uchun ham «Eski filialda tugasin», o'tkazma pochtasi qabul rad javobi manzilni oshkor qilmaydi
 
 #620 (merge qilingan) mustaqil tekshiruvidagi tuzatishlar.

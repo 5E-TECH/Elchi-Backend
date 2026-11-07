@@ -60,6 +60,7 @@ describe('NOTIFICATION_TYPES katalogi (Eh8y21Ha)', () => {
       'order.accepted',
       'order.on_way',
       'order.sold',
+      'order.sold_cheaper',
       'order.cancelled',
       'order.partly_cancelled',
       'order.returned',

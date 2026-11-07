@@ -260,6 +260,21 @@ export class Order extends BaseEntity {
   sale_market_paid_amount!: number | null;
 
   /**
+   * Narx tushirib qisman sotuvdan OLDINGI summa (ega 2026-11-07). Mahsulot soni
+   * kamaymasdan faqat narx tushirilsa (500 000 → 350 000) bola buyurtma
+   * ochilmaydi — rollback asl summani shu ustundan qaytaradi va uni tozalaydi.
+   * `NULL` — narx tushirilmagan (migratsiya 1716000000212).
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  partly_sell_original_total_price!: number | null;
+
+  /**
    * Sotuv/bekor qilishda kuryer yozgan qo'shimcha xarajat.
    *
    * Ilgari bu summa HECH QAYERDA buyurtmada saqlanmasdi — faqat kassa

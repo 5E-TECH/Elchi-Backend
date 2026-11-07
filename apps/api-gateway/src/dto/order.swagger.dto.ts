@@ -1039,7 +1039,17 @@ export class PartlySellOrderRequestDto {
   @Type(() => PartlySoldItemDto)
   order_item_info!: PartlySoldItemDto[];
 
-  @ApiProperty({ example: 15000, minimum: 0 })
+  @ApiProperty({
+    example: 15000,
+    minimum: 0,
+    description:
+      "Mijozdan olingan yangi summa. (2026-11-07, BeePost'dagidek) Mahsulot soni " +
+      "kamaytirilmasa ham bo'ladi — faqat narx tushiriladi: bunda summa buyurtma " +
+      "summasidan KAM bo'lishi shart (teng bo'lsa 400 — oddiy «Sotish»), bekor " +
+      'qilingan bola buyurtma ochilmaydi, asl summa ' +
+      '`partly_sell_original_total_price` da saqlanadi (rollback qaytaradi) va ' +
+      'market `order.sold_cheaper` («Buyurtma arzonroq sotildi») xabarini oladi.',
+  })
   @Transform(({ value }) => parseFormattedNumber(value))
   @IsNumber()
   totalPrice!: number;

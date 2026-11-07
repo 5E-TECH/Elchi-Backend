@@ -155,6 +155,24 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       user_can_mute: true,
     }),
     def({
+      // (ega 2026-11-07, BeePost'dagidek) Kuryer/menejer mahsulot sonini
+      // kamaytirmasdan narxni tushirib sotdi — `order.sold` O'RNIGA. Market
+      // kuryer bilan telefonda kelishgan bo'lsa ham guruhda eski → yangi
+      // narxni ko'rsin: Telegram ham.
+      key: 'order.sold_cheaper',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+      group_key_pattern: ORDER_STATUS_GROUP,
+      label_uz: 'Buyurtma arzonroq sotildi',
+      default_audience: ORDER_AUDIENCE,
+      user_can_mute: true,
+    }),
+    def({
       key: 'order.cancelled',
       category: NotificationCategory.ORDER,
       priority: NotificationPriority.HIGH,

@@ -16,7 +16,7 @@ import { makeInbox } from './testing/inbox-kit-spec';
 /**
  * OA16fdSq — buyurtma bildirishnomasining oxirgi qadami.
  *
- * TC6/TC15: 7 ta pilot hodisaning har biri inboxda qator yaratadi, `link`
+ * TC6/TC15: 8 ta pilot hodisaning (+ order.sold_cheaper, 2026-11-07) har biri inboxda qator yaratadi, `link`
  * — `/orders/edit/{id}` (frontend «Buyurtma tafsiloti»; `/orders/{id}`
  * marshruti yo'q — 404 edi); push ham aynan shu havolani oladi.
  *
@@ -267,12 +267,13 @@ describe('OA16fdSq TC9 — mijoz ismida `<`, `&`, `*` — Telegram rad etmaydi (
   });
 });
 
-describe('OA16fdSq TC6/TC15 — 7 pilot hodisa: inbox qatori + /orders/edit/{id}; push havolasi ham', () => {
+describe('OA16fdSq TC6/TC15 — 8 pilot hodisa: inbox qatori + /orders/edit/{id}; push havolasi ham', () => {
   const fromStatus: Record<string, Order_status | null> = {
     'order.created': null,
     'order.accepted': Order_status.NEW,
     'order.on_way': Order_status.RECEIVED,
     'order.sold': Order_status.WAITING,
+    'order.sold_cheaper': Order_status.WAITING,
     'order.cancelled': Order_status.WAITING,
     'order.returned': Order_status.CANCELLED,
     'order.not_accepted': Order_status.ON_THE_ROAD,

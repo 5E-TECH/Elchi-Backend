@@ -234,6 +234,8 @@ export const FOREIGN_COURIER_ORDER_FIELDS: readonly string[] = [
   'paid_amount',
   'sale_collectible_amount',
   'sale_market_paid_amount',
+  // Narx tushirib qisman sotuvdagi asl summa — sotuv summalari bilan bir qatorda.
+  'partly_sell_original_total_price',
   'branch_cashbox_amount',
   'extra_cost',
   'proof_files',

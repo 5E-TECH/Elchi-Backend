@@ -85,7 +85,8 @@ describe('resolveOrderNotificationType — o‘tish → tur', () => {
   });
 
   it('TC12: barcha pilot turlar notification-types katalogida', () => {
-    expect(ORDER_PILOT_NOTIFICATION_TYPES).toHaveLength(7);
+    // (ega 2026-11-07) + order.sold_cheaper — narx tushirib sotuv.
+    expect(ORDER_PILOT_NOTIFICATION_TYPES).toHaveLength(8);
     ORDER_PILOT_NOTIFICATION_TYPES.forEach((type) =>
       expect(isKnownNotificationType(type)).toBe(true),
     );
@@ -229,6 +230,7 @@ describe('OA16fdSq — link /orders/edit/{id} (frontend «Buyurtma tafsiloti», 
     'order.accepted': Order_status.NEW,
     'order.on_way': Order_status.RECEIVED,
     'order.sold': Order_status.WAITING,
+    'order.sold_cheaper': Order_status.WAITING,
     'order.cancelled': Order_status.WAITING,
     'order.returned': Order_status.CANCELLED,
     'order.not_accepted': Order_status.ON_THE_ROAD,

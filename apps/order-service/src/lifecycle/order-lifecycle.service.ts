@@ -316,6 +316,8 @@ const API_UPDATE_FORBIDDEN_FIELDS = [
   'sale_collectible_amount',
   // T0UGh8bL: sotuvda marketga berilgan naqd — faqat sotuv/rollback yozadi.
   'sale_market_paid_amount',
+  // Narx tushirib qisman sotuvdan oldingi summa — faqat partly-sell/rollback.
+  'partly_sell_original_total_price',
   'extra_cost',
   'proof_files',
   'external_id',
@@ -2144,6 +2146,29 @@ export class OrderLifecycleService {
       lock: { mode: 'pessimistic_write' },
     });
 
+    /**
+     * Narx tushirib qisman sotuv (2026-11-07) bola ochmaydi — asl summa
+     * `partly_sell_original_total_price` da. U AYNAN tiklanadi va ustun
+     * tozalanadi: keyingi sotuv yangidan yozadi.
+     *
+     * ⚠️ Ustundagi summa — ota buyurtmaning narx tushirilishidan OLDINGI o'z
+     * summasi. Avvalgi (mahsuloti kamaygan) qisman sotuvdan qolgan bola
+     * (masalan o'shanda bekor pochtada bo'lib birlashmagan, keyin yana
+     * CANCELLED/WAITING ga qaytgan) summasi unga KIRMAYDI — u o'sha sotuvda
+     * otadan ayirilgan. Shuning uchun pastda bolalar summasi tiklangan summa
+     * USTIGA qo'shiladi (aks holda 3 dona buyurtma 2 dona narxida qolardi).
+     */
+    const originalTotalPrice = parentOrder.partly_sell_original_total_price;
+    if (
+      originalTotalPrice !== null &&
+      typeof originalTotalPrice !== 'undefined'
+    ) {
+      parentOrder.total_price = Number(originalTotalPrice);
+      parentOrder.partly_sell_original_total_price = null;
+      await orderRepo.save(parentOrder);
+      await this.syncOrderToSearch(parentOrder, manager);
+    }
+
     if (!children.length) {
       return 0;
     }
@@ -2199,6 +2224,8 @@ export class OrderLifecycleService {
       await this.removeOrderFromSearch(String(child.id), manager);
     }
 
+    // Narx tushirilgan bo'lsa `total_price` yuqorida asl summaga tiklangan —
+    // bolalar summasi baribir qo'shiladi (ular ustunga kirmaydi).
     parentOrder.total_price =
       Number(parentOrder.total_price ?? 0) + restoredPrice;
     parentOrder.product_quantity =
@@ -11519,9 +11546,22 @@ export class OrderLifecycleService {
       dto.order_item_info,
     );
 
-    if (!cancelledItems.length) {
+    /**
+     * NARX TUSHIRIB QISMAN SOTUV (ega 2026-11-07, BeePost'dagidek).
+     *
+     * Mahsulot soni kamaymagan bo'lsa ham qisman sotuv qabul qilinadi — faqat
+     * summa buyurtma summasidan KAM bo'lsa: mijoz arzonroq olishga rozi, market
+     * telefonda kelishgan (1 dona 500 000 → 350 000; 2 dona ham shunday). Market
+     * tasdig'i, isbot va chegara qo'shilmaydi; izoh ixtiyoriy (ega qarori).
+     * Mahsulot qaytmaydi — bekor qilingan bola buyurtma ochilmaydi, asl summa
+     * `partly_sell_original_total_price` ga yoziladi (rollback shundan tiklaydi).
+     *
+     * Soni ham, narx ham o'zgarmasa — bu oddiy sotuv, qisman emas.
+     */
+    const isPriceCutOnly = cancelledItems.length === 0;
+    if (isPriceCutOnly && !(price < oldTotalPrice)) {
       this.badRequest(
-        'Qisman sotishda kamida bitta mahsulot soni kamaytirilishi kerak',
+        "Mahsulot soni ham, summa ham o'zgarmagan — oddiy «Sotish» dan foydalaning",
       );
     }
     /**
@@ -11544,21 +11584,27 @@ export class OrderLifecycleService {
       );
     }
     const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
-    const cancelledBranchId = String(
-      order.holder_branch_id ??
-        order.branch_id ??
-        order.home_branch_id ??
-        requester.branch_id ??
-        '',
-    ).trim();
-    if (!cancelledBranchId) {
+    // Bola buyurtmaning filiali va egasi faqat bola ochilganda kerak — narx
+    // tushirib sotuvda filiali aniqlanmagan buyurtma keraksiz 400 olmasin.
+    const cancelledBranchId = isPriceCutOnly
+      ? ''
+      : String(
+          order.holder_branch_id ??
+            order.branch_id ??
+            order.home_branch_id ??
+            requester.branch_id ??
+            '',
+        ).trim();
+    if (!isPriceCutOnly && !cancelledBranchId) {
       this.badRequest('Qisman bekor qilingan order uchun branch aniqlanmadi');
     }
     const cancelledCourierId = isManagerRequester ? null : actorCourierId;
-    const cancelledHolder = await this.resolveHolderFromState(
-      cancelledBranchId,
-      cancelledCourierId,
-    );
+    const cancelledHolder = isPriceCutOnly
+      ? null
+      : await this.resolveHolderFromState(
+          cancelledBranchId,
+          cancelledCourierId,
+        );
 
     // Decoupled COD legs (partial price as the operation total). See sellOrder
     // for the model: market / courier / branch each settle independently.
@@ -11830,6 +11876,11 @@ export class OrderLifecycleService {
           // rollback qayta hisoblamasligi uchun snapshot qilinadi
           // (`sellOrder` dagi bilan bir xil sabab).
           sale_collectible_amount: collectible,
+          // Narx tushirib sotuvda asl summa — rollback shundan tiklaydi (bola
+          // yo'q). Mahsuloti kamaygan sotuvda yozilmaydi: u yerda bola bor.
+          ...(isPriceCutOnly
+            ? { partly_sell_original_total_price: oldTotalPrice }
+            : {}),
           return_requested: false,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
@@ -11844,9 +11895,13 @@ export class OrderLifecycleService {
 
       // product_quantity reflects only the sold portion. updateFull's save wrote
       // the stale (pre-sale) value, so overwrite it within the same tx.
+      // MOSLANGAN qatorlar yig'indisi (`soldQty`) — aynan shu sonlar
+      // mahsulot qatorlariga yozildi. So'rov yig'indisi (`newQty`) emas: bitta
+      // `product_id` li so'rov qatori ikki bir xil buyurtma qatoriga moslansa
+      // (to'g'ridan-to'g'ri API) `product_quantity` qatorlardan ajrab qolardi.
       await tx
         .getRepository(Order)
-        .update({ id: String(order.id) }, { product_quantity: newQty });
+        .update({ id: String(order.id) }, { product_quantity: soldQty });
 
       // Open the per-order settlement row (PENDING) inside the same tx.
       await this.recordSaleSettlement(tx, {
@@ -11865,98 +11920,102 @@ export class OrderLifecycleService {
         hasCourier: Boolean(courierCashbox),
       });
 
-      const cancelledOrderRepo = tx.getRepository(Order);
-      const cancelledOrderItemRepo = tx.getRepository(OrderItem);
-      const cancelledTrackingRepo = tx.getRepository(OrderTracking);
-      const cancelledCustodyRepo = tx.getRepository(OrderCustodyEvent);
-      const cancelledOrder = await cancelledOrderRepo.save(
-        cancelledOrderRepo.create({
-          market_id: String(order.market_id),
-          customer_id: String(order.customer_id),
-          where_deliver: order.where_deliver,
-          total_price: cancelledTotalPrice,
-          to_be_paid: 0,
-          paid_amount: 0,
-          status: Order_status.CANCELLED,
-          comment: 'Qisman bekor qilingan mahsulotlar',
-          operator: order.operator ?? null,
-          operator_id: order.operator_id ?? null,
-          post_id: order.post_id ?? null,
-          canceled_post_id: null,
-          branch_id: cancelledBranchId,
-          home_branch_id: order.home_branch_id ?? order.branch_id ?? null,
-          courier_id: cancelledCourierId,
-          assigned_at: cancelledCourierId
-            ? (order.assigned_at ?? new Date())
-            : null,
-          holder_type: cancelledHolder.holder_type,
-          holder_branch_id: cancelledHolder.holder_branch_id,
-          holder_courier_id: cancelledHolder.holder_courier_id,
-          last_handover_at: new Date(),
-          last_handover_by: this.numericActorId(requester.id),
-          district_id: order.district_id ?? null,
-          region_id: order.region_id ?? null,
-          address: order.address ?? null,
-          // txmkXVBa: qo'shimcha raqam nusxasi bola buyurtmaga ham.
-          extra_number: order.extra_number ?? null,
-          qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-          parent_order_id: String(order.id),
-          // T8: qolgan mahsulotlar o'sha posilka — belgilar meros.
-          // Qulf ostidagi qatordan — oradagi PUT eski nusxa bilan bosilmasin.
-          special_categories: [
-            ...(lockedOrder?.special_categories ??
-              order.special_categories ??
-              []),
-          ],
-          source: order.source,
-          // 6kHnNH9j: bola ota buyurtma bandida — omborga qaytishi uchun.
-          ...(this.orderWarehouse?.inheritedFields(order) ?? {}),
-          product_quantity: cancelledItems.reduce(
-            (sum, item) => sum + item.quantity,
-            0,
-          ),
-          isDeleted: false,
-        }),
-      );
-      await cancelledOrderItemRepo
-        .createQueryBuilder()
-        .insert()
-        .values(
-          cancelledItems.map((item) => ({
+      // Bekor qilingan bola buyurtma — faqat mahsulot soni kamayganda. Narx
+      // tushirib sotuvda (`cancelledHolder` yo'q) hech narsa qaytmaydi.
+      if (cancelledHolder) {
+        const cancelledOrderRepo = tx.getRepository(Order);
+        const cancelledOrderItemRepo = tx.getRepository(OrderItem);
+        const cancelledTrackingRepo = tx.getRepository(OrderTracking);
+        const cancelledCustodyRepo = tx.getRepository(OrderCustodyEvent);
+        const cancelledOrder = await cancelledOrderRepo.save(
+          cancelledOrderRepo.create({
+            market_id: String(order.market_id),
+            customer_id: String(order.customer_id),
+            where_deliver: order.where_deliver,
+            total_price: cancelledTotalPrice,
+            to_be_paid: 0,
+            paid_amount: 0,
+            status: Order_status.CANCELLED,
+            comment: 'Qisman bekor qilingan mahsulotlar',
+            operator: order.operator ?? null,
+            operator_id: order.operator_id ?? null,
+            post_id: order.post_id ?? null,
+            canceled_post_id: null,
+            branch_id: cancelledBranchId,
+            home_branch_id: order.home_branch_id ?? order.branch_id ?? null,
+            courier_id: cancelledCourierId,
+            assigned_at: cancelledCourierId
+              ? (order.assigned_at ?? new Date())
+              : null,
+            holder_type: cancelledHolder.holder_type,
+            holder_branch_id: cancelledHolder.holder_branch_id,
+            holder_courier_id: cancelledHolder.holder_courier_id,
+            last_handover_at: new Date(),
+            last_handover_by: this.numericActorId(requester.id),
+            district_id: order.district_id ?? null,
+            region_id: order.region_id ?? null,
+            address: order.address ?? null,
+            // txmkXVBa: qo'shimcha raqam nusxasi bola buyurtmaga ham.
+            extra_number: order.extra_number ?? null,
+            qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+            parent_order_id: String(order.id),
+            // T8: qolgan mahsulotlar o'sha posilka — belgilar meros.
+            // Qulf ostidagi qatordan — oradagi PUT eski nusxa bilan bosilmasin.
+            special_categories: [
+              ...(lockedOrder?.special_categories ??
+                order.special_categories ??
+                []),
+            ],
+            source: order.source,
+            // 6kHnNH9j: bola ota buyurtma bandida — omborga qaytishi uchun.
+            ...(this.orderWarehouse?.inheritedFields(order) ?? {}),
+            product_quantity: cancelledItems.reduce(
+              (sum, item) => sum + item.quantity,
+              0,
+            ),
+            isDeleted: false,
+          }),
+        );
+        await cancelledOrderItemRepo
+          .createQueryBuilder()
+          .insert()
+          .values(
+            cancelledItems.map((item) => ({
+              order_id: cancelledOrder.id,
+              product_id: item.product_id,
+              product_name: item.product_name,
+              quantity: item.quantity,
+            })),
+          )
+          .execute();
+        await this.custody.createTrackingEvent(
+          {
             order_id: cancelledOrder.id,
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-          })),
-        )
-        .execute();
-      await this.custody.createTrackingEvent(
-        {
-          order_id: cancelledOrder.id,
-          from_status: null,
-          to_status: Order_status.CANCELLED,
-          changed_by: String(requester.id),
-          changed_by_role: this.custody.toTrackingRole(requester.roles),
-          note: 'Partly-sell unsold items canceled',
-        },
-        cancelledTrackingRepo,
-      );
-      await this.custody.createCustodyEvent(
-        {
-          order_id: cancelledOrder.id,
-          from_holder_type: null,
-          to_holder_type: cancelledHolder.holder_type,
-          from_branch_id: null,
-          to_branch_id: cancelledHolder.holder_branch_id,
-          from_courier_id: null,
-          to_courier_id: cancelledHolder.holder_courier_id,
-          changed_by: String(requester.id),
-          changed_by_role: this.custody.toTrackingRole(requester.roles),
-          note: 'Partly-sell canceled items custody assigned',
-        },
-        cancelledCustodyRepo,
-      );
-      await this.syncOrderToSearch(cancelledOrder, tx);
+            from_status: null,
+            to_status: Order_status.CANCELLED,
+            changed_by: String(requester.id),
+            changed_by_role: this.custody.toTrackingRole(requester.roles),
+            note: 'Partly-sell unsold items canceled',
+          },
+          cancelledTrackingRepo,
+        );
+        await this.custody.createCustodyEvent(
+          {
+            order_id: cancelledOrder.id,
+            from_holder_type: null,
+            to_holder_type: cancelledHolder.holder_type,
+            from_branch_id: null,
+            to_branch_id: cancelledHolder.holder_branch_id,
+            from_courier_id: null,
+            to_courier_id: cancelledHolder.holder_courier_id,
+            changed_by: String(requester.id),
+            changed_by_role: this.custody.toTrackingRole(requester.roles),
+            note: 'Partly-sell canceled items custody assigned',
+          },
+          cancelledCustodyRepo,
+        );
+        await this.syncOrderToSearch(cancelledOrder, tx);
+      }
 
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -12003,6 +12062,10 @@ export class OrderLifecycleService {
         market_id: order.market_id,
         courier_id: courierCashbox ? actorCourierId : null,
         cancelled_items: cancelledItems.length,
+        // Narx tushirib sotuv (mahsulot soni o'zgarmagan) — jurnalda alohida.
+        ...(isPriceCutOnly
+          ? { price_cut_only: true, original_total_price: oldTotalPrice }
+          : {}),
         // KmWO9gTA: narx jurnali (faqat dvigatel yoqilgan marketda).
         ...(marketPricing.engineActive
           ? { sale_pricing: this.salePricingAudit(marketPricing) }
@@ -12376,6 +12439,8 @@ export class OrderLifecycleService {
       sale_collectible_amount?: number | null;
       /** T0UGh8bL: sotuvda marketga to'g'ridan-to'g'ri berilgan naqd (snapshot). */
       sale_market_paid_amount?: number | null;
+      /** Narx tushirib qisman sotuvdan oldingi summa — rollback shundan tiklaydi. */
+      partly_sell_original_total_price?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       /** Kuryer yozgan qo'shimcha xarajat — buyurtmada saqlanadi. */
@@ -12583,6 +12648,12 @@ export class OrderLifecycleService {
         typeof dto.sale_market_paid_amount !== 'undefined'
           ? dto.sale_market_paid_amount
           : order.sale_market_paid_amount,
+      // Xuddi shu sabab: `typeof`. Sotuv bilan BIR save'da yoziladi — shu
+      // tranzaksiyadagi holat hook'i (bildirishnoma) uni allaqachon ko'radi.
+      partly_sell_original_total_price:
+        typeof dto.partly_sell_original_total_price !== 'undefined'
+          ? dto.partly_sell_original_total_price
+          : order.partly_sell_original_total_price,
       extra_cost:
         typeof dto.extra_cost !== 'undefined'
           ? dto.extra_cost

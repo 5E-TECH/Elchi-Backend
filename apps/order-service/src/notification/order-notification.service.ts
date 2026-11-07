@@ -120,6 +120,9 @@ export const ORDER_PILOT_NOTIFICATION_TYPES = [
   'order.accepted',
   'order.on_way',
   'order.sold',
+  // (ega 2026-11-07) Narx tushirib qisman sotuv — `order.sold` O'RNIGA
+  // (`refineOrderNotificationType`), market Telegram guruhiga ham ketadi.
+  'order.sold_cheaper',
   'order.cancelled',
   'order.returned',
   'order.not_accepted',
@@ -176,6 +179,36 @@ export function resolveOrderNotificationType(
 }
 
 /**
+ * Narx tushirib sotuvdan OLDINGI summa (`partly_sell_original_total_price`)
+ * — yo'q / yaroqsiz bo'lsa `null`.
+ */
+export function originalTotalPriceOf(
+  order: Partial<Pick<Order, 'partly_sell_original_total_price'>>,
+): number | null {
+  const raw = order.partly_sell_original_total_price;
+  if (raw === null || typeof raw === 'undefined') return null;
+  const amount = Number(raw);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+/**
+ * (ega 2026-11-07, BeePost'dagidek) Kuryer/menejer mahsulot sonini
+ * kamaytirmasdan faqat narxni tushirib sotdi — `order.sold` o'rniga
+ * `order.sold_cheaper` («Buyurtma arzonroq sotildi», market Telegram
+ * guruhiga eski → yangi narx bilan). Belgi — `partly_sell_original_total_price`
+ * (faqat shu sotuvda yoziladi, rollback tozalaydi). Ikkala xabar EMAS —
+ * bittasi almashtiriladi. Boshqa turlar o'zgarmaydi.
+ */
+export function refineOrderNotificationType(
+  type: OrderNotificationType,
+  order: Partial<Pick<Order, 'partly_sell_original_total_price'>>,
+): OrderNotificationType {
+  return type === 'order.sold' && originalTotalPriceOf(order) !== null
+    ? 'order.sold_cheaper'
+    : type;
+}
+
+/**
  * (OA16fdSq) Bildirishnoma `link` i — frontend «Buyurtma tafsiloti» sahifasi
  * (`routes.tsx`: `orders` → `edit/:orderId`). Avval `/orders/{id}` edi — bunday
  * marshrut yo'q, bosilganda 404 «ROUTE TOPILMADI» chiqardi (2026-10-09 prod
@@ -198,6 +231,10 @@ const TEXT: Record<OrderNotificationType, { title: string; status: string }> = {
   },
   'order.on_way': { title: "Buyurtma yo'lda", status: "yo'lga chiqdi" },
   'order.sold': { title: 'Buyurtma sotildi', status: 'sotildi' },
+  'order.sold_cheaper': {
+    title: 'Buyurtma arzonroq sotildi',
+    status: 'arzonroq sotildi',
+  },
   'order.cancelled': {
     title: 'Buyurtma bekor qilindi',
     status: 'bekor qilindi',
@@ -218,10 +255,18 @@ const ICON: Record<OrderNotificationType, string> = {
   'order.accepted': '📥',
   'order.on_way': '🚚',
   'order.sold': '✅',
+  'order.sold_cheaper': '⚠️',
   'order.cancelled': '❌',
   'order.returned': '↩️',
   'order.not_accepted': '⚠️',
 };
+
+/** Telegram matnida «↩️ Sabab» ko'rsatiladigan turlar. */
+const REASON_TYPES: ReadonlySet<OrderNotificationType> = new Set([
+  'order.cancelled',
+  'order.returned',
+  'order.not_accepted',
+]);
 
 // `return_reason` (CancelReason) yorliqlari — `domain/cancel-reason.ts`
 // (sabablar statistikasi bilan AYNI manba); noma'lum qiymat o'zicha (escape bilan).
@@ -296,7 +341,9 @@ type TelegramOrder = Pick<
   Order,
   'id' | 'total_price' | 'address' | 'comment' | 'return_reason'
 > &
-  Partial<Pick<Order, 'operator' | 'createdAt'>>;
+  Partial<
+    Pick<Order, 'operator' | 'createdAt' | 'partly_sell_original_total_price'>
+  >;
 
 /**
  * Market Telegram guruhi uchun HTML matn — BeePost bekor qilish xabari
@@ -352,7 +399,20 @@ export function buildOrderTelegramText(
 
   lines.push('');
   const money = formatMoney(order.total_price);
-  lines.push(`💰 <b>Narxi:</b> ${field(money, 40)}`);
+  const originalTotal =
+    type === 'order.sold_cheaper' ? originalTotalPriceOf(order) : null;
+  if (originalTotal !== null) {
+    // (ega 2026-11-07) Eski → yangi narx: market kuryer bilan kelishganini
+    // guruhda ko'radi.
+    const cut = Math.max(0, originalTotal - Number(order.total_price ?? 0));
+    lines.push(
+      `💰 <b>Asl narxi:</b> ${field(formatMoney(originalTotal), 40)}`,
+      `💵 <b>Sotilgan narxi:</b> ${field(money, 40)}`,
+      `📉 <b>Farqi:</b> ${field(`−${formatMoney(cut)}`, 40)}`,
+    );
+  } else {
+    lines.push(`💰 <b>Narxi:</b> ${field(money, 40)}`);
+  }
   const createdAt = formatTashkentDateTime(order.createdAt);
   if (createdAt) {
     lines.push(`🕒 <b>Yaratilgan vaqti:</b> ${escapeTelegramHtml(createdAt)}`);
@@ -365,7 +425,10 @@ export function buildOrderTelegramText(
     `👨‍💼 <b>Operator:</b> ${field(order.operator, 120)}`,
     '',
   );
-  if (order.return_reason) {
+  // Sabab faqat bekor/qaytarish/yetkazilmadi xabarlarida: `return_reason`
+  // tozalanmaydi — avval qaytarish boshlangan buyurtma keyin arzonroq
+  // sotilsa, «Sabab: Mijoz rad etdi» market guruhini chalg'itardi.
+  if (order.return_reason && REASON_TYPES.has(type)) {
     const reason =
       CANCEL_REASON_UZ[String(order.return_reason)] ?? order.return_reason;
     lines.push(`↩️ <b>Sabab:</b> ${field(reason, 200)}`);
@@ -451,7 +514,9 @@ export function buildOrderNotificationPayload(
     | 'comment'
     | 'return_reason'
   > &
-    Partial<Pick<Order, 'operator' | 'createdAt'>>,
+    Partial<
+      Pick<Order, 'operator' | 'createdAt' | 'partly_sell_original_total_price'>
+    >,
   fromStatus: Order_status | null | undefined,
   context: OrderNotificationContext = {},
 ): OrderNotificationPayload | null {
@@ -479,7 +544,10 @@ export function buildOrderNotificationPayload(
     category: entry.category,
     priority: entry.priority,
     title: TEXT[type].title,
-    // in_app: faqat raqam + holat — telefon/manzil YO'Q (PII).
+    // in_app: faqat raqam + holat — telefon/manzil YO'Q (PII). Summa ham YO'Q:
+    // bitta payload viloyat logistiga ham boradi, logist pul ko'rmaydi
+    // (4BftLLnc). «Arzonroq sotildi» ning eski → yangi narxi faqat market
+    // Telegram guruhi matnida (`buildOrderTelegramText`).
     body: `Buyurtma #${orderNumber || orderId} ${TEXT[type].status}.`,
     data,
     link: orderDetailLink(orderId),
@@ -683,18 +751,19 @@ export class OrderNotificationService implements OnApplicationBootstrap {
     transition: TrackingTransition,
     manager?: EntityManager,
   ): Promise<void> {
-    const type = resolveOrderNotificationType(
+    const baseType = resolveOrderNotificationType(
       transition.from_status,
       transition.to_status,
     );
-    if (!type) return;
+    if (!baseType) return;
+    let type: OrderNotificationType = baseType;
 
     const inTransaction = Boolean(manager?.queryRunner?.isTransactionActive);
     try {
       const repo = manager ? manager.getRepository(Order) : this.orderRepo;
       // Telegram matni mahsulotlarni ham ko'rsatadi — faqat o'sha turlarda
       // `items` bilan (bitta JOIN), sotuvda oddiy o'qish.
-      const order = await repo.findOne(
+      let order = await repo.findOne(
         this.typeMayUseTelegram(type)
           ? {
               where: { id: String(transition.order_id) },
@@ -703,6 +772,17 @@ export class OrderNotificationService implements OnApplicationBootstrap {
           : { where: { id: String(transition.order_id) } },
       );
       if (!order) return;
+      // (ega 2026-11-07) Narx tushirib sotilgan — «arzonroq sotildi»
+      // (Telegram bilan). Oddiy sotuv mahsulotlarsiz o'qiladi; bu kam uchraydi,
+      // shuning uchun mahsulotlar faqat shu holda ikkinchi so'rov bilan.
+      type = refineOrderNotificationType(type, order);
+      if (type !== baseType && this.typeMayUseTelegram(type)) {
+        order =
+          (await repo.findOne({
+            where: { id: String(transition.order_id) },
+            relations: ['items'],
+          })) ?? order;
+      }
 
       let payload: OrderNotificationPayload | null = null;
       try {
