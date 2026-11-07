@@ -51,7 +51,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `up -d … $DEPLOY_SERVICES`; CI_IMAGES o'chiq bo'lsa serverda `--build`
  * ham — bir necha daqiqa). Shu oraliqda ESKI logistics-service HQ
  * kuryeriga hali istalgan viloyat buyurtmasini beradi — o'shanda berilgan
- * buyurtma imtiyoz qatorisiz qoladi (TypeORM 204 ni qayta yurgizmaydi).
+ * buyurtma imtiyoz qatorisiz qoladi (TypeORM 211 ni qayta yurgizmaydi).
  * Shuning uchun:
  *  - deploy'ni HQ kuryerlari buyurtma olmayotgan paytda qiling, yoki
  *  - hamma servis yangi kodda ishlay boshlagach, shu SQL ni
@@ -65,7 +65,10 @@ export const HQ_COURIER_COVERAGE_GRANDFATHER_SOURCE = 'hq_region_rule_deploy';
 
 /**
  * up() SQL'i (yuqoridagi tanlov). Alohida eksport — deploy oynasidan keyin
- * psql bilan bir marta qayta yurgizish uchun aynan shu matn.
+ * psql bilan bir marta qayta yurgizish uchun aynan shu matn: ichida shablon
+ * o'rniga YOZMA qiymat (`'hq_region_rule_deploy'` =
+ * `HQ_COURIER_COVERAGE_GRANDFATHER_SOURCE`, pg spec tekshiradi), ya'ni matnni
+ * to'g'ridan-to'g'ri psql'ga qo'yish mumkin.
  */
 export const HQ_COURIER_COVERAGE_GRANDFATHER_UP_SQL = `
       DO $$
@@ -80,7 +83,7 @@ export const HQ_COURIER_COVERAGE_GRANDFATHER_UP_SQL = `
         INSERT INTO "logistics_schema"."district_coverage_exemptions"
           ("order_id", "branch_id", "district_id", "source")
         SELECT o."id", hq."id", o."district_id",
-               '${HQ_COURIER_COVERAGE_GRANDFATHER_SOURCE}'
+               'hq_region_rule_deploy'
           FROM "order_schema"."orders" o
           -- Yo'ldagi (SENT) partiya — u borayotgan filial mas'ul.
           LEFT JOIN "order_schema"."branch_transfer_batches" b

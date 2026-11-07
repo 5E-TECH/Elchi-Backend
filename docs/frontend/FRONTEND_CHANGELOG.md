@@ -22,6 +22,13 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-07 — anKpzwxk davomi (#621 tekshiruvi): qaytarish so'rovi rad javobida manzil filial yo'q, migratsiya 211 yo'riqnomasi
+
+- ✏️ [logistics] `POST /post/:postId/orders/:orderId/return-request` — boshqa filial menejeriga 403 `return_request_not_allowed` da `details` endi faqat `{ post_id }` (manzil `branch_id` olib tashlandi; `PATCH /post/receive/:id` bilan bir xil — pochta qaysi filialga ketayotgani oshkor qilinmaydi). Kod va matn o'zgarmagan.
+- 🟢 [ops] Migratsiya `1716000000211` deploy yo'riqnomasi tuzatildi: deploy oynasidan keyin qayta yurgiziladigani — **211** ning INSERT'i (`HQ_COURIER_COVERAGE_GRANDFATHER_UP_SQL`, 204 emas). SQL matnida endi shablon yo'q — manba qiymati yozma (`'hq_region_rule_deploy'`), matnni to'g'ridan-to'g'ri psql'ga qo'yish mumkin. 2026-11-03 (#620) yozuvidagi «Migratsiya yo'q» qaytarildi.
+
+Migratsiya yo'q. Deploy: logistics-service.
+
 ### 2026-11-07 — Skaner bilan qabul: `PATCH post/receive/:id` `scan: true` (skan = darhol qabul, BeePost kabi)
 
 **Muammo:** pochtani qabul qilishda skan faqat qatorni belgilardi (ptichka), qabul esa «Pochtani qabul qilish» tugmasi bilan bo'lardi. Tanlanmagan yo'ldagilar esa qaytarishga o'tib ketardi. Ega talabi: skan qilingan buyurtma shu zahoti qabul bo'lib ro'yxatdan yo'qolsin.
@@ -380,7 +387,7 @@ Ega qarori (Trello anKpzwxk): 2026-11-02 dagi «tuman ↔ filial» biriktiruvi (
 
 **Deploy paytida HQ kuryerlarida bo'lgan buyurtmalar** (grandfather): eski qoidada HQ kuryeri istalgan viloyat buyurtmasini olardi. Deploy paytida HQ mas'ul bo'lgan, holati `on the road` / `waiting` / `waiting_customer` (shuningdek WAITING ga qaytarilishi mumkin bo'lgan `cancelled` / `sold`) va HQ viloyatidan tashqaridagi buyurtmalar migratsiya 1716000000211 bilan HQ imtiyozini oladi (`source: 'hq_region_rule_deploy'`). Masalan, mijoz javob bermay qaytarilgan Zangiota buyurtmasini boshqa HQ kuryeriga berish mumkin (aks holda yagona chiqish bekor qilish edi). HQ omboridagi `received` / `new` buyurtmalar imtiyoz olmaydi: yangi qoida bo'yicha o'z viloyati filialiga jo'natiladi. Deploy paytida HQ viloyati hali yo'q bo'lsa, HQ dagi barcha shunday buyurtmalar imtiyozli bo'ladi va ops HQ viloyatini belgilagach ishlaydi.
 
-Migratsiya: 1716000000211 — faqat ma'lumot (imtiyoz qatorlari), idempotent (`ON CONFLICT DO NOTHING`); down() faqat o'z qatorlarini o'chiradi. Migratsiya logistics-service almashishidan OLDIN yuradi: oraliqda eski kod HQ kuryeriga bergan buyurtma imtiyozsiz qoladi — deploy'ni HQ kuryerlari buyurtma olmayotgan paytda qiling yoki servislar yangilangach 204 ning INSERT'ini (`HQ_COURIER_COVERAGE_GRANDFATHER_UP_SQL`) psql bilan darhol bir marta qayta yurgizing. Deploy: branch-service, logistics-service, api-gateway.
+Migratsiya yo'q (#620). HQ grandfather migratsiyasi `1716000000211` va uning deploy yo'riqnomasi — yuqoridagi 2026-11-06 yozuvida. Deploy: branch-service, logistics-service, api-gateway.
 
 ### 2026-11-03 — HQ ro'yxatchisi yaratgan buyurtma HQ «Qabul va yaratish»da ko'rinadi
 

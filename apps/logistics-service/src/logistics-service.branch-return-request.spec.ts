@@ -239,7 +239,7 @@ describe('requestCourierOrderReturn — filial menejeri, o‘tkazma pochtasi', (
     expect(ctx.activityLog.log).not.toHaveBeenCalled();
   });
 
-  it('boshqa filial menejeri — 403, hech narsa yozilmaydi', async () => {
+  it('boshqa filial menejeri — 403, hech narsa yozilmaydi, manzil filial oshkor qilinmaydi', async () => {
     const ctx = setup({ orders: [inTransfer('101')] });
     await expectStatus(
       ctx.service.requestCourierOrderReturn(manager20, '98', '101'),
@@ -247,6 +247,16 @@ describe('requestCourierOrderReturn — filial menejeri, o‘tkazma pochtasi', (
       'return_request_not_allowed',
     );
     expect(ctx.updates()).toHaveLength(0);
+
+    // anKpzwxk: `details` da faqat `post_id` (manzil `branch_id` yo'q).
+    let payload: { data?: { details?: unknown; branch_id?: unknown } } = {};
+    try {
+      await ctx.service.requestCourierOrderReturn(manager20, '98', '101');
+    } catch (error) {
+      payload = (error as RpcException).getError() as typeof payload;
+    }
+    expect(payload.data?.details).toEqual({ post_id: '98' });
+    expect(payload.data?.branch_id).toBeUndefined();
   });
 
   it.each([
