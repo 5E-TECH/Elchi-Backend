@@ -501,6 +501,10 @@ export const financeValidationSchema = Joi.object({
   FINANCE_DAILY_SNAPSHOT_DISABLED: Joi.boolean().default(false),
   // (gWI4gYkw) Smena hisoboti fayli (PDF/XLSX) — file-service navbati.
   RABBITMQ_FILE_QUEUE: Joi.string().default('file_queue'),
+  // (mUhkJHmi) `correctable.transfer` — qabul qilgan filial nomi
+  // (`branch.find_by_id`). Sukut bilan: kalit yo'q / bo'sh bo'lsa ham
+  // finance-service ko'tariladi.
+  RABBITMQ_BRANCH_QUEUE: Joi.string().empty('').default('branch_queue'),
   // (y8Tqm9Ap) `off` — smena jadvali cron'i umuman ishga tushmaydi
   // (favqulodda o'chirish; odatiy boshqaruv — superadmin sozlamasi).
   FINANCE_SHIFT_SCHEDULER: Joi.string().allow('').optional(),

@@ -3711,7 +3711,9 @@ export class FinanceGatewayController {
     summary: 'Find cashbox history detail by id',
     description:
       "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). " +
-      "Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q.",
+      "Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id, transfer }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q. " +
+      "mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; " +
+      "`receiver` — kuryer to'lovida pulni olgan kassa, marketga to'lovda MAIN (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`.",
   })
   @ApiParam({ name: 'id', description: 'History id (bigint string)' })
   async findHistoryById(

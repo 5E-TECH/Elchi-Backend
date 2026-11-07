@@ -89,6 +89,9 @@ import { PickupVisitController } from './pickup-visit/pickup-visit.controller';
     RmqModule.register({ name: 'GATEWAY' }),
     // (gWI4gYkw) Smena hisoboti fayli (PDF/XLSX) — file-service (private).
     RmqModule.register({ name: 'FILE' }),
+    // (mUhkJHmi) GET /finance/history/:id → correctable.transfer: qabul
+    // qilgan filial nomi (branch-service find_by_id; faqat o'qish, fail-open).
+    RmqModule.register({ name: 'BRANCH' }),
     DatabaseModule,
     // Transactional outbox: finance publishes `order.settlement.advance` to
     // order-service inside the cashbox-move transaction (Faza 2a). Reliable,

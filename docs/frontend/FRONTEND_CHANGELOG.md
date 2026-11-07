@@ -22,6 +22,42 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+
+### 2026-11-07 — mUhkJHmi / N2 «Qayerdan → Qayerga»: `GET /finance/history/:id` → `correctable.transfer`
+
+**Muammo:** superadminning «Qaytarish» / «Summani tahrirlash» dialoglari (T6) to'lovning ikki tomonini aniq ko'rsata olmasdi. Dialog kuryer kassasi oyog'idan ochilsa, pulni qaysi kassa olgani (Asosiy kassa yoki qaysi filial) ham, click_to_market dagi market nomi ham javobda yo'q edi. Filial kassasining egasi tarixda boyitilmaydi, kuryer oyog'ining `source_user_id` si esa kuryerning o'zi. Ega qarori (2026-11-03): «Backend qo'shsin».
+
+**Endpoint:**
+
+- ✏️ [finance] `GET /finance/history/:id`, faqat superadmin: `correctable` blokiga yangi maydon `transfer` qo'shildi. Mavjud maydonlar (`allowed`, `code?`, `reason?`, `deadline`, `window_days`, `root_history_id`) o'zgarmadi:
+  ```ts
+  transfer: {
+    kind: 'courier_payment' | 'market_payment';
+    payment_method: 'cash' | 'click' | 'click_to_market';
+    amount: number;
+    receiver: { cashbox_type: 'main' | 'branch'; branch_id: string | null; name: string | null };
+    courier: { id: string; name: string | null } | null;
+    market: { id: string; name: string | null } | null;
+  } | null
+  ```
+  - `receiver` — kuryer to'lovida pulni olgan kassa (MAIN yoki filial), marketga to'lovda MAIN. Filialda `branch_id` = filial id, `name` = filial nomi. MAIN da `branch_id: null`, `name: null` — FE «Asosiy kassa» deb yozadi;
+  - `courier` — faqat kuryer to'lovida (kuryer kassasi egasi). Marketga to'lovda `null`;
+  - `market` — marketga to'lovda va click_to_market kuryer to'lovida (pulni olgan market). Oddiy naqd/click kuryer to'lovida `null`;
+  - `amount`, `payment_method` — to'lovning o'zi (barcha oyoqlarda bir xil).
+- `transfer: null` — to'lov shakli aniqlanmaganda: `code: "LEGACY_UNLINKED"`, `reason: "unsupported_type"`, `reason: "reversal_row"`. Shakl aniqlansa maydon **har hukmda** bor: `allowed: true/false`, `ALREADY_CORRECTED`, `WINDOW_EXPIRED`, `reason: "cashbox_deleted"`, gateway'ning `COURIER_MOVED` i ham.
+- `correctable: null` (qamrovdan tashqari tur) va boshqa rollar (`correctable` kaliti yo'q) — avvalgidek.
+- 🟢 Nomlar **fail-open**: identity yoki branch-service javob bermasa, kechiksa (≈1,5 s) yoki yozuv topilmasa, `name: null` bo'ladi. Javob baribir 200, `id` / `branch_id` va boshqa maydonlar joyida. Ism so'rovi — bitta identity so'rovi (kuryer + market), filial nomi — faqat filial qabul qilganda bitta branch so'rovi.
+
+→ **Frontendda:**
+
+- N2 dialoglari (Qaytarish / Summani tahrirlash) «Qayerdan → Qayerga» qatorini `correctable.transfer` dan oladi:
+  - kuryer to'lovi: `courier.name` → `receiver` (`cashbox_type === 'main'` — «Asosiy kassa», `'branch'` — `receiver.name`). click_to_market da qo'shimcha `market.name`;
+  - marketga to'lov: «Asosiy kassa» → `market.name`.
+- `name === null` bo'lsa fallback ko'rsating (masalan «Kuryer #301», «Filial #15»), dialog yopilmasin.
+- `transfer === null` bo'lsa avvalgi ko'rinish qoladi (amal baribir `allowed` ga bog'liq).
+
+Deploy: finance-service (yangi BRANCH RMQ client; `RABBITMQ_BRANCH_QUEUE`, sukut `branch_queue`), api-gateway (faqat swagger tavsifi). Migratsiya yo'q.
+
 ### 2026-11-07 — Skaner bilan qabul: `PATCH post/receive/:id` `scan: true` (skan = darhol qabul, BeePost kabi)
 
 **Muammo:** pochtani qabul qilishda skan faqat qatorni belgilardi (ptichka), qabul esa «Pochtani qabul qilish» tugmasi bilan bo'lardi. Tanlanmagan yo'ldagilar esa qaytarishga o'tib ketardi. Ega talabi: skan qilingan buyurtma shu zahoti qabul bo'lib ro'yxatdan yo'qolsin.
