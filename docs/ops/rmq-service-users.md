@@ -103,7 +103,7 @@ Nega bunday:
 | `svc_gateway` | `gateway_queue\|notification_bot_queue` | ai, analytics, branch, c2c, catalog, file, finance, identity, integration, investor, logistics, notification, notification_bot, order, search |
 | `svc_identity` | `identity_queue` | branch, catalog, finance, gateway, logistics, notification, order, search |
 | `svc_order` | `order_queue` | ai, branch, catalog, file, finance, identity, integration, logistics, notification, search |
-| `svc_finance` | `finance_queue` | file, gateway, identity, integration, notification, order |
+| `svc_finance` | `finance_queue` | branch, file, gateway, identity, integration, notification, order |
 | `svc_logistics` | `logistics_queue` | branch, catalog, identity, notification, order, search |
 | `svc_catalog` | `catalog_queue` | branch, identity, logistics, search |
 | `svc_branch` | `branch_queue` | file, finance, identity, logistics, order |

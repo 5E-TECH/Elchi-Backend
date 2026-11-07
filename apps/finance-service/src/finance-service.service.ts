@@ -2592,14 +2592,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         order = orderResponse?.data ?? orderResponse ?? null;
       }
-      const [enrichedHistory] = await this.withCorrections(
-        await this.enrichHistoryWithUsers([history]),
-        options.include_receipts === true ? 'full' : 'none',
-      );
       // T6 — superadmin uchun: shu to'lovni qaytarish / tuzatish mumkinmi.
-      const correctable = options.include_correctable
-        ? await this.correctableBlock(history)
-        : undefined;
+      // (mUhkJHmi) `correctableBlock` faqat xom `history` ni o'qiydi va xatoni
+      // o'zi `null` ga aylantiradi — enrichment bilan PARALLEL: nom
+      // so'rovlari (≤ 1500 ms) zanjir oxiriga qo'shilmaydi.
+      const [[enrichedHistory], correctable] = await Promise.all([
+        this.enrichHistoryWithUsers([history]).then((rows) =>
+          this.withCorrections(
+            rows,
+            options.include_receipts === true ? 'full' : 'none',
+          ),
+        ),
+        options.include_correctable
+          ? this.correctableBlock(history)
+          : Promise.resolve(undefined),
+      ]);
 
       return this.successRes(
         {
@@ -2659,8 +2666,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * (mUhkJHmi) `transfer` nom so'rovlari muddati: har biri ≤ 1500 ms, qayta
-   * urinishsiz, ikkalasi parallel — gateway'ning `finance.history.find_by_id`
-   * muddati (8 s) ichida qoladi.
+   * urinishsiz, ikkalasi parallel. `correctableBlock` o'zi `findHistoryById`
+   * dagi enrichment (kassa egasi / xodim ismlari) bilan parallel yuradi —
+   * javob vaqtiga ketma-ket qo'shilmaydi (gateway muddati 8 s).
    */
   private static readonly TRANSFER_NAME_TIMEOUT_MS = 1500;
 

@@ -1,5 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import {
   Cashbox_type,
   Operation_type,
@@ -126,12 +126,14 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
   let legsError: Error | null = null;
   let byIdsReply: Reply;
   let branchReply: Reply;
+  // enrichHistoryWithUsers (eski yo'l) — bitta-bitta `find_by_id`.
+  let findByIdReply: Reply = (payload) =>
+    of({ data: { id: payload.id, name: 'Xodim', role: 'admin' } });
   const identityClient = {
     send: jest.fn((pattern: Pattern, payload: Record<string, unknown>) =>
       pattern.cmd === 'identity.user.find_by_ids'
         ? byIdsReply(payload)
-        : // enrichHistoryWithUsers (eski yo'l) — bitta-bitta `find_by_id`.
-          of({ data: { id: payload.id, name: 'Xodim', role: 'admin' } }),
+        : findByIdReply(payload),
     ),
   };
   const branchClient = {
@@ -394,6 +396,39 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
     expect(callsOf('identity.user.find_by_ids')).toHaveLength(1);
     expect(branchClient.send).toHaveBeenCalledTimes(1);
   }, 10_000);
+
+  it('⭐ correctable enrichment bilan PARALLEL — nom so‘rovlari enrichment tugashini kutmaydi', async () => {
+    legs = courierPayment(BRANCH_BOX);
+    const enrichment = new Subject<unknown>();
+    findByIdReply = () => enrichment.asObservable();
+    try {
+      const pending = detail(legs[0]);
+      // Enrichment (`find_by_id`) hali javob bermagan — correctable nom
+      // so'rovlari allaqachon yuborilgan bo'lishi shart.
+      for (
+        let i = 0;
+        i < 20 && !callsOf('identity.user.find_by_ids').length;
+        i += 1
+      ) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(callsOf('identity.user.find_by_ids')).toHaveLength(1);
+      expect(branchClient.send).toHaveBeenCalledTimes(1);
+
+      enrichment.next({ data: { id: '1', name: 'Xodim', role: 'admin' } });
+      enrichment.complete();
+      const res = await pending;
+      expect(res.statusCode).toBe(200);
+      expect(res.data.correctable?.transfer?.receiver).toEqual({
+        cashbox_type: 'branch',
+        branch_id: '15',
+        name: 'Samarqand filiali',
+      });
+    } finally {
+      findByIdReply = (payload) =>
+        of({ data: { id: payload.id, name: 'Xodim', role: 'admin' } });
+    }
+  });
 
   it('branch client ulanmagan (eski spec`lar) — filial nomi null, branch_id bor', async () => {
     legs = courierPayment(BRANCH_BOX);
