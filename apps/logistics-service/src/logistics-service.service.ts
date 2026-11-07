@@ -175,6 +175,83 @@ const RETURN_REQUEST_REVIEW_CONFLICT_REASON = 'return_request_review_conflict';
  */
 const POST_RECEIVE_CONFLICT_REASON = 'post_receive_conflict';
 
+/**
+ * Skaner bilan qabul (2026-11-07, `PATCH post/receive/:id` `scan: true`):
+ * qabul qilinadigan (yo'ldagi) holatlar. «Mijoz kutilmoqda» ham kuryer
+ * qo'lida hali rasman qabul qilinmagan posilka (`releaseCourierPostAfterMove`
+ * kabi yo'ldagi deb hisoblanadi).
+ */
+const POST_SCAN_RECEIVABLE_STATUSES: ReadonlySet<string> = new Set<string>([
+  Order_status.ON_THE_ROAD,
+  Order_status.WAITING_CUSTOMER,
+]);
+
+/**
+ * Pochta qabulida «kutilmoqda» (WAITING) ga QAYTARILMAYDIGAN holatlar —
+ * sotuvdan / bekordan keyingi hammasi. Holat mashinasi SOLD/PAID/... →
+ * WAITING ga (rollback uchun) ruxsat beradi, lekin qabul pul oyoqlari qolgan
+ * buyurtmani «kutilmoqda» ga qaytarmasligi kerak.
+ */
+const POST_RECEIVE_BLOCKED_STATUSES: ReadonlySet<string> = new Set<string>([
+  Order_status.SOLD,
+  Order_status.PARTLY_PAID,
+  Order_status.PAID,
+  Order_status.CANCELLED,
+  Order_status.CANCELLED_SENT,
+  Order_status.CLOSED,
+  Order_status.RETURNED_TO_MARKET,
+]);
+
+/** Skan-qabul ketma-ketligi: `pg_advisory_xact_lock(hashtext('post_receive:<id>'))`. */
+const POST_SCAN_RECEIVE_LOCK_PREFIX = 'post_receive:';
+/** Qulf kutish chegarasi — gateway `timeout(8000)` dan oldin (`SET LOCAL lock_timeout`). */
+const POST_SCAN_RECEIVE_LOCK_TIMEOUT = '7s';
+/** Shu pochtaning boshqa skani 7 s dan ortiq qulfni ushlab turdi — 409. */
+export const POST_SCAN_RECEIVE_BUSY_MESSAGE =
+  'Pochta boshqa skan bilan band — qayta skanerlang';
+
+/** Postgres `lock_not_available` (55P03) — `lock_timeout` tugadi. */
+const isLockNotAvailableError = (err: unknown): boolean => {
+  const e = err as {
+    code?: unknown;
+    driverError?: { code?: unknown };
+  } | null;
+  return e?.code === '55P03' || e?.driverError?.code === '55P03';
+};
+
+/** Skan-qabul: buyurtma shu pochtada emas — 400 `order_not_in_post`. */
+export const POST_SCAN_ORDER_NOT_IN_POST_MESSAGE =
+  'Bu buyurtma shu pochtada emas';
+/** Skan-qabul: buyurtma yo'lda emas (sotilgan, bekor ...) — 400 `order_not_receivable`. */
+export const POST_SCAN_ORDER_NOT_RECEIVABLE_MESSAGE =
+  "Buyurtma yo'lda emas — qabul qilib bo'lmaydi";
+
+/** `assertPostReceiveAccess` natijasi — bulk va skan qabul yo'llari uchun. */
+interface PostReceiveAccess {
+  requesterIsCourier: boolean;
+  isBranchTransferPost: boolean;
+  isPrivileged: boolean;
+  scopedBranchId: string | null;
+  belongsToScopedBranch: boolean;
+}
+
+/** `processScanReceive` natijasi (qulf ostidagi qism → javob va jurnal). */
+interface ScanReceiveOutcome {
+  post: Post;
+  access: PostReceiveAccess;
+  targetBranchId: string | undefined;
+  received: string[];
+  alreadyReceived: string[];
+  notReceived: string[];
+  failures: Array<{ order_id: string; error: string }>;
+  /** Pochtada hamon yo'ldagilar; qayta o'qish yiqilsa `null`. */
+  remainingCount: number | null;
+  postStatusBefore: Post_status;
+  /** Pochta qatori yozildimi (status / branch_id o'zgardi). */
+  postWritten: boolean;
+  orderCount: number;
+}
+
 /** findOrders ning odatiy order.find_all kutish vaqti. */
 const FIND_ORDERS_TIMEOUT_MS = 5000;
 
@@ -4771,15 +4848,18 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async receivePost(
+  /**
+   * `PATCH post/receive/:id` ruxsat bloki — bulk va skan (`scan: true`)
+   * yo'llari uchun AYNAN bir xil va shu tartibda: begona filial (umumiy,
+   * ma'lumotsiz 403) → o'tkazma pochtasi (courier_id '0') faqat manzil filial
+   * menejeri yoki SA/ADMIN override → kuryer faqat o'z pochtasi.
+   * `allOrders` — pochtaning joriy buyurtmalari (filial doirasi uchun).
+   */
+  private async assertPostReceiveAccess(
     requester: RequesterContext,
-    id: string,
-    dto: ReceivePostDto,
-  ) {
-    const post = await this.postRepo.findOne({ where: { id } });
-    if (!post) {
-      this.notFound('Pochta topilmadi');
-    }
+    post: Post,
+    allOrders: OrderRow[],
+  ): Promise<PostReceiveAccess> {
     const requesterRoles = (requester?.roles ?? []).map((role) =>
       String(role ?? '').toLowerCase(),
     );
@@ -4791,15 +4871,6 @@ export class LogisticsServiceService implements OnModuleInit {
       !String(post.courier_id ?? '').trim() ||
       String(post.courier_id ?? '').trim() === '0';
     const isPrivileged = this.isSystemPrivileged(requester);
-    const waitingOrderIds = [
-      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
-    ];
-    const waitingOrderIdSet = new Set(waitingOrderIds);
-    const allOrders = await this.findOrders({
-      post_id: id,
-      page: 1,
-      limit: 1000,
-    });
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     const orderBranchIds = new Set(
       allOrders.map((order) => this.getOrderBranchScope(order)).filter(Boolean),
@@ -4851,6 +4922,74 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
+    return {
+      requesterIsCourier,
+      isBranchTransferPost,
+      isPrivileged,
+      scopedBranchId,
+      belongsToScopedBranch,
+    };
+  }
+
+  /**
+   * Qabul maqsad filiali (buyurtmalar `branch_id` si). O'z filialiga kelgan
+   * o'tkazma pochtasining `branch_id` si boshqa bo'lsa — shu filialga
+   * to'g'rilanadi (faqat `post` obyektida; chaqiruvchi saqlaydi).
+   */
+  private resolvePostReceiveTargetBranch(
+    post: Post,
+    access: PostReceiveAccess,
+  ): string | undefined {
+    const { scopedBranchId, belongsToScopedBranch, isBranchTransferPost } =
+      access;
+    if (
+      scopedBranchId &&
+      belongsToScopedBranch &&
+      isBranchTransferPost &&
+      String(post.branch_id ?? '').trim() !== scopedBranchId
+    ) {
+      post.branch_id = scopedBranchId;
+    }
+
+    return (
+      String(post.branch_id ?? '').trim() ||
+      (belongsToScopedBranch ? String(scopedBranchId) : '') ||
+      undefined
+    );
+  }
+
+  async receivePost(
+    requester: RequesterContext,
+    id: string,
+    dto: ReceivePostDto,
+  ) {
+    // Skaner bilan qabul (2026-11-07): faqat skanlangan buyurtma qabul
+    // qilinadi, qolgan yo'ldagilarga tegilmaydi — alohida yo'l (ruxsat bloki
+    // bir xil). `scan` berilmasa — avvalgi bulk qoida.
+    if (dto?.scan === true) {
+      return this.receivePostByScan(requester, id, dto);
+    }
+
+    const post = await this.postRepo.findOne({ where: { id } });
+    if (!post) {
+      this.notFound('Pochta topilmadi');
+    }
+    const waitingOrderIds = [
+      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
+    ];
+    const waitingOrderIdSet = new Set(waitingOrderIds);
+    const allOrders = await this.findOrders({
+      post_id: id,
+      page: 1,
+      limit: 1000,
+    });
+    const access = await this.assertPostReceiveAccess(
+      requester,
+      post,
+      allOrders,
+    );
+    const { requesterIsCourier, isBranchTransferPost, isPrivileged } = access;
+
     const orderById = new Map(
       allOrders.map((order) => [String(order.id), order]),
     );
@@ -4868,19 +5007,7 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest("Bu holatdagi pochtani qabul qilib bo'lmaydi");
     }
 
-    if (
-      scopedBranchId &&
-      belongsToScopedBranch &&
-      isBranchTransferPost &&
-      String(post.branch_id ?? '').trim() !== scopedBranchId
-    ) {
-      post.branch_id = scopedBranchId;
-    }
-
-    const targetBranchId =
-      String(post.branch_id ?? '').trim() ||
-      (belongsToScopedBranch ? String(scopedBranchId) : '') ||
-      undefined;
+    const targetBranchId = this.resolvePostReceiveTargetBranch(post, access);
 
     // (ePpLHPX2) Filiallararo pochta manzil filialga keldi — bildirishnoma
     // nishoni (filial xodimlari). Qidiruv tranzaksiyadan OLDIN va order
@@ -4918,6 +5045,18 @@ export class LogisticsServiceService implements OnModuleInit {
     });
     for (const orderId of waitingOrderIds) {
       const target = orderById.get(orderId);
+      // Bulk himoya (2026-11-07): sotilgan / to'langan / bekor / yopilgan
+      // buyurtma «kutilmoqda» ga QAYTARILMAYDI (holat mashinasi SOLD → WAITING
+      // ga rollback uchun ruxsat beradi — pul oyoqlari qolgan sotuv qabul
+      // orqali «kutilmoqda» ga tushib qolardi).
+      if (target && POST_RECEIVE_BLOCKED_STATUSES.has(String(target.status))) {
+        failures.push({
+          order_id: String(orderId),
+          error: `${POST_SCAN_ORDER_NOT_RECEIVABLE_MESSAGE} (holati: ${String(target.status)})`,
+        });
+        failedSelectedOrderIds.push(String(orderId));
+        continue;
+      }
       if (target && target.status !== Order_status.WAITING) {
         try {
           await this.updateOrder(
@@ -5096,6 +5235,524 @@ export class LogisticsServiceService implements OnModuleInit {
       failures,
       not_received_order_ids: notReceivedOrderIds,
     };
+  }
+
+  /**
+   * Skaner bilan qabul (2026-11-07, BeePost kabi: skan = darhol qabul) —
+   * `PATCH post/receive/:id` `{ order_ids, scan: true }`.
+   *
+   *  - Ruxsat bloki bulk yo'l bilan AYNAN bir xil (`assertPostReceiveAccess`).
+   *  - Tasnif (ruxsatdan KEYIN, pochta holati darvozasidan OLDIN): pochtada
+   *    yo'q → 400 `order_not_in_post`; yo'lda (ON_THE_ROAD / WAITING_CUSTOMER)
+   *    → qabul; WAITING → `already_received` (yozuvsiz, xato emas); boshqa
+   *    holat → 400 `order_not_receivable`. Hammasi `already_received` bo'lsa
+   *    darvoza qo'llanmaydi (200), LC-11 qayta hisob baribir bajariladi.
+   *  - Faqat skanlangan buyurtma yoziladi: tanlanmagan yo'ldagilarga
+   *    TEGILMAYDI (qaytarish so'rovi qo'yilmaydi, `return_reason`
+   *    tozalanmaydi, filial qayta yozilmaydi).
+   *  - Bir pochtaning skanlari ketma-ket: tranzaksiya + advisory qulf
+   *    (`post_receive:<id>`) — qayta o'qish, yozuvlar, LC-11, pochta yozuvi va
+   *    bildirishnoma qulf ostida (ikki qurilma / tez skanlar pochta holatini
+   *    bir-birining ustidan yozmaydi).
+   *  - Pochta yozuvi faqat `status` / `branch_id` ustunlari (`update`):
+   *    `order_quantity` / `post_total_price` ni scanAssignOrder atomik
+   *    oshiradi — ular ustidan yozilmaydi.
+   */
+  private async receivePostByScan(
+    requester: RequesterContext,
+    id: string,
+    dto: ReceivePostDto,
+  ) {
+    const requestedIds = [
+      ...new Set(
+        (dto.order_ids ?? [])
+          .map((orderId) => String(orderId ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (!requestedIds.length) {
+      this.badRequest("Skanerlangan buyurtma ko'rsatilmagan");
+    }
+
+    let outcome: Awaited<ReturnType<typeof this.processScanReceive>>;
+    try {
+      outcome = await this.postRepo.manager.transaction(async (manager) => {
+        // Navbatdagi skan qulfni gateway (8 s) voz kechgandan keyin ham
+        // ulanishni band qilib kutib turmasin — 7 s dan keyin 409.
+        await manager.query(
+          `SET LOCAL lock_timeout = '${POST_SCAN_RECEIVE_LOCK_TIMEOUT}'`,
+        );
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+          `${POST_SCAN_RECEIVE_LOCK_PREFIX}${id}`,
+        ]);
+        return this.processScanReceive(manager, requester, id, requestedIds);
+      });
+    } catch (err) {
+      if (isLockNotAvailableError(err)) {
+        throw new RpcException(
+          errorRes(POST_SCAN_RECEIVE_BUSY_MESSAGE, 409, {
+            reason: 'post_receive_busy',
+            post_id: String(id),
+          }),
+        );
+      }
+      throw err;
+    }
+    const {
+      post,
+      access,
+      targetBranchId,
+      received,
+      alreadyReceived,
+      notReceived,
+      failures,
+      remainingCount,
+      postStatusBefore,
+      postWritten,
+      orderCount,
+    } = outcome;
+    const postId = String(post.id);
+
+    if (failures.length > 0) {
+      this.logger.warn(
+        `receivePost(scan) post=${postId}: ${failures.length} ta buyurtma qabul qilinmadi. Sample: ${failures
+          .slice(0, 3)
+          .map((f) => `${f.order_id}:${f.error}`)
+          .join(' | ')}`,
+      );
+    }
+    if (postWritten) {
+      void this.syncPostToSearch(post);
+    }
+
+    // Har skan so'rovida bitta yozuv (kim, qaysi buyurtmalar, pochta holati).
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: postId,
+      action: 'logistics.post_scan_receive',
+      new_value: { status: post.status },
+      ...this.auditActor(requester),
+      metadata: {
+        scan: true,
+        received_order_ids: received.slice(0, 10),
+        already_received_order_ids: alreadyReceived.slice(0, 10),
+        not_received_order_ids: notReceived.slice(0, 10),
+        remaining_count: remainingCount,
+        post_status: post.status,
+        branch_id: targetBranchId ?? null,
+        courier_id: post.courier_id ?? null,
+        failed_order_count: failures.length,
+      },
+    });
+
+    // Pochta STATUS_CHANGE — faqat holat haqiqatan o'zgarganda.
+    if (post.status !== postStatusBefore) {
+      await this.activityLog.log({
+        entity_type: 'Post',
+        entity_id: postId,
+        action: ActivityAction.STATUS_CHANGE,
+        new_value: { status: post.status },
+        ...this.auditActor(requester),
+        metadata: {
+          scan: true,
+          order_count: orderCount,
+          branch_id: targetBranchId ?? null,
+          courier_id: post.courier_id,
+          failed_order_count: failures.length,
+          not_received_order_ids: notReceived.slice(0, 10),
+        },
+      });
+    }
+
+    // anKpzwxk (4-band): SA/ADMIN o'tkazma pochtasini manzil menejeri o'rniga
+    // qabul qildi — avvalgidek har so'rovda (qabul bo'lgan bo'lsa).
+    if (access.isBranchTransferPost && access.isPrivileged && received.length) {
+      await this.activityLog.log({
+        entity_type: 'Post',
+        entity_id: postId,
+        action: 'logistics.post_receive_override',
+        new_value: { status: post.status },
+        ...this.auditActor(requester),
+        metadata: {
+          override: true,
+          scan: true,
+          post_id: postId,
+          branch_id: targetBranchId ?? null,
+          received_order_ids: received.slice(0, 10),
+          order_count: orderCount,
+        },
+      });
+    }
+
+    // `data` — qabul qilingan (shu so'rovda yoki avval) buyurtmalar qatorlari.
+    // Qabul allaqachon yozilgan: qator o'qilmasa javob yiqilmaydi (FE qayta
+    // skanlasa `already_received` oladi).
+    const acceptedIds = new Set([...received, ...alreadyReceived]);
+    const rows = (
+      await Promise.allSettled(
+        requestedIds
+          .filter((orderId) => acceptedIds.has(orderId))
+          .map((orderId) => this.findOrderById(orderId)),
+      )
+    )
+      .filter(
+        (result): result is PromiseFulfilledResult<OrderRow> =>
+          result.status === 'fulfilled',
+      )
+      .map((result) => result.value);
+
+    const notReceivedReason = notReceived.length
+      ? (failures.find((f) => f.order_id === notReceived[0])?.error ??
+        'Buyurtma qabul qilinmadi — qayta skanerlang')
+      : '';
+    const message = notReceived.length
+      ? `${notReceived.length === 1 ? `Buyurtma #${notReceived[0]}` : `${notReceived.length} ta buyurtma`} qabul qilinmadi: ${notReceivedReason}`
+      : received.length
+        ? post.status === Post_status.RECEIVED
+          ? "Buyurtma qabul qilindi — pochta to'liq qabul qilindi"
+          : 'Buyurtma qabul qilindi'
+        : 'Buyurtma allaqachon qabul qilingan';
+
+    return {
+      ...successRes(rows, 200, message),
+      failures,
+      not_received_order_ids: notReceived,
+      received_order_ids: received,
+      already_received_order_ids: alreadyReceived,
+      remaining_count: remainingCount,
+      post_status: post.status,
+    };
+  }
+
+  /**
+   * `receivePostByScan` ning qulf ostidagi qismi (chaqiruvchi tranzaksiyasi
+   * va `post_receive:<id>` advisory qulfi ichida): pochta va buyurtmalarni
+   * qayta o'qish, ruxsat, tasnif, yozuvlar, LC-11, pochta yozuvi va
+   * `logistics.batch_arrived`.
+   */
+  private async processScanReceive(
+    manager: EntityManager,
+    requester: RequesterContext,
+    id: string,
+    requestedIds: string[],
+  ): Promise<ScanReceiveOutcome> {
+    const post = await manager.getRepository(Post).findOne({ where: { id } });
+    if (!post) {
+      this.notFound('Pochta topilmadi');
+    }
+    const postId = String(post.id);
+    const allOrders = await this.findOrders({
+      post_id: id,
+      page: 1,
+      limit: 1000,
+    });
+    const access = await this.assertPostReceiveAccess(
+      requester,
+      post,
+      allOrders,
+    );
+
+    // Tasnif — ruxsat blokidan KEYIN (begona so'rovchi buyurtma holatini
+    // bilmaydi), pochta holati darvozasidan OLDIN.
+    const orderById = new Map(
+      allOrders.map((order) => [String(order.id), order]),
+    );
+    const toReceive: OrderRow[] = [];
+    const waitingBefore = new Set<string>();
+    for (const orderId of requestedIds) {
+      const order = orderById.get(orderId);
+      if (!order) {
+        this.badRequest(
+          POST_SCAN_ORDER_NOT_IN_POST_MESSAGE,
+          rejectionData('order_not_in_post', {
+            order_id: orderId,
+            post_id: postId,
+          }),
+        );
+      }
+      const status = String(order.status ?? '');
+      if (POST_SCAN_RECEIVABLE_STATUSES.has(status)) {
+        toReceive.push(order);
+      } else if (status === String(Order_status.WAITING)) {
+        waitingBefore.add(orderId);
+      } else {
+        this.badRequest(
+          POST_SCAN_ORDER_NOT_RECEIVABLE_MESSAGE,
+          rejectionData('order_not_receivable', {
+            order_id: orderId,
+            status: status || null,
+          }),
+        );
+      }
+    }
+
+    const postStatusBefore = post.status;
+    const branchIdBefore = String(post.branch_id ?? '').trim() || null;
+    const postIsReceivable =
+      postStatusBefore === Post_status.SENT ||
+      postStatusBefore === Post_status.RECEIVED;
+    // Mavjud darvoza — faqat qabul qilinadigani bo'lsa: SENT, yoki RECEIVED +
+    // yo'ldagi tanlangan (`toReceive` — hammasi yo'ldagi).
+    if (toReceive.length && !postIsReceivable) {
+      this.badRequest("Bu holatdagi pochtani qabul qilib bo'lmaydi");
+    }
+
+    const targetBranchId = this.resolvePostReceiveTargetBranch(post, access);
+
+    // (ePpLHPX2) O'tkazma pochtasi faqat SENT → RECEIVED da filialga keladi:
+    // nishon qidiruvi yozuvlar bilan parallel (kesh, hech qachon reject yo'q).
+    const arrivalStaffIds: Promise<string[]> | null =
+      this.logisticsNotifications &&
+      access.isBranchTransferPost &&
+      targetBranchId &&
+      postStatusBefore === Post_status.SENT
+        ? this.logisticsNotifications.resolveBranchStaffIds(
+            targetBranchId,
+            requester,
+          )
+        : null;
+
+    const receiveActor = this.postReceiveTrackingActor(
+      requester,
+      access.requesterIsCourier ? 'COURIER' : 'BRANCH',
+    );
+    const failures: Array<{ order_id: string; error: string }> = [];
+    const failedIds = new Set<string>();
+    for (const order of toReceive) {
+      const orderId = String(order.id);
+      try {
+        await this.updateOrder(
+          orderId,
+          {
+            status: Order_status.WAITING,
+            return_requested: false,
+            ...(targetBranchId ? { branch_id: targetBranchId } : {}),
+          },
+          {
+            ...receiveActor,
+            post_receive_guard: {
+              post_id: postId,
+              status: order.status ?? null,
+            },
+          },
+        );
+      } catch (err) {
+        failures.push({
+          order_id: orderId,
+          error: (err as Error)?.message ?? String(err),
+        });
+        failedIds.add(orderId);
+      }
+    }
+
+    // Tanlanmagan yo'ldagilar — faqat LC-11 zaxira qoidasi uchun (yozuv yo'q).
+    // Pochta holati qarori bulk LC-11 bilan BIR XIL: faqat ON_THE_ROAD pochtani
+    // ochiq ushlaydi («mijoz kutilmoqda» skan bilan qabul qilinadi, lekin
+    // RECEIVED pochtani qayta SENT ga ochmaydi va SENT da qotirib qo'ymaydi).
+    const requestedSet = new Set(requestedIds);
+    const remaining = allOrders.filter(
+      (order) =>
+        !requestedSet.has(String(order.id)) &&
+        order.status === Order_status.ON_THE_ROAD,
+    );
+
+    // Natija ro'yxatlari — yozuvlardan KEYIN yangi o'qilgan qatorlardan.
+    // Avval WAITING bo'lgan — doim `already_received` (yozuv bo'lmagan).
+    const fresh = await this.findPostOrdersAfterScanReceive(postId);
+    const received: string[] = [];
+    const alreadyReceived: string[] = [];
+    const notReceived: string[] = [];
+    let stillOnTheRoadIds: Set<string> | null = null;
+    if (fresh) {
+      const freshById = new Map(
+        fresh.map((order) => [String(order.id), order]),
+      );
+      stillOnTheRoadIds = new Set(
+        fresh
+          .filter((order) => order.status === Order_status.ON_THE_ROAD)
+          .map((order) => String(order.id)),
+      );
+      for (const orderId of requestedIds) {
+        if (waitingBefore.has(orderId)) {
+          alreadyReceived.push(orderId);
+          continue;
+        }
+        const row = freshById.get(orderId);
+        if (
+          row &&
+          row.status === Order_status.WAITING &&
+          String(row.post_id ?? postId) === postId
+        ) {
+          received.push(orderId);
+          continue;
+        }
+        notReceived.push(orderId);
+        if (!failedIds.has(orderId)) {
+          failures.push({
+            order_id: orderId,
+            error: row
+              ? `Buyurtma qabul qilinmadi — holati: ${String(row.status ?? '')}`
+              : 'Buyurtma shu orada pochtadan chiqdi',
+          });
+        }
+      }
+    } else {
+      for (const orderId of requestedIds) {
+        if (waitingBefore.has(orderId)) {
+          alreadyReceived.push(orderId);
+        } else if (failedIds.has(orderId)) {
+          notReceived.push(orderId);
+        } else {
+          received.push(orderId);
+        }
+      }
+    }
+
+    // LC-11 — yo'lda qolgani bor → SENT, yo'q → RECEIVED (qayta o'qish
+    // yiqilsa — surat + yiqilgan tanlov bo'yicha, SENT tomonga). Faqat SENT /
+    // RECEIVED pochta (bekor / yangi pochta holatiga tegilmaydi).
+    const hasRemainingReceivableOrders = stillOnTheRoadIds
+      ? stillOnTheRoadIds.size > 0
+      : remaining.length > 0 ||
+        notReceived.some(
+          (orderId) =>
+            orderById.get(orderId)?.status === Order_status.ON_THE_ROAD,
+        );
+    let postWritten = false;
+    if (postIsReceivable) {
+      post.status = hasRemainingReceivableOrders
+        ? Post_status.SENT
+        : Post_status.RECEIVED;
+      // Ega qarori 4: RECEIVED kuryer pochtasi — kuryer filialida; SENT ga
+      // qaytgani — filialsiz.
+      await this.syncCourierPostBranch(post);
+      const branchIdAfter = String(post.branch_id ?? '').trim() || null;
+      const patch: { status?: Post_status; branch_id?: string | null } = {};
+      if (post.status !== postStatusBefore) {
+        patch.status = post.status;
+      }
+      if (branchIdAfter !== branchIdBefore) {
+        patch.branch_id = branchIdAfter;
+      }
+      if (Object.keys(patch).length) {
+        const arrivedNow =
+          postStatusBefore === Post_status.SENT &&
+          post.status === Post_status.RECEIVED;
+        await this.updateScanReceivedPost(
+          manager,
+          postId,
+          patch,
+          arrivedNow && arrivalStaffIds
+            ? {
+                staffIds: arrivalStaffIds,
+                branch_id: targetBranchId ?? null,
+                // Pochtadagi yo'lda emas buyurtmalar (yangi qayta hisobdan).
+                received_count: fresh
+                  ? fresh.filter(
+                      (order) => order.status !== Order_status.ON_THE_ROAD,
+                    ).length
+                  : allOrders.length,
+                order_count: fresh ? fresh.length : allOrders.length,
+                status: post.status,
+              }
+            : null,
+        );
+        postWritten = true;
+      }
+    }
+
+    return {
+      post,
+      access,
+      targetBranchId,
+      received,
+      alreadyReceived,
+      notReceived,
+      failures,
+      remainingCount: stillOnTheRoadIds ? stillOnTheRoadIds.size : null,
+      postStatusBefore,
+      postWritten,
+      orderCount: fresh ? fresh.length : allOrders.length,
+    };
+  }
+
+  /**
+   * Skan-qabul: pochtaning faqat `status` / `branch_id` ustunlari (`update`,
+   * `save` EMAS — `order_quantity` / `post_total_price` ustidan yozilmaydi).
+   * O'tkazma pochtasi shu so'rovda RECEIVED bo'lsa `logistics.batch_arrived`
+   * AYNAN shu yozuv bilan bitta tranzaksiyada (ichki SAVEPOINT): bildirishnoma
+   * yiqilsa faqat SAVEPOINT qaytariladi va pochta bildirishnomasiz yoziladi
+   * (`savePostWithArrivalNotification` kabi FAIL-OPEN; qulf saqlanadi).
+   */
+  private async updateScanReceivedPost(
+    manager: EntityManager,
+    postId: string,
+    patch: { status?: Post_status; branch_id?: string | null },
+    arrival: {
+      staffIds: Promise<string[]>;
+      branch_id: string | null;
+      received_count: number;
+      order_count: number;
+      status: Post_status;
+    } | null,
+  ): Promise<void> {
+    const notifier = this.logisticsNotifications;
+    const recipientIds = arrival ? await arrival.staffIds : [];
+    if (
+      !notifier ||
+      !arrival ||
+      arrival.received_count <= 0 ||
+      !recipientIds.length
+    ) {
+      await manager.getRepository(Post).update({ id: postId }, patch);
+      return;
+    }
+
+    try {
+      await manager.transaction(async (inner) => {
+        await inner.getRepository(Post).update({ id: postId }, patch);
+        await notifier.onBatchArrived(
+          {
+            post_id: postId,
+            branch_id: arrival.branch_id,
+            received_count: arrival.received_count,
+            order_count: arrival.order_count,
+            status: arrival.status,
+            recipient_ids: recipientIds,
+          },
+          inner,
+        );
+      });
+    } catch (err) {
+      this.logger.warn(
+        `receivePost(scan): post=${postId} bildirishnoma bilan yozilmadi (savepoint rollback) — bildirishnomasiz qayta yoziladi: ${
+          (err as Error)?.message ?? err
+        }`,
+      );
+      await manager.getRepository(Post).update({ id: postId }, patch);
+    }
+  }
+
+  /**
+   * Skan-qabul: yozuvlardan keyin pochtaning hamma joriy buyurtmalari.
+   * Yiqilsa `null` (chaqiruvchi surat bo'yicha zaxira qoidaga o'tadi).
+   */
+  private async findPostOrdersAfterScanReceive(
+    postId: string,
+  ): Promise<OrderRow[] | null> {
+    try {
+      return await this.findOrders({
+        post_id: postId,
+        fetch_all: true,
+        page: 1,
+        limit: 1000,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `receivePost(scan): post=${postId} qayta o'qish yiqildi — natija surat bo'yicha: ${(error as Error)?.message ?? error}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -6247,6 +6904,20 @@ export class LogisticsServiceService implements OnModuleInit {
     });
     if (!post) {
       this.notFound('Pochta topilmadi yoki bu kuryerga biriktirilmagan');
+    }
+
+    // Holat himoyasi (2026-11-07): faqat yo'ldagi buyurtma qabul qilinadi —
+    // sotilgan / bekor / allaqachon «kutilmoqda» buyurtma qayta yozilmaydi
+    // (holat mashinasi SOLD → WAITING ga ruxsat beradi).
+    const orderStatus = String(order.status ?? '');
+    if (!POST_SCAN_RECEIVABLE_STATUSES.has(orderStatus)) {
+      this.badRequest(
+        POST_SCAN_ORDER_NOT_RECEIVABLE_MESSAGE,
+        rejectionData('order_not_receivable', {
+          order_id: String(order.id),
+          status: orderStatus || null,
+        }),
+      );
     }
 
     // CODE-09 / C13 — qaytarish so'rovi belgisi tozalanadi (yuqoriga qarang).

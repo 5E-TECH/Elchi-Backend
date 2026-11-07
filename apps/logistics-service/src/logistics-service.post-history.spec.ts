@@ -1235,9 +1235,12 @@ describe('kuryer pochtasi: SENT paytida filialsiz, qabul qilinganda (RECEIVED) k
     const { service, postRepo, branchSend } = baseService({
       postFindOne: jest.fn(() => Promise.resolve(sentCourierPost())),
     });
-    jest
-      .spyOn(service as any, 'findOrderById')
-      .mockResolvedValue({ id: '101', post_id: '450' });
+    // 2026-11-07 holat himoyasi: faqat yo'ldagi buyurtma qabul qilinadi.
+    jest.spyOn(service as any, 'findOrderById').mockResolvedValue({
+      id: '101',
+      post_id: '450',
+      status: Order_status.ON_THE_ROAD,
+    });
     jest
       .spyOn(service as any, 'findOrders')
       .mockImplementation(() => Promise.resolve(remaining));

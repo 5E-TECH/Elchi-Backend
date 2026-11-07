@@ -7074,7 +7074,7 @@
     },
     "/post/receive/{id}": {
       "patch": {
-        "description": "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; manzil filialning registratori, BRANCH akkaunti yoki kuryeri — 403 `data.reason = post_receive_manager_only` (`details.post_id`). Boshqa filial (HQ menejeri ham) — kodsiz va ma'lumotsiz umumiy 403 «Siz bu branch pochtasini qabul qila olmaysiz» (manzil filial oshkor qilinmaydi). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari (haqiqiy `courier_id`) o'zgarmagan.",
+        "description": "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; manzil filialning registratori, BRANCH akkaunti yoki kuryeri — 403 `data.reason = post_receive_manager_only` (`details.post_id`). Boshqa filial (HQ menejeri ham) — kodsiz va ma'lumotsiz umumiy 403 «Siz bu branch pochtasini qabul qila olmaysiz» (manzil filial oshkor qilinmaydi). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari (haqiqiy `courier_id`) o'zgarmagan.\n\nSkaner bilan qabul (2026-11-07) — `scan: true`: faqat `order_ids` (odatda bitta skanlangan buyurtma) qabul qilinadi, pochtadagi qolgan yo'ldagilarga TEGILMAYDI (qaytarish so'rovi qo'yilmaydi). Ruxsat qoidalari yuqoridagidek. Bir pochtaning skanlari serverda ketma-ket bajariladi. Pochtada yo'q buyurtma — 400 «Bu buyurtma shu pochtada emas» (`data.reason = order_not_in_post`, `details: { order_id, post_id }`); yo'lda emas (sotilgan, bekor, yopilgan ...) — 400 «Buyurtma yo'lda emas — qabul qilib bo'lmaydi» (`order_not_receivable`, `details: { order_id, status }`); allaqachon «kutilmoqda» — 200, `already_received_order_ids` da (xato emas, pochta holatidan qat'i nazar). Javobda qo'shimcha: `received_order_ids`, `already_received_order_ids`, `not_received_order_ids`, `remaining_count` (pochtada hamon yo'ldagilar; `null` — qayta tekshiruv yiqildi), `post_status` (`sent` | `received`). Yo'ldagi qolmasa pochta `received` bo'ladi.\n\n`scan` siz (eski qoida): tanlanganlar qabul qilinadi, tanlanmagan yo'ldagilar qaytarish so'roviga o'tadi. Sotilgan / to'langan / bekor / yopilgan buyurtma tanlansa — «kutilmoqda» ga qaytarilmaydi (`failures` da).",
         "operationId": "LogisticsGatewayController_receivePost",
         "parameters": [
           {
@@ -7092,14 +7092,21 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReceivePostRequestDto"
+                "$ref": "#/components/schemas/ReceivePostScanRequestDto"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceivePostResponseDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -27993,6 +28000,117 @@
         },
         "required": [
           "postId"
+        ]
+      },
+      "ReceivePostScanRequestDto": {
+        "type": "object",
+        "properties": {
+          "order_ids": {
+            "example": [
+              "1",
+              "2"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scan": {
+            "type": "boolean",
+            "example": true,
+            "description": "Skaner bilan qabul: `true` — faqat `order_ids` dagi buyurtmalar qabul qilinadi (odatda bitta skanlangan buyurtma), pochtadagi qolgan yo'ldagi buyurtmalarga TEGILMAYDI (qaytarish so'rovi qo'yilmaydi). Allaqachon «kutilmoqda» buyurtma — xato emas (`already_received_order_ids`). Pochtada yo'q buyurtma — 400 `data.reason = order_not_in_post`; yo'lda emas (sotilgan, bekor ...) — 400 `order_not_receivable`. Berilmasa yoki `false` — avvalgi qoida (tanlanganlar qabul, tanlanmagan yo'ldagilar qaytarishga)."
+          }
+        },
+        "required": [
+          "order_ids"
+        ]
+      },
+      "ReceivePostFailureDto": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "example": "101"
+          },
+          "error": {
+            "type": "string",
+            "example": "Buyurtma shu orada pochtadan chiqdi"
+          }
+        },
+        "required": [
+          "order_id",
+          "error"
+        ]
+      },
+      "ReceivePostResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Buyurtma qabul qilindi"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Qabul qilingan buyurtmalar qatorlari (rol proyeksiyasi bilan). `scan: true` da — shu so'rovda yoki avval qabul qilinganlar."
+          },
+          "failures": {
+            "description": "Qabul qilinmagan buyurtmalar va sababi (diagnostika).",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReceivePostFailureDto"
+            }
+          },
+          "not_received_order_ids": {
+            "example": [],
+            "description": "Tanlangan/skanlangan, lekin qabul qilinmagan buyurtmalar — FE ularni «qabul qilindi» deb yashirmasin.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "received_order_ids": {
+            "example": [
+              "101"
+            ],
+            "description": "Faqat `scan: true`: shu so'rovda yo'ldan «kutilmoqda» ga o'tganlar.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "already_received_order_ids": {
+            "example": [],
+            "description": "Faqat `scan: true`: so'rovdan oldin allaqachon «kutilmoqda» bo'lganlar (yozuv yo'q, xato emas).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remaining_count": {
+            "type": "number",
+            "nullable": true,
+            "example": 3,
+            "description": "Faqat `scan: true`: pochtada hamon yo'ldagi (yo'lda / mijoz kutilmoqda, qaytarish so'ralganlar ham) buyurtmalar soni; qayta tekshiruv yiqilsa `null`."
+          },
+          "post_status": {
+            "type": "string",
+            "example": "sent",
+            "description": "Faqat `scan: true`: pochtaning yangi holati (`sent` — yo'ldagi qoldi, `received` — to'liq qabul qilindi)."
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data",
+          "failures",
+          "not_received_order_ids"
         ]
       },
       "ReceivePostRequestDto": {

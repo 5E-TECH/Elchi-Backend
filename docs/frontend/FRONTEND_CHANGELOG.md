@@ -22,6 +22,37 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-07 — Skaner bilan qabul: `PATCH post/receive/:id` `scan: true` (skan = darhol qabul, BeePost kabi)
+
+**Muammo:** pochtani qabul qilishda skan faqat qatorni belgilardi (ptichka), qabul esa «Pochtani qabul qilish» tugmasi bilan bo'lardi. Tanlanmagan yo'ldagilar esa qaytarishga o'tib ketardi. Ega talabi: skan qilingan buyurtma shu zahoti qabul bo'lib ro'yxatdan yo'qolsin.
+
+**Endpoint:**
+- ✏️ [logistics] `PATCH post/receive/:id` tanasiga ixtiyoriy `scan: boolean` qo'shildi (`ReceivePostScanRequestDto`). `scan: true` bo'lsa:
+  - faqat `order_ids` dagi buyurtma(lar) qabul qilinadi (FE bitta skan = bitta id yuboradi). Pochtadagi qolgan yo'ldagilarga **tegilmaydi**: qaytarish so'rovi qo'yilmaydi, `return_reason` tozalanmaydi;
+  - qabul qilinadigan holat — `on the road` yoki `waiting_customer`. Qaytarish so'ralgan (`return_requested`) yo'ldagi buyurtma skanlansa ham to'g'ridan qabul qilinadi (`return_requested = false`);
+  - allaqachon `waiting` — **xato emas**: 200 va id `already_received_order_ids` da, yozuv yo'q. Pochta allaqachon `received` bo'lsa ham shunday (qayta skan);
+  - pochtada yo'q buyurtma — 400 «Bu buyurtma shu pochtada emas», `data.reason = order_not_in_post`, `details: { order_id, post_id }`;
+  - yo'lda emas (`sold`, `paid`, `partly_paid`, `cancelled`, `closed` …) — 400 «Buyurtma yo'lda emas — qabul qilib bo'lmaydi», `data.reason = order_not_receivable`, `details: { order_id, status }`;
+  - ruxsat qoidalari `scan` siz qabul bilan **bir xil**: kuryer — faqat o'z pochtasi; HQ → filial o'tkazma pochtasi — faqat manzil filial menejeri (SA/ADMIN — override yozuvi bilan); begona filial — umumiy 403. Ruxsat 400 lardan **oldin** tekshiriladi;
+  - bir pochtaning skanlari serverda **ketma-ket** bajariladi (pochta bo'yicha qulf). Ikki qurilma yoki tez skanlar pochta holatini buzmaydi.
+- Javob (`scan: true`): `data` — qabul qilingan buyurtmalar qatorlari (shu so'rovda yoki avval qabul qilinganlar). Qo'shimcha maydonlar:
+  - `received_order_ids` — shu so'rovda yo'ldan «kutilmoqda» ga o'tganlar;
+  - `already_received_order_ids` — avval qabul qilinganlar (muvaffaqiyat deb hisoblang);
+  - `not_received_order_ids` + `failures: [{ order_id, error }]` — qabul qilinmaganlar. HTTP baribir 200, `message` da sabab bor (masalan shu orada pochtadan chiqqan);
+  - `remaining_count` — pochtada hamon yo'ldagilar soni (qaytarish so'ralganlar va `waiting_customer` ham). Qayta tekshiruv yiqilsa `null` (sahifa o'z ro'yxatidan sanasin);
+  - `post_status` — pochtaning yangi holati: yo'ldagi qolsa `sent`, qolmasa `received`.
+- ✏️ [logistics] `scan` siz (eski qoida) himoya: tanlangan buyurtma `sold` / `partly_paid` / `paid` / `cancelled` / `cancelled (sent)` / `closed` / `returned_to_market` bo'lsa, «kutilmoqda» ga **qaytarilmaydi** va `failures` da chiqadi. Qolgani avvalgidek: tanlanganlar qabul qilinadi, tanlanmagan yo'ldagilar qaytarishga o'tadi.
+- ✏️ [logistics] `PATCH post/receive/order/:id` (kuryer, bitta buyurtma) endi faqat `on the road` / `waiting_customer` ni qabul qiladi. Boshqa holat, jumladan allaqachon `waiting`, 400 `order_not_receivable` beradi.
+- 🟢 `POST post/cancel` va `POST post/cancel/receive/:id` o'zgarmadi: ularda `scan` maydoni 400 (ortiqcha maydon).
+- 🟢 Faoliyat jurnali: har skan so'rovi — `logistics.post_scan_receive` («Pochtadan buyurtma skaner bilan qabul qilindi»). Pochta `status_change` yozuvi faqat holat haqiqatan o'zgarganda. `logistics.batch_arrived` bildirishnomasi (o'tkazma pochtasi) faqat shu skan pochtani `received` ga o'tkazganda bir marta keladi.
+
+→ **Frontendda:**
+- `/mails/:id` (kuryer o'z pochtasi, menejer o'z filialiga kelgan o'tkazma pochtasi; pochta `sent` yoki yo'lda qolgan buyurtma bor): skan → `PATCH post/receive/:id {order_ids:[id], scan:true}`, qator darhol yashirinadi. Id `received_order_ids` yoki `already_received_order_ids` da bo'lsa — muvaffaqiyat. `not_received_order_ids` da yoki xato bo'lsa — qator qaytadi. `post_status === 'received'` va navbat bo'sh bo'lsa — «Pochta to'liq qabul qilindi».
+- Kuryer `/scan` «Qabul qilish» rejimi va `/orders` ro'yxatidagi «Qabul qilish» tugmasi ham shu so'rovni yuboradi (`post_id` — buyurtmaning pochtasi).
+- Qo'lda belgilab «Pochtani qabul qilish» (`scan` siz) avvalgidek ishlaydi.
+
+Deploy: logistics-service, api-gateway (common: faoliyat jurnali reyestri). Migratsiya yo'q.
+
 ### 2026-11-07 — Narx tushirib qisman sotish (BeePost'dagidek): mahsulot sonini kamaytirmasdan faqat summani tushirish, «Buyurtma arzonroq sotildi» xabari (migratsiya 1716000000212)
 
 **Muammo:** mijoz 500 000 lik mahsulotni 350 000 ga olaman desa, kuryer market bilan telefonda kelishib ham uni sota olmasdi. «Qisman sotish» faqat mahsulot sonini kamaytirganda ishlardi. Bitta mahsulotli buyurtmada umuman yopiq edi (FE «Buyurtmada bitta mahsulot — qisman sotib bo'lmaydi», BE 400). BeePost'da esa bu mumkin.

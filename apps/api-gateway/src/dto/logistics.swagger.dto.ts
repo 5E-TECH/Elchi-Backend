@@ -633,6 +633,94 @@ export class ReceivePostRequestDto {
   order_ids!: string[];
 }
 
+/**
+ * `PATCH post/receive/:id` tanasi (2026-11-07): `ReceivePostRequestDto` +
+ * ixtiyoriy `scan`. FAQAT shu endpointda — `post/cancel` va
+ * `post/cancel/receive/:id` eski DTO da qoladi (`scan` u yerda 400,
+ * forbidNonWhitelisted).
+ */
+export class ReceivePostScanRequestDto extends ReceivePostRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Skaner bilan qabul: `true` — faqat `order_ids` dagi buyurtmalar qabul qilinadi (odatda bitta skanlangan buyurtma), pochtadagi qolgan yo'ldagi buyurtmalarga TEGILMAYDI (qaytarish so'rovi qo'yilmaydi). Allaqachon «kutilmoqda» buyurtma — xato emas (`already_received_order_ids`). Pochtada yo'q buyurtma — 400 `data.reason = order_not_in_post`; yo'lda emas (sotilgan, bekor ...) — 400 `order_not_receivable`. Berilmasa yoki `false` — avvalgi qoida (tanlanganlar qabul, tanlanmagan yo'ldagilar qaytarishga).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  scan?: boolean;
+}
+
+export class ReceivePostFailureDto {
+  @ApiProperty({ example: '101' })
+  order_id!: string;
+
+  @ApiProperty({ example: 'Buyurtma shu orada pochtadan chiqdi' })
+  error!: string;
+}
+
+/** `PATCH post/receive/:id` javobi (skan maydonlari faqat `scan: true` da). */
+export class ReceivePostResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'Buyurtma qabul qilindi' })
+  message!: string;
+
+  @ApiProperty({
+    type: 'array',
+    items: { type: 'object' },
+    description:
+      "Qabul qilingan buyurtmalar qatorlari (rol proyeksiyasi bilan). `scan: true` da — shu so'rovda yoki avval qabul qilinganlar.",
+  })
+  data!: Record<string, unknown>[];
+
+  @ApiProperty({
+    type: [ReceivePostFailureDto],
+    description: 'Qabul qilinmagan buyurtmalar va sababi (diagnostika).',
+  })
+  failures!: ReceivePostFailureDto[];
+
+  @ApiProperty({
+    type: [String],
+    example: [],
+    description:
+      'Tanlangan/skanlangan, lekin qabul qilinmagan buyurtmalar — FE ularni «qabul qilindi» deb yashirmasin.',
+  })
+  not_received_order_ids!: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['101'],
+    description:
+      "Faqat `scan: true`: shu so'rovda yo'ldan «kutilmoqda» ga o'tganlar.",
+  })
+  received_order_ids?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: [],
+    description:
+      "Faqat `scan: true`: so'rovdan oldin allaqachon «kutilmoqda» bo'lganlar (yozuv yo'q, xato emas).",
+  })
+  already_received_order_ids?: string[];
+
+  @ApiPropertyOptional({
+    type: Number,
+    nullable: true,
+    example: 3,
+    description:
+      "Faqat `scan: true`: pochtada hamon yo'ldagi (yo'lda / mijoz kutilmoqda, qaytarish so'ralganlar ham) buyurtmalar soni; qayta tekshiruv yiqilsa `null`.",
+  })
+  remaining_count?: number | null;
+
+  @ApiPropertyOptional({
+    example: 'sent',
+    description:
+      "Faqat `scan: true`: pochtaning yangi holati (`sent` — yo'ldagi qoldi, `received` — to'liq qabul qilindi).",
+  })
+  post_status?: string;
+}
+
 export class ReturnRequestsActionRequestDto {
   @ApiProperty({ type: [String], example: ['1', '2'] })
   @IsNotEmpty()

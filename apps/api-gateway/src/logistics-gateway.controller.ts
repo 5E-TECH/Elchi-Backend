@@ -70,6 +70,8 @@ import {
   ReassignPostRequestDto,
   PostIdRequestDto,
   ReceivePostRequestDto,
+  ReceivePostResponseDto,
+  ReceivePostScanRequestDto,
   ReturnCanceledOrdersRequestDto,
   ReturnRequestsActionRequestDto,
   SendPostRequestDto,
@@ -1325,13 +1327,16 @@ export class LogisticsGatewayController {
   @ApiOperation({
     summary: 'Receive post (branch/courier)',
     description:
-      "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; manzil filialning registratori, BRANCH akkaunti yoki kuryeri — 403 `data.reason = post_receive_manager_only` (`details.post_id`). Boshqa filial (HQ menejeri ham) — kodsiz va ma'lumotsiz umumiy 403 «Siz bu branch pochtasini qabul qila olmaysiz» (manzil filial oshkor qilinmaydi). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari (haqiqiy `courier_id`) o'zgarmagan.",
+      "anKpzwxk: HQ → filial o'tkazma pochtasini (`courier_id: '0'`) FAQAT manzil filial MENEJERI qabul qiladi; manzil filialning registratori, BRANCH akkaunti yoki kuryeri — 403 `data.reason = post_receive_manager_only` (`details.post_id`). Boshqa filial (HQ menejeri ham) — kodsiz va ma'lumotsiz umumiy 403 «Siz bu branch pochtasini qabul qila olmaysiz» (manzil filial oshkor qilinmaydi). SUPERADMIN/ADMIN qabul qila oladi (activity log `logistics.post_receive_override`). Kuryer pochtalari (haqiqiy `courier_id`) o'zgarmagan.\n\n" +
+      "Skaner bilan qabul (2026-11-07) — `scan: true`: faqat `order_ids` (odatda bitta skanlangan buyurtma) qabul qilinadi, pochtadagi qolgan yo'ldagilarga TEGILMAYDI (qaytarish so'rovi qo'yilmaydi). Ruxsat qoidalari yuqoridagidek. Bir pochtaning skanlari serverda ketma-ket bajariladi. Pochtada yo'q buyurtma — 400 «Bu buyurtma shu pochtada emas» (`data.reason = order_not_in_post`, `details: { order_id, post_id }`); yo'lda emas (sotilgan, bekor, yopilgan ...) — 400 «Buyurtma yo'lda emas — qabul qilib bo'lmaydi» (`order_not_receivable`, `details: { order_id, status }`); allaqachon «kutilmoqda» — 200, `already_received_order_ids` da (xato emas, pochta holatidan qat'i nazar). Javobda qo'shimcha: `received_order_ids`, `already_received_order_ids`, `not_received_order_ids`, `remaining_count` (pochtada hamon yo'ldagilar; `null` — qayta tekshiruv yiqildi), `post_status` (`sent` | `received`). Yo'ldagi qolmasa pochta `received` bo'ladi.\n\n" +
+      "`scan` siz (eski qoida): tanlanganlar qabul qilinadi, tanlanmagan yo'ldagilar qaytarish so'roviga o'tadi. Sotilgan / to'langan / bekor / yopilgan buyurtma tanlansa — «kutilmoqda» ga qaytarilmaydi (`failures` da).",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
-  @ApiBody({ type: ReceivePostRequestDto })
+  @ApiBody({ type: ReceivePostScanRequestDto })
+  @ApiOkResponse({ type: ReceivePostResponseDto })
   receivePost(
     @Param('id') id: string,
-    @Body() dto: ReceivePostRequestDto,
+    @Body() dto: ReceivePostScanRequestDto,
     @Req() req: { user: JwtUser },
   ) {
     return this.logisticsClient

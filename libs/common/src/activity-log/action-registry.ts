@@ -26,14 +26,7 @@ export type ActivityActionCategory =
   | 'general';
 
 export type ActivityActionTone =
-  | 'green'
-  | 'red'
-  | 'rose'
-  | 'amber'
-  | 'blue'
-  | 'cyan'
-  | 'violet'
-  | 'slate';
+  'green' | 'red' | 'rose' | 'amber' | 'blue' | 'cyan' | 'violet' | 'slate';
 
 /** Dropdown guruhlari tartibi bilan (antd Select optGroup). */
 export const ACTIVITY_ACTION_CATEGORIES: ReadonlyArray<{
@@ -399,6 +392,14 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'logistics',
     'warning',
     'amber',
+  ),
+  // 2026-11-07 — skaner bilan qabul (`PATCH post/receive/:id` `scan: true`):
+  // har skan so'rovi bitta yozuv (qabul / allaqachon / qabul qilinmagan id lar).
+  'logistics.post_scan_receive': entry(
+    'Pochtadan buyurtma skaner bilan qabul qilindi',
+    'logistics',
+    'check',
+    'green',
   ),
   'logistics.canceled_post_partial_receive': entry(
     'Bekor pochtadan buyurtmalar qabul qilindi',
