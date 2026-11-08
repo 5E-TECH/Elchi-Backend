@@ -8,7 +8,7 @@ import {
 } from '../../../migrations/1716000000211-HqCourierCoverageGrandfather';
 
 /**
- * Migratsiya 204 — HQ kuryeri viloyat qoidasi (ega qarori 6) deploy
+ * Migratsiya 211 — HQ kuryeri viloyat qoidasi (ega qarori 6) deploy
  * paytidagi «Eski filialda tugasin» backfill'i haqiqiy Postgres'da
  * (LOGISTICS_COVERAGE_EXEMPTION_PG_TEST_URI — faqat lokal *_test baza;
  * bo'lmasa skip). Migratsiya sxemalarga qattiq bog'langan, shu bois o'z
@@ -45,8 +45,22 @@ const localTestDatabase = (() => {
 const TOSHKENT = 14;
 const SAMARQAND = 8;
 
+// Postgres'siz ham yuradi: deploy yo'riqnomasidagi «psql bilan qayta
+// yurgizish» uchun UP SQL tayyor matn — shablon qoldig'i yo'q, manba yozma.
+describe('migratsiya 211 — UP SQL psql uchun tayyor matn', () => {
+  it('manba qiymati yozma (`hq_region_rule_deploy`), `${…}` shablon qoldig‘i yo‘q', () => {
+    expect(HQ_COURIER_COVERAGE_GRANDFATHER_SOURCE).toBe(
+      'hq_region_rule_deploy',
+    );
+    expect(HQ_COURIER_COVERAGE_GRANDFATHER_UP_SQL).toContain(
+      `'${HQ_COURIER_COVERAGE_GRANDFATHER_SOURCE}'`,
+    );
+    expect(HQ_COURIER_COVERAGE_GRANDFATHER_UP_SQL).not.toContain('${');
+  });
+});
+
 (localTestDatabase ? describe : describe.skip)(
-  'migratsiya 204 — HQ kuryeri qamrovi grandfather (haqiqiy Postgres)',
+  'migratsiya 211 — HQ kuryeri qamrovi grandfather (haqiqiy Postgres)',
   () => {
     const dbName = `spec_hq_gf_${randomUUID().replace(/-/g, '').slice(0, 12)}_test`;
     let admin: DataSource;

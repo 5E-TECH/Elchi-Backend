@@ -7160,11 +7160,12 @@ export class LogisticsServiceService implements OnModuleInit {
         orderBranchIds.size === 1 && orderBranchIds.has(scopedBranchId);
     }
     if (!isOwnBranchPost) {
+      // anKpzwxk (#621 bilan bir xil): begona filialga pochta qaysi filialga
+      // ketayotgani oshkor qilinmaydi — `details` da faqat `post_id`.
       this.forbidden(
         RETURN_REQUEST_NOT_ALLOWED_MESSAGE,
         rejectionData('return_request_not_allowed', {
           post_id: postId,
-          branch_id: postBranchId || null,
         }),
       );
     }
