@@ -128,11 +128,15 @@ import {
 } from './shift-auto-close/shift-schedule.rules';
 import {
   attachCorrectionViews,
+  buildTransferView,
   evaluateCorrectable,
   isCorrectableType,
   readWindowSetting,
   resolveRootHistoryId,
+  transferPartyIds,
+  type CorrectableTransferView,
   type HistoryWithCashbox,
+  type TransferShape,
 } from './payment-correction/payment-correction.rules';
 
 /**
@@ -273,6 +277,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     @Optional()
     @Inject(PICKUP_FIFO)
     private readonly pickupFifo?: PickupFifoService,
+    // (mUhkJHmi) `correctable.transfer.receiver.name` — filial nomi. Ixtiyoriy:
+    // eski spec'lar usiz quradi — u holda nom `null`.
+    @Optional()
+    @Inject('BRANCH')
+    private readonly branchClient?: ClientProxy,
   ) {}
 
   /**
@@ -2583,14 +2592,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         order = orderResponse?.data ?? orderResponse ?? null;
       }
-      const [enrichedHistory] = await this.withCorrections(
-        await this.enrichHistoryWithUsers([history]),
-        options.include_receipts === true ? 'full' : 'none',
-      );
       // T6 — superadmin uchun: shu to'lovni qaytarish / tuzatish mumkinmi.
-      const correctable = options.include_correctable
-        ? await this.correctableBlock(history)
-        : undefined;
+      // (mUhkJHmi) `correctableBlock` faqat xom `history` ni o'qiydi va xatoni
+      // o'zi `null` ga aylantiradi — enrichment bilan PARALLEL: nom
+      // so'rovlari (≤ 1500 ms) zanjir oxiriga qo'shilmaydi.
+      const [[enrichedHistory], correctable] = await Promise.all([
+        this.enrichHistoryWithUsers([history]).then((rows) =>
+          this.withCorrections(
+            rows,
+            options.include_receipts === true ? 'full' : 'none',
+          ),
+        ),
+        options.include_correctable
+          ? this.correctableBlock(history)
+          : Promise.resolve(undefined),
+      ]);
 
       return this.successRes(
         {
@@ -2608,8 +2624,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * T6 — `/history/:id` dagi `correctable: { allowed, code?, reason?,
-   * deadline, window_days, root_history_id }`. Smena / balans / karta amal
-   * paytida tekshiriladi. Qamrovdan tashqari tur — `null` (iPlY5yop).
+   * deadline, window_days, root_history_id, transfer }`. Smena / balans /
+   * karta amal paytida tekshiriladi. Qamrovdan tashqari tur — `null`
+   * (iPlY5yop). `transfer` (mUhkJHmi) — to'lov shakli topilganda tomonlar,
+   * aks holda `null`; nom so'rovlari fail-open (blokni `null` qilmaydi).
    */
   private async correctableBlock(history: HistoryWithCashbox) {
     try {
@@ -2625,21 +2643,124 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         history,
         { windowDays: window_days },
       );
+      const [rootHistoryId, transfer] = await Promise.all([
+        resolveRootHistoryId(this.dataSource.manager, history, verdict.root),
+        this.correctableTransfer(verdict.shape),
+      ]);
       return {
         allowed: verdict.allowed,
         ...(verdict.code ? { code: verdict.code } : {}),
         ...(verdict.reason ? { reason: verdict.reason } : {}),
         deadline: verdict.deadline,
         window_days: verdict.window_days,
-        root_history_id: await resolveRootHistoryId(
-          this.dataSource.manager,
-          history,
-          verdict.root,
-        ),
+        root_history_id: rootHistoryId,
+        transfer,
       };
     } catch (error) {
       this.logger.warn(
         `correctable hisoblanmadi (T6, history=${String(history.id)}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * (mUhkJHmi) `transfer` nom so'rovlari muddati: har biri ≤ 1500 ms, qayta
+   * urinishsiz, ikkalasi parallel. `correctableBlock` o'zi `findHistoryById`
+   * dagi enrichment (kassa egasi / xodim ismlari) bilan parallel yuradi —
+   * javob vaqtiga ketma-ket qo'shilmaydi (gateway muddati 8 s).
+   */
+  private static readonly TRANSFER_NAME_TIMEOUT_MS = 1500;
+
+  /** branch-service `branch.find_by_id` requester'siz 403 beradi — tizim nomidan. */
+  private static readonly SYSTEM_BRANCH_REQUESTER = {
+    id: 'system',
+    roles: ['superadmin'],
+  };
+
+  /**
+   * (mUhkJHmi, N2 «Qayerdan → Qayerga») `correctable.transfer`. Shakl yo'q —
+   * `null`. Nomlar: kuryer + market — BITTA `identity.user.find_by_ids`,
+   * filial — BITTA `branch.find_by_id` (faqat BRANCH qabul qilganda), parallel.
+   * Fail-open: xato / timeout / topilmadi — nom `null`, javob baribir chiqadi.
+   */
+  private async correctableTransfer(
+    shape: TransferShape | undefined,
+  ): Promise<CorrectableTransferView | null> {
+    if (!shape) return null;
+    const ids = transferPartyIds(shape);
+    const [users, branch] = await Promise.all([
+      this.transferUserNames([ids.courier_id, ids.market_id]),
+      ids.branch_id
+        ? this.transferBranchName(ids.branch_id)
+        : Promise.resolve(null),
+    ]);
+    return buildTransferView(shape, { users, branch });
+  }
+
+  /** Kuryer / market ismlari — bitta so'rov; xato — bo'sh Map. */
+  private async transferUserNames(
+    rawIds: Array<string | null>,
+  ): Promise<Map<string, string>> {
+    const ids = Array.from(
+      new Set(
+        rawIds
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    );
+    const names = new Map<string, string>();
+    if (!ids.length) return names;
+    try {
+      const response = await rmqSend<unknown>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_ids' },
+        { ids },
+        {
+          timeoutMs: FinanceServiceService.TRANSFER_NAME_TIMEOUT_MS,
+          retries: 0,
+        },
+      );
+      const rows = this.extractResponseData<unknown>(response);
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const user = row as { id?: unknown; name?: unknown } | null;
+        const id =
+          typeof user?.id === 'string' || typeof user?.id === 'number'
+            ? String(user.id)
+            : '';
+        const name = typeof user?.name === 'string' ? user.name.trim() : '';
+        if (id && name) names.set(id, name);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `correctable.transfer: kuryer/market ismlari olinmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return names;
+  }
+
+  /** Filial nomi; client yo'q / xato / topilmadi — `null`. */
+  private async transferBranchName(branchId: string): Promise<string | null> {
+    if (!this.branchClient || !/^\d+$/.test(branchId)) return null;
+    try {
+      const response = await rmqSend<unknown>(
+        this.branchClient,
+        { cmd: 'branch.find_by_id' },
+        {
+          id: branchId,
+          requester: FinanceServiceService.SYSTEM_BRANCH_REQUESTER,
+        },
+        {
+          timeoutMs: FinanceServiceService.TRANSFER_NAME_TIMEOUT_MS,
+          retries: 0,
+        },
+      );
+      const branch = this.extractResponseData<{ name?: unknown }>(response);
+      const name = typeof branch?.name === 'string' ? branch.name.trim() : '';
+      return name || null;
+    } catch (error) {
+      this.logger.warn(
+        `correctable.transfer: filial nomi olinmadi (branch=${branchId}): ${error instanceof Error ? error.message : String(error)}`,
       );
       return null;
     }

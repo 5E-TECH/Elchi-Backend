@@ -320,6 +320,76 @@ export async function evaluateCorrectable(
 }
 
 /**
+ * (mUhkJHmi, N2 «Qayerdan → Qayerga») `correctable.transfer` — to'lovning
+ * tomonlari: superadmin dialogi kuryer kassasi oyog'idan ochilsa ham pulni
+ * qaysi kassa (MAIN yoki qaysi filial) olganini va qaysi market ekanini aniq
+ * ko'rsatsin. Faqat shakl (`classifyTransfer`) topilganda; nomlar fail-open
+ * (topilmasa — `null`), MAIN kassada `receiver.name` doim `null`.
+ */
+export interface CorrectableTransferParty {
+  id: string;
+  name: string | null;
+}
+
+export interface CorrectableTransferView {
+  kind: PaymentCorrectionKind;
+  payment_method: PaymentMethod;
+  amount: number;
+  /** Kuryer to'lovi — pulni olgan kassa; marketga to'lov — MAIN. */
+  receiver: {
+    cashbox_type: Cashbox_type.MAIN | Cashbox_type.BRANCH;
+    branch_id: string | null;
+    name: string | null;
+  };
+  /** Kuryer to'lovida kuryer; marketga to'lovda `null`. */
+  courier: CorrectableTransferParty | null;
+  /** Marketga to'lov va click_to_market — market; oddiy kuryer to'lovida `null`. */
+  market: CorrectableTransferParty | null;
+}
+
+/** Nomi so'raladigan id lar — faqat shakldan (qo'shimcha DB so'rovisiz). */
+export function transferPartyIds(shape: TransferShape): {
+  courier_id: string | null;
+  market_id: string | null;
+  branch_id: string | null;
+} {
+  return {
+    courier_id: shape.courierLeg
+      ? String(shape.courierLeg.cashbox.user_id)
+      : null,
+    market_id: shape.marketLeg ? String(shape.marketLeg.cashbox.user_id) : null,
+    branch_id:
+      shape.receiverCashbox.cashbox_type === Cashbox_type.BRANCH
+        ? String(shape.receiverCashbox.user_id)
+        : null,
+  };
+}
+
+/** Shakl + topilgan nomlar → `transfer` (topilmagan nom — `null`). */
+export function buildTransferView(
+  shape: TransferShape,
+  names: { users: Map<string, string>; branch: string | null },
+): CorrectableTransferView {
+  const ids = transferPartyIds(shape);
+  const party = (id: string | null): CorrectableTransferParty | null =>
+    id ? { id, name: names.users.get(id) ?? null } : null;
+  return {
+    kind: shape.kind,
+    payment_method: shape.payment_method,
+    amount: shape.amount,
+    receiver: ids.branch_id
+      ? {
+          cashbox_type: Cashbox_type.BRANCH,
+          branch_id: ids.branch_id,
+          name: names.branch,
+        }
+      : { cashbox_type: Cashbox_type.MAIN, branch_id: null, name: null },
+    courier: party(ids.courier_id),
+    market: party(ids.market_id),
+  };
+}
+
+/**
  * (iPlY5yop) `correctable.root_history_id` — zanjirning birinchi to'lovidagi
  * oyoq, shu kassadagisi (bir kassada ikki oyoq bo'lsa tur va amal ham mos).
  * Zanjir boshi — qatorning o'zi; teskari qator zanjiri jurnaldan; eski yozuvda

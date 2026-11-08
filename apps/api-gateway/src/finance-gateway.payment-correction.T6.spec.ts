@@ -334,6 +334,76 @@ describe('T6 — /finance/history/:id/{reverse,correct-amount} gateway', () => {
       code: 'COURIER_MOVED',
     });
   });
+
+  it('mUhkJHmi: COURIER_MOVED — `correctable.transfer` (Qayerdan → Qayerga) va boshqa maydonlar saqlanadi', async () => {
+    placement.mockResolvedValue({ branch_id: '22', role: 'COURIER' });
+    context = {
+      payment_kind: 'courier_payment',
+      receiver_cashbox_type: 'branch',
+      receiver_branch_id: '15',
+      courier_id: '301',
+    };
+    const transfer = {
+      kind: 'courier_payment',
+      payment_method: 'cash',
+      amount: 500000,
+      receiver: {
+        cashbox_type: 'branch',
+        branch_id: '15',
+        name: 'Samarqand filiali',
+      },
+      courier: { id: '301', name: 'Ali Kuryer' },
+      market: null,
+    };
+    finance.send.mockImplementation((pattern: { cmd: string }) =>
+      of(
+        pattern.cmd === 'finance.payment_correction.context'
+          ? { data: context }
+          : {
+              statusCode: 200,
+              data: {
+                id: '845',
+                correctable: {
+                  allowed: true,
+                  deadline: 'x',
+                  window_days: 30,
+                  root_history_id: '845',
+                  transfer,
+                },
+              },
+            },
+      ),
+    );
+    const res = await request(http()).get('/finance/history/845');
+    const body = res.body as { data: Record<string, unknown> };
+    expect(body.data.correctable).toEqual({
+      allowed: false,
+      code: 'COURIER_MOVED',
+      deadline: 'x',
+      window_days: 30,
+      root_history_id: '845',
+      transfer,
+    });
+  });
+
+  it('mUhkJHmi: admin — finance `include_correctable: false` (transfer ham yo`q)', async () => {
+    finance.send.mockImplementation(() =>
+      of({ statusCode: 200, data: { id: '845' } }),
+    );
+    const res = await request(http())
+      .get('/finance/history/845')
+      .set('x-test-role', 'admin');
+    expect(res.status).toBe(200);
+    expect((res.body as { data: unknown }).data).not.toHaveProperty(
+      'correctable',
+    );
+    const call = (
+      finance.send.mock.calls as unknown as Array<
+        [{ cmd: string }, Record<string, unknown>]
+      >
+    ).find(([p]) => p.cmd === 'finance.history.find_by_id');
+    expect(call?.[1]).toMatchObject({ include_correctable: false });
+  });
   it('5: COURIER_MOVED — filial 15 qabul qilgan, kuryer 22 da; biriktiruv yo`q; HQ filiali = HQ — o`tadi', async () => {
     context = {
       payment_kind: 'courier_payment',
