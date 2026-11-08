@@ -11,6 +11,11 @@ import {
 import type { BotActionHandler } from './handlers/bot-context';
 import { BotController } from './bot.controller';
 import {
+  COURIER_OP_TIMEOUT_MS,
+  COURIER_OP_UNKNOWN_TEXT,
+  CourierService,
+} from './courier/courier.service';
+import {
   callbackUpdate,
   courierActor,
   makeRouter,
@@ -195,4 +200,70 @@ describe('BOT-3d — update_id bo`yicha takror (webhook 503 → Telegram qayta y
     await controller.onTelegramUpdate(event, {} as never);
     expect(router.dispatch).toHaveBeenCalledTimes(1);
   });
+});
+
+/**
+ * BOT-3d (NIMA 12) — kuryer amali natijasi noma'lum bo'lsa (timeout yoki
+ * gateway 502/503/504) kuryerga «bajarilmadi» yoki inglizcha matn emas,
+ * «⏳ Natija noma'lum — /ishim orqali tekshiring» chiqadi; bot gateway'dan
+ * (60 s) uzoqroq kutadi va `Idempotency-Key` ni uzatadi. Asl blok
+ * `claude/bot-3d-javob-tezlik` (e903e0dd) da edi — dev'dagi CourierService
+ * ga moslab ko'chirildi.
+ */
+describe('BOT-3d — kuryer amali: natija noma`lum', () => {
+  const make = (request: jest.Mock) =>
+    new CourierService(
+      { request } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { get: () => 'https://admin.elchi.test' } as never,
+    );
+
+  it('⭐ 65 s kutadi (gateway 60 s dan uzun), kalit uzatiladi; timeout → «⏳ Natija noma`lum», «bajarilmadi» EMAS', async () => {
+    const request = jest.fn(() =>
+      Promise.reject(
+        Object.assign(new Error('The operation was aborted due to timeout'), {
+          name: 'TimeoutError',
+        }),
+      ),
+    );
+    const outcome = await make(request).perform('25', 'cnd', '81', {
+      reason: 'Mijoz telefonni olmadi',
+      idempotencyKey: 'tg:act0000000000001',
+    });
+    expect(outcome).toEqual({
+      kind: 'error',
+      message: COURIER_OP_UNKNOWN_TEXT,
+    });
+    expect(request).toHaveBeenCalledWith(
+      '25',
+      'POST',
+      '/orders/81/could-not-deliver',
+      expect.anything(),
+      {
+        timeoutMs: COURIER_OP_TIMEOUT_MS,
+        idempotencyKey: 'tg:act0000000000001',
+      },
+    );
+    expect(COURIER_OP_TIMEOUT_MS).toBeGreaterThan(60_000);
+  });
+
+  it.each([502, 503, 504])(
+    '⭐ gateway %i — inglizcha matn emas, «⏳ Natija noma`lum»',
+    async (status) => {
+      const request = jest.fn(() =>
+        Promise.resolve({
+          status,
+          body: { message: 'Gateway Timeout' },
+        }),
+      );
+      const outcome = await make(request).perform('25', 'sell', '81', {});
+      expect(outcome).toEqual({
+        kind: 'error',
+        message: COURIER_OP_UNKNOWN_TEXT,
+      });
+    },
+  );
 });
