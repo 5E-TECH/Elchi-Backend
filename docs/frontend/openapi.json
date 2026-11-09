@@ -21964,6 +21964,924 @@
         ]
       }
     },
+    "/carrier/ping": {
+      "get": {
+        "description": "Ulanishni sinash uchun. Kalit to‘g‘ri bo‘lsa akkaunt nomini qaytaradi.",
+        "operationId": "CarrierGatewayController_ping",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierPingResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "Kalitni tekshirish",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/carrier/scan": {
+      "post": {
+        "description": "QR bo‘yicha buyurtma ma’lumotini qaytaradi. Posilka yo‘lda (`on the road`) yoki mijozni kutishda (`waiting_customer`) bo‘lsa, shu skanda sizga qabul qilinadi (`waiting`, `received: true`) — sotish va bekor qilish faqat shundan keyin mumkin. Qayta skanerlash xavfsiz. Viloyat/tuman — SOATO kodi bilan.",
+        "operationId": "CarrierGatewayController_scan",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierScanRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierScanResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "qr_token bo‘sh yoki 255 belgidan uzun",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Buyurtma topilmadi yoki sizga biriktirilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "Posilka QR skani",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/carrier/orders/{id}/status": {
+      "post": {
+        "description": "`sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). `partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). `rollback` — faqat `sold` yoki `cancelled` holatidagi buyurtmani `waiting` ga qaytaradi (shu buyurtma hisob-kitobi yopilmagan bo‘lsa; `paid`/`partly_paid` — Elchi operatori). Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma (`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).",
+        "operationId": "CarrierGatewayController_updateStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Buyurtma id (scan javobidagi data.order.id)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "MAJBURIY (≤255 belgi). Har YANGI urinish (niyat) uchun YANGI kalit (masalan UUID). Ayni kalitni faqat shu so‘rovni qayta yuborishda ishlating (javob kelmadi, 409/429/5xx/504). Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CarrierOrderStatusRequestDto"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "proof": {
+                        "type": "string",
+                        "format": "binary",
+                        "description": "Ixtiyoriy isbot fayli (faqat multipart)"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CarrierOrderStatusRequestDto"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "proof": {
+                        "type": "string",
+                        "format": "binary",
+                        "description": "Ixtiyoriy isbot fayli (faqat multipart)"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierStatusResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Maydon xato, Idempotency-Key yo‘q, isbot fayli mos emas yoki buyurtma bu amal uchun mos holatda emas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Buyurtma topilmadi yoki sizga biriktirilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ayni kalit bilan so‘rov hali bajarilmoqda (biroz kutib qayta urining) yoki kalit eski urinishga tegishli (CARRIER_IDEMPOTENCY_KEY_STALE — yangi kalit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Isbot fayli 50 MB dan katta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Shu Idempotency-Key boshqa amal/buyurtma/tana bilan ishlatilgan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "Yetkazish natijasi: sold | partly_sold | cancelled | rollback",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/carrier/returns": {
+      "post": {
+        "description": "Sizda turgan `cancelled` holatidagi posilkalar (qisman sotuvdan ajralgan qism ham) uchun qaytarish pochtasi ochiladi — holati `cancelled (sent)`. Posilkalarni Elchi filialiga topshirasiz, filial pochtani qabul qiladi. Takroriy so‘rov xavfsiz.",
+        "operationId": "CarrierGatewayController_returns",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierReturnRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierReturnResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ro‘yxatda `cancelled` holatida bo‘lmagan posilka bor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Buyurtma topilmadi yoki sizga biriktirilmagan (id’lar xabarda)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "Bekor qilingan posilkalarni Elchi filialiga qaytarish",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/carrier/orders": {
+      "get": {
+        "description": "Solishtirish uchun: sizga biriktirilgan yoki hozir qo‘lingizdagi buyurtmalar. `status` — vergul bilan bir nechta holat. `from`/`to` — BUYURTMA YARATILGAN kun (Toshkent vaqti).",
+        "operationId": "CarrierGatewayController_listOrders",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Vergul bilan ajratilgan holatlar: created, new, received, on the road, waiting, waiting_customer, sold, cancelled, returned_to_market, paid, partly_paid, cancelled (sent), closed.",
+            "schema": {
+              "example": "waiting,sold",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Boshlanish kuni (YYYY-MM-DD, Toshkent vaqti, kun kiradi). Filtr BUYURTMA YARATILGAN sana bo‘yicha (biriktirilgan yoki sotilgan sana emas).",
+            "schema": {
+              "example": "2026-11-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Tugash kuni (YYYY-MM-DD, Toshkent vaqti, kun kiradi) — buyurtma yaratilgan sana.",
+            "schema": {
+              "example": "2026-11-10",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number",
+              "enum": [
+                10,
+                25,
+                50,
+                100
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOrderListResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Noma’lum holat yoki sana formati xato",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "Menga biriktirilgan buyurtmalar ro‘yxati",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/carrier/cashbox": {
+      "get": {
+        "description": "`balance` — Elchi’ga topshirilishi kerak bo‘lgan summa (oynaga bog‘liq emas). Tarix — `from`..`to` (Toshkent kunlari, sukut: oxirgi 30 kun, eng ko‘pi 92 kun). Yo‘nalish `type` dan (income/expense), `amount` doim musbat. Xodim ma’lumotlari qaytmaydi.",
+        "operationId": "CarrierGatewayController_cashbox",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Tarix boshi (YYYY-MM-DD, Toshkent kuni). Berilmasa — `to` dan 29 kun oldin (ya’ni oxirgi 30 kun). Oraliq 92 kundan oshmaydi. Balansga ta’sir qilmaydi.",
+            "schema": {
+              "example": "2026-11-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Tarix oxiri (YYYY-MM-DD, Toshkent kuni). Berilmasa — bugun.",
+            "schema": {
+              "example": "2026-11-10",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierCashboxResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sana formati xato, from > to yoki oraliq 92 kundan uzun",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "Kassa: balans va harakatlar tarixi",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/admin/carriers": {
+      "post": {
+        "operationId": "CarrierAdminGatewayController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCarrierAccountRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Carrier akkaunt yaratish — kurierga bog‘lanadi, API kalit BIR MARTA qaytadi",
+        "tags": [
+          "Carriers (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      },
+      "get": {
+        "operationId": "CarrierAdminGatewayController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Carrier akkauntlar ro‘yxati (kalitsiz)",
+        "tags": [
+          "Carriers (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/admin/carriers/{id}": {
+      "patch": {
+        "operationId": "CarrierAdminGatewayController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCarrierAccountRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Nom va IP ro‘yxatini yangilash. Kurier va kalit bu yerda o‘zgarmaydi.",
+        "tags": [
+          "Carriers (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/admin/carriers/{id}/rotate-key": {
+      "post": {
+        "operationId": "CarrierAdminGatewayController_rotateKey",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "API kalitni yangilash (eski darhol ishlamaydi)",
+        "tags": [
+          "Carriers (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/admin/carriers/{id}/status": {
+      "post": {
+        "operationId": "CarrierAdminGatewayController_setActive",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCarrierActiveRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Carrier akkauntni faollashtirish/o‘chirish",
+        "tags": [
+          "Carriers (admin)"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/ai/status": {
       "get": {
         "description": "`cap`: `{period_key, spent_usd, cap_usd, override_usd, effective_cap_usd, ratio, warn_ratio, state, reset_at}`. Ifpimq2x: `warn_ratio` — `state = warn` chegarasi (AI_CAP_WARN_RATIO, sukut 0.8).",
@@ -24597,6 +25515,11 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "type": "http"
+      },
+      "carrier-api-key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key"
       }
     },
     "schemas": {
@@ -34227,6 +35150,832 @@
         }
       },
       "SetPartnerActiveRequestDto": {
+        "type": "object",
+        "properties": {
+          "is_active": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "is_active"
+        ]
+      },
+      "CarrierErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 404
+          },
+          "message": {
+            "type": "string",
+            "example": "Buyurtma topilmadi yoki sizga biriktirilmagan"
+          },
+          "code": {
+            "type": "string",
+            "example": "CARRIER_IDEMPOTENCY_KEY_STALE",
+            "description": "Mashina o‘qiydigan kod (bo‘lsa): CARRIER_IDEMPOTENCY_KEY_REQUIRED (400), CARRIER_COURIER_INACTIVE (403), CARRIER_IDEMPOTENCY_KEY_STALE (409 — yangi kalit), IDEMPOTENCY_IN_PROGRESS (409 — ayni kalit bilan kutib), IDEMPOTENCY_KEY_MISMATCH (422), CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE (503 — ayni kalit bilan). Qarorni matnga emas, statusCode + code ga qarab qiling."
+          },
+          "trace_id": {
+            "type": "string",
+            "example": "eaff465b-4c89-4721-b7c8-30cf22fb403e",
+            "description": "Muammo bo‘lganda Elchi jamoasiga yuboring"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message"
+        ]
+      },
+      "CarrierPartlySoldItemDto": {
+        "type": "object",
+        "properties": {
+          "order_item_id": {
+            "type": "string",
+            "example": "5501",
+            "description": "Buyurtma qatori id (scan javobidagi items[].id). Tavsiya etiladi."
+          },
+          "product_id": {
+            "type": "string",
+            "example": "1",
+            "nullable": true,
+            "description": "Katalog mahsuloti id — order_item_id berilmasa majburiy."
+          },
+          "quantity": {
+            "type": "integer",
+            "example": 1,
+            "minimum": 0,
+            "description": "SOTILGAN dona soni (0 — bu qatordan hech narsa sotilmadi)."
+          }
+        },
+        "required": [
+          "quantity"
+        ]
+      },
+      "CarrierOrderStatusRequestDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "sold",
+              "partly_sold",
+              "cancelled",
+              "rollback"
+            ],
+            "example": "sold",
+            "description": "`sold` — to‘liq sotildi; `partly_sold` — qisman (items + total_price majburiy); `cancelled` — bekor (reason majburiy); `rollback` — xato belgilangan sotuv/bekorni qaytarish (shu buyurtma hisob-kitobi hali yopilmagan bo‘lsa)."
+          },
+          "comment": {
+            "type": "string",
+            "example": "Mijoz qabul qildi",
+            "maxLength": 1000
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "CUSTOMER_NO_ANSWER",
+              "CUSTOMER_REFUSED",
+              "WRONG_ADDRESS",
+              "DEFECTIVE_PRODUCT",
+              "PRICE_DISPUTE",
+              "OTHER"
+            ],
+            "example": "CUSTOMER_REFUSED",
+            "description": "`cancelled` uchun majburiy. `OTHER` bo‘lsa comment ham majburiy."
+          },
+          "total_price": {
+            "type": "number",
+            "example": 150000,
+            "minimum": 0,
+            "description": "`partly_sold` uchun majburiy: mijoz OLGAN tovarlarning to‘liq qiymati (so‘m), oldindan onlayn to‘langan qism (paid_online_amount) HAM shu ichida. Buyurtma summasidan oshmaydi. Siz yig‘adigan naqd = max(total_price − paid_online_amount, 0)."
+          },
+          "items": {
+            "description": "`partly_sold` uchun majburiy: buyurtmaning HAR BIR qatori va undan sotilgan dona soni.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CarrierPartlySoldItemDto"
+            }
+          },
+          "old_item_collected": {
+            "type": "boolean",
+            "example": true,
+            "description": "Almashtirish buyurtmasi: eski mahsulot mijozdan olindi. Almashtirish buyurtmasini sotishda majburiy true."
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "CarrierPingCarrierDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "name": {
+            "type": "string",
+            "example": "BTS Express"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "CarrierPingDataDto": {
+        "type": "object",
+        "properties": {
+          "authenticated": {
+            "type": "boolean",
+            "example": true
+          },
+          "carrier": {
+            "$ref": "#/components/schemas/CarrierPingCarrierDto"
+          }
+        },
+        "required": [
+          "authenticated",
+          "carrier"
+        ]
+      },
+      "CarrierPingResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "ok"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CarrierPingDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "CarrierScanRequestDto": {
+        "type": "object",
+        "properties": {
+          "qr_token": {
+            "type": "string",
+            "example": "a1b2c3d4e5",
+            "description": "Posilka yorlig‘idagi QR qiymati (buyurtmaning qr_code_token)."
+          }
+        },
+        "required": [
+          "qr_token"
+        ]
+      },
+      "CarrierCustomerDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Ali Valiyev"
+          },
+          "phone_number": {
+            "type": "string",
+            "nullable": true,
+            "example": "+998901112233"
+          },
+          "extra_number": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          }
+        },
+        "required": [
+          "name",
+          "phone_number",
+          "extra_number"
+        ]
+      },
+      "CarrierGeoRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "2",
+            "description": "Elchi ichki id"
+          },
+          "soato_code": {
+            "type": "string",
+            "nullable": true,
+            "example": "1726294",
+            "description": "Rasmiy SOATO kodi (viloyat — 4 xona, tuman — 7 xona). null — bu hudud uchun kod Elchi’da yo‘q (id dan foydalaning)."
+          }
+        },
+        "required": [
+          "id",
+          "soato_code"
+        ]
+      },
+      "CarrierRefDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "7"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Chilonzor"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "CarrierReplacementDto": {
+        "type": "object",
+        "properties": {
+          "of_order_id": {
+            "type": "string",
+            "example": "880",
+            "description": "Qaysi buyurtma o‘rniga (eski buyurtma id)"
+          },
+          "old_item_required": {
+            "type": "boolean",
+            "example": true,
+            "description": "true — sotishda old_item_collected: true SHART (eski mahsulotni oling)"
+          }
+        },
+        "required": [
+          "of_order_id",
+          "old_item_required"
+        ]
+      },
+      "CarrierOrderItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "5501",
+            "description": "Qator id — partly_sold da items[].order_item_id"
+          },
+          "product_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "1"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Kurtka"
+          },
+          "quantity": {
+            "type": "number",
+            "example": 2
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "name",
+          "quantity"
+        ]
+      },
+      "CarrierOrderDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "900",
+            "description": "POST /carrier/orders/{id}/status uchun"
+          },
+          "order_number": {
+            "type": "string",
+            "nullable": true,
+            "example": "E-900"
+          },
+          "qr_token": {
+            "type": "string",
+            "nullable": true,
+            "example": "a1b2c3d4e5"
+          },
+          "parent_order_id": {
+            "type": "string",
+            "nullable": true,
+            "example": null,
+            "description": "Qisman sotuvdan ajralgan sotilmagan qism bo‘lsa — asl buyurtma"
+          },
+          "status": {
+            "type": "string",
+            "example": "waiting",
+            "description": "Elchi’dagi holat"
+          },
+          "total_price": {
+            "type": "number",
+            "example": 200000,
+            "description": "Buyurtma summasi, so‘m"
+          },
+          "paid_online_amount": {
+            "type": "number",
+            "example": 50000,
+            "description": "Oldindan onlayn to‘langan"
+          },
+          "cod_amount": {
+            "type": "number",
+            "example": 150000,
+            "description": "Mijozdan NAQD olinadigan summa = total_price − paid_online_amount"
+          },
+          "where_deliver": {
+            "type": "string",
+            "nullable": true,
+            "example": "address"
+          },
+          "address": {
+            "type": "string",
+            "nullable": true,
+            "example": "Chilonzor 5, 12-uy"
+          },
+          "comment": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "customer": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CarrierCustomerDto"
+              }
+            ]
+          },
+          "region": {
+            "nullable": true,
+            "description": "Viloyat — SOATO kodi bilan (nom yuborilmaydi)",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CarrierGeoRefDto"
+              }
+            ]
+          },
+          "district": {
+            "nullable": true,
+            "description": "Tuman — SOATO kodi bilan (nom yuborilmaydi)",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CarrierGeoRefDto"
+              }
+            ]
+          },
+          "market": {
+            "nullable": true,
+            "description": "Sotuvchi",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CarrierRefDto"
+              }
+            ]
+          },
+          "replacement": {
+            "nullable": true,
+            "description": "Almashtirish buyurtmasi bo‘lsa — eski mahsulot mijozdan olinishi kerak; aks holda null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CarrierReplacementDto"
+              }
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CarrierOrderItemDto"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-11-09T10:00:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "order_number",
+          "qr_token",
+          "parent_order_id",
+          "status",
+          "total_price",
+          "paid_online_amount",
+          "cod_amount",
+          "where_deliver",
+          "address",
+          "comment",
+          "customer",
+          "region",
+          "district",
+          "market",
+          "replacement",
+          "items",
+          "created_at"
+        ]
+      },
+      "CarrierScanDataDto": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "example": true,
+            "description": "true — posilka shu skanda sizga qabul qilindi (waiting)"
+          },
+          "order": {
+            "nullable": true,
+            "description": "Buyurtma. null (refreshed: false) — posilka QABUL QILINDI, lekin ma’lumotni hozir o‘qib bo‘lmadi: keyinroq qayta skanerlang (received: false bilan keladi — bu normal).",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CarrierOrderDto"
+              }
+            ]
+          },
+          "refreshed": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "received",
+          "order",
+          "refreshed"
+        ]
+      },
+      "CarrierScanResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "ok"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CarrierScanDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "CarrierStatusDataDto": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "nullable": true,
+            "description": "Yangilangan buyurtma. null — holat QABUL QILINDI, lekin yangilangan buyurtmani hozir o‘qib bo‘lmadi (refreshed: false): GET /carrier/orders bilan keyinroq oling, QAYTA YUBORMANG.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CarrierOrderDto"
+              }
+            ]
+          },
+          "refreshed": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "order",
+          "refreshed"
+        ]
+      },
+      "CarrierStatusResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "ok"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CarrierStatusDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "CarrierReturnRequestDto": {
+        "type": "object",
+        "properties": {
+          "order_ids": {
+            "example": [
+              "901",
+              "905"
+            ],
+            "description": "Elchi filialiga qaytariladigan BEKOR QILINGAN posilkalar id’lari (sizda turgan, holati `cancelled`; qisman sotuvdan ajralgan qism ham). 1–50 ta.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "order_ids"
+        ]
+      },
+      "CarrierReturnDataDto": {
+        "type": "object",
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "example": "77",
+            "description": "Qaytarish pochtasi id — posilkalarni Elchi filialiga shu bilan topshirasiz"
+          },
+          "order_ids": {
+            "example": [
+              "901",
+              "905"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "post_id",
+          "order_ids"
+        ]
+      },
+      "CarrierReturnResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "ok"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CarrierReturnDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "CarrierOrderListDataDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CarrierOrderDto"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 1
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "limit": {
+            "type": "number",
+            "example": 50
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "limit"
+        ]
+      },
+      "CarrierOrderListResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "ok"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CarrierOrderListDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "CarrierCashboxEntryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "7001"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "income",
+              "expense"
+            ],
+            "example": "income",
+            "description": "income — kirim, expense — chiqim"
+          },
+          "source_type": {
+            "type": "string",
+            "example": "sell",
+            "description": "Manba: sell — sotuv, cancel — bekor, correction — tuzatish (rollback), courier_payment — Elchi’ga topshirilgan naqd, extra_cost, payment_reversal — to‘lov tuzatishi. Ro‘yxat OCHIQ — yangi qiymat paydo bo‘lishi mumkin."
+          },
+          "amount": {
+            "type": "number",
+            "example": 125000,
+            "description": "Doim musbat; yo‘nalish `type` da. `sell` qatori ham `expense` bo‘lishi mumkin (oldindan to‘langan buyurtma — Elchi sizga qarzdor)."
+          },
+          "balance_after": {
+            "type": "number",
+            "example": 125000,
+            "description": "Shu harakatdan keyingi balans"
+          },
+          "order_id": {
+            "type": "string",
+            "nullable": true,
+            "example": "900",
+            "description": "Buyurtma bilan bog‘liq qatorda — buyurtma id"
+          },
+          "payment_method": {
+            "type": "string",
+            "nullable": true,
+            "example": "cash"
+          },
+          "comment": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-11-09T12:30:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "source_type",
+          "amount",
+          "balance_after",
+          "order_id",
+          "payment_method",
+          "comment",
+          "created_at"
+        ]
+      },
+      "CarrierCashboxDataDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "example": "2026-10-12",
+            "description": "Tarix oynasi boshi (Toshkent kuni)"
+          },
+          "to": {
+            "type": "string",
+            "example": "2026-11-10",
+            "description": "Tarix oynasi oxiri (Toshkent kuni)"
+          },
+          "balance": {
+            "type": "number",
+            "example": 125000,
+            "description": "Joriy balans — Elchi’ga topshirilishi kerak bo‘lgan summa"
+          },
+          "income": {
+            "type": "number",
+            "example": 125000,
+            "description": "Davrdagi jami kirim"
+          },
+          "outcome": {
+            "type": "number",
+            "example": 0,
+            "description": "Davrdagi jami chiqim"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CarrierCashboxEntryDto"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "balance",
+          "income",
+          "outcome",
+          "history"
+        ]
+      },
+      "CarrierCashboxResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "ok"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CarrierCashboxDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "CreateCarrierAccountRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "BTS Express"
+          },
+          "courier_id": {
+            "type": "string",
+            "example": "55",
+            "description": "Bog‘lanadigan KURIER user id (POST /couriers bilan oldindan ochilgan, faol). Barcha Carrier API amallari shu kurier nomidan bajariladi; bitta kurier — bitta carrier."
+          },
+          "ip_allowlist": {
+            "example": [
+              "203.0.113.10",
+              "203.0.113.0/24",
+              "2001:db8::1"
+            ],
+            "description": "Ruxsat etilgan manzillar: IPv4 (203.0.113.10), IPv4 diapazon (203.0.113.0/24) yoki IPv6 manzil (2001:db8::1). IPv6 diapazon qo‘llab-quvvatlanmaydi. Tushunilmagan yozuv — 400.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "courier_id"
+        ]
+      },
+      "UpdateCarrierAccountRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "BTS Express"
+          },
+          "ip_allowlist": {
+            "example": [
+              "203.0.113.10"
+            ],
+            "description": "Ruxsat etilgan manzillar: IPv4 (203.0.113.10), IPv4 diapazon (203.0.113.0/24) yoki IPv6 manzil (2001:db8::1). IPv6 diapazon qo‘llab-quvvatlanmaydi. Tushunilmagan yozuv — 400. Bo‘sh massiv — IP cheklovi olib tashlanadi.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SetCarrierActiveRequestDto": {
         "type": "object",
         "properties": {
           "is_active": {

@@ -164,8 +164,13 @@ import {
 import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
-import { fileOwnerOf } from './file-ownership';
 import { sendPrivateFileBytes } from './private-file-bytes';
+import {
+  PROOF_OPERATION_TIMEOUT_MS,
+  type UploadedProofFile,
+  uploadProofFile,
+  withUploadedProof,
+} from './order-proof-upload';
 import {
   ORDER_QR_LOOKUP_ROLES,
   assertQrOrderVisible,
@@ -291,14 +296,6 @@ type OrderListRequest =
       roles: string[];
       pagination: { page: number; limit: number };
     };
-
-type UploadedProofFile = {
-  originalname: string;
-  mimetype: string;
-  buffer: Buffer;
-};
-
-const PROOF_OPERATION_TIMEOUT_MS = 60000;
 
 /**
  * 5Yy6r6UI (BG1) — buyurtma javobidagi bekor bosqichi (Swagger tavsifi).
@@ -836,82 +833,18 @@ export class OrderGatewayController {
     };
   }
 
-  private normalizeProofFileKeys(value: unknown): string[] {
-    if (Array.isArray(value)) {
-      return value
-        .flatMap((item) => this.normalizeProofFileKeys(item))
-        .filter(Boolean);
-    }
-    if (typeof value !== 'string') return [];
-
-    const trimmed = value.trim();
-    if (!trimmed) return [];
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) return this.normalizeProofFileKeys(parsed);
-    } catch {
-      // Keep plain form-data values such as "key1,key2" supported.
-    }
-    return trimmed
-      .split(',')
-      .map((key) => key.trim())
-      .filter(Boolean);
-  }
-
-  private async uploadProofFile(
+  // Isbot yuklash — `order-proof-upload.ts` (Carrier API ham AYNI yo'ldan).
+  private uploadProofFile(
     file: UploadedProofFile | undefined,
     user: JwtUser,
   ): Promise<string[]> {
-    if (!file) return [];
-    if (!this.fileClient) {
-      throw new BadRequestException('Fayl xizmati sozlanmagan');
-    }
-
-    const response = await firstValueFrom(
-      this.fileClient
-        .send(
-          { cmd: 'file.upload' },
-          {
-            file_name: file.originalname,
-            mime_type: file.mimetype,
-            file_base64: file.buffer.toString('base64'),
-            folder: 'proof',
-            owner: fileOwnerOf(user),
-          },
-        )
-        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException(
-          'Fayl xizmati vaqtida javob bermadi (timeout)',
-        );
-      }
-      throw error;
-    });
-
-    const key = this.asStr(
-      (response as { data?: { key?: unknown }; key?: unknown })?.data?.key ??
-        (response as { key?: unknown })?.key,
-    ).trim();
-    if (!key) {
-      throw new BadRequestException(
-        "Isbot faylini yuklab bo'lmadi (kalit qaytmadi)",
-      );
-    }
-    return [key];
+    return uploadProofFile(this.fileClient, file, user);
   }
 
-  private async withUploadedProof<
+  private withUploadedProof<
     T extends { proofFileKeys?: string[]; proofFileKeysVerified?: boolean },
   >(dto: T, file: UploadedProofFile | undefined, user: JwtUser): Promise<T> {
-    const existingKeys = this.normalizeProofFileKeys(dto?.proofFileKeys);
-    const uploadedKeys = await this.uploadProofFile(file, user);
-    return {
-      ...dto,
-      proofFileKeys: Array.from(new Set([...existingKeys, ...uploadedKeys])),
-      proofFileKeysVerified:
-        uploadedKeys.length > 0 && existingKeys.length === 0,
-    };
+    return withUploadedProof(this.fileClient, dto, file, user);
   }
 
   private async sendBranchWithTimeout(

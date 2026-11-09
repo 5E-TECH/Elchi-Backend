@@ -6,6 +6,7 @@ import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categorie
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
 import { ORDER_INTAKE_CLOSED } from '../order/order-intake';
+import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -103,6 +104,12 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [SESSION_TOO_NEW]: ['available_at'],
   // (NDmZMzCP) identity javob bermadi — 503, qayta urinish (chiqish emas).
   [SESSION_CHECK_UNAVAILABLE]: [],
+  // Carrier API (`/carrier/*`) — tashqi yetkazuvchi kodga tayanadi (§3).
+  [CARRIER.KEY_CHECK_UNAVAILABLE]: [],
+  [CARRIER.COURIER_INACTIVE]: [],
+  [CARRIER.IDEMPOTENCY_KEY_REQUIRED]: [],
+  [CARRIER.IDEMPOTENCY_KEY_STALE]: [],
+  [CARRIER.TEMPORARILY_UNAVAILABLE]: [],
   // (NDmZMzCP) login qulfi — 429, qancha soniyadan keyin urinish mumkin.
   [LOGIN_LOCKED]: ['retry_after_seconds'],
   // (NDmZMzCP) zaif/vaqtinchalik parol — avval parolni almashtirish, 403.

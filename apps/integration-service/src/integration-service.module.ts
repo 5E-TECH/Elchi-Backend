@@ -25,6 +25,9 @@ import { PaymentTransaction } from './entities/payment-transaction.entity';
 import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
+import { CarrierAccount } from './entities/carrier-account.entity';
+import { CarrierAccountController } from './carrier/carrier-account.controller';
+import { CarrierAccountService } from './carrier/carrier-account.service';
 import { SyncQueueScheduler } from './sync-queue.scheduler';
 import { ReconcileScheduler } from './reconcile.scheduler';
 import { PartnerWebhookDigestScheduler } from './partner-webhook-digest.scheduler';
@@ -66,11 +69,13 @@ import { PartnerWebhookDigestScheduler } from './partner-webhook-digest.schedule
       PartnerProductRef,
       PartnerMarketRef,
       PartnerWebhookOutbox,
+      CarrierAccount,
     ]),
   ],
-  controllers: [IntegrationServiceController],
+  controllers: [IntegrationServiceController, CarrierAccountController],
   providers: [
     IntegrationServiceService,
+    CarrierAccountService,
     SyncQueueScheduler,
     ReconcileScheduler,
     PartnerWebhookDigestScheduler,

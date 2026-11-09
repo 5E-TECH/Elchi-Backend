@@ -253,6 +253,26 @@ export const gatewayValidationSchema = Joi.object({
   // (gateway-http.setup.ts `setupGatewaySwagger`).
   SWAGGER_USER: Joi.string().default('admin'),
   SWAGGER_PASSWORD: Joi.string().allow('').default(''),
+  // Carrier API uchun ALOHIDA Swagger (`/carrier-docs`, faqat /carrier/*) —
+  // tashqi yetkazuvchi dasturchilari uchun (`carrier-swagger.ts`). Production'da
+  // FAQAT `true` + parol bilan ulanadi; dev'da sukut bo'yicha ochiq.
+  // `TRUE`/`1`/`yes` ham — qat'iy `valid('true')` butun gateway'ni yiqitardi.
+  CARRIER_SWAGGER_ENABLED: Joi.string()
+    .trim()
+    .lowercase()
+    .valid('true', 'false', '1', '0', 'yes', 'no')
+    .empty('')
+    .default(''),
+  // Carrier API rate limit (`carrier-throttler.guard.ts`): akkaunt uchun,
+  // barcha endpoint bo'yicha. Bo'sh — sukut.
+  CARRIER_THROTTLE_LIMIT: Joi.number().integer().min(1).empty('').default(120),
+  CARRIER_THROTTLE_TTL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .empty('')
+    .default(60_000),
+  CARRIER_SWAGGER_USER: Joi.string().allow('').default('carrier'),
+  CARRIER_SWAGGER_PASSWORD: Joi.string().allow('').default(''),
   /**
    * AI buyurtma (ai-service) navbati.
    *

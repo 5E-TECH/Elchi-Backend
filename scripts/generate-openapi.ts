@@ -51,6 +51,10 @@ import {
   attachRouteRoles,
   collectRouteRoles,
 } from '../apps/api-gateway/src/auth/route-roles';
+import {
+  CARRIER_API_KEY_SCHEME,
+  buildCarrierSwaggerDocument,
+} from '../apps/api-gateway/src/carrier-swagger';
 
 async function main() {
   const app = await NestFactory.create(ApiGatewayModule, {
@@ -63,6 +67,11 @@ async function main() {
     .setDescription('API Gateway docs for all microservice routes')
     .setVersion('1.0.0')
     .addBearerAuth()
+    // `gateway-http.setup.ts` bilan bir xil: `/carrier/*` shu sxemaga ishora qiladi.
+    .addApiKey(
+      { type: 'apiKey', name: 'X-Api-Key', in: 'header' },
+      CARRIER_API_KEY_SCHEME,
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
@@ -87,6 +96,28 @@ async function main() {
 
   const outPath = join(process.cwd(), 'docs', 'frontend', 'openapi.json');
   writeFileSync(outPath, JSON.stringify(document, null, 2), 'utf8');
+
+  // Carrier API — tashqi yetkazuvchiga yuboriladigan alohida spec (faqat
+  // /carrier/*; `/carrier-docs` dagi Swagger bilan AYNI hujjat). Postman /
+  // kod generatoriga import qilinadi.
+  const carrierPath = join(
+    process.cwd(),
+    'docs',
+    'public',
+    'carrier-openapi.json',
+  );
+  const carrierDocument = buildCarrierSwaggerDocument(app, {
+    serverUrl: 'https://api.elchipochta.uz',
+  });
+  writeFileSync(
+    carrierPath,
+    JSON.stringify(carrierDocument, null, 2) + '\n',
+    'utf8',
+  );
+  // eslint-disable-next-line no-console
+  console.log(
+    `Carrier OpenAPI written → ${carrierPath}\n  paths: ${Object.keys(carrierDocument.paths ?? {}).length}`,
+  );
 
   const pathCount = Object.keys(document.paths ?? {}).length;
   const opCount = Object.values(document.paths ?? {}).reduce(
