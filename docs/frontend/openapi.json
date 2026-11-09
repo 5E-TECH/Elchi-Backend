@@ -3363,6 +3363,60 @@
         ]
       }
     },
+    "/orders/intake-settings": {
+      "get": {
+        "description": "Qabul vaqti (`cutoff_time`) qo`yilgan bo`lsa, `closes_at` dan kun almashguncha (`reopens_at`) hech qanday yangi buyurtma yaratilmaydi: POST /orders, /orders/external, /orders/telegram/bot/create, ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` (`reopens_at`, `cutoff_time`). Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.",
+        "operationId": "OrderGatewayController_getIntakeSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bugungi buyurtma qabuli holati (qabul vaqti, kun almashish soati)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": null
+      },
+      "patch": {
+        "description": "`cutoff_time` — faqat JORIY ish kuni uchun (kun almashganda o`zi bekor bo`ladi), `null` — cheklovni olib tashlash. `day_change_time` — doimiy kun almashish soati (`null` — 00:00). Kamida bittasi kerak (aks holda 400). Javob — GET bilan bir xil. Activity log: `order.intake_cutoff_changed`, `order.day_change_time_changed`.",
+        "operationId": "OrderGatewayController_updateIntakeSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOrderIntakeSettingsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bugungi qabul vaqti / kun almashish soatini o'zgartirish (SUPERADMIN)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/orders/{id}/ai-trace": {
       "get": {
         "operationId": "OrderGatewayController_aiTrace",
@@ -26663,6 +26717,23 @@
           "order_item_info",
           "total_price"
         ]
+      },
+      "UpdateOrderIntakeSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "cutoff_time": {
+            "type": "string",
+            "nullable": true,
+            "example": "10:00",
+            "description": "BUGUNGI ish kuni uchun qabul tugash vaqti (Toshkent, `HH:MM`). Shu vaqtdan kun almashguncha yangi buyurtma yaratilmaydi (409 `ORDER_INTAKE_CLOSED`). `null` — cheklovni olib tashlash. O'tgan vaqt qo'yilsa qabul darhol yopiladi. Kun almashganda o'zi bekor bo'ladi."
+          },
+          "day_change_time": {
+            "type": "string",
+            "nullable": true,
+            "example": "00:00",
+            "description": "Kun almashish soati (Toshkent, `HH:MM`, sukut `00:00`) — ish kuni shu soatdan keyingi kun shu soatgacha. `null` — sukutga qaytarish. Hozircha faqat bugungi qabul oynasini belgilaydi (hisobot / pochta / smena kunlari 00:00 bo`yicha qoladi)."
+          }
+        }
       },
       "AiConfirmCustomerDto": {
         "type": "object",

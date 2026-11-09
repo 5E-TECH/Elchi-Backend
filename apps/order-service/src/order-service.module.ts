@@ -48,6 +48,8 @@ import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-his
 import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
+import { OrderSetting } from './entities/order-setting.entity';
+import { OrderIntakeService } from './intake/order-intake.service';
 
 import { PostMembershipService } from './post-membership/post-membership.service';
 import { OpenCustodyByDistrictService } from './custody/open-custody-by-district.service';
@@ -124,6 +126,7 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
       OrderBatchInboxMessage,
       MarketCancelledHandoverSession,
       OrderExtraCostApproval,
+      OrderSetting,
     ]),
   ],
   controllers: [OrderServiceController, CustomerSegmentController],
@@ -156,6 +159,8 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     PostMembershipService,
     // Tuman ko'chganda ochiq custody buyurtmalari (RMQ: order.open_custody_by_district).
     OpenCustodyByDistrictService,
+    // Bugungi qabul vaqti + kun almashish soati (order.intake.*, migratsiya 213).
+    OrderIntakeService,
   ],
 })
 export class OrderServiceModule {}

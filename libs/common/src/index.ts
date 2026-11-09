@@ -83,6 +83,7 @@ export * from './order/order-create-content';
 export * from './order/order-special-categories';
 export * from './order/order-tracking-notes';
 export * from './order/order-number';
+export * from './order/order-intake';
 export * from './pricing/delivery-pricing';
 export * from './pricing/sale-tariff';
 export * from './notification/notification-types';

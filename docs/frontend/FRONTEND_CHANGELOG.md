@@ -22,6 +22,31 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-09 — Bugungi qabul vaqti + kun almashish soati: `GET|PATCH /orders/intake-settings`, `409 ORDER_INTAKE_CLOSED`
+
+**Vazifa (ega 2026-11-08/09):** superadmin bugun uchun qabul vaqtini qo'yadi (masalan `10:00`) — shu vaqtdan **kun almashguncha** hech qanday yangi buyurtma yaratilmaydi. Kun almashish soati ham qo'lda sozlanadi (Trello #756; sukut `00:00`). Backend FE taklif qilgan kontraktni (`Elchi-Frontend` `entities/order-intake/model.ts`) to'liq bajaradi — FE kodi o'zgarishsiz yoqiladi.
+
+**Endpointlar:**
+- 🆕 [order] `GET /orders/intake-settings` — har qanday kirgan rol. `data`:
+  `{ cutoff_time: "10:00" | null, date: "YYYY-MM-DD", is_open, closes_at: ISO | null, reopens_at: ISO | null, day_change_time: "HH:MM", day_started_at: ISO, next_day_change_at: ISO }`.
+  `reopens_at` — cheklov bo'lsa keyingi kun almashishi, bo'lmasa `null`; `next_day_change_at` — har doim.
+- 🆕 [order] `PATCH /orders/intake-settings` — **faqat SUPERADMIN** (admin ham 403). Tana: `{ cutoff_time?: "HH:MM" | null, day_change_time?: "HH:MM" | null }`, kamida bittasi (aks holda 400). `cutoff_time: null` — cheklovni olib tashlash; `day_change_time: null` — `00:00`. Format qat'iy `HH:MM` (00:00–23:59), boshqasi 400. Javob — GET bilan bir xil.
+- ⚠️ Yaratish yopiq paytda: `POST /orders`, `POST /orders/external`, `POST /orders/telegram/bot/create`, `POST /orders/external/receive` → **409** `{ statusCode, message, code: "ORDER_INTAKE_CLOSED", reopens_at, cutoff_time }`. `POST /orders/ai-confirm` — HTTP 200, har buyurtma natijasida `code: "intake_closed"` va `reason` (qachon ochilishi bilan). Hamkor API (`POST /partner/shipments`) — inglizcha 409, xuddi shu `code`.
+
+**Qoidalar:**
+- Cheklov faqat **joriy ish kuni** uchun — kun almashganda o'zi bekor bo'ladi (qayta qo'yish shart emas). O'tgan vaqt qo'yilsa qabul darhol yopiladi. Cheklov = kun almashish soati (`00:00`) — butun kun yopiq.
+- Ish kuni = `day_change_time` dan keyingi kun shu soatgacha (Toshkent). `18:00` da: 9-noyabr 18:00 → 10-noyabr 18:00 bitta ish kuni (`date: 2026-11-10`), cheklov `10:00` — ertalabki 10:00 dan 18:00 gacha yopiq.
+- ⚠️ Kun almashish soati hozircha **faqat qabul oynasini** belgilaydi; hisobotlar, kunlik pochta kartalari, smena va moliya kunlari avvalgidek 00:00 bo'yicha.
+- Kun almashish soati o'zgarsa va ish kuni sanasi o'zgarmasa (masalan 08:00 da `00:00 → 06:00`), bugungi cheklov yangi oynaga ko'chadi; sana o'zgarsa (19:00 da `00:00 → 18:00` — yangi kun boshlangan) eski kunning cheklovi o'tmaydi.
+- Activity log: `order.intake_cutoff_changed`, `order.day_change_time_changed` (`/activity-logs/actions` da yorliqlari bilan).
+- Takroriy so'rov: hamkorning allaqachon yaratilgan shipment'i yopiq paytda ham o'sha natijani qaytaradi; yopiq paytda rad etilgan `Idempotency-Key` qabul ochilgach qayta ishlaydi (kalit «kuymaydi»).
+- Gateway'da alohida oldindan tekshiruv yo'q: yopiq kunda `POST /orders` mijoz kartasini (telefon bo'yicha) yaratishi/yangilashi mumkin, buyurtma esa yaratilmaydi — FE yaratish tugmasini yopiq paytda o'chirib qo'yadi.
+
+**Frontend action items:**
+- 🔧 «Bugungi qabul» tugmasi/oynasi hozir **superadmin va admin** uchun ko'rinadi (`OrderIntakeControl`) — endi faqat **superadmin** (admin uchun faqat holat belgisi, aks holda saqlashda 403).
+- 🟢 «Kun almashish soati» UI'si (Trello #756) hali yo'q — backend tayyor (`day_change_time` GET'da bor, PATCH qabul qiladi). Sozlamalar sahifasiga superadmin uchun `HH:MM` maydon qo'shish mumkin.
+- 🟢 `409 ORDER_INTAKE_CLOSED` va ai-confirm `intake_closed` — FE allaqachon kutadi (`isOrderIntakeClosedError`).
+
 ### 2026-11-07 — anKpzwxk davomi (#621 tekshiruvi): qaytarish so'rovi rad javobida manzil filial yo'q, migratsiya 211 yo'riqnomasi
 
 - ✏️ [logistics] `POST /post/:postId/orders/:orderId/return-request` — boshqa filial menejeriga 403 `return_request_not_allowed` da `details` endi faqat `{ post_id }` (manzil `branch_id` olib tashlandi; `PATCH /post/receive/:id` bilan bir xil — pochta qaysi filialga ketayotgani oshkor qilinmaydi). Kod va matn o'zgarmagan.

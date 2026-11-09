@@ -104,6 +104,8 @@ describe('ai-order.helpers', () => {
         'duplicate_in_batch',
         'duplicate_recent',
         'duplicate_in_progress',
+        // (2026-11-09) bugungi qabul yopiq — 409 ORDER_INTAKE_CLOSED.
+        'intake_closed',
         'validation_unavailable',
         'create_failed',
         'timeout_unknown',

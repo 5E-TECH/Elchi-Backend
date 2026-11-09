@@ -227,6 +227,9 @@ const NO_ROLES_WHITELIST: readonly string[] = [
   'GET /orders',
   'GET /orders/:id',
   'GET /orders/courier/orders',
+  // (2026-11-09) bugungi qabul holati — har rol o'qiydi (yaratish sahifasi);
+  // PATCH faqat SUPERADMIN (@Roles).
+  'GET /orders/intake-settings',
   'GET /orders/status-counts',
   'GET /scan/:token',
   'POST /scan/market-cancelled',
