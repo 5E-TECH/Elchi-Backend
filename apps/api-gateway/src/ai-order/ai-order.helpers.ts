@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { GatewayTimeoutException, HttpException } from '@nestjs/common';
 import { TimeoutError } from 'rxjs';
+import { readOrderIntakeClosed } from '@app/common';
 import {
   AI_VERIFY_REASON_TEXT,
   type AiVerifyFailureCode,
@@ -122,6 +123,7 @@ export type AiConfirmFailureCode =
   | 'duplicate_in_batch'
   | 'duplicate_recent'
   | 'duplicate_in_progress'
+  | 'intake_closed'
   | 'validation_unavailable'
   | 'create_failed'
   | 'timeout_unknown'
@@ -141,6 +143,8 @@ export const AI_CONFIRM_REASON_TEXT: Readonly<
     'Bu buyurtma 10 daqiqa ichida allaqachon yaratilgan — takror yaratilmadi',
   duplicate_in_progress:
     'Xuddi shu buyurtma hozir yaratilmoqda — “Yangi buyurtmalar”ni tekshiring, qayta yubormang',
+  intake_closed:
+    'Bugungi buyurtma qabuli yopilgan — buyurtmani kun almashgach yarating',
   validation_unavailable:
     'Tuman va mahsulotlarni tekshirib bo‘lmadi — buyurtma yaratilmadi, birozdan so‘ng qayta yuboring',
   create_failed: 'Buyurtma yaratilmadi',
@@ -282,6 +286,18 @@ export function toConfirmFailure(error: unknown): {
   // `RpcException({statusCode:409, code:'duplicate_recent', order_id})`.
   const duplicate = duplicateRecentOf(error);
   if (duplicate) return duplicate;
+
+  // Bugungi qabul yopiq (409 `ORDER_INTAKE_CLOSED`) — buyurtma ANIQ
+  // yaratilmagan; matnda qachon ochilishi bor (PII yo'q).
+  const intakeClosed = readOrderIntakeClosed(error);
+  if (intakeClosed) {
+    return {
+      code: 'intake_closed',
+      reason: intakeClosed.message
+        ? clip(intakeClosed.message)
+        : AI_CONFIRM_REASON_TEXT.intake_closed,
+    };
+  }
 
   if (isTimeoutError(error)) {
     return {

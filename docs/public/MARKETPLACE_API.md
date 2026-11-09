@@ -110,6 +110,7 @@ loglardan aniq so'rovni topamiz.
 | `403` | Hamkor o'chirilgan yoki IP ruxsat etilmagan | ❌ yo'q |
 | `404` | Topilmadi (market, posilka) | ❌ yo'q |
 | `409` | Ziddiyat — masalan yetkazilgan posilkani bekor qilish | ❌ yo'q |
+| `409` `ORDER_INTAKE_CLOSED` | Elchi bugungi qabulni yopgan (§5.2) | ✅ ha — `reopens_at` dan keyin |
 | `429` | Rate limitdan oshdi | ✅ ha, kutib |
 | `5xx` | Bizning tomonimizdagi xato | ✅ ha, backoff bilan |
 
@@ -471,6 +472,27 @@ YARATILMAYDI**:
 > **Timeout bo'lsa qayta yuboring.** Posilka yaratish bir necha bosqichdan
 > iboratlashi mumkin. Javob kelmasa ayni `external_order_id` bilan qayta
 > yuborish **xavfsiz** — dublikat bo'lmaydi.
+
+#### Bugungi qabul yopiq — `409 ORDER_INTAKE_CLOSED`
+
+Elchi ba'zi kunlari qabulni belgilangan soatda yopadi (masalan 10:00). Shundan
+keyin **ish kuni almashguncha** yangi posilka qabul qilinmaydi:
+
+```json
+{
+  "statusCode": 409,
+  "message": "Order intake is closed for today (cutoff 10:00 Asia/Tashkent). New shipments are accepted again from 2026-11-09T19:00:00.000Z.",
+  "code": "ORDER_INTAKE_CLOSED",
+  "reopens_at": "2026-11-09T19:00:00.000Z",
+  "cutoff_time": "10:00",
+  "trace_id": "…"
+}
+```
+
+Posilka **yaratilmagan**. `reopens_at` dan keyin ayni
+`external_order_id` bilan qayta yuboring — oldingi rad javobi kalitni band
+qilmaydi. Allaqachon yaratilgan posilkaning takroriy `POST` i yopiq paytda
+ham `200 idempotent: true` qaytaradi.
 
 ### 5.3 Statusni so'rash
 

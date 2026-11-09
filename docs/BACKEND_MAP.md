@@ -55,7 +55,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 |---|---|---|---|
 | **api-gateway** | — (no DB) | — | HTTP→RMQ proxy, auth guards, RBAC, throttling, Swagger, socket.io, webhooks, excel/printer |
 | **identity-service** | `identity_schema` | `user`, `app_settings` | Users of every role, auth (login/refresh/logout/validate), profiles, markets (+telegram token), couriers/managers/registrators/admins/customers |
-| **order-service** | `order_schema` | `order`, `order_item`, `order_tracking`, `order_settlement`, `order_custody_event`, `branch` (mirror), `branch_transfer_batch(+item,+history)`, `order_batch_inbox_message` | The core. Order lifecycle, sell/cancel/return/rollback, per-order FIFO settlement, transfer batches, order analytics source |
+| **order-service** | `order_schema` | `order`, `order_item`, `order_tracking`, `order_settlement`, `order_custody_event`, `branch` (mirror), `branch_transfer_batch(+item,+history)`, `order_batch_inbox_message`, `order_settings` (intake cutoff / day change) | The core. Order lifecycle, sell/cancel/return/rollback, per-order FIFO settlement, transfer batches, order analytics source |
 | **catalog-service** | `catalog_schema` | `product`, `warehouses`, `warehouse_stock`, `stock_movements`, `stock_reservations` | Market product catalog + **temporary warehouse module** (hY7uacJu: regional-branch stock, stock-in/inventory, order reserve/out/release/return RPCs) |
 | **logistics-service** | `logistics_schema` | `region`, `district`, `post`, `delivery_tariff`, `delivery_pricing_settings` | Geo (regions/districts, SATO codes) + **posts** (courier delivery batches): create/send/receive/reassign/cancel/return-requests + **delivery pricing engine** (DAqXPeSy: versioned tariffs, formula settings, `logistics.delivery.quote`) |
 | **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history`, `payment_corrections` (T6), `cashbox_receipts` (T3) | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
@@ -446,6 +446,33 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     `enrichOrders` adds `warehouse: { id, name, branch_id } | null`
     (`catalog.warehouse.find_by_ids`; catalog down → `{ id, name: null,
     branch_id: null }`).
+- **Bugungi qabul vaqti + kun almashish soati (2026-11-09, migration
+  `1716000000213`, Trello #756)** — `intake/order-intake.service.ts`
+  (`OrderIntakeService`), pure rules in `libs/common/src/order/order-intake.ts`.
+  Table `order_schema.order_settings` (key/value jsonb, `finance_settings`
+  shape): `intake.day_change_time` `{time:'HH:MM'}` (none → `00:00`) and
+  `intake.cutoff` `{window_start, date, cutoff_time}`. Work day = Tashkent
+  `day_change_time` → next `day_change_time` (24 h; `date` = calendar day of
+  start + 12 h). A cutoff applies only while `window_start` equals the current
+  window start, so it expires by itself at the day change. RPCs:
+  `order.intake.state`, `order.intake.update` (SUPERADMIN only, under
+  `pg_advisory_xact_lock`; a day-change edit re-anchors today's cutoff only if
+  the work-day `date` is unchanged; audit verbs `order.intake_cutoff_changed`,
+  `order.day_change_time_changed`). Gate: the controller calls `assertOpen`
+  for `order.create`, `order.external.create`, `order.receive_external`
+  BEFORE `executeIdempotent` (a rejected partner `request_id` must not be
+  cached as `failed`) → 409 `ORDER_INTAKE_CLOSED` + `reopens_at` /
+  `cutoff_time` (in `PUBLIC_ERROR_CODES`); settings unreadable (DB error) →
+  the gate FAILS OPEN with an error log (creation never stops because of it).
+  Gateway `GET|PATCH
+  /orders/intake-settings` (before `:id`; GET any role, PATCH
+  `@Roles(SUPERADMIN)`); ai-confirm maps the 409 to `intake_closed`. No
+  gateway pre-check: a closed-day POST /orders may still upsert the customer
+  card by phone (same as any other order.create failure). integration
+  `createPartnerShipment` → `requestPartnerOrderCreate` turns the 409 into an
+  English 409 (it used to be swallowed into a 502). The day-change hour drives
+  ONLY this intake window — reports, per-day posts, shifts and finance days
+  stay on Tashkent 00:00.
 - **Heavy cross-service caller:** branch, finance, identity, catalog, logistics,
   integration, file. This is where most money/state orchestration lives.
 
@@ -1295,6 +1322,11 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   (still stripped for non-admins); without it the old rule holds
   (REGISTRATOR / MARKET_OPERATOR → requester). `/orders/external`, bot, AI
   and partner paths never send it.
+- **Intake cutoff (2026-11-09):** while today's intake is closed
+  (`order.intake.*`, order-service «Bugungi qabul vaqti» above) every create
+  path — POST /orders, /orders/external, bot, ai-confirm, external import, CRM
+  webhook, partner API — gets 409 `ORDER_INTAKE_CLOSED` until the next day
+  change. Partly-sell children (internal insert) are not affected.
 - **Edit** (`PATCH /orders/:id`, `/:id/full` → `order.update_from_api`):
   SA/ADMIN/REGISTRATOR only. `status`, `market_id`, `to_be_paid`,
   `paid_amount` → 400 for everyone, SA included (status changes only through

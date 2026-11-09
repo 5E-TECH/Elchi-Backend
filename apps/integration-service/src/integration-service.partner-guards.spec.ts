@@ -35,6 +35,14 @@ function svcWith(over: Record<string, unknown> = {}) {
     },
     over,
   );
+  // (2026-11-09) hamkor `order.create` — `requestPartnerOrderCreate` (409
+  // ORDER_INTAKE_CLOSED'ni o'tkazadi, qolgani `rmqRequest` bilan AYNI). Bu
+  // spec'lar `order.create` ni `rmqRequest` mock'i orqali kuzatadi — o'shanga
+  // yo'naltiramiz.
+  if (!('requestPartnerOrderCreate' in over)) {
+    svc.requestPartnerOrderCreate = (...args: unknown[]) =>
+      (svc.rmqRequest as (...a: unknown[]) => unknown)(...args);
+  }
   return svc;
 }
 

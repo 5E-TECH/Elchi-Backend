@@ -5,6 +5,7 @@ import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
+import { ORDER_INTAKE_CLOSED } from '../order/order-intake';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -127,6 +128,9 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
   // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
   [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
+  // (2026-11-09) bugungi buyurtma qabuli yopiq — 409; `reopens_at` — kun
+  // almashadigan lahza (ISO), `cutoff_time` — qo'yilgan qabul vaqti (HH:MM).
+  [ORDER_INTAKE_CLOSED]: ['reopens_at', 'cutoff_time'],
   // (T1 K1 s6xY4f5C) hamkor sotuvchisi / market allaqachon bog'langan — 409.
   [PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN]: [],
   [PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN]: [],

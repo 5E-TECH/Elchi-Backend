@@ -140,6 +140,20 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'tag',
     'amber',
   ),
+  // (2026-11-09) superadmin bugungi qabul vaqtini qo'ydi / olib tashladi.
+  'order.intake_cutoff_changed': entry(
+    "Bugungi qabul vaqti o'zgardi",
+    'order',
+    'clock',
+    'amber',
+  ),
+  // (2026-11-09, Trello #756) superadmin kun almashish soatini o'zgartirdi.
+  'order.day_change_time_changed': entry(
+    "Kun almashish soati o'zgardi",
+    'order',
+    'clock',
+    'amber',
+  ),
 
   // ---- moliya ----
   'finance.manual_income': entry("Qo'lda kirim", 'finance', 'plus', 'green'),

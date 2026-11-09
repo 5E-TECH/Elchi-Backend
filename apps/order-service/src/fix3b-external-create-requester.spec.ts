@@ -135,8 +135,14 @@ describe('fix3b — order.external.create handleri so`rovchini uzatadi', () => {
     );
     const dto = { market_id: '501', customer_id: '801' };
 
+    // (2026-11-09) bugungi qabul darvozasi — bu testda ochiq (o'tkazib yuboradi).
+    const guardOrderIntake = (
+      _ctx: RmqContext,
+      run: () => Promise<unknown>,
+    ) => run();
+
     await handler.call(
-      { executeAndAck, lifecycleService },
+      { executeAndAck, lifecycleService, guardOrderIntake },
       { dto, requester: REGISTRATOR },
       {} as RmqContext,
     );

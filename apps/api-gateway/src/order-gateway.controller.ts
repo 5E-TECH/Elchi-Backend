@@ -124,6 +124,10 @@ import {
 } from './dto/order.swagger.dto';
 import { SetOrderSpecialCategoriesRequestDto } from './order-create/order-special-categories';
 import {
+  ORDER_INTAKE_STATE_DESCRIPTION,
+  UpdateOrderIntakeSettingsRequestDto,
+} from './order-create/order-intake';
+import {
   AI_IMAGE_RAW_MAX_BYTES,
   AI_IMAGES_TOTAL_MAX_BYTES,
   AI_MAX_IMAGES,
@@ -141,6 +145,7 @@ import {
   matchesDeclaredType,
   normalizePersonName,
   normalizeUzPhone,
+  ORDER_INTAKE_RPC,
   parseUzPhoneSearch,
   recordReceiveByScanOutcome,
   requestContext,
@@ -3373,6 +3378,73 @@ export class OrderGatewayController {
       enabled: this.isAiOrderEnabled(),
       state: this.aiStatus?.getState() ?? 'unknown',
     });
+  }
+
+  /**
+   * BUGUNGI QABUL VAQTI (ega 2026-11-09) — holat. Har qanday kirgan rol
+   * (yaratish sahifasi va «Qabul va yaratish» sarlavhasi).
+   *
+   * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan — aks holda 'intake-settings'
+   * buyurtma ID'si deb ushlanadi.
+   */
+  @Get('intake-settings')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Bugungi buyurtma qabuli holati (qabul vaqti, kun almashish soati)',
+    description:
+      'Qabul vaqti (`cutoff_time`) qo`yilgan bo`lsa, `closes_at` dan kun almashguncha (`reopens_at`) ' +
+      'hech qanday yangi buyurtma yaratilmaydi: POST /orders, /orders/external, /orders/telegram/bot/create, ' +
+      'ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` (`reopens_at`, `cutoff_time`). ' +
+      'Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.',
+  })
+  @ApiOkResponse({ description: ORDER_INTAKE_STATE_DESCRIPTION })
+  getIntakeSettings() {
+    return this.sendOrderWithTimeout({ cmd: ORDER_INTAKE_RPC.STATE }, {});
+  }
+
+  /**
+   * Bugungi qabul vaqti va kun almashish soatini o'zgartirish — FAQAT
+   * SUPERADMIN (ega 2026-11-09). order-service ham rolni qayta tekshiradi.
+   *
+   * ⚠️ `@Patch(':id')` dan OLDIN e'lon qilingan.
+   */
+  @Patch('intake-settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Bugungi qabul vaqti / kun almashish soatini o'zgartirish (SUPERADMIN)",
+    description:
+      '`cutoff_time` — faqat JORIY ish kuni uchun (kun almashganda o`zi bekor bo`ladi), `null` — cheklovni ' +
+      'olib tashlash. `day_change_time` — doimiy kun almashish soati (`null` — 00:00). Kamida bittasi kerak ' +
+      '(aks holda 400). Javob — GET bilan bir xil. Activity log: `order.intake_cutoff_changed`, ' +
+      '`order.day_change_time_changed`.',
+  })
+  @ApiBody({ type: UpdateOrderIntakeSettingsRequestDto })
+  @ApiOkResponse({ description: ORDER_INTAKE_STATE_DESCRIPTION })
+  updateIntakeSettings(
+    @Body() dto: UpdateOrderIntakeSettingsRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendOrderWithTimeout(
+      { cmd: ORDER_INTAKE_RPC.UPDATE },
+      {
+        // `undefined` — maydon yuborilmagan (o'zgarmaydi); `null` — tozalash.
+        ...(dto?.cutoff_time !== undefined
+          ? { cutoff_time: dto.cutoff_time }
+          : {}),
+        ...(dto?.day_change_time !== undefined
+          ? { day_change_time: dto.day_change_time }
+          : {}),
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
+      },
+    );
   }
 
   /**

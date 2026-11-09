@@ -40,6 +40,9 @@ import {
   resolvePartnerMoneyFields,
   tashkentDayRange,
   PARTNER_MARKET_ERROR_CODES,
+  ORDER_INTAKE_CLOSED,
+  orderIntakeClosedPartnerMessage,
+  readOrderIntakeClosed,
 } from '@app/common';
 import {
   ExternalIntegration,
@@ -1924,7 +1927,9 @@ export class IntegrationServiceService {
 
     // 3) order.create (to_be_paid = cod_amount; source=external; external_id)
     const totalPrice = Number(dto.subtotal ?? cod);
-    const orderRes = await this.rmqRequest<Record<string, any>>(
+    // Bugungi qabul yopiq (2026-11-09) — `requestPartnerOrderCreate` 409
+    // `ORDER_INTAKE_CLOSED` ni inglizcha matn bilan hamkorga o'tkazadi.
+    const orderRes = await this.requestPartnerOrderCreate<Record<string, any>>(
       this.orderClient,
       { cmd: 'order.create' },
       {
@@ -4693,6 +4698,38 @@ export class IntegrationServiceService {
 
   private clearTokenCache(integrationId: string): void {
     this.tokenCache.delete(integrationId);
+  }
+
+  /**
+   * `rmqRequest` bilan AYNI (har qanday xato / timeout → `null`, chaqiruvchi
+   * avvalgidek 502 qaytaradi), bitta istisno — bugungi qabul yopiq (2026-11-09):
+   * order-service 409 `ORDER_INTAKE_CLOSED` hamkorga INGLIZCHA matn,
+   * `reopens_at` (qachon qayta urinish mumkin) va `cutoff_time` bilan
+   * o'tkaziladi. order-service darvozasi idempotency'dan OLDIN — kalit band
+   * qilinmaydi, `reopens_at` dan keyin ayni `external_order_id` ishlaydi.
+   */
+  private async requestPartnerOrderCreate<T>(
+    client: ClientProxy,
+    pattern: { cmd: string },
+    payload: Record<string, any>,
+    ttlMs = 5000,
+  ): Promise<T | null> {
+    try {
+      return await firstValueFrom(
+        client.send(pattern, payload).pipe(timeout(ttlMs)),
+      );
+    } catch (error) {
+      const closed = readOrderIntakeClosed(error);
+      if (!closed) return null;
+      throw new RpcException({
+        statusCode: 409,
+        message: orderIntakeClosedPartnerMessage(closed),
+        code: ORDER_INTAKE_CLOSED,
+        reopens_at: closed.reopens_at,
+        cutoff_time: closed.cutoff_time,
+        data: null,
+      });
+    }
   }
 
   private async rmqRequest<T>(

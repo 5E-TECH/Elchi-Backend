@@ -15,6 +15,7 @@ import {
   ActivityLogQuery,
 } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
+import { successRes } from '../../../libs/common/helpers/response';
 import {
   OrderServiceService,
   type GeoReassignInput,
@@ -42,6 +43,10 @@ import {
   runWithAiSignature,
   sanitizeAiAuditMetadata,
 } from './ai/ai-create-dedupe';
+import {
+  OrderIntakeService,
+  type OrderIntakeUpdateInput,
+} from './intake/order-intake.service';
 
 /**
  * ai-confirm (gateway) har buyurtma uchun DETERMINISTIK `request_id` yuboradi:
@@ -150,7 +155,42 @@ export class OrderServiceController {
     // Ixtiyoriy: eski spec'lar controllerni pozitsion argumentlar bilan quradi.
     @Optional()
     private readonly openCustodyByDistrict?: OpenCustodyByDistrictService,
+    // Bugungi qabul vaqti. Ixtiyoriy: eski spec'lar controllerni pozitsion
+    // argumentlar bilan quradi (servis yo'q — darvoza o'chiq).
+    @Optional()
+    private readonly orderIntake?: OrderIntakeService,
   ) {}
+
+  /**
+   * Yangi buyurtma yaratadigan handlerlar uchun darvoza: bugungi qabul yopiq
+   * bo'lsa 409 `ORDER_INTAKE_CLOSED`, handler (va idempotency) ISHLAMAYDI.
+   *
+   * ⚠️ IDEMPOTENCY'DAN OLDIN: `executeIdempotent` ichida rad etilsa kalit
+   * `failed` bo'lib keshlanardi — hamkorning deterministik `request_id` si
+   * (`reclaimFailed` yo'q) qabul ochilgandan keyin ham shu xatoni qaytarardi.
+   * Rad javobi `executeAndAck` orqali (ack/nack odatdagidek).
+   */
+  private async guardOrderIntake<T>(
+    context: RmqContext,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.orderIntake) return run();
+    let rejection: Error | null = null;
+    try {
+      await this.orderIntake.assertOpen();
+    } catch (error) {
+      // 409 — RpcException; DB xatosi — oddiy Error (executeAndAck nack qiladi).
+      rejection =
+        error instanceof Error ? error : new Error(String(error ?? 'unknown'));
+    }
+    if (rejection) {
+      const thrown = rejection;
+      return this.executeAndAck(context, () => {
+        throw thrown;
+      });
+    }
+    return run();
+  }
 
   private executeAndAck<T>(
     context: RmqContext,
@@ -339,30 +379,64 @@ export class OrderServiceController {
       Object.keys(lifecycleOpts).length > 0
         ? this.lifecycleService.create(data.dto, data.requester, lifecycleOpts)
         : this.lifecycleService.create(data.dto, data.requester);
-    return executeIdempotent(
-      this.rmqService,
-      this.idempotencyService,
-      context,
-      {
-        requestId,
-        pattern: 'order.create',
-        ...(isStable
-          ? AI_STABLE_CREATE_OPTIONS
-          : isAiRequest
-            ? AI_DEDUPE_CREATE_OPTIONS
-            : isClientKey
-              ? CLIENT_KEY_CREATE_OPTIONS
-              : {}),
-      },
-      isStable
-        ? () =>
-            runWithAiSignature(
-              this.idempotencyService,
-              data.ai_signature,
-              create,
-            )
-        : create,
+    // Bugungi qabul yopiq — idempotency kaliti egallanmasdan 409.
+    return this.guardOrderIntake(context, () =>
+      executeIdempotent(
+        this.rmqService,
+        this.idempotencyService,
+        context,
+        {
+          requestId,
+          pattern: 'order.create',
+          ...(isStable
+            ? AI_STABLE_CREATE_OPTIONS
+            : isAiRequest
+              ? AI_DEDUPE_CREATE_OPTIONS
+              : isClientKey
+                ? CLIENT_KEY_CREATE_OPTIONS
+                : {}),
+        },
+        isStable
+          ? () =>
+              runWithAiSignature(
+                this.idempotencyService,
+                data.ai_signature,
+                create,
+              )
+          : create,
+      ),
     );
+  }
+
+  /** Bugungi qabul holati (`GET /orders/intake-settings`, har rol). */
+  @MessagePattern({ cmd: 'order.intake.state' })
+  intakeState(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, async () => {
+      if (!this.orderIntake) {
+        throw new RpcException({
+          statusCode: 501,
+          message: 'Qabul sozlamalari mavjud emas',
+        });
+      }
+      return successRes(await this.orderIntake.getState());
+    });
+  }
+
+  /** `PATCH /orders/intake-settings` — faqat SUPERADMIN. */
+  @MessagePattern({ cmd: 'order.intake.update' })
+  intakeUpdate(
+    @Payload() data: OrderIntakeUpdateInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () => {
+      if (!this.orderIntake) {
+        throw new RpcException({
+          statusCode: 501,
+          message: 'Qabul sozlamalari mavjud emas',
+        });
+      }
+      return successRes(await this.orderIntake.update(data ?? {}));
+    });
   }
 
   /**
@@ -1493,8 +1567,12 @@ export class OrderServiceController {
     @Payload() data: { integration_id: string; orders: any[] },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.lifecycleService.receiveExternalOrders(data),
+    // Tashqi sayt importi / CRM webhook — yangi buyurtma; qabul yopiq — 409
+    // (butun partiya, yarim yo'lda uzilmaydi).
+    return this.guardOrderIntake(context, () =>
+      this.executeAndAck(context, () =>
+        this.lifecycleService.receiveExternalOrders(data),
+      ),
     );
   }
 
@@ -1579,8 +1657,10 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.lifecycleService.createExternalOrder(data.dto, data.requester),
+    return this.guardOrderIntake(context, () =>
+      this.executeAndAck(context, () =>
+        this.lifecycleService.createExternalOrder(data.dto, data.requester),
+      ),
     );
   }
 
