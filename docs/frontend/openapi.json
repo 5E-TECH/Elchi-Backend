@@ -4679,6 +4679,119 @@
         ]
       }
     },
+    "/orders/markets/cancelled/handovers": {
+      "get": {
+        "description": "One card = one «Marketga jo'natish» press at HQ (POST /orders/markets/:marketId/cancelled/handover): orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers (POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day (Tashkent YYYY-MM-DD), handed_by: { id, name } | null, method: 'qr'|'pin'|'no_qr'|'manual'|null, manual_count, orders_count, total_price_sum }], total, page, limit, totals: { batches, orders, amount } }` (+ pagination meta). `method` — the non-manual method of the batch; `manual_count` — orders confirmed manually (broken label). 503 while the HQ branch id is unknown.",
+        "operationId": "OrderGatewayController_findCancelledHandoverBatches",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Market nomi yoki telefoni bo‘yicha (qism)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "description": "Topshirish sanasi boshi (YYYY-MM-DD, Toshkent kuni)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "description": "Topshirish sanasi oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 1,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 24,
+              "enum": [
+                12,
+                24,
+                48
+              ],
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "HQ cancelled → market handover batches («Topshirilgan» cards)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
+        ]
+      }
+    },
+    "/orders/markets/cancelled/handovers/{batchId}": {
+      "get": {
+        "description": "`batchId` — the `id` from GET /orders/markets/cancelled/handovers. Response: `{ batch, data, total }` (`batch` — the same card object; `data` — orders like GET /orders rows, with `cancel_return`). Malformed id — 400; unknown or not an HQ batch — 404. Same roles as the list.",
+        "operationId": "OrderGatewayController_findCancelledHandoverBatch",
+        "parameters": [
+          {
+            "name": "batchId",
+            "required": true,
+            "in": "path",
+            "description": "market_id_handedAtMicros_handedBy",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One HQ handover batch with its orders",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
+        ]
+      }
+    },
     "/orders/branch/orders": {
       "get": {
         "operationId": "OrderGatewayController_findBranchCancelledOrders",

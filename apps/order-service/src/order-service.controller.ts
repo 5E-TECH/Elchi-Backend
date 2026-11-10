@@ -1813,6 +1813,43 @@ export class OrderServiceController {
     );
   }
 
+  /** «Bekor qilinganlar → Topshirilgan» (HQ) — «Marketga jo'natish» partiyalari (gateway: SA/admin/HQ registratori). */
+  @MessagePattern({ cmd: 'order.cancelled_handover_batches.find' })
+  findCancelledHandoverBatches(
+    @Payload()
+    data: {
+      start_day?: string;
+      end_day?: string;
+      search?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findCancelledHandoverBatches({
+        start_day: data?.start_day,
+        end_day: data?.end_day,
+        search: data?.search,
+        page: data?.page,
+        limit: data?.limit,
+      }),
+    );
+  }
+
+  /** Bitta partiya buyurtmalari (`batch_id` — ro'yxat qatoridagi `id`). */
+  @MessagePattern({ cmd: 'order.cancelled_handover_batches.find_one' })
+  findCancelledHandoverBatch(
+    @Payload() data: { batch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findCancelledHandoverBatch(
+        String(data?.batch_id ?? ''),
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.find_cancelled_by_market_enriched' })
   findCancelledByMarketEnriched(
     @Payload()

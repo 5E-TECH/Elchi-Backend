@@ -556,6 +556,9 @@ export const SETTLEMENT_LUMP_SUM_GONE_MESSAGE =
 
 /** Umumiy ro'yxatlar uchun ruxsat etilgan `limit` qiymatlari. */
 const DEFAULT_ALLOWED_LIMITS = [10, 25, 50, 100] as const;
+/** «Topshirilgan» kartalari sahifasi (3 ustunli to'r) — order-service `HANDOVER_BATCH_PAGE_LIMITS` bilan bir xil. */
+const HANDOVER_BATCH_PAGE_LIMITS = [12, 24, 48] as const;
+const HANDOVER_BATCH_DEFAULT_LIMIT = 24;
 /**
  * `GET /orders/external` — kiruvchi posilkalar skan ekrani (PEc4BjVX):
  * frontend butun qopni `limit=200` bilan oladi; ilgari bu 400 qaytarib,
@@ -6040,6 +6043,134 @@ export class OrderGatewayController {
         },
       ),
     );
+  }
+
+  /**
+   * «QABUL VA YARATISH → BEKOR QILINGANLAR → TOPSHIRILGAN» (HQ) — «Marketga jo'natish» partiyalari.
+   * ⚠️ `@Get(':id')` dan OLDIN (bu yerda 3 va 4 segmentli yo'llar — `markets/:marketId/cancelled` bilan to'qnashmaydi).
+   */
+  @Get('markets/cancelled/handovers')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'HQ cancelled → market handover batches («Topshirilgan» cards)',
+    description:
+      "One card = one «Marketga jo'natish» press at HQ (POST /orders/markets/:marketId/cancelled/handover): " +
+      'orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers ' +
+      '(POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ ' +
+      'registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). ' +
+      'Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day ' +
+      "(Tashkent YYYY-MM-DD), handed_by: { id, name } | null, method: 'qr'|'pin'|'no_qr'|'manual'|null, " +
+      'manual_count, orders_count, total_price_sum }], total, page, limit, totals: { batches, orders, amount } }` ' +
+      '(+ pagination meta). `method` — the non-manual method of the batch; `manual_count` — orders confirmed ' +
+      'manually (broken label). 503 while the HQ branch id is unknown.',
+  })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Market nomi yoki telefoni bo‘yicha (qism)',
+  })
+  @ApiQuery({
+    name: 'start_day',
+    required: false,
+    type: String,
+    description: 'Topshirish sanasi boshi (YYYY-MM-DD, Toshkent kuni)',
+  })
+  @ApiQuery({
+    name: 'end_day',
+    required: false,
+    type: String,
+    description:
+      'Topshirish sanasi oxiri (YYYY-MM-DD, Toshkent kuni, kun oxirigacha)',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    schema: { default: 1, minimum: 1 },
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [...HANDOVER_BATCH_PAGE_LIMITS],
+    schema: { default: HANDOVER_BATCH_DEFAULT_LIMIT },
+  })
+  async findCancelledHandoverBatches(
+    @Req() req: { user: JwtUser },
+    @Query('search') search?: string,
+    @Query('start_day') startDay?: string,
+    @Query('end_day') endDay?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    await this.assertHqHandoverViewer(req?.user);
+    const pagination = this.parsePaginationQuery(
+      page,
+      limit ?? String(HANDOVER_BATCH_DEFAULT_LIMIT),
+      HANDOVER_BATCH_PAGE_LIMITS,
+    );
+    const response = (await this.sendOrderWithTimeout(
+      { cmd: 'order.cancelled_handover_batches.find' },
+      {
+        ...this.marketListFilters(search, startDay, endDay),
+        page: pagination.page,
+        limit: pagination.limit,
+      },
+    )) as { total?: number } & Record<string, unknown>;
+    return {
+      ...response,
+      ...this.buildPaginationMeta(
+        Number(response?.total ?? 0),
+        pagination.page,
+        pagination.limit,
+      ),
+    };
+  }
+
+  @Get('markets/cancelled/handovers/:batchId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'One HQ handover batch with its orders',
+    description:
+      '`batchId` — the `id` from GET /orders/markets/cancelled/handovers. Response: `{ batch, data, total }` ' +
+      '(`batch` — the same card object; `data` — orders like GET /orders rows, with `cancel_return`). ' +
+      'Malformed id — 400; unknown or not an HQ batch — 404. Same roles as the list.',
+  })
+  @ApiParam({
+    name: 'batchId',
+    description: 'market_id_handedAtMicros_handedBy',
+  })
+  async findCancelledHandoverBatch(
+    @Param('batchId') batchId: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    await this.assertHqHandoverViewer(req?.user);
+    const response: unknown = await this.sendOrderWithTimeout(
+      { cmd: 'order.cancelled_handover_batches.find_one' },
+      { batch_id: String(batchId ?? '').trim() },
+    );
+    return projectOrderPayloadForRoles(req?.user?.roles ?? [], response);
+  }
+
+  /**
+   * «Topshirilgan» faqat HQ ko'radi: SA/admin — doim; registrator — faqat HQ filialiniki (FE
+   * `canHandoverCancelledToMarket` bilan bir xil). Filial registratori — 403.
+   */
+  private async assertHqHandoverViewer(user: JwtUser | undefined) {
+    const roles = this.normalizeRoles(user?.roles ?? []);
+    if (roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN)) {
+      return;
+    }
+    const assignment = user ? await this.resolveBranchAssignment(user) : null;
+    if (!(await this.isHqRegistrator(roles, assignment))) {
+      throw new ForbiddenException(
+        'Topshirilganlar faqat HQ xodimlari uchun (superadmin, admin, HQ registratori)',
+      );
+    }
   }
 
   @Get('branch/orders')

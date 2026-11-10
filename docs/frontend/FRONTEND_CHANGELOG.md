@@ -22,6 +22,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-10 — Qabul va yaratish: «Bekor qilinganlar → Topshirilgan» — `GET /orders/markets/cancelled/handovers`
+
+Deploy: api-gateway + order-service. Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-11-10] 🆕 [gateway, order] — **`GET /orders/markets/cancelled/handovers`** — HQ'da «Marketga jo'natish» bilan
+  marketga berilgan bekorlar, **bitta bosish = bitta karta** (bir xil `market_id` + `market_handover_at` +
+  `market_handover_by`), eng yangisi birinchi. Filialda bittalab «Marketga qaytarish»
+  (`POST /orders/:id/mark-returned-to-market`) **kirmaydi** (ega qarori: faqat HQ'dagilar). Rollar: superadmin,
+  admin, **HQ registratori** (filial registratori — 403). Query: `search` (market nomi / telefoni), `start_day`,
+  `end_day` (topshirish vaqti, Toshkent kunlari), `page`, `limit` (12 / 24 / 48, sukut 24). Javob:
+  `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day, handed_by: { id, name } | null,
+  method, manual_count, orders_count, total_price_sum }], total, page, limit, totals: { batches, orders, amount },
+  total_pages, has_next, … }`. `day` — Toshkent kuni (kun sarlavhasi uchun, qurilma soatidan emas). `method` —
+  partiyaning qo'lda bo'lmagan usuli (`qr` / `pin` / `no_qr`; hammasi qo'lda — `manual`; eski partiyada `null`),
+  `manual_count` — QR buzilgani uchun qo'lda tasdiqlanganlar. HQ filiali aniqlanmasa — 503.
+- [2026-11-10] 🆕 [gateway, order] — **`GET /orders/markets/cancelled/handovers/:batchId`** (`batchId` — ro'yxat
+  qatoridagi `id`) → `{ batch, data, total }`: `batch` — o'sha karta, `data` — buyurtmalar (`GET /orders` qatori kabi,
+  `cancel_return` bilan). Buzuq id — 400, topilmasa yoki HQ partiyasi emas — 404.
+- 🔧 FE: «Qabul va yaratish → Bekor qilinganlar» ichida ikki teng tab: «Kutilmoqda» (avvalgi `GET
+  /orders/markets/cancelled` ro'yxati) va «Topshirilgan» (shu kartalar, kun bo'yicha guruhlangan, sukut — joriy oy).
+  Karta → `/new-orders/cancelled/handovers/:batchId`. «Marketga jo'natish» dan keyin `["orders"]` kaliti yangilanadi
+  — yangi karta o'zi chiqadi.
+
 ### 2026-11-10 — Buyurtmalar: «Marketga topshirildi» tabi soni — `GET /orders/status-counts` `data.returned_to_market`
 
 Deploy: api-gateway + order-service. Migratsiya yo'q. `openapi.json` yangilandi.

@@ -91,6 +91,15 @@ import {
   type CancelReturnContext,
   type CancelReturnStage,
 } from './cancel-return/cancel-return';
+import {
+  HANDOVER_BATCH_DEFAULT_LIMIT,
+  HANDOVER_BATCH_SESSION_TOLERANCE_SQL,
+  parseHandoverBatchId,
+  toHandoverBatchView,
+  type HandoverBatchRawRow,
+  type HandoverBatchView,
+} from './cancel-return/handover-batches';
+import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
 const CUSTOMER_SEARCH_LIMIT = 1000;
@@ -3747,6 +3756,346 @@ export class OrderServiceService {
         ? { truncated: true }
         : {}),
     };
+  }
+
+  /**
+   * «BEKOR QILINGANLAR → TOPSHIRILGAN» (HQ) — «Marketga jo'natish» partiyalari (bitta bosish = bitta karta), eng
+   * yangisi birinchi. Doira (`handoverBatchBaseQuery`): HQ'da ommaviy yo'l bilan marketga berilgan bekorlar.
+   * `start_day`/`end_day` — topshirish vaqti bo'yicha Toshkent kunlari; `search` — market nomi yoki telefoni.
+   * Javob: `{ data: HandoverBatchView[], total, page, limit, totals: { batches, orders, amount } }` (`totals` —
+   * butun filtr bo'yicha, sahifadan qat'i nazar).
+   */
+  async findCancelledHandoverBatches(options: {
+    start_day?: string;
+    end_day?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, Math.floor(Number(options.page) || 1));
+    const limit = Math.max(
+      1,
+      Math.floor(Number(options.limit) || HANDOVER_BATCH_DEFAULT_LIMIT),
+    );
+    const empty = {
+      data: [] as HandoverBatchView[],
+      total: 0,
+      page,
+      limit,
+      totals: { batches: 0, orders: 0, amount: 0 },
+    };
+
+    const range = tashkentDayRange(options.start_day, options.end_day);
+    if (
+      (range.start && Number.isNaN(range.start.getTime())) ||
+      (range.end && Number.isNaN(range.end.getTime()))
+    ) {
+      this.badRequest("start_day / end_day noto'g'ri (YYYY-MM-DD)");
+    }
+    const hqBranchId = await this.requireHandoverHqBranchId();
+    const base = this.handoverBatchBaseQuery(hqBranchId);
+    if (range.start) {
+      base.andWhere('o.market_handover_at >= :hbStart', {
+        hbStart: range.start,
+      });
+    }
+    if (range.end) {
+      base.andWhere('o.market_handover_at <= :hbEnd', { hbEnd: range.end });
+    }
+
+    let marketRows: Array<{ market_id: string }>;
+    try {
+      marketRows = await base
+        .clone()
+        .select('o.market_id', 'market_id')
+        .distinct(true)
+        .getRawMany();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    const marketIds = marketRows
+      .map((row) => String(row.market_id ?? '').trim())
+      .filter(Boolean);
+    if (!marketIds.length) return empty;
+
+    const markets = await this.loadMarketsByIds(marketIds);
+    const search = options.search?.trim() ?? '';
+    if (search) {
+      const matched = this.filterMarketRowsBySearch(
+        marketIds.map((id) => ({
+          market_id: id,
+          market: markets.get(id) ?? null,
+        })),
+        search,
+      ).map((row) => row.market_id);
+      if (!matched.length) return empty;
+      base.andWhere('o.market_id IN (:...hbMarketIds)', {
+        hbMarketIds: matched,
+      });
+    }
+
+    const grouped = base
+      .clone()
+      .select('o.market_id', 'market_id')
+      .addSelect(
+        'round(EXTRACT(EPOCH FROM o.market_handover_at) * 1000000)::bigint',
+        'handed_at_us',
+      )
+      .addSelect('o.market_handover_by', 'handed_by')
+      .addSelect(
+        "to_char(o.market_handover_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')",
+        'day',
+      )
+      .addSelect('COUNT(o.id)', 'orders_count')
+      .addSelect('COALESCE(SUM(o.total_price), 0)', 'total_price_sum')
+      .addSelect(
+        "COUNT(o.id) FILTER (WHERE o.market_handover_method = 'manual')",
+        'manual_count',
+      )
+      .addSelect(
+        "MAX(o.market_handover_method) FILTER (WHERE o.market_handover_method <> 'manual')",
+        'method',
+      )
+      .groupBy('o.market_id')
+      .addGroupBy('o.market_handover_at')
+      .addGroupBy('o.market_handover_by');
+
+    let totalsRow: { batches?: unknown; orders?: unknown; amount?: unknown };
+    let rows: HandoverBatchRawRow[];
+    try {
+      const [groupedSql, groupedParams] = grouped.getQueryAndParameters();
+      const totalsResult: Array<typeof totalsRow> = await this.orderRepo.query(
+        `SELECT COUNT(*)::int AS batches, COALESCE(SUM(b.orders_count), 0)::int AS orders, ` +
+          `COALESCE(SUM(b.total_price_sum), 0) AS amount FROM (${groupedSql}) b`,
+        groupedParams,
+      );
+      totalsRow = totalsResult?.[0] ?? {};
+      rows = await grouped
+        .clone()
+        .orderBy('o.market_handover_at', 'DESC')
+        .addOrderBy('o.market_id', 'DESC')
+        .addOrderBy('o.market_handover_by', 'DESC')
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .getRawMany<HandoverBatchRawRow>();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    const names = await this.loadUserNamesByIds(
+      rows.map((row) => row.handed_by),
+    );
+    const total = Number(totalsRow.batches) || 0;
+    return {
+      data: rows.map((row) =>
+        toHandoverBatchView(
+          row,
+          markets.get(String(row.market_id)) ?? null,
+          row.handed_by == null ? null : names.get(String(row.handed_by)),
+        ),
+      ),
+      total,
+      page,
+      limit,
+      totals: {
+        batches: total,
+        orders: Number(totalsRow.orders) || 0,
+        amount: Number(totalsRow.amount) || 0,
+      },
+    };
+  }
+
+  /**
+   * Bitta «Marketga jo'natish» partiyasi (`batch_id` — `findCancelledHandoverBatches` qatoridagi `id`):
+   * `{ batch: HandoverBatchView, data: Order[] (boyitilgan, GET /orders qatori bilan bir xil), total }`.
+   * Doira ro'yxat bilan AYNI — filial partiyasi kaliti HQ ro'yxatidan ochilmaydi (404).
+   */
+  async findCancelledHandoverBatch(batchId: string) {
+    const key = parseHandoverBatchId(batchId);
+    if (!key) this.badRequest("batch_id noto'g'ri");
+    const hqBranchId = await this.requireHandoverHqBranchId();
+    const qb = this.handoverBatchBaseQuery(hqBranchId)
+      .andWhere('o.market_id = :hbMarketId', { hbMarketId: key.market_id })
+      .andWhere(
+        'round(EXTRACT(EPOCH FROM o.market_handover_at) * 1000000)::bigint = :hbAtUs',
+        { hbAtUs: key.handed_at_us },
+      )
+      .andWhere(
+        key.handed_by === null
+          ? 'o.market_handover_by IS NULL'
+          : 'o.market_handover_by = :hbBy',
+        key.handed_by === null ? {} : { hbBy: key.handed_by },
+      )
+      .orderBy('o.id', 'DESC');
+
+    let orders: Order[];
+    let headRow: HandoverBatchRawRow | undefined;
+    try {
+      orders = await qb.getMany();
+      if (!orders.length) this.notFound('Topshirish topilmadi');
+      headRow = await this.handoverBatchBaseQuery(hqBranchId)
+        .select('o.market_id', 'market_id')
+        .addSelect(
+          'round(EXTRACT(EPOCH FROM o.market_handover_at) * 1000000)::bigint',
+          'handed_at_us',
+        )
+        .addSelect('o.market_handover_by', 'handed_by')
+        .addSelect(
+          "to_char(o.market_handover_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')",
+          'day',
+        )
+        .addSelect('COUNT(o.id)', 'orders_count')
+        .addSelect('COALESCE(SUM(o.total_price), 0)', 'total_price_sum')
+        .addSelect(
+          "COUNT(o.id) FILTER (WHERE o.market_handover_method = 'manual')",
+          'manual_count',
+        )
+        .addSelect(
+          "MAX(o.market_handover_method) FILTER (WHERE o.market_handover_method <> 'manual')",
+          'method',
+        )
+        .andWhere('o.id IN (:...hbOrderIds)', {
+          hbOrderIds: orders.map((order) => String(order.id)),
+        })
+        .groupBy('o.market_id')
+        .addGroupBy('o.market_handover_at')
+        .addGroupBy('o.market_handover_by')
+        .getRawOne<HandoverBatchRawRow>();
+    } catch (error) {
+      if (error instanceof RpcException) throw error;
+      this.handleDbError(error);
+    }
+    if (!headRow) this.notFound('Topshirish topilmadi');
+
+    const [markets, names, enriched] = await Promise.all([
+      this.loadMarketsByIds([key.market_id]),
+      this.loadUserNamesByIds([headRow.handed_by]),
+      this.enrichOrders(orders),
+    ]);
+    return {
+      batch: toHandoverBatchView(
+        headRow,
+        markets.get(key.market_id) ?? null,
+        headRow.handed_by == null ? null : names.get(String(headRow.handed_by)),
+      ),
+      data: enriched,
+      total: enriched.length,
+    };
+  }
+
+  /**
+   * «Topshirilgan» doirasi: HQ'da (yoki HQ id o'sha payt aniqlanmagan SA/admin — `branch_id` bo'sh) marketga
+   * berilgan, hozir ham market qo'lidagi buyurtmalar; faqat ommaviy «Marketga jo'natish» — o'sha market QR
+   * sessiyasi shu vaqtda yopilgan (bittalab «Marketga qaytarish» sessiyani yopmaydi). Ombor qaytishlarida
+   * `market_handover_at` bo'sh — kirmaydi.
+   */
+  private handoverBatchBaseQuery(hqBranchId: string) {
+    return this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.isDeleted = :hbDeleted', { hbDeleted: false })
+      .andWhere('o.market_handover_at IS NOT NULL')
+      .andWhere('o.holder_type = :hbHolder', {
+        hbHolder: OrderHolderType.MARKET,
+      })
+      .andWhere('o.status IN (:...hbStatuses)', {
+        hbStatuses: [Order_status.RETURNED_TO_MARKET, Order_status.CLOSED],
+      })
+      .andWhere(
+        '(o.market_handover_branch_id = :hbHq OR o.market_handover_branch_id IS NULL)',
+        { hbHq: hqBranchId },
+      )
+      .andWhere((qb) => {
+        const sessions = qb
+          .subQuery()
+          .select('1')
+          .from(MarketCancelledHandoverSession, 's')
+          .where('s.market_id = o.market_id')
+          .andWhere('s.isDeleted = false')
+          .andWhere('s.consumed_at IS NOT NULL')
+          .andWhere(
+            `s.consumed_at BETWEEN o.market_handover_at - ${HANDOVER_BATCH_SESSION_TOLERANCE_SQL} ` +
+              `AND o.market_handover_at + ${HANDOVER_BATCH_SESSION_TOLERANCE_SQL}`,
+          )
+          .getQuery();
+        return `EXISTS ${sessions}`;
+      });
+  }
+
+  /** HQ filiali id — noma'lum bo'lsa HQ va filial partiyalarini ajratib bo'lmaydi: 503 (fail-closed). */
+  private async requireHandoverHqBranchId(): Promise<string> {
+    const hqBranchId = await this.loadListHqBranchId();
+    if (!hqBranchId) {
+      throw new RpcException({
+        statusCode: 503,
+        message: "HQ filiali aniqlanmadi — birozdan keyin qayta urinib ko'ring",
+      });
+    }
+    return hqBranchId;
+  }
+
+  /** Market profillari (`identity.market.find_by_ids`); javob bo'lmasa — bo'sh xarita (nom `null`). */
+  private async loadMarketsByIds(
+    ids: string[],
+  ): Promise<Map<string, Record<string, any>>> {
+    const unique = [
+      ...new Set(ids.map((id) => String(id).trim()).filter(Boolean)),
+    ];
+    if (!unique.length) return new Map();
+    const response = await rmqSend<{
+      data: Array<{ id: string; [key: string]: any }>;
+    }>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_ids' },
+      { ids: unique },
+    ).catch(() => ({ data: [] as Array<{ id: string; [key: string]: any }> }));
+    return new Map(
+      (response?.data ?? []).map((market): [string, Record<string, any>] => [
+        String(market.id),
+        market,
+      ]),
+    );
+  }
+
+  /** Xodim ismlari — BITTA `identity.user.find_by_ids` (3 s, qayta urinishsiz); javob bo'lmasa — bo'sh xarita. */
+  private async loadUserNamesByIds(
+    rawIds: unknown[],
+  ): Promise<Map<string, string | null>> {
+    const ids = [
+      ...new Set(
+        rawIds
+          .map((id) =>
+            typeof id === 'string' || typeof id === 'number'
+              ? String(id).trim()
+              : '',
+          )
+          .filter(Boolean),
+      ),
+    ];
+    const names = new Map<string, string | null>();
+    if (!ids.length) return names;
+    const response = await rmqSend<{
+      data?: Array<{ id?: unknown; name?: unknown }>;
+    }>(
+      this.identityClient,
+      { cmd: 'identity.user.find_by_ids' },
+      { ids },
+      { timeoutMs: 3000, retries: 0 },
+    ).catch(() => ({ data: [] }));
+    for (const user of response?.data ?? []) {
+      const rawId = user?.id;
+      const id =
+        typeof rawId === 'string' || typeof rawId === 'number'
+          ? String(rawId).trim()
+          : '';
+      if (!id) continue;
+      names.set(
+        id,
+        typeof user?.name === 'string' && user.name.trim()
+          ? user.name.trim()
+          : null,
+      );
+    }
+    return names;
   }
 
   normalizeUpdatePayload(dto: Record<string, any>): Record<string, any> {
