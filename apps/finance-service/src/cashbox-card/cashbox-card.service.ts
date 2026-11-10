@@ -25,6 +25,10 @@ import {
   CashboxCardMovement,
 } from '../entities/cashbox-card-movement.entity';
 import { Shift, ShiftStatus } from '../entities/shift.entity';
+// Faqat TUR (runtime import yo'q): `@app/common` ni mock qiladigan unit
+// spec'lar (finance-service.service importi orqali) entity modulini
+// bilmaydi — jadvalga metadata NOMI bilan murojaat (`discardOpenShiftDrafts`).
+import type { ShiftAccountCheck } from '../entities/shift-account-check.entity';
 import {
   BRANCH_SHIFT_REQUIRED_MESSAGE,
   SHIFT_REQUIRED_MESSAGE,
@@ -162,12 +166,17 @@ function scalarText(value: unknown): string {
   return '';
 }
 
+/**
+ * Raqamli ID — kanonik ko'rinishda (`'02'` → `'2'`). Postgres `'02'` ni
+ * `2` deb o'qiydi: xom matn solishtirilsa (`toId === fromId`, takror
+ * tekshiruvi) bir qator ikki xil ID bo'lib ko'rinadi (cards1111).
+ */
 function assertId(value: unknown, field: string): string {
   const text = scalarText(value);
   if (!/^\d+$/.test(text)) {
     throw new BadRequestException(`${field} raqamli ID bo'lishi kerak`);
   }
-  return text;
+  return BigInt(text).toString();
 }
 
 function assertAmount(value: unknown): number {
@@ -335,6 +344,20 @@ function readCardDetails(
   patch.require_photo_on_shift_close = nextPhoto;
   patch.ai_check_enabled = nextAi;
   return patch;
+}
+
+/** cards1111 — o'chirilayotgan karta qoldig'i qayerga o'tadi. */
+export type CardDeleteMoveTo = 'card' | 'cash';
+
+/** `move_to`: yo'q / bo'sh — `null`; faqat `card` | `cash` (aks holda 400). */
+function readMoveTo(value: unknown): CardDeleteMoveTo | null {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  if (value !== 'card' && value !== 'cash') {
+    throw new BadRequestException("move_to faqat 'card' yoki 'cash'");
+  }
+  return value;
 }
 
 function requireComment(value: unknown, what: string): string {
@@ -756,15 +779,22 @@ export class CashboxCardService {
    * Id bo'yicha karta amali: kassa KARTANING o'zidan olinadi va FOR UPDATE
    * bilan qulflanadi (kartaning `cashbox_id` si o'zgarmaydi), keyin menejer
    * doirasi tekshiriladi.
+   *
+   * cards1111 — `includeDeleted`: o'chirilgan karta ham kassani topishga
+   * yaraydi (o'chirishning takroriy so'rovi; `work` ichida `lockCard` baribir
+   * o'chirilganni 404 qiladi).
    */
   private async withCardCashboxLock<T>(
     cardId: string,
     scope: CardCashboxScope | undefined,
     work: (manager: EntityManager, cashbox: Cashbox) => Promise<T>,
+    options?: { includeDeleted?: boolean },
   ): Promise<T> {
     return this.dataSource.transaction(async (manager) => {
       const card = await manager.findOne(CashboxCard, {
-        where: { id: cardId, isDeleted: false },
+        where: options?.includeDeleted
+          ? { id: cardId }
+          : { id: cardId, isDeleted: false },
       });
       if (!card) {
         throw new NotFoundException('Karta topilmadi');
@@ -800,6 +830,41 @@ export class CashboxCardService {
       },
       manager,
     );
+  }
+
+  /**
+   * cards1111 — o'chirilayotgan kartaning OCHIQ smenadagi tasdiqlanmagan
+   * qoralamalari (`shift_account_checks`: rasm yuklangan, `confirmed_at IS
+   * NULL`) soft-delete qilinadi: yopish formasi, avto-yopish
+   * (`recordAtAutoClose` — qoralama kartalarini o'chirilganlik filtrisiz
+   * o'qiydi) va smena hisoboti (`listForShift`) o'chirilgan kartani
+   * «tasdiqlanmagan» qilib ko'rsatmasin. Yopilgan smena qatorlari — tarix,
+   * tegilmaydi. Qoralama faqat kartaning o'z kassasi smenasida bo'ladi
+   * (`attachPhoto` doira tekshiruvi). Qaytaradi: o'chirilgan qoralamalar soni.
+   */
+  private async discardOpenShiftDrafts(
+    manager: EntityManager,
+    cardId: string,
+  ): Promise<number> {
+    const open = await manager.find(Shift, {
+      where: { status: ShiftStatus.OPEN, isDeleted: false },
+      select: { id: true },
+    });
+    if (!open.length) {
+      return 0;
+    }
+    const result = await manager
+      .createQueryBuilder()
+      .update<ShiftAccountCheck>('ShiftAccountCheck')
+      .set({ isDeleted: true })
+      .where('cashbox_card_id = :cardId', { cardId })
+      .andWhere('shift_id IN (:...shiftIds)', {
+        shiftIds: open.map((shift) => String(shift.id)),
+      })
+      .andWhere('confirmed_at IS NULL')
+      .andWhere('is_deleted = false')
+      .execute();
+    return result.affected ?? 0;
   }
 
   /**
@@ -1406,7 +1471,7 @@ export class CashboxCardService {
           entity_type: 'CashboxCard',
           entity_id: cardId,
           action: renameOnly ? 'finance.card_renamed' : 'finance.card_updated',
-          old_value: pick(outcome.before as unknown as Record<string, unknown>),
+          old_value: pick(outcome.before),
           new_value: pick(after),
           metadata: cashboxScopeView(outcome.cashbox),
           user_id: input?.updated_by ? String(input.updated_by) : null,
@@ -1613,6 +1678,11 @@ export class CashboxCardService {
           const lockedSecond = await this.lockCard(manager, cashboxId, second);
           const from = first === fromId ? lockedFirst : lockedSecond;
           const to = first === fromId ? lockedSecond : lockedFirst;
+          if (String(from.id) === String(to.id)) {
+            throw new BadRequestException(
+              "Manba va maqsad karta bir xil bo'lmasligi kerak",
+            );
+          }
           this.assertUsable(from);
           this.assertUsable(to);
 
@@ -1823,6 +1893,293 @@ export class CashboxCardService {
         outcome.idempotent
           ? "Konvertatsiya allaqachon bajarilgan (takroriy so'rov)"
           : 'Konvertatsiya bajarildi',
+      );
+    } catch (error) {
+      toRpcError(error);
+    }
+  }
+
+  /**
+   * cards1111 — POST /finance/cashbox/cards/:id/delete: kartani o'chirish.
+   * SOFT: `is_deleted = true`, `is_active = false` — nom va Asosiy slot
+   * bo'shaydi (partial unique indekslar o'chirilganlarni hisobga olmaydi),
+   * tarix / harakatlar / smena hisobotlari karta nomini saqlaydi.
+   *
+   *   • Asosiy karta — 400 (avval boshqa kartani asosiy qilish kerak);
+   *   • saqlangan qoldiq manfiy (bo'lmasligi kerak) — 400, jimgina
+   *     tuzatilmaydi;
+   *   • qoldiq 0 — shunchaki o'chiriladi (`move_to` e'tiborsiz, smena shart
+   *     emas);
+   *   • qoldiq > 0 — `move_to` majburiy (400) va pul AVVAL ko'chadi (aks
+   *     holda u izsiz Asosiy kartaga "oqib" o'tib, uning ko'chirmasini
+   *     buzardi):
+   *       - `card` — shu kassaning faol kartasiga (Asosiy ham bo'ladi),
+   *         `transfer` kabi CARD_TO_CARD harakat;
+   *       - `cash` — `convert(card_to_cash)` kabi: balance_card −,
+   *         balance_cash +, kassaning umumiy balansi o'zgarmaydi.
+   *     Pul harakati smena darvozasi ostida (`requireCashboxShift`, transfer /
+   *     convert bilan bir xil).
+   *   • ochiq smenadagi tasdiqlanmagan qoralamalar — `discardOpenShiftDrafts`.
+   *
+   * Qulf: kassa FOR UPDATE, keyin kartalar id tartibida (transfer kabi).
+   * Idempotent (`dedup_epoch`): shu kalitli harakat SHU kartadan va karta
+   * allaqachon o'chirilgan — 200, `idempotent: true`; kalit boshqa amalda
+   * ishlatilgan — 409. Qoldiqsiz o'chirish harakat yozmaydi: takrori — 404.
+   */
+  async deleteCard(
+    input: {
+      id: string;
+      move_to?: CardDeleteMoveTo | null;
+      to_card_id?: string | null;
+      comment?: string | null;
+      deleted_by?: string | null;
+      dedup_epoch?: string | null;
+    } & CardCashboxScope,
+  ) {
+    try {
+      const cardId = assertId(input?.id, 'id');
+      const moveTo = readMoveTo(input?.move_to);
+      const toCardId =
+        input?.to_card_id === undefined ||
+        input?.to_card_id === null ||
+        input?.to_card_id === ''
+          ? null
+          : assertId(input.to_card_id, 'to_card_id');
+      const comment = optionalText(input?.comment, 'comment', 1000) ?? null;
+      const token = String(input?.dedup_epoch ?? '').trim();
+      const actor = input?.deleted_by ? String(input.deleted_by) : null;
+
+      const outcome = await this.withCardCashboxLock(
+        cardId,
+        input,
+        async (manager, cashbox) => {
+          const cashboxId = String(cashbox.id);
+          const replay = await this.findMovementByToken(
+            manager,
+            cashboxId,
+            token,
+          );
+          if (replay) {
+            const deleted = await manager.findOne(CashboxCard, {
+              where: { id: cardId, cashbox_id: cashboxId },
+            });
+            if (
+              !deleted?.isDeleted ||
+              String(replay.from_card_id ?? '') !== String(deleted.id)
+            ) {
+              conflict('Bu Idempotency-Key boshqa amal uchun ishlatilgan');
+            }
+            return {
+              idempotent: true,
+              card: deleted,
+              movement: replay,
+              movedAmount: round2(Number(replay.amount)),
+              destination: null,
+              cashbox,
+              wasActive: false,
+              discardedDrafts: 0,
+            };
+          }
+
+          // Kartalar id tartibida (transfer bilan bir xil). Maqsad karta
+          // faqat pul ko'chganda kerak — topilmasa keyinroq 404.
+          const wantsTarget =
+            moveTo === 'card' && !!toCardId && toCardId !== cardId;
+          const lockTarget = () =>
+            manager.findOne(CashboxCard, {
+              where: {
+                id: toCardId as string,
+                cashbox_id: cashboxId,
+                isDeleted: false,
+              },
+              lock: { mode: 'pessimistic_write' },
+            });
+          const targetFirst = wantsTarget && Number(toCardId) < Number(cardId);
+          let target = targetFirst ? await lockTarget() : null;
+          const card = await this.lockCard(manager, cashboxId, cardId);
+          if (wantsTarget && !targetFirst) {
+            target = await lockTarget();
+          }
+
+          if (card.is_default) {
+            throw new BadRequestException(
+              "Asosiy kartani o'chirib bo'lmaydi — avval boshqa kartani asosiy qiling",
+            );
+          }
+          const balance = round2(Number(card.balance));
+          if (balance < 0) {
+            throw new BadRequestException(
+              `"${card.name}" kartasi balansi manfiy (${balance} so'm) — o'chirishdan oldin kartalararo o'tkazma bilan moslikni tiklang`,
+            );
+          }
+          if (balance > 0) {
+            if (!moveTo) {
+              throw new BadRequestException(
+                `Kartada ${balance} so'm bor — o'chirishdan oldin qoldiqni boshqa kartaga yoki naqd kassaga o'tkazing`,
+              );
+            }
+            if (moveTo === 'card') {
+              if (!toCardId) {
+                throw new BadRequestException(
+                  "Qoldiq o'tkaziladigan kartani tanlang (to_card_id)",
+                );
+              }
+              // ID kanonik (assertId); qulflangan qatorlar ham solishtiriladi —
+              // bir qatorning ikki nusxasi saqlansa karta "tirilib", puli
+              // ikki baravar bo'lardi.
+              if (
+                toCardId === cardId ||
+                (target && String(target.id) === String(card.id))
+              ) {
+                throw new BadRequestException(
+                  "Manba va maqsad karta bir xil bo'lmasligi kerak",
+                );
+              }
+            }
+            await this.requireCashboxShift(manager, cashbox);
+            if (moveTo === 'card') {
+              if (!target) {
+                throw new NotFoundException('Karta topilmadi');
+              }
+              this.assertUsable(target);
+            }
+          }
+
+          // ── yozish: qoldiq 0 + soft-delete, keyin pul harakati ──
+          const wasActive = card.is_active;
+          card.balance = 0;
+          card.isDeleted = true;
+          card.is_active = false;
+          const saved = await manager.save(CashboxCard, card);
+
+          let movement: CashboxCardMovement | null = null;
+          const destination = balance > 0 && moveTo === 'card' ? target : null;
+          if (balance > 0) {
+            const text =
+              comment ??
+              `"${card.name}" kartasi o'chirildi — qoldiq o'tkazildi`;
+            if (destination) {
+              if (!destination.is_default) {
+                destination.balance = round2(
+                  Number(destination.balance) + balance,
+                );
+                await manager.save(CashboxCard, destination);
+              }
+              const defaultAfter = await this.defaultBalance(manager, cashbox);
+              movement = await manager.save(
+                CashboxCardMovement,
+                manager.create(CashboxCardMovement, {
+                  type: CardMovementType.CARD_TO_CARD,
+                  cashbox_id: cashboxId,
+                  from_card_id: cardId,
+                  to_card_id: String(destination.id),
+                  amount: balance,
+                  balance_after_from: 0,
+                  balance_after_to: destination.is_default
+                    ? defaultAfter
+                    : Number(destination.balance),
+                  comment: text,
+                  created_by: actor,
+                  dedup_epoch: token || null,
+                }),
+              );
+            } else {
+              // Umumiy balans o'zgarmaydi — faqat ajratma (convert kabi).
+              cashbox.balance_card = round2(
+                Number(cashbox.balance_card) - balance,
+              );
+              cashbox.balance_cash = round2(
+                Number(cashbox.balance_cash) + balance,
+              );
+              await manager.save(Cashbox, cashbox);
+              movement = await manager.save(
+                CashboxCardMovement,
+                manager.create(CashboxCardMovement, {
+                  type: CardMovementType.CARD_TO_CASH,
+                  cashbox_id: cashboxId,
+                  from_card_id: cardId,
+                  to_card_id: null,
+                  amount: balance,
+                  balance_after_from: 0,
+                  balance_after_to: null,
+                  comment: text,
+                  created_by: actor,
+                  dedup_epoch: token || null,
+                }),
+              );
+            }
+          }
+
+          const discardedDrafts = await this.discardOpenShiftDrafts(
+            manager,
+            cardId,
+          );
+          await this.emitCardChanged(manager, cashbox, {
+            action: 'deleted',
+            card_ids: destination ? [cardId, destination.id] : [cardId],
+            movement_id: movement?.id ?? null,
+          });
+          return {
+            idempotent: false,
+            card: saved,
+            movement,
+            movedAmount: movement ? balance : 0,
+            destination,
+            cashbox,
+            wasActive,
+            discardedDrafts,
+          };
+        },
+        { includeDeleted: true },
+      );
+
+      if (!outcome.idempotent) {
+        const name = outcome.card.name;
+        const where = outcome.destination
+          ? `"${outcome.destination.name}" kartasiga`
+          : 'naqd kassaga';
+        await this.activityLog.log({
+          entity_type: 'CashboxCard',
+          entity_id: cardId,
+          action: 'finance.card_deleted',
+          old_value: {
+            name,
+            balance: outcome.movedAmount,
+            is_active: outcome.wasActive,
+          },
+          new_value: {
+            is_deleted: true,
+            moved_amount: outcome.movedAmount,
+            move_to: outcome.movement ? moveTo : null,
+            to_card_id: outcome.destination
+              ? String(outcome.destination.id)
+              : null,
+            movement_id: outcome.movement ? String(outcome.movement.id) : null,
+          },
+          metadata: {
+            ...cashboxScopeView(outcome.cashbox),
+            ...(outcome.discardedDrafts
+              ? { discarded_shift_drafts: outcome.discardedDrafts }
+              : {}),
+          },
+          user_id: actor,
+          description:
+            outcome.movedAmount > 0
+              ? `"${name}" kartasi o'chirildi — qoldiq ${outcome.movedAmount} so'm ${where} o'tkazildi`
+              : `"${name}" kartasi o'chirildi`,
+        });
+      }
+      return successRes(
+        {
+          card: { ...this.view(outcome.card), is_deleted: true },
+          movement: outcome.movement,
+          moved_amount: outcome.movedAmount,
+          idempotent: outcome.idempotent,
+        },
+        200,
+        outcome.idempotent
+          ? "Karta allaqachon o'chirilgan (takroriy so'rov)"
+          : "Karta o'chirildi",
       );
     } catch (error) {
       toRpcError(error);

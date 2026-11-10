@@ -113,6 +113,36 @@ Frontend action items:
   `photo_required: false`; superadmin bayroq qo'ygan filial kartasida `cards[].photo_required` / `ai_enabled` true
   bo'lishi mumkin — oyna shu maydonlarga qarasin). Filial UI'si hozircha shart emas.
 
+### 2026-11-11 — Kassa kartasini o'chirish (qoldiq avval ko'chiriladi) — cards1111
+
+Deploy: finance-service + api-gateway. Migratsiya YO'Q (soft delete — mavjud `is_deleted`). `openapi.json`
+yangilandi.
+
+- [2026-11-11] 🆕 [gateway, finance] — **`POST /finance/cashbox/cards/:id/delete`** (superadmin, admin; menejer —
+  403). Tana ixtiyoriy: `move_to?: 'card' | 'cash'`, `to_card_id?` (`move_to: 'card'` da), `comment?` (1–1000).
+  `Idempotency-Key` sarlavhasi (ixtiyoriy, ≤255). Javob **200**: `data.card` (`is_deleted: true`,
+  `is_active: false`), `data.movement` (pul ko'chgan bo'lsa — `card_to_card` / `card_to_cash` harakat, aks holda
+  `null`), `data.moved_amount`, `data.idempotent`; `message: "Karta o'chirildi"`.
+  - Qoldiq 0 — shunchaki o'chiriladi (`move_to` e'tiborsiz, smena shart emas).
+  - Qoldiq > 0 va `move_to` yo'q — 400 «Kartada N so'm bor — o'chirishdan oldin qoldiqni boshqa kartaga yoki naqd
+    kassaga o'tkazing». `card` — shu kassaning faol kartasiga (Asosiy karta ham bo'ladi); arxivlangan maqsad — 400,
+    o'zi — 400 «Manba va maqsad karta bir xil bo'lmasligi kerak», boshqa kassa kartasi — 404. `cash` — naqd kassaga
+    (karta qoldig'i −, naqd +; umumiy balans o'zgarmaydi). Pul ko'chishi o'tkazma / konvertatsiya kabi smena
+    darvozasi ostida (smenasiz — o'sha «Smena ochilmagan! …» 400).
+  - Asosiy karta — 400 «Asosiy kartani o'chirib bo'lmaydi — avval boshqa kartani asosiy qiling».
+  - O'chirilgan karta `GET /finance/cashbox/cards` da (`include_inactive=true` bilan ham) chiqmaydi, nomi qayta
+    ishlatiladi; ko'chirmasi 404. Harakatlar ro'yxati va smena hisobotlari eski nomni ko'rsatadi.
+  - Takror (o'sha `Idempotency-Key`) — 200, `idempotent: true`, o'sha harakat (faqat pul ko'chgan o'chirishda;
+    qoldiqsiz o'chirish takrori — 404 «Karta topilmadi» — bu holda ro'yxatni qayta o'qing). Kalit boshqa amalda
+    ishlatilgan — 409.
+  - Realtime: `finance.cashbox.card_changed` `action: 'deleted'` (`card_ids` — o'chirilgan + maqsad karta,
+    `movement_id`). Ochiq smenadagi shu kartaning tasdiqlanmagan qoldiq rasmi qoralamasi ham o'chiriladi.
+- [2026-11-11] 🟢 [finance] — T6 tuzatish: CLICK to'lovi tushgan karta o'chirilgan bo'lsa qaytarish / tuzatish POST
+  — 409 `NOT_CORRECTABLE` + `reason: 'cashbox_deleted'` (avvalgidek), `message`: «To'lov kartasi o'chirilgan — bu
+  to'lovni qaytarib yoki tuzatib bo'lmaydi». Tafsilotdagi `correctable` bloki karta o'chirilgani uchun o'zgarmaydi
+  (u yerda `cashbox_deleted` faqat kuryer / market / qabul qiluvchi kassasi o'chirilganini bildiradi). FE POST
+  xatosida click uchun «To'lovdagi kassa yoki karta o'chirilgan» deydi — frontend o'zgarishi shart emas.
+
 ### 2026-11-11 — Kassa xarajati kategoriyalari: standart kategoriyalar qulflangan — `is_default`
 
 Deploy: finance-service + api-gateway. **Migratsiya 214** (`cashbox_expense_categories.is_default`). `openapi.json`

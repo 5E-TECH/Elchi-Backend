@@ -1164,6 +1164,58 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     });
   });
 
+  it('cards1111: CLICK to`lov kartasi o`chirilgan — tafsilot hukmi o`zgarmaydi (FE uni kuryer/market kassasi deb o`qirdi), POST 409 aniq matn bilan', async () => {
+    const main = await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await sale('301', Cashbox_type.FOR_COURIER, 300_000);
+    const card = await db.getRepository(CashboxCard).save(
+      db.getRepository(CashboxCard).create({
+        cashbox_id: String(main.id),
+        name: 'Uzcard 1',
+        balance: 0,
+        is_default: false,
+        is_active: true,
+        sort_order: 1,
+      }),
+    );
+    const tid = await payCourier(100_000, {
+      payment_method: PaymentMethod.CLICK,
+      card_id: String(card.id),
+    });
+    const leg = await legOf(tid, Cashbox_type.MAIN);
+    expect((await detailOf(leg.id)).correctable).toMatchObject({
+      allowed: true,
+    });
+
+    // Karta o'chirildi (qoldig'i avval ko'chirilgan).
+    await db
+      .getRepository(CashboxCard)
+      .update(
+        { id: card.id },
+        { isDeleted: true, is_active: false, balance: 0 },
+      );
+    // Tafsilotda `cashbox_deleted` ko'rsatilmaydi: FE uni oyoq kassasi
+    // (kuryer / market) o'chirilgan deb o'qiydi. Karta — faqat amal paytida.
+    const block = (await detailOf(leg.id)).correctable;
+    expect(block).toMatchObject({ allowed: true });
+    expect(block).not.toHaveProperty('reason');
+    expect(block).not.toHaveProperty('message');
+    const before = await box('0', Cashbox_type.MAIN);
+    expect(
+      await reverse(String(leg.id)).catch((e) => e.getError()),
+    ).toMatchObject({
+      statusCode: 409,
+      code: 'NOT_CORRECTABLE',
+      reason: 'cashbox_deleted',
+      message:
+        "To'lov kartasi o'chirilgan — bu to'lovni qaytarib yoki tuzatib bo'lmaydi",
+    });
+    expect(
+      await correct(String(leg.id), 50_000).catch((e) => e.getError()),
+    ).toMatchObject({ code: 'NOT_CORRECTABLE', reason: 'cashbox_deleted' });
+    expect(await box('0', Cashbox_type.MAIN)).toEqual(before);
+  });
+
   it('iPlY5yop #5: correction — payment_kind va related (asl → yangi/teskari; teskari/yangi → asl)', async () => {
     await seed('0', Cashbox_type.MAIN);
     await seed('301', Cashbox_type.FOR_COURIER);

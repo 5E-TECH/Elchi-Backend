@@ -31,6 +31,31 @@ import {
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * cards1111 — CLICK to'lov tushgan karta o'chirilgan: FAQAT amal (POST)
+ * xatosi — `assertFunds`, kod / sabab o'zgarmaydi (`NOT_CORRECTABLE` +
+ * `cashbox_deleted`; FE POST xatosida click uchun «To'lovdagi kassa yoki
+ * karta o'chirilgan» deydi), `message` aniq. Tafsilotdagi `correctable`
+ * hukmiga (`evaluateCorrectable`) qo'shilmaydi: u yerda FE `cashbox_deleted`
+ * ni oyoq kassasi (kuryer / market) o'chirilgan deb o'qiydi — noto'g'ri bo'lardi.
+ */
+export const PAYMENT_CARD_DELETED_MESSAGE =
+  "To'lov kartasi o'chirilgan — bu to'lovni qaytarib yoki tuzatib bo'lmaydi";
+
+/**
+ * Tuzatish tushadigan karta oyog'i: kuryer to'lovi — qabul qiluvchi kirimi,
+ * marketga to'lov — MAIN chiqimi (faqat `click` usulida karta bo'ladi).
+ */
+export function correctionCardLeg(
+  shape: TransferShape,
+): HistoryWithCashbox | null {
+  const leg =
+    shape.kind === 'market_payment' ? shape.mainMarketLeg : shape.receiverLeg;
+  return leg?.card_id && shape.payment_method === PaymentMethod.CLICK
+    ? leg
+    : null;
+}
+
 export type HistoryWithCashbox = CashboxHistory & { cashbox: Cashbox };
 
 /** Bir to'lovning oyoqlari, vazifasi bo'yicha. */

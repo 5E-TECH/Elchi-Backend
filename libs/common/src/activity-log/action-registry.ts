@@ -279,6 +279,14 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'swap',
     'cyan',
   ),
+  // cards1111: karta o'chirildi (soft; qoldiq bo'lsa avval boshqa kartaga
+  // yoki naqd kassaga o'tkaziladi).
+  'finance.card_deleted': entry(
+    "Kassa kartasi o'chirildi",
+    'finance',
+    'delete',
+    'red',
+  ),
   // Elchi Pochta №1: kassa xarajatlari kategoriyalari (superadmin)
   'finance.expense_category_created': entry(
     "Xarajat kategoriyasi qo'shildi",

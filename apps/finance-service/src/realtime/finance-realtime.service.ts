@@ -99,7 +99,9 @@ export type CashboxCardAction =
   | 'archived'
   | 'transfer'
   | 'card_to_cash'
-  | 'cash_to_card';
+  | 'cash_to_card'
+  // cards1111 — karta o'chirildi (qoldiq o'tkazilgan bo'lsa `movement_id` bilan).
+  | 'deleted';
 
 export interface RealtimeNotifyMessage {
   event: FinanceRealtimeEvent;
