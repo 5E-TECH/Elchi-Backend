@@ -103,6 +103,7 @@ describe('GaBIPi3Z — OrderServiceService.statusCounts', () => {
       by_status: { new: 32, sold: 600, 'cancelled (sent)': 5 },
       total: 637,
       cancelled: null,
+      returned_to_market: null,
       new_incoming: null,
       search_truncated: false,
     });
@@ -178,6 +179,26 @@ describe('GaBIPi3Z — OrderServiceService.statusCounts', () => {
     expect(sql).toContain('order.holder_type = :holder_type');
     expect(sql).toContain('order.canceled_post_id IS NULL');
     expect(sql).toContain('order.status IN (:...statuses)');
+  });
+
+  it('⭐ returned_to_market_query («Marketga topshirildi» tabi) — alohida COUNT, cancel_stage=market sharti bilan', async () => {
+    const { service, tab: tabs } = setup({
+      rows: [{ status: 'returned_to_market', count: '9' }],
+      tabCount: 6,
+    });
+    const res = await service.statusCounts({
+      query: { market_id: '37' },
+      returned_to_market_query: { market_id: '37', cancel_stages: ['market'] },
+    });
+    expect(res.returned_to_market).toBe(6);
+    expect(res.cancelled).toBeNull();
+    // Xom holat soni o'zgarishsiz (tab soni EMAS).
+    expect(res.by_status).toEqual({ returned_to_market: 9 });
+    const [tab] = tabs();
+    expect(tab.getCount).toHaveBeenCalledTimes(1);
+    const sql = andWhereSql(tab);
+    expect(sql).toContain('order.market_id = :market_id');
+    expect(sql).not.toContain('order.status IN (:...statuses)');
   });
 
   it('new_incoming (SA): HQ filialida yaratilgan filial manbali buyurtma sanaladi (HQ ro‘yxatchisi)', async () => {
