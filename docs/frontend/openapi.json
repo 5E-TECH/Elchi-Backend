@@ -4030,7 +4030,7 @@
     },
     "/orders/status-counts": {
       "get": {
-        "description": "GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except `status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. `all` = GET /orders total without status; `paid` = paid + partly_paid; `closed` = closed; `cancelled` = cancelled + \"cancelled (sent)\" — for branch staff / HQ registrator / courier it is the total of their own cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). `new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like GET /orders/markets/new (branch staff — own branch; SA/admin — all except orders created at a non-HQ branch; market — own); it ignores the list filters; `null` for roles without that section (operator, courier, logist, customer). `by_status` — raw count per status. Logist with no regions — all zeros. No money fields.",
+        "description": "GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except `status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. `all` = GET /orders total without status; `paid` = paid + partly_paid; `returned_to_market` = returned_to_market; `cancelled` = cancelled + \"cancelled (sent)\" — for branch staff / HQ registrator / courier it is the total of their own cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). `new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like GET /orders/markets/new (branch staff — own branch; SA/admin — all except orders created at a non-HQ branch; market — own); it ignores the list filters; `null` for roles without that section (operator, courier, logist, customer). `by_status` — raw count per status. Logist with no regions — all zeros. No money fields.",
         "operationId": "OrderGatewayController_statusCounts",
         "parameters": [
           {
@@ -4209,7 +4209,7 @@
                       "waiting": 41,
                       "sold": 600,
                       "paid": 300,
-                      "closed": 12,
+                      "returned_to_market": 12,
                       "cancelled": 75,
                       "new_incoming": 7,
                       "by_status": {
@@ -4220,7 +4220,7 @@
                         "sold": 600,
                         "paid": 290,
                         "partly_paid": 10,
-                        "closed": 12,
+                        "returned_to_market": 12,
                         "cancelled": 70,
                         "cancelled (sent)": 5
                       },

@@ -22,15 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
-### 2026-11-10 — Buyurtmalar: «Yopildi» tabi soni — `GET /orders/status-counts` `data.closed`
+### 2026-11-10 — Buyurtmalar: «Marketga topshirildi» tabi soni — `GET /orders/status-counts` `data.returned_to_market`
 
 Deploy: faqat api-gateway. Migratsiya yo'q. `openapi.json` yangilandi.
 
-- [2026-11-10] ✏️ [gateway] — `GET /orders/status-counts` javobiga **`closed`** qo'shildi: `closed` (yopilgan) holatidagi
-  buyurtmalar soni, filtrlar va rol doirasi boshqa tablar bilan bir xil. Ilgari bu son faqat `by_status.closed` da
-  bor edi (0 bo'lsa umuman yo'q). Boshqa kalitlar o'zgarmagan.
-- 🔧 FE: `/orders` holat tablariga «Yopildi» (`status=closed`) qo'shildi, soni `data.closed` dan olinadi (eski backendda
-  `by_status.closed` dan, u ham bo'lmasa 0).
+- [2026-11-10] ✏️ [gateway] — `GET /orders/status-counts` javobiga **`returned_to_market`** qo'shildi: marketga
+  topshirilgan (`returned_to_market`) buyurtmalar soni, filtrlar va rol doirasi boshqa tablar bilan bir xil. `closed`
+  bu songa kirmaydi. Ilgari bu son faqat `by_status.returned_to_market` da bor edi (0 bo'lsa umuman yo'q).
+- ⚠️ Shu kuni ertaroq dev/test ga chiqqan `data.closed` kaliti («Yopildi» tabi) **olib tashlandi** — ega: «yopildi
+  kerak emas, otkaz marketga topshiriladi». main ga chiqmagan edi. `by_status.closed` avvalgidek qoladi.
+- 🔧 FE: `/orders` holat tablarida «Yopildi» o'rniga «Marketga topshirildi» (`status=returned_to_market`), soni
+  `data.returned_to_market` dan (eski backendda `by_status.returned_to_market` dan, u ham bo'lmasa 0).
 
 ### 2026-11-09 — Bugungi qabul vaqti + kun almashish soati: `GET|PATCH /orders/intake-settings`, `409 ORDER_INTAKE_CLOSED`
 

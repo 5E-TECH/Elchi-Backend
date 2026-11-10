@@ -48,11 +48,13 @@ const COUNTS_REPLY = {
     sold: 600,
     paid: 290,
     partly_paid: 10,
-    closed: 12,
+    // «Marketga topshirildi» tabi faqat returned_to_market — closed unga qo'shilmaydi.
+    returned_to_market: 12,
+    closed: 4,
     cancelled: 70,
     'cancelled (sent)': 5,
   },
-  total: 1263,
+  total: 1267,
   cancelled: null,
   new_incoming: 7,
   search_truncated: false,
@@ -159,20 +161,20 @@ const countsPayload = (order: { send: jest.Mock }) => {
 };
 
 describe('GaBIPi3Z — GET /orders/status-counts', () => {
-  it('⭐ SA: tab guruhlari (paid = paid+partly_paid, closed, cancelled = cancelled+sent), all = total, by_status, new_incoming', async () => {
+  it('⭐ SA: tab guruhlari (paid = paid+partly_paid, returned_to_market (closed emas), cancelled = cancelled+sent), all = total, by_status, new_incoming', async () => {
     const { controller, order } = setup();
     const res = (await call(controller, user('1', ['superadmin']))) as {
       data: Record<string, unknown>;
     };
     expect(res.data).toEqual({
-      all: 1263,
+      all: 1267,
       new: 32,
       received: 120,
       on_the_road: 80,
       waiting: 41,
       sold: 600,
       paid: 300,
-      closed: 12,
+      returned_to_market: 12,
       cancelled: 75,
       new_incoming: 7,
       by_status: COUNTS_REPLY.by_status,
@@ -362,7 +364,7 @@ describe('GaBIPi3Z — GET /orders/status-counts', () => {
       all: 0,
       new: 0,
       paid: 0,
-      closed: 0,
+      returned_to_market: 0,
       cancelled: 0,
       new_incoming: null,
     });
@@ -446,6 +448,6 @@ describe('GaBIPi3Z — HTTP marshrut: /orders/status-counts `:id` ga tushmaydi',
     };
     expect(payload.query.status).toBeUndefined();
     expect(payload.query.start_day).toBe('2026-10-01');
-    expect((res.body as { data: { all: number } }).data.all).toBe(1263);
+    expect((res.body as { data: { all: number } }).data.all).toBe(1267);
   });
 });
