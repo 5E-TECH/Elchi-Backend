@@ -36,7 +36,7 @@ Deploy: api-gateway + order-service. Migratsiya yo'q. `openapi.json` yangilandi.
   kerak emas, otkaz marketga topshiriladi». main ga chiqmagan edi. `by_status.closed` avvalgidek qoladi.
 - 🔧 FE: `/orders` holat tablarida «Yopildi» o'rniga «Marketga topshirildi» («Bekor qilingan» dan keyin): URL
   `status=returned_to_market`, ro'yxat so'rovi `cancel_stage=market` (holatsiz), soni `data.returned_to_market` dan
-  (eski backendda `by_status.returned_to_market` dan, u ham bo'lmasa 0).
+  (eski backendda bu kalit yo'q — faqat shu tab sonsiz; xom `by_status` olinmaydi, ro'yxat bilan mos emas).
 
 ### 2026-11-09 — Bugungi qabul vaqti + kun almashish soati: `GET|PATCH /orders/intake-settings`, `409 ORDER_INTAKE_CLOSED`
 

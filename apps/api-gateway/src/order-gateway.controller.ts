@@ -324,7 +324,7 @@ const CANCEL_STAGE_QUERY_DOC =
   '`courier`, `in_transit`, `branch`, `hq`, `market` (OR, case-insensitive). Same definition as the row `return_stage` ' +
   '(filter == badge): courier = cancelled + held by courier; in_transit = `cancelled (sent)`; branch = cancelled + held ' +
   'by branch (received, not in a return post); hq = cancelled + held by HQ; market = handed over to market ' +
-  '(`returned_to_market`, warehouse returns excluded). Combined with all other filters and the role scope (AND); with ' +
+  '(`returned_to_market`, warehouse returns excluded, plus pre-F4 `closed` / cancelled held by the market). Combined with all other filters and the role scope (AND); with ' +
   '`cancel_stage` the implicit cancelled-inventory tab mode is off. Unknown value — 400.';
 
 const WAREHOUSE_ID_QUERY_MAX = BigInt('9223372036854775807');
