@@ -4715,7 +4715,7 @@ export class OrderGatewayController {
     description:
       'GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except ' +
       '`status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. ' +
-      '`all` = GET /orders total without status; `paid` = paid + partly_paid; `cancelled` = cancelled + ' +
+      '`all` = GET /orders total without status; `paid` = paid + partly_paid; `closed` = closed; `cancelled` = cancelled + ' +
       '"cancelled (sent)" — for branch staff / HQ registrator / courier it is the total of their own ' +
       'cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). ' +
       '`new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like ' +
@@ -4782,6 +4782,7 @@ export class OrderGatewayController {
           waiting: 41,
           sold: 600,
           paid: 300,
+          closed: 12,
           cancelled: 75,
           new_incoming: 7,
           by_status: {
@@ -4792,6 +4793,7 @@ export class OrderGatewayController {
             sold: 600,
             paid: 290,
             partly_paid: 10,
+            closed: 12,
             cancelled: 70,
             'cancelled (sent)': 5,
           },
@@ -4879,6 +4881,8 @@ export class OrderGatewayController {
           waiting: by(Order_status.WAITING),
           sold: by(Order_status.SOLD),
           paid: by(Order_status.PAID) + by(Order_status.PARTLY_PAID),
+          // «Yopildi» tabi (ega 2026-11-10): faqat CLOSED.
+          closed: by(Order_status.CLOSED),
           cancelled:
             cancelled === null || cancelled === undefined
               ? by(Order_status.CANCELLED) + by(Order_status.CANCELLED_SENT)

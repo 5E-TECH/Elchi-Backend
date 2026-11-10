@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-10 — Buyurtmalar: «Yopildi» tabi soni — `GET /orders/status-counts` `data.closed`
+
+Deploy: faqat api-gateway. Migratsiya yo'q. `openapi.json` yangilandi.
+
+- [2026-11-10] ✏️ [gateway] — `GET /orders/status-counts` javobiga **`closed`** qo'shildi: `closed` (yopilgan) holatidagi
+  buyurtmalar soni, filtrlar va rol doirasi boshqa tablar bilan bir xil. Ilgari bu son faqat `by_status.closed` da
+  bor edi (0 bo'lsa umuman yo'q). Boshqa kalitlar o'zgarmagan.
+- 🔧 FE: `/orders` holat tablariga «Yopildi» (`status=closed`) qo'shildi, soni `data.closed` dan olinadi (eski backendda
+  `by_status.closed` dan, u ham bo'lmasa 0).
+
 ### 2026-11-09 — Bugungi qabul vaqti + kun almashish soati: `GET|PATCH /orders/intake-settings`, `409 ORDER_INTAKE_CLOSED`
 
 **Vazifa (ega 2026-11-08/09):** superadmin bugun uchun qabul vaqtini qo'yadi (masalan `10:00`) — shu vaqtdan **kun almashguncha** hech qanday yangi buyurtma yaratilmaydi. Kun almashish soati ham qo'lda sozlanadi (Trello #756; sukut `00:00`). Backend FE taklif qilgan kontraktni (`Elchi-Frontend` `entities/order-intake/model.ts`) to'liq bajaradi — FE kodi o'zgarishsiz yoqiladi.
