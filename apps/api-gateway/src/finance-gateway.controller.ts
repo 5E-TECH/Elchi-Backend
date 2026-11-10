@@ -5582,7 +5582,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Kassa xarajatlari kategoriyalari (chiqim oynasidagi tanlov)',
     description:
-      "`data.items` — `{ id, name, description, sort_order, is_deleted, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
+      "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
   })
   @ApiQuery({ name: 'include_deleted', required: false, type: Boolean })
   listCashboxExpenseCategories(
@@ -5623,9 +5623,9 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Xarajat kategoriyasini tahrirlash (faqat superadmin; topilmasa — 404, nom takrori — 409)',
+      'Xarajat kategoriyasini tahrirlash (faqat superadmin; topilmasa — 404, standart — 403, nom takrori — 409)',
     description:
-      "Kamida bitta maydon: `name`, `description` (`null` — tozalash), `sort_order`. Eski tarix qatorlari yozilgan paytdagi nomni (snapshot) ko'rsatishda davom etadi.",
+      "Kamida bitta maydon: `name`, `description` (`null` — tozalash), `sort_order`. Standart kategoriya (`is_default: true`) — 403 «Standart xarajat kategoriyasini tahrirlab bo'lmaydi», hech narsa o'zgarmaydi. Eski tarix qatorlari yozilgan paytdagi nomni (snapshot) ko'rsatishda davom etadi.",
   })
   @ApiParam({ name: 'id', description: 'Kategoriya ID' })
   @ApiBody({ type: UpdateCashboxExpenseCategoryRequestDto })
@@ -5651,7 +5651,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "Xarajat kategoriyasini o'chirish (soft; faqat superadmin)",
     description:
-      "Tanlov ro'yxatidan yo'qoladi va yangi chiqimda berilsa 400; mavjud tarix qatorlari nomini (snapshot) saqlaydi. Topilmasa yoki allaqachon o'chirilgan — 404.",
+      "Tanlov ro'yxatidan yo'qoladi va yangi chiqimda berilsa 400; mavjud tarix qatorlari nomini (snapshot) saqlaydi. Topilmasa yoki allaqachon o'chirilgan — 404. Standart kategoriya (`is_default: true`) — 403 «Standart xarajat kategoriyasini o'chirib bo'lmaydi».",
   })
   @ApiParam({ name: 'id', description: 'Kategoriya ID' })
   deleteCashboxExpenseCategory(

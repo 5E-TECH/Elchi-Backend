@@ -22,6 +22,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-11 — Kassa xarajati kategoriyalari: standart kategoriyalar qulflangan — `is_default`
+
+Deploy: finance-service + api-gateway. **Migratsiya 214** (`cashbox_expense_categories.is_default`). `openapi.json`
+yangilandi.
+
+- [2026-11-11] ✏️ [gateway, finance] — **`GET /finance/cashbox/expense-categories`**: har elementda yangi maydon
+  **`is_default: boolean`**. `true` — standart kategoriya (migratsiya 129 seed'idagi 17 ta: «Ovqatlanish»,
+  «Yoqilg'i», …; seed'dan keyin qayta nomlangani ham standart qoladi). Superadmin qo'shganlari — `false`.
+- [2026-11-11] ⚠️ [gateway, finance] — **`PATCH` / `DELETE /finance/cashbox/expense-categories/:id`** standart
+  kategoriyada (`is_default: true`) **403**: «Standart xarajat kategoriyasini tahrirlab bo'lmaydi» /
+  «Standart xarajat kategoriyasini o'chirib bo'lmaydi» (ega 2026-11-11). Qator o'zgarmaydi, jurnalga yozilmaydi.
+  `is_default: false` kategoriyalar avvalgidek tahrirlanadi va o'chiriladi; standart kategoriyaga chiqim
+  (`PATCH /finance/cashbox/spend`) avvalgidek ishlaydi.
+  → 🔧 «Xarajat kategoriyalari» ro'yxatida `is_default: true` qatorda «Tahrirlash» / «O'chirish» tugmalarini
+  ko'rsatmang (o'rniga «Standart» belgisi). Eski backend (maydon yo'q) — hammasi tahrirlanadigan deb hisoblanadi.
+
 ### 2026-11-10 — Qabul va yaratish: «Bekor qilinganlar → Topshirilgan» — `GET /orders/markets/cancelled/handovers`
 
 Deploy: api-gateway + order-service. Migratsiya yo'q. `openapi.json` yangilandi.

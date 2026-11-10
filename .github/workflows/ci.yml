@@ -284,6 +284,8 @@ jobs:
           apps/finance-service/src/cashbox-receipt/cashbox-receipt-link.T3.pg.spec.ts
           apps/finance-service/src/pickup-visit/pickup-visit.B824gOu5.pg.spec.ts
           apps/finance-service/src/pickup-visit/pickup-visit.migration.B824gOu5.pg.spec.ts
+          apps/finance-service/src/expense-category/expense-category.pg.spec.ts
+          apps/finance-service/src/expense-category/expense-report.ljVOuNz4.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
@@ -293,6 +295,9 @@ jobs:
           ORDER_T8_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # T3: kassa cheki — o'z vaqtinchalik bazasi (migratsiya 188 `finance_schema`).
           FINANCE_T3_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # Xarajat kategoriyalari (migratsiya 129/197/214, standart kategoriya qulfi —
+          # ega 2026-11-11): o'z vaqtinchalik bazalari, elchi_e_test faqat ulanish uchun.
+          FINANCE_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file

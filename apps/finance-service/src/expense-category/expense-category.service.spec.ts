@@ -5,8 +5,11 @@ import {
   CASHBOX_EXPENSE_CATEGORY_SEED,
   CreateCashboxExpenseCategories1716000000129,
 } from '../../../../migrations/1716000000129-CreateCashboxExpenseCategories';
+import { CashboxExpenseCategoryIsDefault1716000000214 } from '../../../../migrations/1716000000214-CashboxExpenseCategoryIsDefault';
 import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.entity';
 import {
+  DEFAULT_CATEGORY_DELETE_FORBIDDEN,
+  DEFAULT_CATEGORY_EDIT_FORBIDDEN,
   ExpenseCategoryService,
   ExpenseCategoryView,
   resolveSpendExpenseCategory,
@@ -180,6 +183,99 @@ describe('Elchi Pochta №1 — seed (migratsiya 129)', () => {
   });
 });
 
+describe('Standart kategoriyalar qulfi (migratsiya 214, ega 2026-11-11)', () => {
+  it('up(): `is_default` ustuni (NOT NULL DEFAULT false) va seed qatorlari — `created_by IS NULL` — standart; `is_deleted` ga tegmaydi', async () => {
+    const queryRunner = { query: jest.fn().mockResolvedValue(undefined) };
+    await new CashboxExpenseCategoryIsDefault1716000000214().up(
+      queryRunner as never,
+    );
+    const sql = (queryRunner.query.mock.calls as Array<[string]>)
+      .map(([q]) => q)
+      .join('\n');
+    expect(sql).toContain(
+      'ADD COLUMN IF NOT EXISTS "is_default" BOOLEAN NOT NULL DEFAULT false',
+    );
+    expect(sql).toMatch(
+      /SET "is_default" = true\s+WHERE "created_by" IS NULL\s+AND "is_default" = false/,
+    );
+    expect(sql).not.toMatch(/SET[^;]*"is_deleted"/);
+    expect(sql).toContain("set_config('lock_timeout', '5s', true)");
+
+    const down = { query: jest.fn().mockResolvedValue(undefined) };
+    await new CashboxExpenseCategoryIsDefault1716000000214().down(
+      down as never,
+    );
+    expect((down.query.mock.calls as Array<[string]>)[0][0]).toContain(
+      'DROP COLUMN IF EXISTS "is_default"',
+    );
+  });
+
+  it('⭐ standart kategoriya: tahrirlash — 403, o`chirish — 403; qator saqlanmaydi, jurnalga yozilmaydi', async () => {
+    const row = category({ is_default: true });
+    const env = makeEnv([row]);
+
+    for (const patch of [
+      { name: 'Benzin' },
+      { description: null },
+      { sort_order: 40 },
+    ]) {
+      expect(
+        await rpcError(
+          env.service.update({ id: '2', ...patch, updated_by: '1' }),
+        ),
+      ).toEqual({ statusCode: 403, message: DEFAULT_CATEGORY_EDIT_FORBIDDEN });
+    }
+    expect(
+      await rpcError(env.service.remove({ id: '2', deleted_by: '1' })),
+    ).toEqual({ statusCode: 403, message: DEFAULT_CATEGORY_DELETE_FORBIDDEN });
+
+    expect(env.manager.save).not.toHaveBeenCalled();
+    expect(env.activityLog.log).not.toHaveBeenCalled();
+    expect(row).toMatchObject({
+      name: "Yoqilg'i",
+      description: 'Benzin, gaz, dizel',
+      sort_order: 2,
+      isDeleted: false,
+      updated_by: null,
+    });
+
+    // Ro'yxatda belgi bilan: FE tahrirlash / o'chirish tugmalarini ko'rsatmaydi.
+    const list = await result<{ items: ExpenseCategoryView[] }>(
+      env.service.list(),
+    );
+    expect(list.data.items[0]).toMatchObject({ id: '2', is_default: true });
+  });
+
+  it('yangi qo`shilgan (standart emas) — avvalgidek tahrirlanadi va o`chiriladi; yangi qator `is_default` siz yaratiladi', async () => {
+    const env = makeEnv([
+      category({ id: '30', name: 'Kofe', created_by: '1', is_default: false }),
+    ]);
+    const created = await result<{ category: ExpenseCategoryView }>(
+      env.service.create({ name: 'Choy', created_by: '1' }),
+    );
+    expect(created.data.category.is_default).toBe(false);
+    expect(env.manager.create).toHaveBeenCalledWith(
+      CashboxExpenseCategory,
+      expect.not.objectContaining({ is_default: true }),
+    );
+
+    const updated = await result<{ category: ExpenseCategoryView }>(
+      env.service.update({ id: '30', name: 'Kofe va choy', updated_by: '1' }),
+    );
+    expect(updated.data.category).toMatchObject({
+      name: 'Kofe va choy',
+      is_default: false,
+    });
+    const removed = await result<{ category: ExpenseCategoryView }>(
+      env.service.remove({ id: '30', deleted_by: '1' }),
+    );
+    expect(removed.data.category).toMatchObject({
+      id: '30',
+      is_deleted: true,
+    });
+  });
+});
+
 describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
   it('ro`yxat: sukut — faqat o`chirilmaganlar, sort_order → id tartibida; include_deleted — hammasi', async () => {
     const env = makeEnv([category()]);
@@ -199,6 +295,7 @@ describe('Elchi Pochta №1 — ExpenseCategoryService', () => {
         description: 'Benzin, gaz, dizel',
         sort_order: 2,
         is_deleted: false,
+        is_default: false,
         created_by: null,
         updated_by: null,
         created_at: createdAt,

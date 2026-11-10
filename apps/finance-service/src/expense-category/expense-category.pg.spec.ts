@@ -7,6 +7,7 @@ import {
   CreateCashboxExpenseCategories1716000000129,
 } from '../../../../migrations/1716000000129-CreateCashboxExpenseCategories';
 import { FinancialExpenseCategory1716000000197 } from '../../../../migrations/1716000000197-FinancialExpenseCategory';
+import { CashboxExpenseCategoryIsDefault1716000000214 } from '../../../../migrations/1716000000214-CashboxExpenseCategoryIsDefault';
 import { FinanceServiceService } from '../finance-service.service';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
@@ -65,6 +66,8 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
   const migration = new CreateCashboxExpenseCategories1716000000129();
   // ljVOuNz4 — `ledger_category` entity'da, ustuni migratsiya 197 da.
   const ledgerMigration = new FinancialExpenseCategory1716000000197();
+  // Ega 2026-11-11 — `is_default` (standart kategoriya qulfi) migratsiya 214 da.
+  const defaultMigration = new CashboxExpenseCategoryIsDefault1716000000214();
   const ORIGINAL_ENV = process.env.FINANCE_REQUIRE_OPEN_SHIFT;
 
   const dbUrl = () => {
@@ -116,6 +119,7 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
     const runner = db.createQueryRunner();
     await migration.up(runner);
     await ledgerMigration.up(runner);
+    await defaultMigration.up(runner);
     await runner.release();
 
     const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
@@ -177,6 +181,7 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
       await migration.down(runner);
       await migration.up(runner);
       await ledgerMigration.up(runner);
+      await defaultMigration.up(runner);
     } finally {
       await runner.release();
     }
@@ -265,38 +270,53 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
       ),
     ).rejects.toMatchObject({ code: '23505' });
 
-    const fuelId = await idOf("Yoqilg'i");
-    await categories.remove({ id: fuelId, deleted_by: '1' });
+    // Standart (seed) kategoriya o'chirilmaydi (ega 2026-11-11) — nomni
+    // qayta berishni superadmin qo'shgan kategoriyada tekshiramiz.
+    const coffee = await result<{ category: ExpenseCategoryView }>(
+      categories.create({ name: 'Kofe', created_by: '1' }),
+    );
+    const coffeeId = coffee.data.category.id;
+    expect(coffee.data.category).toMatchObject({
+      sort_order: 18,
+      is_default: false,
+    });
+    await categories.remove({ id: coffeeId, deleted_by: '1' });
     const again = await result<{ category: ExpenseCategoryView }>(
-      categories.create({ name: "Yoqilg'i", created_by: '1' }),
+      categories.create({ name: 'KOFE', created_by: '1' }),
     );
     expect(again.statusCode).toBe(201);
     expect(again.data.category).toMatchObject({
-      name: "Yoqilg'i",
+      name: 'KOFE',
       sort_order: 18,
       created_by: '1',
+      is_default: false,
     });
-    expect(again.data.category.id).not.toBe(fuelId);
+    expect(again.data.category.id).not.toBe(coffeeId);
 
     // Ro'yxat: o'chirilgan sukut bo'yicha yo'q, include_deleted — oxirida.
     const list = await result<{ items: ExpenseCategoryView[] }>(
       categories.list(),
     );
-    expect(list.data.items).toHaveLength(17);
-    expect(list.data.items.at(-1)?.name).toBe("Yoqilg'i");
+    expect(list.data.items).toHaveLength(18);
+    expect(list.data.items.at(-1)?.name).toBe('KOFE');
     const withDeleted = await result<{ items: ExpenseCategoryView[] }>(
       categories.list({ include_deleted: true }),
     );
-    expect(withDeleted.data.items).toHaveLength(18);
+    expect(withDeleted.data.items).toHaveLength(19);
     expect(withDeleted.data.items.at(-1)).toMatchObject({
-      id: fuelId,
+      id: coffeeId,
       is_deleted: true,
       updated_by: '1',
     });
   });
 
   it('⭐ chiqim kategoriya bilan → tarixda id + nom; kategoriya qayta nomlansa / o`chirilsa ham tarix nomni saqlaydi; o`chirilganga chiqim — 400, kassa o`zgarmaydi', async () => {
-    const fuelId = await idOf("Yoqilg'i");
+    // Standart kategoriya tahrirlanmaydi / o'chirilmaydi (ega 2026-11-11) —
+    // snapshot superadmin qo'shgan kategoriyada tekshiriladi.
+    const created = await result<{ category: ExpenseCategoryView }>(
+      categories.create({ name: "Yoqilg'i (filial)", created_by: '1' }),
+    );
+    const fuelId = created.data.category.id;
     const spent = await result<{ history: HistoryRow }>(
       finance.spendMoney({
         user_id: '1',
@@ -310,7 +330,7 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
     );
     expect(spent.data.history).toMatchObject({
       expense_category_id: fuelId,
-      expense_category_name: "Yoqilg'i",
+      expense_category_name: "Yoqilg'i (filial)",
     });
     expect((await main()).balance_cash).toBe(450_000);
 
@@ -324,20 +344,20 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
     expect(history.data.items).toHaveLength(1);
     expect(history.data.items[0]).toMatchObject({
       expense_category_id: fuelId,
-      expense_category_name: "Yoqilg'i",
+      expense_category_name: "Yoqilg'i (filial)",
     });
     const detail = await result<HistoryRow>(
       finance.findHistoryById(String(spent.data.history.id)),
     );
     expect(detail.data).toMatchObject({
       expense_category_id: fuelId,
-      expense_category_name: "Yoqilg'i",
+      expense_category_name: "Yoqilg'i (filial)",
     });
     const mainPage = await result<{ cashboxHistory: HistoryRow[] }>(
       finance.getMainCashbox(),
     );
     expect(mainPage.data.cashboxHistory[0]).toMatchObject({
-      expense_category_name: "Yoqilg'i",
+      expense_category_name: "Yoqilg'i (filial)",
     });
 
     // O'chirilgan kategoriyaga yangi chiqim — 400, hech narsa yozilmaydi.
@@ -371,5 +391,115 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
       expense_category_name: null,
     });
     expect((await main()).balance_cash).toBe(440_000);
+  });
+
+  it("⭐ migratsiya 214 + qulf (ega 2026-11-11): seed'dagi 17 ta — standart, superadmin qo`shgani — yo`q; standartni tahrirlash / o`chirish — 403, bazada hech narsa o`zgarmaydi; standartga chiqim ishlayveradi", async () => {
+    const flags = () =>
+      db.query<
+        Array<{ name: string; is_default: boolean; is_deleted: boolean }>
+      >(
+        `SELECT "name", "is_default", "is_deleted"
+           FROM "finance_schema"."cashbox_expense_categories"
+          ORDER BY "id"`,
+      );
+    expect(
+      (await flags()).filter((r) => r.is_default).map((r) => r.name),
+    ).toEqual(seededNames());
+
+    // Prod holati: migratsiyadan OLDIN superadmin seed'ni qayta nomlagan,
+    // birini o'chirgan va o'zi kategoriya qo'shgan.
+    const runner = db.createQueryRunner();
+    try {
+      await defaultMigration.down(runner);
+      const fuelId = await idOf("Yoqilg'i");
+      const rentId = await idOf('Ijara (arenda)');
+      await db.query(
+        `UPDATE "finance_schema"."cashbox_expense_categories"
+            SET "name" = 'Benzin', "updated_by" = 1 WHERE "id" = $1`,
+        [fuelId],
+      );
+      await db.query(
+        `UPDATE "finance_schema"."cashbox_expense_categories"
+            SET "is_deleted" = true, "updated_by" = 1 WHERE "id" = $1`,
+        [rentId],
+      );
+      await db.query(
+        `INSERT INTO "finance_schema"."cashbox_expense_categories"
+           ("name", "sort_order", "created_by") VALUES ('Kofe', 18, 1)`,
+      );
+      await defaultMigration.up(runner);
+      await defaultMigration.up(runner); // idempotent
+    } finally {
+      await runner.release();
+    }
+    const rows = await flags();
+    expect(rows.filter((r) => r.is_default)).toHaveLength(17);
+    expect(rows.find((r) => r.name === 'Benzin')).toMatchObject({
+      is_default: true,
+      is_deleted: false,
+    });
+    expect(rows.find((r) => r.name === 'Ijara (arenda)')).toMatchObject({
+      is_default: true,
+      is_deleted: true,
+    });
+    expect(rows.find((r) => r.name === 'Kofe')).toMatchObject({
+      is_default: false,
+    });
+
+    // Standart — tahrirlash ham, o'chirish ham 403; qator o'zgarmaydi.
+    const foodId = await idOf('Ovqatlanish');
+    const before = await activeRows();
+    for (const patch of [
+      { name: 'Tushlik' },
+      { description: null },
+      { sort_order: 99 },
+    ]) {
+      expect(
+        await rpcError(
+          categories.update({ id: foodId, ...patch, updated_by: '1' }),
+        ),
+      ).toEqual({
+        statusCode: 403,
+        message: "Standart xarajat kategoriyasini tahrirlab bo'lmaydi",
+      });
+    }
+    expect(
+      await rpcError(categories.remove({ id: foodId, deleted_by: '1' })),
+    ).toEqual({
+      statusCode: 403,
+      message: "Standart xarajat kategoriyasini o'chirib bo'lmaydi",
+    });
+    expect(await activeRows()).toEqual(before);
+
+    // Ro'yxatda belgi bor; superadmin qo'shgani avvalgidek tahrirlanadi va o'chiriladi.
+    const list = await result<{ items: ExpenseCategoryView[] }>(
+      categories.list(),
+    );
+    expect(list.data.items.find((c) => c.id === foodId)?.is_default).toBe(true);
+    const coffeeId = await idOf('Kofe');
+    await categories.update({
+      id: coffeeId,
+      name: 'Kofe va choy',
+      updated_by: '1',
+    });
+    await categories.remove({ id: coffeeId, deleted_by: '1' });
+    expect((await activeRows()).map((r) => r.name)).not.toContain(
+      'Kofe va choy',
+    );
+
+    // Standart kategoriyaga chiqim — avvalgidek.
+    const spent = await result<{ history: HistoryRow }>(
+      finance.spendMoney({
+        user_id: '1',
+        amount: 20_000,
+        dedup_epoch: 'pg-spend-default',
+        expense_category_id: foodId,
+        financial_ledger: true,
+      }),
+    );
+    expect(spent.data.history).toMatchObject({
+      expense_category_id: foodId,
+      expense_category_name: 'Ovqatlanish',
+    });
   });
 });

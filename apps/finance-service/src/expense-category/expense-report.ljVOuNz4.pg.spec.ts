@@ -10,6 +10,7 @@ import {
   Source_type,
 } from '@app/common';
 import { CreateCashboxExpenseCategories1716000000129 } from '../../../../migrations/1716000000129-CreateCashboxExpenseCategories';
+import { CashboxExpenseCategoryIsDefault1716000000214 } from '../../../../migrations/1716000000214-CashboxExpenseCategoryIsDefault';
 import {
   FinancialExpenseCategory1716000000197,
   SEED_LEDGER_CATEGORY_BY_NAME,
@@ -115,6 +116,8 @@ describePg('ljVOuNz4 — daftar kategoriyasi, haqiqiy Postgres', () => {
     await db.initialize();
     const runner = db.createQueryRunner();
     await new CreateCashboxExpenseCategories1716000000129().up(runner);
+    // Entity'dagi `is_default` ustuni (ega 2026-11-11) — migratsiya 214.
+    await new CashboxExpenseCategoryIsDefault1716000000214().up(runner);
     await runner.release();
 
     finance = new FinanceServiceService(

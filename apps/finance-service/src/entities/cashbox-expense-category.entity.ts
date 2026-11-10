@@ -6,7 +6,8 @@ import { ExpenseCategory } from '@app/common/enums';
  * Elchi Pochta №1 — kassa xarajati kategoriyasi (migratsiya 1716000000129).
  * "To'lovlar → Kassa → xarajat" (`PATCH /finance/cashbox/spend`) da
  * tanlanadi; ro'yxatni superadmin boshqaradi (qo'shish / tahrirlash /
- * o'chirish).
+ * o'chirish). Standart kategoriyalar (`is_default`, migratsiya 214) —
+ * tahrirlanmaydi va o'chirilmaydi.
  *
  * Nom o'chirilmaganlar orasida noyob — `lower(name)` partial unique indeksi
  * migratsiyada. O'chirish SOFT (`is_deleted`): tarix qatorlari
@@ -31,6 +32,15 @@ export class CashboxExpenseCategory extends BaseEntity {
   /** Oxirgi tahrirlagan / o'chirgan foydalanuvchi. */
   @Column({ type: 'bigint', nullable: true })
   updated_by!: string | null;
+
+  /**
+   * Standart kategoriya (migratsiya 214: seed 129 dagi 17 ta) — ega
+   * 2026-11-11: tahrirlab ham, o'chirib ham bo'lmaydi (servis 403).
+   * Superadmin qo'shganlari — `false`, ular avvalgidek tahrirlanadi va
+   * o'chiriladi.
+   */
+  @Column({ type: 'boolean', default: false })
+  is_default!: boolean;
 
   /**
    * ljVOuNz4 (migratsiya 197) — kassa kategoriyasining yopiq ro'yxatdagi

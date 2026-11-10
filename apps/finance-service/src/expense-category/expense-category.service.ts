@@ -17,7 +17,10 @@ import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.ent
  *   • qo'shish / tahrirlash / o'chirish — faqat superadmin (gateway @Roles).
  *     O'chirish SOFT: tarix qatorlari nomni snapshot sifatida saqlaydi
  *     (`cashbox_history.expense_category_name`), o'chirilgan nom yangi
- *     kategoriyaga qayta berilishi mumkin.
+ *     kategoriyaga qayta berilishi mumkin;
+ *   • standart kategoriyalar (`is_default`, migratsiya 214 — seed'dagi 17 ta)
+ *     — ega 2026-11-11: tahrirlab ham, o'chirib ham bo'lmaydi (403, qator
+ *     o'zgarmaydi, jurnalga yozilmaydi). Yangi qo'shilganlari — `false`.
  *
  * Qulf tartibi: tahrirlash / o'chirish qatorni FOR UPDATE bilan oladi, qo'lda
  * chiqim (`resolveSpendExpenseCategory`) esa FOR SHARE — o'chirish jarayondagi
@@ -32,6 +35,16 @@ const ID_RE = /^\d+$/;
 function conflict(message: string): never {
   throw new RpcException({ statusCode: 409, message });
 }
+
+function forbidden(message: string): never {
+  throw new RpcException({ statusCode: 403, message });
+}
+
+/** Ega 2026-11-11 — standart kategoriya qulfi (matnlar FE xabarida ham). */
+export const DEFAULT_CATEGORY_EDIT_FORBIDDEN =
+  "Standart xarajat kategoriyasini tahrirlab bo'lmaydi";
+export const DEFAULT_CATEGORY_DELETE_FORBIDDEN =
+  "Standart xarajat kategoriyasini o'chirib bo'lmaydi";
 
 function toRpcError(error: unknown): never {
   if (error instanceof RpcException) {
@@ -196,6 +209,8 @@ export type ExpenseCategoryView = {
   description: string | null;
   sort_order: number;
   is_deleted: boolean;
+  /** Standart (seed) kategoriya — tahrirlanmaydi, o'chirilmaydi. */
+  is_default: boolean;
   created_by: string | null;
   updated_by: string | null;
   created_at: Date;
@@ -227,6 +242,7 @@ export class ExpenseCategoryService {
       description: category.description ?? null,
       sort_order: Number(category.sort_order ?? 0),
       is_deleted: category.isDeleted === true,
+      is_default: category.is_default === true,
       created_by: category.created_by ?? null,
       updated_by: category.updated_by ?? null,
       created_at: category.createdAt,
@@ -380,6 +396,9 @@ export class ExpenseCategoryService {
           if (!category) {
             throw new NotFoundException('Kategoriya topilmadi');
           }
+          if (category.is_default) {
+            forbidden(DEFAULT_CATEGORY_EDIT_FORBIDDEN);
+          }
           if (
             patch.name !== undefined &&
             (await this.hasDuplicateName(manager, patch.name, id))
@@ -436,7 +455,8 @@ export class ExpenseCategoryService {
   /**
    * DELETE /finance/cashbox/expense-categories/:id — SOFT o'chirish.
    * Tanlov ro'yxatidan yo'qoladi, yangi chiqimga berilsa 400; mavjud tarix
-   * qatorlari nomni (snapshot) ko'rsatishda davom etadi.
+   * qatorlari nomni (snapshot) ko'rsatishda davom etadi. Standart
+   * kategoriya — 403 (o'chirilmaydi).
    */
   async remove(input: { id: string; deleted_by?: string | null }) {
     try {
@@ -449,6 +469,9 @@ export class ExpenseCategoryService {
         });
         if (!row) {
           throw new NotFoundException('Kategoriya topilmadi');
+        }
+        if (row.is_default) {
+          forbidden(DEFAULT_CATEGORY_DELETE_FORBIDDEN);
         }
         row.isDeleted = true;
         row.updated_by = deletedBy;
