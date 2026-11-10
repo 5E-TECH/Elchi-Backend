@@ -15,6 +15,7 @@ import { CarrierThrottlerGuard } from './auth/carrier-throttler.guard';
 import { CarrierGatewayController } from './carrier-gateway.controller';
 import {
   CARRIER_API_KEY_SCHEME,
+  CARRIER_API_SERVERS,
   CARRIER_SWAGGER_GUIDE,
   buildCarrierSwaggerDocument,
   filterCarrierDocument,
@@ -172,7 +173,7 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
     beforeAll(async () => {
       const built = await buildApp({ NODE_ENV: 'development' });
       doc = buildCarrierSwaggerDocument(built.app, {
-        serverUrl: 'https://api.elchipochta.uz',
+        servers: CARRIER_API_SERVERS,
       });
       await built.app.close();
     });
@@ -193,9 +194,16 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
       );
     });
 
-    it('statik spec’da server manzili bor; quantity — integer', () => {
+    it('statik spec’da production va test serverlari bor; quantity — integer', () => {
       expect(doc.servers).toEqual([
-        expect.objectContaining({ url: 'https://api.elchipochta.uz' }),
+        {
+          url: 'https://api.elchipochta.uz',
+          description: expect.stringContaining('Production'),
+        },
+        {
+          url: 'https://test-api.elchipochta.uz',
+          description: expect.stringContaining('Test'),
+        },
       ]);
       const item = doc.components?.schemas?.CarrierPartlySoldItemDto as {
         properties: Record<string, { type?: string }>;
@@ -347,6 +355,21 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
       // Basic Auth faqat hujjatga — API'ning o'zi X-Api-Key bilan.
       expect((await request(server).get('/carrier/ping')).status).toBe(200);
     });
+  });
+
+  it('qo‘llanmadagi «Muhitlar» = statik spec serverlari; misollarda qattiq host yo‘q', () => {
+    for (const server of CARRIER_API_SERVERS) {
+      expect(CARRIER_SWAGGER_GUIDE).toContain(`| \`${server.url}\` |`);
+      expect(CARRIER_SWAGGER_GUIDE).toContain(`\`${server.url}/carrier-docs\``);
+    }
+    // curl misollari faqat BASE_URL orqali — test'chi production'ga yuborilmaydi.
+    const curlLines = CARRIER_SWAGGER_GUIDE.split('\n').filter((line) =>
+      line.startsWith('curl'),
+    );
+    expect(curlLines.length).toBeGreaterThanOrEqual(3);
+    for (const line of curlLines) {
+      expect(line).toContain('"$BASE_URL/carrier/');
+    }
   });
 
   it('docs/public/CARRIER_API_QUICKSTART.md = Swagger’dagi qo‘llanma', () => {

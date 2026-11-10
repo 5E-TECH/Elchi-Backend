@@ -1622,7 +1622,9 @@ settlement FIFO and tracking are unchanged (no `markByProvider`, no
   (Basic Auth; no password → stays closed). Its description is the quickstart
   (`CARRIER_SWAGGER_GUIDE` = `docs/public/CARRIER_API_QUICKSTART.md`, spec
   keeps them equal). `npm run openapi:generate` also writes
-  `docs/public/carrier-openapi.json`; CI drift gate checks both specs.
+  `docs/public/carrier-openapi.json` (servers: production + test
+  `test-api.elchipochta.uz`, `CARRIER_API_SERVERS`); CI drift gate checks both
+  specs. Guide/quickstart examples use `BASE_URL` + a «Muhitlar» table.
 
 ---
 

@@ -1,11 +1,14 @@
 # Elchi Pochta — Carrier API (tashqi yetkazuvchi)
 
-**Dasturchilar uchun qo'llanma** · Versiya 1 · Oxirgi yangilanish: 2026-11-10
+**Dasturchilar uchun qo'llanma** · Versiya 1 · Oxirgi yangilanish: 2026-11-11
 
 > Qisqa variant: [`CARRIER_API_QUICKSTART.md`](./CARRIER_API_QUICKSTART.md).
-> Interaktiv hujjat (Swagger, faqat Carrier API): `https://api.elchipochta.uz/carrier-docs`
-> — login va parolni Elchi beradi. Mashina o'qiydigan spec:
-> [`carrier-openapi.json`](./carrier-openapi.json) (Postman / kod generatori).
+> Interaktiv hujjat (Swagger, faqat Carrier API): test —
+> `https://test-api.elchipochta.uz/carrier-docs`, production —
+> `https://api.elchipochta.uz/carrier-docs` (login va parolni Elchi beradi;
+> muhitlar — §1 «Baza manzili»). Mashina o'qiydigan spec:
+> [`carrier-openapi.json`](./carrier-openapi.json) (Postman / kod generatori;
+> ikkala server ham ichida).
 
 Bu hujjat Elchi Pochta posilkalarini **yetkazib beradigan tashqi kompaniya**
 dasturchisi uchun. Unda quyidagilar bor: posilka QR'ini skanerlab buyurtma
@@ -55,9 +58,19 @@ marta, ulanishda qilinadi. Keyingi oqim:
 
 ### Baza manzili
 
-```
-https://api.elchipochta.uz
-```
+| Muhit | Baza manzili (`BASE_URL`) | Swagger |
+|---|---|---|
+| Test | `https://test-api.elchipochta.uz` | `https://test-api.elchipochta.uz/carrier-docs` |
+| Production | `https://api.elchipochta.uz` | `https://api.elchipochta.uz/carrier-docs` |
+
+- Avval **test muhitida** sinang: kontrakt production bilan bir xil, lekin
+  ma'lumot faqat sinov uchun (haqiqiy mijoz va pul yo'q).
+- Test va production — **alohida tizimlar**: kalit, kurier akkaunti va
+  buyurtmalar alohida. Test kaliti production'da ishlamaydi (va aksincha).
+- Swagger sahifasi login/parol (Basic Auth) bilan yopiq — ularni Elchi beradi.
+  U yerda **Authorize** tugmasiga `X-Api-Key` ni kiritib, "Try it out" bilan
+  so'rov yuborish mumkin; so'rov sahifa ochilgan muhitga ketadi.
+- Yo'llarda `/api` yoki versiya prefiksi yo'q: `BASE_URL` + `/carrier/...`.
 
 ---
 
@@ -67,7 +80,7 @@ Har bir so'rovda **`X-Api-Key`** sarlavhasi bo'lishi kerak:
 
 ```http
 GET /carrier/ping HTTP/1.1
-Host: api.elchipochta.uz
+Host: test-api.elchipochta.uz
 X-Api-Key: elc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 

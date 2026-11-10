@@ -41,10 +41,18 @@ export const CARRIER_SWAGGER_GUIDE = `Elchi Pochta posilkalarini yetkazadigan ta
 
 Har so'rovda \`X-Api-Key\` sarlavhasi (kalit \`elc_\` bilan boshlanadi, uni Elchi operatori beradi). Kalit faqat bir marta ko'rsatiladi — xavfsiz saqlang.
 
-Interaktiv hujjat: \`https://api.elchipochta.uz/carrier-docs\` (login va parolni Elchi beradi). U yerda **Authorize** tugmasiga kalitni kiritib, so'rovlarni to'g'ridan-to'g'ri sinash mumkin.
+**Muhitlar.** Avval test muhitida sinang. Test va production — alohida tizimlar: kalit ham, buyurtmalar ham alohida (test kaliti production'da ishlamaydi va aksincha).
+
+| Muhit | \`BASE_URL\` | Interaktiv hujjat (Swagger) |
+|---|---|---|
+| Test | \`https://test-api.elchipochta.uz\` | \`https://test-api.elchipochta.uz/carrier-docs\` |
+| Production | \`https://api.elchipochta.uz\` | \`https://api.elchipochta.uz/carrier-docs\` |
+
+Swagger sahifasining login va parolini Elchi beradi. U yerda **Authorize** tugmasiga kalitni kiritib, so'rovlarni ("Try it out") to'g'ridan-to'g'ri sinash mumkin — so'rov sahifa ochilgan muhitga yuboriladi. Quyidagi misollarda \`BASE_URL\` — tanlangan muhit manzili:
 
 \`\`\`bash
-curl https://api.elchipochta.uz/carrier/ping -H "X-Api-Key: elc_..."
+BASE_URL=https://test-api.elchipochta.uz
+curl "$BASE_URL/carrier/ping" -H "X-Api-Key: elc_..."
 \`\`\`
 
 ## 2. Ish oqimi
@@ -52,7 +60,7 @@ curl https://api.elchipochta.uz/carrier/ping -H "X-Api-Key: elc_..."
 **1) Skanerlash** — posilkani qo'lingizga olganda:
 
 \`\`\`bash
-curl -X POST https://api.elchipochta.uz/carrier/scan \\
+curl -X POST "$BASE_URL/carrier/scan" \\
   -H "X-Api-Key: elc_..." -H "Content-Type: application/json" \\
   -d '{"qr_token":"a1b2c3d4e5"}'
 \`\`\`
@@ -62,7 +70,7 @@ Javobda buyurtma (\`data.order\`): mijoz, manzil, tovarlar va **\`cod_amount\` �
 **2) Natijani yuborish** — \`data.order.id\` bilan. **\`Idempotency-Key\` majburiy** — har yangi urinish uchun yangi UUID:
 
 \`\`\`bash
-curl -X POST https://api.elchipochta.uz/carrier/orders/900/status \\
+curl -X POST "$BASE_URL/carrier/orders/900/status" \\
   -H "X-Api-Key: elc_..." -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{"status":"sold"}'
@@ -177,14 +185,29 @@ export function splitMultipartProofBodies(doc: OpenAPIObject): OpenAPIObject {
   return doc;
 }
 
+export type CarrierApiServer = { url: string; description: string };
+
 /**
- * @param serverUrl statik spec uchun (`scripts/generate-openapi.ts`:
- *   `https://api.elchipochta.uz`). Jonli `/carrier-docs` da BERILMAYDI —
- *   "Try it out" sahifa ochilgan host'ga yuboradi (staging'dan prod'ga emas).
+ * Statik spec (`docs/public/carrier-openapi.json`) serverlari — qo'llanmadagi
+ * «Muhitlar» jadvali bilan bir xil manzillar (`carrier-swagger.spec.ts`
+ * tekshiradi). Postman / kod generatori server tanlovini shundan oladi.
+ */
+export const CARRIER_API_SERVERS: readonly CarrierApiServer[] = [
+  { url: 'https://api.elchipochta.uz', description: 'Production' },
+  {
+    url: 'https://test-api.elchipochta.uz',
+    description: 'Test muhiti — avval shu yerda sinang (alohida kalit)',
+  },
+];
+
+/**
+ * @param servers statik spec uchun (`scripts/generate-openapi.ts`:
+ *   `CARRIER_API_SERVERS`). Jonli `/carrier-docs` da BERILMAYDI — "Try it
+ *   out" sahifa ochilgan host'ga yuboradi (test'dan production'ga emas).
  */
 export function buildCarrierSwaggerDocument(
   app: INestApplication,
-  options: { serverUrl?: string } = {},
+  options: { servers?: readonly CarrierApiServer[] } = {},
 ): OpenAPIObject {
   const builder = new DocumentBuilder()
     .setTitle('Elchi Pochta — Carrier API')
@@ -195,8 +218,8 @@ export function buildCarrierSwaggerDocument(
       CARRIER_API_KEY_SCHEME,
     )
     .addTag('Carrier', 'Tashqi yetkazuvchi endpointlari');
-  if (options.serverUrl) {
-    builder.addServer(options.serverUrl);
+  for (const server of options.servers ?? []) {
+    builder.addServer(server.url, server.description);
   }
   return splitMultipartProofBodies(
     filterCarrierDocument(SwaggerModule.createDocument(app, builder.build())),

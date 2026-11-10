@@ -6,10 +6,18 @@ Elchi Pochta posilkalarini yetkazadigan tashqi kompaniya uchun API. Elchi'da siz
 
 Har so'rovda `X-Api-Key` sarlavhasi (kalit `elc_` bilan boshlanadi, uni Elchi operatori beradi). Kalit faqat bir marta ko'rsatiladi — xavfsiz saqlang.
 
-Interaktiv hujjat: `https://api.elchipochta.uz/carrier-docs` (login va parolni Elchi beradi). U yerda **Authorize** tugmasiga kalitni kiritib, so'rovlarni to'g'ridan-to'g'ri sinash mumkin.
+**Muhitlar.** Avval test muhitida sinang. Test va production — alohida tizimlar: kalit ham, buyurtmalar ham alohida (test kaliti production'da ishlamaydi va aksincha).
+
+| Muhit | `BASE_URL` | Interaktiv hujjat (Swagger) |
+|---|---|---|
+| Test | `https://test-api.elchipochta.uz` | `https://test-api.elchipochta.uz/carrier-docs` |
+| Production | `https://api.elchipochta.uz` | `https://api.elchipochta.uz/carrier-docs` |
+
+Swagger sahifasining login va parolini Elchi beradi. U yerda **Authorize** tugmasiga kalitni kiritib, so'rovlarni ("Try it out") to'g'ridan-to'g'ri sinash mumkin — so'rov sahifa ochilgan muhitga yuboriladi. Quyidagi misollarda `BASE_URL` — tanlangan muhit manzili:
 
 ```bash
-curl https://api.elchipochta.uz/carrier/ping -H "X-Api-Key: elc_..."
+BASE_URL=https://test-api.elchipochta.uz
+curl "$BASE_URL/carrier/ping" -H "X-Api-Key: elc_..."
 ```
 
 ## 2. Ish oqimi
@@ -17,7 +25,7 @@ curl https://api.elchipochta.uz/carrier/ping -H "X-Api-Key: elc_..."
 **1) Skanerlash** — posilkani qo'lingizga olganda:
 
 ```bash
-curl -X POST https://api.elchipochta.uz/carrier/scan \
+curl -X POST "$BASE_URL/carrier/scan" \
   -H "X-Api-Key: elc_..." -H "Content-Type: application/json" \
   -d '{"qr_token":"a1b2c3d4e5"}'
 ```
@@ -27,7 +35,7 @@ Javobda buyurtma (`data.order`): mijoz, manzil, tovarlar va **`cod_amount` — m
 **2) Natijani yuborish** — `data.order.id` bilan. **`Idempotency-Key` majburiy** — har yangi urinish uchun yangi UUID:
 
 ```bash
-curl -X POST https://api.elchipochta.uz/carrier/orders/900/status \
+curl -X POST "$BASE_URL/carrier/orders/900/status" \
   -H "X-Api-Key: elc_..." -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
   -d '{"status":"sold"}'

@@ -53,6 +53,7 @@ import {
 } from '../apps/api-gateway/src/auth/route-roles';
 import {
   CARRIER_API_KEY_SCHEME,
+  CARRIER_API_SERVERS,
   buildCarrierSwaggerDocument,
 } from '../apps/api-gateway/src/carrier-swagger';
 
@@ -106,8 +107,9 @@ async function main() {
     'public',
     'carrier-openapi.json',
   );
+  // Ikki server: production va test muhiti (`CARRIER_API_SERVERS`).
   const carrierDocument = buildCarrierSwaggerDocument(app, {
-    serverUrl: 'https://api.elchipochta.uz',
+    servers: CARRIER_API_SERVERS,
   });
   writeFileSync(
     carrierPath,
