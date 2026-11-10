@@ -12040,6 +12040,67 @@
         ]
       }
     },
+    "/finance/cashbox/cards/{id}/delete": {
+      "post": {
+        "description": "cards1111 — SOFT o'chirish: karta ro'yxatlardan (`include_inactive=true` da ham) yo'qoladi, nomi qayta ishlatilishi mumkin; tarix, harakatlar va smena hisobotlari nomni saqlaydi. Asosiy karta → 400 «Asosiy kartani o'chirib bo'lmaydi — avval boshqa kartani asosiy qiling». Qoldiq 0 — shunchaki o'chiriladi (`move_to` e'tiborsiz, smena shart emas). Qoldiq > 0: `move_to` majburiy (yo'q → 400 «Kartada N so'm bor — o'chirishdan oldin qoldiqni boshqa kartaga yoki naqd kassaga o'tkazing»); `card` — `to_card_id` ga (shu kassa, faol, o'zi emas; Asosiy karta ham bo'ladi) CARD_TO_CARD harakat; `cash` — CARD_TO_CASH (balance_card −, balance_cash +; umumiy balans o'zgarmaydi). Pul ko'chishi smena darvozasi ostida (transfer / convert kabi). Ochiq smenadagi shu kartaning tasdiqlanmagan qoldiq qoralamalari ham o'chiriladi. Javob 200: `data.card` (`is_deleted: true`), `data.movement` (yoki null), `data.moved_amount`, `data.idempotent`. `Idempotency-Key` bilan takror — 200, `idempotent: true` (faqat pul ko'chgan o'chirishda; qoldiqsiz o'chirish takrori — 404 «Karta topilmadi»); kalit boshqa amalda ishlatilgan — 409.",
+        "operationId": "FinanceGatewayController_deleteCashboxCard",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Karta ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCashboxCardRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kartani o'chirish (qoldiq bo'lsa avval boshqa kartaga yoki naqdga o'tkaziladi)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/finance/cashbox/expense-categories": {
       "get": {
         "description": "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
@@ -30017,6 +30078,31 @@
           "amount",
           "comment"
         ]
+      },
+      "DeleteCashboxCardRequestDto": {
+        "type": "object",
+        "properties": {
+          "move_to": {
+            "type": "string",
+            "enum": [
+              "card",
+              "cash"
+            ],
+            "example": "card",
+            "description": "Kartada qoldiq bo'lsa majburiy: `card` — shu kassaning boshqa faol kartasiga (Asosiy karta ham bo'ladi), `cash` — naqd kassaga (balance_card −, balance_cash +). Qoldiq 0 bo'lsa e'tiborsiz."
+          },
+          "to_card_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Qoldiq o'tkaziladigan karta ID (`move_to: card` da majburiy; o'sha kartaning o'zi emas, shu kassada, faol)."
+          },
+          "comment": {
+            "type": "string",
+            "example": "Karta yopildi",
+            "maxLength": 1000,
+            "description": "Harakat izohi. Berilmasa: `\"<nom>\" kartasi o'chirildi — qoldiq o'tkazildi`."
+          }
+        }
       },
       "CreateCashboxExpenseCategoryRequestDto": {
         "type": "object",

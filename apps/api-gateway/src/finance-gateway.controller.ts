@@ -96,6 +96,7 @@ import {
   OpenShiftRequestDto,
   ConvertCashboxCardRequestDto,
   CreateCashboxCardRequestDto,
+  DeleteCashboxCardRequestDto,
   UpdateCashboxCardRequestDto,
   SetCashboxCardStatusRequestDto,
   TransferCashboxCardRequestDto,
@@ -4944,8 +4945,7 @@ export class FinanceGatewayController {
       deliveries?: unknown;
       report?: { file_key?: unknown } & Record<string, unknown>;
     };
-    const { file_key: fileKey, ...reportRest } =
-      report ?? ({} as Record<string, unknown>);
+    const { file_key: fileKey, ...reportRest } = report ?? {};
     const fileUrl = isSuperadmin ? this.shiftFileUrl(req, fileKey) : null;
     return {
       ...response,
@@ -5568,6 +5568,41 @@ export class FinanceGatewayController {
       {
         ...dto,
         created_by: String(req.user.sub),
+        ...(key ? { dedup_epoch: key } : {}),
+      },
+    );
+  }
+
+  // cards1111 — DELETE + tana emas: gateway'da DELETE so'rov tanasi pretsedenti
+  // yo'q (proksi / mijozlar tanani tashlab yuborishi mumkin).
+  @Post('cashbox/cards/:id/delete')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Kartani o'chirish (qoldiq bo'lsa avval boshqa kartaga yoki naqdga o'tkaziladi)",
+    description:
+      "cards1111 — SOFT o'chirish: karta ro'yxatlardan (`include_inactive=true` da ham) yo'qoladi, nomi qayta ishlatilishi mumkin; tarix, harakatlar va smena hisobotlari nomni saqlaydi. Asosiy karta → 400 «Asosiy kartani o'chirib bo'lmaydi — avval boshqa kartani asosiy qiling». Qoldiq 0 — shunchaki o'chiriladi (`move_to` e'tiborsiz, smena shart emas). Qoldiq > 0: `move_to` majburiy (yo'q → 400 «Kartada N so'm bor — o'chirishdan oldin qoldiqni boshqa kartaga yoki naqd kassaga o'tkazing»); `card` — `to_card_id` ga (shu kassa, faol, o'zi emas; Asosiy karta ham bo'ladi) CARD_TO_CARD harakat; `cash` — CARD_TO_CASH (balance_card −, balance_cash +; umumiy balans o'zgarmaydi). Pul ko'chishi smena darvozasi ostida (transfer / convert kabi). Ochiq smenadagi shu kartaning tasdiqlanmagan qoldiq qoralamalari ham o'chiriladi. Javob 200: `data.card` (`is_deleted: true`), `data.movement` (yoki null), `data.moved_amount`, `data.idempotent`. `Idempotency-Key` bilan takror — 200, `idempotent: true` (faqat pul ko'chgan o'chirishda; qoldiqsiz o'chirish takrori — 404 «Karta topilmadi»); kalit boshqa amalda ishlatilgan — 409.",
+  })
+  @ApiParam({ name: 'id', description: 'Karta ID' })
+  @ApiHeader({ name: 'Idempotency-Key', required: false })
+  @ApiBody({ type: DeleteCashboxCardRequestDto, required: false })
+  deleteCashboxCard(
+    @Req() req: { user: JwtUser },
+    @Param('id') id: string,
+    @Body() dto: DeleteCashboxCardRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    const cardId = this.assertCardId(id);
+    const key = this.readIdempotencyKey(idempotencyKey);
+    return this.send(
+      { cmd: 'finance.cashbox.cards.delete' },
+      {
+        ...dto,
+        id: cardId,
+        deleted_by: String(req.user.sub),
         ...(key ? { dedup_epoch: key } : {}),
       },
     );

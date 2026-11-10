@@ -164,6 +164,63 @@ describe('3PE0B03q — /finance/cashbox/cards gateway kontrakti', () => {
     expect(finance.send).not.toHaveBeenCalled();
   });
 
+  it('cards1111: POST /finance/cashbox/cards/:id/delete → finance.cashbox.cards.delete (move_to, to_card_id, comment, deleted_by, Idempotency-Key → dedup_epoch), 200', async () => {
+    const ok = await request(app.getHttpServer())
+      .post('/finance/cashbox/cards/5/delete')
+      .set('Idempotency-Key', ' del-1 ')
+      .send({ move_to: 'card', to_card_id: '1', comment: 'Karta yopildi' });
+    expect(ok.status).toBe(200);
+    expect(lastCall()).toEqual([
+      { cmd: 'finance.cashbox.cards.delete' },
+      {
+        id: '5',
+        move_to: 'card',
+        to_card_id: '1',
+        comment: 'Karta yopildi',
+        deleted_by: '9',
+        dedup_epoch: 'del-1',
+      },
+    ]);
+
+    // Tanasiz (qoldiq 0) va naqdga — kalitsiz dedup_epoch yo'q.
+    const empty = await request(app.getHttpServer()).post(
+      '/finance/cashbox/cards/5/delete',
+    );
+    expect(empty.status).toBe(200);
+    expect(lastCall()).toEqual([
+      { cmd: 'finance.cashbox.cards.delete' },
+      { id: '5', deleted_by: '9' },
+    ]);
+    await request(app.getHttpServer())
+      .post('/finance/cashbox/cards/5/delete')
+      .send({ move_to: 'cash' });
+    expect(lastCall()?.[1]).toEqual({
+      move_to: 'cash',
+      id: '5',
+      deleted_by: '9',
+    });
+
+    finance.send.mockClear();
+    const bad: Array<[string, Record<string, unknown>, string?]> = [
+      ['abc', {}],
+      ['5', { move_to: 'bank' }],
+      ['5', { move_to: 'card', to_card_id: 'x' }],
+      ['5', { comment: '' }],
+      ['5', { comment: 'x'.repeat(1001) }],
+      ['5', { amount: 100 }],
+      ['5', {}, 'k'.repeat(256)],
+    ];
+    for (const [id, body, key] of bad) {
+      const req = request(app.getHttpServer()).post(
+        `/finance/cashbox/cards/${id}/delete`,
+      );
+      if (key) req.set('Idempotency-Key', key);
+      const res = await req.send(body);
+      expect(res.status).toBe(400);
+    }
+    expect(finance.send).not.toHaveBeenCalled();
+  });
+
   it('PATCH /:id va /:id/status, GET /movements va /:id/ledger — to`g`ri cmd; noto`g`ri id → 400', async () => {
     await request(app.getHttpServer())
       .patch('/finance/cashbox/cards/3')
@@ -268,6 +325,8 @@ describe('3PE0B03q — /finance/cashbox/cards gateway kontrakti', () => {
       'setCashboxCardStatus',
       'transferCashboxCards',
       'convertCashboxCard',
+      // cards1111 — o'chirish ham faqat superadmin/admin (menejer — 403).
+      'deleteCashboxCard',
     ]) {
       const descriptor = Object.getOwnPropertyDescriptor(
         FinanceGatewayController.prototype,

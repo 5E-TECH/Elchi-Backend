@@ -45,6 +45,8 @@ import {
 import { FinanceNotificationService } from '../notification/finance-notification.service';
 import { FinanceRealtimeService } from '../realtime/finance-realtime.service';
 import {
+  PAYMENT_CARD_DELETED_MESSAGE,
+  correctionCardLeg,
   evaluateCorrectable,
   readWindowSetting,
   type CorrectableVerdict,
@@ -751,7 +753,9 @@ export class PaymentCorrectionService {
    *    chiqadi — usul cho'ntagi va karta (nomli — o'z qoldig'i, Asosiy —
    *    hosila qoldiq) yetishi shart; click_to_market da MAIN sof 0;
    *  • marketga to'lov tahriri: MAIN ga X qaytadi, keyin yangi summa chiqadi;
-   *  • to'lov kartasi arxivda — CARD_ARCHIVED.
+   *  • to'lov kartasi arxivda — CARD_ARCHIVED;
+   *  • cards1111: to'lov kartasi o'chirilgan — NOT_CORRECTABLE
+   *    (`cashbox_deleted`), matni — «To'lov kartasi o'chirilgan …».
    */
   private async assertFunds(
     tx: EntityManager,
@@ -759,18 +763,22 @@ export class PaymentCorrectionService {
     receiverBox: Cashbox,
     newAmount: number | null,
   ) {
-    const receiverLeg =
-      shape.kind === 'market_payment' ? shape.mainMarketLeg : shape.receiverLeg;
     const method = shape.payment_method;
-    const card =
-      receiverLeg?.card_id && method === PaymentMethod.CLICK
-        ? await tx.findOne(CashboxCard, {
-            where: { id: String(receiverLeg.card_id), isDeleted: false },
-            lock: { mode: 'pessimistic_write' },
-          })
-        : null;
-    if (receiverLeg?.card_id && method === PaymentMethod.CLICK) {
-      if (!card || String(card.cashbox_id) !== String(receiverBox.id)) {
+    const cardLeg = correctionCardLeg(shape);
+    // O'chirilgan karta ham o'qiladi — aniq xato matni uchun.
+    const card = cardLeg
+      ? await tx.findOne(CashboxCard, {
+          where: { id: String(cardLeg.card_id) },
+          lock: { mode: 'pessimistic_write' },
+        })
+      : null;
+    if (cardLeg) {
+      if (!card || card.isDeleted) {
+        fail(409, C.NOT_CORRECTABLE, PAYMENT_CARD_DELETED_MESSAGE, {
+          reason: R.CASHBOX_DELETED,
+        });
+      }
+      if (String(card.cashbox_id) !== String(receiverBox.id)) {
         failCode(409, C.NOT_CORRECTABLE, { reason: R.CASHBOX_DELETED });
       }
       if (!card.is_active && !card.is_default) {

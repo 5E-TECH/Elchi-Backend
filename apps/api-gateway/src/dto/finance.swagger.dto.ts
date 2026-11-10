@@ -1468,6 +1468,50 @@ export class ConvertCashboxCardRequestDto {
   comment!: string;
 }
 
+/** cards1111 — o'chirilayotgan karta qoldig'i qayerga o'tadi. */
+export enum CashboxCardDeleteMoveTo {
+  CARD = 'card',
+  CASH = 'cash',
+}
+
+/**
+ * cards1111 — POST /finance/cashbox/cards/:id/delete (hammasi ixtiyoriy).
+ * Qoldiq 0 — maydonlar e'tiborsiz; qoldiq > 0 — `move_to` majburiy
+ * (finance 400), `card` da `to_card_id` ham.
+ */
+export class DeleteCashboxCardRequestDto {
+  @ApiPropertyOptional({
+    enum: CashboxCardDeleteMoveTo,
+    example: CashboxCardDeleteMoveTo.CARD,
+    description:
+      "Kartada qoldiq bo'lsa majburiy: `card` — shu kassaning boshqa faol kartasiga (Asosiy karta ham bo'ladi), `cash` — naqd kassaga (balance_card −, balance_cash +). Qoldiq 0 bo'lsa e'tiborsiz.",
+  })
+  @IsOptional()
+  @IsEnum(CashboxCardDeleteMoveTo)
+  move_to?: CashboxCardDeleteMoveTo;
+
+  @ApiPropertyOptional({
+    example: '1',
+    description:
+      "Qoldiq o'tkaziladigan karta ID (`move_to: card` da majburiy; o'sha kartaning o'zi emas, shu kassada, faol).",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  to_card_id?: string;
+
+  @ApiPropertyOptional({
+    example: 'Karta yopildi',
+    maxLength: 1000,
+    description:
+      'Harakat izohi. Berilmasa: `"<nom>" kartasi o\'chirildi — qoldiq o\'tkazildi`.',
+  })
+  @IsOptional()
+  @IsString()
+  @Length(1, 1000)
+  comment?: string;
+}
+
 export class RecordFinancialBalanceRequestDto {
   @ApiProperty({
     example: -50000,
