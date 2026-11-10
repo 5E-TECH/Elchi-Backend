@@ -9,6 +9,7 @@ import { RmqService, executeAndAck } from '@app/common';
 import {
   CashboxCardService,
   type CardCashboxScope,
+  type CardDeleteMoveTo,
   type CardDetailsInput,
 } from './cashbox-card.service';
 import type { CardMovementType } from '../entities/cashbox-card-movement.entity';
@@ -29,8 +30,7 @@ export class CashboxCardController {
   list(
     @Payload()
     data:
-      | ({ include_inactive?: boolean | string } & CardCashboxScope)
-      | undefined,
+      ({ include_inactive?: boolean | string } & CardCashboxScope) | undefined,
     @Ctx() context: RmqContext,
   ) {
     return executeAndAck(this.rmqService, context, () =>
@@ -139,6 +139,28 @@ export class CashboxCardController {
   ) {
     return executeAndAck(this.rmqService, context, () =>
       this.cards.convert(data),
+    );
+  }
+
+  /**
+   * cards1111 — kartani o'chirish (soft). Qoldiq bo'lsa `move_to`
+   * (`card` + `to_card_id` | `cash`) bo'yicha avval ko'chiriladi.
+   */
+  @MessagePattern({ cmd: 'finance.cashbox.cards.delete' })
+  delete(
+    @Payload()
+    data: {
+      id: string;
+      move_to?: CardDeleteMoveTo | null;
+      to_card_id?: string | null;
+      comment?: string | null;
+      deleted_by?: string | null;
+      dedup_epoch?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.cards.deleteCard(data),
     );
   }
 
