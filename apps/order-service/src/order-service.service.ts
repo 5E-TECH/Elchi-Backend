@@ -1948,6 +1948,11 @@ export class OrderServiceService {
   async statusCounts(payload: {
     query?: OrderListQuery & { search?: string };
     cancelled_query?: (OrderListQuery & { search?: string }) | null;
+    /**
+     * «Marketga topshirildi» tabi (ega 2026-11-10): GET /orders `cancel_stage=market`
+     * bilan AYNI so'rov (gateway quradi) — alohida COUNT. Yo'q bo'lsa `null`.
+     */
+    returned_to_market_query?: (OrderListQuery & { search?: string }) | null;
     new_incoming?: {
       branch_id?: string;
       exclude_branch_source?: boolean;
@@ -1957,6 +1962,7 @@ export class OrderServiceService {
     by_status: Record<string, number>;
     total: number;
     cancelled: number | null;
+    returned_to_market: number | null;
     new_incoming: number | null;
     search_truncated: boolean;
   }> {
@@ -1997,6 +2003,12 @@ export class OrderServiceService {
           return qb ? qb.getCount() : 0;
         })()
       : Promise.resolve(null);
+    const returnedToMarketTask = payload?.returned_to_market_query
+      ? (async () => {
+          const { qb } = await listQuery(payload.returned_to_market_query!);
+          return qb ? qb.getCount() : 0;
+        })()
+      : Promise.resolve(null);
     const newIncomingTask = payload?.new_incoming
       ? (async () => {
           const scope = payload.new_incoming!;
@@ -2027,11 +2039,13 @@ export class OrderServiceService {
 
     let byStatus: Awaited<typeof byStatusTask>;
     let cancelled: number | null;
+    let returnedToMarket: number | null;
     let newIncoming: number | null;
     try {
-      [byStatus, cancelled, newIncoming] = await Promise.all([
+      [byStatus, cancelled, returnedToMarket, newIncoming] = await Promise.all([
         byStatusTask,
         cancelledTask,
+        returnedToMarketTask,
         newIncomingTask,
       ]);
     } catch (error) {
@@ -2051,6 +2065,8 @@ export class OrderServiceService {
       by_status,
       total,
       cancelled: cancelled === null ? null : Number(cancelled) || 0,
+      returned_to_market:
+        returnedToMarket === null ? null : Number(returnedToMarket) || 0,
       new_incoming: newIncoming === null ? null : Number(newIncoming) || 0,
       search_truncated: byStatus.search_truncated,
     };

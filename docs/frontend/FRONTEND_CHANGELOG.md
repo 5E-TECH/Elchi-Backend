@@ -24,15 +24,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-11-10 — Buyurtmalar: «Marketga topshirildi» tabi soni — `GET /orders/status-counts` `data.returned_to_market`
 
-Deploy: faqat api-gateway. Migratsiya yo'q. `openapi.json` yangilandi.
+Deploy: api-gateway + order-service. Migratsiya yo'q. `openapi.json` yangilandi.
 
-- [2026-11-10] ✏️ [gateway] — `GET /orders/status-counts` javobiga **`returned_to_market`** qo'shildi: marketga
-  topshirilgan (`returned_to_market`) buyurtmalar soni, filtrlar va rol doirasi boshqa tablar bilan bir xil. `closed`
-  bu songa kirmaydi. Ilgari bu son faqat `by_status.returned_to_market` da bor edi (0 bo'lsa umuman yo'q).
+- [2026-11-10] ✏️ [gateway, order] — `GET /orders/status-counts` javobiga **`returned_to_market`** qo'shildi —
+  «Marketga topshirildi» tabining soni = `GET /orders?cancel_stage=market` (holatsiz) `total`i, filtrlar va rol
+  doirasi boshqa tablar bilan bir xil. Ta'rif qatordagi `return_stage = market` bilan bir: `returned_to_market`
+  (ombor buyurtmasi omborga qaytgani — kirmaydi) + F4 (2026-10-02) dan oldingi market qo'lidagi `closed` / bekor.
+  Shuning uchun `by_status.returned_to_market` dan farq qilishi mumkin. Eski order-service javob bermasa —
+  `by_status.returned_to_market`.
 - ⚠️ Shu kuni ertaroq dev/test ga chiqqan `data.closed` kaliti («Yopildi» tabi) **olib tashlandi** — ega: «yopildi
   kerak emas, otkaz marketga topshiriladi». main ga chiqmagan edi. `by_status.closed` avvalgidek qoladi.
-- 🔧 FE: `/orders` holat tablarida «Yopildi» o'rniga «Marketga topshirildi» (`status=returned_to_market`), soni
-  `data.returned_to_market` dan (eski backendda `by_status.returned_to_market` dan, u ham bo'lmasa 0).
+- 🔧 FE: `/orders` holat tablarida «Yopildi» o'rniga «Marketga topshirildi» («Bekor qilingan» dan keyin): URL
+  `status=returned_to_market`, ro'yxat so'rovi `cancel_stage=market` (holatsiz), soni `data.returned_to_market` dan
+  (eski backendda `by_status.returned_to_market` dan, u ham bo'lmasa 0).
 
 ### 2026-11-09 — Bugungi qabul vaqti + kun almashish soati: `GET|PATCH /orders/intake-settings`, `409 ORDER_INTAKE_CLOSED`
 

@@ -56,6 +56,9 @@ const COUNTS_REPLY = {
   },
   total: 1267,
   cancelled: null,
+  // `cancel_stage=market` alohida COUNT (by_status.returned_to_market dan farqli:
+  // ombor qaytishlari chiqariladi, F4 dan oldingi market qo'lidagi closed qo'shiladi).
+  returned_to_market: 15,
   new_incoming: 7,
   search_truncated: false,
 };
@@ -156,6 +159,7 @@ const countsPayload = (order: { send: jest.Mock }) => {
   return calls[0][1] as {
     query: Record<string, unknown>;
     cancelled_query: Record<string, unknown> | null;
+    returned_to_market_query: Record<string, unknown> | null;
     new_incoming: Record<string, unknown> | null;
   };
 };
@@ -174,7 +178,7 @@ describe('GaBIPi3Z — GET /orders/status-counts', () => {
       waiting: 41,
       sold: 600,
       paid: 300,
-      returned_to_market: 12,
+      returned_to_market: 15,
       cancelled: 75,
       new_incoming: 7,
       by_status: COUNTS_REPLY.by_status,
@@ -186,9 +190,33 @@ describe('GaBIPi3Z — GET /orders/status-counts', () => {
     expect(payload.query.market_id).toBeUndefined();
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.cancelled_query).toBeNull();
+    // «Marketga topshirildi» — GET /orders?cancel_stage=market (holatsiz) doirasi.
+    expect(payload.returned_to_market_query).toEqual({
+      ...payload.query,
+      cancel_stages: ['market'],
+    });
     expect(payload.new_incoming).toEqual({ exclude_branch_source: true });
     // BITTA so'rov (8 ta alohida emas).
     expect(order.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('«Marketga topshirildi»: so`rovdagi boshqa cancel_stage almashtiriladi; eski order-service (son yo`q) — by_status.returned_to_market', async () => {
+    const legacyReply: Record<string, unknown> = { ...COUNTS_REPLY };
+    delete legacyReply.returned_to_market;
+    const { controller, order } = setup({
+      order: { 'order.status_counts': legacyReply },
+    });
+    const res = (await call(controller, user('1', ['admin']), {
+      market_id: '37',
+      cancel_stage: 'hq',
+    })) as { data: Record<string, unknown> };
+    const payload = countsPayload(order);
+    expect(payload.query.cancel_stages).toEqual(['hq']);
+    expect(payload.returned_to_market_query).toEqual({
+      ...payload.query,
+      cancel_stages: ['market'],
+    });
+    expect(res.data.returned_to_market).toBe(12);
   });
 
   it("⭐ GET /orders filtrlari o'tadi (market, sana, qidiruv, where_deliver, region, filial, kuryer, manba)", async () => {
@@ -282,6 +310,13 @@ describe('GaBIPi3Z — GET /orders/status-counts', () => {
     expect(payload.new_incoming).toEqual({ branch_id: '3' });
     // GET /orders?status=cancelled,... (menejer) bilan AYNI son.
     expect(res.data.cancelled).toBe(4);
+    // «Marketga topshirildi» — o'z filiali, inventar rejimisiz.
+    expect(payload.returned_to_market_query).toEqual({
+      ...payload.query,
+      cancel_stages: ['market'],
+    });
+    expect(payload.returned_to_market_query?.holder_type).toBeUndefined();
+    expect(res.data.returned_to_market).toBe(15);
   });
 
   it('registrator / filial: filialga biriktirilmagan — 400 (GET /orders kabi)', async () => {
@@ -341,6 +376,12 @@ describe('GaBIPi3Z — GET /orders/status-counts', () => {
     });
     expect(payload.new_incoming).toBeNull();
     expect(res.data.cancelled).toBe(2);
+    // Kuryer bekor tabi rejimi bosqich bilan yoqilmaydi — o'zi, oddiy doira.
+    expect(payload.returned_to_market_query).toEqual({
+      ...payload.query,
+      cancel_stages: ['market'],
+    });
+    expect(payload.returned_to_market_query?.courier_cancelled_tab).toBeUndefined();
   });
 
   it('⭐ logist: faqat o`z viloyatlari (region_ids), begona viloyat 400, viloyatsiz — nol (order-service`ga so`rov yo`q)', async () => {

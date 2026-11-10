@@ -4715,7 +4715,9 @@ export class OrderGatewayController {
     description:
       'GaBIPi3Z. Filters and role scope are EXACTLY those of GET /orders (same query params except ' +
       '`status`/`page`/`limit`/`sort_*`/`fetch_all`, which are ignored). One GROUP BY status query. ' +
-      '`all` = GET /orders total without status; `paid` = paid + partly_paid; `returned_to_market` = returned_to_market; `cancelled` = cancelled + ' +
+      '`all` = GET /orders total without status; `paid` = paid + partly_paid; `returned_to_market` = «Marketga topshirildi» tab = total of ' +
+      'GET /orders?cancel_stage=market (no status; returned_to_market except warehouse orders returned to the warehouse, ' +
+      'plus pre-F4 closed/cancelled held by the market — same as the row `return_stage`); `cancelled` = cancelled + ' +
       '"cancelled (sent)" — for branch staff / HQ registrator / courier it is the total of their own ' +
       'cancelled tab (GET /orders?status=cancelled,cancelled (sent) — inventory / courier cancelled tab). ' +
       '`new_incoming` — «Qabul va yaratish» badge: NEW orders not yet received into a batch, scoped like ' +
@@ -4855,6 +4857,12 @@ export class OrderGatewayController {
       },
       user,
     );
+    // «Marketga topshirildi» tabi (ega 2026-11-10): FE ro'yxati
+    // GET /orders?cancel_stage=market (holatsiz) — son ham AYNAN shu doiradan.
+    const marketTab = await this.resolveOrderListRequest(
+      { ...filters, cancel_stage: 'market' },
+      user,
+    );
 
     const toCount = (value: unknown) => {
       const parsed = Number(value);
@@ -4864,6 +4872,7 @@ export class OrderGatewayController {
       byStatus: Record<string, unknown>,
       all: unknown,
       cancelled: unknown,
+      returnedToMarket: unknown,
       newIncoming: unknown,
       searchTruncated: boolean,
     ) => {
@@ -4881,9 +4890,12 @@ export class OrderGatewayController {
           waiting: by(Order_status.WAITING),
           sold: by(Order_status.SOLD),
           paid: by(Order_status.PAID) + by(Order_status.PARTLY_PAID),
-          // «Marketga topshirildi» tabi (ega 2026-11-10; «Yopildi» tabi o'rniga):
-          // faqat RETURNED_TO_MARKET (F4 dan beri otkaz marketga topshirilganda).
-          returned_to_market: by(Order_status.RETURNED_TO_MARKET),
+          // «Marketga topshirildi» tabi (ega 2026-11-10; «Yopildi» tabi o'rniga) —
+          // `cancel_stage=market` soni; eski order-service javob bermasa xom holat.
+          returned_to_market:
+            returnedToMarket === null || returnedToMarket === undefined
+              ? by(Order_status.RETURNED_TO_MARKET)
+              : toCount(returnedToMarket),
           cancelled:
             cancelled === null || cancelled === undefined
               ? by(Order_status.CANCELLED) + by(Order_status.CANCELLED_SENT)
@@ -4902,7 +4914,7 @@ export class OrderGatewayController {
 
     if (base.kind !== 'query') {
       // 4BftLLnc: viloyat biriktirilmagan logist — bo'sh ro'yxat → nol.
-      return build({}, 0, 0, null, false);
+      return build({}, 0, 0, 0, null, false);
     }
 
     const stripListKeys = (query: Record<string, unknown>) => {
@@ -4941,18 +4953,23 @@ export class OrderGatewayController {
       }
     }
 
+    const returnedToMarketQuery =
+      marketTab.kind === 'query' ? stripListKeys(marketTab.query) : null;
+
     const newIncomingScope = this.newIncomingScope(user, baseQuery);
     const counts = (await this.sendOrderWithTimeout(
       { cmd: 'order.status_counts' },
       {
         query: baseQuery,
         cancelled_query: cancelledQuery,
+        returned_to_market_query: returnedToMarketQuery,
         new_incoming: newIncomingScope,
       },
     )) as {
       by_status?: Record<string, unknown>;
       total?: unknown;
       cancelled?: unknown;
+      returned_to_market?: unknown;
       new_incoming?: unknown;
       search_truncated?: unknown;
     } | null;
@@ -4961,6 +4978,11 @@ export class OrderGatewayController {
       counts?.by_status ?? {},
       counts?.total,
       cancelledQuery ? (counts?.cancelled ?? 0) : null,
+      returnedToMarketQuery
+        ? (counts?.returned_to_market ?? null)
+        : marketTab.kind === 'empty'
+          ? 0
+          : null,
       newIncomingScope ? (counts?.new_incoming ?? 0) : null,
       counts?.search_truncated === true,
     );
