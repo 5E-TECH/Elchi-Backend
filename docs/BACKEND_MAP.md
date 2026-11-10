@@ -847,7 +847,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (default off, owner decision 2026-10-22).
 - **Cashbox receipts (T3, 2026-10-30, migr `1716000000188`):** photo + AI
   check for manual expenses (`manual_expense`) and click courier → HQ /
-  branch → HQ transfers (`courier_to_hq` / `branch_to_hq`).
+  branch → HQ transfers (`courier_to_hq` / `branch_to_hq`). Since BE-C
+  (owner 2026-11-10) a receipt applies ONLY to card (`click`) operations —
+  manual expenses too (`isReceiptPaymentMethod` in libs/common; cash /
+  click_to_market + `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`, no
+  `RECEIPT_REQUIRED`; `RECEIPT_EXPECTED_SQL` counts only click manual
+  expenses).
   `cashbox-receipt/`: `CashboxReceiptService` (settings in `finance_settings`
   `receipt.{manual_expense,hq_transfer}.{photo_required,ai_enabled}`, SA-only
   update; draft upload; `linkInTx` inside the payment tx — `spendMoney`,

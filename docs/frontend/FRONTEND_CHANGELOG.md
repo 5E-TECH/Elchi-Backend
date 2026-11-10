@@ -22,6 +22,57 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-10 — Kassa: qo'lda chiqim cheki faqat karta (`click`) chiqimida — naqd chiqimda chek yo'q
+
+Deploy: finance-service + api-gateway (+ libs/common; ai-service — faqat AI yordamchi tool tavsifi, ixtiyoriy).
+**Migratsiya yo'q.** `openapi.json` yangilandi. Ega qarori 2026-11-10 («faqat karta chiqimida») — qo'lda chiqim
+uchun 2026-10-29 qarorining («har qanday kategoriyali chiqimda chek») o'rniga. HQ'ga o'tkazmalar (kuryer → HQ,
+filial → HQ) qoidasi **o'zgarmadi** (avvalgidek faqat `click`).
+
+> **Deploy tartibi: FE bilan BIRGA chiqarilsin.** Eski FE (T3, 2026-10-30) naqd chiqimga ham chek yuklab
+> `receipt_id` yuboradi → yangi backend 400 `RECEIPT_NOT_APPLICABLE` (naqd chiqim o'tmaydi). Yangi FE naqdda
+> `receipt_id` yubormaydi → eski backend 400 `RECEIPT_REQUIRED`. Birga chiqarib bo'lmasa: superadmin birinchi
+> deploydan OLDIN `PATCH /finance/receipt-settings` `{ "manual_expense": { "photo_required": false } }` (AI ham
+> o'chadi; `manual_expense` yuklash → 400 `RECEIPT_DISABLED`, yangi `receipt_id` olinmaydi), ikkala deploy
+> chiqqach avvalgi qiymatlarni qayta yoqadi (sukut: `{ "manual_expense": { "photo_required": true,
+> "ai_enabled": true } }`). O'chiq paytda karta chiqimida ham chek so'ralmaydi va AI tahlili bo'lmaydi. Xuddi shu
+> eslatma PR / deploy ro'yxatida ham bo'lsin.
+
+- [2026-11-10] ⚠️ [gateway, finance] — **`PATCH /finance/cashbox/spend`**: chek endi **faqat karta chiqimida**
+  (`type: "click"`).
+  - **Karta (`click`)** — avvalgidek: `GET /finance/receipt-settings` → `manual_expense.photo_required: true` bo'lsa
+    `receipt_id` majburiy (yo'q → 400 `RECEIPT_REQUIRED` «Chek rasmini yuklang»), chek bog'lanadi, AI tahlili
+    (`data.receipt: { id, ai_status }`). Boshqa xatolar o'zgarmagan (`RECEIPT_NOT_FOUND` 400,
+    `RECEIPT_NOT_OWNER` 403, `RECEIPT_KIND_MISMATCH` 400, `RECEIPT_ALREADY_USED` 409).
+  - **Naqd** (`type: "cash"` yoki `type` yo'q — sukut naqd) va `type: "click_to_market"` — chek **so'ralmaydi**,
+    `photo_required` yoqiq bo'lsa ham: `receipt_id` siz → 200, `data.receipt: null` (`RECEIPT_REQUIRED` yo'q).
+  - Naqd / `click_to_market` + `receipt_id` → **400** `{ code: "RECEIPT_NOT_APPLICABLE", message: "Bu operatsiyada
+    chek qo'llanmaydi" }` (HQ'ga naqd o'tkazma bilan AYNI kod va matn). Pul, kassa tarixi, P&L yozuvi va jurnal
+    yozilmaydi; chek qoralama (`draft`) holatida qoladi — 24 soat ichida karta chiqimiga biriktirish mumkin.
+  - Menejer (filial kassasi) chiqimiga ham xuddi shu qoida. Takroriy `Idempotency-Key` — asl natija (naqdda
+    `receipt: null`).
+- [2026-11-10] ✏️ [finance] — **«Chek yo'q»** (`GET /finance/history?receipt_status=none`) va
+  **`GET /finance/receipts/summary`** `counts.none` (shuningdek `by_branch[].counts.none`,
+  `by_category[].counts.none`): qo'lda chiqim cheksiz qator sifatida **faqat karta (`click`) bilan to'langan
+  bo'lsa** sanaladi. Naqd qo'lda chiqim (avvalgi naqd chiqimlar ham) endi `none` ga **kirmaydi** — `counts.none`
+  kamayishi mumkin. HQ'ga o'tkazmalar qoidasi o'zgarmagan (MAIN'ga `click` kuryer / filial o'tkazmasi).
+  Faqat **kutilish** o'zgardi: eski naqd chiqimga ilgari bog'langan chek o'z AI holati bo'yicha
+  (`receipt_status=match|mismatch|…`, `counts.match` …) va tarix qatorining `receipt` blokida avvalgidek ko'rinadi.
+  `counts.none` = `GET /finance/history?receipt_status=none` jami (shu davrda) — avvalgidek bir xil predikat.
+- [2026-11-10] 🟢 [gateway] — `POST /finance/receipts` o'zgarmagan (`kind: "manual_expense"` yuklash sozlama
+  bo'yicha), lekin bunday chek faqat karta chiqimiga biriktiriladi.
+
+→ **Frontendda:**
+
+- 🔧 «Chiqim» (qo'lda chiqim) formasida chek yuklash blokini **faqat `type === "click"` (karta)** tanlanganda
+  ko'rsating. Naqd tanlanganda blokni yashiring / o'chiring, yuklangan qoralamani unuting va so'rovga **`receipt_id`
+  yubormang** (aks holda 400 `RECEIPT_NOT_APPLICABLE`). To'lov usuli karta → naqdga o'zgartirilsa `receipt_id` ni
+  tozalang.
+- 🔧 «Chek majburiy» belgisi / tekshiruvi (`manual_expense.photo_required`) — faqat karta chiqimida; naqd chiqimni
+  chek yo'qligi uchun bloklamang.
+- 🟢 `RECEIPT_NOT_APPLICABLE` — `code` bo'yicha xabar (matn backenddan). «Chek yo'q» filtri / xulosa soni — o'zgarish
+  shart emas (backend hisoblaydi), faqat yorliq yoki tooltip bo'lsa: «karta chiqimi va HQ'ga click o'tkazma».
+
 ### 2026-11-11 — Kassa xarajati kategoriyalari: standart kategoriyalar qulflangan — `is_default`
 
 Deploy: finance-service + api-gateway. **Migratsiya 214** (`cashbox_expense_categories.is_default`). `openapi.json`

@@ -1,13 +1,15 @@
 /**
- * T3 (QlLf33Ma) — kassa CHEKI: qo'lda chiqim va HQ'ga o'tkazmalarda chek
- * rasmi + AI tahlili. Gateway ↔ finance-service kontrakti: turlar, holatlar,
- * sozlama kalitlari, xato kodlari (`PUBLIC_ERROR_CODES` ga ham) va sozlama
- * qoidasi.
+ * T3 (QlLf33Ma) — kassa CHEKI: karta (`click`) bilan qo'lda chiqim va HQ'ga
+ * o'tkazmalarda chek rasmi + AI tahlili (BE-C, 2026-11-10: faqat karta —
+ * `isReceiptPaymentMethod`). Gateway ↔ finance-service kontrakti: turlar,
+ * holatlar, sozlama kalitlari, xato kodlari (`PUBLIC_ERROR_CODES` ga ham) va
+ * sozlama qoidasi.
  *
  * SAQLASH: operatsiyaga bog'langan (`linked`) chek va uning fayli HECH QACHON
  * avtomatik o'chirilmaydi — tarixdan keyin ham ko'riladi. Faqat bog'lanmagan
  * qoralama (`draft`) 24 soatdan keyin tozalanadi.
  */
+import { PaymentMethod } from '../enums';
 
 /** Chek turi: qaysi operatsiyaga biriktiriladi. */
 export const CASHBOX_RECEIPT_KINDS = [
@@ -35,6 +37,20 @@ export const receiptSettingGroupOf = (
   kind: CashboxReceiptKind,
 ): CashboxReceiptSettingGroup =>
   kind === 'manual_expense' ? 'manual_expense' : 'hq_transfer';
+
+/**
+ * BE-C (ega qarori 2026-11-10, «faqat karta chiqimida») — chek FAQAT karta
+ * (`click`) operatsiyasida qo'llanadi: qo'lda chiqim ham (2026-10-29 dagi
+ * «har qanday kategoriyali chiqim» qarori o'rniga), HQ'ga o'tkazma ham
+ * (avvalgidek). Naqd va `click_to_market` — chek yo'q: `receipt_id` → 400
+ * `RECEIPT_NOT_APPLICABLE`, rasm sozlamasi yoqiq bo'lsa ham
+ * `RECEIPT_REQUIRED` yo'q, «Chek yo'q» (`receipt_status=none`) ga kirmaydi
+ * (finance `RECEIPT_EXPECTED_SQL` — AYNI qoida).
+ */
+export const CASHBOX_RECEIPT_PAYMENT_METHOD = PaymentMethod.CLICK;
+
+export const isReceiptPaymentMethod = (method: unknown): boolean =>
+  method === CASHBOX_RECEIPT_PAYMENT_METHOD;
 
 /** `finance_settings` kalitlari (qiymat — boolean; qator yo'q — `true`). */
 export const CASHBOX_RECEIPT_SETTING_KEYS: Readonly<
@@ -126,7 +142,7 @@ export const CASHBOX_RECEIPT_ERROR_CODES = {
   KIND_MISMATCH: 'RECEIPT_KIND_MISMATCH',
   /** 409 — chek boshqa operatsiyaga allaqachon bog'langan. */
   ALREADY_USED: 'RECEIPT_ALREADY_USED',
-  /** 400 — bu operatsiyada chek qo'llanmaydi (naqd, click_to_market …). */
+  /** 400 — chek qo'llanmaydi (naqd chiqim / o'tkazma, click_to_market). */
   NOT_APPLICABLE: 'RECEIPT_NOT_APPLICABLE',
   /** 409 — chek «Mos keldi» — qayta tahlil kerak emas. */
   ALREADY_MATCHED: 'RECEIPT_ALREADY_MATCHED',

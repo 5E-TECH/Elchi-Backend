@@ -69,6 +69,7 @@ import {
   Order_status,
   PaymentMethod,
   Source_type,
+  isReceiptPaymentMethod,
   rmqSend,
   OutboxService,
   tashkentDayRange,
@@ -287,7 +288,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   /**
    * T3 — gateway'ning `receipt_policy` si (faqat 3 HTTP yo'li: qo'lda
    * chiqim, kuryer → HQ, filial → HQ). Ichki RMQ chaqiruvlarida yo'q —
-   * chek talab qilinmaydi.
+   * chek talab qilinmaydi. BE-C (2026-11-10): uchalasida ham chek faqat
+   * karta (`click`) to'lovida qo'llanadi (`isReceiptPaymentMethod`).
    */
   private receiptRequest(
     data: {
@@ -337,7 +339,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         leg.operation_type === Operation_type.EXPENSE,
     );
     const applicable =
-      ctx.payment_method === PaymentMethod.CLICK && Boolean(income);
+      isReceiptPaymentMethod(ctx.payment_method) && Boolean(income);
     return this.receipts.linkInTx(manager, request, {
       applicable,
       history_id: String(income?.id ?? ''),
@@ -2042,13 +2044,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         // T3 — qo'lda chiqim cheki: AYNI tranzaksiyada bog'lanadi (xato —
         // pul ham rollback). Chek talab qilinsa-yu yo'q bo'lsa — 400.
+        // BE-C (ega 2026-11-10) — faqat karta (`click`) chiqimida: naqd
+        // chiqimda chek so'ralmaydi, `receipt_id` → 400
+        // RECEIPT_NOT_APPLICABLE (HQ'ga o'tkazmalar bilan bir xil).
         const linkedReceipt =
           options?.receipt && this.receipts
             ? await this.receipts.linkInTx(
                 queryRunner.manager,
                 options.receipt,
                 {
-                  applicable: true,
+                  applicable: isReceiptPaymentMethod(paymentMethod),
                   history_id: String(savedHistory.id),
                   entered_amount: Number(dto.amount),
                   payment_method: paymentMethod,
@@ -4193,7 +4198,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * tizim chaqiruvchilari yubormaydi — ikki marta yozilmaydi.
      */
     financial_ledger?: boolean;
-    /** T3 — faqat gateway'ning qo'lda chiqimi: `{ kind: 'manual_expense' }`. */
+    /**
+     * T3 — faqat gateway'ning qo'lda chiqimi: `{ kind: 'manual_expense' }`.
+     * BE-C — chek faqat `type=click` da (naqd + `receipt_id` → 400).
+     */
     receipt_policy?: { kind?: unknown };
     receipt_id?: unknown;
   }) {
@@ -5452,9 +5460,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const linkedReceipt =
         receiptRequest && this.receipts
           ? await this.receipts.linkInTx(queryRunner.manager, receiptRequest, {
-              applicable:
-                (data.payment_method ?? PaymentMethod.CASH) ===
-                PaymentMethod.CLICK,
+              applicable: isReceiptPaymentMethod(
+                data.payment_method ?? PaymentMethod.CASH,
+              ),
               history_id: String(mainHistory.id),
               counter_history_id: String(branchHistory.id),
               entered_amount: Number(data.amount),
