@@ -19,6 +19,8 @@ import { ShiftAccountCheckService } from './shift-account-check.service';
  * holatlar; AI o'chiq / AI xatosi yopishni bloklamaydi; rasm majburiy → 400;
  * farq / mismatch → izoh majburiy; sozlamalar faqat superadmin; eski AI
  * natijasi e'tiborsiz; PUL INVARIANTI (balanslar o'zgarmaydi).
+ * BE-A (ega 2026-11-10): sozlama qatori yo'q — MAIN da tasdiqlash + rasm + AI
+ * majburiy, filialda o'chiq; avto-yopish qamrovi kassa bo'yicha.
  * Env (`FINANCE_PG_TEST_URI`) berilmasa skip. Haqiqiy AI CHAQIRILMAYDI —
  * AI javobi `applyAiResult` ga qo'lda beriladi (gateway fon vazifasi o'rniga).
  */
@@ -375,7 +377,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
   });
 
   it('TC: AI xatosi smenani bloklamaydi (error), pending esa kutish tugagach yopiladi', async () => {
-    await setSettings({ ai_check_enabled: true });
+    // BE-A: MAIN tasdiqlash sukut yoqiq — bu holat uchun aniq o'chiriladi.
+    await setSettings({ ai_check_enabled: true, account_check_enabled: false });
     const humo = await attach(String(cards.humo.id), 100_000);
     await checks.applyAiResult({
       shift_id: shiftId,
@@ -465,6 +468,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
   });
 
   it('TC: tasdiqlash o‘chiq va accounts yo‘q — avvalgi yopish oqimi o‘zgarmaydi', async () => {
+    // BE-A: MAIN da sukut yoqiq — superadmin o'chirgan holat.
+    await setSettings({ account_check_enabled: false });
     const closed = (await service.closeShift({
       shift_id: shiftId,
       closed_by: '25',
@@ -475,6 +480,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
   });
 
   it('TC: begona kalit / begona karta / yopilgan smena / eski AI natijasi', async () => {
+    // Oxirida accounts'siz yopiladi — MAIN tasdiqlash (BE-A sukut yoqiq) o'chiq.
+    await setSettings({ account_check_enabled: false });
     const foreignKey = await rpcError(
       service.closeShift({
         shift_id: shiftId,
@@ -584,5 +591,517 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
       service.getShiftReport({ shift_id: shiftId, cashbox_user_id: '13' }),
     );
     expect(err.statusCode).toBe(404);
+  });
+
+  // ─────────────── BE-A (ega 2026-11-10): MAIN sukut majburiy ───────────────
+
+  const BRANCH = '13';
+
+  /** Migratsiya 215 holati: MAIN kartalarining hammasi rasm + AI bilan. */
+  const mainCardsOn = () =>
+    db
+      .getRepository(CashboxCard)
+      .update(
+        { cashbox_id: cashboxId },
+        { require_photo_on_shift_close: true, ai_check_enabled: true },
+      );
+
+  /** Filial kassasi: Asosiy karta + nomli karta (sukut — bayroqlar o'chiq). */
+  const seedBranch = async () => {
+    const cashbox = await db.getRepository(Cashbox).save(
+      db.getRepository(Cashbox).create({
+        user_id: BRANCH,
+        cashbox_type: Cashbox_type.BRANCH,
+        balance: 120_000,
+        balance_cash: 70_000,
+        balance_card: 50_000,
+      } as Partial<Cashbox>),
+    );
+    const repo = db.getRepository(CashboxCard);
+    const def = await repo.save(
+      repo.create({
+        cashbox_id: String(cashbox.id),
+        name: 'Asosiy karta',
+        balance: 0,
+        is_default: true,
+      }),
+    );
+    const humo = await repo.save(
+      repo.create({
+        cashbox_id: String(cashbox.id),
+        name: 'Filial Humo',
+        balance: 20_000,
+        sort_order: 1,
+      }),
+    );
+    const openBranchShift = async () =>
+      String(
+        (
+          await db.getRepository(Shift).save(
+            db.getRepository(Shift).create({
+              opened_by: '26',
+              cashbox_user_id: BRANCH,
+              status: ShiftStatus.OPEN,
+              opened_at: new Date(Date.now() - 3_600_000),
+              opening_balance_cash: 70_000,
+              opening_balance_card: 50_000,
+            }),
+          )
+        ).id,
+      );
+    return { def, humo, openBranchShift };
+  };
+
+  it('BE-A: sozlama qatori yo‘q — MAIN: tasdiqlash + rasm + AI yoqiq; filial: tasdiqlash o‘chiq; GET ikkala kalitni ko‘rsatadi', async () => {
+    await mainCardsOn();
+    await seedBranch();
+    expect(await db.getRepository(FinanceSetting).count()).toBe(0);
+
+    const main = (await checks.getSettings({ cashbox_user_id: '0' })) as Rpc;
+    expect(main.data).toEqual(
+      expect.objectContaining({
+        cashbox_type: 'main',
+        cashbox_user_id: '0',
+        account_check_enabled: true,
+        main_account_check_enabled: true,
+        branch_account_check_enabled: false,
+        photo_required: true,
+        ai_check_enabled: true,
+      }),
+    );
+    expect(main.data.cards).toHaveLength(3);
+    for (const card of main.data.cards) {
+      expect(card).toEqual(
+        expect.objectContaining({
+          require_photo_on_shift_close: true,
+          ai_check_enabled: true,
+          photo_required: true,
+          ai_enabled: true,
+        }),
+      );
+    }
+
+    const branch = (await checks.getSettings({
+      cashbox_user_id: BRANCH,
+    })) as Rpc;
+    expect(branch.data).toEqual(
+      expect.objectContaining({
+        cashbox_type: 'branch',
+        cashbox_user_id: BRANCH,
+        account_check_enabled: false,
+        main_account_check_enabled: true,
+        branch_account_check_enabled: false,
+        photo_required: true,
+        ai_check_enabled: true,
+      }),
+    );
+    expect(branch.data.cards.map((card: any) => card.name)).toEqual([
+      'Asosiy karta',
+      'Filial Humo',
+    ]);
+    for (const card of branch.data.cards) {
+      expect(card).toEqual(
+        expect.objectContaining({ photo_required: false, ai_enabled: false }),
+      );
+    }
+  });
+
+  it('BE-A: MAIN yopish (sukut) — har faol karta qoldig‘i va rasmi majburiy, AI pending; keyin yopiladi', async () => {
+    await mainCardsOn();
+    const before = await balancesSnapshot();
+
+    // accounts yo'q — 400, hamma karta nomi bilan.
+    const none = await rpcError(
+      service.closeShift({
+        shift_id: shiftId,
+        closed_by: '25',
+        closing_balance_cash: 200_000,
+      }),
+    );
+    expect(none.statusCode).toBe(400);
+    expect(none.message).toBe(
+      "Har karta qoldig'ini tasdiqlang: Asosiy karta, Humo, Uzcard",
+    );
+
+    const accounts = [
+      { card_id: String(cards.def.id), entered_balance: 150_000 },
+      { card_id: String(cards.humo.id), entered_balance: 100_000 },
+      { card_id: String(cards.uzcard.id), entered_balance: 50_000 },
+    ];
+    // Bitta karta tushib qolsa — faqat o'sha nomi.
+    const partial = await rpcError(
+      service.closeShift({
+        shift_id: shiftId,
+        closed_by: '25',
+        closing_balance_cash: 200_000,
+        accounts: accounts.slice(1),
+      }),
+    );
+    expect(partial.statusCode).toBe(400);
+    expect(partial.message).toBe(
+      "Har karta qoldig'ini tasdiqlang: Asosiy karta",
+    );
+    // Hamma karta bor, rasm yo'q — 400 (birinchi rasmsiz karta).
+    const noPhoto = await rpcError(
+      service.closeShift({
+        shift_id: shiftId,
+        closed_by: '25',
+        closing_balance_cash: 200_000,
+        accounts,
+      }),
+    );
+    expect(noPhoto.statusCode).toBe(400);
+    expect(noPhoto.message).toBe(
+      '«Asosiy karta»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang',
+    );
+    expect(
+      (await db.getRepository(Shift).findOneByOrFail({ id: shiftId })).status,
+    ).toBe(ShiftStatus.OPEN);
+
+    // Rasm — AI sukut yoqiq: pending + ai_request_id (gateway AI'ni chaqiradi).
+    for (const card of [cards.def, cards.humo, cards.uzcard]) {
+      const res = await attach(String(card.id));
+      expect(res.data.ai_enabled).toBe(true);
+      expect(res.data.ai_request_id).toEqual(expect.any(String));
+      expect(res.data.check.ai_status).toBe('pending');
+      expect(res.data.check.photo_required_snap).toBe(true);
+    }
+    const closed = (await service.closeShift({
+      shift_id: shiftId,
+      closed_by: '25',
+      closing_balance_cash: 200_000,
+      accounts,
+    })) as Rpc;
+    expect(closed.data.status).toBe(ShiftStatus.CLOSED);
+    expect(closed.data.accounts_check).toEqual(
+      expect.objectContaining({ total: 3, pending: 3 }),
+    );
+    const rows = await db.getRepository(ShiftAccountCheck).find({
+      where: { shift_id: shiftId },
+    });
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.photo_required_snap).toBe(true);
+      expect(row.ai_enabled_snap).toBe(true);
+      expect(row.confirmed_by).toBe('25');
+    }
+    // PUL INVARIANTI.
+    expect(await balancesSnapshot()).toEqual(before);
+  });
+
+  it('BE-A: superadmin MAIN kartasini kartama-karta o‘chiradi — o‘sha kartada rasm talab qilinmaydi', async () => {
+    await mainCardsOn();
+    const res = await setSettings({
+      cards: [
+        {
+          card_id: String(cards.def.id),
+          require_photo_on_shift_close: false,
+        },
+      ],
+    });
+    // Rasm o'chsa AI ham o'chadi.
+    expect(res.data.cards).toEqual([
+      expect.objectContaining({
+        card_id: String(cards.def.id),
+        new: { require_photo_on_shift_close: false, ai_check_enabled: false },
+      }),
+    ]);
+    await attach(String(cards.humo.id));
+    await attach(String(cards.uzcard.id));
+    const closed = (await service.closeShift({
+      shift_id: shiftId,
+      closed_by: '25',
+      closing_balance_cash: 200_000,
+      accounts: [
+        { card_id: String(cards.def.id), entered_balance: 150_000 },
+        { card_id: String(cards.humo.id), entered_balance: 100_000 },
+        { card_id: String(cards.uzcard.id), entered_balance: 50_000 },
+      ],
+    })) as Rpc;
+    expect(closed.data.status).toBe(ShiftStatus.CLOSED);
+    const def = await db.getRepository(ShiftAccountCheck).findOneByOrFail({
+      shift_id: shiftId,
+      cashbox_card_id: String(cards.def.id),
+    });
+    expect(def.photo_required_snap).toBe(false);
+    expect(def.ai_status).toBe('not_required');
+  });
+
+  it('BE-A: filial smenasi (sukut) — accounts’siz yopiladi; filial kaliti yoqilsa har karta majburiy', async () => {
+    const branch = await seedBranch();
+    const first = await branch.openBranchShift();
+    const closed = (await service.closeShift({
+      shift_id: first,
+      closed_by: '26',
+      closing_balance_cash: 70_000,
+      cashbox_user_id: BRANCH,
+    })) as Rpc;
+    expect(closed.data.status).toBe(ShiftStatus.CLOSED);
+    expect(closed.data.accounts_check).toBeUndefined();
+    // Ixtiyoriy yuborilgan karta — rasmsiz qabul qilinadi (filial kartasi
+    // bayrog'i o'chiq), qolganlari talab qilinmaydi.
+    const second = await branch.openBranchShift();
+    const voluntary = (await service.closeShift({
+      shift_id: second,
+      closed_by: '26',
+      closing_balance_cash: 70_000,
+      cashbox_user_id: BRANCH,
+      accounts: [{ card_id: String(branch.humo.id), entered_balance: 20_000 }],
+    })) as Rpc;
+    expect(voluntary.data.accounts_check).toEqual(
+      expect.objectContaining({ total: 1, not_required: 1 }),
+    );
+    // MAIN smenasi bu paytda ham majburiy (filial yopilishi unga ta'sir qilmaydi).
+    const mainStill = await rpcError(
+      service.closeShift({
+        shift_id: shiftId,
+        closed_by: '25',
+        closing_balance_cash: 200_000,
+      }),
+    );
+    expect(mainStill.statusCode).toBe(400);
+
+    // Superadmin filial kalitini yoqadi — MAIN kaliti o'zgarmaydi.
+    const patched = await setSettings({ branch_account_check_enabled: true });
+    expect(patched.data).toEqual(
+      expect.objectContaining({
+        cashbox_type: 'main',
+        account_check_enabled: true,
+        main_account_check_enabled: true,
+        branch_account_check_enabled: true,
+      }),
+    );
+    expect(
+      (
+        await db
+          .getRepository(FinanceSetting)
+          .findOneByOrFail({ key: 'shift.account_check.branch_enabled' })
+      ).value,
+    ).toBe(true);
+    const third = await branch.openBranchShift();
+    const required = await rpcError(
+      service.closeShift({
+        shift_id: third,
+        closed_by: '26',
+        closing_balance_cash: 70_000,
+        cashbox_user_id: BRANCH,
+      }),
+    );
+    expect(required.statusCode).toBe(400);
+    expect(required.message).toBe(
+      "Har karta qoldig'ini tasdiqlang: Asosiy karta, Filial Humo",
+    );
+    // Filial kartalarida rasm baribir talab qilinmaydi (karta bayrog'i o'chiq).
+    const ok = (await service.closeShift({
+      shift_id: third,
+      closed_by: '26',
+      closing_balance_cash: 70_000,
+      cashbox_user_id: BRANCH,
+      accounts: [
+        { card_id: String(branch.def.id), entered_balance: 30_000 },
+        { card_id: String(branch.humo.id), entered_balance: 20_000 },
+      ],
+    })) as Rpc;
+    expect(ok.data.status).toBe(ShiftStatus.CLOSED);
+  });
+
+  it('BE-A: avto-yopish — MAIN sukut: har faol karta yoziladi; filial sukut: faqat qoralamali karta', async () => {
+    await mainCardsOn();
+    const branch = await seedBranch();
+    const branchShiftId = await branch.openBranchShift();
+    // Filial: bitta kartaga rasm (qoralama) yuklangan.
+    await checks.attachPhoto({
+      card_id: String(branch.humo.id),
+      photo_file_key: 'shift-check-branch.jpg',
+      entered_balance: 20_000,
+      requester_id: '26',
+      cashbox_user_id: BRANCH,
+    });
+    const record = async (id: string) =>
+      db.transaction(async (manager) => {
+        const shift = await manager.findOneByOrFail(Shift, { id });
+        return checks.recordAtAutoClose(manager, shift);
+      });
+
+    const mainResult = await record(shiftId);
+    expect(mainResult).toEqual(
+      expect.objectContaining({ total: 3, unconfirmed: 3, auto_closed: true }),
+    );
+    const branchResult = await record(branchShiftId);
+    expect(branchResult).toEqual(
+      expect.objectContaining({ total: 1, unconfirmed: 1 }),
+    );
+    expect(
+      (branchResult as { accounts: Array<{ card_id: string }> }).accounts.map(
+        (row) => row.card_id,
+      ),
+    ).toEqual([String(branch.humo.id)]);
+    const mainRows = await db.getRepository(ShiftAccountCheck).find({
+      where: { shift_id: shiftId },
+    });
+    for (const row of mainRows) {
+      expect(row.photo_required_snap).toBe(true);
+      expect(row.entered_balance).toBeNull();
+      expect(row.confirmed_at).toBeNull();
+    }
+  });
+
+  it('BE-A: PATCH branch_account_check_enabled — faqat superadmin, boolean', async () => {
+    const denied = await rpcError(
+      checks.updateSettings({
+        requester_id: '2',
+        requester_roles: ['admin'],
+        branch_account_check_enabled: true,
+      }),
+    );
+    expect(denied.statusCode).toBe(403);
+    const invalid = await rpcError(
+      setSettings({ branch_account_check_enabled: 'ha' }),
+    );
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.message).toBe(
+      "branch_account_check_enabled boolean bo'lishi kerak",
+    );
+    expect(await db.getRepository(FinanceSetting).count()).toBe(0);
+
+    await setSettings({
+      account_check_enabled: false,
+      branch_account_check_enabled: true,
+    });
+    const main = (await checks.getSettings({ cashbox_user_id: '0' })) as Rpc;
+    expect(main.data.account_check_enabled).toBe(false);
+    const branch = (await checks.getSettings({
+      cashbox_user_id: BRANCH,
+    })) as Rpc;
+    expect(branch.data).toEqual(
+      expect.objectContaining({
+        account_check_enabled: true,
+        main_account_check_enabled: false,
+        branch_account_check_enabled: true,
+      }),
+    );
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'finance.shift_settings_updated',
+        old_value: expect.objectContaining({
+          account_check_enabled: true,
+          branch_account_check_enabled: false,
+        }),
+        new_value: expect.objectContaining({
+          account_check_enabled: false,
+          branch_account_check_enabled: true,
+        }),
+      }),
+    );
+  });
+
+  it('BE-A: MAIN kassada karta qatori yo‘q — «Asosiy karta» yaratiladi va majburiy; filial bo‘sh qoladi', async () => {
+    // Yangi / staging baza: hech kim GET /finance/cashbox/cards chaqirmagan.
+    await db.query(`DELETE FROM "${schema}".cashbox_cards`);
+    const mainCards = () =>
+      db.getRepository(CashboxCard).find({ where: { cashbox_id: cashboxId } });
+    const mainMoney = () =>
+      db.query<unknown[]>(
+        `SELECT balance, balance_cash, balance_card FROM "${schema}".cashboxes WHERE id = $1`,
+        [cashboxId],
+      );
+    const before = await mainMoney();
+
+    // 1) Yopish (accounts yo'q) — bo'sh ro'yxat bilan o'tib ketmaydi.
+    const none = await rpcError(
+      service.closeShift({
+        shift_id: shiftId,
+        closed_by: '25',
+        closing_balance_cash: 200_000,
+      }),
+    );
+    expect(none.statusCode).toBe(400);
+    expect(none.message).toBe("Har karta qoldig'ini tasdiqlang: Asosiy karta");
+    expect(
+      (await db.getRepository(Shift).findOneByOrFail({ id: shiftId })).status,
+    ).toBe(ShiftStatus.OPEN);
+    // Rad etilgan yopish tranzaksiyasi bilan qator ham qaytarildi.
+    expect(await mainCards()).toHaveLength(0);
+
+    // 2) GET settings — yopish oynasi «Asosiy karta»ni ko'radi (rasm + AI).
+    const settings = (await checks.getSettings({
+      cashbox_user_id: '0',
+    })) as Rpc;
+    expect(settings.data.cards).toEqual([
+      expect.objectContaining({
+        name: 'Asosiy karta',
+        is_default: true,
+        require_photo_on_shift_close: true,
+        ai_check_enabled: true,
+        photo_required: true,
+        ai_enabled: true,
+      }),
+    ]);
+    // Qayta GET — takror qator yo'q.
+    await checks.getSettings({ cashbox_user_id: '0' });
+    const created = await mainCards();
+    expect(created).toHaveLength(1);
+    expect(Number(created[0].balance)).toBe(0);
+
+    // 3) Avto-yopish — qator yo'q bo'lsa ham bitta «tasdiqlanmagan» yozuv.
+    await db.query(`DELETE FROM "${schema}".cashbox_cards`);
+    const auto = await db.transaction(async (manager) => {
+      const shift = await manager.findOneByOrFail(Shift, { id: shiftId });
+      return checks.recordAtAutoClose(manager, shift);
+    });
+    expect(auto).toEqual(
+      expect.objectContaining({ total: 1, unconfirmed: 1, auto_closed: true }),
+    );
+    const [defCard] = await mainCards();
+    expect(defCard).toEqual(
+      expect.objectContaining({ name: 'Asosiy karta', is_default: true }),
+    );
+    const rows = await db.getRepository(ShiftAccountCheck).find({
+      where: { shift_id: shiftId },
+    });
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0].cashbox_card_id)).toBe(String(defCard.id));
+    expect(rows[0].photo_required_snap).toBe(true);
+    expect(rows[0].confirmed_at).toBeNull();
+
+    // 4) Filial kassasi kartasiz — talab yo'q, qator yaratilmaydi.
+    const branchCashbox = await db.getRepository(Cashbox).save(
+      db.getRepository(Cashbox).create({
+        user_id: BRANCH,
+        cashbox_type: Cashbox_type.BRANCH,
+        balance: 50_000,
+        balance_cash: 50_000,
+        balance_card: 0,
+      } as Partial<Cashbox>),
+    );
+    const branchShift = await db.getRepository(Shift).save(
+      db.getRepository(Shift).create({
+        opened_by: '26',
+        cashbox_user_id: BRANCH,
+        status: ShiftStatus.OPEN,
+        opened_at: new Date(Date.now() - 3_600_000),
+        opening_balance_cash: 50_000,
+        opening_balance_card: 0,
+      }),
+    );
+    const branchSettings = (await checks.getSettings({
+      cashbox_user_id: BRANCH,
+    })) as Rpc;
+    expect(branchSettings.data.cards).toEqual([]);
+    const branchClosed = (await service.closeShift({
+      shift_id: String(branchShift.id),
+      closed_by: '26',
+      closing_balance_cash: 50_000,
+      cashbox_user_id: BRANCH,
+    })) as Rpc;
+    expect(branchClosed.data.status).toBe(ShiftStatus.CLOSED);
+    expect(branchClosed.data.accounts_check).toBeUndefined();
+    expect(
+      await db
+        .getRepository(CashboxCard)
+        .count({ where: { cashbox_id: String(branchCashbox.id) } }),
+    ).toBe(0);
+    // PUL INVARIANTI — MAIN kassa qoldiqlari o'zgarmagan.
+    expect(await mainMoney()).toEqual(before);
   });
 });

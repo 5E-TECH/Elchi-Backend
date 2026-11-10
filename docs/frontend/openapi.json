@@ -11063,7 +11063,7 @@
     },
     "/finance/shift/close": {
       "post": {
-        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy.",
+        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`).",
         "operationId": "FinanceGatewayController_closeShift",
         "parameters": [],
         "requestBody": {
@@ -11137,7 +11137,7 @@
     },
     "/finance/shift/settings": {
       "get": {
-        "description": "Global `account_check_enabled` / `photo_required` / `ai_check_enabled` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled`, hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+        "description": "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
         "operationId": "FinanceGatewayController_getShiftSettings",
         "parameters": [
           {
@@ -11173,7 +11173,7 @@
         ]
       },
       "patch": {
-        "description": "Global kalitlar va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled`; AI faqat rasm talab qilinganda — aks holda 400). Activity-log: `finance.shift_settings_updated`.",
+        "description": "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`.",
         "operationId": "FinanceGatewayController_updateShiftSettings",
         "parameters": [],
         "requestBody": {
@@ -11600,7 +11600,7 @@
         ]
       },
       "post": {
-        "description": "Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403). `make_default: true` — darhol Asosiy karta.",
+        "description": "Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta.",
         "operationId": "FinanceGatewayController_createCashboxCard",
         "parameters": [],
         "requestBody": {
@@ -29563,7 +29563,7 @@
             "example": "Smena yopildi"
           },
           "accounts": {
-            "description": "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun majburiy (aks holda 400). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish 30 s gacha kutadi, keyin baribir yopiladi.",
+            "description": "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. Shu kassa uchun tasdiqlash yoqilgan bo'lsa (ASOSIY kassa — `shift.account_check.enabled`, sukut true; FILIAL — `shift.account_check.branch_enabled`, sukut false; `GET /finance/shift/settings` → `account_check_enabled`) kassaning HAR faol kartasi uchun majburiy (aks holda 400 «Har karta qoldig'ini tasdiqlang: …»). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish ~15 s gacha kutadi (`SHIFT_CLOSE_AI_WAIT_MS`, ega chegarasi 30 s), keyin baribir yopiladi.",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CloseShiftAccountRequestDto"
@@ -29616,12 +29616,13 @@
           },
           "require_photo_on_shift_close": {
             "type": "boolean",
-            "example": true
+            "example": false,
+            "description": "Smena yopishda shu kartaning qoldiq skrinshoti majburiy (MAIN kartalarida sukut true — `false` bilan kartama-karta o'chiriladi; `false` — AI ham o'chadi)"
           },
           "ai_check_enabled": {
             "type": "boolean",
             "example": true,
-            "description": "Faqat rasm talab qilinganda yoqiladi (aks holda 400)"
+            "description": "Faqat rasm talab qilinganda yoqiladi (aks holda 400). MAIN kartalarida sukut true"
           }
         },
         "required": [
@@ -29719,17 +29720,22 @@
           "account_check_enabled": {
             "type": "boolean",
             "example": true,
-            "description": "Global `shift.account_check.enabled` (sukut false): yoqilsa yopishda har faol karta uchun `accounts[]` majburiy"
+            "description": "ASOSIY (MAIN) kassa: `shift.account_check.enabled` (sukut **true**, BE-A): yoqiq — MAIN smenasini yopishda har faol karta uchun `accounts[]` majburiy (aks holda 400). Filial kassalariga ta'sir qilmaydi — ular uchun `branch_account_check_enabled`"
+          },
+          "branch_account_check_enabled": {
+            "type": "boolean",
+            "example": false,
+            "description": "(BE-A) FILIAL kassalari: `shift.account_check.branch_enabled` (sukut **false**): o'chiq — filial smenasini yopishda `accounts[]` ixtiyoriy (avvalgi oqim); yoqiq — filialning har faol kartasi majburiy"
           },
           "photo_required": {
             "type": "boolean",
             "example": true,
-            "description": "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi"
+            "description": "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi (MAIN kartalarida sukut true, filial kartalarida false)"
           },
           "ai_check_enabled": {
             "type": "boolean",
-            "example": false,
-            "description": "Global `shift.ai_check.enabled` (sukut false) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi"
+            "example": true,
+            "description": "Global `shift.ai_check.enabled` (sukut **true**, BE-A) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi (MAIN kartalarida sukut true, filial kartalarida false)"
           },
           "cards": {
             "type": "array",
@@ -29852,12 +29858,12 @@
           "require_photo_on_shift_close": {
             "type": "boolean",
             "example": true,
-            "description": "Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi."
+            "description": "Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi. Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false."
           },
           "ai_check_enabled": {
             "type": "boolean",
             "example": false,
-            "description": "Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400)."
+            "description": "Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400). Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false."
           },
           "name": {
             "type": "string",
@@ -29924,12 +29930,12 @@
           "require_photo_on_shift_close": {
             "type": "boolean",
             "example": true,
-            "description": "Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi."
+            "description": "Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi. Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false."
           },
           "ai_check_enabled": {
             "type": "boolean",
             "example": false,
-            "description": "Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400)."
+            "description": "Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400). Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false."
           },
           "name": {
             "type": "string",

@@ -22,6 +22,97 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-10 — Smena yopish: ASOSIY kassada karta qoldig'i + skrinshot + AI sukut bo'yicha MAJBURIY (BE-A)
+
+Ega qarori (2026-11-10): «majburiy, superadmin kartama-karta o'chira oladi», «filiallarga default o'chiq, faqat
+asosiy kassaga», «darhol yoqilsin», AI ham «Ha, yoqilsin». Deploy: finance-service + api-gateway. **Migratsiya 215**
+(`ShiftCheckMainDefaults`). `openapi.json` yangilandi.
+
+- [2026-11-10] ⚠️ [finance] — **`POST /finance/shift/close` (ASOSIY kassa smenasi)**: endi sukut bo'yicha
+  `accounts[]` kassaning **HAR faol kartasi** uchun majburiy («Asosiy karta» ham): `{ card_id, entered_balance,
+  comment? }`. Rasm talab qilingan kartada (`GET /finance/shift/settings` → `cards[].photo_required: true`; MAIN
+  kartalarida sukut — hammasi) skrinshot yopishdan OLDIN `POST /finance/shift/account-photo` (multipart: `card_id`,
+  `photo`, ixtiyoriy `entered_balance`, `comment`) bilan yuklanadi. Xatolar (400, smena ochiq qoladi; matnlar
+  o'zgarmagan):
+  - karta tushib qolgan — `Har karta qoldig'ini tasdiqlang: Asosiy karta, Humo` (yetishmagan kartalar nomi, vergul
+    bilan);
+  - rasm yo'q — `«Humo»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang`;
+  - farq ≠ 0 / AI `mismatch` / kiritilgan ≠ rasmdagi — `«Humo»: farq bor yoki AI natijasi mos emas — izoh majburiy`;
+  - begona / takror karta — `accounts[0]: karta bu smena kassasiga tegishli emas` / `accounts[1]: karta takrorlangan`.
+  AI natijasi hali `pending` bo'lsa yopish ~15 s kutadi va baribir yopiladi (natija keyin realtime
+  `finance.shift.account_checked` bilan keladi). Muvaffaqiyatli javobda avvalgidek `data.accounts_check`
+  (`total`, `match`, `mismatch`, `pending`, …, `accounts[]`).
+- [2026-11-10] 🟢 [finance] — **Filial smenasi o'zgarmaydi**: filial kaliti sukut o'chiq — `accounts[]` ixtiyoriy,
+  filial kartalarida rasm / AI sukut o'chiq. ⚠️ Rasm / AI master kalitlari GLOBAL va migratsiya 215 ularni yoqadi:
+  superadmin avval rasm / AI bayrog'ini yoqib qo'ygan filial kartalarida (`require_photo_on_shift_close` /
+  `ai_check_enabled: true`) deploydan keyin AI ishlay boshlaydi (master avval o'chiq bo'lsa — rasm ham). Bunday karta
+  `accounts[]` da yuborilsa rasm talab qilinadi, AI `pending` da yopish ~15 s kutadi, AI `mismatch` bo'lsa izoh
+  majburiy (400). Kerak bo'lmasa superadmin kartama-karta o'chiradi: `PATCH /finance/shift/settings`
+  `cards: [{ card_id, require_photo_on_shift_close: false }]`. Avto-yopishda: MAIN — har faol karta «tasdiqlanmagan»
+  snapshot bilan yoziladi, filial — faqat rasm yuklangan kartalar (avvalgidek).
+- [2026-11-10] ✏️ [gateway, finance] — **`GET /finance/shift/settings?cashbox_user_id=`** javobi endi so'ralgan
+  KASSA uchun amaldagi qiymatni beradi va ikkala tasdiqlash kalitini alohida ko'rsatadi:
+  ```ts
+  {
+    account_check_enabled: boolean;        // SHU kassa uchun (yopish oynasi shuni ishlatadi): MAIN sukut true, filial sukut false
+    main_account_check_enabled: boolean;   // 🆕 `shift.account_check.enabled` (ASOSIY kassa), sukut true
+    branch_account_check_enabled: boolean; // 🆕 `shift.account_check.branch_enabled` (filiallar), sukut false
+    photo_required: boolean;               // global master kalit, sukut true
+    ai_check_enabled: boolean;             // global master kalit, sukut endi TRUE (avval false)
+    auto_close: {...}; report: {...};      // o'zgarmagan
+    cashbox_user_id: string; cashbox_type: 'main' | 'branch';
+    cards: Array<{ card_id, name, kind, bank_name, last4, is_default,
+      require_photo_on_shift_close: boolean; ai_check_enabled: boolean;   // karta bayroqlari
+      photo_required: boolean; ai_enabled: boolean }>;                    // hisoblangan (master && karta)
+  }
+  ```
+- [2026-11-10] ✏️ [gateway, finance] — **`PATCH /finance/shift/settings`** (faqat SUPERADMIN, boshqa rol — 403) yangi
+  ixtiyoriy maydon **`branch_account_check_enabled: boolean`** (filial kassalari kaliti). `account_check_enabled` —
+  endi faqat **ASOSIY** kassa kaliti. Boolean bo'lmagan qiymat — 400. Karta bo'yicha o'chirish avvalgidek:
+  `cards: [{ card_id, require_photo_on_shift_close: false }]` (rasm o'chsa AI ham o'chadi; AI rasmsiz yoqilsa — 400
+  `AI tekshiruvi faqat smena yopishda qoldiq rasmi talab qilinganda yoqiladi`). Javob `data`: `account_check_enabled`
+  (ASOSIY), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`,
+  `auto_close`, `report`, `cashbox_type: 'main'`, `cards: [{ card_id, old, new }]` (o'zgargan kartalar).
+- [2026-11-10] ✏️ [finance] — **Karta sukutlari**: `POST /finance/cashbox/cards` da `require_photo_on_shift_close` /
+  `ai_check_enabled` berilmasa — ASOSIY kassa kartasi **true / true**, filial kartasi (`branch_id`) **false / false**
+  (admin ham yarata oladi — bayroq yubormasa 403 yo'q). Berilgani shu sukut ustiga qo'llanadi (faqat superadmin):
+  MAIN'da `ai_check_enabled: false` — rasm qoladi, AI o'chiq; `require_photo_on_shift_close: false` — ikkalasi o'chiq.
+  MAIN «Asosiy karta» ham true / true. Uning qatori (yo'q bo'lsa) birinchi `GET /finance/cashbox/cards`,
+  `GET /finance/shift/settings` (`cashbox_user_id='0'`), MAIN smenasini yopish yoki avto-yopishda yaratiladi —
+  kartalari hali yaratilmagan yangi bazada ham MAIN yopishda «Asosiy karta» majburiy (`Har karta qoldig'ini
+  tasdiqlang: Asosiy karta`). Balans 0 (hosila) — pul o'zgarmaydi. Filial kassasida bunday qator yaratilmaydi.
+  `PATCH /finance/cashbox/cards/:id` o'zgarmagan — superadmin MAIN kartasini o'chiradi.
+- [2026-11-10] 🟢 [ops] — **Migratsiya 215 deploy paytida**: `shift.account_check.enabled`, `shift.photo.required`,
+  `shift.ai_check.enabled` = `true` (superadmin avval o'chirgan bo'lsa ham USTIGA yoziladi — «darhol yoqilsin»),
+  `shift.account_check.branch_enabled` = `false` (faqat qator yo'q bo'lsa), ASOSIY kassaning barcha o'chirilmagan
+  kartalarida (arxivlanganlar ham) rasm + AI yoqiladi. Filial kartalarining bayroqlari o'zgarmaydi, lekin rasm / AI
+  master kalitlari global — superadmin avval rasm / AI yoqqan filial kartalarida ular deploydan keyin ishlay
+  boshlaydi (AI chaqiruvi pullik; o'chirish — `PATCH /finance/shift/settings` `cards[]`); pul / balanslar o'zgarmaydi.
+  ⚠️ Deploy paytida **ochiq turgan MAIN smenasi** ham yopishda har karta qoldig'i + rasmini talab qiladi. AI master
+  yoqiq — har MAIN skrinshot AI'ga yuboriladi (`AI_DAILY_USD_CAP` ichida). Qaytarish: superadmin
+  `PATCH /finance/shift/settings` bilan global yoki kartama-karta o'chiradi. down() — `account_check` / `ai_check`
+  `false`, filial kaliti o'chadi; karta bayroqlari qaytarilmaydi (qaysini migratsiya yoqqani saqlanmaydi).
+  ⚠️ **Eski kod + yangi DB**: BE-A gacha bo'lgan finance-service `shift.account_check.enabled` ni HAMMA kassaga
+  (filiallarga ham) qo'llaydi. Migratsiya 215 dan keyin eski kod ishlasa — deploy oralig'ida (migration-runner
+  tugagan, finance-service hali almashmagan) yoki kod qaytarilganda (deploy.yml `rollback()` DB'ni qaytarmaydi) —
+  filial smenasi `accounts[]` siz yopilsa 400 `Har karta qoldig'ini tasdiqlang: …` oladi. Shuning uchun kodni
+  qaytarish `npm run migration:revert` (215 down() — `account_check` / `ai_check` = `false`) bilan birga qilinsin
+  yoki undan OLDIN superadmin `PATCH /finance/shift/settings { account_check_enabled: false }` yuborsin (bu MAIN
+  talabini ham o'chiradi). Deploy oralig'idagi filial yopishlari shu 400 ni olishi mumkin — qayta urinish yetarli.
+
+Frontend action items:
+- 🔧 MAIN «Smenani yopish» oynasi: `GET /finance/shift/settings` (`cashbox_user_id='0'`) dan `account_check_enabled`
+  va `cards[]` ni oling; `true` bo'lsa HAR karta uchun qoldiq maydoni majburiy, `cards[].photo_required: true` kartada
+  skrinshot yuklash (`POST /finance/shift/account-photo`) majburiy — yuklanmaguncha «Yopish» tugmasi o'chiq. AI holati
+  (`pending` → realtime `finance.shift.account_checked`) va izoh maydoni (`comment_required`) avvalgidek. 400 matnini
+  foydalanuvchiga to'g'ridan-to'g'ri ko'rsating.
+- 🔧 Superadmin «Smena sozlamalari»: «Asosiy kassa — qoldiq tasdiqlash» (`account_check_enabled` /
+  `main_account_check_enabled`) va yangi «Filiallar — qoldiq tasdiqlash» (`branch_account_check_enabled`) — ikki
+  alohida switch; karta ro'yxatida rasm / AI switch'lari (MAIN'da hammasi yoqiq bo'lib keladi).
+- 🟢 Filial menejeri yopish oynasi o'zgarmaydi (`account_check_enabled: false`, kartalarda sukut
+  `photo_required: false`; superadmin bayroq qo'ygan filial kartasida `cards[].photo_required` / `ai_enabled` true
+  bo'lishi mumkin — oyna shu maydonlarga qarasin). Filial UI'si hozircha shart emas.
+
 ### 2026-11-11 — Kassa xarajati kategoriyalari: standart kategoriyalar qulflangan — `is_default`
 
 Deploy: finance-service + api-gateway. **Migratsiya 214** (`cashbox_expense_categories.is_default`). `openapi.json`

@@ -35,6 +35,7 @@ import {
   FinanceRealtimeService,
   type CashboxCardAction,
 } from '../realtime/finance-realtime.service';
+import { defaultCardShiftFlags } from '../shift-account-check/shift-account-check.rules';
 
 /**
  * 3PE0B03q (UZOQ MUDDAT) — BeePost `cashbox_card` tizimining Elchi porti:
@@ -103,6 +104,16 @@ function scopeCashboxWhere(scope?: CardCashboxScope | null) {
         cashbox_type: Cashbox_type.MAIN,
         isDeleted: false,
       };
+}
+
+/**
+ * BE-A — yangi kartaning smena sozlamalari sukuti (chaqiruvchi bermasa):
+ * MAIN kassa kartasi — rasm + AI yoqiq, filial kartasi — o'chiq.
+ */
+function cardShiftDefaultsFor(cashbox: Pick<Cashbox, 'cashbox_type'>) {
+  return defaultCardShiftFlags(
+    cashbox.cashbox_type === Cashbox_type.MAIN ? 'main' : 'branch',
+  );
 }
 
 /** Kassa realtime / javob doirasi. */
@@ -574,8 +585,9 @@ export class CashboxCardService {
    */
   private async ensureDefaultCard(
     manager: EntityManager,
-    cashboxId: string,
+    cashbox: Cashbox,
   ): Promise<CashboxCard> {
+    const cashboxId = String(cashbox.id);
     const existing = await manager.findOne(CashboxCard, {
       where: { cashbox_id: cashboxId, is_default: true, isDeleted: false },
     });
@@ -593,6 +605,8 @@ export class CashboxCardService {
         is_default: true,
         is_active: true,
         sort_order: 0,
+        // BE-A: MAIN Asosiy kartasi ham rasm + AI bilan (filial — o'chiq).
+        ...cardShiftDefaultsFor(cashbox),
       })
       .orIgnore()
       .execute();
@@ -810,7 +824,7 @@ export class CashboxCardService {
         `"${target.name}" kartasi arxivlangan — avval faollashtiring`,
       );
     }
-    const current = await this.ensureDefaultCard(manager, cashboxId);
+    const current = await this.ensureDefaultCard(manager, cashbox);
     const previous = await this.lockCard(
       manager,
       cashboxId,
@@ -859,7 +873,7 @@ export class CashboxCardService {
       return await this.withScopeLock(
         input,
         async (manager, cashbox) => {
-          const def = await this.ensureDefaultCard(manager, String(cashbox.id));
+          const def = await this.ensureDefaultCard(manager, cashbox);
           const cards = await manager.find(CashboxCard, {
             where: {
               cashbox_id: String(cashbox.id),
@@ -1201,12 +1215,18 @@ export class CashboxCardService {
       const sortOrder = Number.isInteger(Number(input?.sort_order))
         ? Number(input.sort_order)
         : 0;
-      const details = readCardDetails(input);
+      // BE-A: rasm / AI bayrog'i berilmasa — kassa turi sukuti (doira
+      // `branch_id` bo'yicha: berilgan — filial, yo'q — MAIN). Berilgani shu
+      // sukut ustiga qo'llanadi (AI faqat rasm bilan qoidasi saqlanadi).
+      const shiftDefaults = defaultCardShiftFlags(
+        scopeBranchId(input) ? 'branch' : 'main',
+      );
+      const details = readCardDetails(input, shiftDefaults);
       const makeDefault = input?.make_default === true;
       const outcome = await this.withScopeLock(
         input,
         async (manager, cashbox) => {
-          await this.ensureDefaultCard(manager, String(cashbox.id));
+          await this.ensureDefaultCard(manager, cashbox);
           if (await this.findDuplicateName(manager, String(cashbox.id), name)) {
             conflict(`"${name}" nomli karta allaqachon bor`);
           }
@@ -1220,6 +1240,7 @@ export class CashboxCardService {
               is_active: true,
               sort_order: sortOrder,
               created_by: input?.created_by ? String(input.created_by) : null,
+              ...shiftDefaults,
               ...details,
             }),
           );
@@ -1256,6 +1277,8 @@ export class CashboxCardService {
           bank_name: card.bank_name ?? null,
           last4: card.last4 ?? null,
           is_default: card.is_default,
+          require_photo_on_shift_close: card.require_photo_on_shift_close,
+          ai_check_enabled: card.ai_check_enabled,
         },
         metadata: cashboxScopeView(outcome.cashbox),
         user_id: input?.created_by ? String(input.created_by) : null,

@@ -650,11 +650,21 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 - **Shift close — per-card balance confirmation (kiZgTybn, 2026-10-26):**
   `finance_schema.shift_account_checks` (migr 166; UNIQUE shift_id +
   cashbox_card_id) + `finance_schema.finance_settings` (key/value, SA only).
-  Global keys: `shift.account_check.enabled` (default false → `accounts[]`
-  required for EVERY active card of the shift's cashbox), `shift.photo.required`
-  (default true, master switch AND card `require_photo_on_shift_close`),
-  `shift.ai_check.enabled` (default false, master switch AND card
-  `ai_check_enabled`). Flow: gateway `POST /finance/shift/account-photo`
+  Global keys (BE-A, 2026-11-10, migr 215 sets them at deploy): settings are
+  resolved PER CASHBOX (`loadSettingsFor`): MAIN — `shift.account_check.enabled`
+  (default true → `accounts[]` required for EVERY active card of the MAIN
+  shift), branches — `shift.account_check.branch_enabled` (default false →
+  accounts optional, legacy flow); `shift.photo.required` (default true,
+  master switch AND card `require_photo_on_shift_close`),
+  `shift.ai_check.enabled` (default true, master switch AND card
+  `ai_check_enabled`). Card flags default true/true for MAIN cards (create
+  path + Asosiy karta; migr 215 flips existing MAIN cards) and false/false for
+  branch cards; SA can switch a card off. The MAIN Asosiy karta row is created
+  if missing by shift settings GET / close / auto-close too (so an empty card
+  list never bypasses the MAIN requirement). Rollback hazard: pre-BE-A finance
+  code applies `shift.account_check.enabled` globally (branches too); pair a
+  code rollback with `migration:revert` of 215 or PATCH
+  account_check_enabled=false first. Flow: gateway `POST /finance/shift/account-photo`
   (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
   IPTC/text chunks, file-service folder `shift-check`, private, signed URL
   300 s) → `finance.shift.account_check.attach_photo` (draft row, expected

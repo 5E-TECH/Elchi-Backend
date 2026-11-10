@@ -4267,7 +4267,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Close shift',
     description:
-      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy.",
+      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`).",
   })
   @ApiBody({ type: CloseShiftRequestDto })
   async closeShift(
@@ -4279,7 +4279,7 @@ export class FinanceGatewayController {
     // opened_by berilmasa finance o'zining, bo'lmasa MAIN kassaning ochiq
     // smenasini yopadi. R6: menejer uchun doira — o'z filiali kassasi.
     const scope = await this.resolveShiftCashboxScope(req.user);
-    // (kiZgTybn) Yopish AI natijasini 30 s gacha kutishi mumkin.
+    // (kiZgTybn) Yopish AI natijasini kutishi mumkin (sukut 15 s, ega chegarasi 30 s).
     return this.send(
       { cmd: 'finance.shift.close' },
       { ...dto, closed_by: String(req.user.sub), ...scope },
@@ -4557,7 +4557,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena yopish sozlamalari (global + karta bo'yicha)",
     description:
-      "Global `account_check_enabled` / `photo_required` / `ai_check_enabled` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled`, hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+      "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
   })
   async getShiftSettings(
     @Req() req: { user: JwtUser },
@@ -4594,7 +4594,7 @@ export class FinanceGatewayController {
     summary:
       "(kiZgTybn) Smena yopish sozlamalarini o'zgartirish — FAQAT superadmin",
     description:
-      "Global kalitlar va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled`; AI faqat rasm talab qilinganda — aks holda 400). Activity-log: `finance.shift_settings_updated`.",
+      "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`.",
   })
   async updateShiftSettings(
     @Req() req: { user: JwtUser },
@@ -5282,7 +5282,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Yangi karta yoki hisob raqam (balans 0)',
     description:
-      'Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403). `make_default: true` — darhol Asosiy karta.',
+      'Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta.',
   })
   @ApiBody({ type: CreateCashboxCardRequestDto })
   createCashboxCard(

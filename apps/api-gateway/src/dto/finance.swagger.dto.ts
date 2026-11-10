@@ -430,7 +430,7 @@ export class CloseShiftRequestDto {
   @ApiPropertyOptional({
     type: () => [CloseShiftAccountRequestDto],
     description:
-      "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun majburiy (aks holda 400). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish 30 s gacha kutadi, keyin baribir yopiladi.",
+      "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. Shu kassa uchun tasdiqlash yoqilgan bo'lsa (ASOSIY kassa — `shift.account_check.enabled`, sukut true; FILIAL — `shift.account_check.branch_enabled`, sukut false; `GET /finance/shift/settings` → `account_check_enabled`) kassaning HAR faol kartasi uchun majburiy (aks holda 400 «Har karta qoldig'ini tasdiqlang: …»). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish ~15 s gacha kutadi (`SHIFT_CLOSE_AI_WAIT_MS`, ega chegarasi 30 s), keyin baribir yopiladi.",
   })
   @IsOptional()
   @IsArray()
@@ -539,14 +539,19 @@ export class ShiftCardSettingRequestDto {
   @Matches(/^\d+$/)
   card_id!: string;
 
-  @ApiPropertyOptional({ example: true })
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "Smena yopishda shu kartaning qoldiq skrinshoti majburiy (MAIN kartalarida sukut true — `false` bilan kartama-karta o'chiriladi; `false` — AI ham o'chadi)",
+  })
   @IsOptional()
   @IsBoolean()
   require_photo_on_shift_close?: boolean;
 
   @ApiPropertyOptional({
     example: true,
-    description: 'Faqat rasm talab qilinganda yoqiladi (aks holda 400)',
+    description:
+      'Faqat rasm talab qilinganda yoqiladi (aks holda 400). MAIN kartalarida sukut true',
   })
   @IsOptional()
   @IsBoolean()
@@ -662,25 +667,34 @@ export class UpdateShiftSettingsRequestDto {
   @ApiPropertyOptional({
     example: true,
     description:
-      'Global `shift.account_check.enabled` (sukut false): yoqilsa yopishda har faol karta uchun `accounts[]` majburiy',
+      "ASOSIY (MAIN) kassa: `shift.account_check.enabled` (sukut **true**, BE-A): yoqiq — MAIN smenasini yopishda har faol karta uchun `accounts[]` majburiy (aks holda 400). Filial kassalariga ta'sir qilmaydi — ular uchun `branch_account_check_enabled`",
   })
   @IsOptional()
   @IsBoolean()
   account_check_enabled?: boolean;
 
   @ApiPropertyOptional({
+    example: false,
+    description:
+      "(BE-A) FILIAL kassalari: `shift.account_check.branch_enabled` (sukut **false**): o'chiq — filial smenasini yopishda `accounts[]` ixtiyoriy (avvalgi oqim); yoqiq — filialning har faol kartasi majburiy",
+  })
+  @IsOptional()
+  @IsBoolean()
+  branch_account_check_enabled?: boolean;
+
+  @ApiPropertyOptional({
     example: true,
     description:
-      "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi",
+      "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi (MAIN kartalarida sukut true, filial kartalarida false)",
   })
   @IsOptional()
   @IsBoolean()
   photo_required?: boolean;
 
   @ApiPropertyOptional({
-    example: false,
+    example: true,
     description:
-      "Global `shift.ai_check.enabled` (sukut false) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi",
+      "Global `shift.ai_check.enabled` (sukut **true**, BE-A) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi (MAIN kartalarida sukut true, filial kartalarida false)",
   })
   @IsOptional()
   @IsBoolean()
@@ -1324,7 +1338,7 @@ export class CashboxCardDetailsRequestDto {
   @ApiPropertyOptional({
     example: true,
     description:
-      'Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi.',
+      'Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi. Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false.',
   })
   @IsOptional()
   @IsBoolean()
@@ -1333,7 +1347,7 @@ export class CashboxCardDetailsRequestDto {
   @ApiPropertyOptional({
     example: false,
     description:
-      'Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400).',
+      'Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400). Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false.',
   })
   @IsOptional()
   @IsBoolean()
