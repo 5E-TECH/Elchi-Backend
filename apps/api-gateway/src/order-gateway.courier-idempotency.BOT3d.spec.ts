@@ -17,12 +17,16 @@ describe('BOT-3d — kuryer amali Idempotency-Key → request_id', () => {
       { send: jest.fn(() => of({})) } as never,
       { send: jest.fn(() => of({})) } as never,
     );
+    // (2026-11-12) sell/cancel/partly-sell avval `order.find_by_id` o'qiydi
+    // (yo'ldagi buyurtmani avtomatik qabul) — u request_id siz, sanalmaydi.
     const requestIds = () =>
       (
         orderClient.send.mock.calls as unknown as Array<
-          [unknown, { request_id: string }]
+          [{ cmd: string }, { request_id: string }]
         >
-      ).map(([, payload]) => payload.request_id);
+      )
+        .filter(([pattern]) => pattern.cmd !== 'order.find_by_id')
+        .map(([, payload]) => payload.request_id);
     return { controller, requestIds };
   };
   const req = (sub: string, key?: string) =>

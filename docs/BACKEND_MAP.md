@@ -1413,8 +1413,16 @@ of an own `on the road`/`waiting` order is idempotent. The courier list
 (`courierPostOrdersQuery`, also counts and `/region/my/district-stats`) hides
 `on the road` until the post is received, except a parcel the courier took by
 scan himself (`isCourierScanTakenOrder`: holder = courier, `last_handover_by` =
-courier, no `return_requested`); it stays `on the road`, so sell/cancel still
-wait for the post receive (6qypMFeT).
+courier, no `return_requested`); it stays `on the road` until received
+(6qypMFeT). **Auto-receive on sell/cancel (2026-11-12):** `POST
+/orders/sell|partly-sell|cancel/:id` on an `on the road`/`waiting_customer`
+order with a `post_id` first runs the scan receive at the gateway
+(`OrderGatewayController.autoReceiveOnRoadOrder` → `logistics.post.receive`
+`{order_ids:[id], scan:true}`) — courier: only his own post, manager: only a
+branch transfer post (`courier_id` '0'/empty); others skip and order-service
+answers as before. Tracking gets `on the road → waiting` (post received) then
+`waiting → sold/cancelled`. Receive error → the action is not sent; receive OK
+but the action rejected → the order stays `waiting`.
 
 **Warehouse orders (6kHnNH9j):** `fulfillment_source = WAREHOUSE` orders skip
 HQ intake and posts — created `received` at the regional warehouse branch

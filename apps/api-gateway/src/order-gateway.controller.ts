@@ -847,6 +847,97 @@ export class OrderGatewayController {
     return withUploadedProof(this.fileClient, dto, file, user);
   }
 
+  /**
+   * (Dilshod 2026-11-12) «Yo'lda» buyurtmada «Sotish» / «Qisman sotish» /
+   * «Bekor qilish» bosilsa — avval AVTOMATIK QABUL, keyin amal. Tracking'da
+   * ikki yozuv: «Yo'lda → Kutilmoqda» (pochtani qabul qildi) va darhol
+   * «Kutilmoqda → Sotildi / Bekor qilindi».
+   *
+   * Qabul — mavjud skan-qabul yo'li (`logistics.post.receive`, `scan: true`,
+   * faqat shu buyurtma): ruxsat, pochta holati (LC-11), jurnal va tracking
+   * qo'lda «Qabul qilish» bosilgandagi bilan AYNI.
+   *
+   * Qachon qabul qilinadi (aks holda hech narsa qilinmaydi — order-service
+   * avvalgidek javob beradi):
+   *  - holat `on the road` yoki `waiting_customer` va `post_id` bor;
+   *  - kuryer — pochta o'ziniki (`post.courier_id` = o'zi);
+   *  - menejer — filial o'tkazma pochtasi (`courier_id` '0' / bo'sh —
+   *    «Pochtadan qabul»). Kuryer pochtasidagi buyurtmani menejer qabul
+   *    qilmaydi (kuryer qo'lidagi buyurtma — kuryerniki).
+   * Qabul xatosi (403, 409 band, 400) — amal bajarilmaydi, xato qaytadi.
+   * Qabul o'tib amal rad etilsa (masalan isbot yo'q) — buyurtma «Kutilmoqda»
+   * da qoladi (qo'lda qabul qilingandagidek), qayta bosish amalni bajaradi.
+   */
+  private async autoReceiveOnRoadOrder(
+    id: string,
+    req: CourierOpRequest,
+  ): Promise<boolean> {
+    const order = this.unwrapOrderRow(
+      await this.sendOrderWithTimeout(
+        { cmd: 'order.find_by_id' },
+        { id },
+      ).catch(() => null),
+    );
+    const status = String(order?.status ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      status !== String(Order_status.ON_THE_ROAD) &&
+      status !== String(Order_status.WAITING_CUSTOMER)
+    ) {
+      return false;
+    }
+    const postId = String(order?.post_id ?? '').trim();
+    if (!postId || postId === '0') return false;
+
+    const roles = this.normalizeRoles(req.user.roles);
+    const isCourier = roles.includes(RoleEnum.COURIER);
+    const isManager = !isCourier && roles.includes(RoleEnum.MANAGER);
+    if (!isCourier && !isManager) return false;
+
+    const post = this.unwrapOrderRow(
+      await this.sendLogisticsWithTimeout(
+        { cmd: 'logistics.post.find_by_id' },
+        { id: postId },
+      ).catch(() => null),
+    );
+    if (!post) return false;
+    const postCourierId = String(post.courier_id ?? '').trim();
+    const allowed = isCourier
+      ? postCourierId === String(req.user.sub)
+      : !postCourierId || postCourierId === '0';
+    if (!allowed) return false;
+
+    // Javob: `data` — buyurtma qatorlari; id ro'yxatlari YUQORI darajada.
+    const received = (await this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.receive' },
+      {
+        id: postId,
+        dto: { order_ids: [String(id)], scan: true },
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
+    )) as Record<string, unknown> | null;
+    const idList = (value: unknown): string[] =>
+      Array.isArray(value) ? (value as unknown[]).map((v) => String(v)) : [];
+    const acceptedIds = [
+      ...idList(received?.received_order_ids),
+      ...idList(received?.already_received_order_ids),
+    ];
+    if (!acceptedIds.includes(String(id))) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message:
+          "Buyurtmani avtomatik qabul qilib bo'lmadi — avval «Qabul qilish»ni bosing",
+        reason: 'auto_receive_failed',
+      });
+    }
+    return true;
+  }
+
   private async sendBranchWithTimeout(
     pattern: { cmd: string },
     payload: object,
@@ -7345,7 +7436,11 @@ export class OrderGatewayController {
     description:
       "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
   })
-  @ApiOperation({ summary: 'Sell order (courier)' })
+  @ApiOperation({
+    summary: 'Sell order (courier)',
+    description:
+      "«Yo'lda» (on the road / waiting_customer) order: the gateway first auto-receives it (same as scan receive — courier: own post, manager: branch transfer post), so tracking shows «Yo'lda → Kutilmoqda» and then the result. If the receive fails, the action is not done.",
+  })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: SellOrderRequestDto })
@@ -7362,6 +7457,8 @@ export class OrderGatewayController {
     @Req() req: CourierOpRequest,
   ) {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
+    // (2026-11-12) «Yo'lda» — avval avtomatik qabul (tracking: Kutilmoqda).
+    await this.autoReceiveOnRoadOrder(id, req);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -7403,7 +7500,11 @@ export class OrderGatewayController {
     description:
       "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
   })
-  @ApiOperation({ summary: 'Cancel order (courier)' })
+  @ApiOperation({
+    summary: 'Cancel order (courier)',
+    description:
+      "«Yo'lda» (on the road / waiting_customer) order: the gateway first auto-receives it (same as scan receive — courier: own post, manager: branch transfer post), so tracking shows «Yo'lda → Kutilmoqda» and then the result. If the receive fails, the action is not done.",
+  })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: CancelOrderRequestDto })
@@ -7420,6 +7521,8 @@ export class OrderGatewayController {
     @Req() req: CourierOpRequest,
   ) {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
+    // (2026-11-12) «Yo'lda» — avval avtomatik qabul (tracking: Kutilmoqda).
+    await this.autoReceiveOnRoadOrder(id, req);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -7603,7 +7706,11 @@ export class OrderGatewayController {
     description:
       "BOT-3d: ixtiyoriy barqaror kalit (≤255 belgi, foydalanuvchi bo'yicha ajratiladi) — takroriy so'rov (qayta urinish, ikki marta bosish) amalni ikkinchi marta bajarmaydi. Har amal + buyurtma + tana uchun noyob kalit: ayni kalit boshqa amal, buyurtma yoki tana bilan → 422; ayni kalitli so'rov hali bajarilayotgan bo'lsa → 409; 255 belgidan uzun → 400.",
   })
-  @ApiOperation({ summary: 'Partly sell order (courier)' })
+  @ApiOperation({
+    summary: 'Partly sell order (courier)',
+    description:
+      "«Yo'lda» (on the road / waiting_customer) order: the gateway first auto-receives it (same as scan receive — courier: own post, manager: branch transfer post), so tracking shows «Yo'lda → Kutilmoqda» and then the result. If the receive fails, the action is not done.",
+  })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: PartlySellOrderRequestDto })
@@ -7620,6 +7727,8 @@ export class OrderGatewayController {
     @Req() req: CourierOpRequest,
   ) {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
+    // (2026-11-12) «Yo'lda» — avval avtomatik qabul (tracking: Kutilmoqda).
+    await this.autoReceiveOnRoadOrder(id, req);
     return firstValueFrom(
       this.orderClient
         .send(

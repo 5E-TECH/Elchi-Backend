@@ -5767,6 +5767,7 @@
     },
     "/orders/sell/{id}": {
       "post": {
+        "description": "«Yo'lda» (on the road / waiting_customer) order: the gateway first auto-receives it (same as scan receive — courier: own post, manager: branch transfer post), so tracking shows «Yo'lda → Kutilmoqda» and then the result. If the receive fails, the action is not done.",
         "operationId": "OrderGatewayController_sellOrder",
         "parameters": [
           {
@@ -5825,6 +5826,7 @@
     },
     "/orders/cancel/{id}": {
       "post": {
+        "description": "«Yo'lda» (on the road / waiting_customer) order: the gateway first auto-receives it (same as scan receive — courier: own post, manager: branch transfer post), so tracking shows «Yo'lda → Kutilmoqda» and then the result. If the receive fails, the action is not done.",
         "operationId": "OrderGatewayController_cancelOrder",
         "parameters": [
           {
@@ -6050,6 +6052,7 @@
     },
     "/orders/partly-sell/{id}": {
       "post": {
+        "description": "«Yo'lda» (on the road / waiting_customer) order: the gateway first auto-receives it (same as scan receive — courier: own post, manager: branch transfer post), so tracking shows «Yo'lda → Kutilmoqda» and then the result. If the receive fails, the action is not done.",
         "operationId": "OrderGatewayController_partlySellOrder",
         "parameters": [
           {

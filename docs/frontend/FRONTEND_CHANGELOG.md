@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-12 — «Yo'lda» buyurtmani ham sotish / qisman sotish / bekor qilish mumkin: avval avtomatik qabul, tracking'da «Kutilmoqda» → «Sotildi / Bekor qilindi»
+
+Dilshod: «buyurtmaning statusi yo'lda bo'lsa ham sotishni yoki bekor qilishni bossa sotilib yoki bekor qilinib tracking da auto kutilmoqda bo'lsin va srazi sotildi yoki bekor qilindi ham yozilsin».
+Deploy: faqat api-gateway, migratsiya yo'q.
+
+- ✏️ `POST /orders/sell/:id`, `/orders/partly-sell/:id`, `/orders/cancel/:id` (COURIER, MANAGER): buyurtma `on the road` yoki `waiting_customer` bo'lsa gateway avval skan-qabul qiladi (`PATCH /post/receive/:postId {order_ids:[id], scan:true}` bilan AYNI: ruxsat, pochta holati, jurnal), keyin amalni bajaradi. Tracking'da ikki yozuv: «Yo'lda → Kutilmoqda» (pochtani qabul qildi) va «Kutilmoqda → Sotildi / Bekor qilindi».
+- Kuryer — faqat o'z pochtasidagi buyurtma; menejer — faqat filial o'tkazma pochtasidagi buyurtma («Pochtadan qabul»). Boshqa holatda qabul qilinmaydi, javob avvalgidek (400 «kutilmoqda holatida emas»).
+- Qabul xatosi (403 boshqa filial, 409 `post_receive_busy`, 400) — amal bajarilmaydi, o'sha xato qaytadi; buyurtma qabul ro'yxatiga tushmasa — 400 `reason: auto_receive_failed`.
+- 🟢 Qabul o'tib amal rad etilsa (masalan isbot yo'q) — buyurtma «Kutilmoqda»da qoladi; qayta bosish amalni bajaradi. Takroriy so'rov (`Idempotency-Key`) — buyurtma endi «yo'lda» emas, qabul qayta so'ralmaydi.
+
+**Frontend action items:**
+- 🔧 «Yo'lda» buyurtma qatorida (kuryer ro'yxati, skaner natijasi) «Qabul qilish» bilan birga «Sotish» va «Bekor qilish» ham ko'rinsin.
+
 ### 2026-11-12 — «Qabul punkti» va «Aralash» filial menejeri market yaratadi va o'zi yaratgan marketlarni «Foydalanuvchilar»da ko'radi
 
 Dilshod: «Qabul va aralash managerlar market yarata olsin va o'zi yaratgan marketlarni foydalanuvchilar ro'yxatida ko'rib tursin».
