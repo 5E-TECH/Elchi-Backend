@@ -189,15 +189,6 @@ export class UpdateAdminRequestDto {
   @IsBoolean()
   can_sell_cancel?: boolean;
 
-  @ApiPropertyOptional({
-    example: true,
-    description:
-      "(2026-11-11) KURYER kassasi qarzga ishlaydi: yoqilsa kuryerdan qoldig'idan ORTIQ (oldindan) pul qabul qilinadi — kuryer kassasi manfiyga tushadi (kompaniya kuryerga qarzdor, ortig'i keyingi sotuvlarga hisoblanadi). O'chiq (sukut) — ortiqcha summa 400. Faqat admin/superadmin, faqat kuryer yozuvida (market — `PATCH /admin/markets/:id`); boshqa rol 400, menejer 403.",
-  })
-  @IsOptional()
-  @IsBoolean()
-  cashbox_debt_enabled?: boolean;
-
   @ApiPropertyOptional({ example: 'center', enum: ['center', 'address'] })
   @IsOptional()
   @IsEnum(['center', 'address'])

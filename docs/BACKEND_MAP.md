@@ -790,7 +790,11 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (strict, no negative; `card_id` must be that branch's card; branch shift
   gate R6), idempotency on the branch leg, `branch_to_hq` (`<token>:b`) then
   `hq_to_market` (`<token>`). Both new shapes are NOT correctable (T6
-  `classifyTransfer` requires MAIN).
+  `classifyTransfer` requires MAIN). A BRANCH cashbox may go negative only for system
+  legs — a manager's manual `spend` is strict like MAIN (400). `all_info` adds
+  `marketPayableTotal` (sum of positive market balances). Financial-balance
+  history/analytics/top-impacts and the cashbox history date filters use
+  Tashkent days for `YYYY-MM-DD`.
 - **Branch cashbox debt (2026-11-11, migration `1716000000217`
   `branch_schema.branches.cashbox_debt_enabled`, default false):**
   `payment_branch_main` reads the flag via `branch.find_by_id` BEFORE the
@@ -808,24 +812,6 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   legs: an INCOME into an already-negative MAIN/BRANCH bucket is never
   refused (a manager can receive courier cash into a branch cashbox that
   HQ drove negative).
-- **Courier cashbox debt (2026-11-11, no migration — reuses
-  `admins.cashbox_debt_enabled` from `1716000000207`):** `payment_courier`
-  over-remit guard (amount > courier balance → 400) is skipped when identity
-  says the COURIER has `cashbox_debt_enabled = true` (asked only when the
-  amount exceeds the balance; identity error / other role → closed). The
-  courier cashbox goes negative (company owes the courier — an advance);
-  the ledger keeps the surplus as the `courier_to_branch` carry, later sales
-  are closed by it. Toggle: `PATCH /users/:id {cashbox_debt_enabled}` —
-  SA/ADMIN only, courier rows only (market keeps `PATCH /admin/markets/:id`).
-  The courier advance payload carries `carry_branch_id` (receiver branch;
-  only on the manager path): order-service uses it for the carry's
-  `branch_id` ONLY when the courier has no settlement rows yet (a new
-  courier's advance was otherwise booked as an HQ-courier carry and lowered
-  `chain_receivable`). A BRANCH cashbox may go negative only for system
-  legs — a manager's manual `spend` is strict like MAIN (400). `all_info` adds
-  `marketPayableTotal` (sum of positive market balances). Financial-balance
-  history/analytics/top-impacts and the cashbox history date filters use
-  Tashkent days for `YYYY-MM-DD`.
 - **Payment correction (T6, 2026-10-30, migr `1716000000186`):** SUPERADMIN
   only reverses or re-amounts a courier receipt (`courier_payment`, MAIN/BRANCH,
   cash/click/click_to_market) or an HQ market payment (`market_payment`).

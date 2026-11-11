@@ -224,7 +224,7 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
           { balance: 100_000, balance_cash: 100_000 },
         );
       jest
-        .spyOn(service as never, 'isCashboxDebtEnabled')
+        .spyOn(service as never, 'isMarketCashboxDebtEnabled')
         .mockResolvedValueOnce(false as never);
 
       await expect(pay('gw:ctm-3')).rejects.toMatchObject({

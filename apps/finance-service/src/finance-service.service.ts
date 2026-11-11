@@ -4581,15 +4581,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     amount: number,
     requesterId: string | null | undefined,
     token: string,
-    /** Qo'shimcha maydonlar (masalan `carry_branch_id`). */
-    extra?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const payload: Record<string, unknown> = {
       level,
       match_value: String(matchValue ?? ''),
       amount: Number(amount ?? 0),
       requester_id: requesterId ? String(requesterId) : undefined,
-      ...(extra ?? {}),
     };
     // Bake the shared idempotency key into the payload so the in-tx outbox row
     // AND the post-commit immediate publish (Faza 2c) carry the SAME request_id
@@ -5013,15 +5010,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // shuning uchun qo'riqchi usuldan qat'i nazar JAMI `balance` bilan;
     // qabul qiluvchi MAIN/BRANCH kassasi esa updateBalancesByMethod'da usul
     // bo'yicha tekshiriladi.
-    // (2026-11-11) Kuryer sozlamasida «kassa qarzga ishlaydi»
-    // (`cashbox_debt_enabled`) yoqilgan bo'lsa ortiqcha (oldindan) to'lov
-    // o'tadi: kuryer kassasi manfiyga tushadi, ortig'i order-service'da
-    // `courier_to_branch` qoldig'i bo'lib keyingi sotuvlarni yopadi.
-    // Identity faqat oshganda so'raladi; javob bermasa — yopiq (400).
-    if (
-      Number(data.amount) > Number(courierCashbox.balance) &&
-      !(await this.isCashboxDebtEnabled(String(data.courier_id), 'courier'))
-    ) {
+    if (Number(data.amount) > Number(courierCashbox.balance)) {
       throw new BadRequestException(
         `To'lov miqdori courier qoldig'idan oshib ketdi (qoldiq: ${Number(
           courierCashbox.balance,
@@ -5215,11 +5204,6 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       Number(data.amount),
       data.created_by,
       dedupKey,
-      // (2026-11-11) Kuryerda daftar qatori bo'lmasa (yangi kuryer avansi)
-      // qoldiq shu filialniki bo'lsin — order-service `carryBranchHint`.
-      receiverCashboxType === Cashbox_type.BRANCH
-        ? { carry_branch_id: receiverUserId }
-        : undefined,
     );
     /**
      * AUDIT M4 — menejer yo'lida (filial kassasi) marketga o'tkazma: filial
@@ -5820,7 +5804,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     if (amount <= marketPayable) {
       return;
     }
-    if (await this.isCashboxDebtEnabled(marketId, 'market')) {
+    if (await this.isMarketCashboxDebtEnabled(marketId)) {
       return;
     }
     throw new BadRequestException(
@@ -5861,29 +5845,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * Kassa qarzga ishlaydimi (`identity` → `cashbox_debt_enabled`): market
-   * (migratsiya 207) va (2026-11-11) kuryer. Rol ham tekshiriladi — boshqa
-   * rol yoki identity xatosi — yopiq (`false`).
-   */
-  private async isCashboxDebtEnabled(
-    userId: string,
-    role: 'market' | 'courier',
-  ): Promise<boolean> {
+  private async isMarketCashboxDebtEnabled(marketId: string): Promise<boolean> {
     try {
       const response = await rmqSend<{
         data?: { role?: unknown; cashbox_debt_enabled?: unknown };
       }>(
         this.identityClient,
         { cmd: 'identity.user.find_by_id' },
-        { id: userId },
+        { id: marketId },
         { timeoutMs: 3000, retries: 0 },
       );
-      const user = response?.data;
-      return user?.role === role && user.cashbox_debt_enabled === true;
+      const market = response?.data;
+      return market?.role === 'market' && market.cashbox_debt_enabled === true;
     } catch (err) {
       this.logger.warn(
-        `${role === 'market' ? 'Market' : 'Kuryer'} ${userId} kassa qarzi sozlamasini o'qib bo'lmadi: ${(err as Error).message}`,
+        `Market ${marketId} kassa qarzi sozlamasini o'qib bo'lmadi: ${(err as Error).message}`,
       );
       return false;
     }

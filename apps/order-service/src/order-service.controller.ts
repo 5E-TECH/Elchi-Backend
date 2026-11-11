@@ -1207,8 +1207,6 @@ export class OrderServiceController {
       amount: number;
       requester_id?: string;
       request_id?: string;
-      /** (2026-11-11) Kuryer avansi — pul qaysi filial kassasiga tushdi. */
-      carry_branch_id?: string | null;
     },
     @Ctx() context: RmqContext,
   ) {
