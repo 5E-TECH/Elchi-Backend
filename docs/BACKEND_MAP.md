@@ -779,9 +779,18 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   ≤5 s on shutdown — a crash mid-sync drops them, display-only). The sync
   pages SOLD/PARTLY_PAID orders oldest-first (100/page, ≤50 pages; remaining =
   `to_be_paid − extra_cost − paid_amount`). `payment_courier` with
-  `click_to_market` and a BRANCH receiver → 400; on the HQ path the amount must
-  not exceed the market payable (400) and a second `hq_to_market` advance is
-  enqueued (token `<token>:m`). A BRANCH cashbox may go negative only for system
+  `click_to_market`: the amount must not exceed the market payable (400) and a
+  second `hq_to_market` advance is enqueued (token `<token>:m`). (M4,
+  2026-11-11) A BRANCH receiver (manager path) is allowed: branch +X/−X (net
+  0) and a `branch_to_hq` advance (token `<token>:b`, match = branch id) is
+  enqueued between the two, so `branch_payable` drops with
+  `courier_receivable` (no phantom branch debt). `payment_market` takes
+  optional `payer_cashbox_type: 'branch'` + `payer_user_id` (branch id; set by
+  the gateway for a manager): the branch cashbox is locked and debited
+  (strict, no negative; `card_id` must be that branch's card; branch shift
+  gate R6), idempotency on the branch leg, `branch_to_hq` (`<token>:b`) then
+  `hq_to_market` (`<token>`). Both new shapes are NOT correctable (T6
+  `classifyTransfer` requires MAIN). A BRANCH cashbox may go negative only for system
   legs — a manager's manual `spend` is strict like MAIN (400). `all_info` adds
   `marketPayableTotal` (sum of positive market balances). Financial-balance
   history/analytics/top-impacts and the cashbox history date filters use
@@ -1532,8 +1541,10 @@ an order — see finance-service › Pickup visits.
 - **Manager cash scope** (C3/M7/RBAC-07): own branch only — a manager receives
   cash only from couriers whose active `branch_users` row is in his branch
   (403 "Bu kuryer sizning filialingizga tegishli emas"; branch-service down →
-  503). `click_to_market` by a manager → 403 (only via the HQ/MAIN cashbox).
-  `POST /finance/cashbox/payment/market` is SA/ADMIN only.
+  503). (M4, 2026-11-11) A manager may take `click_to_market` (via his branch
+  cashbox, net 0) and `POST /finance/cashbox/payment/market` is SA/ADMIN/MANAGER
+  — a manager pays from HIS branch cashbox (branch from JWT/branch_users, 403
+  if none; HQ MAIN untouched); SA/ADMIN pay from MAIN as before.
 - **Payout idempotency** (C1/M2): `payment/courier`, `payment/market` and
   `payment/branch-to-main` honour `Idempotency-Key` (used as `dedup_epoch`;
   duplicate → `{statusCode:200, data:{idempotent:true}}`). Without a key the

@@ -22,6 +22,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-11 — Menejer: «Marketga to'lov» o'z filial kassasidan va «Marketga o'tkazma» (audit M4)
+
+Deploy: finance-service + api-gateway. **Migratsiya yo'q.** Frontend `712257b2` kutgan kontrakt.
+
+- 🆕 `POST /finance/cashbox/payment/market` endi **menejerga ham** ochiq. Body o'zgarmagan: `{ market_id, amount, payment_method, card_id?, payment_date?, comment? }` + `Idempotency-Key`. Menejer — pul **o'z filial kassasidan** chiqadi (filial JWT / branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Superadmin/admin — avvalgidek HQ asosiy kassasidan.
+  - Filial kassasida yetarli naqd / karta bo'lishi shart: yetmasa **400** («Naqd kassada yetarli mablag' yo'q» / «Karta hisobida yetarli mablag' yo'q»), HQ kassasiga tegilmaydi. Marketga qarzdan oshsa — 400 (avvalgidek).
+  - `card_id` — **filial kassasining** kartasi (boshqa kassa kartasi 403, faqat `click`).
+  - Filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`).
+  - «HQ ga berilishi kerak» filial kassasidagi pul bilan birga X ga kamayadi.
+- ✏️ `POST /finance/cashbox/payment/courier` `payment_method: "click_to_market"` + `market_id` — menejer uchun endi **403 emas**. Filial kassasiga +X va darhol −X (sof 0), kuryer qarzi −X, marketga qarz −X. «Kuryerlardan olinishi kerak» va «HQ ga berilishi kerak» ikkalasi X ga kamayadi — soxta filial qarzi qolmaydi.
+- ⚠️ Bu ikki yangi shakl (filial orqali marketga o'tkazma, filialdan marketga to'lov) **tuzatib / qaytarib bo'lmaydi** (T6): tarix qatorida `correctable.allowed: false`, `reason: "unsupported_type"`.
+
+**Frontend action items:**
+- 🟢 Kontrakt FE kutganidek — o'zgarish shart emas.
+- 🔧 Menejer sahifasida «Marketga to'lov» kartalari ro'yxati — filial kassasining kartalari (`GET /finance/cashbox/cards`, menejerga o'z filiali).
+
 ### 2026-11-11 — «Kun tartibi» backend: har kungi yaratish / qabul chegaralari, smenani avtomatik ochish, kechikish xabari
 
 Frontend `bahodir` («Kun tartibi» tabi, `9f44a6b0` / `eae05d7d`) kutgan kontrakt. Deploy: order-service, finance-service, api-gateway, integration-service (`libs/common` o'zgargan — hammasi). **Migratsiya `1716000000216`** (finance `shifts`).

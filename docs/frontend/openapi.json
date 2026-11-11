@@ -9323,6 +9323,7 @@
     },
     "/finance/cashbox/payment/market": {
       "post": {
+        "description": "Superadmin/admin — HQ asosiy kassasidan. (2026-11-11, audit M4) Menejer — O'Z FILIAL KASSASIDAN (filial JWT/branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Menejer yo'lida: filial kassasida yetarli naqd/karta bo'lishi shart (yo'q → 400, HQ kassasiga tegilmaydi), `card_id` — filial kassasining kartasi (`GET /finance/cashbox/cards?cashbox_id=<filial kassa id>`), filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`). Daftar: filial → HQ va HQ → market bo'g'inlari AYNI summaga yopiladi — «HQ ga berilishi kerak» filial kassasidagi pul bilan birga kamayadi.",
         "operationId": "FinanceGatewayController_paymentToMarket",
         "parameters": [
           {
@@ -9360,7 +9361,8 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "manager"
         ]
       }
     },
