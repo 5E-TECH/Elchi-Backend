@@ -32,10 +32,8 @@ describe("Yo'ldagi buyurtmani sotish/bekor qilish — avtomatik qabul", () => {
     const logisticsClient = {
       send: jest.fn((pattern: { cmd: string }) => {
         calls.push(pattern.cmd);
-        if (pattern.cmd === 'logistics.post.find_by_id') {
-          return opts.post
-            ? of({ statusCode: 200, data: opts.post })
-            : throwError(() => ({ statusCode: 404 }));
+        if (pattern.cmd === 'logistics.post.find_by_ids') {
+          return of({ statusCode: 200, data: opts.post ? [opts.post] : [] });
         }
         if (pattern.cmd === 'logistics.post.receive') {
           if (opts.receiveError) return throwError(() => opts.receiveError);
@@ -108,7 +106,7 @@ describe("Yo'ldagi buyurtmani sotish/bekor qilish — avtomatik qabul", () => {
       await act(controller, req('25', ['courier'], '3'));
       expect(calls).toEqual([
         'order.find_by_id',
-        'logistics.post.find_by_id',
+        'logistics.post.find_by_ids',
         'logistics.post.receive',
         cmd,
       ]);
@@ -145,7 +143,7 @@ describe("Yo'ldagi buyurtmani sotish/bekor qilish — avtomatik qabul", () => {
     );
     expect(calls).toEqual([
       'order.find_by_id',
-      'logistics.post.find_by_id',
+      'logistics.post.find_by_ids',
       'logistics.post.receive',
       'order.cancel',
     ]);

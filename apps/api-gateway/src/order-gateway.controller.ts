@@ -895,11 +895,28 @@ export class OrderGatewayController {
     const isManager = !isCourier && roles.includes(RoleEnum.MANAGER);
     if (!isCourier && !isManager) return false;
 
-    const post = this.unwrapOrderRow(
-      await this.sendLogisticsWithTimeout(
-        { cmd: 'logistics.post.find_by_id' },
-        { id: postId },
-      ).catch(() => null),
+    // Ichki o'qish (doirasiz, yon ta'sirsiz): `post.find_by_id` so'rovchisiz
+    // 403 beradi, so'rovchi bilan esa menejerga o'tkazma pochtasini qayta
+    // yozishi mumkin. Bu yerda faqat `courier_id` kerak — ruxsatni qabulning
+    // o'zi (`assertPostReceiveAccess`) tekshiradi.
+    const postsResponse = (await this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.find_by_ids' },
+      { ids: [postId] },
+    ).catch(() => null)) as { data?: unknown } | unknown[] | null;
+    const postRows: unknown[] = Array.isArray(postsResponse)
+      ? postsResponse
+      : Array.isArray(postsResponse?.data)
+        ? (postsResponse.data as unknown[])
+        : [];
+    type PostRow = {
+      id?: string | number;
+      courier_id?: string | number | null;
+    };
+    const post = postRows.find(
+      (row): row is PostRow =>
+        Boolean(row) &&
+        typeof row === 'object' &&
+        String((row as PostRow).id ?? '') === postId,
     );
     if (!post) return false;
     const postCourierId = String(post.courier_id ?? '').trim();
