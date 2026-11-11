@@ -19,7 +19,9 @@ import { FinanceGatewayController } from './finance-gateway.controller';
  *  - validatsiya (entered_balance majburiy ≥ 0, comment ≤ 1000, ID, rasm) — 400;
  *  - o'tkazish: `finance.shift.account_check.late_photo` (requester_roles),
  *    javob — hisobot qatori shakli (photo_url, kalit yashirin), AI fonda,
- *    eski rasm o'chiriladi; finance xato kodi (`code`, `deadline`) FE'ga
+ *    finance qaytargan `previous_photo_file_key` (oldingi KEYIN yuklangan
+ *    rasm; kassir qoralamasi — dalil, null) o'chiriladi; finance xato kodi
+ *    (`code`, `deadline`) FE'ga
  *    yetadi, rad etilganda yetim fayl o'chiriladi;
  *  - hisobot `can_upload_late` — qoida && superadmin / admin.
  * Haqiqiy AI CHAQIRILMAYDI.
@@ -215,7 +217,8 @@ describe('BE-B — gateway: avto-yopilgan smenaga karta rasmini keyin yuklash', 
       requester_id: '9',
       requester_roles: ['superadmin'],
     });
-    // Eski rasm o'chiriladi (qayta yuklash — oxirgisi yutadi).
+    // Oldingi KEYIN yuklangan rasm o'chiriladi (qayta yuklash — oxirgisi
+    // yutadi). Kassir qoralamasi (dalil) uchun finance kalit qaytarmaydi.
     expect(cmd(file.send, 'file.delete').map(([, p]) => p)).toEqual([
       { key: 'shift-check-old.jpg' },
     ]);

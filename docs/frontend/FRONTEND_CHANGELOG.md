@@ -49,8 +49,12 @@ ustunlar va smenaning `close_reason` belgisidan hisoblanadi). `openapi.json` yan
   (`expected_balance` — avto-yopish paytidagi SNAPSHOT, joriy balansdan qayta hisoblanmaydi; farq aniq 0 bo'lmasa izoh
   majburiy — yopishdagi qoida), qator tasdiqlanadi (`confirmed_at` = hozir, `confirmed_by` = yuklovchi), AI yoqilgan
   kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status: 'pending'`, aks holda `'disabled'`. 24
-  soat ichida qayta yuklash mumkin — oxirgisi yutadi (eski rasm o'chiriladi, uning kechikkan AI natijasi e'tiborsiz;
-  izoh berilmasa avvalgisi qoladi). Javob **201**:
+  soat ichida qayta yuklash mumkin — oxirgisi yutadi (oldingi KEYIN yuklangan rasm o'chiriladi, uning kechikkan AI
+  natijasi e'tiborsiz; izoh berilmasa faqat avvalgi KEYIN yuklash izohi qoladi). Kassirning yopishdan oldingi
+  qoralama izohi farq ≠ 0 dagi izoh talabini qoplamaydi va almashtiriladi (activity-log `old_value.comment` da
+  qoladi). Kassirning smena yopilishidan OLDINGI qoralama rasmi
+  (`late_uploaded: false`, `photo_status: 'uploaded'`) almashtirilsa ham fayli **o'chirilmaydi** — dalil sifatida
+  saqlanadi, eski kaliti va AI qiymatlari activity-log `old_value` da qoladi; qatorda yangi rasm ko'rinadi. Javob **201**:
   ```ts
   { statusCode: 201, message: 'Shift account late photo uploaded',
     data: AccountRow }  // `GET /finance/shift/:id/report` → `accounts[]` qatori bilan AYNAN bir xil shakl
@@ -67,14 +71,20 @@ ustunlar va smenaning `close_reason` belgisidan hisoblanadi). `openapi.json` yan
   yuklash mumkin (ochiq smena qoralamasi yoki avto-yopilgan ASOSIY smenaning 24 soatlik oynasi); `missing` — talab
   qilingan, yo'q, oyna yopiq yoki yo'q (qo'lda yopilgan / filial smenasi); `not_required` — talab qilinmagan.
   `can_upload_late` finance'da faqat qoida, rolni gateway qo'shadi (chek `can_reanalyze` kabi) — menejer /
-  registratorga doim `false`. Keyin yuklangan qatorda `confirmed_by` — yuklagan superadmin / admin ID si.
+  registratorga doim `false`. Keyin yuklangan qatorda `confirmed_by` — yuklagan superadmin / admin ID si. Smena
+  davomida arxivlangan, lekin kassir qoralamasi bor karta ham hisobotda qoladi: avto-yopishda uning
+  `expected_balance` i kartaning yopish paytidagi saqlangan qoldig'i (`balance`) bilan qayta yoziladi (0 faqat
+  o'chirilgan karta uchun), `ai_status: 'not_required'`.
 - [2026-11-10] ✏️ [finance] — **Realtime `finance.shift.account_checked`** keyin yuklashda va shu rasmning AI
   natijasida ham chiqadi, payload'da qo'shimcha **`late: true`** (summasiz): `{ shift_id, cashbox_user_id,
-  cashbox_type, branch_id, card_id, ai_status, checked_at, late: true }`. Nishonlar avvalgidek (ASOSIY smena —
-  superadmin / admin / registrator + smenani ochgan xodim). Oddiy (ochiq smena) yuklashda `late` maydoni yo'q.
+  cashbox_type, branch_id, card_id, ai_status, checked_at, late: true }`. Nishonlar avvalgidek: ASOSIY smena —
+  superadmin / admin / registrator; smenani ochgan xodim faqat smenada `opened_by` bo'lsa qo'shiladi — «Kun
+  tartibi» bo'yicha tizim avtomatik ochgan smenada (`opened_by: null`) faqat rollar. Oddiy (ochiq smena) yuklashda
+  `late` maydoni yo'q.
 - [2026-11-10] 🟢 [finance] — Activity-log: **`finance.shift_late_photo_uploaded`** («Karta qoldig'i rasmi keyin
   yuklandi (avto-yopilgan smena)»), metadata `{ shift_id, card_id, entered, expected, difference, closed_at, deadline,
-  replaced_photo }`. Smena hisoboti (Telegram / PDF) avtomatik qayta yuborilmaydi — kerak bo'lsa superadmin
+  replaced_photo, replaced_photo_key, kept_pre_close_photo }`; `old_value` da almashtirilgan rasm kaliti, izoh va AI
+  qiymatlari (`ai_read_balance`, `ai_last4_detected`, …; `ai_raw` emas). Smena hisoboti (Telegram / PDF) avtomatik qayta yuborilmaydi — kerak bo'lsa superadmin
   `POST /finance/shift/:id/report/resend`.
 
 Frontend action items:

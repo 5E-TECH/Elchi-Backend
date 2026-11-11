@@ -23,7 +23,8 @@ import { SHIFT_LATE_PHOTO_WINDOW_MS } from './shift-account-check.rules';
  * tasdiqlanadi, AI pending); qayta yuklashda eski AI natijasi e'tiborsiz;
  * AI natijasi yoziladi va `finance.shift.account_checked` (`late: true`);
  * 24 soatdan keyin 409 EXPIRED va `missing`; qo'lda yopilgan / ochiq — 409;
- * filial — 400; begona karta — 404; farq + izohsiz — 400; PUL INVARIANTI.
+ * filial — 400; begona karta — 404; farq + izohsiz — 400; PUL INVARIANTI;
+ * «Kun tartibi» — tizim ochgan smena (`opened_by` NULL) ham.
  * Env (`FINANCE_PG_TEST_URI`) berilmasa skip. Haqiqiy AI CHAQIRILMAYDI.
  */
 const pgUri =
@@ -83,6 +84,11 @@ describePg(
         extra: { max: 5 },
       });
       await db.initialize();
+      // «Kun tartibi» — migratsiya 216 dagi CHECK (entity'da yo'q, shu yerda
+      // qo'shiladi): tizim ochgan smenada `opened_by` NULL.
+      await db.query(
+        `ALTER TABLE "${schema}"."shifts" ADD CONSTRAINT "CHK_SHIFT_OPENED_BY_OR_SYSTEM" CHECK ("opened_by" IS NOT NULL OR "opened_by_system" = true)`,
+      );
       const realtime = new FinanceRealtimeService(
         outbox as never,
         { get: () => 'gateway_queue' } as never,
@@ -262,7 +268,14 @@ describePg(
 
     const realtimeEvents = (name: string) =>
       outbox.enqueue.mock.calls
-        .map((call) => call[2] as { event: string; payload: any })
+        .map(
+          (call) =>
+            call[2] as {
+              event: string;
+              payload: any;
+              targets: Array<Record<string, unknown>>;
+            },
+        )
         .filter((msg) => msg.event === name);
 
     it('avto-yopilgan MAIN smena — hisobotda har karta `pending` + 24 soatlik muddat, `can_upload_late`', async () => {
@@ -366,6 +379,9 @@ describePg(
             entered: 99_000,
             expected: 100_000,
             difference: -1_000,
+            replaced_photo: false,
+            replaced_photo_key: null,
+            kept_pre_close_photo: false,
           }),
         }),
       );
@@ -393,13 +409,223 @@ describePg(
       ).toEqual(shiftBefore);
     });
 
+    it('«Kun tartibi»: tizim ochgan (`opened_by` NULL) va avto-yopilgan MAIN smena — keyin yuklash o‘tadi, nishonlarda «null» xodim yo‘q', async () => {
+      // beforeEach'dagi kassir smenasi olib tashlanadi — kassada ochiq smena
+      // yo'q, uni HAQIQIY `autoOpenShift` yo'li bilan tizim ochadi.
+      await db.getRepository(Shift).delete({ id: shiftId });
+      const opened = await service.autoOpenShift({
+        cashbox_user_id: '0',
+        slot_key: '2026-11-10T09:00',
+        slot_at: new Date(Date.now() - 3 * H),
+      });
+      expect(opened).toEqual(
+        expect.objectContaining({ opened: true, reason: 'auto_opened' }),
+      );
+      shiftId = String(opened.shift_id);
+      expect(
+        await db.getRepository(Shift).findOneByOrFail({ id: shiftId }),
+      ).toEqual(
+        expect.objectContaining({
+          cashbox_user_id: '0',
+          status: ShiftStatus.OPEN,
+          opened_by: null,
+          opened_by_system: true,
+          opening_balance_cash: 200_000,
+          opening_balance_card: 300_000,
+        }),
+      );
+      // Ertalabki slotda ochilgan bo'lsin — `autoCloseShift` slotdan KEYIN
+      // ochilgan smenani yopmaydi (`opened_after_slot`).
+      await db.query(
+        `UPDATE "${schema}".shifts SET opened_at = $1 WHERE id = $2`,
+        [new Date(Date.now() - 3 * H), shiftId],
+      );
+      const closed = await autoClose();
+      expect(closed).toEqual(
+        expect.objectContaining({
+          close_reason: 'auto',
+          closed_by: null,
+          closed_by_system: true,
+          opened_by: null,
+          opened_by_system: true,
+        }),
+      );
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.shift_auto_closed',
+          metadata: expect.objectContaining({ opened_by: null }),
+        }),
+      );
+      outbox.enqueue.mockClear();
+      activityLog.log.mockClear();
+
+      const res = await late(cards.humo.id, 100_000);
+      expect(res.statusCode).toBe(201);
+      expect(res.data.check).toEqual(
+        expect.objectContaining({
+          card_id: String(cards.humo.id),
+          expected_balance: 100_000,
+          entered_balance: 100_000,
+          difference: 0,
+          ai_status: 'pending',
+          confirmed_by: '1',
+          photo_status: 'uploaded',
+          late_uploaded: true,
+        }),
+      );
+      const saved = await row(cards.humo.id);
+      expect(String(saved.confirmed_by)).toBe('1');
+      expect(String(saved.photo_uploaded_by)).toBe('1');
+      expect(saved.confirmed_at).toBeInstanceOf(Date);
+
+      // Realtime: `late: true`; nishonlar — faqat ASOSIY smena rollari
+      // (ochuvchi ham, yopuvchi ham NULL — `user_id` nishoni yo'q, «null» /
+      // «undefined» xodim ham yo'q).
+      const events = realtimeEvents('finance.shift.account_checked');
+      expect(events).toHaveLength(1);
+      expect(events[0].payload).toEqual(
+        expect.objectContaining({
+          shift_id: shiftId,
+          cashbox_type: 'main',
+          card_id: String(cards.humo.id),
+          ai_status: 'pending',
+          late: true,
+        }),
+      );
+      expect(events[0].targets).toEqual([
+        { role: 'superadmin' },
+        { role: 'admin' },
+        { role: 'registrator' },
+      ]);
+      expect(JSON.stringify(events[0].targets)).not.toMatch(
+        /user_id|null|undefined/,
+      );
+
+      // Activity-log xatosiz yozildi (yuklovchi nomidan).
+      expect(activityLog.log).toHaveBeenCalledTimes(1);
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.shift_late_photo_uploaded',
+          entity_type: 'ShiftAccountCheck',
+          entity_id: String(saved.id),
+          user_id: '1',
+          new_value: expect.objectContaining({ confirmed_by: '1' }),
+          metadata: expect.objectContaining({
+            shift_id: shiftId,
+            card_id: String(cards.humo.id),
+            entered: 100_000,
+            expected: 100_000,
+            difference: 0,
+            replaced_photo: false,
+            kept_pre_close_photo: false,
+          }),
+        }),
+      );
+
+      // Hisobot: smenani tizim ochgan va yopgan (ismlar null); karta qatorlari
+      // BE-B maydonlari bilan — yuklangani `uploaded`, qolganlari `pending`.
+      const deadline = new Date(
+        new Date(closed.closed_at as Date).getTime() +
+          SHIFT_LATE_PHOTO_WINDOW_MS,
+      ).toISOString();
+      const { data, byCard } = await report();
+      expect(data.shift).toEqual(
+        expect.objectContaining({
+          opened_by: null,
+          opened_by_system: true,
+          opened_by_name: null,
+          closed_by: null,
+          closed_by_name: null,
+        }),
+      );
+      expect(data.close_reason).toBe('auto');
+      expect(data.closed_by_system).toBe(true);
+      expect(data.cashbox_type).toBe('main');
+      expect(data.accounts).toHaveLength(3);
+      expect(byCard.get(String(cards.humo.id))).toEqual(
+        expect.objectContaining({
+          expected_balance: 100_000,
+          entered_balance: 100_000,
+          difference: 0,
+          confirmed_by: '1',
+          photo_status: 'uploaded',
+          late_uploaded: true,
+          late_upload_deadline: deadline,
+          can_upload_late: true,
+        }),
+      );
+      for (const card of [cards.def, cards.uzcard]) {
+        expect(byCard.get(String(card.id))).toEqual(
+          expect.objectContaining({
+            photo_file_key: null,
+            confirmed_by: null,
+            photo_status: 'pending',
+            late_uploaded: false,
+            late_upload_deadline: deadline,
+            can_upload_late: true,
+          }),
+        );
+      }
+    });
+
     it('qayta yuklash — oxirgisi yutadi, eski AI natijasi e’tiborsiz; yangisi snapshot bilan solishtiriladi va hodisa chiqadi', async () => {
       await autoClose();
       const first = await late(cards.humo.id, 100_000);
+      // Birinchi keyin yuklangan rasmning AI natijasi qayta yuklashdan OLDIN
+      // keladi — ikkinchi rasm qatorida eski AI qiymatlari qolmasin.
+      const firstAi = await checks.applyAiResult({
+        shift_id: shiftId,
+        card_id: String(cards.humo.id),
+        ai_request_id: first.data.ai_request_id,
+        result: {
+          ok: true,
+          balance: 100_000,
+          last4: '1234',
+          date: '10.11.2026',
+          confidence: 0.95,
+          model: 'mock',
+        },
+      });
+      expect(firstAi.data.check).toEqual(
+        expect.objectContaining({ ai_status: 'match', ai_entered_ok: true }),
+      );
+      activityLog.log.mockClear();
       const second = await late(cards.humo.id, 100_000);
       expect(second.data.ai_request_id).not.toBe(first.data.ai_request_id);
+      // Oldingi KEYIN yuklangan rasm (dalil emas) — gateway o'chiradi.
       expect(second.data.previous_photo_file_key).toEqual(
         expect.stringMatching(/^shift-check-late-/),
+      );
+      expect(second.data.previous_photo_file_key).toBe(
+        first.data.check.photo_file_key,
+      );
+      expect(second.data.check).toEqual(
+        expect.objectContaining({
+          ai_status: 'pending',
+          ai_read_balance: null,
+          ai_last4_detected: null,
+          ai_date_detected: null,
+          ai_confidence: null,
+          ai_entered_ok: null,
+          ai_model: null,
+          ai_checked_at: null,
+          ai_raw: null,
+        }),
+      );
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.shift_late_photo_uploaded',
+          old_value: expect.objectContaining({
+            photo_file_key: first.data.check.photo_file_key,
+            ai_read_balance: 100_000,
+            ai_entered_ok: true,
+          }),
+          metadata: expect.objectContaining({
+            replaced_photo: true,
+            replaced_photo_key: first.data.check.photo_file_key,
+            kept_pre_close_photo: false,
+          }),
+        }),
       );
       // Joriy karta qoldig'i o'zgargan — AI baribir SNAPSHOT (100 000) bilan.
       await db.query(
@@ -487,6 +713,15 @@ describePg(
           deadline,
         }),
       );
+      // Guard tartibi: muddat kartadan OLDIN tekshiriladi (qatori yo'q karta ham 409).
+      const unknownExpired = await rpcError(late('999999', 100_000));
+      expect(unknownExpired).toEqual(
+        expect.objectContaining({
+          statusCode: 409,
+          code: 'SHIFT_LATE_PHOTO_EXPIRED',
+          deadline,
+        }),
+      );
       const untouched = await row(cards.humo.id);
       expect(untouched.photo_file_key).toBeNull();
       expect(untouched.confirmed_at).toBeNull();
@@ -536,6 +771,9 @@ describePg(
           message: 'Rasmni keyin yuklash faqat avtomatik yopilgan smena uchun',
         }),
       );
+      const manualUnknown = await rpcError(late('999999', 0));
+      expect(manualUnknown.statusCode).toBe(409);
+      expect(manualUnknown.code).toBe('SHIFT_LATE_PHOTO_NOT_AUTO_CLOSED');
       const { byCard } = await report();
       expect(byCard.get(String(cards.humo.id))).toEqual(
         expect.objectContaining({
@@ -548,6 +786,11 @@ describePg(
     });
 
     it('ochiq smena — 409 NOT_AUTO_CLOSED; qoralama: rasm talab qilingan, yo‘q → `pending`', async () => {
+      // Guard tartibi: hali hech qanday qator yo'q (odatiy holat) — baribir
+      // 409 NOT_AUTO_CLOSED, 404 CARD_NOT_IN_SHIFT emas.
+      const noRow = await rpcError(late(cards.humo.id, 100_000));
+      expect(noRow.statusCode).toBe(409);
+      expect(noRow.code).toBe('SHIFT_LATE_PHOTO_NOT_AUTO_CLOSED');
       await checks.attachPhoto({
         card_id: String(cards.humo.id),
         photo_file_key: 'shift-check-draft.jpg',
@@ -619,6 +862,12 @@ describePg(
         cashbox_user_id: '13',
       });
       await autoClose(String(branchShift.id));
+      // Guard tartibi: MAIN_ONLY kartadan OLDIN (qatori yo'q karta ham 400).
+      const branchUnknown = await rpcError(
+        late('999999', 0, { shift_id: String(branchShift.id) }),
+      );
+      expect(branchUnknown.statusCode).toBe(400);
+      expect(branchUnknown.code).toBe('SHIFT_LATE_PHOTO_MAIN_ONLY');
       const err = await rpcError(
         late(branchCard.id, 20_000, { shift_id: String(branchShift.id) }),
       );
@@ -698,6 +947,83 @@ describePg(
       );
     });
 
+    it('kassirning yopishdan oldingi qoralama izohi keyin yuklash izohi o‘rnini bosmaydi; avvalgi KEYIN yuklash izohi qayta yuklashda qoladi', async () => {
+      const cashierComment = 'kassir: 5000 naqdga olindi';
+      const draft = await checks.attachPhoto({
+        card_id: String(cards.humo.id),
+        photo_file_key: 'shift-check-comment-draft.jpg',
+        entered_balance: 95_000,
+        comment: cashierComment,
+        requester_id: '25',
+      });
+      expect(draft.data.check.comment).toBe(cashierComment);
+      await autoClose();
+      const snap = await row(cards.humo.id);
+      expect(snap.expected_balance).toBe(100_000);
+      expect(snap.entered_balance).toBeNull();
+      expect(snap.comment).toBe(cashierComment);
+
+      // Farq −20 000, superadmin izoh bermadi — kassir izohi hisoblanmaydi.
+      const err = await rpcError(late(cards.humo.id, 80_000));
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message: '«Humo»: farq bor yoki AI natijasi mos emas — izoh majburiy',
+        }),
+      );
+      const untouched = await row(cards.humo.id);
+      expect(untouched.photo_file_key).toBe('shift-check-comment-draft.jpg');
+      expect(untouched.entered_balance).toBeNull();
+      expect(untouched.confirmed_at).toBeNull();
+      expect(untouched.confirmed_by).toBeNull();
+      expect(untouched.comment).toBe(cashierComment);
+      expect(activityLog.log).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.shift_late_photo_uploaded',
+        }),
+      );
+
+      // Farq 0 — izohsiz o'tadi; kassir izohi qatordan olinadi (tasdiqning
+      // sababi emas), activity-log old_value.comment da qoladi.
+      const ok = await late(cards.humo.id, 100_000);
+      expect(ok.statusCode).toBe(201);
+      expect(ok.data.check).toEqual(
+        expect.objectContaining({
+          difference: 0,
+          comment: null,
+          comment_required: false,
+          confirmed_by: '1',
+          late_uploaded: true,
+        }),
+      );
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.shift_late_photo_uploaded',
+          old_value: expect.objectContaining({ comment: cashierComment }),
+        }),
+      );
+
+      // Avvalgi KEYIN yuklash izohi — qayta yuklashda izoh berilmasa qoladi.
+      const withComment = await late(cards.humo.id, 90_000, {
+        comment: 'admin: 10 000 komissiya',
+      });
+      expect(withComment.data.check).toEqual(
+        expect.objectContaining({
+          difference: -10_000,
+          comment: 'admin: 10 000 komissiya',
+        }),
+      );
+      const again = await late(cards.humo.id, 85_000);
+      expect(again.statusCode).toBe(201);
+      expect(again.data.check).toEqual(
+        expect.objectContaining({
+          difference: -15_000,
+          comment: 'admin: 10 000 komissiya',
+          comment_required: true,
+        }),
+      );
+    });
+
     it('kirish: faqat superadmin / admin (finance ham tekshiradi); entered_balance majburiy; AI o‘chiq — `disabled`', async () => {
       await autoClose();
       const denied = await rpcError(
@@ -733,6 +1059,220 @@ describePg(
           photo_status: 'uploaded',
         }),
       );
+      const events = realtimeEvents('finance.shift.account_checked');
+      expect(events).toHaveLength(1);
+      expect(events[0].payload).toEqual(
+        expect.objectContaining({ ai_status: 'disabled', late: true }),
+      );
+    });
+
+    it('smena ichida arxivlangan karta qoralamasi ham avto-yopishda qayta snapshot qilinadi — keyin yuklash farqi yopish qoldig‘i (0) bo‘yicha', async () => {
+      const draft = await checks.attachPhoto({
+        card_id: String(cards.uzcard.id),
+        photo_file_key: 'shift-check-uzcard-draft.jpg',
+        requester_id: '25',
+      });
+      expect(draft.data.check.expected_balance).toBe(50_000);
+      expect(draft.data.check.ai_status).toBe('pending');
+      // Qoldiq Asosiy kartaga (hosila) o'tgan va karta arxivlangan
+      // (`setCardActive` — balans 0 shart).
+      await db.query(
+        `UPDATE "${schema}".cashbox_cards SET balance = 0, is_active = false WHERE id = $1`,
+        [cards.uzcard.id],
+      );
+      await autoClose();
+      const snap = await row(cards.uzcard.id);
+      expect(snap.expected_balance).toBe(0);
+      expect(snap.entered_balance).toBeNull();
+      expect(snap.difference).toBeNull();
+      expect(snap.ai_status).toBe('not_required');
+      expect(snap.ai_enabled_snap).toBe(false);
+      expect(snap.confirmed_at).toBeNull();
+      // Kassir rasmi dalil sifatida qoladi.
+      expect(snap.photo_file_key).toBe('shift-check-uzcard-draft.jpg');
+      // Asosiy karta hosila snapshot'i: 300 000 − 100 000 = 200 000.
+      expect((await row(cards.def.id)).expected_balance).toBe(200_000);
+
+      // Yopishdagi haqiqiy qoldiq (0) — farq 0, izoh shart emas.
+      const res = await late(cards.uzcard.id, 0);
+      expect(res.statusCode).toBe(201);
+      expect(res.data.check).toEqual(
+        expect.objectContaining({
+          expected_balance: 0,
+          entered_balance: 0,
+          difference: 0,
+          comment_required: false,
+        }),
+      );
+    });
+
+    it('kassirning yopishdan oldingi qoralama rasmi va AI natijasi — DALIL: fayl o‘chirilmaydi, eski qiymatlar activity-log’da', async () => {
+      const draft = await checks.attachPhoto({
+        card_id: String(cards.humo.id),
+        photo_file_key: 'shift-check-cashier-draft.jpg',
+        requester_id: '25',
+      });
+      // Kassir skrinshoti 90 000 ko'rsatadi (10 000 kam).
+      await checks.applyAiResult({
+        shift_id: shiftId,
+        card_id: String(cards.humo.id),
+        ai_request_id: draft.data.ai_request_id,
+        result: {
+          ok: true,
+          balance: 90_000,
+          last4: '1234',
+          confidence: 0.9,
+          model: 'mock',
+        },
+      });
+      await autoClose();
+      const kept = await row(cards.humo.id);
+      expect(kept.photo_file_key).toBe('shift-check-cashier-draft.jpg');
+      expect(kept.ai_read_balance).toBe(90_000);
+      activityLog.log.mockClear();
+
+      const res = await late(cards.humo.id, 100_000, {
+        requester_roles: ['admin'],
+        requester_id: '2',
+      });
+      expect(res.statusCode).toBe(201);
+      // Gateway o'chiradigan kalit YO'Q — kassir rasmi saqlanadi.
+      expect(res.data.previous_photo_file_key).toBeNull();
+      expect(res.data.check.photo_file_key).not.toBe(
+        'shift-check-cashier-draft.jpg',
+      );
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.shift_late_photo_uploaded',
+          user_id: '2',
+          old_value: expect.objectContaining({
+            photo_file_key: 'shift-check-cashier-draft.jpg',
+            photo_uploaded_by: '25',
+            ai_read_balance: 90_000,
+            ai_last4_detected: '1234',
+            ai_confidence: 0.9,
+            ai_model: 'mock',
+          }),
+          metadata: expect.objectContaining({
+            replaced_photo: true,
+            replaced_photo_key: 'shift-check-cashier-draft.jpg',
+            kept_pre_close_photo: true,
+          }),
+        }),
+      );
+      const entry = activityLog.log.mock.calls
+        .map((call) => call[0] as { action: string; old_value: object })
+        .find((log) => log.action === 'finance.shift_late_photo_uploaded');
+      // `ai_raw` — faqat superadmin; activity-log'ni admin ham o'qiydi.
+      expect(entry?.old_value).not.toHaveProperty('ai_raw');
+    });
+
+    it.each([
+      ['yoqiq', true, 'pending'],
+      ['o‘chiq', false, 'disabled'],
+    ] as const)(
+      'AI natijasi bor qoralama qatoriga keyin yuklash (AI %s) — eski AI qiymatlari tozalanadi',
+      async (_label, aiOn, status) => {
+        const draft = await checks.attachPhoto({
+          card_id: String(cards.humo.id),
+          photo_file_key: 'shift-check-draft.jpg',
+          requester_id: '25',
+        });
+        await checks.applyAiResult({
+          shift_id: shiftId,
+          card_id: String(cards.humo.id),
+          ai_request_id: draft.data.ai_request_id,
+          result: {
+            ok: true,
+            balance: 100_000,
+            last4: '1234',
+            date: '10.11.2026',
+            confidence: 0.9,
+            model: 'mock',
+          },
+        });
+        await autoClose();
+        // recordAtAutoClose AI o'qishlarini (dalil) saqlaydi.
+        const kept = await row(cards.humo.id);
+        expect(kept.ai_read_balance).toBe(100_000);
+        expect(kept.ai_raw).not.toBeNull();
+        if (!aiOn) {
+          await checks.updateSettings({
+            requester_id: '1',
+            requester_roles: ['superadmin'],
+            ai_check_enabled: false,
+          });
+        }
+        const res = await late(cards.humo.id, 100_000);
+        expect(res.data.previous_photo_file_key).toBeNull();
+        const cleared = {
+          ai_status: status,
+          ai_read_balance: null,
+          ai_last4_detected: null,
+          ai_date_detected: null,
+          ai_confidence: null,
+          ai_model: null,
+          ai_checked_at: null,
+          ai_raw: null,
+        };
+        expect(res.data.check).toEqual(expect.objectContaining(cleared));
+        const saved = await row(cards.humo.id);
+        expect(saved.ai_raw).toBeNull();
+        expect(saved.ai_read_balance).toBeNull();
+        const { byCard } = await report();
+        expect(byCard.get(String(cards.humo.id))).toEqual(
+          expect.objectContaining(cleared),
+        );
+      },
+    );
+
+    it("karta AI bayrog'i o'chiq (global yoqiq) — `disabled`, AI so'rovi yo'q", async () => {
+      await autoClose();
+      await db
+        .getRepository(CashboxCard)
+        .update({ id: cards.humo.id }, { ai_check_enabled: false });
+      outbox.enqueue.mockClear();
+      const res = await late(cards.humo.id, 100_000);
+      expect(res.data.ai_enabled).toBe(false);
+      expect(res.data.ai_request_id).toBeNull();
+      expect(res.data.check).toEqual(
+        expect.objectContaining({
+          ai_status: 'disabled',
+          ai_enabled_snap: false,
+        }),
+      );
+      const saved = await row(cards.humo.id);
+      expect(saved.ai_status).toBe('disabled');
+      expect(saved.ai_request_id).toBeNull();
+      const events = realtimeEvents('finance.shift.account_checked');
+      expect(events).toHaveLength(1);
+      expect(events[0].payload).toEqual(
+        expect.objectContaining({ ai_status: 'disabled', late: true }),
+      );
+    });
+
+    it('kassir qoralamasi: AI natijasi avto-yopishdan keyin keladi — `late` yo‘q, `late_uploaded: false`', async () => {
+      const draft = await checks.attachPhoto({
+        card_id: String(cards.humo.id),
+        photo_file_key: 'shift-check-draft.jpg',
+        requester_id: '25',
+      });
+      expect(draft.data.ai_request_id).toBeTruthy();
+      await autoClose();
+      outbox.enqueue.mockClear();
+      // recordAtAutoClose ai_request_id ni saqlaydi — qoralama natijasi yoziladi.
+      const applied = await checks.applyAiResult({
+        shift_id: shiftId,
+        card_id: String(cards.humo.id),
+        ai_request_id: draft.data.ai_request_id,
+        result: { ok: true, balance: 100_000, last4: '1234', confidence: 0.9 },
+      });
+      expect(applied.data.applied).toBe(true);
+      expect(applied.data.check.late_uploaded).toBe(false);
+      const events = realtimeEvents('finance.shift.account_checked');
+      expect(events).toHaveLength(1);
+      // Rasm smena yopilishidan OLDIN yuklangan — `late` maydoni yo'q (avvalgi shakl).
+      expect(events[0].payload).not.toHaveProperty('late');
     });
   },
 );

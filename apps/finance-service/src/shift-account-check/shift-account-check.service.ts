@@ -851,11 +851,17 @@ export class ShiftAccountCheckService {
    * Bitta tranzaksiya, qator FOR UPDATE: rasm kaliti / vaqti / yuklovchi,
    * kiritilgan qoldiq, farq = kiritilgan − SNAPSHOT `expected_balance`
    * (avto-yopish paytidagi haqiqat — joriy balansdan QAYTA HISOBLANMAYDI),
-   * izoh (yopishdagi qoida: farq ≠ 0 — majburiy, 400), `confirmed_at /
+   * izoh (yopishdagi qoida: farq ≠ 0 — majburiy, 400; kassirning yopishdan
+   * oldingi qoralama izohi hisobga olinmaydi va almashtiriladi — faqat
+   * avvalgi KEYIN yuklash izohi qayta yuklashda qoladi), `confirmed_at /
    * confirmed_by` = hozir / yuklovchi. AI — qoralama / yopish qoidasi
    * (master kalit && karta bayrog'i): `pending` + YANGI `ai_request_id`
    * (oldingi rasmning kechikkan natijasi e'tiborsiz), aks holda `disabled`.
-   * Oyna ichida qayta yuklash mumkin — oxirgisi yutadi. Realtime
+   * Oyna ichida qayta yuklash mumkin — oxirgisi yutadi (oldingi KEYIN
+   * yuklangan rasm fayli gateway'da o'chiriladi). Kassirning smena
+   * yopilishidan OLDINGI qoralama rasmi va AI natijasi DALIL — fayl
+   * o'chirilmaydi (`previous_photo_file_key = null`), eski kalit va AI
+   * qiymatlari activity-log `old_value` da qoladi. Realtime
    * `finance.shift.account_checked` (`late: true`) shu tranzaksiyada.
    * PUL HARAKATI YO'Q (balanslar o'qilmaydi ham).
    */
@@ -932,34 +938,56 @@ export class ShiftAccountCheckService {
         const expected =
           row.expected_balance == null ? null : Number(row.expected_balance);
         const difference = expected == null ? null : round2(entered - expected);
+        // Kassirning yopishdan oldingi qoralama rasmi va AI natijasi DALIL —
+        // fayl o'chirilmaydi, eski qiymatlar activity-log'da (old_value).
+        // Vaqti noma'lum rasm ham (keyin yuklangani isbotlanmagan) — dalil.
+        const previousKey = row.photo_file_key;
+        const preCloseEvidence =
+          Boolean(previousKey) && !isLateUploaded(row, shift);
         const before = {
           entered_balance: row.entered_balance,
           difference: row.difference,
+          comment: row.comment,
+          photo_file_key: row.photo_file_key,
           photo_uploaded_at: row.photo_uploaded_at,
           photo_uploaded_by:
             row.photo_uploaded_by == null
               ? null
               : String(row.photo_uploaded_by),
           ai_status: row.ai_status,
+          // `ai_raw` yozilmaydi (gateway uni faqat superadminga beradi,
+          // activity-log'ni admin ham o'qiydi) — muvaffaqiyatli natijada u
+          // aynan shu maydonlardan iborat.
+          ai_read_balance: row.ai_read_balance,
+          ai_last4_detected: row.ai_last4_detected,
+          ai_date_detected: row.ai_date_detected,
+          ai_confidence: row.ai_confidence,
+          ai_entered_ok: row.ai_entered_ok,
+          ai_model: row.ai_model,
+          ai_checked_at: row.ai_checked_at,
           confirmed_at: row.confirmed_at,
           confirmed_by:
             row.confirmed_by == null ? null : String(row.confirmed_by),
         };
-        if (comment) row.comment = comment;
+        // Kassirning yopishdan oldingi qoralama izohi — boshqa qiymat uchun
+        // yozilgan (activity-log old_value.comment da qoladi); faqat avvalgi
+        // KEYIN yuklash izohi qayta yuklashda saqlanadi.
+        const priorComment = isLateUploaded(row, shift) ? row.comment : null;
+        const nextComment = comment ?? priorComment;
         if (
           isCommentRequired({
             difference,
             ai_status: null,
             ai_entered_ok: null,
           }) &&
-          !scalarText(row.comment)
+          !scalarText(nextComment)
         ) {
           throw new BadRequestException(
             `«${card?.name ?? `#${cardId}`}»: ${ACCOUNT_COMMENT_REQUIRED_MESSAGE}`,
           );
         }
+        row.comment = nextComment;
 
-        const previousKey = row.photo_file_key;
         row.photo_file_key = photoKey;
         row.photo_uploaded_at = now;
         row.photo_uploaded_by = requesterId;
@@ -992,7 +1020,15 @@ export class ShiftAccountCheckService {
           },
           manager,
         );
-        return { saved, shift, card, previousKey, aiEnabled, before };
+        return {
+          saved,
+          shift,
+          card,
+          previousKey,
+          preCloseEvidence,
+          aiEnabled,
+          before,
+        };
       });
 
       await this.activityLog.log({
@@ -1018,6 +1054,8 @@ export class ShiftAccountCheckService {
           closed_at: outcome.shift.closed_at,
           deadline: lateUploadDeadline(outcome.shift)?.toISOString() ?? null,
           replaced_photo: Boolean(outcome.previousKey),
+          replaced_photo_key: outcome.previousKey ?? null,
+          kept_pre_close_photo: outcome.preCloseEvidence,
         },
         user_id: requesterId,
       });
@@ -1033,7 +1071,10 @@ export class ShiftAccountCheckService {
           shift_id: String(outcome.shift.id),
           ai_enabled: outcome.aiEnabled,
           ai_request_id: outcome.saved.ai_request_id,
+          // Gateway shu kalitni o'chiradi — kassirning yopishdan oldingi
+          // qoralamasi (dalil) hech qachon qaytarilmaydi.
           previous_photo_file_key:
+            !outcome.preCloseEvidence &&
             outcome.previousKey &&
             outcome.previousKey !== outcome.saved.photo_file_key
               ? outcome.previousKey
@@ -1404,7 +1445,9 @@ export class ShiftAccountCheckService {
    * Qamrov: shu kassa uchun tasdiqlash yoqilgan bo'lsa (MAIN —
    * `shift.account_check.enabled`, sukut true; filial —
    * `shift.account_check.branch_enabled`, sukut false) — kassaning HAR faol
-   * kartasi (hisobotda «tasdiqlanmagan» bo'lib ko'rinadi); o'chiq bo'lsa —
+   * kartasi (hisobotda «tasdiqlanmagan» bo'lib ko'rinadi) + smena ichida
+   * arxivlangan, lekin qoralamasi bor kartalar (BE-B: ularning qatori ham
+   * yopish paytidagi qoldiq bilan qayta snapshot qilinadi); o'chiq bo'lsa —
    * faqat smenada qoralamasi (rasm yuklangan) bor kartalar.
    * Qoralamadagi rasm kaliti va AI xom natijasi DALIL sifatida saqlanadi,
    * lekin holat `not_required` — kassir tasdiqlamagan qiymat solishtirilmaydi.
@@ -1433,13 +1476,20 @@ export class ShiftAccountCheckService {
     }
     const cards = settings.account_check_enabled
       ? await this.activeCards(manager, String(cashbox.id))
-      : drafts.length
-        ? await manager.find(CashboxCard, {
-            where: {
-              id: In(drafts.map((row) => String(row.cashbox_card_id))),
-            },
-          })
-        : [];
+      : [];
+    // BE-B: smena ichida arxivlangan kartaning qoralamasi ham avto-yopish
+    // SNAPSHOT'iga aylanadi — keyin yuklash farqi / AI eskirgan (qoralama
+    // paytidagi) `expected_balance` bilan hisoblanmasin. O'chiq bo'lsa —
+    // faqat qoralamasi bor kartalar (avvalgidek).
+    const covered = new Set(cards.map((card) => String(card.id)));
+    const extraIds = drafts
+      .map((row) => String(row.cashbox_card_id))
+      .filter((id) => !covered.has(id));
+    if (extraIds.length) {
+      cards.push(
+        ...(await manager.find(CashboxCard, { where: { id: In(extraIds) } })),
+      );
+    }
     if (!cards.length) return null;
     const balances = await this.systemBalances(manager, cashbox);
     const results: ShiftAccountCheck[] = [];

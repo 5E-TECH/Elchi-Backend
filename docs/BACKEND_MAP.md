@@ -681,7 +681,17 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   codes `SHIFT_LATE_PHOTO_{MAIN_ONLY,NOT_AUTO_CLOSED,EXPIRED,CARD_NOT_IN_SHIFT}`
   in libs/common), and every report row gets computed `photo_status` /
   `late_upload_deadline` / `late_uploaded` / `can_upload_late` (rules file;
-  gateway ANDs the latter with SA/ADMIN). Flow: gateway `POST /finance/shift/account-photo`
+  gateway ANDs the latter with SA/ADMIN). A cashier's pre-close draft photo
+  replaced by a late upload is evidence: its file is never deleted
+  (`previous_photo_file_key` is returned — and deleted by the gateway — only
+  for a superseded LATE upload); old key + AI readings go to the activity-log
+  `old_value` (no `ai_raw`), metadata `replaced_photo_key` /
+  `kept_pre_close_photo`. The cashier's pre-close draft `comment` never
+  satisfies the late "difference ≠ 0 → comment" rule and is replaced (kept in
+  `old_value.comment`); only an earlier LATE upload's comment carries over
+  when a re-upload omits it. `recordAtAutoClose` also re-snapshots draft rows of
+  cards archived mid-shift (expected = the card's stored `balance` at close —
+  0 only for a deleted card; `not_required`). Flow: gateway `POST /finance/shift/account-photo`
   (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
   IPTC/text chunks, file-service folder `shift-check`, private, signed URL
   300 s) → `finance.shift.account_check.attach_photo` (draft row, expected
