@@ -5,7 +5,10 @@ import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
-import { ORDER_INTAKE_CLOSED } from '../order/order-intake';
+import {
+  ORDER_INTAKE_CLOSED,
+  ORDER_RECEIVE_CLOSED,
+} from '../order/order-intake';
 import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
 
 /**

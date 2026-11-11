@@ -13,8 +13,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `courier_user_id` o'chirilmagan qatorlar orasida unique — bitta kurier
  * akkaunti ikki kompaniyaga berilmasin.
  */
-export class CreateCarrierAccounts1716000000215 implements MigrationInterface {
-  name = 'CreateCarrierAccounts1716000000215';
+export class CreateCarrierAccounts1716000000218 implements MigrationInterface {
+  name = 'CreateCarrierAccounts1716000000218';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`

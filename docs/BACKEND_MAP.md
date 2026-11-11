@@ -995,7 +995,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   base tariff at sale). Measures without `external_product_id` are not stored
   (logged). Marketplace repo is separate: its `ElchiTariffInput` and checkout
   still send no measures — tracked outside this repo.
-- **Carrier API (2026-11-10):** `carrier_accounts` (migration 215) — an
+- **Carrier API (2026-11-10):** `carrier_accounts` (migration 218) — an
   external delivery company works as ONE courier user. `CarrierAccountService`
   (`src/carrier/`): `integration.carrier.{validate_key,create,list,update,
   rotate_key,set_active}`; key `elc_…` stored as SHA-256 hash, shown once;
