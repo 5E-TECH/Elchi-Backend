@@ -34,15 +34,20 @@ function beaEntry(): string {
 describe('BE-A FRONTEND_CHANGELOG ↔ kod (migratsiya 215)', () => {
   const entry = beaEntry();
 
-  it('yozuv «Yangi yozuvlar shu yerga» belgisidan keyin eng tepada', () => {
+  // 2026-11-11: «eng tepada» sharti olib tashlandi — jurnal «eng yangisi
+  // tepada», ya'ni har yangi yozuv (masalan 2026-11-11 operator dashboardi)
+  // bu yozuvni pastga suradi va test qizil bo'lardi. Talab — yozuv
+  // «Yozuvlar» bo'limida, belgidan KEYIN turishi.
+  it('yozuv «Yangi yozuvlar shu yerga» belgisidan keyin (Yozuvlar bo`limida)', () => {
     const marker = CHANGELOG.indexOf(
       '<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->',
     );
     expect(marker).toBeGreaterThanOrEqual(0);
-    const firstEntry = CHANGELOG.indexOf('\n### ', marker);
-    expect(CHANGELOG.slice(firstEntry + 1)).toMatch(
-      /^### 2026-11-10 — Smena yopish: ASOSIY kassada/,
+    const at = CHANGELOG.indexOf(
+      '\n### 2026-11-10 — Smena yopish: ASOSIY kassada',
+      marker,
     );
+    expect(at).toBeGreaterThan(marker);
   });
 
   it('AI pending kutishi ~15 s (30 s emas)', () => {
