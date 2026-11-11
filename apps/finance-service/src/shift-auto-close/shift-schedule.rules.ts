@@ -12,6 +12,13 @@ export const SHIFT_AUTOMATION_KEYS = {
   autoCloseWarnBeforeMin: 'shift.auto_close.warn_before_min',
   reportRecipients: 'shift.report.recipients',
   reportFormat: 'shift.report.format',
+  // «Kun tartibi» (2026-11-11): avtomatik ochish va kechikish xabari.
+  autoOpenEnabled: 'shift.auto_open.enabled',
+  autoOpenTimes: 'shift.auto_open.times',
+  autoOpenScope: 'shift.auto_open.scope',
+  lateAlertEnabled: 'shift.late_alert.enabled',
+  lateAlertGraceMin: 'shift.late_alert.grace_min',
+  lateAlertChannels: 'shift.late_alert.channels',
 } as const;
 
 export type AutoCloseScope = 'main' | 'main+branches';
@@ -72,6 +79,59 @@ export const REPORT_DEFAULTS: ReportSettings = Object.freeze({
   },
   format: 'pdf',
 }) as ReportSettings;
+
+/**
+ * «Kun tartibi» (2026-11-11) — belgilangan vaqtda qamrovdagi kassada OCHIQ
+ * smena bo'lmasa, tizim uni o'zi ochadi (`opened_by = NULL`,
+ * `opened_by_system = true`). `times` / `scope` — `auto_close` qoidalari.
+ * Sukut: O'CHIQ, 09:00, faqat MAIN.
+ */
+export interface AutoOpenSettings {
+  enabled: boolean;
+  times: string[];
+  scope: AutoCloseScope;
+}
+
+export const AUTO_OPEN_DEFAULTS: AutoOpenSettings = Object.freeze({
+  enabled: false,
+  times: ['09:00'],
+  scope: 'main',
+});
+
+/**
+ * «Kun tartibi» (2026-11-11) — KECHIKISH XABARI superadminlarga: ochish
+ * vaqtidan (`auto_open.times`) `grace_min` daqiqa o'tib kassada ochiq smena
+ * yo'q, yoki yopish vaqtidan (`auto_close.times`) keyin smena hali ochiq.
+ * Vaqtlar — jadvalnikidan, avtomatika yoqiq-o'chiqligidan qat'i nazar
+ * (o'chiq bo'lsa ham bu kassirning jadvali). Tizimning avtomatik
+ * ochishi / yopishi xato bilan tugasa — darhol, sababi bilan. Har slot
+ * uchun BIR marta. Sukut: O'CHIQ, 15 daqiqa, faqat ilova ichida.
+ */
+export interface LateAlertSettings {
+  enabled: boolean;
+  grace_min: number;
+  channels: ReportChannels;
+}
+
+export const MAX_LATE_ALERT_GRACE_MIN = 180;
+
+export const LATE_ALERT_DEFAULTS: LateAlertSettings = Object.freeze({
+  enabled: false,
+  grace_min: 15,
+  channels: { telegram: false, in_app: true },
+});
+
+/**
+ * Ochish va yopish ro'yxatida bir xil vaqt — 400 `SHIFT_SCHEDULE_CONFLICT`
+ * (`@app/common` `PUBLIC_ERROR_CODES`, FE `conflictingTimes`).
+ */
+export class ShiftScheduleConflictError extends Error {
+  constructor(readonly times: string[]) {
+    super(
+      `${times.join(', ')} — ham ochish, ham yopish vaqti. Bittasini o'zgartiring`,
+    );
+  }
+}
 
 export const MAX_AUTO_CLOSE_TIMES = 12;
 export const MAX_WARN_BEFORE_MIN = 180;
@@ -144,6 +204,73 @@ export function readAutoCloseSettings(
   };
 }
 
+function readScope(value: unknown, fallback: AutoCloseScope): AutoCloseScope {
+  return AUTO_CLOSE_SCOPES.includes(value as AutoCloseScope)
+    ? (value as AutoCloseScope)
+    : fallback;
+}
+
+function readChannels(
+  value: unknown,
+  fallback: ReportChannels,
+): ReportChannels {
+  const item =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  return {
+    telegram:
+      typeof item.telegram === 'boolean' ? item.telegram : fallback.telegram,
+    in_app: typeof item.in_app === 'boolean' ? item.in_app : fallback.in_app,
+  };
+}
+
+/** «Kun tartibi» — avtomatik ochish (yaroqsiz qiymat sukutga tushadi). */
+export function readAutoOpenSettings(
+  map: Map<string, unknown>,
+): AutoOpenSettings {
+  const enabled = map.get(SHIFT_AUTOMATION_KEYS.autoOpenEnabled);
+  let times = AUTO_OPEN_DEFAULTS.times;
+  try {
+    const raw = map.get(SHIFT_AUTOMATION_KEYS.autoOpenTimes);
+    if (raw !== undefined) times = normalizeTimes(raw);
+  } catch {
+    times = AUTO_OPEN_DEFAULTS.times;
+  }
+  return {
+    enabled:
+      typeof enabled === 'boolean' ? enabled : AUTO_OPEN_DEFAULTS.enabled,
+    times: [...times],
+    scope: readScope(
+      map.get(SHIFT_AUTOMATION_KEYS.autoOpenScope),
+      AUTO_OPEN_DEFAULTS.scope,
+    ),
+  };
+}
+
+/** «Kun tartibi» — kechikish xabari (yaroqsiz qiymat sukutga tushadi). */
+export function readLateAlertSettings(
+  map: Map<string, unknown>,
+): LateAlertSettings {
+  const enabled = map.get(SHIFT_AUTOMATION_KEYS.lateAlertEnabled);
+  const grace = Number(map.get(SHIFT_AUTOMATION_KEYS.lateAlertGraceMin));
+  return {
+    enabled:
+      typeof enabled === 'boolean' ? enabled : LATE_ALERT_DEFAULTS.enabled,
+    grace_min:
+      map.has(SHIFT_AUTOMATION_KEYS.lateAlertGraceMin) &&
+      Number.isInteger(grace) &&
+      grace >= 0 &&
+      grace <= MAX_LATE_ALERT_GRACE_MIN
+        ? grace
+        : LATE_ALERT_DEFAULTS.grace_min,
+    channels: readChannels(
+      map.get(SHIFT_AUTOMATION_KEYS.lateAlertChannels),
+      LATE_ALERT_DEFAULTS.channels,
+    ),
+  };
+}
+
 export function readReportSettings(map: Map<string, unknown>): ReportSettings {
   const raw = map.get(SHIFT_AUTOMATION_KEYS.reportRecipients);
   const source =
@@ -210,6 +337,132 @@ export function parseAutoClosePatch(input: unknown): Array<[string, unknown]> {
     out.push([SHIFT_AUTOMATION_KEYS.autoCloseWarnBeforeMin, warn]);
   }
   return out;
+}
+
+/** «Kun tartibi» — `auto_open` PATCH qismi; faqat berilgan maydonlar. */
+export function parseAutoOpenPatch(input: unknown): Array<[string, unknown]> {
+  if (input === undefined || input === null) return [];
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new ShiftSettingsError("auto_open obyekt bo'lishi kerak");
+  }
+  const raw = input as Record<string, unknown>;
+  const out: Array<[string, unknown]> = [];
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') {
+      throw new ShiftSettingsError("auto_open.enabled boolean bo'lishi kerak");
+    }
+    out.push([SHIFT_AUTOMATION_KEYS.autoOpenEnabled, raw.enabled]);
+  }
+  if (raw.times !== undefined) {
+    out.push([SHIFT_AUTOMATION_KEYS.autoOpenTimes, normalizeTimes(raw.times)]);
+  }
+  if (raw.scope !== undefined) {
+    if (!AUTO_CLOSE_SCOPES.includes(raw.scope as AutoCloseScope)) {
+      throw new ShiftSettingsError(
+        "auto_open.scope 'main' yoki 'main+branches' bo'lishi kerak",
+      );
+    }
+    out.push([SHIFT_AUTOMATION_KEYS.autoOpenScope, raw.scope]);
+  }
+  return out;
+}
+
+/** «Kun tartibi» — `late_alert` PATCH qismi; `channels` qisman birlashtiriladi. */
+export function parseLateAlertPatch(
+  input: unknown,
+  current: LateAlertSettings,
+): Array<[string, unknown]> {
+  if (input === undefined || input === null) return [];
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new ShiftSettingsError("late_alert obyekt bo'lishi kerak");
+  }
+  const raw = input as Record<string, unknown>;
+  const out: Array<[string, unknown]> = [];
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') {
+      throw new ShiftSettingsError("late_alert.enabled boolean bo'lishi kerak");
+    }
+    out.push([SHIFT_AUTOMATION_KEYS.lateAlertEnabled, raw.enabled]);
+  }
+  if (raw.grace_min !== undefined) {
+    const grace = Number(raw.grace_min);
+    if (
+      typeof raw.grace_min !== 'number' ||
+      !Number.isInteger(grace) ||
+      grace < 0 ||
+      grace > MAX_LATE_ALERT_GRACE_MIN
+    ) {
+      throw new ShiftSettingsError(
+        `late_alert.grace_min 0–${MAX_LATE_ALERT_GRACE_MIN} butun son bo'lishi kerak`,
+      );
+    }
+    out.push([SHIFT_AUTOMATION_KEYS.lateAlertGraceMin, grace]);
+  }
+  if (raw.channels !== undefined) {
+    if (
+      !raw.channels ||
+      typeof raw.channels !== 'object' ||
+      Array.isArray(raw.channels)
+    ) {
+      throw new ShiftSettingsError("late_alert.channels obyekt bo'lishi kerak");
+    }
+    const channels = raw.channels as Record<string, unknown>;
+    for (const key of Object.keys(channels)) {
+      if (key !== 'telegram' && key !== 'in_app') {
+        throw new ShiftSettingsError(
+          `late_alert.channels.${key.slice(0, 40)} noma'lum (telegram | in_app)`,
+        );
+      }
+      if (typeof channels[key] !== 'boolean') {
+        throw new ShiftSettingsError(
+          `late_alert.channels.${key} boolean bo'lishi kerak`,
+        );
+      }
+    }
+    out.push([
+      SHIFT_AUTOMATION_KEYS.lateAlertChannels,
+      readChannels(channels, current.channels),
+    ]);
+  }
+  return out;
+}
+
+/**
+ * PATCH dan KEYINGI holat bo'yicha jadval tekshiruvi:
+ *  - ochish va yopish ro'yxatida bir xil vaqt — `ShiftScheduleConflictError`;
+ *  - avtomatik ochish yoqiq, lekin vaqt yo'q — xato;
+ *  - kechikish xabari yoqiq, lekin kanal yo'q — xato.
+ */
+export function assertShiftScheduleValid(next: {
+  auto_open: AutoOpenSettings;
+  auto_close: AutoCloseSettings;
+  late_alert: LateAlertSettings;
+}): void {
+  const close = new Set(next.auto_close.times);
+  const conflict = next.auto_open.times.filter((time) => close.has(time));
+  if (conflict.length) throw new ShiftScheduleConflictError(conflict);
+  if (next.auto_open.enabled && !next.auto_open.times.length) {
+    throw new ShiftSettingsError('Kamida bitta ochish vaqtini qo`shing');
+  }
+  if (
+    next.late_alert.enabled &&
+    !next.late_alert.channels.telegram &&
+    !next.late_alert.channels.in_app
+  ) {
+    throw new ShiftSettingsError(
+      'Kechikish xabari uchun kamida bitta kanalni tanlang',
+    );
+  }
+}
+
+/** `key → value` PATCH yozuvlarini joriy xaritaga qo'llaydi (tekshiruv uchun). */
+export function applySettingEntries(
+  map: Map<string, unknown>,
+  entries: Array<[string, unknown]>,
+): Map<string, unknown> {
+  const next = new Map(map);
+  for (const [key, value] of entries) next.set(key, value);
+  return next;
 }
 
 export function parseReportPatch(
@@ -365,10 +618,43 @@ export function dueWarnSlots(
   );
 }
 
+/**
+ * Kechikish tekshiruvi oynasi: `slot + grace ≤ now < slot + grace + catch-up`
+ * (tick kechiksa ham slot o'tkazib yuborilmasin, eskisi quvlanmasin).
+ */
+export function dueLateSlots(
+  now: Date,
+  times: string[],
+  graceMin: number,
+  catchupMin = AUTO_CLOSE_CATCHUP_MIN,
+): ScheduleSlot[] {
+  const t = now.getTime();
+  const grace = Math.max(0, graceMin) * 60_000;
+  return candidateSlots(now, times).filter(
+    (slot) =>
+      slot.at.getTime() + grace <= t &&
+      t < slot.at.getTime() + grace + catchupMin * 60_000,
+  );
+}
+
 export const autoCloseClaimKey = (shiftId: string, slotKey: string) =>
   `auto_close:${shiftId}:${slotKey}`;
 export const warnClaimKey = (shiftId: string, slotKey: string) =>
   `warn:${shiftId}:${slotKey}`;
+/** «Kun tartibi»: kassa × slot uchun bitta avtomatik ochish. */
+export const autoOpenClaimKey = (cashboxUserId: string, slotKey: string) =>
+  `auto_open:${cashboxUserId}:${slotKey}`;
+/** Kassa × ochish sloti uchun bitta kechikish xabari (xato yoki muddat). */
+export const lateOpenClaimKey = (cashboxUserId: string, slotKey: string) =>
+  `late_open:${cashboxUserId}:${slotKey}`;
+/** Smena × yopish sloti uchun bitta kechikish xabari (xato yoki muddat). */
+export const lateCloseClaimKey = (shiftId: string, slotKey: string) =>
+  `late_close:${shiftId}:${slotKey}`;
+
+/** Avtomatik ochilgan smena belgisi (tarix / hisobot). */
+export function autoOpenedLabel(openedAt: Date | string | null | undefined) {
+  return `Avtomatik ochildi — ${tashkentClock(openedAt)}`;
+}
 
 /** Hisobotdagi sariq banner matni (y8Tqm9Ap #3). */
 export function autoClosedLabel(closedAt: Date | string | null | undefined) {

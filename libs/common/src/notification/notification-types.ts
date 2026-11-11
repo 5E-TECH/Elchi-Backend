@@ -374,6 +374,25 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
         NotificationChannel.TELEGRAM,
       ],
     }),
+    // «Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi»
+    // superadminlarga (kassa / smena × slot uchun bir marta; tizimning
+    // avtomatik ochishi / yopishi xato bilan tugasa — sababi bilan).
+    // Kanallar — superadmin sozlamasidan (`late_alert.channels`).
+    def({
+      key: 'finance.shift_late',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern:
+        'finance:shift-late:{{kind}}:{{cashbox_user_id}}:{{slot}}',
+      label_uz: 'Smena vaqtida ochilmadi / yopilmadi',
+      default_audience: [Roles.SUPERADMIN],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
     // (y8Tqm9Ap #4) «Smena N daqiqadan keyin avtomatik yopiladi» — smenani
     // ochgan xodimga (slot uchun bir marta).
     def({

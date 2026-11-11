@@ -446,24 +446,31 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     `enrichOrders` adds `warehouse: { id, name, branch_id } | null`
     (`catalog.warehouse.find_by_ids`; catalog down → `{ id, name: null,
     branch_id: null }`).
-- **Bugungi qabul vaqti + kun almashish soati (2026-11-09, migration
-  `1716000000213`, Trello #756)** — `intake/order-intake.service.ts`
-  (`OrderIntakeService`), pure rules in `libs/common/src/order/order-intake.ts`.
-  Table `order_schema.order_settings` (key/value jsonb, `finance_settings`
-  shape): `intake.day_change_time` `{time:'HH:MM'}` (none → `00:00`) and
-  `intake.cutoff` `{window_start, date, cutoff_time}`. Work day = Tashkent
-  `day_change_time` → next `day_change_time` (24 h; `date` = calendar day of
-  start + 12 h). A cutoff applies only while `window_start` equals the current
-  window start, so it expires by itself at the day change. RPCs:
-  `order.intake.state`, `order.intake.update` (SUPERADMIN only, under
-  `pg_advisory_xact_lock`; a day-change edit re-anchors today's cutoff only if
-  the work-day `date` is unchanged; audit verbs `order.intake_cutoff_changed`,
-  `order.day_change_time_changed`). Gate: the controller calls `assertOpen`
-  for `order.create`, `order.external.create`, `order.receive_external`
+- **«Kun tartibi»: yaratish / qabul chegaralari + kun almashish soati
+  (2026-11-09 / 2026-11-11, migration `1716000000213`, Trello #756)** —
+  `intake/order-intake.service.ts` (`OrderIntakeService`), pure rules in
+  `libs/common/src/order/order-intake.ts`. Table `order_schema.order_settings`
+  (key/value jsonb, `finance_settings` shape): `intake.day_change_time`
+  `{time:'HH:MM'}` (none → `00:00`), `intake.cutoff` and
+  `intake.receive_cutoff` `{cutoff_time}`. Both cutoffs are PERMANENT — they
+  repeat every work day until SA changes / clears them (owner 2026-11-11; the
+  2026-11-09 `{window_start, date, cutoff_time}` shape is read as permanent).
+  Work day = Tashkent `day_change_time` → next `day_change_time` (24 h; `date`
+  = calendar day of start + 12 h); a cutoff closes at its first occurrence in
+  the window and reopens at the next day change. RPCs: `order.intake.state`
+  (also `receive_cutoff_time` (key always present), `receive_is_open`,
+  `receive_closes_at`, `receive_reopens_at`), `order.intake.update` (SUPERADMIN
+  only, several fields at once, all validated before the tx, under
+  `pg_advisory_xact_lock`; unchanged values are not written / logged; audit
+  verbs `order.intake_cutoff_changed`, `order.receive_cutoff_changed`,
+  `order.day_change_time_changed`). Gates (controller `guardOrderIntake`):
+  create — `order.create`, `order.external.create`, `order.receive_external`
   BEFORE `executeIdempotent` (a rejected partner `request_id` must not be
   cached as `failed`) → 409 `ORDER_INTAKE_CLOSED` + `reopens_at` /
-  `cutoff_time` (in `PUBLIC_ERROR_CODES`); settings unreadable (DB error) →
-  the gate FAILS OPEN with an error log (creation never stops because of it).
+  `cutoff_time`; receive — `order.receive`, `order.receive_by_scan` → 409
+  `ORDER_RECEIVE_CLOSED` + `reopens_at` / `receive_cutoff_time` (both in
+  `PUBLIC_ERROR_CODES`); settings unreadable (DB error) → both gates FAIL OPEN
+  with an error log.
   Gateway `GET|PATCH
   /orders/intake-settings` (before `:id`; GET any role, PATCH
   `@Roles(SUPERADMIN)`); ai-confirm maps the 409 to `intake_closed`. No
@@ -688,6 +695,33 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   Activity-log: `finance.shift_settings_updated`,
   `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
   shift close metadata `accounts`.
+- **«Kun tartibi» — shift auto-OPEN + late alert (2026-11-11, migr
+  `1716000000216`):** `shifts.opened_by` nullable + `opened_by_system`
+  (CHECK `opened_by IS NOT NULL OR opened_by_system`), `shift_schedule_claims.
+  shift_id` nullable (cashbox claims). Settings in `finance_settings`
+  (`shift.auto_open.{enabled,times,scope}` default off/['09:00']/main;
+  `shift.late_alert.{enabled,grace_min,channels}` default off/15/in_app;
+  rules + PATCH parsing in `shift-auto-close/shift-schedule.rules.ts`; PATCH
+  re-validates the resulting schedule: open ∩ close times → 400
+  `SHIFT_SCHEDULE_CONFLICT` + `times` (`PUBLIC_ERROR_CODES`), enabled
+  auto-open without times / late alert without channels → 400). The same
+  scheduler tick, after auto-close: due open slots (slot ≤ now < slot+10 min)
+  → `FinanceServiceService.autoOpenShift` per cashbox in scope ('0' +
+  BRANCH cashboxes for `main+branches`): cashbox row FOR UPDATE → skip if an
+  open shift exists → `auto_open:<cashbox>:<slot>` claim → shift with
+  `opened_by NULL`, `opened_by_system true`, live opening balances → realtime
+  `finance.shift.auto_opened` (outbox, same tx) → activity
+  `finance.shift_auto_opened`. Late alert (`late_alert.enabled`): at slot +
+  `grace_min` (+10 min catch-up) — cashbox in `auto_open.scope` without an
+  open shift / a shift opened since the slot → `late_open:<cashbox>:<slot>`;
+  shift opened before an `auto_close.times` slot still open →
+  `late_close:<shift>:<slot>`; times come from the schedules even when the
+  automations are off. A failed `autoOpenShift` / `autoCloseShift` claims the
+  same key at once with the reason. Claim + `notification.dispatch`
+  (`finance.shift_late`, active superadmins via `identity.user.
+  active_ids_by_role`, channels from settings) in ONE tx. A system-opened
+  shift is closed as usual (`closeShift` falls back to the cashbox's open
+  shift); its auto-close warning has no recipient.
 - **Shift auto-close + shift report delivery (y8Tqm9Ap + gWI4gYkw,
   2026-10-26):** migr 167 adds `shifts.close_reason` (manual|auto, NULL =
   open / legacy → API `manual`), `closed_by_system`, `report_status`
@@ -1337,11 +1371,13 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   (still stripped for non-admins); without it the old rule holds
   (REGISTRATOR / MARKET_OPERATOR → requester). `/orders/external`, bot, AI
   and partner paths never send it.
-- **Intake cutoff (2026-11-09):** while today's intake is closed
-  (`order.intake.*`, order-service «Bugungi qabul vaqti» above) every create
-  path — POST /orders, /orders/external, bot, ai-confirm, external import, CRM
-  webhook, partner API — gets 409 `ORDER_INTAKE_CLOSED` until the next day
-  change. Partly-sell children (internal insert) are not affected.
+- **«Kun tartibi» cutoffs (2026-11-09 / 2026-11-11, daily):** after the
+  create cutoff (`order.intake.*`, order-service «Kun tartibi» above) every
+  create path — POST /orders, /orders/external, bot, ai-confirm, external
+  import, CRM webhook, partner API — gets 409 `ORDER_INTAKE_CLOSED` until the
+  next day change; after the receive cutoff HQ intake (`order.receive`,
+  `order.receive_by_scan`) gets 409 `ORDER_RECEIVE_CLOSED`. Partly-sell
+  children (internal insert) are not affected.
 - **Edit** (`PATCH /orders/:id`, `/:id/full` → `order.update_from_api`):
   SA/ADMIN/REGISTRATOR only. `status`, `market_id`, `to_be_paid`,
   `paid_amount` → 400 for everyone, SA included (status changes only through

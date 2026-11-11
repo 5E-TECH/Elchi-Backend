@@ -126,6 +126,8 @@ import { ShiftScheduleClaim } from './entities/shift-schedule-claim.entity';
 import {
   autoCloseClaimKey,
   autoClosedLabel,
+  autoOpenClaimKey,
+  autoOpenedLabel,
 } from './shift-auto-close/shift-schedule.rules';
 import {
   attachCorrectionViews,
@@ -3432,6 +3434,124 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     });
     this.shiftReports?.deliverSoon(String(saved.id));
     return { closed: true, reason: 'auto_closed', shift_id: shiftId };
+  }
+
+  /**
+   * «Kun tartibi» (2026-11-11) — jadval sloti kelganda kassada OCHIQ smena
+   * bo'lmasa, tizim uni o'zi ochadi (`opened_by = NULL`,
+   * `opened_by_system = true`, migratsiya 216).
+   *
+   * Kafolatlar (bitta tranzaksiya):
+   *  - kassa qatori FOR UPDATE — `openShift` bilan bir xil «bitta kassa —
+   *    bitta ochiq smena» qulfi (kassir shu lahzada ochsa — ikkinchisi ko'radi);
+   *  - `auto_open:<kassa>:<slot>` kaliti (PRIMARY KEY) — bir nechta finance
+   *    replikasi slotni bir marta bajaradi;
+   *  - ochilish qoldig'i — kassaning JONLI qoldig'i (`openShift` kabi);
+   *  - realtime `finance.shift.auto_opened` — outbox, shu tranzaksiyada.
+   * Pul harakati YO'Q.
+   */
+  async autoOpenShift(input: {
+    cashbox_user_id: string;
+    slot_key: string;
+    slot_at: Date;
+  }): Promise<{ opened: boolean; reason: string; shift_id: string | null }> {
+    const cashboxUserId = String(input.cashbox_user_id);
+    this.assertBigIntId(cashboxUserId, 'cashbox_user_id');
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let saved: Shift | null = null;
+    try {
+      const manager = queryRunner.manager;
+      const cashbox = await manager.findOne(Cashbox, {
+        where: {
+          user_id: cashboxUserId,
+          cashbox_type: FinanceServiceService.shiftCashboxType(cashboxUserId),
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!cashbox) {
+        await queryRunner.rollbackTransaction();
+        return { opened: false, reason: 'no_cashbox', shift_id: null };
+      }
+      const open = await this.findOpenShiftForCashbox(manager, cashboxUserId);
+      if (open) {
+        await queryRunner.rollbackTransaction();
+        return {
+          opened: false,
+          reason: 'already_open',
+          shift_id: String(open.id),
+        };
+      }
+      const claim = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(ShiftScheduleClaim)
+        .values({
+          key: autoOpenClaimKey(cashboxUserId, input.slot_key),
+          shift_id: null,
+          kind: 'auto_open',
+          slot: input.slot_key,
+        })
+        .orIgnore()
+        .returning(['key'])
+        .execute();
+      if (!Array.isArray(claim.raw) || !claim.raw.length) {
+        await queryRunner.rollbackTransaction();
+        return { opened: false, reason: 'claimed', shift_id: null };
+      }
+      const shift = manager.create(Shift, {
+        opened_by: null,
+        opened_by_system: true,
+        opened_at: new Date(),
+        status: ShiftStatus.OPEN,
+        opening_balance_cash: Number(cashbox.balance_cash ?? 0),
+        opening_balance_card: Number(cashbox.balance_card ?? 0),
+        comment: null,
+        cashbox_user_id: cashboxUserId,
+      });
+      saved = await manager.save(shift);
+      await manager.update(
+        ShiftScheduleClaim,
+        { key: autoOpenClaimKey(cashboxUserId, input.slot_key) },
+        { shift_id: String(saved.id) },
+      );
+      await this.financeRealtime?.shiftAutoOpened(saved, manager);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Shift',
+      entity_id: saved.id,
+      action: 'finance.shift_auto_opened',
+      new_value: {
+        status: saved.status,
+        opened_at: saved.opened_at,
+        opened_by_system: true,
+        opening_balance_cash: saved.opening_balance_cash,
+        opening_balance_card: saved.opening_balance_card,
+      },
+      user_id: null,
+      metadata: {
+        description: 'Smena tizim tomonidan avtomatik ochildi',
+        label: autoOpenedLabel(saved.opened_at),
+        slot: input.slot_key,
+        cashbox_user_id: cashboxUserId,
+      },
+    });
+    return {
+      opened: true,
+      reason: 'auto_opened',
+      shift_id: String(saved.id),
+    };
   }
 
   /**

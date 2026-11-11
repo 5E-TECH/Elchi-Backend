@@ -7,9 +7,9 @@ import {
   ORDER_INTAKE_SETTING_KEYS,
   formatClockTime,
   orderIntakeClosedError,
+  orderReceiveClosedError,
   parseClockTime,
   resolveOrderIntakeState,
-  resolveOrderIntakeWindow,
   type OrderIntakeState,
   type StoredOrderIntakeCutoff,
 } from '@app/common';
@@ -21,29 +21,36 @@ const INTAKE_SETTINGS_LOCK = 'order.intake.settings';
 interface IntakeSettingsRow {
   dayChangeTime: unknown;
   cutoff: unknown;
+  receiveCutoff: unknown;
 }
 
 export interface OrderIntakeUpdateInput {
-  /** `'HH:MM'` — bugungi qabul vaqti; `null` — cheklovni olib tashlash. */
+  /** `'HH:MM'` — buyurtma yaratish chegarasi (har kuni); `null` — olib tashlash. */
   cutoff_time?: unknown;
+  /** `'HH:MM'` — buyurtma qabul qilish chegarasi (har kuni); `null` — olib tashlash. */
+  receive_cutoff_time?: unknown;
   /** `'HH:MM'` — kun almashish soati; `null` — sukut (`00:00`). */
   day_change_time?: unknown;
   requester?: { id?: unknown; roles?: unknown } | null;
 }
+
+type ClockField = 'cutoff_time' | 'receive_cutoff_time' | 'day_change_time';
 
 function rpc(statusCode: number, message: string): RpcException {
   return new RpcException({ statusCode, message, data: null });
 }
 
 /**
- * BUGUNGI QABUL VAQTI va KUN ALMASHISH SOATI (ega 2026-11-09, Trello #756).
- * Vaqt hisobi — `@app/common` `order/order-intake.ts` (toza); bu servis
- * faqat `order_settings` ni o'qiydi/yozadi.
+ * «KUN TARTIBI»: buyurtma YARATISH va QABUL QILISH chegaralari (har kuni
+ * takrorlanadi) hamda KUN ALMASHISH SOATI (ega 2026-11-09 / 2026-11-11,
+ * Trello #756). Vaqt hisobi — `@app/common` `order/order-intake.ts` (toza);
+ * bu servis faqat `order_settings` ni o'qiydi/yozadi.
  *
- * Darvoza (`assertOpen`) controllerda IDEMPOTENCY'DAN OLDIN chaqiriladi:
- * aks holda rad etilgan `order.create` kaliti `failed` bo'lib keshlanardi va
- * hamkor (deterministik `request_id`, `reclaimFailed` yo'q) qabul ochilgach
- * ham o'sha buyurtmani HECH QACHON yarata olmasdi.
+ * Darvozalar (`assertOpen`, `assertReceiveOpen`) controllerda chaqiriladi —
+ * yaratish darvozasi IDEMPOTENCY'DAN OLDIN: aks holda rad etilgan
+ * `order.create` kaliti `failed` bo'lib keshlanardi va hamkor (deterministik
+ * `request_id`, `reclaimFailed` yo'q) qabul ochilgach ham o'sha buyurtmani
+ * HECH QACHON yarata olmasdi.
  */
 @Injectable()
 export class OrderIntakeService {
@@ -60,43 +67,44 @@ export class OrderIntakeService {
   }
 
   /**
-   * Qabul yopiq bo'lsa — 409 `ORDER_INTAKE_CLOSED` (`reopens_at` bilan).
+   * Yaratish yopiq bo'lsa — 409 `ORDER_INTAKE_CLOSED` (`reopens_at` bilan).
    *
    * ⚠️ FAIL OPEN: sozlamani o'qib bo'lmasa (DB xatosi, migratsiya 213
-   * hali ishlamagan) darvoza o'tkazib yuboradi va `error` yoziladi — qabul
-   * vaqti yumshoq qoida, uning nosozligi BUTUN buyurtma yaratishni
-   * to'xtatmasin. (`getState` — `GET /orders/intake-settings` — xatoni
-   * yashirmaydi.)
+   * hali ishlamagan) darvoza o'tkazib yuboradi va `error` yoziladi — chegara
+   * yumshoq qoida, uning nosozligi BUTUN buyurtma yaratishni to'xtatmasin.
+   * (`getState` — `GET /orders/intake-settings` — xatoni yashirmaydi.)
    */
   async assertOpen(now: Date = new Date()): Promise<OrderIntakeState | null> {
-    let state: OrderIntakeState;
-    try {
-      state = await this.getState(now);
-    } catch (error) {
-      this.logger.error(
-        `order intake settings unreadable — gate skipped (fail open): ${
-          (error as Error)?.message ?? 'unknown'
-        }`,
-      );
-      return null;
-    }
-    if (!state.is_open) {
+    const state = await this.readStateFailOpen(now, 'create');
+    if (state && !state.is_open) {
       throw new RpcException(orderIntakeClosedError(state));
     }
     return state;
   }
 
   /**
+   * Qabul qilish yopiq bo'lsa — 409 `ORDER_RECEIVE_CLOSED` (`reopens_at`,
+   * `receive_cutoff_time`). `assertOpen` kabi FAIL OPEN.
+   */
+  async assertReceiveOpen(
+    now: Date = new Date(),
+  ): Promise<OrderIntakeState | null> {
+    const state = await this.readStateFailOpen(now, 'receive');
+    if (state && !state.receive_is_open) {
+      throw new RpcException(orderReceiveClosedError(state));
+    }
+    return state;
+  }
+
+  /**
    * Faqat SUPERADMIN (gateway ham `@Roles(SUPERADMIN)` — himoya chuqurligi).
+   * Bir nechta maydon birga keladi, berilmagani o'zgarmaydi:
    *
-   * - `cutoff_time` — JORIY ish kuni oynasiga yoziladi (`window_start`);
-   *   kun almashganda o'zi amal qilmay qoladi. O'tgan vaqt qo'yilsa qabul
-   *   darhol yopiladi.
-   * - `day_change_time` — doimiy. O'zgarsa joriy oyna siljiydi; bugungi
-   *   cheklov (alohida berilmagan bo'lsa) yangi oynaga KO'CHADI, faqat ish
-   *   kuni sanasi o'zgarmagan bo'lsa (masalan 00:00 → 06:00 ertalab). Sana
-   *   o'zgarsa (19:00 da 00:00 → 18:00 — yangi kun boshlangan) — eski kunning
-   *   cheklovi yangi kunga o'tmaydi.
+   * - `cutoff_time` / `receive_cutoff_time` — DOIMIY (har ish kuni), boshqa
+   *   vaqtga o'zgartirilmaguncha yoki `null` bilan olib tashlanmaguncha.
+   *   Bugun o'tgan vaqt qo'yilsa — shu ish kuni darhol yopiladi.
+   * - `day_change_time` — doimiy. O'zgarsa joriy ish kuni oynasi siljiydi,
+   *   chegaralar yangi oynada o'z soatida amal qiladi.
    */
   async update(
     input: OrderIntakeUpdateInput,
@@ -108,19 +116,29 @@ export class OrderIntakeService {
     if (!roles.includes('superadmin')) {
       throw rpc(
         403,
-        "Bugungi qabul vaqti va kun almashish soatini faqat superadmin o'zgartira oladi",
+        "Buyurtma chegaralari va kun almashish soatini faqat superadmin o'zgartira oladi",
       );
     }
     const hasCutoff = input?.cutoff_time !== undefined;
+    const hasReceive = input?.receive_cutoff_time !== undefined;
     const hasDayChange = input?.day_change_time !== undefined;
-    if (!hasCutoff && !hasDayChange) {
+    if (!hasCutoff && !hasReceive && !hasDayChange) {
       throw rpc(
         400,
-        "O'zgartiriladigan sozlama berilmadi (cutoff_time yoki day_change_time)",
+        "O'zgartiriladigan sozlama berilmadi (cutoff_time, receive_cutoff_time yoki day_change_time)",
       );
     }
+    // Hammasi tranzaksiyadan OLDIN tekshiriladi — bitta maydon xato bo'lsa
+    // hech biri yozilmaydi.
     const cutoffTime = hasCutoff
       ? this.parseClockInput(input.cutoff_time, 'cutoff_time', null)
+      : undefined;
+    const receiveCutoffTime = hasReceive
+      ? this.parseClockInput(
+          input.receive_cutoff_time,
+          'receive_cutoff_time',
+          null,
+        )
       : undefined;
     const dayChangeTime = hasDayChange
       ? this.parseClockInput(
@@ -146,7 +164,6 @@ export class OrderIntakeService {
           now,
           ...(await this.loadSettings(manager)),
         });
-        const nextDayChange = dayChangeTime ?? beforeState.day_change_time;
         if (
           dayChangeTime !== undefined &&
           dayChangeTime !== beforeState.day_change_time
@@ -158,31 +175,28 @@ export class OrderIntakeService {
             requesterId,
           );
         }
-        const window = resolveOrderIntakeWindow(
-          now,
-          parseClockTime(nextDayChange) as number,
-        );
-        let nextCutoff: string | null | undefined = cutoffTime;
         if (
-          nextCutoff === undefined &&
-          dayChangeTime !== undefined &&
-          beforeState.cutoff_time !== null &&
-          window.date === beforeState.date &&
-          window.start.toISOString() !== beforeState.day_started_at
+          cutoffTime !== undefined &&
+          cutoffTime !== beforeState.cutoff_time
         ) {
-          // Kun almashish soati o'zgardi, ish kuni o'sha — bugungi cheklov
-          // yangi oynada ham amal qilsin.
-          nextCutoff = beforeState.cutoff_time;
-        }
-        if (nextCutoff !== undefined) {
-          const value: StoredOrderIntakeCutoff = {
-            window_start: window.start.toISOString(),
-            date: window.date,
-            cutoff_time: nextCutoff,
-          };
+          const value: StoredOrderIntakeCutoff = { cutoff_time: cutoffTime };
           await this.writeSetting(
             manager,
             ORDER_INTAKE_SETTING_KEYS.cutoff,
+            value,
+            requesterId,
+          );
+        }
+        if (
+          receiveCutoffTime !== undefined &&
+          receiveCutoffTime !== beforeState.receive_cutoff_time
+        ) {
+          const value: StoredOrderIntakeCutoff = {
+            cutoff_time: receiveCutoffTime,
+          };
+          await this.writeSetting(
+            manager,
+            ORDER_INTAKE_SETTING_KEYS.receiveCutoff,
             value,
             requesterId,
           );
@@ -198,18 +212,36 @@ export class OrderIntakeService {
     );
 
     // Jurnal — tranzaksiyadan keyin (fail-safe; yozilmasa ham sozlama turadi).
-    if (hasCutoff) {
+    // Faqat haqiqatan o'zgargan qiymat yoziladi.
+    if (before.cutoff_time !== after.cutoff_time) {
       await this.activityLog?.log({
         entity_type: 'OrderSetting',
         entity_id: ORDER_INTAKE_SETTING_KEYS.cutoff,
         action: 'order.intake_cutoff_changed',
-        old_value: { cutoff_time: before.cutoff_time, date: before.date },
-        new_value: { cutoff_time: after.cutoff_time, date: after.date },
+        old_value: { cutoff_time: before.cutoff_time },
+        new_value: { cutoff_time: after.cutoff_time },
         user_id: requesterId,
         metadata: {
+          date: after.date,
           closes_at: after.closes_at,
           reopens_at: after.reopens_at,
           is_open: after.is_open,
+        },
+      });
+    }
+    if (before.receive_cutoff_time !== after.receive_cutoff_time) {
+      await this.activityLog?.log({
+        entity_type: 'OrderSetting',
+        entity_id: ORDER_INTAKE_SETTING_KEYS.receiveCutoff,
+        action: 'order.receive_cutoff_changed',
+        old_value: { receive_cutoff_time: before.receive_cutoff_time },
+        new_value: { receive_cutoff_time: after.receive_cutoff_time },
+        user_id: requesterId,
+        metadata: {
+          date: after.date,
+          receive_closes_at: after.receive_closes_at,
+          receive_reopens_at: after.receive_reopens_at,
+          receive_is_open: after.receive_is_open,
         },
       });
     }
@@ -225,18 +257,35 @@ export class OrderIntakeService {
           day_started_at: after.day_started_at,
           next_day_change_at: after.next_day_change_at,
           cutoff_time: after.cutoff_time,
+          receive_cutoff_time: after.receive_cutoff_time,
         },
       });
     }
     this.logger.log(
-      `order intake updated by ${requesterId ?? 'unknown'}: cutoff ${before.cutoff_time ?? '-'} → ${after.cutoff_time ?? '-'}, day change ${before.day_change_time} → ${after.day_change_time}`,
+      `order intake updated by ${requesterId ?? 'unknown'}: create ${before.cutoff_time ?? '-'} → ${after.cutoff_time ?? '-'}, receive ${before.receive_cutoff_time ?? '-'} → ${after.receive_cutoff_time ?? '-'}, day change ${before.day_change_time} → ${after.day_change_time}`,
     );
     return after;
   }
 
+  private async readStateFailOpen(
+    now: Date,
+    gate: 'create' | 'receive',
+  ): Promise<OrderIntakeState | null> {
+    try {
+      return await this.getState(now);
+    } catch (error) {
+      this.logger.error(
+        `order intake settings unreadable — ${gate} gate skipped (fail open): ${
+          (error as Error)?.message ?? 'unknown'
+        }`,
+      );
+      return null;
+    }
+  }
+
   private parseClockInput(
     value: unknown,
-    field: 'cutoff_time' | 'day_change_time',
+    field: ClockField,
     nullValue: string | null,
   ): string | null {
     if (value === null) return nullValue;
@@ -260,6 +309,7 @@ export class OrderIntakeService {
           key: In([
             ORDER_INTAKE_SETTING_KEYS.dayChangeTime,
             ORDER_INTAKE_SETTING_KEYS.cutoff,
+            ORDER_INTAKE_SETTING_KEYS.receiveCutoff,
           ]),
           isDeleted: false,
         },
@@ -272,6 +322,7 @@ export class OrderIntakeService {
           ? (dayChange as { time?: unknown }).time
           : null,
       cutoff: map.get(ORDER_INTAKE_SETTING_KEYS.cutoff) ?? null,
+      receiveCutoff: map.get(ORDER_INTAKE_SETTING_KEYS.receiveCutoff) ?? null,
     };
   }
 
