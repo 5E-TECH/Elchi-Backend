@@ -314,6 +314,66 @@ export class CarrierOrderStatusRequestDto {
   old_item_collected?: boolean;
 }
 
+/**
+ * `POST /carrier/orders/{id}/status` — Swagger'dagi tayyor so'rov misollari
+ * (`application/json` → `examples`, "Try it out" da ro'yxat bo'lib chiqadi).
+ * Tartib va kalitlar — hujjatdagi ro'yxat tartibi.
+ *
+ * ⚠️ Har bir misol endpoint validatsiyasidan (global ValidationPipe +
+ * kontroller tekshiruvlari + order-service qoidalari) o'tishi SHART —
+ * `carrier-status-examples.spec.ts` tekshiradi. Kontrakt (maydon, qoida)
+ * shu yerda O'ZGARMAYDI: bu faqat hujjat.
+ */
+export const CARRIER_STATUS_REQUEST_EXAMPLES = {
+  sold: {
+    summary: 'Sotildi',
+    value: { status: CarrierOrderStatus.SOLD, comment: 'Mijoz qabul qildi' },
+  },
+  sold_exchange: {
+    summary: 'Sotildi (almashtirish, eski tovar olindi)',
+    value: { status: CarrierOrderStatus.SOLD, old_item_collected: true },
+  },
+  partly_sold: {
+    summary: 'Qisman sotildi (har bir qator + sotilgan dona)',
+    description:
+      '2 qatorli buyurtma: 5501-qatordan 1 dona sotildi, 5502-qatordan hech narsa ' +
+      '(`quantity: 0`). `items` da buyurtmaning HAR BIR qatori bo‘lishi shart. ' +
+      '`total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida).',
+    value: {
+      status: CarrierOrderStatus.PARTLY_SOLD,
+      total_price: 150000,
+      items: [
+        { order_item_id: '5501', quantity: 1 },
+        { order_item_id: '5502', quantity: 0 },
+      ],
+      comment: 'Mijoz faqat bittasini oldi',
+    },
+  },
+  cancelled: {
+    summary: 'Bekor qilindi (mijoz rad etdi)',
+    value: {
+      status: CarrierOrderStatus.CANCELLED,
+      reason: CancelReason.CUSTOMER_REFUSED,
+      comment: 'Mijoz rad etdi',
+    },
+  },
+  cancelled_other: {
+    summary: 'Bekor qilindi (boshqa sabab — izoh majburiy)',
+    value: {
+      status: CarrierOrderStatus.CANCELLED,
+      reason: CancelReason.OTHER,
+      comment: 'Mijoz boshqa shaharga ko‘chib ketgan',
+    },
+  },
+  rollback: {
+    summary: 'Xato natijani bekor qilish (rollback)',
+    value: { status: CarrierOrderStatus.ROLLBACK },
+  },
+} as const satisfies Record<
+  string,
+  { summary: string; description?: string; value: object }
+>;
+
 const CARRIER_LIST_STATUSES = Object.values(Order_status) as string[];
 
 export class CarrierOrderListQueryDto {

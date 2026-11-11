@@ -37,6 +37,13 @@ const CARRIER_PATH_PREFIX = '/carrier/';
  */
 export const CARRIER_SWAGGER_GUIDE = `Elchi Pochta posilkalarini yetkazadigan tashqi kompaniya uchun API. Elchi'da siz **bitta kurier akkaunti** sifatida ishlaysiz: Elchi xodimi buyurtmani sizga biriktiradi, siz posilka QR'ini skanerlaysiz va yetkazish natijasini yuborasiz. Pul sizning kurier kassangizga yoziladi.
 
+## Ish tartibi (qisqa)
+
+1. \`POST /carrier/scan\` — posilka sizga o'tadi (\`waiting\`).
+2. \`POST /carrier/orders/{id}/status\` — natija: \`sold\` / \`partly_sold\` / \`cancelled\` (xato bo'lsa — \`rollback\`).
+3. \`POST /carrier/returns\` — bekor qilinganlarni qaytarish.
+4. \`GET /carrier/cashbox\` — kassa va naqd topshirish.
+
 ## 1. Kirish
 
 Har so'rovda \`X-Api-Key\` sarlavhasi (kalit \`elc_\` bilan boshlanadi, uni Elchi operatori beradi). Kalit faqat bir marta ko'rsatiladi — xavfsiz saqlang.
@@ -160,13 +167,20 @@ export function filterCarrierDocument(full: OpenAPIObject): OpenAPIObject {
   };
 }
 
-type MediaTypes = Record<string, { schema?: Record<string, unknown> }>;
+type MediaTypes = Record<
+  string,
+  { schema?: Record<string, unknown>; examples?: unknown; example?: unknown }
+>;
 
 /**
  * JSON va multipart so'rov tanasini AJRATADI. `@ApiBody` bitta sxema beradi:
  * `allOf: [DTO, { proof: binary }]` — u `application/json` ga ham tushib,
  * kod generatorlari JSON modelida `File` maydonini yasardi. Endi JSON —
  * faqat DTO, multipart — DTO + `proof`.
+ *
+ * `@ApiBody` misollari (`examples`) ham ikkala turga tushadi — ular JSON
+ * tanasi uchun (multipart'da `items` JSON satr bo'lib keladi va Swagger UI
+ * multipart misolini yaxshi ko'rsatmaydi), shu bois multipart'dan olinadi.
  */
 export function splitMultipartProofBodies(doc: OpenAPIObject): OpenAPIObject {
   for (const pathItem of Object.values(doc.paths ?? {})) {
@@ -174,12 +188,17 @@ export function splitMultipartProofBodies(doc: OpenAPIObject): OpenAPIObject {
       const content = (op as { requestBody?: { content?: MediaTypes } })
         ?.requestBody?.content;
       const json = content?.['application/json'];
+      const multipart = content?.['multipart/form-data'];
       const allOf = json?.schema?.allOf as
         Array<Record<string, unknown>> | undefined;
-      if (!content?.['multipart/form-data'] || !Array.isArray(allOf)) continue;
+      if (!content || !multipart || !Array.isArray(allOf)) continue;
       const base = allOf.find((part) => typeof part.$ref === 'string');
       if (!base) continue;
       content['application/json'] = { ...json, schema: { ...base } };
+      const multipartOnly = { ...multipart };
+      delete multipartOnly.examples;
+      delete multipartOnly.example;
+      content['multipart/form-data'] = multipartOnly;
     }
   }
   return doc;

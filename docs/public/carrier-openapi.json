@@ -189,7 +189,7 @@
     },
     "/carrier/orders/{id}/status": {
       "post": {
-        "description": "`sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). `partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). `rollback` — faqat `sold` yoki `cancelled` holatidagi buyurtmani `waiting` ga qaytaradi (shu buyurtma hisob-kitobi yopilmagan bo‘lsa; `paid`/`partly_paid` — Elchi operatori). Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma (`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).",
+        "description": "Kuryeringiz posilkani topshirganda yoki topshira olmaganda shu so‘rovni yuboring — bizda buyurtma holati darhol o‘zgaradi. `sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). `partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). `rollback` — faqat `sold` yoki `cancelled` holatidagi buyurtmani `waiting` ga qaytaradi (shu buyurtma hisob-kitobi yopilmagan bo‘lsa; `paid`/`partly_paid` — Elchi operatori). Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma (`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).",
         "operationId": "CarrierGatewayController_updateStatus",
         "parameters": [
           {
@@ -204,7 +204,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "MAJBURIY (≤255 belgi). Har YANGI urinish (niyat) uchun YANGI kalit (masalan UUID). Ayni kalitni faqat shu so‘rovni qayta yuborishda ishlating (javob kelmadi, 409/429/5xx/504). Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE.",
+            "description": "MAJBURIY (≤255 belgi). Har YANGI urinish (niyat) uchun YANGI kalit (masalan UUID). Ayni kalitni faqat shu so‘rovni qayta yuborishda ishlating (javob kelmadi, 409/429/5xx/504). Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE. Swagger’da har sinov uchun YANGI UUID kiriting (masalan terminalda `uuidgen`) — maydon ataylab bo‘sh: bir kalitni takrorlasangiz 422/409 olasiz.",
             "required": true,
             "schema": {
               "type": "string"
@@ -217,6 +217,63 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CarrierOrderStatusRequestDto"
+              },
+              "examples": {
+                "sold": {
+                  "summary": "Sotildi",
+                  "value": {
+                    "status": "sold",
+                    "comment": "Mijoz qabul qildi"
+                  }
+                },
+                "sold_exchange": {
+                  "summary": "Sotildi (almashtirish, eski tovar olindi)",
+                  "value": {
+                    "status": "sold",
+                    "old_item_collected": true
+                  }
+                },
+                "partly_sold": {
+                  "summary": "Qisman sotildi (har bir qator + sotilgan dona)",
+                  "description": "2 qatorli buyurtma: 5501-qatordan 1 dona sotildi, 5502-qatordan hech narsa (`quantity: 0`). `items` da buyurtmaning HAR BIR qatori bo‘lishi shart. `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida).",
+                  "value": {
+                    "status": "partly_sold",
+                    "total_price": 150000,
+                    "items": [
+                      {
+                        "order_item_id": "5501",
+                        "quantity": 1
+                      },
+                      {
+                        "order_item_id": "5502",
+                        "quantity": 0
+                      }
+                    ],
+                    "comment": "Mijoz faqat bittasini oldi"
+                  }
+                },
+                "cancelled": {
+                  "summary": "Bekor qilindi (mijoz rad etdi)",
+                  "value": {
+                    "status": "cancelled",
+                    "reason": "CUSTOMER_REFUSED",
+                    "comment": "Mijoz rad etdi"
+                  }
+                },
+                "cancelled_other": {
+                  "summary": "Bekor qilindi (boshqa sabab — izoh majburiy)",
+                  "value": {
+                    "status": "cancelled",
+                    "reason": "OTHER",
+                    "comment": "Mijoz boshqa shaharga ko‘chib ketgan"
+                  }
+                },
+                "rollback": {
+                  "summary": "Xato natijani bekor qilish (rollback)",
+                  "value": {
+                    "status": "rollback"
+                  }
+                }
               }
             },
             "multipart/form-data": {
@@ -357,7 +414,7 @@
             "carrier-api-key": []
           }
         ],
-        "summary": "Yetkazish natijasi: sold | partly_sold | cancelled | rollback",
+        "summary": "Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled), rollback",
         "tags": [
           "Carrier"
         ]
@@ -727,7 +784,7 @@
   },
   "info": {
     "title": "Elchi Pochta — Carrier API",
-    "description": "Elchi Pochta posilkalarini yetkazadigan tashqi kompaniya uchun API. Elchi'da siz **bitta kurier akkaunti** sifatida ishlaysiz: Elchi xodimi buyurtmani sizga biriktiradi, siz posilka QR'ini skanerlaysiz va yetkazish natijasini yuborasiz. Pul sizning kurier kassangizga yoziladi.\n\n## 1. Kirish\n\nHar so'rovda `X-Api-Key` sarlavhasi (kalit `elc_` bilan boshlanadi, uni Elchi operatori beradi). Kalit faqat bir marta ko'rsatiladi — xavfsiz saqlang.\n\n**Muhitlar.** Avval test muhitida sinang. Test va production — alohida tizimlar: kalit ham, buyurtmalar ham alohida (test kaliti production'da ishlamaydi va aksincha).\n\n| Muhit | `BASE_URL` | Interaktiv hujjat (Swagger) |\n|---|---|---|\n| Test | `https://test-api.elchipochta.uz` | `https://test-api.elchipochta.uz/carrier-docs` |\n| Production | `https://api.elchipochta.uz` | `https://api.elchipochta.uz/carrier-docs` |\n\nSwagger sahifasining login va parolini Elchi beradi. U yerda **Authorize** tugmasiga kalitni kiritib, so'rovlarni (\"Try it out\") to'g'ridan-to'g'ri sinash mumkin — so'rov sahifa ochilgan muhitga yuboriladi. Quyidagi misollarda `BASE_URL` — tanlangan muhit manzili:\n\n```bash\nBASE_URL=https://test-api.elchipochta.uz\ncurl \"$BASE_URL/carrier/ping\" -H \"X-Api-Key: elc_...\"\n```\n\n## 2. Ish oqimi\n\n**1) Skanerlash** — posilkani qo'lingizga olganda:\n\n```bash\ncurl -X POST \"$BASE_URL/carrier/scan\" \\\n  -H \"X-Api-Key: elc_...\" -H \"Content-Type: application/json\" \\\n  -d '{\"qr_token\":\"a1b2c3d4e5\"}'\n```\n\nJavobda buyurtma (`data.order`): mijoz, manzil, tovarlar va **`cod_amount` — mijozdan olinadigan naqd**. Viloyat va tuman nomi emas, **SOATO kodi** bilan keladi: `region.soato_code` (4 xona), `district.soato_code` (7 xona; kod noma'lum bo'lsa `null`). Yo'ldagi (yoki mijozni kutishdagi) posilka shu skanda sizga qabul qilinadi (`status: waiting`). Sotish va bekor qilish faqat shundan keyin mumkin. `replacement.old_item_required: true` — almashtirish: eski mahsulotni oling va sotishda `old_item_collected: true` yuboring.\n\n**2) Natijani yuborish** — `data.order.id` bilan. **`Idempotency-Key` majburiy** — har yangi urinish uchun yangi UUID:\n\n```bash\ncurl -X POST \"$BASE_URL/carrier/orders/900/status\" \\\n  -H \"X-Api-Key: elc_...\" -H \"Idempotency-Key: $(uuidgen)\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"status\":\"sold\"}'\n```\n\n| status | Qachon | Qo'shimcha maydonlar |\n|---|---|---|\n| `sold` | To'liq sotildi | — |\n| `partly_sold` | Qisman sotildi | `total_price` (mijoz olgan tovarlar qiymati, onlayn to'langan qism ham ichida), `items: [{order_item_id, quantity}]` — buyurtmaning har bir qatori |\n| `cancelled` | Mijoz olmadi | `reason`: `CUSTOMER_NO_ANSWER`, `CUSTOMER_REFUSED`, `WRONG_ADDRESS`, `DEFECTIVE_PRODUCT`, `PRICE_DISPUTE`, `OTHER` (+ `comment`) |\n| `rollback` | Xato yuborilgan sold/cancelled ni qaytarish | — (holat aynan sold yoki cancelled va hisob-kitob yopilmagan bo'lsa) |\n\n**3) Bekor qilinganlarni qaytarish** — `cancelled` posilkalar (qisman sotuvning sotilmagan qismi ham) sizda qoladi: `POST /carrier/returns` `{\"order_ids\":[\"901\"]}` → qaytarish pochtasi (`post_id`); posilkalarni Elchi filialiga topshirasiz. Qaytarilgan posilka `/carrier/orders` ro'yxatidan chiqadi.\n\n**4) Solishtirish** — `GET /carrier/orders` (sizdagi buyurtmalar) va `GET /carrier/cashbox` (balans va oxirgi 30 kunlik harakatlar).\n\n## 3. Muhim qoidalar\n\n- Faqat **sizga biriktirilgan** buyurtmalar ko'rinadi; boshqasiga `404`.\n- `Idempotency-Key`: har **yangi** urinish — yangi kalit; javob kelmasa — **ayni kalit** bilan qayta yuboring (amal ikki marta bajarilmaydi). Rollback'dan keyingi qayta sotuv — yangi kalit (eskisi bilan `409 CARRIER_IDEMPOTENCY_KEY_STALE`).\n- Limit: akkaunt uchun daqiqada 120 so'rov, barcha endpoint birgalikda, va har endpoint uchun bitta IP'dan 120 (`429`). Ro'yxatni bittalab emas, sahifalab oling.\n- Xato javobi: `{ statusCode, message, code?, trace_id }`. Qarorni matnga emas, `statusCode`/`code` ga qarab qiling. `trace_id` ni saqlang — muammo bo'lsa Elchi'ga yuboring.\n- `409`, `429`, `5xx`, `503`, `504` — biroz kutib, **ayni** `Idempotency-Key` bilan qayta urining (`CARRIER_IDEMPOTENCY_KEY_STALE` — yangi kalit; 10 daqiqadan uzoq takrorlansa — Elchi'ga). Boshqa `4xx` — so'rovni tuzating.\n- `refreshed: false` — holat qabul qilindi, buyurtmani keyinroq o'qing (qayta yubormang).\n\n## 4. Pul\n\nSotuvda kassangizga **(mijozdan olingan naqd − yetkazish haqingiz)** yoziladi — bu Elchi'ga topshiriladigan summa. Naqdni topshirganingizda Elchi xodimi qabul qiladi va kassada chiqim paydo bo'ladi (eng eski sotuvlardan boshlab yopiladi). Bekor qilishda pul harakati yo'q. Kassa yozuvi holat yuborilgandan keyin **bir necha soniyada** paydo bo'ladi. Yo'nalish — `type` (income/expense), `amount` doim musbat.",
+    "description": "Elchi Pochta posilkalarini yetkazadigan tashqi kompaniya uchun API. Elchi'da siz **bitta kurier akkaunti** sifatida ishlaysiz: Elchi xodimi buyurtmani sizga biriktiradi, siz posilka QR'ini skanerlaysiz va yetkazish natijasini yuborasiz. Pul sizning kurier kassangizga yoziladi.\n\n## Ish tartibi (qisqa)\n\n1. `POST /carrier/scan` — posilka sizga o'tadi (`waiting`).\n2. `POST /carrier/orders/{id}/status` — natija: `sold` / `partly_sold` / `cancelled` (xato bo'lsa — `rollback`).\n3. `POST /carrier/returns` — bekor qilinganlarni qaytarish.\n4. `GET /carrier/cashbox` — kassa va naqd topshirish.\n\n## 1. Kirish\n\nHar so'rovda `X-Api-Key` sarlavhasi (kalit `elc_` bilan boshlanadi, uni Elchi operatori beradi). Kalit faqat bir marta ko'rsatiladi — xavfsiz saqlang.\n\n**Muhitlar.** Avval test muhitida sinang. Test va production — alohida tizimlar: kalit ham, buyurtmalar ham alohida (test kaliti production'da ishlamaydi va aksincha).\n\n| Muhit | `BASE_URL` | Interaktiv hujjat (Swagger) |\n|---|---|---|\n| Test | `https://test-api.elchipochta.uz` | `https://test-api.elchipochta.uz/carrier-docs` |\n| Production | `https://api.elchipochta.uz` | `https://api.elchipochta.uz/carrier-docs` |\n\nSwagger sahifasining login va parolini Elchi beradi. U yerda **Authorize** tugmasiga kalitni kiritib, so'rovlarni (\"Try it out\") to'g'ridan-to'g'ri sinash mumkin — so'rov sahifa ochilgan muhitga yuboriladi. Quyidagi misollarda `BASE_URL` — tanlangan muhit manzili:\n\n```bash\nBASE_URL=https://test-api.elchipochta.uz\ncurl \"$BASE_URL/carrier/ping\" -H \"X-Api-Key: elc_...\"\n```\n\n## 2. Ish oqimi\n\n**1) Skanerlash** — posilkani qo'lingizga olganda:\n\n```bash\ncurl -X POST \"$BASE_URL/carrier/scan\" \\\n  -H \"X-Api-Key: elc_...\" -H \"Content-Type: application/json\" \\\n  -d '{\"qr_token\":\"a1b2c3d4e5\"}'\n```\n\nJavobda buyurtma (`data.order`): mijoz, manzil, tovarlar va **`cod_amount` — mijozdan olinadigan naqd**. Viloyat va tuman nomi emas, **SOATO kodi** bilan keladi: `region.soato_code` (4 xona), `district.soato_code` (7 xona; kod noma'lum bo'lsa `null`). Yo'ldagi (yoki mijozni kutishdagi) posilka shu skanda sizga qabul qilinadi (`status: waiting`). Sotish va bekor qilish faqat shundan keyin mumkin. `replacement.old_item_required: true` — almashtirish: eski mahsulotni oling va sotishda `old_item_collected: true` yuboring.\n\n**2) Natijani yuborish** — `data.order.id` bilan. **`Idempotency-Key` majburiy** — har yangi urinish uchun yangi UUID:\n\n```bash\ncurl -X POST \"$BASE_URL/carrier/orders/900/status\" \\\n  -H \"X-Api-Key: elc_...\" -H \"Idempotency-Key: $(uuidgen)\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"status\":\"sold\"}'\n```\n\n| status | Qachon | Qo'shimcha maydonlar |\n|---|---|---|\n| `sold` | To'liq sotildi | — |\n| `partly_sold` | Qisman sotildi | `total_price` (mijoz olgan tovarlar qiymati, onlayn to'langan qism ham ichida), `items: [{order_item_id, quantity}]` — buyurtmaning har bir qatori |\n| `cancelled` | Mijoz olmadi | `reason`: `CUSTOMER_NO_ANSWER`, `CUSTOMER_REFUSED`, `WRONG_ADDRESS`, `DEFECTIVE_PRODUCT`, `PRICE_DISPUTE`, `OTHER` (+ `comment`) |\n| `rollback` | Xato yuborilgan sold/cancelled ni qaytarish | — (holat aynan sold yoki cancelled va hisob-kitob yopilmagan bo'lsa) |\n\n**3) Bekor qilinganlarni qaytarish** — `cancelled` posilkalar (qisman sotuvning sotilmagan qismi ham) sizda qoladi: `POST /carrier/returns` `{\"order_ids\":[\"901\"]}` → qaytarish pochtasi (`post_id`); posilkalarni Elchi filialiga topshirasiz. Qaytarilgan posilka `/carrier/orders` ro'yxatidan chiqadi.\n\n**4) Solishtirish** — `GET /carrier/orders` (sizdagi buyurtmalar) va `GET /carrier/cashbox` (balans va oxirgi 30 kunlik harakatlar).\n\n## 3. Muhim qoidalar\n\n- Faqat **sizga biriktirilgan** buyurtmalar ko'rinadi; boshqasiga `404`.\n- `Idempotency-Key`: har **yangi** urinish — yangi kalit; javob kelmasa — **ayni kalit** bilan qayta yuboring (amal ikki marta bajarilmaydi). Rollback'dan keyingi qayta sotuv — yangi kalit (eskisi bilan `409 CARRIER_IDEMPOTENCY_KEY_STALE`).\n- Limit: akkaunt uchun daqiqada 120 so'rov, barcha endpoint birgalikda, va har endpoint uchun bitta IP'dan 120 (`429`). Ro'yxatni bittalab emas, sahifalab oling.\n- Xato javobi: `{ statusCode, message, code?, trace_id }`. Qarorni matnga emas, `statusCode`/`code` ga qarab qiling. `trace_id` ni saqlang — muammo bo'lsa Elchi'ga yuboring.\n- `409`, `429`, `5xx`, `503`, `504` — biroz kutib, **ayni** `Idempotency-Key` bilan qayta urining (`CARRIER_IDEMPOTENCY_KEY_STALE` — yangi kalit; 10 daqiqadan uzoq takrorlansa — Elchi'ga). Boshqa `4xx` — so'rovni tuzating.\n- `refreshed: false` — holat qabul qilindi, buyurtmani keyinroq o'qing (qayta yubormang).\n\n## 4. Pul\n\nSotuvda kassangizga **(mijozdan olingan naqd − yetkazish haqingiz)** yoziladi — bu Elchi'ga topshiriladigan summa. Naqdni topshirganingizda Elchi xodimi qabul qiladi va kassada chiqim paydo bo'ladi (eng eski sotuvlardan boshlab yopiladi). Bekor qilishda pul harakati yo'q. Kassa yozuvi holat yuborilgandan keyin **bir necha soniyada** paydo bo'ladi. Yo'nalish — `type` (income/expense), `amount` doim musbat.",
     "version": "1.0.0",
     "contact": {}
   },
