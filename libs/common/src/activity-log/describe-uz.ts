@@ -240,6 +240,15 @@ export const ActivityDescribeUz = {
     return `Filial #${String(branchId ?? '-')} → asosiy kassa: ${moneyUz(amount)}${cashboxSuffix(null, method)}`;
   },
 
+  /** "Filial #77 → market #501 (marketga o'tkazma): 150 000 so'm" */
+  branchToMarketPayment(
+    branchId: Id | null | undefined,
+    marketId: Id | null | undefined,
+    amount: unknown,
+  ): string {
+    return `Filial #${String(branchId ?? '-')} → market #${String(marketId ?? '-')} (marketga o'tkazma): ${moneyUz(amount)}`;
+  },
+
   /** "Market #501 ga to'lov: 150 000 so'm (naqd)" */
   marketPayment(
     marketId: Id | null | undefined,

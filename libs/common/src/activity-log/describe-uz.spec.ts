@@ -239,6 +239,11 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
         150000,
         'cash',
       ),
+      branchToMarketPayment: ActivityDescribeUz.branchToMarketPayment(
+        '77',
+        '501',
+        150000,
+      ),
       marketPayment: ActivityDescribeUz.marketPayment('501', 150000, 'click'),
       operatorPayment: ActivityDescribeUz.operatorPayment('42', 150000),
       branchTransferCreated: ActivityDescribeUz.branchTransferCreated({

@@ -5435,7 +5435,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     /** T3 — gateway: `{ kind: 'branch_to_hq' }`. */
     receipt_policy?: { kind?: unknown };
     receipt_id?: unknown;
+    /** (2026-11-11) «Marketga o'tkazma» — faqat `click_to_market` bilan. */
+    market_id?: string;
   }) {
+    // (2026-11-11, Dilshod) «Marketga o'tkazma»: filial pulni HQ'ga bermay,
+    // to'g'ridan-to'g'ri marketga o'tkazgan — alohida yo'l (izoh o'sha yerda).
+    if (data?.payment_method === PaymentMethod.CLICK_TO_MARKET) {
+      return this.paymentFromBranchToMarket(data);
+    }
     // (2026-11-11) Filial kassasi qarzga ishlaydimi — tranzaksiya va
     // qulflardan OLDIN o'qiladi (RPC qulf ichida kutmasin). Xato — yopiq.
     const branchDebtEnabled = await this.isBranchCashboxDebtEnabled(
@@ -5452,6 +5459,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     try {
       this.assertBigIntId(data.branch_id, 'branch_id');
       this.assertPositiveAmount(Number(data.amount));
+      // (2026-11-11) Market faqat «Marketga o'tkazma» da — naqd / o'tkazma
+      // bilan kelgan `market_id` jimgina e'tiborsiz qolmasin.
+      if (data.market_id != null && String(data.market_id).trim() !== '') {
+        throw new BadRequestException(
+          "market_id faqat «Marketga o'tkazma» (click_to_market) usulida beriladi",
+        );
+      }
       const transferSourceUserId = this.resolveTransferSourceUserId(data);
 
       const branchCashbox = await queryRunner.manager.findOne(Cashbox, {
@@ -5690,6 +5704,365 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             data.branch_id,
             data.amount,
             data.payment_method,
+          ),
+        });
+      }
+    }
+  }
+
+  /**
+   * (2026-11-11, Dilshod) «Marketga o'tkazma» FILIALDAN: HQ (superadmin /
+   * admin) filial menejeridan pul qabul qilayotganda — filial pulni HQ'ga
+   * bermay, HQ nomidan to'g'ridan-to'g'ri marketga o'tkazgan. Gateway
+   * `POST finance/cashbox/payment/branch-to-main` (`payment_method:
+   * click_to_market` + `market_id`).
+   *
+   * Bitta tranzaksiya, bitta `transfer_id` — kuryer click_to_market
+   * (`applyCourierPaymentInTx`) naqshi:
+   *  1. FILIAL −X: `branch_to_main` EXPENSE — filialning HQ'ga topshirgani
+   *     (gateway «HQ'ga to'langan» yig'indisi, menejer tarixi shu turdan).
+   *  2. MAIN +X (`branch_to_main` INCOME) va −X (`market_payment` EXPENSE) —
+   *     sof 0, faqat iz: pul HQ kassasiga kirmadi.
+   *  3. MARKET −X (`market_payment` EXPENSE) — HQ'ning marketga qarzi.
+   *  4. Daftar (outbox, shu tranzaksiyada): `branch_to_hq` X (token — dedup,
+   *     oddiy filial → HQ bilan bir xil) — filialning HQ'ga qarzi kamayadi;
+   *     `hq_to_market` X + ochiq pickup haqi (token `:m`) — market bo'g'ini.
+   *  5. Commitdan keyin — market buyurtmalari to'lov holati sinxroni va
+   *     hamkor xabari (`scheduleMarketPaymentFollowUp`, `paymentsToMarket`
+   *     dagidek).
+   *
+   * KASSA BO'LAGI — KARTA (`balance_card`), naqd tegilmaydi. Asos: kuryer
+   * click_to_market'da MAIN ikkala oyog'i ham karta bo'lagida;
+   * `updateBalancesByMethod` (1bz6tOle) CLICK_TO_MARKET ni karta deb oladi;
+   * karta daftari (`cashbox-card`) Asosiy kartaga CLICK va CLICK_TO_MARKET
+   * ni sanaydi. «Marketga o'tkazma» — naqdsiz o'tkazma: filial uni o'z
+   * kartasidan (Asosiy karta) qilgan. Nomli karta tanlanmaydi — `card_id` /
+   * `branch_card_id` 400 (`applyCashboxCardSelection` ham faqat `click`).
+   *
+   * Filial «Kassa qarzga ishlaydi» (mig 217) yoqilgan — filial kartasi
+   * minusga tushishi mumkin (ortig'i `branch_to_hq` qoldig'i: HQ filialga
+   * qarzdor); o'chiq — qat'iy («Karta hisobida yetarli mablag' yo'q»).
+   * Marketga qarzdan ortig'i — market sozlamasiga ko'ra
+   * (`assertMarketPayoutWithinDebt`).
+   *
+   * Chek yo'q (`receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). T6 tuzatish bu
+   * shaklni QO'LLAMAYDI: `classifyTransfer` filial → MAIN → market guruhini
+   * tanimaydi → 409 `NOT_CORRECTABLE` / `unsupported_type` (daftarni orqaga
+   * surish `branch_to_hq` ni bilmaydi — pul yarim teskarilanib qolmasin).
+   */
+  private async paymentFromBranchToMarket(
+    data: Parameters<FinanceServiceService['paymentFromBranchToMain']>[0],
+  ) {
+    const branchDebtEnabled = await this.isBranchCashboxDebtEnabled(
+      String(data.branch_id ?? ''),
+    );
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    // Commit + release dan KEYIN yoziladigan audit (tranzaksiya ichida emas).
+    let auditedBranchCashboxId: string | null = null;
+    const receiptRequest = this.receiptRequest(data, 'branch_to_hq');
+    const method = PaymentMethod.CLICK_TO_MARKET;
+    try {
+      this.assertBigIntId(data.branch_id, 'branch_id');
+      this.assertPositiveAmount(Number(data.amount));
+      const marketId = String(data.market_id ?? '').trim();
+      if (!marketId) {
+        throw new BadRequestException(
+          "«Marketga o'tkazma» da market_id bo'lishi shart",
+        );
+      }
+      this.assertBigIntId(marketId, 'market_id');
+      if (data.card_id || data.branch_card_id) {
+        throw new BadRequestException(
+          "«Marketga o'tkazma» da karta tanlanmaydi (card_id / branch_card_id faqat click to'lovida)",
+        );
+      }
+      const amount = Number(data.amount);
+      const transferSourceUserId = this.resolveTransferSourceUserId(data);
+      const manager = queryRunner.manager;
+
+      // Qulf tartibi: filial → main → market (filial → HQ va kuryer → main →
+      // market yo'llari bilan bir xil — o'zaro deadlock yo'q).
+      const branchCashbox = await manager.findOne(Cashbox, {
+        where: { user_id: data.branch_id, cashbox_type: Cashbox_type.BRANCH },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!branchCashbox)
+        throw new NotFoundException('Filial kassasi topilmadi');
+
+      // Idempotentlik — filial oyog'i bo'yicha (oddiy filial → HQ bilan bir
+      // xil kalit): takroriy so'rov / RMQ qayta yetkazishi pulni qayta yozmaydi.
+      const dedupKey = String(data.dedup_epoch ?? '').trim();
+      const paymentSourceId = dedupKey ? String(data.branch_id) : null;
+      if (
+        await this.isDuplicateTransfer(manager, {
+          cashbox_id: String(branchCashbox.id),
+          source_type: Source_type.BRANCH_TO_MAIN,
+          source_id: String(data.branch_id),
+          operation_type: Operation_type.EXPENSE,
+          dedup_epoch: dedupKey,
+        })
+      ) {
+        await queryRunner.commitTransaction();
+        return this.successRes(
+          { idempotent: true, ...(receiptRequest ? { receipt: null } : {}) },
+          200,
+          "To'lov allaqachon qabul qilingan (takroriy so'rov)",
+        );
+      }
+
+      // Filial smenasi shart emas (2026-11-07, filial → HQ bilan bir xil);
+      // ochiq bo'lsa FOR SHARE — yopilayotgan smena bu chiqimni kutadi.
+      await this.findOpenShiftForCashbox(
+        manager,
+        String(data.branch_id),
+        'pessimistic_read',
+      );
+      // MAIN orqali iz — kuryer click_to_market dagidek MAIN smenasi shart
+      // (darvoza yoqilgan bo'lsa).
+      await this.requireOpenShift(manager, {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      });
+
+      let mainCashbox = await manager.findOne(Cashbox, {
+        where: {
+          user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+          cashbox_type: Cashbox_type.MAIN,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!mainCashbox) {
+        mainCashbox = await manager.save(
+          manager.create(Cashbox, {
+            user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+            cashbox_type: Cashbox_type.MAIN,
+            balance: 0,
+            balance_cash: 0,
+            balance_card: 0,
+          }),
+        );
+      }
+
+      const marketCashbox = await manager.findOne(Cashbox, {
+        where: {
+          user_id: marketId,
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!marketCashbox)
+        throw new NotFoundException('Market kassasi topilmadi');
+      // Pul ko'chishidan OLDIN: marketga qarzdan oshmasin (kuryer
+      // click_to_market va `paymentsToMarket` dagi qo'riqchi).
+      await this.assertMarketPayoutWithinDebt(
+        marketId,
+        amount,
+        Number(marketCashbox.balance ?? 0),
+      );
+
+      const transferId = randomUUID();
+      const legBase = {
+        transfer_id: transferId,
+        amount,
+        payment_method: method,
+        comment: data.comment ?? null,
+        created_by: data.created_by ?? null,
+        payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+      };
+      const after = (cashbox: Cashbox) => ({
+        balance_after: cashbox.balance,
+        balance_cash_after: cashbox.balance_cash,
+        balance_card_after: cashbox.balance_card,
+      });
+
+      // 1. Filial −X (karta bo'lagi; «Kassa qarzga ishlaydi» — minusga ham).
+      this.updateBalancesByMethod(
+        branchCashbox,
+        amount,
+        Operation_type.EXPENSE,
+        method,
+        branchDebtEnabled,
+      );
+      await manager.save(branchCashbox);
+      const branchHistory = await manager.save(
+        manager.create(CashboxHistory, {
+          ...legBase,
+          ...after(branchCashbox),
+          operation_type: Operation_type.EXPENSE,
+          cashbox_id: branchCashbox.id,
+          source_type: Source_type.BRANCH_TO_MAIN,
+          source_id: paymentSourceId,
+          dedup_epoch: dedupKey,
+          source_user_id: data.branch_id,
+          transfer_source_user_id: transferSourceUserId,
+        }),
+      );
+
+      // 2. MAIN +X / −X — sof 0 (iz). Chiqim oyog'i qoldiqni faqat kirimdan
+      // oldingi holatiga qaytaradi — MAIN kartasi tekshirilmaydi (oldindan
+      // manfiy bo'lsa ham o'tish o'zi uni yomonlashtirmaydi).
+      this.updateBalancesByMethod(
+        mainCashbox,
+        amount,
+        Operation_type.INCOME,
+        method,
+      );
+      await manager.save(mainCashbox);
+      const mainIncome = await manager.save(
+        manager.create(CashboxHistory, {
+          ...legBase,
+          ...after(mainCashbox),
+          operation_type: Operation_type.INCOME,
+          cashbox_id: mainCashbox.id,
+          source_type: Source_type.BRANCH_TO_MAIN,
+          source_user_id: data.branch_id,
+          transfer_source_user_id: transferSourceUserId,
+        }),
+      );
+      this.updateBalancesByMethod(
+        mainCashbox,
+        amount,
+        Operation_type.EXPENSE,
+        method,
+        true,
+      );
+      await manager.save(mainCashbox);
+      await manager.save(
+        manager.create(CashboxHistory, {
+          ...legBase,
+          ...after(mainCashbox),
+          operation_type: Operation_type.EXPENSE,
+          cashbox_id: mainCashbox.id,
+          source_type: Source_type.MARKET_PAYMENT,
+          source_user_id: marketId,
+        }),
+      );
+
+      // 3. Market −X.
+      this.updateBalancesByMethod(
+        marketCashbox,
+        amount,
+        Operation_type.EXPENSE,
+        method,
+      );
+      await manager.save(marketCashbox);
+      const marketHistory = await manager.save(
+        manager.create(CashboxHistory, {
+          ...legBase,
+          ...after(marketCashbox),
+          operation_type: Operation_type.EXPENSE,
+          cashbox_id: marketCashbox.id,
+          source_type: Source_type.MARKET_PAYMENT,
+          source_user_id: marketId,
+        }),
+      );
+
+      // Chek bu usulda qo'llanmaydi: `receipt_id` → 400 RECEIPT_NOT_APPLICABLE
+      // (butun to'lov rollback); yo'q — `receipt: null`.
+      const linkedReceipt =
+        receiptRequest && this.receipts
+          ? await this.receipts.linkInTx(manager, receiptRequest, {
+              applicable: false,
+              history_id: String(mainIncome.id),
+              counter_history_id: String(branchHistory.id),
+              entered_amount: amount,
+              payment_method: method,
+              card_id: null,
+              branch_id: String(data.branch_id),
+            })
+          : undefined;
+
+      // 4. Daftar — filial → HQ, keyin HQ → market (outbox tartibi).
+      const branchAdvancePayload = await this.enqueueSettlementAdvance(
+        manager,
+        'branch_to_hq',
+        String(data.branch_id),
+        amount,
+        data.created_by,
+        dedupKey,
+      );
+      const pickupFifoAmount = await this.claimPickupFifoInTx(
+        manager,
+        marketId,
+        transferId,
+      );
+      const marketAdvancePayload = await this.enqueueSettlementAdvance(
+        manager,
+        'hq_to_market',
+        marketId,
+        this.addMoney(amount, pickupFifoAmount),
+        data.created_by,
+        dedupKey ? `${dedupKey}:m` : '',
+      );
+
+      // Marketga «to'lov keldi» (kuryer click_to_market dagidek) — outbox,
+      // shu tranzaksiyada.
+      await this.financeNotifications?.paymentReceived(
+        {
+          kind: 'market_payment',
+          recipient_id: marketId,
+          payment_id: marketHistory?.id,
+          amount,
+          payment_method: method,
+          balance_after: marketHistory?.balance_after ?? null,
+          payment_date: data.payment_date ?? null,
+        },
+        manager,
+      );
+
+      await queryRunner.commitTransaction();
+      await this.tryPublishAdvanceNow(branchAdvancePayload);
+      await this.tryPublishAdvanceNow(marketAdvancePayload);
+      auditedBranchCashboxId = String(branchCashbox.id);
+
+      // 5. Buyurtmalar sinxroni + hamkor xabari — fonda, javob kutmaydi.
+      void this.scheduleMarketPaymentFollowUp({
+        market_id: marketId,
+        amount,
+        pickup_fifo_amount: pickupFifoAmount,
+        payment_date: data.payment_date,
+        dedup_key: dedupKey,
+      });
+
+      return this.successRes(
+        {
+          branch_cashbox: branchCashbox,
+          main_cashbox: mainCashbox,
+          market_cashbox: marketCashbox,
+          transfer_id: transferId,
+          ...(linkedReceipt !== undefined ? { receipt: linkedReceipt } : {}),
+        },
+        200,
+        "Filialdan marketga o'tkazma bajarildi",
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.toRpcError(error);
+    } finally {
+      await queryRunner.release();
+      if (auditedBranchCashboxId) {
+        await this.activityLog.log({
+          entity_type: 'Cashbox',
+          entity_id: auditedBranchCashboxId,
+          action: ActivityAction.PAYMENT,
+          new_value: {
+            amount: Number(data.amount),
+            payment_method: method,
+          },
+          user_id: data.created_by ? String(data.created_by) : null,
+          metadata: {
+            branch_id: data.branch_id,
+            market_id: data.market_id ?? null,
+            amount: Number(data.amount),
+            created_by: data.created_by ?? null,
+          },
+          description: ActivityDescribeUz.branchToMarketPayment(
+            data.branch_id,
+            data.market_id,
+            data.amount,
           ),
         });
       }

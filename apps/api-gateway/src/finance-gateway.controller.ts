@@ -54,6 +54,7 @@ import {
   FinancialSource_type,
   Operation_type,
   PAYMENT_CORRECTION_ERROR_CODES,
+  PaymentMethod,
   CASHBOX_RECEIPT_ERROR_CODES,
   CASHBOX_RECEIPT_FILE_FOLDER,
   CASHBOX_RECEIPT_MAX_BYTES,
@@ -2570,6 +2571,36 @@ export class FinanceGatewayController {
       throw new ForbiddenException('branch_id yuborilishi shart');
     }
 
+    // (2026-11-11, Dilshod) «Marketga o'tkazma» — filial pulni HQ'ga bermay,
+    // to'g'ridan-to'g'ri marketga o'tkazgan: market majburiy, chek va karta
+    // yo'q (kuryer click_to_market dagidek). Pul — finance, bitta tranzaksiya.
+    const isMarketTransfer =
+      dto.payment_method === PaymentMethod.CLICK_TO_MARKET;
+    const marketId = String(dto.market_id ?? '').trim();
+    if (isMarketTransfer) {
+      if (!marketId) {
+        throw new BadRequestException(
+          "«Marketga o'tkazma» da market_id bo'lishi shart",
+        );
+      }
+      if (dto.receipt_id) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: CASHBOX_RECEIPT_ERROR_CODES.NOT_APPLICABLE,
+          message: CASHBOX_RECEIPT_MESSAGES.RECEIPT_NOT_APPLICABLE,
+        });
+      }
+      if (dto.card_id || dto.branch_card_id) {
+        throw new BadRequestException(
+          "«Marketga o'tkazma» da karta tanlanmaydi (card_id / branch_card_id faqat click to'lovida)",
+        );
+      }
+    } else if (marketId) {
+      throw new BadRequestException(
+        "market_id faqat «Marketga o'tkazma» (click_to_market) usulida beriladi",
+      );
+    }
+
     await this.sendBranch(
       { cmd: 'branch.find_by_id' },
       { id: branchId, requester: this.toRequester(req.user) },
@@ -2586,6 +2617,7 @@ export class FinanceGatewayController {
         comment: dto.comment,
         created_by: req.user.sub,
         dedup_epoch: token,
+        ...(isMarketTransfer ? { market_id: marketId } : {}),
         // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
         ...(dto.source_user_id
           ? { transfer_source_user_id: dto.source_user_id }
