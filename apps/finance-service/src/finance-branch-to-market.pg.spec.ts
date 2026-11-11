@@ -436,6 +436,38 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     ]);
   });
 
+  it('pul nomli kartada — Asosiy karta (hosila) yetmasa 400, rollback; qarz rejimida o`tadi', async () => {
+    const branchBox = await db
+      .getRepository(Cashbox)
+      .findOneByOrFail({ user_id: BRANCH, cashbox_type: Cashbox_type.BRANCH });
+    // Karta bo'lagi 300 000, shundan 250 000 nomli kartada → Asosiy karta 50 000.
+    await db.getRepository(CashboxCard).save(
+      db.getRepository(CashboxCard).create({
+        cashbox_id: String(branchBox.id),
+        name: 'Uzcard filial',
+        balance: 250_000,
+        is_default: false,
+        is_active: true,
+      }),
+    );
+
+    expect(await errorBody(toMarket(100_000, 'gw:bm-named'))).toMatchObject({
+      statusCode: 400,
+      message:
+        "Filialning Asosiy kartasida yetarli mablag' yo'q! Mavjud: 50000 so'm, so'ralgan: 100000 so'm",
+    });
+    await assertUntouched();
+    expect(advances()).toEqual([]);
+
+    await toMarket(50_000, 'gw:bm-named-ok');
+    expect((await box(BRANCH, Cashbox_type.BRANCH)).card).toBe(250_000);
+
+    branchDebt = true;
+    await toMarket(100_000, 'gw:bm-named-debt');
+    expect((await box(BRANCH, Cashbox_type.BRANCH)).card).toBe(150_000);
+    expect((await box(MARKET, Cashbox_type.FOR_MARKET)).balance).toBe(850_000);
+  });
+
   it('marketga qarzdan ortiq (market qarzga ishlamaydi) → 400, rollback', async () => {
     branchDebt = true;
     expect(await errorBody(toMarket(1_200_000, 'gw:bm-4'))).toMatchObject({

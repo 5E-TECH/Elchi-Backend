@@ -29,7 +29,10 @@ import {
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift, ShiftStatus } from './entities/shift.entity';
-import { applyCashboxCardSelection } from './cashbox-card/cashbox-card.service';
+import {
+  applyCashboxCardSelection,
+  sumNamedCardBalances,
+} from './cashbox-card/cashbox-card.service';
 import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
 import {
   aggregateExpenseReport,
@@ -5886,6 +5889,26 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         method,
         branchDebtEnabled,
       );
+      // Pul Asosiy kartadan chiqadi (hosila: karta bo'lagi − nomli kartalar).
+      // Jami karta yetsa ham pul nomli kartalarda bo'lsa Asosiy karta minusga
+      // tushardi — karta daftari buzilardi. Qarz rejimi o'chiq — qat'iy
+      // (oddiy filial → HQ da Asosiy karta tanlanganidagi tekshiruv bilan bir xil).
+      if (!branchDebtEnabled) {
+        const named = await sumNamedCardBalances(
+          manager,
+          String(branchCashbox.id),
+        );
+        const defaultCardAfter = FinanceServiceService.roundMoney(
+          Number(branchCashbox.balance_card) - named,
+        );
+        if (defaultCardAfter < 0) {
+          throw new BadRequestException(
+            `Filialning Asosiy kartasida yetarli mablag' yo'q! Mavjud: ${FinanceServiceService.roundMoney(
+              defaultCardAfter + amount,
+            )} so'm, so'ralgan: ${amount} so'm`,
+          );
+        }
+      }
       await manager.save(branchCashbox);
       const branchHistory = await manager.save(
         manager.create(CashboxHistory, {
