@@ -55,8 +55,11 @@ jobs:
       - name: OpenAPI spec is in sync
         run: |
           npm run openapi:generate
-          git diff --exit-code -- docs/frontend/openapi.json \
-            || { echo "::error::openapi.json is stale — run 'npm run openapi:generate' and commit the result."; exit 1; }
+          git diff --exit-code -- docs/frontend/openapi.json docs/public/carrier-openapi.json \
+            || { echo "::error::openapi.json / carrier-openapi.json is stale — run 'npm run openapi:generate' and commit the result."; exit 1; }
+          # Yangi (hali commit qilinmagan) fayl `git diff` da ko'rinmaydi.
+          git ls-files --error-unmatch docs/public/carrier-openapi.json >/dev/null \
+            || { echo "::error::docs/public/carrier-openapi.json is not committed — run 'npm run openapi:generate' and commit it."; exit 1; }
 
       # Staging (docs/ops/staging.md): the `deploy-staging` script in deploy.yml
       # is GENERATED from the production `deploy` script, and every service of

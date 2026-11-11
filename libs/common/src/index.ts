@@ -47,6 +47,7 @@ export * from './security/ssrf';
 export * from './security/user-summary';
 export * from './security/password-policy';
 export * from './security/temp-password';
+export * from './security/ip-allowlist-rule';
 
 export * from './filters/rpc-exception.filter';
 export * from './filters/all-exceptions.filter';
@@ -73,6 +74,7 @@ export * from './logistics/district-coverage';
 export * from './integration/status-catalog';
 export * from './integration/partner-money';
 export * from './integration/partner-markets';
+export * from './integration/carrier-error-codes';
 export * from './catalog/product-measure';
 export * from './catalog/product-code';
 export * from './catalog/warehouse';
