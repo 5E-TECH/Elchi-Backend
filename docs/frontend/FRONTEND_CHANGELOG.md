@@ -98,6 +98,19 @@ Frontend action items:
 - 🔧 Realtime `finance.shift.account_checked` (`late: true` bilan ham) — ochiq hisobot sahifasi
   `GET /finance/shift/:id/report` ni qayta o'qisin (AI natijasi keyin, shu hodisa bilan keladi).
 - 🟢 Menejer / registrator: tugma ko'rinmaydi (`can_upload_late: false`), holat va muddat ko'rinadi.
+### 2026-11-11 — Filialdan «Marketga o'tkazma»: filial pulni HQ'ga bermay marketga o'tkazgan (superadmin/admin)
+
+Deploy: api-gateway + finance-service (migratsiya yo'q). `openapi.json` yangilandi (`market_id`).
+
+- ✏️ `POST /finance/cashbox/payment/branch-to-main` — `payment_method: 'click_to_market'` + `market_id` (raqamli satr). Market yo'q → 400; `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`; `card_id` / `branch_card_id` → 400; `market_id` naqd / o'tkazma bilan → 400. Idempotency-Key — avvalgidek. Javob: `{ branch_cashbox, main_cashbox, market_cashbox, transfer_id }`, takroriy → `data.idempotent: true`.
+- 🟢 Pul: filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0, tarixda iz), market kassasi −X (HQ'ning marketga qarzi kamayadi). Filial «Kassa qarzga ishlaydi» o'chiq bo'lsa karta bo'lagi yetmasa 400 «Karta hisobida yetarli mablag' yo'q». Filial va asosiy kassada smena ochiq bo'lishi kerak (filial → HQ dagidek).
+- 🟢 Tarix qatori: `source_type = 'branch_to_main'`, `payment_method = 'click_to_market'` (filial va asosiy kassada), market kassasida `market_payment`. T6 tuzatish bu o'tkazmani qaytarmaydi (409 `unsupported_type`).
+- 🟢 Menejerning kuryer `click_to_market` backend yo'li o'zgarmagan.
+
+**Frontend (bajarildi, Elchi-Frontend `dilshodbek`):**
+- Filial (`type=branch`) kassa sahifasida superadmin/admin uchun «Marketga o'tkazma»: market majburiy, tasdiq oynasida market nomi, chek va karta maydoni yo'q.
+- Kuryer kassasida «Marketga o'tkazma» faqat superadmin/admin uchun; menejer o'z kuryeridan qabul qilganda faqat «Naqd» va «O'tkazma».
+- Tarixda `branch_to_main` + `click_to_market` → «Filialdan marketga o'tkazma» (uz/ru/en).
 
 ### 2026-11-11 — Filial kassasi qarzga ishlaydi: HQ filialdan qarzidan ortiq qabul qiladi
 

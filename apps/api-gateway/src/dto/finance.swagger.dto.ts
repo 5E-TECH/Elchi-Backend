@@ -1205,6 +1205,18 @@ export class PaymentBranchToMainRequestDto {
   @IsString()
   @Matches(/^\d+$/)
   branch_card_id?: string;
+
+  // (2026-11-11, Dilshod) «Marketga o'tkazma» — filial pulni HQ'ga bermay,
+  // to'g'ridan-to'g'ri marketga o'tkazgan.
+  @ApiPropertyOptional({
+    example: '2002',
+    description:
+      "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda chek (`receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`) va karta (`card_id` / `branch_card_id` → 400) yo'q. Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  market_id?: string;
 }
 
 export class MainCashboxFilterQueryDto {
