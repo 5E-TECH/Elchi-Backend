@@ -1,3 +1,4 @@
+import type { ShiftAccountPhotoStatus } from '@app/common';
 import { ShiftAccountAiStatus } from '../entities/shift-account-check.types';
 
 /**
@@ -195,6 +196,145 @@ export function isCommentRequired(input: {
     input.ai_status === ShiftAccountAiStatus.MISMATCH ||
     input.ai_entered_ok === false
   );
+}
+
+// ─────────────── BE-B: avto-yopilgan smenaga rasmni keyin yuklash ───────────────
+
+/**
+ * BE-B (ega 2026-11-10: «24 soat ichida keyin yuklash») — ASOSIY kassa
+ * smenasi AVTOMATIK yopilgach, superadmin / admin karta qoldig'i rasmini
+ * `closed_at` dan keyin shuncha vaqt ichida yuklay oladi.
+ */
+export const SHIFT_LATE_PHOTO_WINDOW_MS = 24 * 3600_000;
+
+const MAIN_CASHBOX_USER_ID = '0';
+
+/** Qoida uchun smena qatorining kerakli maydonlari. */
+export interface LatePhotoShiftSource {
+  status?: string | null;
+  cashbox_user_id?: string | number | null;
+  /** `auto` — jadval bo'yicha tizim yopgan (y8Tqm9Ap marker). */
+  close_reason?: string | null;
+  closed_at?: Date | string | null;
+}
+
+/** Rad etish sababi (kod `SHIFT_LATE_PHOTO_ERROR_CODES` ga mos keladi). */
+export type LatePhotoBlock = 'main_only' | 'not_auto_closed' | 'expired';
+
+const timeOf = (value: Date | string | null | undefined): number | null => {
+  if (value == null) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+};
+
+const nowMs = (now: Date | number): number =>
+  typeof now === 'number' ? now : now.getTime();
+
+export const isMainShift = (
+  shift: Pick<LatePhotoShiftSource, 'cashbox_user_id'>,
+): boolean =>
+  String(shift.cashbox_user_id ?? MAIN_CASHBOX_USER_ID) ===
+  MAIN_CASHBOX_USER_ID;
+
+/**
+ * Avtomatik yopilgan ASOSIY kassa smenasi: `status = closed`,
+ * `close_reason = 'auto'` (autoCloseShift — `closed_by_system = true`,
+ * `closed_by = NULL` bilan birga yoziladi) va `closed_at` bor.
+ */
+export function isAutoClosedMainShift(shift: LatePhotoShiftSource): boolean {
+  return (
+    isMainShift(shift) &&
+    shift.status === 'closed' &&
+    shift.close_reason === 'auto' &&
+    timeOf(shift.closed_at) !== null
+  );
+}
+
+/** Keyin yuklash muddati: avto-yopilgan MAIN smenada `closed_at + 24 soat`, aks holda null. */
+export function lateUploadDeadline(shift: LatePhotoShiftSource): Date | null {
+  if (!isAutoClosedMainShift(shift)) return null;
+  return new Date(
+    (timeOf(shift.closed_at) as number) + SHIFT_LATE_PHOTO_WINDOW_MS,
+  );
+}
+
+/**
+ * Keyin yuklash ruxsati — FAQAT qoida (rol gateway / FE'da; chek
+ * `can_reanalyze` naqshi). `null` — ruxsat; tartib endpoint guard'lari bilan
+ * bir xil: MAIN emas → `main_only`; ochiq / qo'lda yopilgan →
+ * `not_auto_closed`; `now > closed_at + 24 soat` → `expired`.
+ */
+export function latePhotoBlock(
+  shift: LatePhotoShiftSource,
+  now: Date | number,
+): LatePhotoBlock | null {
+  if (!isMainShift(shift)) return 'main_only';
+  const deadline = lateUploadDeadline(shift);
+  if (!deadline) return 'not_auto_closed';
+  return nowMs(now) > deadline.getTime() ? 'expired' : null;
+}
+
+/** Qator shu smenaga keyin yuklanishi mumkinmi (`can_upload_late`). */
+export const canUploadLate = (
+  shift: LatePhotoShiftSource,
+  now: Date | number,
+): boolean => latePhotoBlock(shift, now) === null;
+
+/**
+ * Hisobot qatorining `photo_status` (hisoblanadi, saqlanmaydi):
+ *   uploaded     — rasm kaliti bor;
+ *   pending      — rasm talab qilingan (`photo_required_snap`), yo'q va hali
+ *                  yuklash mumkin: smena OCHIQ (qoralama) yoki avto-yopilgan
+ *                  MAIN smenasining 24 soatlik oynasi ichida;
+ *   missing      — rasm talab qilingan, yo'q, oyna yopiq / yo'q;
+ *   not_required — rasm talab qilinmagan.
+ */
+export function shiftAccountPhotoStatus(
+  row: {
+    photo_file_key?: string | null;
+    photo_required_snap?: boolean | null;
+  },
+  shift: LatePhotoShiftSource,
+  now: Date | number,
+): ShiftAccountPhotoStatus {
+  if (row.photo_file_key) return 'uploaded';
+  if (!row.photo_required_snap) return 'not_required';
+  if (shift.status === 'open' || canUploadLate(shift, now)) return 'pending';
+  return 'missing';
+}
+
+/** Rasm smena yopilgandan KEYIN yuklangan (`late_uploaded`). */
+export function isLateUploaded(
+  row: { photo_uploaded_at?: Date | string | null },
+  shift: Pick<LatePhotoShiftSource, 'closed_at'>,
+): boolean {
+  const uploaded = timeOf(row.photo_uploaded_at);
+  const closed = timeOf(shift.closed_at);
+  return uploaded !== null && closed !== null && uploaded > closed;
+}
+
+/** Hisobot qatoriga qo'shiladigan BE-B maydonlari. */
+export function latePhotoFields(
+  row: {
+    photo_file_key?: string | null;
+    photo_required_snap?: boolean | null;
+    photo_uploaded_at?: Date | string | null;
+  },
+  shift: LatePhotoShiftSource,
+  now: Date | number,
+): {
+  photo_status: ShiftAccountPhotoStatus;
+  late_upload_deadline: string | null;
+  late_uploaded: boolean;
+  can_upload_late: boolean;
+} {
+  const deadline = lateUploadDeadline(shift);
+  return {
+    photo_status: shiftAccountPhotoStatus(row, shift, now),
+    late_upload_deadline: deadline ? deadline.toISOString() : null,
+    late_uploaded: isLateUploaded(row, shift),
+    can_upload_late: canUploadLate(shift, now),
+  };
 }
 
 /** Natijalar sarhisobi (hisobot / activity-log uchun). */

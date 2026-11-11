@@ -11137,6 +11137,60 @@
         ]
       }
     },
+    "/finance/shift/{shift_id}/accounts/{card_id}/late-photo": {
+      "post": {
+        "description": "Faqat superadmin / admin (boshqa rol — 403). Smena jadval bo'yicha AVTOMATIK yopilsa kassir skrinshot yuklay olmagan — `closed_at` dan keyin 24 soat ichida yuklanadi (ega 2026-11-10). Multipart: `photo` — jpeg / png / webp, ≤ 5 MB, magic-bytes, EXIF tozalanadi, shaxsiy (`POST /finance/shift/account-photo` bilan bir xil); `entered_balance` — MAJBURIY, ≥ 0; `comment` — ixtiyoriy, ≤ 1000, kiritilgan qoldiq snapshot'dan farq qilsa majburiy (400 ««<karta>»: farq bor yoki AI natijasi mos emas — izoh majburiy»). Xatolar (`code`): smena yo'q — 404 «Smena topilmadi»; ASOSIY kassa smenasi emas — 400 `SHIFT_LATE_PHOTO_MAIN_ONLY`; smena ochiq yoki qo'lda yopilgan — 409 `SHIFT_LATE_PHOTO_NOT_AUTO_CLOSED`; 24 soat o'tgan — 409 `SHIFT_LATE_PHOTO_EXPIRED` (`deadline` — ISO); smenada bu karta qatori yo'q — 404 `SHIFT_LATE_PHOTO_CARD_NOT_IN_SHIFT`. Rad etilsa yuklangan fayl o'chiriladi. Oyna ichida qayta yuklash mumkin — oxirgisi yutadi (oldingi KEYIN yuklangan rasm o'chiriladi, uning kechikkan AI natijasi e'tiborsiz; kassirning smena yopilishidan OLDINGI qoralama rasmi o'chirilmaydi — dalil sifatida saqlanadi, eski kaliti va AI qiymatlari activity-log'da). Natija: farq = `entered_balance` − avto-yopish paytidagi SNAPSHOT `expected_balance` (joriy balansdan qayta hisoblanmaydi), qator tasdiqlanadi (`confirmed_at`, `confirmed_by` = yuklovchi), AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`, aks holda `disabled`; realtime `finance.shift.account_checked` (`late: true`) — yuklashda va AI natijasida. Pul harakati YO'Q. Javob `data` — yangilangan karta qatori `GET /finance/shift/:id/report` → `accounts[]` shaklida (`photo_url`, `has_photo`, `photo_status`, `late_upload_deadline`, `late_uploaded`, `can_upload_late`, `ai_status`, `difference`, …). Activity-log: `finance.shift_late_photo_uploaded`.",
+        "operationId": "FinanceGatewayController_uploadShiftLatePhoto",
+        "parameters": [
+          {
+            "name": "shift_id",
+            "required": true,
+            "in": "path",
+            "description": "Smena ID si (avto-yopilgan)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "card_id",
+            "required": true,
+            "in": "path",
+            "description": "Kassa kartasi ID si (smena hisobotidagi qator)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ShiftLatePhotoSwaggerDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(BE-B) Avto-yopilgan ASOSIY kassa smenasiga karta qoldig'i rasmini keyin yuklash (24 soat ichida)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/finance/shift/settings": {
       "get": {
         "description": "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
@@ -11451,7 +11505,7 @@
     },
     "/finance/shift/{id}/report": {
       "get": {
-        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. (BE-B) Har karta qatorida: `photo_status` (not_required | uploaded | pending | missing — `pending`: rasm talab qilingan, yo'q, hali yuklash mumkin: smena ochiq yoki avto-yopilgan ASOSIY kassa smenasining 24 soatlik oynasi ichida; `missing`: oyna yopiq), `late_upload_deadline` (ISO, avto-yopilgan ASOSIY smenada `closed_at + 24 soat`, aks holda null), `late_uploaded` (rasm smena yopilgandan keyin yuklangan), `can_upload_late` (avto-yopilgan ASOSIY smena + oyna ichida VA so'rovchi superadmin / admin — `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` tugmasi). `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
         "operationId": "FinanceGatewayController_shiftReport",
         "parameters": [
           {
@@ -30596,6 +30650,30 @@
         },
         "required": [
           "card_id",
+          "photo"
+        ]
+      },
+      "ShiftLatePhotoSwaggerDto": {
+        "type": "object",
+        "properties": {
+          "entered_balance": {
+            "type": "number",
+            "example": 1250000,
+            "description": "Karta qoldig'i (so'm), MAJBURIY, ≥ 0. Farq = shu qiymat − avto-yopish paytidagi snapshot `expected_balance`"
+          },
+          "comment": {
+            "type": "string",
+            "example": "Kassir yuklamagan — bank ilovasidan olindi",
+            "description": "Izoh (≤ 1000). Kiritilgan qoldiq snapshot'dan farq qilsa MAJBURIY (yopishdagi qoida)"
+          },
+          "photo": {
+            "type": "string",
+            "format": "binary",
+            "description": "Qoldiq skrinshoti: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)"
+          }
+        },
+        "required": [
+          "entered_balance",
           "photo"
         ]
       },

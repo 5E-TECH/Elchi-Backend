@@ -671,7 +671,27 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   list never bypasses the MAIN requirement). Rollback hazard: pre-BE-A finance
   code applies `shift.account_check.enabled` globally (branches too); pair a
   code rollback with `migration:revert` of 215 or PATCH
-  account_check_enabled=false first. Flow: gateway `POST /finance/shift/account-photo`
+  account_check_enabled=false first. BE-B (2026-11-10, no migration): on an
+  AUTO-closed MAIN shift (`close_reason = 'auto'`) SA/ADMIN may upload a card
+  photo within 24 h of `closed_at` (`SHIFT_LATE_PHOTO_WINDOW_MS`) via
+  `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` →
+  `finance.shift.account_check.late_photo` (row FOR UPDATE: entered, difference
+  vs the auto-close SNAPSHOT `expected_balance`, confirmed_at/by = uploader,
+  new `ai_request_id`, realtime `finance.shift.account_checked` + `late: true`;
+  codes `SHIFT_LATE_PHOTO_{MAIN_ONLY,NOT_AUTO_CLOSED,EXPIRED,CARD_NOT_IN_SHIFT}`
+  in libs/common), and every report row gets computed `photo_status` /
+  `late_upload_deadline` / `late_uploaded` / `can_upload_late` (rules file;
+  gateway ANDs the latter with SA/ADMIN). A cashier's pre-close draft photo
+  replaced by a late upload is evidence: its file is never deleted
+  (`previous_photo_file_key` is returned — and deleted by the gateway — only
+  for a superseded LATE upload); old key + AI readings go to the activity-log
+  `old_value` (no `ai_raw`), metadata `replaced_photo_key` /
+  `kept_pre_close_photo`. The cashier's pre-close draft `comment` never
+  satisfies the late "difference ≠ 0 → comment" rule and is replaced (kept in
+  `old_value.comment`); only an earlier LATE upload's comment carries over
+  when a re-upload omits it. `recordAtAutoClose` also re-snapshots draft rows of
+  cards archived mid-shift (expected = the card's stored `balance` at close —
+  0 only for a deleted card; `not_required`). Flow: gateway `POST /finance/shift/account-photo`
   (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
   IPTC/text chunks, file-service folder `shift-check`, private, signed URL
   300 s) → `finance.shift.account_check.attach_photo` (draft row, expected
@@ -694,7 +714,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   {get,update}` (`GET|PATCH /finance/shift/settings`; PATCH SUPERADMIN only).
   Activity-log: `finance.shift_settings_updated`,
   `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
-  shift close metadata `accounts`.
+  `finance.shift_late_photo_uploaded` (BE-B), shift close metadata `accounts`.
 - **«Kun tartibi» — shift auto-OPEN + late alert (2026-11-11, migr
   `1716000000216`):** `shifts.opened_by` nullable + `opened_by_system`
   (CHECK `opened_by IS NOT NULL OR opened_by_system`), `shift_schedule_claims.
