@@ -1208,6 +1208,15 @@ export class OrderSettlementService {
      * Kaskad va sof-nol yopish bermaydi — ular kassa to'lovi emas.
      */
     unapplied?: { level: SettlementLevel; dedupEpoch: string };
+    /**
+     * (2026-11-11) Kuryer qoldig'ining filiali — FAQAT kuryerda hech bir
+     * daftar qatori bo'lmasa (yangi kuryer oldindan pul topshirgan).
+     * Odatda filial kuryerning so'nggi qatoridan olinadi; qator yo'q bo'lsa
+     * qoldiq `branch_id` NULL qolib, «HQ kuryeri qoldig'i» deb kompaniya
+     * holatidan ayirilardi — naqd esa filial kassasida. Finance pul qabul
+     * qilgan kassadan beradi (filial id; HQ — null).
+     */
+    carryBranchHint?: string | null;
   }): Promise<{
     settled_order_ids: string[];
     allocated: number;
@@ -1483,6 +1492,8 @@ export class OrderSettlementService {
             }));
           if (sample) {
             carryBranchId = sample.branch_id ? String(sample.branch_id) : null;
+          } else if (params.carryBranchHint !== undefined) {
+            carryBranchId = params.carryBranchHint;
           }
         }
         await carryRepo.update(
@@ -1791,6 +1802,26 @@ export class OrderSettlementService {
   }
 
   /**
+   * (2026-11-11) `carry_branch_id` — faqat `courier_to_branch` da va raqamli
+   * id yoki `null` (HQ) bo'lsa; boshqa holatda `undefined` (eski xulq —
+   * maslahat yo'q, eski outbox qatorlari ham shunday).
+   */
+  private parseCarryBranchHint(data: {
+    level?: string;
+    carry_branch_id?: string | null;
+  }): string | null | undefined {
+    if (data?.level !== 'courier_to_branch' || !('carry_branch_id' in data)) {
+      return undefined;
+    }
+    const raw = data.carry_branch_id;
+    if (raw === null) {
+      return null;
+    }
+    const value = String(raw ?? '').trim();
+    return /^\d+$/.test(value) ? value : undefined;
+  }
+
+  /**
    * Advance the per-order FIFO settlement ledger WITHOUT posting any cashbox leg.
    * The production cash path (finance.cashbox.payment_courier/branch_to_main/
    * market) already moves the cashbox balances; this keeps order_settlement in
@@ -1806,6 +1837,8 @@ export class OrderSettlementService {
     amount: number;
     requester_id?: string;
     request_id?: string;
+    /** (2026-11-11) `runFifoSettlement.carryBranchHint` — faqat courier_to_branch. */
+    carry_branch_id?: string | null;
   }) {
     const requesterId = String(data?.requester_id ?? 'system');
     const matchValue = String(data?.match_value ?? '').trim();
@@ -1882,6 +1915,7 @@ export class OrderSettlementService {
           level: data.level,
           dedupEpoch: token || `no-token:${randomUUID()}`,
         },
+        carryBranchHint: this.parseCarryBranchHint(data),
       });
     } catch (error) {
       // M8: parallel ishga tushgan ikkinchi nusxa — birinchisi commit bo'ldi.

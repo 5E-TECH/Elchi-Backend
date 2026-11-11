@@ -79,32 +79,36 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
    */
   let rows: { a: OrderSettlement; b: OrderSettlement };
   let seq = 0;
+  const make = async (
+    courier: number,
+    market: number,
+    courierId: string = COURIER,
+  ) => {
+    seq += 1;
+    const saved = await db.getRepository(OrderSettlement).save(
+      db.getRepository(OrderSettlement).create({
+        order_id: String(5000 + seq),
+        courier_id: courierId,
+        branch_id: BRANCH,
+        market_id: MARKET,
+        courier_amount: courier,
+        branch_amount: courier,
+        market_amount: market,
+        status: SettlementStatus.PENDING,
+      }),
+    );
+    // createdAt tartibi aniq bo'lsin (FIFO: A — eng eski).
+    await db.query(
+      `UPDATE "${schema}".order_settlement SET "createdAt" = now() + ($1 || ' seconds')::interval WHERE id = $2`,
+      [String(seq), saved.id],
+    );
+    return saved;
+  };
   beforeEach(async () => {
     await db.query(
       `TRUNCATE "${schema}".order_settlement, "${schema}".order_settlement_carry,
         "${schema}".idempotency_keys RESTART IDENTITY`,
     );
-    const make = async (courier: number, market: number) => {
-      seq += 1;
-      const saved = await db.getRepository(OrderSettlement).save(
-        db.getRepository(OrderSettlement).create({
-          order_id: String(5000 + seq),
-          courier_id: COURIER,
-          branch_id: BRANCH,
-          market_id: MARKET,
-          courier_amount: courier,
-          branch_amount: courier,
-          market_amount: market,
-          status: SettlementStatus.PENDING,
-        }),
-      );
-      // createdAt tartibi aniq bo'lsin (FIFO: A — eng eski).
-      await db.query(
-        `UPDATE "${schema}".order_settlement SET "createdAt" = now() + ($1 || ' seconds')::interval WHERE id = $2`,
-        [String(seq), saved.id],
-      );
-      return saved;
-    };
     rows = {
       a: await make(300_000, 270_000),
       b: await make(200_000, 180_000),
@@ -300,6 +304,84 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       await marketPaymentFromBranch(270_000, 'gw:mp-3');
       await marketPaymentFromBranch(270_000, 'gw:mp-3');
       await expectInvariant(230_000, 0);
+    });
+  });
+  describe('(2026-11-11) Kuryer avansi — «kassa qarzga ishlaydi» yoqilgan kuryer', () => {
+    /** Finance kuryer to'lovi (menejer yo'li) — `carry_branch_id` bilan. */
+    const courierPaysToBranch = (
+      courierId: string,
+      amount: number,
+      token: string,
+      carryBranchId: string | null = BRANCH,
+    ) =>
+      service.advanceSettlement({
+        level: 'courier_to_branch',
+        match_value: courierId,
+        amount,
+        request_id: token,
+        requester_id: '15001',
+        carry_branch_id: carryBranchId,
+      });
+
+    it('⭐ qarzdan ortiq to`lov — ortig`i qoldiq; keyingi sotuv va to`lov uni yopadi', async () => {
+      // Qarz 500 000, kuryer 600 000 topshiradi (100 000 oldindan).
+      await courierPaysToBranch(COURIER, 600_000, 'gw:adv-1');
+      await expectInvariant(600_000, -100_000);
+      expect(await statusOf(rows.a)).toBe(SettlementStatus.COURIER_SETTLED);
+      expect(await statusOf(rows.b)).toBe(SettlementStatus.COURIER_SETTLED);
+      // Avans kompaniya holatini o'zgartirmaydi (naqd filialda, kuryerga qarz).
+      expect((await companySummary()).chain_receivable).toBe(500_000);
+
+      // Yangi sotuv 150 000 — avans 100 000 ni hisobga oladi.
+      const c = await make(150_000, 130_000);
+      await expectInvariant(600_000, 50_000);
+
+      // Kuryer qolgan 50 000 ni topshiradi — C yopiladi, qoldiq 0.
+      await courierPaysToBranch(COURIER, 50_000, 'gw:adv-2');
+      await expectInvariant(650_000, 0);
+      expect(await statusOf(c)).toBe(SettlementStatus.COURIER_SETTLED);
+      const carries = await db.getRepository(OrderSettlementCarry).find();
+      expect(carries.every((row) => Number(row.amount) === 0)).toBe(true);
+    });
+
+    it('⭐ yangi kuryer (daftarda qatori yo`q) — avans filialniki, HQ kuryeri deb olinmaydi', async () => {
+      const before = (await companySummary()).chain_receivable;
+      await courierPaysToBranch('310', 200_000, 'gw:adv-3');
+
+      const carry = await db
+        .getRepository(OrderSettlementCarry)
+        .findOneByOrFail({ level: 'courier_to_branch', party_id: '310' });
+      expect(carry).toMatchObject({ branch_id: BRANCH });
+      expect(Number(carry.amount)).toBe(200_000);
+      // Kompaniya holati o'zgarmaydi (avvalgi xato: −200 000).
+      expect((await companySummary()).chain_receivable).toBe(before);
+      // Kuryer qarzi −200 000 (filial kassasida avans).
+      const summary = (
+        (await service.getBranchSettlementSummary({
+          branch_id: BRANCH,
+          courier_ids: ['310'],
+        })) as { data: { courier_receivable: number } }
+      ).data;
+      expect(summary.courier_receivable).toBe(-200_000);
+    });
+
+    it('maslahatsiz (eski outbox qatori) — eski xulq: HQ kuryeri qoldig`i', async () => {
+      const before = (await companySummary()).chain_receivable;
+      // `carry_branch_id` umuman yo'q — eski finance payload'i.
+      await advance('courier_to_branch', '311', 200_000, 'gw:adv-4');
+      const carry = await db
+        .getRepository(OrderSettlementCarry)
+        .findOneByOrFail({ level: 'courier_to_branch', party_id: '311' });
+      expect(carry.branch_id).toBeNull();
+      expect((await companySummary()).chain_receivable).toBe(before - 200_000);
+    });
+
+    it('qatori bor kuryerda maslahat e`tiborsiz — filial qatordan olinadi', async () => {
+      await courierPaysToBranch(COURIER, 600_000, 'gw:adv-5', '99');
+      const carry = await db
+        .getRepository(OrderSettlementCarry)
+        .findOneByOrFail({ level: 'courier_to_branch', party_id: COURIER });
+      expect(carry.branch_id).toBe(BRANCH);
     });
   });
 });
