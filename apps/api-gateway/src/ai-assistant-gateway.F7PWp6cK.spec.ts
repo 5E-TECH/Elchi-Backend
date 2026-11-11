@@ -178,6 +178,30 @@ describe('AiAssistantGatewayController (F7PWp6cK)', () => {
     });
   });
 
+  describe('BE-D: tool endpointi yuboradigan RMQ buyrug‘i (`cmd`) haqiqiy', () => {
+    const controllers: Record<string, { prototype: object }> = {
+      FinanceGatewayController,
+      AnalyticsGatewayController,
+      BranchGatewayController,
+    };
+    it.each(
+      AI_ASSISTANT_TOOL_NAMES.flatMap((tool) =>
+        AI_ASSISTANT_TOOL_ENDPOINTS[tool].map(
+          (ep) => [tool, ep.route, ep] as const,
+        ),
+      ),
+    )('%s → %s', (_tool, _route, ep) => {
+      const handler = Object.getOwnPropertyDescriptor(
+        controllers[ep.controller].prototype,
+        ep.handler,
+      )?.value as ((...args: unknown[]) => unknown) | undefined;
+      expect(handler).toBeDefined();
+      // Endpoint handler'i aynan shu buyruqni yuboradi — yordamchi API
+      // o'qiydigan narsadan boshqasini o'qimaydi.
+      expect(String(handler)).toContain(`'${ep.cmd}'`);
+    });
+  });
+
   describe('POST /ai/assistant/messages', () => {
     it.each([
       [

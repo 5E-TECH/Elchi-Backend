@@ -1517,4 +1517,74 @@ describe('8OYPuz7J — last_closed, smena ro`yxati filtri/saralashi, xodim ismla
     // Bo'sh sahifa — identity'ga so'rov yo'q.
     expect(rmqSend).not.toHaveBeenCalled();
   });
+
+  describe('F7PWp6cK (BE-D, D1) — findAllShifts sana filtri: Toshkent kuni, ikki chet ham kiradi', () => {
+    /** `where.opened_at` FindOperator → { type, value }. */
+    const openedAtOf = async (dto: Record<string, unknown>) => {
+      const env = makeEnv({});
+      env.shiftRepo.findAndCount = jest.fn().mockResolvedValue([[], 0]);
+      await env.service.findAllShifts(dto);
+      const op = env.shiftRepo.findAndCount.mock.calls[0][0].where.opened_at;
+      return op ? { type: op.type, value: op.value } : undefined;
+    };
+
+    it("bitta kun ('YYYY-MM-DD' = 'YYYY-MM-DD') — butun Toshkent kuni 00:00:00.000 … 23:59:59.999 (+05:00)", async () => {
+      expect(
+        await openedAtOf({ from_date: '2026-10-01', to_date: '2026-10-01' }),
+      ).toEqual({
+        type: 'between',
+        value: [
+          new Date('2026-09-30T19:00:00.000Z'),
+          new Date('2026-10-01T18:59:59.999Z'),
+        ],
+      });
+    });
+
+    it('oraliq — `to` kuni to‘liq kiradi (ilgari to 05:00 Toshkentda kesilardi)', async () => {
+      expect(
+        await openedAtOf({ from_date: '2026-10-01', to_date: '2026-10-07' }),
+      ).toEqual({
+        type: 'between',
+        value: [
+          new Date('2026-09-30T19:00:00.000Z'),
+          new Date('2026-10-07T18:59:59.999Z'),
+        ],
+      });
+    });
+
+    it('faqat from_date / faqat to_date — mos Toshkent kun chegarasi', async () => {
+      expect(await openedAtOf({ from_date: '2026-10-01' })).toEqual({
+        type: 'moreThanOrEqual',
+        value: new Date('2026-09-30T19:00:00.000Z'),
+      });
+      expect(await openedAtOf({ to_date: '2026-10-01' })).toEqual({
+        type: 'lessThanOrEqual',
+        value: new Date('2026-10-01T18:59:59.999Z'),
+      });
+    });
+
+    it('to‘liq ISO vaqt — o‘zgarishsiz (aniq lahza, orqaga moslik)', async () => {
+      expect(
+        await openedAtOf({
+          from_date: '2026-03-01T00:00:00Z',
+          to_date: '2026-03-07T23:59:59Z',
+        }),
+      ).toEqual({
+        type: 'between',
+        value: [
+          new Date('2026-03-01T00:00:00.000Z'),
+          new Date('2026-03-07T23:59:59.000Z'),
+        ],
+      });
+    });
+
+    it('yaroqsiz sana — avvalgidek 400, so‘rov YO‘Q', async () => {
+      const env = makeEnv({});
+      env.shiftRepo.findAndCount = jest.fn();
+      await expect(
+        env.service.findAllShifts({ from_date: 'kecha' } as any),
+      ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      expect(env.shiftRepo.findAndCount).not.toHaveBeenCalled();
+    });
+  });
 });

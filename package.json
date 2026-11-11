@@ -60,6 +60,7 @@
     "db:sync:sato": "node -r ts-node/register -r tsconfig-paths/register scripts/sync-logistics-sato.ts",
     "openapi:generate": "node -r ts-node/register -r tsconfig-paths/register scripts/generate-openapi.ts",
     "ai:eval": "node -r ts-node/register -r tsconfig-paths/register scripts/ai-eval.ts",
+    "ai:tc": "node scripts/ai/assistant-tc.mjs",
     "audit:frontend": "node scripts/audit-frontend-coverage.mjs",
     "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d typeorm.config.ts",
     "infra:up": "docker compose up rabbitmq postgres -d",

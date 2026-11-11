@@ -1009,7 +1009,8 @@ export const aiValidationSchema = Joi.object({
     .max(32000)
     .empty('')
     .default(8000),
-  // Foydalanuvchi kunlik savol limiti (Toshkent kuni) — ⚠️ ega tasdig'i kutilmoqda.
+  // Foydalanuvchi kunlik savol limiti (Toshkent kuni) — 100, ega tasdiqlagan
+  // (T2 TZ RXST7Hm4 B4 / xUc6JRHc: «Kunlik 100 savol qoladi»).
   AI_ASSISTANT_DAILY_LIMIT: Joi.number()
     .integer()
     .min(0)

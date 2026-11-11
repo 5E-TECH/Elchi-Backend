@@ -83,9 +83,10 @@ function normRoles(roles: unknown): string[] {
  * rollar — rad. Funksiya sukut bo'yicha O'CHIQ (`AI_ASSISTANT_ENABLED`).
  *
  * Limitlar: foydalanuvchi kunlik savol limiti (Toshkent kuni, sukut 100 —
- * ⚠️ ega tasdig'i kutilmoqda), yordamchining kunlik USD shifti
- * (`ai_usage_log.feature='assistant'`), global kunlik shift (ClaudeService
- * budget guard, har qadamda), xabar boshiga token/USD shifti, 6 qadam,
+ * ega tasdiqlagan: T2 TZ RXST7Hm4 B4 / xUc6JRHc «Kunlik 100 savol qoladi»),
+ * yordamchining kunlik USD shifti (`ai_usage_log.feature='assistant'`),
+ * global kunlik shift (ClaudeService budget guard, har qadamda), xabar
+ * boshiga token/USD shifti, 6 qadam,
  * foydalanuvchi bo'yicha bir vaqtda bitta savol, suhbat uzunligi.
  *
  * Audit: savol, har qadam (model, token, narx), har tool chaqiruvi (nom,

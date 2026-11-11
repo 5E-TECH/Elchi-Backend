@@ -7,7 +7,10 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { ROLES_KEY } from './auth/roles.decorator';
 import { FinanceGatewayController } from './finance-gateway.controller';
-import { CLOSING_BALANCE_CASH_REQUIRED_MESSAGE } from './dto/finance.swagger.dto';
+import {
+  CLOSING_BALANCE_CASH_REQUIRED_MESSAGE,
+  FindShiftQueryDto,
+} from './dto/finance.swagger.dto';
 
 /**
  * 4-tur, A guruhi (2026-10-14) — gateway kontrakti:
@@ -22,9 +25,8 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
     send: jest.fn(() => of({ statusCode: 200, data: { ok: true } })),
   };
   const branch = {
-    send: jest.fn(
-      (): Observable<{ statusCode?: number; data: unknown }> =>
-        of({ statusCode: 200, data: { id: '13' } }),
+    send: jest.fn((): Observable<{ statusCode?: number; data: unknown }> =>
+      of({ statusCode: 200, data: { id: '13' } }),
     ),
   };
   const SUPERADMIN = { sub: '9', roles: ['superadmin'] };
@@ -360,6 +362,67 @@ describe('A4 — kassa/smena gateway kontrakti', () => {
 
       expect(result.status).toBe(403);
       expect(finance.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('F7PWp6cK (BE-D, D1) — GET /finance/shift sana filtri: Toshkent kuni', () => {
+    /** @nestjs/swagger `DECORATORS.API_PARAMETERS` / `API_MODEL_PROPERTIES`. */
+    const API_PARAMETERS = 'swagger/apiParameters';
+    const API_MODEL_PROPERTIES = 'swagger/apiModelProperties';
+
+    it('from_date/to_date (YYYY-MM-DD va ISO) finance ga O‘ZGARISHSIZ uzatiladi — talqin finance’da', async () => {
+      const result = await request(app.getHttpServer()).get(
+        '/finance/shift?from_date=2026-10-01&to_date=2026-10-01',
+      );
+      expect(result.status).toBe(200);
+      expect(lastPayload()).toEqual({
+        from_date: '2026-10-01',
+        to_date: '2026-10-01',
+      });
+
+      await request(app.getHttpServer()).get(
+        '/finance/shift?from_date=2026-03-01T00:00:00Z&to_date=2026-03-07T23:59:59Z',
+      );
+      expect(lastPayload()).toEqual({
+        from_date: '2026-03-01T00:00:00Z',
+        to_date: '2026-03-07T23:59:59Z',
+      });
+    });
+
+    it('swagger: from_date/to_date — Toshkent kuni, ikki chet ham kiradi; ISO — aniq lahza', () => {
+      const handler = Object.getOwnPropertyDescriptor(
+        FinanceGatewayController.prototype,
+        'findShifts',
+      )?.value as object;
+      const params = (
+        Reflect.getMetadata(API_PARAMETERS, handler) as Array<{
+          name: string;
+          description?: string;
+          example?: unknown;
+        }>
+      ).filter((p) => p.name === 'from_date' || p.name === 'to_date');
+      expect(
+        params
+          .map((p) => [p.name, p.example])
+          .sort(([a], [b]) => String(a).localeCompare(String(b))),
+      ).toEqual([
+        ['from_date', '2026-10-01'],
+        ['to_date', '2026-10-07'],
+      ]);
+      for (const p of params) {
+        expect(p.description).toMatch(/Toshkent kunining/);
+        expect(p.description).toMatch(/kun kiradi/);
+        expect(p.description).toMatch(/ISO — aniq lahza/);
+      }
+      for (const key of ['from_date', 'to_date']) {
+        const meta = Reflect.getMetadata(
+          API_MODEL_PROPERTIES,
+          FindShiftQueryDto.prototype,
+          key,
+        ) as { description?: string; example?: unknown };
+        expect(meta.description).toMatch(/Toshkent kunining/);
+        expect(meta.example).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      }
     });
   });
 

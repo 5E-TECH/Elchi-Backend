@@ -58,16 +58,27 @@ export const AI_ASSISTANT_READ_PATTERNS: ReadonlyArray<{
   { client: 'ANALYTICS', cmd: 'analytics.dashboard' },
   { client: 'BRANCH', cmd: 'branch.find_all' },
   { client: 'FINANCE', cmd: 'finance.receipt_checks.summary' },
+  // BE-D (D5) — davr jami summalari SQL SUM bilan (1000 qator chegarasiz):
+  // get_cashbox_history, get_expenses_by_category.
+  { client: 'FINANCE', cmd: 'finance.history.daily' },
 ]);
 
 /**
- * Har tool'ga MOS mavjud HTTP endpointlar (gateway controller sinfi + metod).
+ * Har tool'ga MOS mavjud HTTP endpointlar (gateway controller sinfi + metod)
+ * va endpoint yuboradigan RMQ buyrug'i (`cmd`).
  * Tool ruxsati = shu endpointlar `@Roles` ning KESISHMASI ∩ {superadmin, admin}.
+ * Tool FAQAT o'z endpointlari `cmd` larini o'qiydi; oq ro'yxat
+ * (`AI_ASSISTANT_READ_PATTERNS`) = barcha `cmd` lar birlashmasi (spec tekshiradi).
  */
 export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
   Record<
     AiAssistantToolName,
-    ReadonlyArray<{ route: string; controller: string; handler: string }>
+    ReadonlyArray<{
+      route: string;
+      controller: string;
+      handler: string;
+      cmd: string;
+    }>
   >
 > = Object.freeze({
   get_cash_position: [
@@ -75,11 +86,13 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/cashbox/financial-balanse',
       controller: 'FinanceGatewayController',
       handler: 'financialBalance',
+      cmd: 'finance.cashbox.financial_balance',
     },
     {
       route: 'GET /finance/cashbox/cards',
       controller: 'FinanceGatewayController',
       handler: 'listCashboxCards',
+      cmd: 'finance.cashbox.cards.list',
     },
   ],
   get_cashbox_history: [
@@ -87,6 +100,13 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/history',
       controller: 'FinanceGatewayController',
       handler: 'findHistory',
+      cmd: 'finance.history.find_all',
+    },
+    {
+      route: 'GET /finance/history/daily',
+      controller: 'FinanceGatewayController',
+      handler: 'historyDaily',
+      cmd: 'finance.history.daily',
     },
   ],
   get_courier_debts: [
@@ -94,6 +114,7 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/cashbox/financial-balanse',
       controller: 'FinanceGatewayController',
       handler: 'financialBalance',
+      cmd: 'finance.cashbox.financial_balance',
     },
   ],
   get_market_payables: [
@@ -101,6 +122,7 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/cashbox/financial-balanse',
       controller: 'FinanceGatewayController',
       handler: 'financialBalance',
+      cmd: 'finance.cashbox.financial_balance',
     },
   ],
   get_branch_settlements: [
@@ -108,11 +130,13 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/cashbox/financial-balanse',
       controller: 'FinanceGatewayController',
       handler: 'financialBalance',
+      cmd: 'finance.cashbox.financial_balance',
     },
     {
       route: 'GET /branches',
       controller: 'BranchGatewayController',
       handler: 'findAllBranches',
+      cmd: 'branch.find_all',
     },
   ],
   get_shift_summaries: [
@@ -120,6 +144,7 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/shift',
       controller: 'FinanceGatewayController',
       handler: 'findShifts',
+      cmd: 'finance.shift.find_all',
     },
   ],
   get_expenses_by_category: [
@@ -127,11 +152,19 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/history',
       controller: 'FinanceGatewayController',
       handler: 'findHistory',
+      cmd: 'finance.history.find_all',
+    },
+    {
+      route: 'GET /finance/history/daily',
+      controller: 'FinanceGatewayController',
+      handler: 'historyDaily',
+      cmd: 'finance.history.daily',
     },
     {
       route: 'GET /finance/cashbox/expense-categories',
       controller: 'FinanceGatewayController',
       handler: 'listCashboxExpenseCategories',
+      cmd: 'finance.cashbox.expense_categories.list',
     },
   ],
   get_revenue_profit: [
@@ -139,11 +172,13 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /analytics/revenue',
       controller: 'AnalyticsGatewayController',
       handler: 'getRevenue',
+      cmd: 'analytics.revenue',
     },
     {
       route: 'GET /finance/financial-balance/analytics',
       controller: 'FinanceGatewayController',
       handler: 'financialBalanceAnalytics',
+      cmd: 'finance.financial_balance.analytics',
     },
   ],
   get_order_flow: [
@@ -151,6 +186,7 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /analytics/dashboard',
       controller: 'AnalyticsGatewayController',
       handler: 'getDashboard',
+      cmd: 'analytics.dashboard',
     },
   ],
   get_receipt_checks: [
@@ -158,6 +194,7 @@ export const AI_ASSISTANT_TOOL_ENDPOINTS: Readonly<
       route: 'GET /finance/receipts/summary',
       controller: 'FinanceGatewayController',
       handler: 'receiptChecksSummary',
+      cmd: 'finance.receipt_checks.summary',
     },
   ],
 });
