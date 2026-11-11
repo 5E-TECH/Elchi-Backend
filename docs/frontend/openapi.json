@@ -33688,6 +33688,11 @@
               }
             ],
             "description": "Hamkor filial har sotilgan buyurtmadan olib qoladigan summa (so'm). Faqat ownership='partner' da va 0 dan katta bo'lishi shart; 'owned' filialda 0 saqlanadi."
+          },
+          "cashbox_debt_enabled": {
+            "type": "boolean",
+            "example": false,
+            "description": "Filial kassasi qarzga ishlaydimi (sukut FALSE, faqat admin/superadmin). TRUE — HQ filialdan kassasidagi puldan ortiq qabul qila oladi: filial kassasi manfiyga tushadi, ortig'i HQ'ning filialga qarzi («HQ qarzi») bo'lib qoladi va keyingi sotuvlar uni yopadi; FALSE — ortiqcha qabul 400."
           }
         }
       },

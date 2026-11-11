@@ -1184,6 +1184,8 @@ export class ApiGatewayController {
           ? await this.findUserCashbox(branchId, Cashbox_type.BRANCH)
           : null;
         const payableToHq = Math.max(Number(branch?.berilishi_kerak ?? 0), 0);
+        // (2026-11-11) HQ'ning shu filialga qarzi («Kassa qarzga ishlaydi»).
+        const hqQarzi = Math.max(Number(branch?.hq_qarzi ?? 0), 0);
 
         return {
           ...manager,
@@ -1193,6 +1195,7 @@ export class ApiGatewayController {
           payable_to_hq: payableToHq,
           berilishi_kerak: payableToHq,
           olinishi_kerak: payableToHq,
+          hq_qarzi: hqQarzi,
         };
       }),
     );

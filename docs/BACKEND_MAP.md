@@ -791,6 +791,19 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   gate R6), idempotency on the branch leg, `branch_to_hq` (`<token>:b`) then
   `hq_to_market` (`<token>`). Both new shapes are NOT correctable (T6
   `classifyTransfer` requires MAIN).
+- **Branch cashbox debt (2026-11-11, migration `1716000000217`
+  `branch_schema.branches.cashbox_debt_enabled`, default false):**
+  `payment_branch_main` reads the flag via `branch.find_by_id` BEFORE the
+  transaction (RPC error / HQ / non-boolean → closed) and, when on, passes
+  `allowNegativeOverride` for the branch EXPENSE leg (cash or card bucket)
+  and `allow_negative_default` to `applyCashboxCardSelection` (explicit
+  Asosiy card may go negative; a NAMED card stays strict). The full amount is
+  enqueued as the `branch_to_hq` advance — the surplus stays as that carry,
+  so `branch_payable` goes negative (HQ owes the branch) and later sales close
+  it. Gateway keeps `berilishi_kerak = max(payable, 0)` and adds
+  `hq_qarzi = max(-payable, 0)` (manager settlement, payable-to-hq, all-info,
+  SA branch view, `GET /branches`, `GET /managers` list). Toggle:
+  `PATCH /branches/:id {cashbox_debt_enabled}` — SA/ADMIN only, not on HQ.
 - **Courier cashbox debt (2026-11-11, no migration — reuses
   `admins.cashbox_debt_enabled` from `1716000000207`):** `payment_courier`
   over-remit guard (amount > courier balance → 400) is skipped when identity

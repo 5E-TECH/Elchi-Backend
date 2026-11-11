@@ -1577,10 +1577,15 @@ export class FinanceGatewayController {
      * ketadi), shuning uchun ilgarigidek "to'langanini ayirish" kerak emas —
      * o'sha ayirish sana oynasiga bog'liq edi va noto'g'ri natija berardi.
      */
-    const berilishiKerak = Math.max(
-      Number(settlementSummary?.data?.branch_payable ?? 0),
-      0,
-    );
+    const branchPayable = Number(settlementSummary?.data?.branch_payable ?? 0);
+    const berilishiKerak = Math.max(branchPayable, 0);
+    /**
+     * (2026-11-11) HQ'ning filialga qarzi: «Kassa qarzga ishlaydi» yoqilgan
+     * filialdan HQ qarzidan ortiq qabul qilgan — ortig'i `branch_to_hq`
+     * qoldig'i, `branch_payable` manfiy. Menejer uchun «HQ'dan olinishi
+     * kerak»; keyingi sotuvlar uni o'zi yopadi.
+     */
+    const hqQarzi = Math.max(-branchPayable, 0);
 
     const branchToMainHistoryResponse = ownCashbox?.id
       ? await this.send<{
@@ -1613,6 +1618,7 @@ export class FinanceGatewayController {
       kassa,
       olinishi_kerak: olinishiKerak,
       berilishi_kerak: berilishiKerak,
+      hq_qarzi: hqQarzi,
       // Tanlangan davrda HQ'ga topshirilgan summa — ma'lumot uchun.
       hq_ga_tollangan: paidToHq,
       counterparty: 'HQ',
@@ -1634,6 +1640,7 @@ export class FinanceGatewayController {
     kassadagiSumma: unknown,
     settlement: {
       berilishi_kerak?: unknown;
+      hq_qarzi?: unknown;
       olinishi_kerak?: unknown;
       hq_ga_tollangan?: unknown;
       counterparty?: string;
@@ -1642,6 +1649,7 @@ export class FinanceGatewayController {
     return {
       kassadagi_summa: Number(kassadagiSumma ?? 0),
       berilishi_kerak: Number(settlement?.berilishi_kerak ?? 0),
+      hq_qarzi: Number(settlement?.hq_qarzi ?? 0),
       olinishi_kerak: Number(settlement?.olinishi_kerak ?? 0),
       hq_ga_tollangan: Number(settlement?.hq_ga_tollangan ?? 0),
       counterparty: settlement?.counterparty ?? 'HQ',
@@ -2741,6 +2749,8 @@ export class FinanceGatewayController {
         counterparty: settlement.counterparty,
         kassa: { cash, card, total: settlement.kassa },
         berilishi_kerak: settlement.berilishi_kerak,
+        // (2026-11-11) HQ'dan olinishi kerak (HQ ortiqcha qabul qilgan).
+        hq_qarzi: settlement.hq_qarzi,
         olinishi_kerak: settlement.olinishi_kerak,
         // j8qCkJhV — hisoblangan, lekin ilgari javobdan tashlab yuborilardi.
         hq_ga_tollangan: settlement.hq_ga_tollangan,
@@ -2766,6 +2776,8 @@ export class FinanceGatewayController {
       data: {
         counterparty: settlement.counterparty,
         berilishi_kerak: settlement.berilishi_kerak,
+        // (2026-11-11) HQ'dan olinishi kerak (HQ ortiqcha qabul qilgan).
+        hq_qarzi: settlement.hq_qarzi,
       },
     };
   }

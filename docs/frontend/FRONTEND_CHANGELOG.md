@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-11 — Filial kassasi qarzga ishlaydi: HQ filialdan qarzidan ortiq qabul qiladi
+
+Deploy: branch-service + finance-service + api-gateway. **Migratsiya `1716000000217`** (`branch_schema.branches.cashbox_debt_enabled boolean NOT NULL DEFAULT false` — hamma filial o'chiq, backfill yo'q).
+
+- 🆕 `PATCH /branches/:id` — `cashbox_debt_enabled: boolean` (faqat superadmin/admin; boshqa rol 403, boolean emas 400, HQ filialda `true` — 400). `GET /branches/:id` va `GET /branches` javobida ham bor (sukut `false`).
+- ✏️ `POST /finance/cashbox/payment/branch-to-main` — filialda yoqilgan bo'lsa HQ filial kassasidagidan **ortiq** summani qabul qiladi (masalan qarz 4 500 000, qabul 5 000 000): filial kassasi (naqd yoki karta tanlanmagan/Asosiy karta) manfiyga tushadi, ortig'i daftarda `branch_to_hq` qoldig'i — HQ filialga qarzdor; keyingi sotuvlar uni o'zi yopadi. Nomli karta baribir qat'iy (kartadagidan ortiq — 400). O'chiq bo'lsa — avvalgidek **400** «Naqd kassada yetarli mablag' yo'q» / «Karta hisobida yetarli mablag' yo'q».
+- 🆕 `hq_qarzi` (HQ'ning filialga qarzi, ≥ 0): `GET /branches` har filial qatorida, `GET /managers` (menejer qatorida), `GET /finance/cashbox/manager/settlement`, `GET /finance/cashbox/manager/payable-to-hq`, `GET /finance/cashbox/all-info` (menejer) va SA/admin filial kassasi ko'rinishi (`toBranchSettlementFields`). `berilishi_kerak` avvalgidek 0 dan pastga tushmaydi.
+
+**Frontend action items:**
+- 🔧 Filial tafsiloti (superadmin/admin): «Kassa qarzga ishlaydi» kaliti → `PATCH /branches/:id { cashbox_debt_enabled }`.
+- 🔧 HQ «Pul qabul qilish» (filialdan): yoqilgan filialda summa kassadagi bilan cheklanmasin; `hq_qarzi > 0` bo'lsa «HQ qarzi: N» ko'rsatilsin.
+- 🔧 Menejer kassasi: `hq_qarzi > 0` bo'lsa «HQ'dan olinishi kerak: N».
+
 ### 2026-11-11 — Kuryer kassasi qarzga ishlaydi: kuryerdan oldindan pul qabul qilish
 
 Deploy: identity-service + finance-service + order-service + api-gateway. **Migratsiya yo'q** (marketniki bilan bir xil ustun — `1716000000207`).

@@ -5447,6 +5447,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     receipt_policy?: { kind?: unknown };
     receipt_id?: unknown;
   }) {
+    // (2026-11-11) Filial kassasi qarzga ishlaydimi — tranzaksiya va
+    // qulflardan OLDIN o'qiladi (RPC qulf ichida kutmasin). Xato — yopiq.
+    const branchDebtEnabled = await this.isBranchCashboxDebtEnabled(
+      String(data.branch_id ?? ''),
+    );
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -5544,11 +5549,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      // (2026-11-11) «Kassa qarzga ishlaydi» yoqilgan filial: HQ kassadagidan
+      // ortiq qabul qila oladi — filial kassasi (naqd yoki Asosiy karta)
+      // manfiyga tushadi. Ortig'i `enqueueSettlementAdvance` da `branch_to_hq`
+      // qoldig'i bo'lib qoladi: filial qarzi manfiy = HQ filialga qarzdor,
+      // keyingi sotuvlar uni o'zi yopadi. Nomli karta baribir qat'iy
+      // (haqiqiy karta qoldig'idan ortiq chiqmaydi).
       this.updateBalancesByMethod(
         branchCashbox,
         Number(data.amount),
         Operation_type.EXPENSE,
         data.payment_method ?? PaymentMethod.CASH,
+        branchDebtEnabled,
       );
       // Zv3MLn0a — filial oyog'i: tanlangan filial kartasidan (yo'q — Asosiy).
       const branchCardId = await applyCashboxCardSelection(
@@ -5559,6 +5571,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           operation: Operation_type.EXPENSE,
           amount: Number(data.amount),
           payment_method: data.payment_method ?? PaymentMethod.CASH,
+          allow_negative_default: branchDebtEnabled,
         },
       );
       await queryRunner.manager.save(branchCashbox);
@@ -5808,6 +5821,39 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     throw new BadRequestException(
       `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
     );
+  }
+
+  /**
+   * (2026-11-11) Filial kassasi qarzga ishlaydimi (`branch_schema.branches.
+   * cashbox_debt_enabled`, mig 217). Client yo'q, id noto'g'ri, filial HQ yoki
+   * xato — yopiq (`false`): avvalgi qat'iy xulq.
+   */
+  private async isBranchCashboxDebtEnabled(branchId: string): Promise<boolean> {
+    if (!this.branchClient || !/^\d+$/.test(branchId)) return false;
+    try {
+      const response = await rmqSend<unknown>(
+        this.branchClient,
+        { cmd: 'branch.find_by_id' },
+        {
+          id: branchId,
+          requester: FinanceServiceService.SYSTEM_BRANCH_REQUESTER,
+        },
+        { timeoutMs: 3000, retries: 0 },
+      );
+      const branch = this.extractResponseData<{
+        type?: unknown;
+        cashbox_debt_enabled?: unknown;
+      }>(response);
+      return (
+        String(branch?.type ?? '').toUpperCase() !== 'HQ' &&
+        branch?.cashbox_debt_enabled === true
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Filial ${branchId} kassa qarzi sozlamasini o'qib bo'lmadi: ${(err as Error).message}`,
+      );
+      return false;
+    }
   }
 
   /**

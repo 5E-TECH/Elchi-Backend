@@ -408,6 +408,12 @@ export async function applyCashboxCardSelection(
     operation: Operation_type;
     amount: number;
     payment_method: PaymentMethod;
+    /**
+     * (2026-11-11) Filial «Kassa qarzga ishlaydi»: ANIQ tanlangan Asosiy karta
+     * (hosila balans) chiqimda manfiyga tushishi mumkin. Nomli karta — doim
+     * qat'iy.
+     */
+    allow_negative_default?: boolean;
   },
 ): Promise<string | null> {
   if (input.card_id === undefined || input.card_id === null) {
@@ -448,7 +454,10 @@ export async function applyCashboxCardSelection(
   }
   const amount = Number(input.amount);
   if (card.is_default) {
-    if (input.operation === Operation_type.EXPENSE) {
+    if (
+      input.operation === Operation_type.EXPENSE &&
+      !input.allow_negative_default
+    ) {
       const named = await sumNamedCardBalances(manager, String(cashbox.id));
       const after = round2(Number(cashbox.balance_card) - named);
       if (after < 0) {
