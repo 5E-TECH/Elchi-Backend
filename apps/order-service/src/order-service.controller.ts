@@ -2249,6 +2249,11 @@ export class OrderServiceController {
       startDate?: string;
       endDate?: string;
       all?: boolean;
+      /**
+       * Market operatori dashboardi (ega 2026-11-11): faqat shu operator
+       * (`orders.operator_id`) buyurtmalari. Yo'q — butun market.
+       */
+      operator_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -2258,6 +2263,7 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.all,
+        data.operator_id,
       ),
     );
   }

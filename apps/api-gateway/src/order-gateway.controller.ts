@@ -1859,10 +1859,12 @@ export class OrderGatewayController {
   }
 
   /**
-   * VRyloH62 — registrator/market operatori `operator` maydonini bo'sh
-   * qoldirsa (forma, bot, AI), buyurtmaga uning ISMI yoziladi (BeePost
+   * VRyloH62 — market operatori `operator` maydonini bo'sh qoldirsa (forma,
+   * bot, AI), buyurtmaga uning ISMI yoziladi (BeePost
    * `order.service.ts:362-365` kabi). Ilgari faqat `operator_id` yozilardi,
-   * ko'rinadigan `operator` matni bo'sh qolardi.
+   * ko'rinadigan `operator` matni bo'sh qolardi. Ega 2026-11-11: registrator
+   * operator EMAS — operator tanlamasa buyurtma operatorsiz qoladi, uning
+   * ismi ham yozilmaydi.
    *
    * Qaytaradi: to'ldiriladigan ism yoki `null` (to'ldirish kerak emas —
    * matn yozilgan, rol boshqa yoki ism olinmadi). Ism olinmasa buyurtma
@@ -1877,10 +1879,7 @@ export class OrderGatewayController {
     if (this.asStr(typed).trim()) {
       return null;
     }
-    if (
-      !roles.includes(RoleEnum.REGISTRATOR) &&
-      !roles.includes(RoleEnum.MARKET_OPERATOR)
-    ) {
+    if (!roles.includes(RoleEnum.MARKET_OPERATOR)) {
       return null;
     }
     if (preloaded !== undefined) {
@@ -2060,7 +2059,8 @@ export class OrderGatewayController {
    * takrorlanmaydi), filial esa rol bo'yicha `createOrderInternal` da
    * qo'yiladi. `region_id` — DB'dagi tuman yozuvidan. `operator` — FAQAT
    * matn; `operator_id` `createOrderInternal` da faqat ROLDAN qo'yiladi
-   * (MARKET → null, MARKET_OPERATOR/REGISTRATOR → sub), matndan HECH QACHON.
+   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null),
+   * matndan HECH QACHON.
    */
   private async createAiOrder(
     item: EligibleAiOrder,
@@ -2883,12 +2883,14 @@ export class OrderGatewayController {
               // inline mijozniki (bot, filial); mavjud mijozniki va viloyat —
               // order-service'da.
               district_id: orderCreateDistrictId(dto),
-              // Tekshirilgan tanlov; bo'lmasa — rol bo'yicha (registrator /
-              // market operatori — o'zi, qolganlar — null).
+              // Tekshirilgan tanlov; bo'lmasa — rol bo'yicha: market
+              // operatori — o'zi, qolganlar (market, registrator, admin…) —
+              // null. Ega 2026-11-11: registrator operator EMAS — tanlamasa
+              // buyurtma operatorsiz qoladi (ilgari registratorning o'zi
+              // `operator_id` bo'lib yozilardi).
               operator_id: chosenOperator
                 ? chosenOperator.id
-                : roles.includes(RoleEnum.REGISTRATOR) ||
-                    roles.includes(RoleEnum.MARKET_OPERATOR)
+                : roles.includes(RoleEnum.MARKET_OPERATOR)
                   ? req.user.sub
                   : null,
               // Filial xodimi — o'z filiali; SUPERADMIN/ADMIN — so'raganicha;

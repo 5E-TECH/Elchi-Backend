@@ -22,6 +22,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-11 — Operator dashboardi: o'z statistikasi + registrator operator emas
+
+Deploy: analytics-service + order-service + api-gateway. **Migratsiya yo'q.** Kontrakt (maydonlar) o'zgarmagan.
+
+- ✏️ `GET /analytics/dashboard` — **market_operator** uchun `myStat` (jami / sotilgan / bekor / jarayonda / sof
+  foyda / foiz va oldingi davr solishtiruvi) endi FAQAT o'z buyurtmalari: `orders.operator_id` = operator (o'zi
+  yaratgani va market/registrator uni tanlagani; «Top operatorlar» va komissiya bilan AYNI atribut), o'z marketi
+  doirasida. Ilgari butun market raqamlari edi (ega 2026-11-11). `markets`, `topMarkets`, `topOperators` —
+  o'zgarmagan (market bo'yicha; ega: ikkala reyting ham qolsin). Market roli dashboardi o'zgarmagan.
+  🔧 FE: operator sahifasida «Top operatorlar» o'rtacha belgisi `myStat.successRate` emas — o'z marketi qatori
+  (`markets[]`) foizi bo'lsin (endi `myStat` operatorniki).
+- ✏️ `POST /orders` (va AI / bot yo'llari) — **registrator** «Operator» tanlamasa buyurtma OPERATORSIZ:
+  `operator_id = null`, `operator` matni uning ismi bilan to'ldirilmaydi (ilgari registratorning o'zi operator
+  bo'lib yozilardi). Tanlasa — tanlangan operator (o'zgarmagan). Market operatori — avvalgidek o'zi.
+  🟢 FE o'zgarishi shart emas (forma allaqachon registratorga tanlov ko'rsatadi).
+
 ### 2026-11-10 — Smena yopish: ASOSIY kassada karta qoldig'i + skrinshot + AI sukut bo'yicha MAJBURIY (BE-A)
 
 Ega qarori (2026-11-10): «majburiy, superadmin kartama-karta o'chira oladi», «filiallarga default o'chiq, faqat
