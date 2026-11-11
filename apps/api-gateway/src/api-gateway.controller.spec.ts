@@ -455,7 +455,10 @@ describe('ApiGatewayController', () => {
         unknown,
         { query: Record<string, unknown> },
       ];
-      expect(payload.query.branch_scope).toEqual({ user_ids: ['101'] });
+      expect(payload.query.branch_scope).toEqual({
+        user_ids: ['101'],
+        market_owner_id: '25',
+      });
       expect(payload.query.user_ids).toBeUndefined();
     });
   });
@@ -619,8 +622,10 @@ describe('ApiGatewayController', () => {
         user: { sub: '19', username: 'm', roles: ['manager'] },
       });
 
-      expect(identityClient.send).toHaveBeenCalledTimes(1);
-      const [pattern, payload] = identityClient.send.mock.calls[0];
+      // 1-chaqiruv — «o'zi yaratgan marketmi?» (2026-11-12), 2-si — javob.
+      expect(identityClient.send).toHaveBeenCalledTimes(2);
+      expect(identityClient.send.mock.calls[0][1]).toStrictEqual({ id: '42' });
+      const [pattern, payload] = identityClient.send.mock.calls[1];
       expect(pattern).toEqual({ cmd: 'identity.user.find_by_id' });
       expect(payload).toStrictEqual({ id: '42', include_branch: true });
       expect(payload).not.toHaveProperty('include_tg_token');

@@ -282,8 +282,18 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   sends `query.branch_scope.user_ids` = the manager's branch `branch_users`
   ids and `findAllAdmins` adds `admin.id IN (...)` (empty → `1 = 0`) to the
   base query, so list, `total`, `totalUsers` and `countsByRole` only cover
-  branch members (no markets, admins, logists or other branches' staff); an
+  branch members (no admins, logists or other branches' staff); an
   unassigned manager gets an empty page (no HQ fallback). SA/ADMIN: no scope.
+  Since 2026-11-12 the scope also carries `market_owner_id` (the manager's
+  numeric id) and the condition is `(admin.id IN (...) OR (admin.role =
+  'market' AND admin.created_by = :owner))` — a manager sees the markets he
+  created (list, `?role=market` tab, counts) and `GET /users/:id` opens such
+  a market without the branch-member / branch-type check
+  (`isManagerOwnMarket`, one extra `identity.user.find_by_id`; lookup error →
+  old check, fail-closed). Other people's markets stay hidden. `POST
+  /markets` by a manager: PICKUP («Qabul punkti») or HYBRID («Aralash»)
+  branch only (was HYBRID only), others / unassigned → 403; `created_by` =
+  the manager.
   `GET /couriers`: non-SA/ADMIN, non-logist requesters always get their own
   branch's couriers (client `branch_id` ignored); unassigned → empty page.
   Manager mutations (`PATCH /users/:id`, `POST /users/:id/password/resend-sms`,

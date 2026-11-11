@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-12 — «Qabul punkti» va «Aralash» filial menejeri market yaratadi va o'zi yaratgan marketlarni «Foydalanuvchilar»da ko'radi
+
+Dilshod: «Qabul va aralash managerlar market yarata olsin va o'zi yaratgan marketlarni foydalanuvchilar ro'yxatida ko'rib tursin».
+Deploy: api-gateway + identity-service, migratsiya yo'q.
+
+- ✏️ `POST /markets` (MANAGER): filial turi `PICKUP` yoki `HYBRID` bo'lsa ruxsat (ilgari faqat `HYBRID`); boshqa tur / biriktirilmagan — 403 «Faqat «Qabul punkti» yoki «Aralash» filial menejeri market yarata oladi».
+- ✏️ `GET /users` (MANAGER): ro'yxatga menejer O'ZI yaratgan marketlar ham qo'shildi (`role=market` tabida ham, `countsByRole.market` / `totalMarket` shu doirada). Boshqalar yaratgan marketlar chiqmaydi.
+- ✏️ `GET /users/:id` (MANAGER): o'zi yaratgan market ochiladi (filial turi va a'zoligi tekshirilmaydi). Tahrirlash (`PATCH /users/:id`) o'zgarmagan — menejerga 403.
+- 🔧 FE: «Market qo'shish» tugmasi `PICKUP` filial menejeriga ham; «Foydalanuvchilar» → «Market» tabi menejerga ko'rinadi.
+
 ### 2026-11-12 — «Marketga o'tkazma»da ham chek: «chek talab qilish» sozlamasi «O'tkazma» va «Marketga o'tkazma»ga bir xil ta'sir qiladi
 
 Deploy: api-gateway + finance-service (migratsiya yo'q). Superadmin/admin'ning HQ'ga qabuli — kuryer sahifasi (`POST /finance/cashbox/payment/courier`) va filial sahifasi (`POST /finance/cashbox/payment/branch-to-main`).

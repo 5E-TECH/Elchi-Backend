@@ -731,7 +731,7 @@
     },
     "/users": {
       "get": {
-        "description": "SUPERADMIN/ADMIN — barcha foydalanuvchilar (superadmin va mijozsiz). MANAGER — faqat o'z filialining faol a'zolari (`branch_users`: menejer, registrator, kuryer); admin, logist, investor, boshqa filial xodimlari va marketlar chiqmaydi (`role=market` — bo'sh). `meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. Filialga biriktirilmagan menejer — bo'sh sahifa (meta shakli o'zgarmaydi, sonlar 0).",
+        "description": "SUPERADMIN/ADMIN — barcha foydalanuvchilar (superadmin va mijozsiz). MANAGER — o'z filialining faol a'zolari (`branch_users`: menejer, registrator, kuryer) VA o'zi yaratgan marketlar (`role = market`, `created_by` = menejer, 2026-11-12); admin, logist, investor, boshqa filial xodimlari va boshqalar yaratgan marketlar chiqmaydi. `meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. Filialga biriktirilmagan menejer — bo'sh sahifa (meta shakli o'zgarmaydi, sonlar 0).",
         "operationId": "ApiGatewayController_getUsers",
         "parameters": [
           {
@@ -1162,6 +1162,7 @@
     },
     "/markets": {
       "post": {
+        "description": "SUPERADMIN/ADMIN — cheklovsiz. MANAGER — faqat «Qabul punkti» (PICKUP) yoki «Aralash» (HYBRID) filial menejeri (2026-11-12; ilgari faqat HYBRID), boshqa filial turi yoki biriktirilmagan — 403. `created_by` = yaratgan foydalanuvchi; menejer o'zi yaratgan marketni GET /users ro'yxatida va GET /users/:id da ko'radi.",
         "operationId": "ApiGatewayController_createMarket",
         "parameters": [],
         "requestBody": {

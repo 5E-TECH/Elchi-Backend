@@ -1198,6 +1198,13 @@ export class UserServiceService implements OnModuleInit {
               .map((id) => primitiveText(id).trim())
               .filter((id) => /^\d{1,19}$/.test(id))
           : null,
+      // 2026-11-12: menejer o'zi yaratgan marketlar (faqat raqamli id).
+      branch_scope_market_owner_id:
+        query.branch_scope &&
+        typeof query.branch_scope === 'object' &&
+        /^\d{1,19}$/.test(primitiveText(query.branch_scope.market_owner_id).trim())
+          ? primitiveText(query.branch_scope.market_owner_id).trim()
+          : null,
       telegram_linked: this.normalizeTelegramLinkedFilter(
         query.telegram_linked,
       ),
@@ -3354,6 +3361,7 @@ export class UserServiceService implements OnModuleInit {
       region_id,
       user_ids,
       branch_scope_user_ids,
+      branch_scope_market_owner_id,
       telegram_linked,
       page,
       limit,
@@ -3423,10 +3431,22 @@ export class UserServiceService implements OnModuleInit {
      * hech kim yo'q / biriktirilmagan menejer) — hech qanday qator.
      */
     if (branch_scope_user_ids) {
+      // 2026-11-12: filial a'zolari YOKI shu menejer yaratgan marketlar.
+      const scopeConditions: string[] = [];
+      const scopeParams: Record<string, unknown> = {};
       if (branch_scope_user_ids.length) {
-        baseQb.andWhere('admin.id IN (:...branchScopeUserIds)', {
-          branchScopeUserIds: branch_scope_user_ids,
-        });
+        scopeConditions.push('admin.id IN (:...branchScopeUserIds)');
+        scopeParams.branchScopeUserIds = branch_scope_user_ids;
+      }
+      if (branch_scope_market_owner_id) {
+        scopeConditions.push(
+          '(admin.role = :scopeMarketRole AND admin.created_by = :scopeMarketOwnerId)',
+        );
+        scopeParams.scopeMarketRole = Roles.MARKET;
+        scopeParams.scopeMarketOwnerId = branch_scope_market_owner_id;
+      }
+      if (scopeConditions.length) {
+        baseQb.andWhere(`(${scopeConditions.join(' OR ')})`, scopeParams);
       } else {
         baseQb.andWhere('1 = 0');
       }

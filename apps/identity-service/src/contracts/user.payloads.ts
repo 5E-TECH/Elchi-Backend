@@ -113,8 +113,13 @@ export interface UserFilterQuery {
    * `branch_users` a'zolari) — 2026-11-04 dan har qanday rol uchun (market,
    * admin, logist, boshqa filial xodimi ham chiqmaydi). Bo'sh massiv — hech
    * qanday qator. Ro'yxat ham, `total` / `countsByRole` ham shu shart bilan.
+   *
+   * 2026-11-12 (Dilshod: «Qabul va aralash managerlar market yarata olsin va
+   * o'zi yaratgan marketlarni foydalanuvchilar ro'yxatida ko'rib tursin»):
+   * `market_owner_id` — shu menejer YARATGAN marketlar ham ko'lamga qo'shiladi
+   * (`role = market AND created_by = market_owner_id`, `user_ids` bilan OR).
    */
-  branch_scope?: { user_ids?: string[] } | null;
+  branch_scope?: { user_ids?: string[]; market_owner_id?: string } | null;
   /**
    * yA31z7Rr — GET /users «Ulangan / Ulanmagan»: true — `telegram_id` bor,
    * false — yo'q (javobdagi `telegram_linked` bilan bir xil qoida).

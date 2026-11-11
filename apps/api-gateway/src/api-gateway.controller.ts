@@ -105,6 +105,12 @@ const USER_BRANCH_ROLES = new Set([
 ]);
 /** YEThmZBn — filial xizmati sekin bo'lsa ro'yxat shu muddatdan ortiq kutmaydi. */
 const USER_BRANCH_LOOKUP_TIMEOUT_MS = 3000;
+/**
+ * 2026-11-12 (Dilshod: «Qabul va aralash managerlar market yarata olsin»):
+ * market yarata oladigan menejer filial turlari — PICKUP («Qabul punkti») va
+ * HYBRID («Aralash»).
+ */
+const UserGatewayMarketCreatorBranchTypes = new Set(['PICKUP', 'HYBRID']);
 
 interface BranchAssignment {
   branch_id?: string | null;
@@ -1269,9 +1275,10 @@ export class ApiGatewayController {
   @ApiOperation({
     summary: 'List all users with filtering and pagination',
     description:
-      "SUPERADMIN/ADMIN — barcha foydalanuvchilar (superadmin va mijozsiz). MANAGER — faqat o'z filialining faol a'zolari " +
-      '(`branch_users`: menejer, registrator, kuryer); admin, logist, investor, boshqa filial xodimlari va marketlar chiqmaydi ' +
-      "(`role=market` — bo'sh). `meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. " +
+      "SUPERADMIN/ADMIN — barcha foydalanuvchilar (superadmin va mijozsiz). MANAGER — o'z filialining faol a'zolari " +
+      "(`branch_users`: menejer, registrator, kuryer) VA o'zi yaratgan marketlar (`role = market`, `created_by` = menejer, 2026-11-12); " +
+      'admin, logist, investor, boshqa filial xodimlari va boshqalar yaratgan marketlar chiqmaydi. ' +
+      "`meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. " +
       "Filialga biriktirilmagan menejer — bo'sh sahifa (meta shakli o'zgarmaydi, sonlar 0).",
   })
   @ApiQuery({ name: 'search', required: false, type: String })
@@ -1397,8 +1404,15 @@ export class ApiGatewayController {
               // gateway'da filtrlanardi — `meta.total` / `totalUsers`
               // sahifadagi qatorlar soniga teng, `countsByRole` esa ko'lamsiz
               // edi. Endi ro'yxat, `total` va `countsByRole` bitta shart bilan.
+              // 2026-11-12: menejer o'zi YARATGAN marketlarni ham ko'radi
+              // (identity: `role = market AND created_by = market_owner_id`).
               branch_scope: Array.isArray(branchBoundUserIds)
-                ? { user_ids: branchBoundUserIds }
+                ? {
+                    user_ids: branchBoundUserIds,
+                    ...(/^\d+$/.test(String(req?.user?.sub ?? '').trim())
+                      ? { market_owner_id: String(req?.user?.sub).trim() }
+                      : {}),
+                  }
                 : undefined,
               page: page ? Number(page) : undefined,
               limit: limit ? Number(limit) : undefined,
@@ -1559,7 +1573,10 @@ export class ApiGatewayController {
     if (
       !requesterIsPrivileged &&
       requesterRoles.includes(RoleEnum.MANAGER) &&
-      req?.user?.sub
+      req?.user?.sub &&
+      // 2026-11-12: o'zi yaratgan market — ro'yxatda ko'rinadi, tafsiloti ham
+      // ochiladi (filial a'zoligi va filial turi talab qilinmaydi).
+      !(await this.isManagerOwnMarket(req.user, id))
     ) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
@@ -1618,6 +1635,34 @@ export class ApiGatewayController {
     const data: unknown = response?.data;
     const row = projectUserRowContactsForRoles(req?.user?.roles, data);
     return row === data ? response : { ...response, data: row };
+  }
+
+  /**
+   * 2026-11-12: nishon — shu menejer YARATGAN market (`role = market`,
+   * `created_by = menejer id`). Identity javob bermasa / topilmasa — false
+   * (eski filial tekshiruvi ishlaydi, fail-closed).
+   */
+  private async isManagerOwnMarket(
+    user: JwtUser,
+    targetId: string,
+  ): Promise<boolean> {
+    const managerId = String(user?.sub ?? '').trim();
+    if (!/^\d+$/.test(managerId)) return false;
+    try {
+      const response = await firstValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.user.find_by_id' }, { id: targetId })
+          .pipe(timeout(8000)),
+      );
+      const row = (response as { data?: Record<string, unknown> } | undefined)
+        ?.data;
+      return (
+        String(row?.role ?? '').toLowerCase() === RoleEnum.MARKET &&
+        String(row?.created_by ?? '').trim() === managerId
+      );
+    } catch {
+      return false;
+    }
   }
 
   @Patch('users/:id')
@@ -1836,7 +1881,13 @@ export class ApiGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create market' })
+  @ApiOperation({
+    summary: 'Create market',
+    description:
+      "SUPERADMIN/ADMIN — cheklovsiz. MANAGER — faqat «Qabul punkti» (PICKUP) yoki «Aralash» (HYBRID) filial menejeri " +
+      "(2026-11-12; ilgari faqat HYBRID), boshqa filial turi yoki biriktirilmagan — 403. `created_by` = yaratgan foydalanuvchi; " +
+      "menejer o'zi yaratgan marketni GET /users ro'yxatida va GET /users/:id da ko'radi.",
+  })
   @ApiBody({ type: CreateMarketRequestDto })
   @ApiCreatedResponse({ description: 'Market created' })
   @ApiConflictResponse({ description: 'Conflict' })
@@ -1863,9 +1914,11 @@ export class ApiGatewayController {
           'Manager hech qaysi branchga biriktirilmagan',
         );
       }
-      if (branchType !== 'HYBRID') {
+      // 2026-11-12 (Dilshod): «Qabul va aralash managerlar market yarata
+      // olsin» — PICKUP («Qabul punkti») va HYBRID («Aralash») filial menejeri.
+      if (!UserGatewayMarketCreatorBranchTypes.has(branchType)) {
         throw new ForbiddenException(
-          "Faqat HYBRID branch manager'i market yarata oladi",
+          "Faqat «Qabul punkti» yoki «Aralash» filial menejeri market yarata oladi",
         );
       }
     }

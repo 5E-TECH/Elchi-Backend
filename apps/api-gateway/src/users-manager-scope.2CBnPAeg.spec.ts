@@ -108,8 +108,10 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
 
     const res = await listUsers(MANAGER);
 
+    // 2026-11-12: + o'zi yaratgan marketlar (`market_owner_id` = menejer id).
     expect(identityQuery().branch_scope).toEqual({
       user_ids: ['101', '25', '300'],
+      market_owner_id: '25',
     });
     expect(identityQuery()).not.toHaveProperty('user_ids');
     // Sahifadan keyingi filtr yo'q: total sahifa uzunligi (2) EMAS.
@@ -132,7 +134,7 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
 
     expect(identityQuery()).toMatchObject({
       role: 'courier',
-      branch_scope: { user_ids: ['101', '25'] },
+      branch_scope: { user_ids: ['101', '25'], market_owner_id: '25' },
     });
     expect(identityQuery().user_ids).toBeUndefined();
   });
@@ -142,10 +144,13 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
 
     await listUsers(MANAGER);
 
-    expect(identityQuery().branch_scope).toEqual({ user_ids: [] });
+    expect(identityQuery().branch_scope).toEqual({
+      user_ids: [],
+      market_owner_id: '25',
+    });
   });
 
-  it('menejer ?role=market — ko`lam baribir yuboriladi (identity bo`sh qaytaradi)', async () => {
+  it('menejer ?role=market — ko`lam + o`zi yaratgan marketlar (2026-11-12)', async () => {
     branchReplies({ branch_id: '3', role: 'MANAGER' }, [
       { user_id: '101', role: 'COURIER' },
     ]);
@@ -154,7 +159,7 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
 
     expect(identityQuery()).toMatchObject({
       role: 'market',
-      branch_scope: { user_ids: ['101'] },
+      branch_scope: { user_ids: ['101'], market_owner_id: '25' },
     });
   });
 
@@ -166,7 +171,11 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
     const cmds = branchClient.send.mock.calls.map(([p]: [Pattern]) => p.cmd);
     expect(cmds).not.toContain('branch.find_hq');
     expect(cmds).not.toContain('branch.user.find_by_branch');
-    expect(identityQuery().branch_scope).toEqual({ user_ids: [] });
+    // Filial a'zolari yo'q; faqat o'zi yaratgan marketlar (2026-11-12).
+    expect(identityQuery().branch_scope).toEqual({
+      user_ids: [],
+      market_owner_id: '25',
+    });
     // Javob shakli identity'dan (bo'sh sahifa, meta va countsByRole bilan).
     expect(res.data).toHaveProperty('meta');
   });
@@ -175,7 +184,10 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
     branchReplies(null, [], null);
 
     await expect(listUsers(MANAGER)).resolves.toBeDefined();
-    expect(identityQuery().branch_scope).toEqual({ user_ids: [] });
+    expect(identityQuery().branch_scope).toEqual({
+      user_ids: [],
+      market_owner_id: '25',
+    });
   });
 
   it('menejer tokenida `sub` yo`q — ko`lamsiz EMAS, bo`sh ko`lam', async () => {
