@@ -2574,8 +2574,10 @@ export class FinanceGatewayController {
     }
 
     // (2026-11-11, Dilshod) «Marketga o'tkazma» — filial pulni HQ'ga bermay,
-    // to'g'ridan-to'g'ri marketga o'tkazgan: market majburiy, chek va karta
-    // yo'q (kuryer click_to_market dagidek). Pul — finance, bitta tranzaksiya.
+    // to'g'ridan-to'g'ri marketga o'tkazgan: market majburiy, karta yo'q
+    // (kuryer click_to_market dagidek). Pul — finance, bitta tranzaksiya.
+    // Chek (2026-11-12) — «O'tkazma» bilan bir xil `hq_transfer` sozlamasi
+    // (majburiylik finance'da).
     const isMarketTransfer =
       dto.payment_method === PaymentMethod.CLICK_TO_MARKET;
     const marketId = String(dto.market_id ?? '').trim();
@@ -2584,13 +2586,6 @@ export class FinanceGatewayController {
         throw new BadRequestException(
           "«Marketga o'tkazma» da market_id bo'lishi shart",
         );
-      }
-      if (dto.receipt_id) {
-        throw new BadRequestException({
-          statusCode: 400,
-          code: CASHBOX_RECEIPT_ERROR_CODES.NOT_APPLICABLE,
-          message: CASHBOX_RECEIPT_MESSAGES.RECEIPT_NOT_APPLICABLE,
-        });
       }
       if (dto.card_id || dto.branch_card_id) {
         throw new BadRequestException(
@@ -2624,7 +2619,8 @@ export class FinanceGatewayController {
         ...(dto.source_user_id
           ? { transfer_source_user_id: dto.source_user_id }
           : {}),
-        // T3 — chek siyosati (faqat click; majburiylik finance'da).
+        // T3 — chek siyosati (click va click_to_market; majburiylik
+        // finance'da).
         receipt_policy: { kind: 'branch_to_hq' },
         ...(dto.receipt_id ? { receipt_id: dto.receipt_id } : {}),
         // 3PE0B03q — CLICK pul asosiy kassaning qaysi nomli kartasiga.
@@ -4872,7 +4868,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: '(T3) Kassa cheki rasmini yuklash (qoralama)',
     description:
-      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`).",
+      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
   })
   @UseInterceptors(
     FileInterceptor('photo', {

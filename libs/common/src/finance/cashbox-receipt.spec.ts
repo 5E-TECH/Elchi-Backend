@@ -4,6 +4,7 @@ import {
   CASHBOX_RECEIPT_PAYMENT_METHOD,
   applyReceiptSettingsPatch,
   isReceiptPaymentMethod,
+  isTransferReceiptPaymentMethod,
   receiptSettingGroupOf,
   type CashboxReceiptSettings,
 } from './cashbox-receipt';
@@ -87,5 +88,32 @@ describe('isReceiptPaymentMethod', () => {
     ['CLICK'],
   ])('%p — chek qo`llanmaydi', (method) => {
     expect(isReceiptPaymentMethod(method)).toBe(false);
+  });
+});
+
+/**
+ * (Dilshod 2026-11-12) HQ'ga o'tkazma cheki — «O'tkazma» (`click`) va
+ * «Marketga o'tkazma» (`click_to_market`) bir xil sozlamaga bo'ysunadi.
+ */
+describe('isTransferReceiptPaymentMethod', () => {
+  it.each([[PaymentMethod.CLICK], [PaymentMethod.CLICK_TO_MARKET]])(
+    '%p — HQ`ga o`tkazmada chek qo`llanadi',
+    (method) => {
+      expect(isTransferReceiptPaymentMethod(method)).toBe(true);
+    },
+  );
+
+  it.each([
+    [PaymentMethod.CASH],
+    [undefined],
+    [null],
+    [''],
+    ['CLICK_TO_MARKET'],
+  ])('%p — chek qo`llanmaydi', (method) => {
+    expect(isTransferReceiptPaymentMethod(method)).toBe(false);
+  });
+
+  it('qo`lda chiqim qoidasi o`zgarmagan — click_to_market chiqimda cheksiz', () => {
+    expect(isReceiptPaymentMethod(PaymentMethod.CLICK_TO_MARKET)).toBe(false);
   });
 });

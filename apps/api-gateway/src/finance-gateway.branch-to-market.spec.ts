@@ -7,8 +7,9 @@ import { FinanceGatewayController } from './finance-gateway.controller';
  * (2026-11-11, Dilshod) `POST finance/cashbox/payment/branch-to-main` —
  * «Marketga o'tkazma» (`payment_method: click_to_market` + `market_id`):
  * filial pulni HQ'ga bermay, to'g'ridan-to'g'ri marketga o'tkazgan.
- *  • market majburiy, chek (RECEIPT_NOT_APPLICABLE) va karta yo'q — 400,
- *    finance'ga bormaydi;
+ *  • market majburiy, karta yo'q — 400, finance'ga bormaydi;
+ *  • chek (2026-11-12) — «O'tkazma» bilan bir xil: `receipt_id` finance'ga
+ *    boradi (majburiylik `hq_transfer` sozlamasiga ko'ra finance'da);
  *  • boshqa usulda `market_id` — 400;
  *  • faqat superadmin/admin (menejer — 403);
  *  • finance'ga `market_id` boradi, oddiy to'lovga — bormaydi.
@@ -79,17 +80,20 @@ describe('branch-to-main — «Marketga o`tkazma» (gateway)', () => {
     expect(finance.send).not.toHaveBeenCalled();
   });
 
-  it('⭐ chek → 400 RECEIPT_NOT_APPLICABLE, finance`ga bormaydi', async () => {
+  it('⭐ (2026-11-12) chek — finance`ga receipt_id va chek siyosati bilan boradi («O`tkazma» dagidek)', async () => {
     const { controller, finance } = make();
-    const error = await controller
-      .paymentBranchToMain(user(['admin']), body({ receipt_id: '41' }))
-      .catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(BadRequestException);
-    expect((error as BadRequestException).getResponse()).toMatchObject({
-      statusCode: 400,
-      code: 'RECEIPT_NOT_APPLICABLE',
+    await controller.paymentBranchToMain(
+      user(['admin']),
+      body({ receipt_id: '41' }),
+      'idem-b2m-r',
+    );
+    expect(finance.send).toHaveBeenCalledTimes(1);
+    expect(lastPayload(finance)).toMatchObject({
+      payment_method: 'click_to_market',
+      market_id: '201',
+      receipt_id: '41',
+      receipt_policy: { kind: 'branch_to_hq' },
     });
-    expect(finance.send).not.toHaveBeenCalled();
   });
 
   it.each([['cash'], ['click']])(

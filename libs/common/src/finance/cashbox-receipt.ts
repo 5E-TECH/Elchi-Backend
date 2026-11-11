@@ -1,7 +1,9 @@
 /**
  * T3 (QlLf33Ma) — kassa CHEKI: karta (`click`) bilan qo'lda chiqim va HQ'ga
  * o'tkazmalarda chek rasmi + AI tahlili (BE-C, 2026-11-10: faqat karta —
- * `isReceiptPaymentMethod`). Gateway ↔ finance-service kontrakti: turlar,
+ * `isReceiptPaymentMethod`; HQ'ga o'tkazmada 2026-11-12 dan «Marketga
+ * o'tkazma» ham — `isTransferReceiptPaymentMethod`). Gateway ↔
+ * finance-service kontrakti: turlar,
  * holatlar, sozlama kalitlari, xato kodlari (`PUBLIC_ERROR_CODES` ga ham) va
  * sozlama qoidasi.
  *
@@ -45,12 +47,30 @@ export const receiptSettingGroupOf = (
  * (avvalgidek). Naqd va `click_to_market` — chek yo'q: `receipt_id` → 400
  * `RECEIPT_NOT_APPLICABLE`, rasm sozlamasi yoqiq bo'lsa ham
  * `RECEIPT_REQUIRED` yo'q, «Chek yo'q» (`receipt_status=none`) ga kirmaydi
- * (finance `RECEIPT_EXPECTED_SQL` — AYNI qoida).
+ * (finance `RECEIPT_EXPECTED_SQL` — AYNI qoida). 2026-11-12 dan HQ'ga
+ * o'tkazmada `click_to_market` ham chekli — `isTransferReceiptPaymentMethod`.
  */
 export const CASHBOX_RECEIPT_PAYMENT_METHOD = PaymentMethod.CLICK;
 
 export const isReceiptPaymentMethod = (method: unknown): boolean =>
   method === CASHBOX_RECEIPT_PAYMENT_METHOD;
+
+/**
+ * (Dilshod 2026-11-12) HQ'ga o'tkazma cheki (`courier_to_hq` /
+ * `branch_to_hq`, sozlama guruhi `hq_transfer`) — `click` («O'tkazma») VA
+ * `click_to_market` («Marketga o'tkazma»): «chek talab qilish» sozlamasi
+ * ikkalasiga ham bir xil ta'sir qiladi (yoqiq — ikkalasida majburiy, o'chiq —
+ * ikkalasida so'ralmaydi). Naqd — chek yo'q. Qo'lda chiqim avvalgidek faqat
+ * `click` (`isReceiptPaymentMethod`). Finance `RECEIPT_EXPECTED_SQL` — AYNI
+ * qoida.
+ */
+export const CASHBOX_TRANSFER_RECEIPT_PAYMENT_METHODS: readonly PaymentMethod[] =
+  Object.freeze([PaymentMethod.CLICK, PaymentMethod.CLICK_TO_MARKET]);
+
+export const isTransferReceiptPaymentMethod = (method: unknown): boolean =>
+  (CASHBOX_TRANSFER_RECEIPT_PAYMENT_METHODS as readonly unknown[]).includes(
+    method,
+  );
 
 /** `finance_settings` kalitlari (qiymat — boolean; qator yo'q — `true`). */
 export const CASHBOX_RECEIPT_SETTING_KEYS: Readonly<

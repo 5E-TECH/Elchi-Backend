@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-12 — «Marketga o'tkazma»da ham chek: «chek talab qilish» sozlamasi «O'tkazma» va «Marketga o'tkazma»ga bir xil ta'sir qiladi
+
+Deploy: api-gateway + finance-service (migratsiya yo'q). Superadmin/admin'ning HQ'ga qabuli — kuryer sahifasi (`POST /finance/cashbox/payment/courier`) va filial sahifasi (`POST /finance/cashbox/payment/branch-to-main`).
+
+- ✏️ `payment_method: click_to_market` («Marketga o'tkazma») endi `click` («O'tkazma») bilan bir xil chek qoidasida: `GET /finance/receipt-settings` → `hq_transfer.photo_required` **yoqiq** — `receipt_id` MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`, pul ko'chmaydi); **o'chiq** — so'ralmaydi. Chek turi — kuryer sahifasida `courier_to_hq`, filial sahifasida `branch_to_hq` (avvalgidek). Ilgari `click_to_market` + `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE` edi — endi chek bog'lanadi, javobda `data.receipt: { id, ai_status }` (takroriy so'rovda — asl chek).
+- 🟢 Naqd — o'zgarmagan (chek yo'q, `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). Menejerning kuryerdan qabuli — chek yo'q (avvalgidek). Qo'lda chiqim (`manual_expense`) — faqat `click` (o'zgarmagan).
+- 🟢 «Chek yo'q» filtri (`receipt_status=none`) va xulosa: cheksiz «Marketga o'tkazma» (MAIN INCOME oyog'i) ham sanaladi — eski cheksiz yozuvlar ham. AI `card_mismatch` «Marketga o'tkazma»da tekshirilmaydi (pul market kartasiga ketgan).
+
+**Frontend action items:**
+- 🔧 Kuryer va filial sahifasidagi qabul formasida chek maydoni «O'tkazma» va «Marketga o'tkazma» ikkalasida ham ko'rinsin (sozlama yoqiq bo'lsa majburiy), `receipt_id` yuborilsin. Sozlamalar sahifasidagi `hq_transfer` izohi ikkala usulni aytsin.
+
 ### 2026-11-12 — Qo'shimcha xarajat alohida tranzaksiya: buyurtma darhol sotiladi / bekor qilinadi, xarajat market tasdig'ini kutadi (SPEC v2)
 
 Deploy: order-service + finance-service (gateway DTO o'zgarmagan — `openapi.json` qayta yaratilmadi). **Migratsiya `1716000000219`** (`order_extra_cost_approval`: `mode` (`'replay'` sukut), `items` jsonb, `deferred_snapshot` jsonb; `order_settlement`: `kind` (`'sale'` sukut), `extra_cost_approval_id`; buyurtmaga bitta `order_settlement` cheklovi endi faqat `kind='sale'` uchun). Eski qatorlar o'zgarmaydi.

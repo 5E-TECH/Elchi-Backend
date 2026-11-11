@@ -73,6 +73,7 @@ import {
   PaymentMethod,
   Source_type,
   isReceiptPaymentMethod,
+  isTransferReceiptPaymentMethod,
   rmqSend,
   OutboxService,
   tashkentDayRange,
@@ -316,7 +317,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * T3 — gateway'ning `receipt_policy` si (faqat 3 HTTP yo'li: qo'lda
    * chiqim, kuryer → HQ, filial → HQ). Ichki RMQ chaqiruvlarida yo'q —
    * chek talab qilinmaydi. BE-C (2026-11-10): uchalasida ham chek faqat
-   * karta (`click`) to'lovida qo'llanadi (`isReceiptPaymentMethod`).
+   * karta (`click`) to'lovida qo'llanadi (`isReceiptPaymentMethod`); HQ'ga
+   * o'tkazmada (kuryer / filial) 2026-11-12 dan «Marketga o'tkazma»
+   * (`click_to_market`) ham — `isTransferReceiptPaymentMethod`.
    */
   private receiptRequest(
     data: {
@@ -365,8 +368,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         String(leg.cashbox_id) === ctx.counter_cashbox_id &&
         leg.operation_type === Operation_type.EXPENSE,
     );
+    // (2026-11-12) `click` va `click_to_market` — «chek talab qilish»
+    // sozlamasi ikkalasiga ham ta'sir qiladi; naqd — chek yo'q.
     const applicable =
-      isReceiptPaymentMethod(ctx.payment_method) && Boolean(income);
+      isTransferReceiptPaymentMethod(ctx.payment_method) && Boolean(income);
     return this.receipts.linkInTx(manager, request, {
       applicable,
       history_id: String(income?.id ?? ''),
@@ -4909,7 +4914,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       } = applied;
 
       // T3 — chek: HQ (MAIN) INCOME + kuryer EXPENSE oyoqlari (`transfer_id`).
-      // Faqat `click` da; naqd / click_to_market + chek → 400. Xato — rollback.
+      // `click` va `click_to_market` da (2026-11-12); naqd + chek → 400.
+      // Xato — rollback.
       const linkedReceipt = receiptRequest
         ? await this.linkTransferReceipt(queryRunner.manager, receiptRequest, {
             transfer_id: applied.transferId,
@@ -5765,7 +5771,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const linkedReceipt =
         receiptRequest && this.receipts
           ? await this.receipts.linkInTx(queryRunner.manager, receiptRequest, {
-              applicable: isReceiptPaymentMethod(
+              applicable: isTransferReceiptPaymentMethod(
                 data.payment_method ?? PaymentMethod.CASH,
               ),
               history_id: String(mainHistory.id),
@@ -5870,7 +5876,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * Marketga qarzdan ortig'i — market sozlamasiga ko'ra
    * (`assertMarketPayoutWithinDebt`).
    *
-   * Chek yo'q (`receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). T6 tuzatish bu
+   * Chek (2026-11-12, Dilshod) — «O'tkazma» (`click`) bilan bir xil:
+   * `branch_to_hq` turi, `hq_transfer` sozlamasi (rasm majburiy bo'lsa
+   * `receipt_id` siz → 400 `RECEIPT_REQUIRED`); `history_id` — MAIN INCOME,
+   * `counter` — filial EXPENSE; takrorda asl chek qaytadi. T6 tuzatish bu
    * shaklni QO'LLAMAYDI: `classifyTransfer` filial → MAIN → market guruhini
    * tanimaydi → 409 `NOT_CORRECTABLE` / `unsupported_type` (daftarni orqaga
    * surish `branch_to_hq` ni bilmaydi — pul yarim teskarilanib qolmasin).
@@ -5886,6 +5895,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     await queryRunner.startTransaction();
     // Commit + release dan KEYIN yoziladigan audit (tranzaksiya ichida emas).
     let auditedBranchCashboxId: string | null = null;
+    let auditedReceiptId: string | null = null;
     const receiptRequest = this.receiptRequest(data, 'branch_to_hq');
     const method = PaymentMethod.CLICK_TO_MARKET;
     try {
@@ -5929,9 +5939,28 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           dedup_epoch: dedupKey,
         })
       ) {
+        // T3 — takror: asl to'lovning cheki (filial EXPENSE oyog'i orqali;
+        // oddiy filial → HQ dagidek).
+        let replayReceipt: LinkedReceiptRef | null | undefined;
+        if (receiptRequest && this.receipts) {
+          const leg = await this.findDedupLeg(manager, {
+            cashbox_id: String(branchCashbox.id),
+            source_type: Source_type.BRANCH_TO_MAIN,
+            source_id: String(data.branch_id),
+            dedup_epoch: dedupKey,
+          });
+          replayReceipt = leg
+            ? await this.receipts.findForReplay(manager, {
+                counter_history_id: String(leg.id),
+              })
+            : null;
+        }
         await queryRunner.commitTransaction();
         return this.successRes(
-          { idempotent: true, ...(receiptRequest ? { receipt: null } : {}) },
+          {
+            idempotent: true,
+            ...(replayReceipt !== undefined ? { receipt: replayReceipt } : {}),
+          },
           200,
           "To'lov allaqachon qabul qilingan (takroriy so'rov)",
         );
@@ -6105,12 +6134,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }),
       );
 
-      // Chek bu usulda qo'llanmaydi: `receipt_id` → 400 RECEIPT_NOT_APPLICABLE
-      // (butun to'lov rollback); yo'q — `receipt: null`.
+      // T3 — chek (2026-11-12): «O'tkazma» bilan bir xil sozlama
+      // (`hq_transfer`): MAIN INCOME + filial EXPENSE. Rasm majburiy va chek
+      // yo'q / chek xato — 400/403/409, butun to'lov rollback.
       const linkedReceipt =
         receiptRequest && this.receipts
           ? await this.receipts.linkInTx(manager, receiptRequest, {
-              applicable: false,
+              applicable: isTransferReceiptPaymentMethod(method),
               history_id: String(mainIncome.id),
               counter_history_id: String(branchHistory.id),
               entered_amount: amount,
@@ -6162,6 +6192,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       await this.tryPublishAdvanceNow(branchAdvancePayload);
       await this.tryPublishAdvanceNow(marketAdvancePayload);
       auditedBranchCashboxId = String(branchCashbox.id);
+      auditedReceiptId = linkedReceipt?.id ?? null;
 
       // 5. Buyurtmalar sinxroni + hamkor xabari — fonda, javob kutmaydi.
       void this.scheduleMarketPaymentFollowUp({
@@ -6203,6 +6234,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             market_id: data.market_id ?? null,
             amount: Number(data.amount),
             created_by: data.created_by ?? null,
+            ...(auditedReceiptId ? { receipt_id: auditedReceiptId } : {}),
           },
           description: ActivityDescribeUz.branchToMarketPayment(
             data.branch_id,

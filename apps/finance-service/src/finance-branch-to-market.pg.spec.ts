@@ -12,6 +12,7 @@ import { FinanceServiceService } from './finance-service.service';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxCard } from './entities/cashbox-card.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
+import { CashboxReceipt } from './entities/cashbox-receipt.entity';
 import { FinanceSetting } from './entities/finance-setting.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 import { PaymentCorrection } from './entities/payment-correction.entity';
@@ -58,6 +59,7 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
   let db: DataSource;
   let service: FinanceServiceService;
   let corrections: PaymentCorrectionService;
+  let receipts: CashboxReceiptService;
   const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
   /** branch-service `branch.find_by_id` (filial «Kassa qarzga ishlaydi»). */
@@ -101,6 +103,7 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
         Cashbox,
         CashboxHistory,
         CashboxCard,
+        CashboxReceipt,
         FinancialBalanceHistory,
         FinanceSetting,
         PaymentCorrection,
@@ -111,8 +114,9 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     await db.initialize();
     const notifications = new FinanceNotificationService(outbox as never);
     const realtime = new FinanceRealtimeService(outbox as never);
-    // Chek: «Marketga o'tkazma» da `applicable: false` — jadvalga tegmaydi.
-    const receipts = new CashboxReceiptService(
+    // Chek (2026-11-12): «Marketga o'tkazma» — «O'tkazma» bilan bir xil
+    // `hq_transfer` sozlamasi.
+    receipts = new CashboxReceiptService(
       db,
       activityLog as never,
       { send: jest.fn(() => of({})) } as never,
@@ -191,7 +195,8 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
       `TRUNCATE TABLE "${schema}".cashbox_history, "${schema}".cashboxes,
         "${schema}".financial_balance_history, "${schema}".payment_corrections,
         "${schema}".finance_settings, "${schema}".cashbox_cards,
-        "${schema}".shifts RESTART IDENTITY CASCADE`,
+        "${schema}".cashbox_receipts, "${schema}".shifts
+        RESTART IDENTITY CASCADE`,
     );
     await seed('0', Cashbox_type.MAIN, 2_000_000, 500_000);
     // Filial: naqd 4 mln, karta 300 000.
@@ -499,17 +504,105 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     await assertUntouched();
   });
 
-  it('chek: receipt_id → 400 RECEIPT_NOT_APPLICABLE (rollback); chek yo`q — `receipt: null`', async () => {
-    const policy = { receipt_policy: { kind: 'branch_to_hq' } };
+  // ─── Chek (Dilshod 2026-11-12): «O'tkazma» bilan bir xil `hq_transfer` ───
+
+  const policy = { receipt_policy: { kind: 'branch_to_hq' } };
+  const uploadReceipt = async () =>
+    (
+      (await receipts.createDraft({
+        kind: 'branch_to_hq',
+        file_key: `cashbox-receipt-${randomUUID()}-receipt.jpg`,
+        file_sha256: 'c'.repeat(64),
+        mime: 'image/jpeg',
+        size_bytes: 1000,
+        requester_id: '1',
+        requester_roles: ['superadmin'],
+      })) as { data: { receipt_id: string } }
+    ).data.receipt_id;
+  const receiptRow = (id: string) =>
+    db.getRepository(CashboxReceipt).findOneByOrFail({ id });
+
+  it('⭐ chek rasmi YOQIQ (sukut): cheksiz → 400 RECEIPT_REQUIRED, hech narsa yozilmaydi', async () => {
+    expect(await errorBody(toMarket(100_000, 'gw:bm-7', policy))).toMatchObject(
+      { statusCode: 400, code: 'RECEIPT_REQUIRED' },
+    );
+    await assertUntouched();
+  });
+
+  it('⭐ chek bilan → bog`lanadi: history = MAIN INCOME, counter = filial EXPENSE; takrorda asl chek; jurnalda receipt_id', async () => {
+    const receiptId = await uploadReceipt();
+    const res = await toMarket(100_000, 'gw:bm-8', {
+      ...policy,
+      receipt_id: receiptId,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.data.receipt).toMatchObject({
+      id: receiptId,
+      ai_status: 'pending',
+    });
+    const rows = await legs();
+    const mainIncome = rows.find(
+      (row) =>
+        row.box === Cashbox_type.MAIN && row.op === Operation_type.INCOME,
+    );
+    const branchExpense = rows.find((row) => row.box === Cashbox_type.BRANCH);
+    expect(await receiptRow(receiptId)).toMatchObject({
+      state: 'linked',
+      history_id: mainIncome?.id,
+      counter_history_id: branchExpense?.id,
+      payment_method: 'click_to_market',
+      entered_amount: 100_000,
+      branch_id: BRANCH,
+    });
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_type: 'Cashbox',
+        metadata: expect.objectContaining({
+          market_id: MARKET,
+          receipt_id: receiptId,
+        }),
+      }),
+    );
+
+    const again = await toMarket(100_000, 'gw:bm-8', {
+      ...policy,
+      receipt_id: receiptId,
+    });
+    expect(again.data).toMatchObject({
+      idempotent: true,
+      receipt: { id: receiptId },
+    });
+    expect(await db.getRepository(CashboxHistory).count()).toBe(4);
+  });
+
+  it('chek rasmi O`CHIQ → cheksiz o`tadi, `receipt: null`', async () => {
+    await receipts.updateSettings({
+      ...SA,
+      hq_transfer: { photo_required: false },
+    });
+    const ok = await toMarket(100_000, 'gw:bm-8b', policy);
+    expect(ok?.data).toMatchObject({ receipt: null });
+    expect((await box(MARKET, Cashbox_type.FOR_MARKET)).balance).toBe(900_000);
+  });
+
+  it('chek xato (boshqa turdagi chek) → 400, butun to`lov rollback', async () => {
+    const wrong = (
+      (await receipts.createDraft({
+        kind: 'manual_expense',
+        file_key: `cashbox-receipt-${randomUUID()}-receipt.jpg`,
+        file_sha256: 'd'.repeat(64),
+        mime: 'image/jpeg',
+        size_bytes: 1000,
+        requester_id: '1',
+        requester_roles: ['superadmin'],
+      })) as { data: { receipt_id: string } }
+    ).data.receipt_id;
     expect(
       await errorBody(
-        toMarket(100_000, 'gw:bm-7', { ...policy, receipt_id: '41' }),
+        toMarket(100_000, 'gw:bm-8c', { ...policy, receipt_id: wrong }),
       ),
-    ).toMatchObject({ statusCode: 400, code: 'RECEIPT_NOT_APPLICABLE' });
+    ).toMatchObject({ statusCode: 400, code: 'RECEIPT_KIND_MISMATCH' });
     await assertUntouched();
-
-    const ok = await toMarket(100_000, 'gw:bm-8', policy);
-    expect(ok?.data).toMatchObject({ receipt: null });
   });
 
   it('takroriy so`rov (ayni Idempotency-Key) — pul ham, siljish ham bir marta', async () => {

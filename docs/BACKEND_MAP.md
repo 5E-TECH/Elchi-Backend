@@ -942,7 +942,14 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   manual expenses too (`isReceiptPaymentMethod` in libs/common; cash /
   click_to_market + `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`, no
   `RECEIPT_REQUIRED`; `RECEIPT_EXPECTED_SQL` counts only click manual
-  expenses).
+  expenses). HQ transfers since Dilshod 2026-11-12: «O'tkazma» (`click`) AND
+  «Marketga o'tkazma» (`click_to_market`, courier → market and branch →
+  market) follow the same `hq_transfer` setting (`isTransferReceiptPaymentMethod`;
+  photo on → required on both, off → asked on neither; history = MAIN INCOME,
+  counter = courier/branch EXPENSE; `RECEIPT_EXPECTED_SQL` MAIN INCOME clause
+  takes both methods, so older cheque-less click_to_market rows also count as
+  «Chek yo'q»; `card_mismatch` is skipped for click_to_market — the money went
+  to the market's card, not an HQ card). Cash stays receipt-less.
   `cashbox-receipt/`: `CashboxReceiptService` (settings in `finance_settings`
   `receipt.{manual_expense,hq_transfer}.{photo_required,ai_enabled}`, SA-only
   update; draft upload; `linkInTx` inside the payment tx — `spendMoney`,
@@ -1686,9 +1693,10 @@ an order — see finance-service › Pickup visits.
 - **Branch → market «Marketga o'tkazma» (Dilshod 2026-11-11):** the branch
   paid the market directly instead of handing the money to HQ. SA/ADMIN send
   `POST /finance/cashbox/payment/branch-to-main` with
-  `payment_method: click_to_market` + `market_id` (required → 400; `receipt_id`
-  → 400 `RECEIPT_NOT_APPLICABLE`; `card_id`/`branch_card_id` → 400; `market_id`
-  with cash/click → 400, also re-checked in finance). finance
+  `payment_method: click_to_market` + `market_id` (required → 400; receipt —
+  same `hq_transfer` rule as click since 2026-11-12, linked to MAIN INCOME +
+  branch EXPENSE, replay returns it; `card_id`/`branch_card_id` → 400;
+  `market_id` with cash/click → 400, also re-checked in finance). finance
   `paymentFromBranchToMarket` — ONE tx, same `Idempotency-Key`/`dedup_epoch`
   dedup as branch → HQ: branch EXPENSE `branch_to_main` −X, MAIN INCOME
   `branch_to_main` +X and MAIN EXPENSE `market_payment` −X (trace, net 0),
