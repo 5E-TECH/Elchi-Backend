@@ -343,11 +343,27 @@ export class ExcelGatewayController {
 
   @Get('shifts.xlsx')
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
-  @ApiOperation({ summary: 'Smenalarni Excel (.xlsx) ga eksport qilish' })
+  @ApiOperation({
+    summary: 'Smenalarni Excel (.xlsx) ga eksport qilish',
+    description:
+      "(F7PWp6cK) Sana filtri GET /finance/shift bilan AYNI: 'YYYY-MM-DD' — Toshkent kalendar kuni, ikki chet ham kiradi (opened_at bo'yicha); to'liq ISO — aniq lahza.",
+  })
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'opened_by', required: false, type: String })
-  @ApiQuery({ name: 'from_date', required: false, type: String })
-  @ApiQuery({ name: 'to_date', required: false, type: String })
+  @ApiQuery({
+    name: 'from_date',
+    required: false,
+    type: String,
+    description:
+      "'YYYY-MM-DD' — Toshkent kunining 00:00 dan (kun kiradi); to'liq ISO — aniq lahza",
+  })
+  @ApiQuery({
+    name: 'to_date',
+    required: false,
+    type: String,
+    description:
+      "'YYYY-MM-DD' — Toshkent kunining 23:59:59.999 gacha (kun kiradi); to'liq ISO — aniq lahza",
+  })
   async exportShifts(
     @Res() res: Response,
     @Query('status') status?: string,

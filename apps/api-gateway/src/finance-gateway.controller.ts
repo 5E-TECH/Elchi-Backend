@@ -5922,12 +5922,27 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Find shifts with filters',
     description:
-      "(8OYPuz7J) `cashbox_user_id` ('0' — MAIN, aks holda filial ID si), `sort_by=opened_at|closed_at` + `sort_dir=asc|desc` (sukut opened_at desc). Qatorlarda `opened_by_name` / `closed_by_name`. Menejer — faqat o'z filiali kassasi smenalari (boshqa `cashbox_user_id` — 403).",
+      "(8OYPuz7J) `cashbox_user_id` ('0' — MAIN, aks holda filial ID si), `sort_by=opened_at|closed_at` + `sort_dir=asc|desc` (sukut opened_at desc). Qatorlarda `opened_by_name` / `closed_by_name`. Menejer — faqat o'z filiali kassasi smenalari (boshqa `cashbox_user_id` — 403). " +
+      "(F7PWp6cK) Sana filtri smena OCHILGAN vaqti (`opened_at`) bo'yicha: `from_date`/`to_date` = 'YYYY-MM-DD' — Toshkent kalendar kuni, IKKI chet ham kiradi " +
+      "(from 00:00:00.000 … to 23:59:59.999, +05:00; `from_date=to_date` — o'sha kun). To'liq ISO vaqt (masalan `2026-03-01T00:00:00Z`) — aniq lahza sifatida, o'zgarishsiz. " +
+      'Yaroqsiz qiymat — 400.',
   })
   @ApiQuery({ name: 'opened_by', required: false })
   @ApiQuery({ name: 'status', required: false })
-  @ApiQuery({ name: 'from_date', required: false })
-  @ApiQuery({ name: 'to_date', required: false })
+  @ApiQuery({
+    name: 'from_date',
+    required: false,
+    example: '2026-10-01',
+    description:
+      "Davr boshi (opened_at). 'YYYY-MM-DD' — Toshkent kunining 00:00:00.000 (+05:00) dan, kun kiradi; to'liq ISO — aniq lahza",
+  })
+  @ApiQuery({
+    name: 'to_date',
+    required: false,
+    example: '2026-10-07',
+    description:
+      "Davr oxiri (opened_at). 'YYYY-MM-DD' — Toshkent kunining 23:59:59.999 (+05:00) gacha, kun kiradi; to'liq ISO — aniq lahza",
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   async findShifts(

@@ -54,6 +54,17 @@ Qachon: kuryer yoki menejer (HQ menejeri ham) sotadi / qisman sotadi / bekor qil
 - 🔧 `extra_cost_request` belgisi holat yonida (kuryer, menejer/admin, market ro'yxatlari, skaner, buyurtma tafsiloti): `pending` → «Xarajat kutilmoqda · 20 000», `approved` → «Xarajat tasdiqlangan · 20 000», `rejected` → «Xarajat rad etildi». Kechiktirilgan so'rov uchun 30 soniyalik polling kerak emas.
 - 🔧 Buyurtma tafsiloti: «Qo'shimcha xarajat» qatori (summa, holat, qaysi tovarlar uchun, rad sababi).
 
+### 2026-11-11 — Smenalar sana filtri Toshkent kuni bo'yicha + AI yordamchi raqamlari hisobotlar bilan bir xil (F7PWp6cK, BE-D)
+
+Deploy: finance-service + api-gateway + ai-service. Migratsiya yo'q. `openapi.json` yangilandi (faqat `GET /finance/shift` va `GET /export/shifts.xlsx` tavsiflari).
+
+- ✏️ `GET /finance/shift` (Smenalar sahifasi) — `from_date` / `to_date` = `YYYY-MM-DD` endi **Toshkent kalendar kuni, ikki chet ham kiradi** (smena **ochilgan** vaqti `opened_at` bo'yicha: `from` 00:00:00.000 … `to` 23:59:59.999, +05:00) — boshqa moliya ro'yxatlari (`GET /finance/history`, Balans) bilan bir xil qoida. Ilgari `YYYY-MM-DD` UTC yarim tuni (= Toshkent **05:00**) deb o'qilardi: oyna `[from 05:00, to 05:00)` bo'lib, `to` kuni amalda tushib qolar, `from_date=to_date` (bitta kun) **~0 smena** qaytarar, `from` kunining 00:00–05:00 smenalari ham ko'rinmasdi. To'liq ISO vaqt (`2026-03-01T00:00:00Z`) — avvalgidek **aniq lahza**, o'zgarishsiz; yaroqsiz qiymat — avvalgidek 400. `GET /export/shifts.xlsx` ham AYNI qoida.
+- 🟢 [ai] — Yordamchi tool natijalari o'zgardi (faqat model ko'radi; SSE `tool_result` / `done.sources` va `GET /ai/assistant/conversations/:id` shakli **o'zgarmagan** — FE tool payloadini o'qimaydi): kassa tarixi va xarajatlar jami endi SQL agregatdan (1000 qator chegarasiz, aniq), xarajatlar kategoriyasi faqat qo'lda kiritilgan xarajatlar bo'yicha (market to'lovi, ish haqi va h.k. alohida — manba turi bo'yicha), kuryer/market/filial balanslari musbat va manfiy alohida ro'yxatlarda, marketlar uchun sof (imzoli) va «berilishi kerak» (faqat musbat) jami alohida, «Buyurtmalar oqimi» reytingida market/filial nomi, `get_shift_summaries` — yuqoridagi smena sana tuzatishi va `close_reason='auto'` bo'yicha avto-yopilganlar soni. Yordamchi davri ko'pi bilan 366 kalendar kun (ikki chet ham). Kunlik limit 100 savol — ega tasdiqlagan (T2 TZ).
+
+**Frontend action items:**
+- 🔧 Smenalar sahifasi: `from_date`/`to_date` ni `YYYY-MM-DD` ko'rinishida yuborish yetarli — tanlangan kunlar to'liq kiradi. Agar `to_date` ga +1 kun qo'shish, ISO chegaralarni qo'lda hisoblash (`T00:00:00+05:00` / `T23:59:59`) yoki shunga o'xshash aylanib o'tish yozilgan bo'lsa — **olib tashlang** (endi +1 kun qo'shilsa ortiqcha kun kiradi). ISO yuborayotgan bo'lsangiz — o'zgarish shart emas.
+- 🟢 AI yordamchi oynasi — o'zgarish shart emas.
+
 ### 2026-11-11 — Avto-yopilgan ASOSIY kassa smenasiga 24 soat ichida karta rasmini keyin yuklash (BE-B)
 
 Ega qarori (2026-11-10): «24 soat ichida keyin yuklash». ASOSIY kassa smenasi jadval bo'yicha AVTOMATIK yopilsa

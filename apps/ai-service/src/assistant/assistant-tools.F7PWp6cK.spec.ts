@@ -1,6 +1,7 @@
 import { of, throwError } from 'rxjs';
 import {
   AI_ASSISTANT_READ_PATTERNS,
+  AI_ASSISTANT_TOOL_ENDPOINTS,
   AI_ASSISTANT_TOOL_NAMES,
   type AiAssistantRequester,
 } from '@app/common';
@@ -78,6 +79,59 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
     for (const p of AI_ASSISTANT_READ_PATTERNS) {
       expect(p.cmd).not.toMatch(WRITE_VERB_RE);
       expect(['FINANCE', 'ANALYTICS', 'BRANCH']).toContain(p.client);
+    }
+  });
+
+  it('oq ro‘yxat AYNAN shu 11 ta o‘qish buyrug‘i (BE-D: + finance.history.daily)', () => {
+    expect(
+      AI_ASSISTANT_READ_PATTERNS.map((p) => `${p.client}:${p.cmd}`),
+    ).toEqual([
+      'FINANCE:finance.cashbox.financial_balance',
+      'FINANCE:finance.cashbox.cards.list',
+      'FINANCE:finance.history.find_all',
+      'FINANCE:finance.shift.find_all',
+      'FINANCE:finance.cashbox.expense_categories.list',
+      'FINANCE:finance.financial_balance.analytics',
+      'ANALYTICS:analytics.revenue',
+      'ANALYTICS:analytics.dashboard',
+      'BRANCH:branch.find_all',
+      'FINANCE:finance.receipt_checks.summary',
+      'FINANCE:finance.history.daily',
+    ]);
+    expect(AssistantReader.isAllowed('FINANCE', 'finance.history.daily')).toBe(
+      true,
+    );
+  });
+
+  it('oq ro‘yxat = tool endpointlari buyruqlari birlashmasi (ortiqcha ruxsat yo‘q)', () => {
+    const endpointCmds = new Set(
+      Object.values(AI_ASSISTANT_TOOL_ENDPOINTS).flatMap((eps) =>
+        eps.map((ep) => ep.cmd),
+      ),
+    );
+    expect(new Set(AI_ASSISTANT_READ_PATTERNS.map((p) => p.cmd))).toEqual(
+      endpointCmds,
+    );
+    expect(
+      AI_ASSISTANT_TOOL_ENDPOINTS.get_cashbox_history.map((e) => e.route),
+    ).toContain('GET /finance/history/daily');
+    expect(
+      AI_ASSISTANT_TOOL_ENDPOINTS.get_expenses_by_category.map((e) => e.route),
+    ).toContain('GET /finance/history/daily');
+  });
+
+  it('har tool FAQAT o‘z endpointlari o‘qiydigan buyruqlarni yuboradi', async () => {
+    for (const name of AI_ASSISTANT_TOOL_NAMES) {
+      const { reader, sent } = fakeClients({});
+      const exec = await executeAssistantTool(name, {}, ctx(reader));
+      expect(exec.result.isError).toBe(false);
+      const allowed = AI_ASSISTANT_TOOL_ENDPOINTS[name].map((e) => e.cmd);
+      expect(sent.length).toBeGreaterThan(0);
+      for (const s of sent) {
+        expect({ tool: name, cmd: s.cmd, ok: allowed.includes(s.cmd) }).toEqual(
+          { tool: name, cmd: s.cmd, ok: true },
+        );
+      }
     }
   });
 
@@ -190,7 +244,9 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
   it('payload API SUPERADMIN yo‘li bilan bir xil: tarix sukut MAIN, sukut davr — joriy oy', async () => {
     const { reader, sent } = fakeClients({});
     await executeAssistantTool('get_cashbox_history', {}, ctx(reader));
-    expect(sent[0]).toMatchObject({
+    expect(
+      sent.find((x) => x.cmd === 'finance.history.find_all'),
+    ).toMatchObject({
       client: 'FINANCE',
       cmd: 'finance.history.find_all',
       payload: {
@@ -253,8 +309,8 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
     expect(exec.result.content).not.toContain('901234567');
     expect(exec.result.content).not.toContain('phone');
     const body = JSON.parse(exec.result.content);
-    expect(body.data.top).toHaveLength(15);
-    expect(body.data.top[0]).toMatchObject({
+    expect(body.data.top_positive).toHaveLength(15);
+    expect(body.data.top_positive[0]).toMatchObject({
       name: 'Kuryer 20',
       balance: 20000,
     });
@@ -284,10 +340,12 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
               expense_category_id: '2',
               source_type: 'manual_expense',
             },
-            { amount: 100, expense_category_id: null, source_type: 'salary' },
           ],
-          pagination: { total: 3 },
+          pagination: { total: 2 },
         },
+      },
+      'finance.history.daily': {
+        data: { totals: { expense: 400, expense_count: 2 } },
       },
       'finance.cashbox.expense_categories.list': {
         data: {
@@ -303,20 +361,22 @@ describe('AI yordamchi tool oq ro‘yxati (F7PWp6cK)', () => {
       { from: '2026-10-01', to: '2026-10-26' },
       ctx(reader),
     );
-    expect(sent[0].payload).toMatchObject({
-      cashbox_type: 'main',
-      operation_type: 'expense',
-    });
+    for (const s of sent.filter((x) => x.cmd.startsWith('finance.history'))) {
+      expect(s.payload).toMatchObject({
+        cashbox_type: 'main',
+        operation_type: 'expense',
+      });
+    }
     const body = JSON.parse(exec.result.content);
-    expect(body.data.total_expense).toBe(500);
+    expect(body.data.manual_expense_total).toBe(400);
     expect(body.data.by_category[0]).toMatchObject({
       name: 'Yoqilg‘i',
       amount: 300,
-      share_percent: 60,
+      share_of_manual_percent: 75,
     });
     expect(exec.result.content).not.toContain('1112233');
     expect(body.period).toEqual({ from: '2026-10-01', to: '2026-10-26' });
-    expect(body.records).toBe(3);
+    expect(body.records).toBe(2);
   });
 
   it('⭐ get_receipt_checks (T3-4): payload API bilan bir xil (rollar bilan), natija top-15 bilan cheklangan', async () => {

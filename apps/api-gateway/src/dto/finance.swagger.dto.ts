@@ -890,12 +890,29 @@ export class FindShiftQueryDto {
   @IsString()
   status?: 'open' | 'closed';
 
-  @ApiPropertyOptional({ example: '2026-03-01T00:00:00Z' })
+  /**
+   * (F7PWp6cK) Smena ochilgan vaqti (`opened_at`) bo'yicha. 'YYYY-MM-DD' —
+   * Toshkent kunining boshidan (00:00:00.000 +05:00), kun kiradi; to'liq ISO
+   * vaqt — aniq lahza (o'zgarishsiz).
+   */
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      "Davr boshi (opened_at). 'YYYY-MM-DD' — Toshkent kunining 00:00:00.000 (+05:00) dan, kun kiradi; to'liq ISO — aniq lahza",
+  })
   @IsOptional()
   @IsString()
   from_date?: string;
 
-  @ApiPropertyOptional({ example: '2026-03-07T23:59:59Z' })
+  /**
+   * (F7PWp6cK) 'YYYY-MM-DD' — Toshkent kunining oxirigacha (23:59:59.999
+   * +05:00), kun KIRADI (ilgari UTC yarim tuni = Toshkent 05:00 edi).
+   */
+  @ApiPropertyOptional({
+    example: '2026-10-07',
+    description:
+      "Davr oxiri (opened_at). 'YYYY-MM-DD' — Toshkent kunining 23:59:59.999 (+05:00) gacha, kun kiradi; to'liq ISO — aniq lahza",
+  })
   @IsOptional()
   @IsString()
   to_date?: string;

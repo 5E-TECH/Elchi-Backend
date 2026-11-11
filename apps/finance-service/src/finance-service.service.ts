@@ -4015,8 +4015,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where.cashbox_user_id = String(dto.cashbox_user_id);
       }
 
-      const from = this.parseDate(dto.from_date);
-      const to = this.parseDate(dto.to_date);
+      // F7PWp6cK — Toshkent kuni (SqVMuhKo), boshqa moliya ro'yxatlari bilan
+      // AYNI qoida: 'YYYY-MM-DD' — butun Toshkent kuni, ikki chet ham kiradi
+      // (00:00:00.000 … 23:59:59.999 +05:00). Ilgari `new Date('YYYY-MM-DD')`
+      // UTC yarim tuni (= Toshkent 05:00) edi: oyna [from 05:00, to 05:00)
+      // bo'lib, `to` kuni amalda tushib qolar, bitta kun so'rovi ~0 qaytarardi.
+      // To'liq ISO qiymat o'zgarishsiz (aniq lahza); yaroqsiz — avvalgidek 400.
+      const { start: from, end: to } = this.parseDateRange(
+        dto.from_date,
+        dto.to_date,
+      );
       if (from && to) {
         where.opened_at = Between(from, to);
       } else if (from) {

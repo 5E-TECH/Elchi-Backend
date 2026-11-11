@@ -815,6 +815,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `marketPayableTotal` (sum of positive market balances). Financial-balance
   history/analytics/top-impacts and the cashbox history date filters use
   Tashkent days for `YYYY-MM-DD`.
+- **Shift list dates (F7PWp6cK BE-D, 2026-11-11):** `finance.shift.find_all` (`GET /finance/shift`, `shifts.xlsx`, AI `get_shift_summaries`) filters `opened_at` by inclusive Tashkent days for `YYYY-MM-DD` (`parseDateRange`; was UTC midnight = 05:00 Tashkent); full ISO unchanged. The AI assistant whitelist also has `finance.history.daily` (exact SQL period totals for `get_cashbox_history` / `get_expenses_by_category`). Acceptance TC (10 questions vs. report endpoints): `docs/ai/ASSISTANT_TC_F7PWp6cK.md`; runner `npm run ai:tc` (`scripts/ai/assistant-tc.mjs` + pure `assistant-tc.lib.ts`; read-only, credentials from env only, no redirects followed; results JSON `assistant-tc-results*.json` holds live financial data — gitignored, mode 0600).
 - **Branch cashbox debt (2026-11-11, migration `1716000000217`
   `branch_schema.branches.cashbox_debt_enabled`, default false):**
   `payment_branch_main` reads the flag via `branch.find_by_id` BEFORE the

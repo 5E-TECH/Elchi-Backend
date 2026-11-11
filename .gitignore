@@ -81,6 +81,11 @@ backups/
 tests/load/summary.json
 tests/load/capacity-summary.json
 
+# (F7PWp6cK) AI yordamchi TC natijasi (`npm run ai:tc`, ELCHI_TC_OUT) — jonli
+# moliyaviy ma'lumot (kuryer/market/filial nomlari, balanslar, kassa);
+# commit qilinmaydi, faqat Trello kartasiga ilova qilinadi.
+/assistant-tc-results*.json
+
 # Claude Code agent worktree'lari (lokal git worktree — commit qilinmaydi;
 # gitlink bo'lib tushsa CI checkout cleanup'da "No url found for submodule")
 .claude/worktrees/
