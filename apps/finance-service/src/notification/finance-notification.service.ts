@@ -365,8 +365,14 @@ export function buildPaymentReceivedPayload(
     body = [
       `✅ ${money} qabul qilindi${ref}.`,
       `Qabul qildi: ${accepted}.`,
+      // (2026-11-11) «Kassa qarzga ishlaydi» kuryeri oldindan topshirgan —
+      // manfiy qoldiq «−200 000» emas, «Avans» bo'lib ko'rinadi.
       ...(balanceAfter !== null
-        ? [`Qoldiq: ${formatMoney(balanceAfter)}.`]
+        ? [
+            balanceAfter < 0
+              ? `Avans (oldindan topshirilgan): ${formatMoney(-balanceAfter)} — keyingi sotuvlardan yopiladi.`
+              : `Qoldiq: ${formatMoney(balanceAfter)}.`,
+          ]
         : []),
       `Sana: ${day}`,
     ].join('\n');

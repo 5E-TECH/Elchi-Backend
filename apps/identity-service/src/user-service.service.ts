@@ -1970,6 +1970,7 @@ export class UserServiceService implements OnModuleInit {
       add_order: admin.add_order,
       can_add_extra_cost: admin.can_add_extra_cost,
       can_sell_cancel: admin.can_sell_cancel,
+      cashbox_debt_enabled: admin.cashbox_debt_enabled ?? false,
       language: admin.language,
       ai_price_per_order: admin.ai_price_per_order ?? null,
       can_order_from_warehouse: admin.can_order_from_warehouse ?? false,
@@ -2098,6 +2099,34 @@ export class UserServiceService implements OnModuleInit {
         this.badRequest('Sotish/bekor ruxsati faqat manager uchun');
       }
       admin.can_sell_cancel = dto.can_sell_cancel;
+    }
+
+    /**
+     * (2026-11-11) KURYER kassasi qarzga ishlaydi (`cashbox_debt_enabled`,
+     * ustun — migratsiya 1716000000207, marketniki bilan bir xil). Yoqilsa
+     * finance kuryerdan qoldig'idan ORTIQ (oldindan) pul qabul qiladi —
+     * kuryer kassasi manfiyga tushadi (kompaniya kuryerga qarzdor; ortig'i
+     * `courier_to_branch` qoldig'i bo'lib keyingi sotuvlarga hisoblanadi).
+     * Faqat SUPERADMIN/ADMIN, o'zini emas; faqat KURYER yozuvida (market —
+     * `PATCH /admin/markets/:id`). RMQ'da ValidationPipe yo'q — boolean.
+     */
+    if (typeof dto.cashbox_debt_enabled !== 'undefined') {
+      if (!requesterIsPrivileged || requesterIsSelf) {
+        this.forbidden(
+          'Kuryer kassasini qarzga ishlatishni faqat admin yoki superadmin yoqa oladi',
+        );
+      }
+      if (admin.role !== Roles.COURIER) {
+        this.badRequest(
+          'Bu yerda kassa qarzi faqat kuryer uchun (market — PATCH /admin/markets/:id)',
+        );
+      }
+      if (typeof dto.cashbox_debt_enabled !== 'boolean') {
+        this.badRequest(
+          "cashbox_debt_enabled boolean (true/false) bo'lishi kerak",
+        );
+      }
+      admin.cashbox_debt_enabled = dto.cashbox_debt_enabled;
     }
 
     if (
@@ -2245,6 +2274,7 @@ export class UserServiceService implements OnModuleInit {
         add_order: saved.add_order,
         can_add_extra_cost: saved.can_add_extra_cost,
         can_sell_cancel: saved.can_sell_cancel,
+        cashbox_debt_enabled: saved.cashbox_debt_enabled ?? false,
         language: saved.language,
         ai_price_per_order: saved.ai_price_per_order ?? null,
         can_order_from_warehouse: saved.can_order_from_warehouse ?? false,

@@ -96,6 +96,22 @@ describe('buildPaymentReceivedPayload', () => {
     });
   });
 
+  it('(2026-11-11) kuryer avansi — manfiy qoldiq «Avans» bo`lib ko`rinadi', () => {
+    const payload = buildPaymentReceivedPayload({
+      kind: 'courier_payment',
+      recipient_id: 44,
+      payment_id: '10',
+      amount: 300_000,
+      balance_after: -200_000,
+      accepted_by_name: 'Ali Valiyev',
+      payment_date: '2026-11-11T08:00:00Z',
+    })!;
+    expect(payload.body).toBe(
+      "✅ 300 000 so'm qabul qilindi (to'lov #10).\nQabul qildi: Ali Valiyev.\nAvans (oldindan topshirilgan): 200 000 so'm — keyingi sotuvlardan yopiladi.\nSana: 11.11.2026",
+    );
+    expect(payload.data.balance_after).toBe(-200_000);
+  });
+
   it('kuryer to‘lovi — kuryer qabul qiluvchi (2crjWf7v kvitansiya: kim qabul qildi, qoldiq, 👍/❗️)', () => {
     const payload = buildPaymentReceivedPayload({
       kind: 'courier_payment',

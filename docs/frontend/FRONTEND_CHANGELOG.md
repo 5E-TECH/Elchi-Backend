@@ -22,6 +22,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-11 — Kuryer kassasi qarzga ishlaydi: kuryerdan oldindan pul qabul qilish
+
+Deploy: identity-service + finance-service + order-service + api-gateway. **Migratsiya yo'q** (marketniki bilan bir xil ustun — `1716000000207`).
+
+- 🆕 `PATCH /users/:id` — `cashbox_debt_enabled: boolean` (faqat **kuryer** yozuvida; faqat superadmin/admin — menejer 403, boshqa rol 400). `GET /users/:id` javobida ham bor (sukut `false`). Market uchun avvalgidek `PATCH /admin/markets/:id`.
+- ✏️ `POST /finance/cashbox/payment/courier` — kuryerda yoqilgan bo'lsa kuryer **qoldig'idan ortiq** (oldindan) summa qabul qilinadi: kuryer kassasi manfiyga tushadi (kompaniya kuryerga qarzdor), keyingi sotuvlar uni yopadi. O'chiq bo'lsa — avvalgidek **400** «To'lov miqdori courier qoldig'idan oshib ketdi (qoldiq: N)». HQ va menejer yo'llari ikkalasida.
+- Menejer sahifasida «Kuryerlardan olinishi kerak» avansdan keyin 0 dan pastga tushmaydi (manfiy qism — avans).
+- Kuryer kvitansiyasi (`finance.payment_received`, Telegram/ilova): qoldiq manfiy bo'lsa «Qoldiq: −N» emas, «Avans (oldindan topshirilgan): N so'm — keyingi sotuvlardan yopiladi.» (`data.balance_after` — manfiy son, o'zgarmagan).
+- Avansi bor (kassasi ≠ 0) kuryerni boshqa filialga o'tkazish avvalgidek to'siladi — avval hisob-kitob.
+
+**Frontend action items:**
+- 🔧 Kuryer tahrirlash formasi (superadmin/admin): «Kassa qarzga ishlaydi (oldindan pul qabul qilish)» kaliti → `PATCH /users/:id { cashbox_debt_enabled }`.
+- 🔧 «Pul qabul qilish» formasi: kuryerda yoqilgan bo'lsa summa kuryer qoldig'i bilan cheklanmasin (manfiy qoldiqni «Avans» deb ko'rsatish mumkin).
+
 ### 2026-11-11 — Menejer: «Marketga to'lov» o'z filial kassasidan va «Marketga o'tkazma» (audit M4)
 
 Deploy: finance-service + api-gateway. **Migratsiya yo'q.** Frontend `712257b2` kutgan kontrakt.

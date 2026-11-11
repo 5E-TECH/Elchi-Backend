@@ -88,6 +88,14 @@ export class UpdateUserDto {
   @IsBoolean()
   can_sell_cancel?: boolean;
 
+  /**
+   * (2026-11-11) KURYER kassasi qarzga ishlaydimi — yoqilsa kuryerdan
+   * qoldig'idan ortiq (oldindan) pul qabul qilinadi. Faqat admin/superadmin.
+   */
+  @IsOptional()
+  @IsBoolean()
+  cashbox_debt_enabled?: boolean;
+
   @IsOptional()
   @IsEnum(Where_deliver)
   default_tariff?: Where_deliver;
