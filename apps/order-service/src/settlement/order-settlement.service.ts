@@ -873,11 +873,15 @@ export class OrderSettlementService {
     const rows = await this.orderSettlementRepo
       .createQueryBuilder('settlement')
       .select('settlement.branch_id', 'branch_id')
-      // (SPEC v2) «N ta sotuvi» — faqat sotuv qatorlari; kechiktirilgan E ning
-      // kredit qatori (−E) sotuv emas. Summa esa HAMMA turdan: kredit qator
-      // yolg'iz qolsa ham kuryer kassasi manfiy bo'lib, to'siq pul orqali
-      // saqlanadi.
-      .addSelect(`COUNT(*) FILTER (WHERE settlement.kind = 'sale')`, 'count')
+      // (SPEC v2) Sotuv qatorlari + kechiktirilgan E ning nol bo'lmagan kredit
+      // qatori (−E). Kredit qator ham shu filialning ochiq hisobi: uni sanamasak,
+      // kuryer kassasi boshqa yo'l bilan 0 ga kelganda (qo'lda to'ldirish,
+      // manfiy carry) filialdan ko'chirish / HQ qabuli o'tib ketadi va keyingi
+      // topshirish boshqa filialda B ning −E sini yeb qo'yadi. Summa — HAMMA turdan.
+      .addSelect(
+        `COUNT(*) FILTER (WHERE settlement.kind = 'sale' OR settlement.courier_amount <> 0)`,
+        'count',
+      )
       .addSelect('COALESCE(SUM(settlement.courier_amount), 0)', 'amount')
       .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('settlement.status = :status', {
@@ -1553,7 +1557,9 @@ export class OrderSettlementService {
           const sample =
             candidates[0] ??
             (await repo.findOne({
-              where: { courier_id: params.matchValue } as Record<
+              // (SPEC v2) faqat sotuv qatori: tasdiqda keyin yozilgan E qatori
+              // eski filialdagi buyurtmaniki bo'lishi mumkin.
+              where: { courier_id: params.matchValue, kind: 'sale' } as Record<
                 string,
                 unknown
               >,
@@ -2301,7 +2307,10 @@ export class OrderSettlementService {
                 },
           );
           reopened = round2(reopened + leg);
-          reopenedIds.push(String(row.order_id));
+          // (SPEC v2) sotuv va E qatori bitta buyurtmaniki bo'lishi mumkin — id bir marta.
+          if (!reopenedIds.includes(String(row.order_id))) {
+            reopenedIds.push(String(row.order_id));
+          }
         }
       }
 
@@ -2317,7 +2326,8 @@ export class OrderSettlementService {
           }
         } else if (level === 'courier_to_branch' && !branchId) {
           const sample = await repo.findOne({
-            where: { courier_id: matchValue },
+            // (SPEC v2) faqat sotuv qatori (E qatori eski filialniki bo'lishi mumkin).
+            where: { courier_id: matchValue, kind: 'sale' },
             order: { createdAt: 'DESC' },
           });
           branchId = sample?.branch_id ? String(sample.branch_id) : null;

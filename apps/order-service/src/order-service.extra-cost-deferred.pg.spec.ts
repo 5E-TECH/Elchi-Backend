@@ -1097,7 +1097,7 @@ type Snapshot = {
       });
     }, 120_000);
 
-    it('⭐ kuryer o`tkazish tekshiruvi: kechiktirilgan so`rov buyurtma holatidan qat`i nazar sanaladi; E krediti «N ta sotuv» ga kirmaydi', async () => {
+    it('⭐ kuryer o`tkazish tekshiruvi: kechiktirilgan so`rov buyurtma holatidan qat`i nazar sanaladi; ochiq E krediti ham sanaladi', async () => {
       await run({ approvalRequired: true }, async () => {
         expectDeferred(await sell('7001', C, E));
         await courierToBranch(C);
@@ -1113,11 +1113,12 @@ type Snapshot = {
           pending_settlement_count: 0,
         });
         await approve();
-        // Tasdiqdan keyin: so'rov yopildi; zanjir krediti (−E, PENDING)
-        // summada bor, lekin sotuvlar sonida emas.
+        // Tasdiqdan keyin: so'rov yopildi; zanjir krediti (−E, PENDING) — shu
+        // filialning ochiq hisobi: summada ham, sonda ham (kassa boshqa yo'l
+        // bilan 0 ga kelsa ham kuryer boshqa filialga o'tib ketmasin).
         expect(await check()).toMatchObject({
           pending_extra_cost_approvals: 0,
-          pending_settlement_count: 0,
+          pending_settlement_count: 1,
           pending_settlement_amount: -E,
         });
       });

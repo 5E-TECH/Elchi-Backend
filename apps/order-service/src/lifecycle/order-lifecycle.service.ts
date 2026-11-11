@@ -6949,7 +6949,15 @@ export class OrderLifecycleService {
           plan.remittedChainRows.push(row);
           continue;
         }
+        // Bekor qilishda sotuv qatori yo'q — superadmin yo'li ham yo'q, shuning
+        // uchun «keyin superadmin qaytara oladi» deb va'da berilmaydi.
+        const isCancel =
+          approvals.find(
+            (approval) =>
+              String(approval.id) === String(row.extra_cost_approval_id ?? ''),
+          )?.action === 'cancel';
         if (
+          !isCancel &&
           start === SettlementStatus.PENDING &&
           status === SettlementStatus.COURIER_SETTLED
         ) {
