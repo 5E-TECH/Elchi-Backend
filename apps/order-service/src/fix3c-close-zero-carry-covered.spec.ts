@@ -391,6 +391,9 @@ function makeWorld(opts: { carryTable?: boolean } = {}) {
     syncOrderToSearch: jest.fn().mockResolvedValue(undefined),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+    // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+    // (bugungi darhol yozish yo'li qamraladi).
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),
   });
   const svc = lifecycle as unknown as OrderLifecycleService;

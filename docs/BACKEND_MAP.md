@@ -1523,6 +1523,80 @@ A pickup fee (B824gOu5) is NOT a leg of this chain: it belongs to a visit, not
 an order — see finance-service › Pickup visits.
 **Details:** memory `settlement_compensation_initiative.md`, `order_flow_money_fixes.md`.
 
+**Deferred extra cost (SPEC v2, 2026-11-12, migration `1716000000219`):**
+- **When:** sell / partly_sell / cancel with E > 0 by a courier or manager
+  (HQ manager too) on a market with `extra_cost_requires_approval`, numeric
+  requester + market ids (`shouldDeferExtraCost` in the lifecycle). Partner
+  orders (non-empty `external_id`), admin/superadmin requesters and the legacy
+  replay execution keep the old 202/replay path; approval OFF stays immediate
+  (the immediate row now also stores `items`).
+- **At operation time** the order is sold / cancelled NOW with E = 0 (legs,
+  settlement row, ledger, `orders.extra_cost` = 0, comment, payment state);
+  only the market-paid-at-sale limit (X ≤ C − T − E) uses the requested E. E
+  becomes an `order_extra_cost_approval` row `mode='deferred'` with `items`
+  (order_item_id, product_id, product_name, quantity; partly-sell also
+  sold_quantity / returned_quantity) and
+  `deferred_snapshot` (who is charged — courier `couriers` / manager `branch`
+  cashbox, settlement start status, shares). Response: `extra_cost_request`
+  (no 202). Legacy rows have `mode='replay'` (column default).
+- **Approve** (market/admin, Telegram, auto-approve) = its own transaction:
+  FOR_MARKET −E, charged cashbox −E, ledger `cancel_extra_cost` /
+  `sell_extra_cost` (dedup `extra-cost:<approvalId>`), `orders.extra_cost` = E,
+  and new `order_settlement` rows — `kind='extra_cost_chain'`
+  (−E_courier/−E_branch/0 at the snapshot start status) and
+  `kind='extra_cost_market'` (0/0/−E at BRANCH_SETTLED); one `kind='sale'`
+  row per order (`UQ_order_settlement_sale_order`), at most one row per
+  extra kind per approval. If the market was already paid at least
+  `to_be_paid − E` (SOLD / PARTLY_PAID / PAID) the order goes PAID
+  (`paid_amount = to_be_paid`) and the overage goes through the outbox to
+  `finance.market.extra_cost_overage` (payload: `market_id`, `amount`,
+  `approval_id`, `order_id`, `dedup_key`, `market_leg`). In that case the
+  FOR_MARKET −E leg is NOT enqueued on its own: finance, in the market's
+  order-sync chain, first calls order-service
+  `order.extra_cost.apply_overage` (`applyDeferredExtraCostOverage`: one
+  transaction, approval row locked, market SOLD / PARTLY_PAID orders FIFO
+  `FOR UPDATE`, exactly once via `overage_applied_at`; a duplicate returns
+  `duplicate: true`), THEN posts `market_leg` (`updateBalance`, dedup
+  `extra-cost:<approvalId>`). So a sale never sees −E before the overage is
+  applied (no double E via autopay); leftover with no open order stays as a
+  negative FOR_MARKET balance for the next sale's autopay. Failures reject
+  and the outbox retries; concurrent duplicates share one in-flight result.
+  After commit `nudgeExtraCostSettlement` runs the pending carries
+  (courier→branch, branch→HQ, HQ→market). Result = today's "approval OFF
+  with E" for every balance, carry, ledger and order column (real-Postgres
+  spec `order-service.extra-cost-deferred.pg.spec.ts`).
+- **Reject / void:** nothing moves (= sale with E = 0).
+- **Rollback:** pending deferred row → void; approved → reversed from the
+  snapshot (FOR_MARKET +E, charged +E, ledger correction, extra rows at
+  their start status deleted, `extra_cost` = 0). Plan per row
+  (`planDeferredExtraCostRows`), re-checked under `FOR UPDATE` of all the
+  order's settlement rows (`ORDER BY createdAt, id`, after the courier
+  carries — same order as the settlement FIFO); if anything changed since
+  the pre-check → 400 «Rollback holati o'zgargan … qayta urinib ko'ring»:
+  - market row MARKET_SETTLED (consumed by an HQ→market payment, maybe for
+    another order) → kept, plus a compensation row
+    `kind='extra_cost_reversal'` (0/0/+E, BRANCH_SETTLED): the market is
+    owed E again and the next HQ→market payment closes it;
+  - chain row COURIER_SETTLED together with a COURIER_SETTLED sale row
+    (courier paid C − E after approval), superadmin only → deleted; the
+    courier carry credit is sale + chain (C − E), like approval OFF;
+  - chain row pulled by ANOTHER order's courier payment → 400 «Qo'shimcha
+    xarajat krediti boshqa buyurtma hisob-kitobida ishlatilgan — hozir
+    rollback mumkin emas … Kuryer bu buyurtma pulini ham topshirgach, uni
+    superadmin qaytara oladi»;
+  - anything else → 400 «… rollback mumkin emas (…). Buxgalteriya
+    tuzatishi kerak».
+- **Reads:** `extra_cost_request` (latest approval row, any status/mode) on
+  every enriched order; `pending_extra_cost_approval` only for replay rows;
+  approval lists/serializer add `mode` + `items` (with product names).
+  Courier transfer/removal check counts deferred PENDING rows regardless of
+  order status. Settlement provider flips / counts read only `kind='sale'`
+  rows; `getSettlementByOrderId` adds `extra_rows` (base = the sale row,
+  else an unreversed extra row, else `null`). FIFO results
+  (`settled_order_ids`) list each order once even when its sale and extra
+  rows close together. Activity action `order.extra_cost_approved` is in
+  `ACTIVITY_ACTION_REGISTRY`.
+
 **fix3 money rules (2026-10-01):**
 - **Rollback reverses what the sale recorded** (M1/LC-01,
   `resolveRollbackReversalActor`): if the `order_settlement` row has a

@@ -36,6 +36,8 @@ import {
 import {
   EXTRA_COST_PENDING_UNIQUE_INDEX,
   ExtraCostApprovalAction,
+  type ExtraCostApprovalItem,
+  type ExtraCostDeferredSnapshot,
   OrderExtraCostApproval,
 } from '../entities/order-extra-cost-approval.entity';
 import {
@@ -145,6 +147,17 @@ import {
   matchPartlySellItems,
   type PartlySellRequestItem,
 } from './partly-sell-items';
+import {
+  computeDeferredExtraCostOrderState,
+  extraCostItemsFromOrderItems,
+  extraCostItemsFromPartlySell,
+  formatExtraCostItems,
+  isDeferredExtraCostFamilyStatus,
+  isPartnerSyncedOrder,
+  legacyExtraCostItems,
+  withExtraCostItemNames,
+} from './extra-cost-deferred';
+import { OrderSettlementService } from '../settlement/order-settlement.service';
 import {
   classifyBatchBlockers,
   classifyPostOrders,
@@ -400,6 +413,31 @@ interface RemittedCourierCredit {
   amount: number;
   /** Tekshirilgan qator holati (qulf ostida o'zgarmagan bo'lishi shart). */
   status: SettlementStatus;
+  /**
+   * (SPEC v2 §5) Sotuv qatori bilan birga topshirilgan kechiktirilgan E
+   * zanjir qatorlari (kuryer −E): qoldiqqa `amount + deferredChainAmount`
+   * kredit bo'ladi — bugungi «tasdiqsiz E» ning bitta qatori summasi.
+   */
+  deferredChainAmount?: number;
+}
+
+/** Kuryer qoldig'iga yoziladigan kredit: sotuv qatori + birga topshirilgan zanjir (−E). */
+function remittedCarryCredit(credit: RemittedCourierCredit): number {
+  return (
+    (toTiyin(credit.amount) + toTiyin(credit.deferredChainAmount ?? 0)) / 100
+  );
+}
+
+/**
+ * (SPEC v2 §5) Rollback'da tasdiqlangan kechiktirilgan E qatorlari bilan nima
+ * qilinadi (`planDeferredExtraCostRows`). Ro'yxatda yo'q qatorlar
+ * boshlang'ich holatida — oddiy o'chiriladi.
+ */
+interface DeferredExtraCostRowPlan {
+  /** Boshqa buyurtma HQ→market FIFO'si ishlatgan market qatorlari (joyida qoladi, +E kompensatsiya). */
+  consumedMarketRows: OrderSettlement[];
+  /** Superadmin: sotuv qatori bilan birga topshirilgan zanjir qatorlari. */
+  remittedChainRows: OrderSettlement[];
 }
 
 /**
@@ -466,6 +504,9 @@ export const EXTRA_COST_CLOSE_REASON = {
     `buyurtma endi «kutilmoqda» holatida emas (${status})`,
   statusChanged: (status: string) =>
     `so'rov ochilgandan keyin buyurtma holati o'zgargan (${status})`,
+  /** (SPEC v2) Kechiktirilgan so'rov: buyurtma amal oilasidan chiqib ketgan. */
+  outsideFamily: (status: string) =>
+    `buyurtma holati endi amalga mos emas (${status})`,
   superseded: (action: string, amount: number, oldAction: string) =>
     `Yangi so'rov bilan almashtirildi (${action}, ${amount} so'm) — ` +
     `eski ${oldAction} so'rovi yopildi`,
@@ -517,6 +558,8 @@ type ExtraCostImmediateWrite = {
   marketId: string | null | undefined;
   proofFiles: string[];
   payload: Record<string, unknown>;
+  /** (SPEC v2) Qaysi tovarlar uchun — snapshot. */
+  items?: ExtraCostApprovalItem[];
 };
 
 /**
@@ -532,6 +575,8 @@ const EXTRA_COST_NOTICE_COLUMNS = [
   'amount',
   'status',
   'closed_reason',
+  // (SPEC v2) kechiktirilgan so'rov matni boshqacha.
+  'mode',
 ];
 
 /**
@@ -599,6 +644,15 @@ export class OrderLifecycleService {
     // (eski spec'lar) hamma buyurtma HQ va ombor RPC'si chaqirilmaydi.
     @Optional()
     private readonly orderWarehouse?: OrderWarehouseService,
+    // (SPEC v2) Qo'shimcha xarajat tovar nomlari (katalog). Ixtiyoriy — usiz
+    // nom `product_name` / «Tovar #id».
+    @Optional()
+    @Inject('CATALOG')
+    private readonly catalogClient?: ClientProxy,
+    // (SPEC v2) Kechiktirilgan E tasdig'idan keyin hisob-kitob «turtki»si.
+    // Ixtiyoriy — usiz turtki yo'q (qoldiq keyingi to'lovda qo'llanadi).
+    @Optional()
+    private readonly settlementService?: OrderSettlementService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService =====
@@ -2040,13 +2094,102 @@ export class OrderLifecycleService {
       isDeleted: false,
     };
 
+    // (SPEC v2) Faqat sotuv qatori (`kind = 'sale'`) — kechiktirilgan E
+    // qatorlari (−E) ustidan yozilib ketmasin; o'chirilgani ham qayta
+    // ishlatiladi (qisman unikal indeks `kind = 'sale'`).
     const existing = await repo.findOne({
-      where: { order_id: String(data.order_id) },
+      where: { order_id: String(data.order_id), kind: 'sale' },
     });
     if (existing) {
       await repo.update({ id: existing.id }, fields);
     } else {
-      await repo.save(repo.create(fields));
+      await repo.save(repo.create({ ...fields, kind: 'sale' }));
+    }
+  }
+
+  /**
+   * (SPEC v2 §3.4) Kechiktirilgan E ning sotuv-zanjiri boshlang'ich holati —
+   * AYNAN `recordSaleSettlement` hisoblagandek (kuryer bor — PENDING; kuryer
+   * yo'q, filial bor — COURIER_SETTLED; ikkalasi ham yo'q — BRANCH_SETTLED).
+   */
+  private resolveSettlementStartStatus(params: {
+    hasCourier: boolean;
+    branchId: string | null;
+  }): SettlementStatus {
+    if (params.hasCourier) return SettlementStatus.PENDING;
+    return params.branchId
+      ? SettlementStatus.COURIER_SETTLED
+      : SettlementStatus.BRANCH_SETTLED;
+  }
+
+  /**
+   * (SPEC v2 §3.4) Tasdiqlangan kechiktirilgan E ning ikki hisob-kitob
+   * qatori (ikkalasi ham `extra_cost_approval_id` bilan):
+   *   • `extra_cost_chain` — kuryer −E_k, filial −E_f, market 0; holat —
+   *     snapshot'dagi boshlang'ich holat (sotuv qatori qayerdan boshlangan
+   *     bo'lsa). Ikki oyoq ham 0 bo'lsa (HQ menejeri sotuvi) yozilmaydi;
+   *   • `extra_cost_market` — 0 / 0 / −E, BRANCH_SETTLED (HQ→market FIFO uni
+   *     darhol ishlata oladi, kuryer/filial harakatini kutmaydi).
+   * Ikkalasining yig'indisi bugungi «E ichidagi» bitta qator bilan teng.
+   */
+  private async recordExtraCostSettlementRows(
+    manager: EntityManager,
+    data: {
+      order_id: string;
+      approval_id: string;
+      snapshot: ExtraCostDeferredSnapshot;
+    },
+  ): Promise<void> {
+    const repo = manager.getRepository(OrderSettlement);
+    const now = new Date();
+    const snap = data.snapshot;
+    const base = {
+      order_id: String(data.order_id),
+      extra_cost_approval_id: String(data.approval_id),
+      courier_id: snap.courier_id ? String(snap.courier_id) : null,
+      branch_id: snap.branch_id ? String(snap.branch_id) : null,
+      market_id: snap.market_id ? String(snap.market_id) : null,
+      courier_to_branch_by: null,
+      branch_to_hq_by: null,
+      hq_to_market_at: null,
+      hq_to_market_by: null,
+      isDeleted: false,
+    };
+    const courierLeg = Math.max(Number(snap.legs?.courier) || 0, 0);
+    const branchLeg = Math.max(Number(snap.legs?.branch) || 0, 0);
+    const marketLeg = Math.max(Number(snap.legs?.market) || 0, 0);
+    if (courierLeg > 0 || branchLeg > 0) {
+      const status =
+        (snap.chain_start_status as SettlementStatus) ||
+        SettlementStatus.PENDING;
+      await repo.save(
+        repo.create({
+          ...base,
+          kind: 'extra_cost_chain',
+          courier_amount: -courierLeg,
+          branch_amount: -branchLeg,
+          market_amount: 0,
+          status,
+          courier_to_branch_at:
+            status === SettlementStatus.PENDING ? null : now,
+          branch_to_hq_at:
+            status === SettlementStatus.BRANCH_SETTLED ? now : null,
+        }),
+      );
+    }
+    if (marketLeg > 0) {
+      await repo.save(
+        repo.create({
+          ...base,
+          kind: 'extra_cost_market',
+          courier_amount: 0,
+          branch_amount: 0,
+          market_amount: -marketLeg,
+          status: SettlementStatus.BRANCH_SETTLED,
+          courier_to_branch_at: now,
+          branch_to_hq_at: now,
+        }),
+      );
     }
   }
 
@@ -2090,12 +2233,25 @@ export class OrderLifecycleService {
   /**
    * Reset an order's settlement row on rollback (it returns to an unsold state).
    * Only callable while the order has NOT reached HQ (guarded by the caller).
+   *
+   * (SPEC v2 §5) Faqat JORIY sikl qatorlari: sotuv qatori (`kind = 'sale'` —
+   * eski qatorlarning hammasi shu, xulq o'zgarmagan) va qaytarilayotgan
+   * tasdiqlangan kechiktirilgan E qatorlari (`extraCostApprovalIds`).
+   * `keepIds` (boshqa buyurtma FIFO'si ishlatgan market qatori) va avvalgi
+   * sikldan qolgan E qatorlari (ishlatilgan market qatori + uning +E
+   * kompensatsiyasi) TEGILMAYDI — ular market daftarining bir qismi.
    */
   private async resetSettlementOnRollback(
     manager: EntityManager,
     orderId: string,
+    scope: { extraCostApprovalIds?: string[]; keepIds?: string[] } = {},
   ): Promise<void> {
     const repo = manager.getRepository(OrderSettlement);
+    const approvalIds = (scope.extraCostApprovalIds ?? []).map(String);
+    const keepIds = (scope.keepIds ?? []).map(String);
+    const extraCostRows = approvalIds.length
+      ? ` OR (extra_cost_approval_id IN (:...approvalIds)${keepIds.length ? ' AND id NOT IN (:...keepIds)' : ''})`
+      : '';
     await repo
       .createQueryBuilder()
       .update(OrderSettlement)
@@ -2112,7 +2268,12 @@ export class OrderLifecycleService {
         market_amount: 0,
         isDeleted: true,
       })
-      .where('order_id = :orderId', { orderId: String(orderId) })
+      .where(`order_id = :orderId AND (kind = :saleKind${extraCostRows})`, {
+        orderId: String(orderId),
+        saleKind: 'sale',
+        ...(approvalIds.length ? { approvalIds } : {}),
+        ...(keepIds.length ? { keepIds } : {}),
+      })
       .execute();
   }
 
@@ -2509,6 +2670,8 @@ export class OrderLifecycleService {
       autoApproved?: boolean;
       rejectLabel?: string | null;
       comment?: string | null;
+      /** (SPEC v2) Kechiktirilgan so'rov tovarlari matni. */
+      products?: string | null;
     } = {},
   ): Promise<void> {
     if (!approvals.length) return;
@@ -2532,6 +2695,7 @@ export class OrderLifecycleService {
           autoApproveMinutes,
           rejectLabel: extra.rejectLabel,
           comment: extra.comment,
+          products: extra.products,
         },
         { manager },
       );
@@ -2661,8 +2825,850 @@ export class OrderLifecycleService {
         auto_approved: false,
         decided_by_user_id: null,
         decided_at: new Date(),
+        items: write.items ?? null,
       }),
     );
+  }
+
+  // ===== (SPEC v2) Kechiktirilgan qo'shimcha xarajat =====
+
+  /**
+   * (SPEC v2 §1) Kechiktirilgan rejim qachon qo'llanadi: sotish / qisman
+   * sotish / bekor qilish, yozuvchi kuryer yoki menejer (HQ menejeri ham),
+   * E > 0, market tasdig'i talab qilinadi, yozuvchi va market id raqam.
+   * Eski xulq qoladi:
+   *   • tasdiq o'chiq — darhol yoziladi (o'zgarmagan);
+   *   • hamkor buyurtmasi (`external_id`) — kech yozilgan E hamkorga hech
+   *     qachon yetmasdi, shuning uchun eski (replay) yo'l;
+   *   • replay ijrosining o'zi (`options.extraCostApproval`) — hech qachon
+   *     kechiktirilmaydi (aks holda eski so'rov tasdiqlanib, yangisi ochilardi).
+   */
+  private shouldDeferExtraCost(params: {
+    extraCost: number;
+    market?: { extra_cost_requires_approval?: boolean | null } | null;
+    order: { external_id?: string | null; market_id?: string | null };
+    requester: { id: string; roles?: string[] };
+    options?: ExtraCostExecutionOptions;
+  }): boolean {
+    if (!(params.extraCost > 0)) return false;
+    if (params.options?.extraCostApproval) return false;
+    if (
+      !this.isExtraCostApprovalRequired({
+        extraCost: params.extraCost,
+        market: params.market,
+      })
+    ) {
+      return false;
+    }
+    if (isPartnerSyncedOrder(params.order)) return false;
+    if (
+      !this.hasRole(params.requester, Roles.COURIER) &&
+      !this.hasRole(params.requester, Roles.MANAGER)
+    ) {
+      return false;
+    }
+    return Boolean(
+      this.numericActorId(params.requester.id) &&
+      this.numericActorId(params.order.market_id),
+    );
+  }
+
+  /**
+   * (SPEC v2 §2) Kechiktirilgan so'rov qatori — amal bilan BITTA
+   * tranzaksiyada, `applyExtraCostApprovalsOnExecution` (eski ochiq so'rovlarni
+   * yopadi) dan KEYIN. `auto_approve_from` NULL — skaner birinchi tikda
+   * `createdAt` qilib belgilaydi (bugungi qoida).
+   */
+  private async recordDeferredExtraCost(
+    tx: EntityManager,
+    params: {
+      order: Order;
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
+      action: ExtraCostApprovalAction;
+      amount: number;
+      proofFiles: string[];
+      dto: Record<string, unknown>;
+      items: ExtraCostApprovalItem[];
+      snapshot: ExtraCostDeferredSnapshot;
+    },
+  ): Promise<OrderExtraCostApproval> {
+    const repo = tx.getRepository(OrderExtraCostApproval);
+    return repo.save(
+      repo.create({
+        order_id: String(params.order.id),
+        market_id: String(params.order.market_id),
+        requested_by_user_id: String(params.requester.id),
+        requested_by_role: this.requesterPrimaryRole(params.requester),
+        requester_branch_id: this.numericActorId(params.requester.branch_id),
+        action: params.action,
+        amount: params.amount,
+        proof_file_keys: params.proofFiles,
+        operation_payload: {
+          ...(params.dto ?? {}),
+          extraCost: params.amount,
+          proofFileKeys: params.proofFiles,
+          proofFileKeysVerified: true,
+        },
+        status: 'pending',
+        mode: 'deferred',
+        items: params.items,
+        deferred_snapshot: params.snapshot,
+      }),
+    );
+  }
+
+  /**
+   * Tovar nomlari — BITTA `catalog.product.find_by_ids` (OSS enrichOrders
+   * kabi). Katalog ulanmagan yoki javob bermasa — bo'sh xarita (nom
+   * `product_name` dan, so'ng «Tovar #id»).
+   */
+  private async loadExtraCostProductNames(
+    lists: Array<ExtraCostApprovalItem[] | null | undefined>,
+  ): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    const ids = [
+      ...new Set(
+        lists
+          .flatMap((list) => list ?? [])
+          .map((item) => String(item?.product_id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    ];
+    if (!ids.length || !this.catalogClient) return names;
+    try {
+      const response = await rmqSend<{
+        data?: Array<{ id?: unknown; name?: unknown }>;
+      }>(
+        this.catalogClient,
+        { cmd: 'catalog.product.find_by_ids' },
+        { ids },
+        { timeoutMs: 3_000, retries: 0 },
+      );
+      for (const row of response?.data ?? []) {
+        const id =
+          typeof row?.id === 'string' || typeof row?.id === 'number'
+            ? String(row.id).trim()
+            : '';
+        const name = typeof row?.name === 'string' ? row.name.trim() : '';
+        if (id && name) names.set(id, name);
+      }
+    } catch {
+      // Nom faqat yorliq — katalog javob bermasa ham davom etamiz.
+    }
+    return names;
+  }
+
+  /**
+   * (SPEC v2 §6) So'rovning tovarlari (nomlari bilan). Kechiktirilgan va
+   * yangi darhol qatorlarda — `items` snapshot; eski qatorlarda — qisman
+   * sotuvda `operation_payload.order_item_info`, aks holda buyurtmaning
+   * hozirgi qatorlari (`orderItems`).
+   */
+  private extraCostApprovalItems(
+    approval: Pick<
+      OrderExtraCostApproval,
+      'items' | 'action' | 'operation_payload'
+    >,
+    orderItems?: Array<{
+      id?: unknown;
+      product_id?: unknown;
+      product_name?: string | null;
+      quantity?: unknown;
+    }> | null,
+  ): ExtraCostApprovalItem[] {
+    if (Array.isArray(approval.items)) return approval.items;
+    return legacyExtraCostItems({
+      action: approval.action,
+      payload: approval.operation_payload,
+      orderItems: orderItems ?? [],
+    });
+  }
+
+  /** Bir nechta so'rov uchun tovarlar (nomlari bilan) — buyurtma qatorlari BITTA so'rovda. */
+  private async resolveExtraCostItemsFor(
+    approvals: OrderExtraCostApproval[],
+  ): Promise<Map<string, ExtraCostApprovalItem[]>> {
+    const result = new Map<string, ExtraCostApprovalItem[]>();
+    if (!approvals.length) return result;
+    const legacyOrderIds = [
+      ...new Set(
+        approvals
+          .filter((approval) => !Array.isArray(approval.items))
+          .map((approval) => String(approval.order_id)),
+      ),
+    ];
+    const orderItems = new Map<string, OrderItem[]>();
+    if (legacyOrderIds.length) {
+      const rows = await this.orderItemRepo
+        .find({ where: { order_id: In(legacyOrderIds) } })
+        .catch(() => [] as OrderItem[]);
+      for (const row of rows ?? []) {
+        const key = String(row.order_id);
+        orderItems.set(key, [...(orderItems.get(key) ?? []), row]);
+      }
+    }
+    const raw = approvals.map((approval) => ({
+      id: String(approval.id),
+      items: this.extraCostApprovalItems(
+        approval,
+        orderItems.get(String(approval.order_id)),
+      ),
+    }));
+    const names = await this.loadExtraCostProductNames(
+      raw.map((row) => row.items),
+    );
+    for (const row of raw) {
+      result.set(row.id, withExtraCostItemNames(row.items, names));
+    }
+    return result;
+  }
+
+  /**
+   * (SPEC v2 §2/§6) Buyurtma javobidagi `extra_cost_request` ko'rinishi —
+   * so'rovning qisqa holati (amal javobida ham, ro'yxatlarda ham bir xil).
+   */
+  private extraCostRequestView(
+    approval: OrderExtraCostApproval,
+    items: ExtraCostApprovalItem[],
+  ) {
+    const rejectReason = approval.reject_reason ?? null;
+    return {
+      id: String(approval.id),
+      status: approval.status,
+      mode: approval.mode ?? 'replay',
+      action: approval.action,
+      amount: Number(approval.amount ?? 0),
+      items,
+      auto_approve_at: this.extraCostAutoApproveAt(approval),
+      created_at: approval.createdAt ?? null,
+      decided_at: approval.decided_at ?? null,
+      reject_reason: rejectReason,
+      reject_reason_label: rejectReason
+        ? (EXTRA_COST_REJECT_REASON_LABELS[
+            rejectReason as ExtraCostRejectReason
+          ] ?? null)
+        : null,
+      immediate: Boolean(approval.immediate),
+      auto_approved: Boolean(approval.auto_approved),
+    };
+  }
+
+  /** Amal javobi uchun: yangi kechiktirilgan so'rov (nomlar katalogdan). */
+  private async deferredExtraCostResponse(approval: OrderExtraCostApproval) {
+    const items = await this.resolveExtraCostItemsFor([approval]);
+    return this.extraCostRequestView(
+      approval,
+      items.get(String(approval.id)) ?? [],
+    );
+  }
+
+  /**
+   * (SPEC v2 §2) Market egasiga xabar (Telegram ✅/❌ + kabinet) — bugungi
+   * mexanizm, matn kechiktirilgan: buyurtma allaqachon sotilgan / qisman
+   * sotilgan / bekor qilingan, kim qancha yozdi, tovarlar, tasdiq / rad
+   * oqibati. BEST-EFFORT — amal javobi o'zgarmaydi.
+   */
+  private async notifyDeferredExtraCostRequested(
+    approval: OrderExtraCostApproval,
+    order: Order,
+    items: ExtraCostApprovalItem[],
+  ): Promise<void> {
+    try {
+      const orderNumber =
+        orderNumberOf(approval.order_id) || `#${approval.order_id}`;
+      const done =
+        approval.action === 'cancel'
+          ? 'bekor qilindi'
+          : approval.action === 'partly_sell'
+            ? 'qisman sotildi'
+            : 'sotildi';
+      const isManager =
+        String(approval.requested_by_role ?? '').toLowerCase() ===
+        String(Roles.MANAGER);
+      const actorName = requestContext.get()?.userName;
+      const actorLabel = isManager ? 'Menejer' : 'Kuryer';
+      const products = formatExtraCostItems(items);
+      await enqueueExtraCostNotification(this.outbox, {
+        type: 'order.extra_cost_requested',
+        approvalId: String(approval.id),
+        orderId: String(approval.order_id),
+        marketId: String(approval.market_id),
+        title: `Qo'shimcha xarajat: buyurtma ${orderNumber}`,
+        body: [
+          `Buyurtma ${orderNumber} allaqachon ${done}.`,
+          `${actorLabel}${actorName ? ` ${actorName}` : ''} ${formatSom(approval.amount)} qo'shimcha xarajat yozdi.`,
+          products ? `Tovarlar: ${products}` : null,
+          `Buyurtma summasi: ${formatSom(order.total_price)}`,
+          `Tasdiqlansa — ${formatSom(approval.amount)} xarajat yoziladi; rad etilsa — yozilmaydi (buyurtma holati o'zgarmaydi).`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        data: {
+          action: approval.action,
+          amount: Number(approval.amount ?? 0),
+          mode: 'deferred',
+          products: products || null,
+          telegram_media: (approval.proof_file_keys ?? []).slice(0, 10),
+          telegram_buttons: [
+            [
+              {
+                text: '✅ Tasdiqlash',
+                action: 'ec.ok',
+                payload: { approval_id: String(approval.id) },
+                order_id: String(approval.order_id),
+                one_shot: false,
+              },
+              {
+                text: '❌ Rad etish',
+                action: 'ec.no',
+                payload: { approval_id: String(approval.id) },
+                order_id: String(approval.order_id),
+                one_shot: false,
+              },
+            ],
+          ],
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `order.extra_cost_requested (deferred) bildirishnomasi navbatga qo'yilmadi (approval ${approval.id}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Eslatma / avtomatik tasdiq matni uchun tovarlar (kechiktirilganda). */
+  private async extraCostProductsText(
+    approval: OrderExtraCostApproval,
+  ): Promise<string> {
+    try {
+      const items = await this.resolveExtraCostItemsFor([approval]);
+      return formatExtraCostItems(items.get(String(approval.id)) ?? []);
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * (SPEC v2 §3) Kechiktirilgan so'rovni TASDIQLASH — amal qayta ijro
+   * QILINMAYDI, faqat E alohida tranzaksiya bo'lib yoziladi. BITTA
+   * tranzaksiya:
+   *   1. buyurtma qatori FOR UPDATE (rollback bilan poyga yo'q), darvoza —
+   *      buyurtma bor, o'chirilmagan, holati amal oilasida (sotuv: SOLD /
+   *      PAID / PARTLY_PAID / CLOSED; bekor: CANCELLED va keyingi bosqichlar).
+   *      Darvoza o'tmasa — so'rov `void`, 409;
+   *   2. shartli claim `pending → approved` (o'xshamasa — 409 «allaqachon
+   *      yakunlangan», bot shu matnni taniydi);
+   *   3. pul: FOR_MARKET −E, snapshot'dagi kassa −E (bo'lsa), daftar −E —
+   *      dedup kaliti `extra-cost:<id>`. Ortiqcha bo'lsa FOR_MARKET −E
+   *      ortiqcha hodisasi ichida — finance uni ortiqchani qo'llagandan
+   *      KEYIN yozadi (`applyDeferredExtraCostOverage` izohi);
+   *   4. hisob-kitob: `extra_cost_chain` + `extra_cost_market` qatorlari;
+   *   5. buyurtma: `extra_cost = E` va market to'lov hisobi
+   *      (`computeDeferredExtraCostOrderState`), ortiqcha — finance'ga;
+   *   6. so'rov yozuvchiga xabar.
+   * Commit'dan keyin — faoliyat jurnali va hisob-kitob «turtki»si.
+   *
+   * Biznes xatolari (kassa topilmadi, …) so'rovni YOPMAYDI — `void` kuryer E
+   * ni jimgina yo'qotishi bo'lardi: qo'lda tasdiqda xato qaytadi, avtomatikda
+   * esa infratuzilma xatosi kabi keyinroq qayta urinadi.
+   */
+  private async approveDeferredExtraCost(
+    approval: OrderExtraCostApproval,
+    requester: { id: string; roles?: string[] } | null,
+    dto: { comment?: string } | undefined,
+    options: { auto?: boolean },
+  ) {
+    const actorId = options.auto ? null : String(requester!.id);
+    const snapshot = approval.deferred_snapshot;
+    if (!snapshot) {
+      // Kechiktirilgan qator snapshot'siz bo'lmaydi — yopilmaydi, ko'rinadi.
+      throw new RpcException({
+        statusCode: 500,
+        message: "Qo'shimcha xarajat so'rovida hisob ma'lumoti yo'q",
+      });
+    }
+    const amount = this.wholeExtraCost(approval.amount);
+    const approvalId = String(approval.id);
+    const orderId = String(approval.order_id);
+    const itemsById = await this.resolveExtraCostItemsFor([approval]);
+    const items = itemsById.get(approvalId) ?? [];
+    const products = formatExtraCostItems(items);
+    const orderNumber =
+      snapshot.order_number || orderNumberOf(orderId) || `#${orderId}`;
+    const legComment = `Qo'shimcha xarajat — №${orderNumber}${products ? ` · ${products}` : ''}`;
+    const proofFiles = approval.proof_file_keys ?? [];
+    const createdBy =
+      this.numericActorId(approval.requested_by_user_id) ?? undefined;
+
+    // Kassalar tranzaksiyadan OLDIN (masofaviy o'qish) — topilmasa so'rov
+    // `pending` qoladi.
+    const marketCashbox = await this.lookup.getCashboxByUser(
+      String(approval.market_id),
+      Cashbox_type.FOR_MARKET,
+    );
+    if (!marketCashbox) {
+      this.notFound('Market kassasi topilmadi');
+    }
+    const chargedType = snapshot.charged_cashbox_type
+      ? (snapshot.charged_cashbox_type as Cashbox_type)
+      : null;
+    const chargedUserId = this.numericActorId(snapshot.charged_user_id);
+    if (chargedType && chargedUserId) {
+      if (chargedType === Cashbox_type.BRANCH) {
+        await this.lookup.ensureBranchCashbox(chargedUserId);
+      }
+      const charged = await this.lookup
+        .getCashboxByUser(chargedUserId, chargedType)
+        .catch(() => null);
+      if (!charged) {
+        this.notFound(
+          chargedType === Cashbox_type.BRANCH
+            ? 'Filial kassasi topilmadi'
+            : 'Kuryer kassasi topilmadi',
+        );
+      }
+    }
+
+    const decidedAt = new Date();
+    const comment = options.auto
+      ? (dto?.comment ??
+        'Muddat ichida javob berilmadi — avtomatik tasdiqlandi')
+      : (dto?.comment ?? null);
+    let gateReason: string | null = null;
+    let overage = 0;
+    let finalStatus: string | null = null;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const tx = queryRunner.manager;
+      const order = await tx.getRepository(Order).findOne({
+        where: { id: orderId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order || order.isDeleted) {
+        gateReason = EXTRA_COST_CLOSE_REASON.orderMissing;
+      } else if (
+        !isDeferredExtraCostFamilyStatus(approval.action, order.status)
+      ) {
+        gateReason = EXTRA_COST_CLOSE_REASON.outsideFamily(
+          String(order.status),
+        );
+      }
+      if (gateReason) {
+        await this.voidOpenExtraCostApprovals(tx, {
+          approvalId,
+          reason: gateReason,
+          actorId,
+        });
+        await queryRunner.commitTransaction();
+        throw new ExtraCostRequestClosedError(gateReason);
+      }
+      const claimed = await this.claimExtraCostDecision(
+        approvalId,
+        {
+          status: 'approved',
+          decided_by_user_id: actorId,
+          decided_at: decidedAt,
+          decision_comment: comment,
+          auto_approved: Boolean(options.auto),
+          reject_reason: null,
+        },
+        tx.getRepository(OrderExtraCostApproval),
+      );
+      if (!claimed) {
+        throw new ExtraCostRequestClosedError();
+      }
+
+      const dedupEpoch = `extra-cost:${approvalId}`;
+      // Market buyurtmasi hisobi (5-qadam) OLDINDAN — ortiqcha bormi, shunga
+      // qarab market oyog'i qayerdan yozilishi tanlanadi.
+      const state =
+        approval.action === 'cancel'
+          ? {
+              status: String(order!.status),
+              paidAmount: Number(order!.paid_amount ?? 0),
+              overage: 0,
+            }
+          : computeDeferredExtraCostOrderState({
+              status: String(order!.status),
+              toBePaid: Number(order!.to_be_paid ?? 0),
+              paidAmount: Number(order!.paid_amount ?? 0),
+              extraCost: amount,
+            });
+      overage = state.overage;
+      finalStatus = state.status;
+      const marketLeg = {
+        user_id: String(approval.market_id),
+        cashbox_type: Cashbox_type.FOR_MARKET,
+        amount,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.EXTRA_COST,
+        source_id: orderId,
+        created_by: createdBy,
+        comment: legComment,
+        proof_files: proofFiles.length ? proofFiles : undefined,
+        dedup_epoch: dedupEpoch,
+      };
+      if (overage > 0) {
+        /**
+         * Ortiqcha bor — FOR_MARKET −E alohida oyoq bo'lib YUBORILMAYDI:
+         * finance uni `finance.market.extra_cost_overage` ichida, ortiqchani
+         * market buyurtmalariga qo'llagandan KEYIN (o'sha market navbatida)
+         * yozadi. Aks holda −E tushgan zahoti kelgan sotuv manfiy balansdan
+         * E ni avtomatik to'lardi, ortiqcha esa o'sha buyurtmaga ikkinchi
+         * marta tushardi (E ikki marta). Oyoq shakli `updateCashboxBalance`
+         * bilan AYNAN bir xil (dedup — `extra-cost:<id>`).
+         */
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.market.extra_cost_overage',
+          {
+            market_id: String(approval.market_id),
+            amount: overage,
+            approval_id: approvalId,
+            order_id: orderId,
+            dedup_key: `extra-cost-overage:${approvalId}`,
+            market_leg: {
+              ...marketLeg,
+              payment_method: PaymentMethod.CASH,
+              allow_negative: true,
+            },
+          },
+          { manager: tx },
+        );
+      } else {
+        await this.updateCashboxBalance(marketLeg, tx);
+      }
+      if (chargedType && chargedUserId) {
+        await this.updateCashboxBalance(
+          {
+            user_id: chargedUserId,
+            cashbox_type: chargedType,
+            amount,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.EXTRA_COST,
+            source_id: orderId,
+            created_by: createdBy,
+            comment: legComment,
+            proof_files: proofFiles.length ? proofFiles : undefined,
+            dedup_epoch: dedupEpoch,
+          },
+          tx,
+        );
+      }
+      // Daftar (P&L): `finance.financial_balance.record` da aniq sana maydoni
+      // YO'Q — yozuv TASDIQ vaqti bilan tushadi (BeePost sotuv sanasini
+      // qo'yadi; bizda `operation_at` snapshot'da saqlanadi, izohda ko'rinadi).
+      await this.outbox.enqueue(
+        'FINANCE',
+        'finance.financial_balance.record',
+        {
+          amount: -amount,
+          source_type: snapshot.ledger_kind,
+          order_id: orderId,
+          related_user_id: String(approval.market_id),
+          comment: `Order #${orderId} ${snapshot.ledger_kind === 'cancel_extra_cost' ? 'cancel' : 'sell'} extra cost (deferred, ${snapshot.operation_at}) — ${legComment}`,
+          dedup_key: dedupEpoch,
+        },
+        { manager: tx },
+      );
+
+      await this.recordExtraCostSettlementRows(tx, {
+        order_id: orderId,
+        approval_id: approvalId,
+        snapshot,
+      });
+
+      const statusChanged = state.status !== String(order!.status);
+      const paidChanged = state.paidAmount !== Number(order!.paid_amount ?? 0);
+      await this.updateFull(
+        orderId,
+        {
+          extra_cost: amount,
+          ...(statusChanged || paidChanged
+            ? {
+                status: state.status as Order_status,
+                paid_amount: state.paidAmount,
+              }
+            : {}),
+        },
+        {
+          id: actorId ?? undefined,
+          roles: requester?.roles,
+          note: "Qo'shimcha xarajat tasdiqlandi",
+          audit: false,
+        },
+        tx,
+        { suppressExternalSync: true },
+      );
+      await this.notifyExtraCostRequesters(tx, [claimed], 'approved', {
+        autoApproved: Boolean(options.auto),
+        products,
+      });
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.activityLog
+      .log({
+        entity_type: 'Order',
+        entity_id: orderId,
+        action: options.auto
+          ? 'order.extra_cost_auto_approved'
+          : 'order.extra_cost_approved',
+        new_value: { extra_cost: amount, status: finalStatus },
+        metadata: {
+          approval_id: approvalId,
+          mode: 'deferred',
+          amount,
+          market_id: String(approval.market_id),
+          products: products || null,
+          ...(overage > 0 ? { overage } : {}),
+        },
+      })
+      .catch(() => undefined);
+    // Turtki — to'xtab qolgan qatorlar mavjud qoldiq bilan darhol yopiladi.
+    if (this.settlementService) {
+      await this.settlementService
+        .nudgeExtraCostSettlement({
+          courier_id: snapshot.courier_id,
+          branch_id: snapshot.branch_id,
+          market_id: snapshot.market_id ?? String(approval.market_id),
+          requester_id: actorId ?? 'system',
+        })
+        .catch(() => undefined);
+    }
+
+    Object.assign(approval, {
+      status: 'approved',
+      decided_by_user_id: actorId,
+      decided_at: decidedAt,
+      decision_comment: comment,
+      auto_approved: Boolean(options.auto),
+    });
+    const [serializedApproval] = await this.withExtraCostRequesterNames([
+      approval,
+    ]);
+    return successRes(
+      {
+        approval: serializedApproval,
+        operation: {
+          mode: 'deferred',
+          order_id: orderId,
+          extra_cost: amount,
+          status: finalStatus,
+          overage,
+        },
+      },
+      200,
+      options.auto
+        ? "Qo'shimcha xarajat avtomatik tasdiqlandi"
+        : "Qo'shimcha xarajat tasdiqlandi",
+    );
+  }
+
+  /**
+   * (SPEC v2 §3.5) Kechiktirilgan E tasdig'idagi ORTIQCHA (buyurtma to'langan
+   * qismi yangi sof qarzdan oshgan) — marketning keyingi ochiq
+   * buyurtmalariga, pul ko'chirmasdan. `order.extra_cost.apply_overage`:
+   * faqat finance `finance.market.extra_cost_overage` hodisasidan, o'sha
+   * marketning to'lov sinxroni navbatida (`marketOrderSyncChains`) — HQ
+   * to'lovi sinxroni bilan aralashmaydi (u ham o'qib-yozadi).
+   *
+   * AYNAN BIR MARTA, BITTA tranzaksiyada: so'rov qatori FOR UPDATE;
+   * `overage_applied_at` bor bo'lsa — takror (qayta yetkazish, timeout'dan
+   * keyingi qayta yuborish, finance qayta ishga tushishi), hech narsa
+   * qilinmaydi; aks holda ochiq (SOLD / PARTLY_PAID) buyurtmalar FOR UPDATE
+   * va finance `applyPaymentToOrders` bilan AYNAN bir xil FIFO (eng eskisi
+   * birinchi; manfiy qoldiq hovuzni oshiradi), belgi — shu tranzaksiyada.
+   * Yarim qo'llanish yo'q (xato — hammasi qaytadi, outbox qayta yuboradi).
+   *
+   * FOR_MARKET −E ni finance shu hodisada, bu qo'llashdan KEYIN yozadi:
+   * −E tushmaguncha sotuv manfiy balans ko'rmaydi (avtomatik to'lov yo'q) va
+   * ochiq bo'lsa shu yerda ortiqchani oladi; −E tushgandan keyingi sotuv esa
+   * faqat qo'llanmay qolgan qismni (ochiq buyurtma bo'lmasa) manfiy
+   * balansdan oladi — E ikki marta hisoblanmaydi.
+   *
+   * So'rov endi `approved` emas (buyurtma orqaga qaytarilgan) — buyurtmalarga
+   * tegilmaydi (market ortiqchasi rollback'dan keyingi manfiy balansda),
+   * belgi baribir qo'yiladi.
+   */
+  async applyDeferredExtraCostOverage(data: {
+    approval_id?: string | number | null;
+    market_id?: string | number | null;
+    amount?: number | string | null;
+  }) {
+    const approvalId = String(data?.approval_id ?? '').trim();
+    const marketId = String(data?.market_id ?? '').trim();
+    const amount = Number(data?.amount ?? 0);
+    if (!/^\d+$/.test(approvalId) || !/^\d+$/.test(marketId) || !(amount > 0)) {
+      this.badRequest(
+        "Ortiqcha: approval_id, market_id (raqam) va amount (> 0) bo'lishi kerak",
+      );
+    }
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const tx = queryRunner.manager;
+      const approvalRepo = tx.getRepository(OrderExtraCostApproval);
+      const approval = await approvalRepo.findOne({
+        where: { id: approvalId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!approval || String(approval.market_id) !== marketId) {
+        this.notFound("Qo'shimcha xarajat so'rovi topilmadi");
+      }
+      if (approval.overage_applied_at) {
+        await queryRunner.commitTransaction();
+        return successRes(
+          { applied: false, duplicate: true, orders: [], leftover: 0 },
+          200,
+          "Ortiqcha allaqachon qo'llangan",
+        );
+      }
+      const applied =
+        approval.status === 'approved'
+          ? await this.applyOverageToMarketOrders(tx, marketId, amount)
+          : null;
+      await approvalRepo.update(
+        { id: approvalId },
+        { overage_applied_at: new Date() },
+      );
+      await queryRunner.commitTransaction();
+      return successRes(
+        {
+          applied: Boolean(applied),
+          duplicate: false,
+          orders: applied?.orders ?? [],
+          leftover: applied?.leftover ?? 0,
+        },
+        200,
+        applied
+          ? "Ortiqcha market buyurtmalariga qo'llandi"
+          : "So'rov endi tasdiqlangan emas — ortiqcha buyurtmalarga qo'llanmadi",
+      );
+    } catch (error) {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Finance `applyPaymentToOrders` ning order-service'dagi aynan nusxasi
+   * (tranzaksiya va qator qulfi bilan): marketning SOLD / PARTLY_PAID
+   * buyurtmalari, ENG ESKISI BIRINCHI (`createdAt`, `id`), sahifama-sahifa
+   * (finance kabi 100 tadan, ko'pi bilan 50 sahifa) to'lov qoplanguncha
+   * o'qiladi — o'qish yozishdan OLDIN tugaydi. Qoldiq
+   * `to_be_paid − extra_cost − paid_amount`: manfiy — hovuz oshadi va
+   * buyurtma PAID; 0 — PAID; hovuz yetsa — PAID (`paid_amount = to_be_paid`),
+   * yetmasa — PARTLY_PAID (`paid_amount += hovuz`). Hamkorga xabar yo'q.
+   */
+  private async applyOverageToMarketOrders(
+    tx: EntityManager,
+    marketId: string,
+    amount: number,
+  ): Promise<{
+    orders: Array<{ id: string; status: Order_status; paid_amount: number }>;
+    leftover: number;
+  }> {
+    const pageSize = 100;
+    const maxPages = 50;
+    const orderRepo = tx.getRepository(Order);
+    const remainingOf = (order: Order) =>
+      Math.max(Number(order.to_be_paid ?? 0) || 0, 0) -
+      Math.max(Number(order.extra_cost ?? 0) || 0, 0) -
+      Math.max(Number(order.paid_amount ?? 0) || 0, 0);
+    const orders: Order[] = [];
+    let covered = 0;
+    for (let page = 0; page < maxPages; page += 1) {
+      const rows = await orderRepo.find({
+        where: {
+          market_id: marketId,
+          isDeleted: false,
+          status: In([Order_status.SOLD, Order_status.PARTLY_PAID]),
+        },
+        order: { createdAt: 'ASC', id: 'ASC' },
+        skip: page * pageSize,
+        take: pageSize,
+        lock: { mode: 'pessimistic_write' },
+      });
+      for (const row of rows ?? []) {
+        orders.push(row);
+        covered += remainingOf(row);
+      }
+      if ((rows ?? []).length < pageSize || covered >= amount) break;
+    }
+
+    let pool = amount;
+    const written: Array<{
+      id: string;
+      status: Order_status;
+      paid_amount: number;
+    }> = [];
+    const write = async (
+      order: Order,
+      status: Order_status,
+      paidAmount: number,
+    ) => {
+      await this.updateFull(
+        String(order.id),
+        { status, paid_amount: paidAmount },
+        undefined,
+        tx,
+        { suppressExternalSync: true },
+      );
+      written.push({ id: String(order.id), status, paid_amount: paidAmount });
+    };
+    for (const order of orders) {
+      const remaining = remainingOf(order);
+      const fullPaid = Math.max(Number(order.to_be_paid ?? 0) || 0, 0);
+      if (remaining < 0) {
+        // Market bizga qarzdor — hovuz oshadi, buyurtma yopiladi.
+        pool -= remaining;
+        await write(order, Order_status.PAID, fullPaid);
+      } else if (remaining === 0) {
+        await write(order, Order_status.PAID, fullPaid);
+      } else if (pool <= 0) {
+        continue;
+      } else if (pool >= remaining) {
+        pool -= remaining;
+        await write(order, Order_status.PAID, fullPaid);
+      } else {
+        const paidBefore = Math.max(Number(order.paid_amount ?? 0) || 0, 0);
+        await write(order, Order_status.PARTLY_PAID, paidBefore + pool);
+        pool = 0;
+      }
+    }
+    return { orders: written, leftover: Math.max(pool, 0) };
   }
 
   /**
@@ -2839,6 +3845,8 @@ export class OrderLifecycleService {
   private serializeExtraCostApproval(
     approval: OrderExtraCostApproval,
     requesterName: string | null = null,
+    /** (SPEC v2) Tovarlar nomlari bilan; berilmasa — snapshot (nomsiz). */
+    items?: ExtraCostApprovalItem[] | null,
   ) {
     return {
       id: String(approval.id),
@@ -2875,6 +3883,10 @@ export class OrderLifecycleService {
       // (hwTkXsGi) `void` / `reversed` sababi va vaqti (boshqa holatlarda null).
       closed_reason: approval.closed_reason ?? null,
       closed_at: approval.closed_at ?? null,
+      // (SPEC v2) 'replay' (eski) | 'deferred' (amal bajarilgan, E alohida)
+      // va qaysi tovarlar uchunligi.
+      mode: approval.mode ?? 'replay',
+      items: items ?? approval.items ?? [],
       createdAt: approval.createdAt,
       updatedAt: approval.updatedAt,
     };
@@ -2889,13 +3901,20 @@ export class OrderLifecycleService {
   private async withExtraCostRequesterNames(
     approvals: OrderExtraCostApproval[],
   ) {
-    const names = await this.loadExtraCostUserNames(
-      approvals.map((approval) => approval.requested_by_user_id),
-    );
+    const [names, items] = await Promise.all([
+      this.loadExtraCostUserNames(
+        approvals.map((approval) => approval.requested_by_user_id),
+      ),
+      // (SPEC v2) Tovarlar (nomlari bilan) — xato ro'yxatni to'xtatmaydi.
+      this.resolveExtraCostItemsFor(approvals).catch(
+        () => new Map<string, ExtraCostApprovalItem[]>(),
+      ),
+    ]);
     return approvals.map((approval) =>
       this.serializeExtraCostApproval(
         approval,
         names.get(String(approval.requested_by_user_id)) ?? null,
+        items.get(String(approval.id)) ?? null,
       ),
     );
   }
@@ -3491,7 +4510,7 @@ export class OrderLifecycleService {
         extraNumber: textOf(row.order_extra_number),
       });
     }
-    const [names, customers] = await Promise.all([
+    const [names, customers, itemsById] = await Promise.all([
       this.loadExtraCostUserNames(
         approvals.flatMap((approval) => [
           approval.requested_by_user_id,
@@ -3502,6 +4521,10 @@ export class OrderLifecycleService {
         [...orderOf.values()]
           .map((order) => order.customerId)
           .filter((id): id is string => Boolean(id)),
+      ),
+      // (SPEC v2) «Buyurtma» katagi: qaysi tovarlar uchun.
+      this.resolveExtraCostItemsFor(approvals).catch(
+        () => new Map<string, ExtraCostApprovalItem[]>(),
       ),
     ]);
     return approvals.map((approval) => {
@@ -3515,6 +4538,7 @@ export class OrderLifecycleService {
         ...this.serializeExtraCostApproval(
           approval,
           names.get(String(approval.requested_by_user_id)) ?? null,
+          itemsById.get(String(approval.id)) ?? null,
         ),
         order_status: order?.status ?? null,
         // Mijoz kartasi; shu buyurtma uchun kiritilgan qo'shimcha raqam —
@@ -3574,6 +4598,11 @@ export class OrderLifecycleService {
     // Tezkor rad (o'qilgan holat); haqiqiy himoya — tranzaksiyadagi shartli UPDATE.
     if (approval.status !== 'pending') {
       throw new ExtraCostRequestClosedError();
+    }
+    // (SPEC v2 §3) Kechiktirilgan so'rov — amal allaqachon bajarilgan, faqat
+    // E alohida yoziladi (replay darvozasi va qayta ijro yo'q).
+    if (approval.mode === 'deferred') {
+      return this.approveDeferredExtraCost(approval, requester, dto, options);
     }
     const actorId = options.auto ? null : String(requester!.id);
     // Darvozaning qulfsiz tezkor yo'li — qayta ijroning RPC'laridan OLDIN.
@@ -3734,6 +4763,12 @@ export class OrderLifecycleService {
     const comment =
       [label, dto?.comment?.trim()].filter(Boolean).join(' — ') || null;
     const decidedAt = new Date();
+    // (SPEC v2 §4) Kechiktirilgan so'rov rad etilsa PUL YO'Q, buyurtmaga
+    // tegilmaydi — faqat xabar matni tovarlar bilan.
+    const products =
+      approval.mode === 'deferred'
+        ? await this.extraCostProductsText(approval)
+        : null;
     // (GykuOz8f) Qaror va so'rov yozgan xodimga «rad etildi» xabari — bitta
     // tranzaksiyada.
     const claimed = await this.dataSource.transaction(async (manager) => {
@@ -3753,6 +4788,7 @@ export class OrderLifecycleService {
         await this.notifyExtraCostRequesters(manager, [row], 'rejected', {
           rejectLabel: label,
           comment: dto?.comment?.trim() || null,
+          products,
         });
       }
       return row;
@@ -3869,13 +4905,30 @@ export class OrderLifecycleService {
           .execute();
         if (!marked.affected) continue;
         stats.reminded += 1;
+        // (SPEC v2) Kechiktirilgan so'rov — tovarlar va «buyurtma allaqachon
+        // …» bilan; eski (replay) matn o'zgarmagan.
+        const reminderProducts =
+          approval.mode === 'deferred'
+            ? await this.extraCostProductsText(approval)
+            : '';
         await enqueueExtraCostNotification(this.outbox, {
           type: 'order.extra_cost_reminder',
           approvalId: String(approval.id),
           orderId: String(approval.order_id),
           marketId: String(approval.market_id),
           title: `⏰ Qo'shimcha xarajat: buyurtma #${approval.order_id}`,
-          body: `${params.reminderMinutes} daqiqada javob bermasangiz ${formatSom(approval.amount)} AVTOMATIK tasdiqlanadi.`,
+          body:
+            approval.mode === 'deferred'
+              ? `${params.reminderMinutes} daqiqada javob bermasangiz ${formatSom(approval.amount)} qo'shimcha xarajat${reminderProducts ? ` (${reminderProducts})` : ''} AVTOMATIK tasdiqlanadi. Buyurtma allaqachon ${approval.action === 'cancel' ? 'bekor qilingan' : 'sotilgan'} — tasdiqlansa faqat xarajat yoziladi.`
+              : `${params.reminderMinutes} daqiqada javob bermasangiz ${formatSom(approval.amount)} AVTOMATIK tasdiqlanadi.`,
+          ...(approval.mode === 'deferred'
+            ? {
+                data: {
+                  mode: 'deferred',
+                  products: reminderProducts || null,
+                },
+              }
+            : {}),
         }).catch((error: unknown) =>
           this.logger.warn(
             `order.extra_cost_reminder navbatga qo'yilmadi: ${error instanceof Error ? error.message : String(error)}`,
@@ -3909,13 +4962,23 @@ export class OrderLifecycleService {
           auto: true,
         });
         stats.approved += 1;
+        const autoProducts =
+          approval.mode === 'deferred'
+            ? await this.extraCostProductsText(approval)
+            : '';
         await enqueueExtraCostNotification(this.outbox, {
           type: 'order.extra_cost_auto_approved',
           approvalId: String(approval.id),
           orderId: String(approval.order_id),
           marketId: String(approval.market_id),
           title: `Qo'shimcha xarajat avtomatik tasdiqlandi: #${approval.order_id}`,
-          body: `${formatSom(approval.amount)} — muddat ichida javob berilmadi. E'tiroz bo'lsa admin bilan bog'laning.`,
+          body:
+            approval.mode === 'deferred'
+              ? `${formatSom(approval.amount)} qo'shimcha xarajat${autoProducts ? ` (${autoProducts})` : ''} — muddat ichida javob berilmadi, xarajat yozildi. E'tiroz bo'lsa admin bilan bog'laning.`
+              : `${formatSom(approval.amount)} — muddat ichida javob berilmadi. E'tiroz bo'lsa admin bilan bog'laning.`,
+          ...(approval.mode === 'deferred'
+            ? { data: { mode: 'deferred', products: autoProducts || null } }
+            : {}),
         }).catch(() => undefined);
       } catch (error) {
         // Kechiktirish xato bo'lgan paytdan (uzun tikda `now` eskirgan bo'ladi).
@@ -4814,8 +5877,11 @@ export class OrderLifecycleService {
     // Settlement-aware guard: a branch/courier may roll back only while the
     // order's COD has NOT yet reached HQ. Once branch→HQ is settled the money
     // has moved up the chain and the order must not be reverted here.
+    // (SPEC v2) Faqat SOTUV qatori (`kind = 'sale'`) — kechiktirilgan E ning
+    // market qatori ataylab BRANCH_SETTLED dan boshlanadi, u «HQ'ga yetgan»
+    // degani emas.
     const existingSettlement = await this.orderSettlementRepo.findOne({
-      where: { order_id: String(id), isDeleted: false },
+      where: { order_id: String(id), isDeleted: false, kind: 'sale' },
     });
     if (existingSettlement && this.isSettledToHq(existingSettlement.status)) {
       this.badRequest(
@@ -4837,17 +5903,44 @@ export class OrderLifecycleService {
      * yoki HQ qatori, kuryer boshqa filialga o'tgan, qoldiq jadvali yo'q,
      * snapshot mos emas) aniq xabar bilan rad etiladi.
      */
+    /**
+     * (SPEC v2 §5) Tasdiqlangan kechiktirilgan E: uning hisob-kitob qatorlari
+     * (`extra_cost_chain` / `extra_cost_market`) qanday qaytarilishi —
+     * `planDeferredExtraCostRows`: boshlang'ich holatidagisi o'chiriladi;
+     * boshqa buyurtma HQ→market FIFO'si ishlatgan market qatori joyida
+     * qoladi, o'rniga +E kompensatsiya; superadmin yo'lida sotuv qatori
+     * bilan birga topshirilgan zanjir qatori fix3b kabi qaytariladi; zanjir
+     * krediti boshqa buyurtma topshirig'ida ishlatilgan bo'lsa — 400 (aks
+     * holda kuryer / filial daftari E ga buzilardi). Teskari yozish egasi —
+     * snapshot (bugungi E qayerga yozilgan bo'lsa). Kutilayotgan (pending)
+     * so'rov — faqat `void`, pul yo'q (`extra_cost` 0).
+     */
+    if (isCourierRemittedSettlement(existingSettlement) && !isSuperAdmin) {
+      this.badRequest(
+        "Kuryer bu buyurtma pulini filialga topshirib bo'lgan — rollback " +
+          'mumkin emas, aks holda kuryer hisob-kitobi buziladi. ' +
+          'Tuzatishni faqat superadmin qila oladi',
+      );
+    }
+    // Bu yerga faqat superadmin yetadi (yuqoridagi to'siq).
+    const remittedSale = isCourierRemittedSettlement(existingSettlement)
+      ? existingSettlement
+      : null;
+    const deferredRollback = await this.loadDeferredExtraCostRollbackState(
+      order,
+      remittedSale,
+    );
     let remittedCourierCredit: RemittedCourierCredit | null = null;
-    if (isCourierRemittedSettlement(existingSettlement)) {
-      if (!isSuperAdmin) {
-        this.badRequest(
-          "Kuryer bu buyurtma pulini filialga topshirib bo'lgan — rollback " +
-            'mumkin emas, aks holda kuryer hisob-kitobi buziladi. ' +
-            'Tuzatishni faqat superadmin qila oladi',
-        );
-      }
+    if (remittedSale) {
       remittedCourierCredit =
-        await this.prepareRemittedCourierCredit(existingSettlement);
+        await this.prepareRemittedCourierCredit(remittedSale);
+      const remittedChainAmount = deferredRollback.plan.remittedChainRows
+        .map((row) => Number(row.courier_amount) || 0)
+        .reduce((sum, amount) => sum + amount, 0);
+      if (deferredRollback.plan.remittedChainRows.length) {
+        remittedCourierCredit.deferredChainAmount =
+          toTiyin(remittedChainAmount) / 100;
+      }
     }
 
     const courierId = this.resolveActorCourierId(requester, order, post);
@@ -4975,8 +6068,14 @@ export class OrderLifecycleService {
     const extraCostAmount = extraCostRefundStatuses.includes(originalStatus)
       ? Math.max(Number(order.extra_cost ?? 0) || 0, 0)
       : 0;
+    // (SPEC v2) Kechiktirilgan E — egasi snapshot'dan (HQ menejeri sotuvida
+    // kassa yo'q — faqat market qaytadi, bugungidek).
     const extraCostParty =
-      extraCostAmount > 0 ? reversalActor.extraCostParty : null;
+      extraCostAmount > 0
+        ? deferredRollback.approvals.length
+          ? deferredRollback.party
+          : reversalActor.extraCostParty
+        : null;
     if (extraCostParty?.cashbox_type === Cashbox_type.BRANCH) {
       await this.lookup.ensureBranchCashbox(extraCostParty.user_id);
     }
@@ -5086,9 +6185,22 @@ export class OrderLifecycleService {
             ? saleMarketPaidAmount
             : 0,
       });
+      // (SPEC v2 §5) Kechiktirilgan E zanjir qatori (kuryer −E) ham
+      // o'chiriladi: kutilgan kassa qaytimi −(sotuv.courier_amount +
+      // zanjir.courier_amount). Qoldiqqa: zanjir ishlatilmagan (PENDING) —
+      // faqat sotuv qatori summasi; sotuv bilan birga topshirilgan
+      // (COURIER_SETTLED) — sotuv + zanjir (`deferredChainAmount`).
+      const deferredChainCourier = deferredRollback.extraRows
+        .filter(
+          (row) =>
+            row.kind === 'extra_cost_chain' &&
+            String(row.courier_id ?? '') === remittedCourierCredit.courierId,
+        )
+        .reduce((sum, row) => sum + (Number(row.courier_amount) || 0), 0);
       if (
         saleCourierId !== remittedCourierCredit.courierId ||
-        toTiyin(courierCashboxDelta) !== -toTiyin(remittedCourierCredit.amount)
+        toTiyin(courierCashboxDelta) !==
+          -toTiyin(remittedCourierCredit.amount + deferredChainCourier)
       ) {
         this.badRequest(
           'Kuryer hisob-kitob qatori sotuv summalariga mos kelmaydi ' +
@@ -5128,6 +6240,36 @@ export class OrderLifecycleService {
       if (!locked || locked.status !== originalStatus) {
         this.badRequest(
           `Rollback holati o'zgargan (status: ${locked?.status ?? "yo'q"})`,
+        );
+      }
+      /**
+       * (SPEC v2 §5) Kechiktirilgan E tasdig'i buyurtma QULFI ostida
+       * yoziladi (holat o'zgarmaydi, faqat `extra_cost`) — shu orada
+       * tasdiqlangan bo'lsa teskari summa eskirgan: qayta urinish kerak.
+       * E qatorlari ham qulf ostida qayta tekshiriladi (FIFO ularni shu orada
+       * ishlatgan bo'lishi mumkin).
+       */
+      if (
+        Math.max(Number(locked.extra_cost ?? 0) || 0, 0) !==
+        Math.max(Number(order.extra_cost ?? 0) || 0, 0)
+      ) {
+        this.badRequest(
+          "Rollback holati o'zgargan (qo'shimcha xarajat shu orada tasdiqlandi) — qaytadan urinib ko'ring",
+        );
+      }
+      if (deferredRollback.approvals.length) {
+        // Qulf tartibi `runFifoSettlement` bilan BIR XIL: avval qoldiq
+        // (carry) qatorlari (superadmin kredit yo'li), keyin buyurtmaning
+        // hisob-kitob qatorlari `createdAt, id` tartibida — teskari tartib
+        // kuryer to'lovi bilan deadlock (40P01) berardi.
+        if (remittedCourierCredit) {
+          await this.lockRemittedCourierCarries(tx, remittedCourierCredit);
+        }
+        await this.assertDeferredExtraCostRowsUnchanged(
+          tx,
+          String(order.id),
+          deferredRollback,
+          remittedSale,
         );
       }
 
@@ -5393,7 +6535,20 @@ export class OrderLifecycleService {
 
       // The order is being reverted out of its sold state — clear its settlement
       // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
-      await this.resetSettlementOnRollback(tx, id);
+      await this.resetSettlementOnRollback(tx, id, {
+        extraCostApprovalIds: deferredRollback.approvals.map((row) =>
+          String(row.id),
+        ),
+        keepIds: deferredRollback.plan.consumedMarketRows.map((row) =>
+          String(row.id),
+        ),
+      });
+      // (SPEC v2 §5) Boshqa buyurtma FIFO'si ishlatgan market qatori o'rniga
+      // +E (market kassasiga yuqorida +E qaytdi — daftarda ham ochiq +E).
+      await this.recordExtraCostMarketReversalRows(
+        tx,
+        deferredRollback.plan.consumedMarketRows,
+      );
 
       // Qo'shimcha xarajat yuqorida qaytarildi — buyurtmadagi snapshot ham
       // nolga tushadi. Qolsa, keyingi rollback (qayta sotuv/bekordan keyin)
@@ -5573,7 +6728,9 @@ export class OrderLifecycleService {
         // fix3b (M6): superadmin tuzatishi — kuryer qoldig'iga yozilgan kredit.
         ...(remittedCourierCredit
           ? {
-              courier_credit_carried: remittedCourierCredit.amount,
+              courier_credit_carried: remittedCarryCredit(
+                remittedCourierCredit,
+              ),
               courier_credit_courier_id: remittedCourierCredit.courierId,
               courier_credit_branch_id: remittedCourierCredit.branchId,
             }
@@ -5605,7 +6762,7 @@ export class OrderLifecycleService {
 
     // fix3b (M6): superadmin tuzatishida kuryer krediti haqida aniq xabar.
     const courierCreditNote = remittedCourierCredit
-      ? `. Kuryer filialga topshirgan ${remittedCourierCredit.amount} so'm ` +
+      ? `. Kuryer filialga topshirgan ${remittedCarryCredit(remittedCourierCredit)} so'm ` +
         "uning keyingi topshirig'iga hisoblanadi"
       : '';
     if (rollbackTarget === 'cancelled') {
@@ -5630,6 +6787,237 @@ export class OrderLifecycleService {
       200,
       `Order WAITING holatiga qaytarildi${courierCreditNote}`,
     );
+  }
+
+  /**
+   * (SPEC v2 §5) Rollback uchun kechiktirilgan E holati (qulfsiz o'qish;
+   * qulf ostida `assertDeferredExtraCostRowsUnchanged` qayta tekshiradi):
+   *   • tasdiqlangan `deferred` so'rovlar (odatda bittadan ko'p emas);
+   *   • ularning hisob-kitob qatorlari va ular bilan nima qilinishi
+   *     (`planDeferredExtraCostRows`);
+   *   • teskari yozish egasi — snapshot'dagi kassa.
+   * Tasdiqlangan E bo'lsa `extra_cost` > 0 — aks holda hech narsa o'qilmaydi
+   * (oddiy rollback avvalgidek, ortiqcha so'rovsiz).
+   * Qatorni xavfsiz qaytarib bo'lmasa — 400 (aniq sabab bilan).
+   */
+  private async loadDeferredExtraCostRollbackState(
+    order: Pick<Order, 'id' | 'extra_cost'>,
+    /**
+     * FAQAT superadmin: kuryer topshirgan (COURIER_SETTLED) sotuv qatori —
+     * u bilan birga topshirilgan zanjir qatori ham qaytariladi (fix3b).
+     */
+    remittedSale: OrderSettlement | null = null,
+  ): Promise<{
+    approvals: OrderExtraCostApproval[];
+    extraRows: OrderSettlement[];
+    party: { user_id: string; cashbox_type: Cashbox_type } | null;
+    plan: DeferredExtraCostRowPlan;
+  }> {
+    const empty = {
+      approvals: [] as OrderExtraCostApproval[],
+      extraRows: [] as OrderSettlement[],
+      party: null,
+      plan: { consumedMarketRows: [], remittedChainRows: [] },
+    };
+    if (!(Number(order.extra_cost ?? 0) > 0)) return empty;
+    const approvals = await this.extraCostApprovalRepo.find({
+      where: {
+        order_id: String(order.id),
+        status: 'approved',
+        mode: 'deferred',
+        isDeleted: false,
+      },
+      order: { id: 'ASC' },
+    });
+    if (!approvals?.length) return empty;
+    const extraRows = await this.orderSettlementRepo.find({
+      where: {
+        order_id: String(order.id),
+        isDeleted: false,
+        extra_cost_approval_id: In(approvals.map((row) => String(row.id))),
+      },
+    });
+    const plan = this.planDeferredExtraCostRows(
+      approvals,
+      extraRows ?? [],
+      remittedSale,
+    );
+    const snapshot = approvals[approvals.length - 1].deferred_snapshot;
+    const chargedUserId = this.numericActorId(snapshot?.charged_user_id);
+    const party =
+      snapshot?.charged_cashbox_type && chargedUserId
+        ? {
+            user_id: chargedUserId,
+            cashbox_type: snapshot.charged_cashbox_type as Cashbox_type,
+          }
+        : null;
+    return { approvals, extraRows: extraRows ?? [], party, plan };
+  }
+
+  /**
+   * (SPEC v2 §5) Tasdiqlangan E qatorlarini rollback qanday qaytaradi:
+   *   • boshlang'ich holatidagi qator (zanjir — snapshot; market —
+   *     BRANCH_SETTLED) — o'chiriladi (`resetSettlementOnRollback`);
+   *   • market qatori boshqa buyurtmaning HQ→market FIFO'sida ishlatilgan
+   *     (MARKET_SETTLED) — JOYIDA qoladi (o'chirilsa market daftari E ga
+   *     buzilardi, `retreatSettlement` esa kredit qatorni hech qachon qayta
+   *     ochmaydi), o'rniga +E kompensatsiya qatori yoziladi
+   *     (`consumedMarketRows` → `recordExtraCostMarketReversalRows`): rollback
+   *     market kassasiga +E qaytaradi, daftarda esa aynan shu +E ochiq;
+   *   • FAQAT superadmin (`remittedSale`): kuryer sotuv qatori bilan birga
+   *     topshirgan zanjir qatori (ikkalasi COURIER_SETTLED, kuryer va filial
+   *     bir xil) — ikkalasining yig'indisi bugungi «tasdiqsiz E» ning bitta
+   *     qatori bilan teng, fix3b kabi qaytariladi (`remittedChainRows`:
+   *     o'chiriladi, kuryer qoldig'iga sotuv + zanjir summasi kredit);
+   *   • boshqa hamma holat — 400: zanjir krediti boshqa buyurtmaning
+   *     topshirig'ida ishlatilgan (to'lovni qaytarish buni o'zgartirmaydi).
+   */
+  private planDeferredExtraCostRows(
+    approvals: OrderExtraCostApproval[],
+    rows: OrderSettlement[],
+    remittedSale: OrderSettlement | null,
+  ): DeferredExtraCostRowPlan {
+    const startById = new Map(
+      approvals.map((approval) => [
+        String(approval.id),
+        String(
+          approval.deferred_snapshot?.chain_start_status ??
+            SettlementStatus.PENDING,
+        ),
+      ]),
+    );
+    const plan: DeferredExtraCostRowPlan = {
+      consumedMarketRows: [],
+      remittedChainRows: [],
+    };
+    const usedElsewhere =
+      "Qo'shimcha xarajat krediti boshqa buyurtma hisob-kitobida ishlatilgan — ";
+    const noPaymentReversal =
+      "to'lovni qaytarish buni o'zgartirmaydi, rollback bajarilmadi";
+    for (const row of rows) {
+      const start = startById.get(String(row.extra_cost_approval_id ?? ''));
+      const status = String(row.status);
+      if (start && row.kind === 'extra_cost_market') {
+        if (status === SettlementStatus.BRANCH_SETTLED) continue;
+        if (status === SettlementStatus.MARKET_SETTLED) {
+          plan.consumedMarketRows.push(row);
+          continue;
+        }
+      } else if (start && row.kind === 'extra_cost_chain') {
+        if (status === start) continue;
+        const remittedTogether =
+          remittedSale &&
+          remittedSale.status === SettlementStatus.COURIER_SETTLED &&
+          start === SettlementStatus.PENDING &&
+          status === SettlementStatus.COURIER_SETTLED &&
+          this.normalizeCourierId(row.courier_id) ===
+            this.normalizeCourierId(remittedSale.courier_id) &&
+          String(row.branch_id ?? '').trim() ===
+            String(remittedSale.branch_id ?? '').trim();
+        if (remittedTogether) {
+          plan.remittedChainRows.push(row);
+          continue;
+        }
+        if (
+          start === SettlementStatus.PENDING &&
+          status === SettlementStatus.COURIER_SETTLED
+        ) {
+          // Kuryer darajasida ishlatilgan — kuryer shu buyurtma pulini ham
+          // topshirsa, sotuv qatori bilan birga superadmin qaytara oladi.
+          this.badRequest(
+            `${usedElsewhere}hozir rollback mumkin emas (${noPaymentReversal}). ` +
+              'Kuryer bu buyurtma pulini ham topshirgach, uni superadmin qaytara oladi',
+          );
+        }
+      }
+      this.badRequest(
+        `${usedElsewhere}rollback mumkin emas (${noPaymentReversal}). ` +
+          'Buxgalteriya tuzatishi kerak',
+      );
+    }
+    return plan;
+  }
+
+  /**
+   * (SPEC v2 §5) Qulf ostida qayta tekshiruv. Buyurtmaning HAMMA
+   * (o'chirilmagan) hisob-kitob qatorlari BITTA `SELECT … FOR UPDATE`
+   * bilan, `runFifoSettlement` dagi tartibda (`createdAt`, `id`) qulflanadi
+   * — sotuv qatori ham, E qatorlari ham (keyingi `resetSettlementOnRollback`
+   * yangi qulf so'ramaydi, ya'ni FIFO bilan teskari tartib — deadlock — yo'q).
+   * E qatorlari tranzaksiyadan oldingi o'qishdan beri o'zgargan bo'lsa (FIFO
+   * shu orada ishlatgan) — 400, hech narsa yozilmaydi.
+   */
+  private async assertDeferredExtraCostRowsUnchanged(
+    tx: EntityManager,
+    orderId: string,
+    state: {
+      approvals: OrderExtraCostApproval[];
+      extraRows: OrderSettlement[];
+    },
+    remittedSale: OrderSettlement | null,
+  ): Promise<void> {
+    const locked = await tx.getRepository(OrderSettlement).find({
+      where: { order_id: String(orderId), isDeleted: false },
+      order: { createdAt: 'ASC', id: 'ASC' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    const approvalIds = new Set(state.approvals.map((row) => String(row.id)));
+    const rows = (locked ?? []).filter((row) =>
+      approvalIds.has(String(row.extra_cost_approval_id ?? '')),
+    );
+    // Qulf ostida yana o'sha qoidalar (o'tmasa — aniq sabab bilan 400).
+    this.planDeferredExtraCostRows(state.approvals, rows, remittedSale);
+    const signature = (list: OrderSettlement[]) =>
+      list
+        .map((row) => `${String(row.id)}:${String(row.status)}`)
+        .sort()
+        .join('|');
+    if (signature(rows) !== signature(state.extraRows)) {
+      this.badRequest(
+        "Rollback holati o'zgargan (qo'shimcha xarajat hisob-kitobi yangilangan) — qayta urinib ko'ring",
+      );
+    }
+  }
+
+  /**
+   * (SPEC v2 §5) Boshqa buyurtma FIFO'si ishlatgan market qatori o'rniga
+   * +E kompensatsiya qatori: 0 / 0 / +E, BRANCH_SETTLED (HQ→market FIFO uni
+   * keyingi to'lovda yopadi), shu so'rov bilan (`UQ_order_settlement_extra_
+   * cost_kind` bitta qatorga ruxsat beradi). `resetSettlementOnRollback` dan
+   * KEYIN yoziladi (u buni o'chirmasin).
+   */
+  private async recordExtraCostMarketReversalRows(
+    tx: EntityManager,
+    rows: OrderSettlement[],
+  ): Promise<void> {
+    if (!rows.length) return;
+    const repo = tx.getRepository(OrderSettlement);
+    const now = new Date();
+    for (const row of rows) {
+      await repo.save(
+        repo.create({
+          order_id: String(row.order_id),
+          kind: 'extra_cost_reversal',
+          extra_cost_approval_id: row.extra_cost_approval_id
+            ? String(row.extra_cost_approval_id)
+            : null,
+          courier_id: row.courier_id ? String(row.courier_id) : null,
+          branch_id: row.branch_id ? String(row.branch_id) : null,
+          market_id: row.market_id ? String(row.market_id) : null,
+          courier_amount: 0,
+          branch_amount: 0,
+          market_amount: -(Number(row.market_amount) || 0),
+          status: SettlementStatus.BRANCH_SETTLED,
+          courier_to_branch_at: now,
+          courier_to_branch_by: null,
+          branch_to_hq_at: now,
+          branch_to_hq_by: null,
+          hq_to_market_at: null,
+          hq_to_market_by: null,
+          isDeleted: false,
+        }),
+      );
+    }
   }
 
   /**
@@ -5751,39 +7139,13 @@ export class OrderLifecycleService {
     credit: RemittedCourierCredit,
   ): Promise<void> {
     const carryRepo = tx.getRepository(OrderSettlementCarry);
-    await carryRepo
-      .createQueryBuilder()
-      .insert()
-      .values({
-        level: 'courier_to_branch',
-        party_id: credit.courierId,
-        branch_id: credit.branchId,
-        amount: 0,
-      })
-      .orIgnore()
-      .execute();
-    const courierCarry = await carryRepo.findOne({
-      where: { level: 'courier_to_branch', party_id: credit.courierId },
-      lock: { mode: 'pessimistic_write' },
-    });
-    await carryRepo
-      .createQueryBuilder()
-      .insert()
-      .values({
-        level: 'branch_to_hq',
-        party_id: credit.branchId,
-        branch_id: null,
-        amount: 0,
-      })
-      .orIgnore()
-      .execute();
-    await carryRepo.findOne({
-      where: { level: 'branch_to_hq', party_id: credit.branchId },
-      lock: { mode: 'pessimistic_write' },
-    });
+    // Kechiktirilgan E yo'lida qoldiqlar allaqachon qulflangan (shu
+    // tranzaksiyada qayta qulf — no-op).
+    const courierCarry = await this.lockRemittedCourierCarries(tx, credit);
 
+    // (SPEC v2) Faqat sotuv qatori — E qatorlari kredit beradigan qator emas.
     const row = await tx.getRepository(OrderSettlement).findOne({
-      where: { order_id: String(orderId), isDeleted: false },
+      where: { order_id: String(orderId), isDeleted: false, kind: 'sale' },
       lock: { mode: 'pessimistic_write' },
     });
     if (row && this.isSettledToHq(row.status)) {
@@ -5819,10 +7181,57 @@ export class OrderLifecycleService {
       { id: courierCarry.id },
       {
         amount:
-          (Math.max(toTiyin(existingAmount), 0) + toTiyin(credit.amount)) / 100,
+          (Math.max(toTiyin(existingAmount), 0) +
+            toTiyin(remittedCarryCredit(credit))) /
+          100,
         branch_id: credit.branchId,
       },
     );
+  }
+
+  /**
+   * fix3b — superadmin kredit yo'lining qoldiq (carry) qulflari:
+   * `courier_to_branch` (kuryer) va `branch_to_hq` (filial), `runFifoSettlement`
+   * kabi `INSERT … ON CONFLICT DO NOTHING` + `pessimistic_write`. Kuryer
+   * qoldig'i qatorini qaytaradi. Shu tranzaksiyada qayta chaqirish xavfsiz.
+   */
+  private async lockRemittedCourierCarries(
+    tx: EntityManager,
+    credit: RemittedCourierCredit,
+  ): Promise<OrderSettlementCarry | null> {
+    const carryRepo = tx.getRepository(OrderSettlementCarry);
+    await carryRepo
+      .createQueryBuilder()
+      .insert()
+      .values({
+        level: 'courier_to_branch',
+        party_id: credit.courierId,
+        branch_id: credit.branchId,
+        amount: 0,
+      })
+      .orIgnore()
+      .execute();
+    const courierCarry = await carryRepo.findOne({
+      where: { level: 'courier_to_branch', party_id: credit.courierId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    await carryRepo
+      .createQueryBuilder()
+      .insert()
+      .values({
+        level: 'branch_to_hq',
+        party_id: credit.branchId,
+        branch_id: null,
+        amount: 0,
+      })
+      .orIgnore()
+      .execute();
+    await carryRepo.findOne({
+      where: { level: 'branch_to_hq', party_id: credit.branchId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    return courierCarry ?? null;
   }
 
   /**
@@ -9856,29 +11265,47 @@ export class OrderLifecycleService {
       proofFileKeys: dto?.proofFileKeys,
       proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
-    const pendingApproval = await this.requestExtraCostApprovalIfNeeded({
+    /**
+     * (SPEC v2) Kechiktirilgan rejim: sotuv HOZIR E = 0 bilan bajariladi
+     * (kassa oyoqlari, settlement, daftar, `extra_cost`, izoh, to'lov
+     * holati), E esa alohida `pending` so'rov — tasdiqlansa alohida
+     * tranzaksiya bo'lib yoziladi. ISTISNO: X chegarasi (yuqorida) so'ralgan
+     * E bilan tekshirilgan — X ≤ C − T − E (aks holda tasdiqdan keyin
+     * marketga ortiqcha to'langan bo'lardi).
+     */
+    const deferExtraCost = this.shouldDeferExtraCost({
+      extraCost,
+      market,
       order,
       requester,
-      action: 'sell',
-      extraCost,
-      proofFiles,
-      dto: dto ?? {},
-      market,
       options,
     });
+    const appliedExtraCost = deferExtraCost ? 0 : extraCost;
+    const pendingApproval = deferExtraCost
+      ? null
+      : await this.requestExtraCostApprovalIfNeeded({
+          order,
+          requester,
+          action: 'sell',
+          extraCost,
+          proofFiles,
+          dto: dto ?? {},
+          market,
+          options,
+        });
     if (pendingApproval) {
       return pendingApproval;
     }
     const finalComment = this.generateSaleComment(
       order.comment,
       dto?.comment,
-      extraCost,
+      appliedExtraCost,
     );
 
     // Qo'shimcha xarajat AYNAN qaysi kassadan yechiladi — daftar oyoqlari ham
     // shuncha kamayadi (pastda `recordSaleSettlement` ga uzatiladi).
     const extraCostLegs = this.resolveExtraCostSettlementLegs({
-      extraCost,
+      extraCost: appliedExtraCost,
       chargedCashboxType: actorExpenseCashbox ? actorExpenseCashboxType : null,
     });
 
@@ -9935,7 +11362,9 @@ export class OrderLifecycleService {
       currentPaid,
       marketPaidAtSale,
       debtBeforeSale,
-      extraCost,
+      // (SPEC v2) Kechiktirilganda E = 0 — rad etilsa PAID holatda qolib
+      // ketmasin (crit-money k).
+      extraCost: appliedExtraCost,
     });
     // X qaysi kassadan chiqqan bo'lsa, settlement'da o'sha bo'g'in va
     // yuqoridagilar shuncha kam ko'taradi — qo'shimcha xarajat bilan AYNI
@@ -9953,6 +11382,8 @@ export class OrderLifecycleService {
     // sold_at is a real wall-clock timestamp (read as a number by analytics) —
     // kept separate from the dedup token above.
     const soldAt = String(Date.now());
+    let deferredApproval: OrderExtraCostApproval | null = null;
+    const saleItems = extraCostItemsFromOrderItems(order.items);
 
     // Atomic block: outbox enqueues for cashbox updates + order status save must
     // commit together. Otherwise a crash between them produces missing finance
@@ -9971,16 +11402,56 @@ export class OrderLifecycleService {
         id,
         requester,
         options,
-        extraCost > 0
+        appliedExtraCost > 0
           ? {
               action: 'sell',
-              amount: extraCost,
+              amount: appliedExtraCost,
               marketId: order.market_id,
               proofFiles,
               payload: { ...(dto ?? {}), extraCost, proofFileKeys: proofFiles },
+              items: saleItems,
             }
           : undefined,
       );
+      if (deferExtraCost) {
+        // (SPEC v2 §2) E — alohida `pending` so'rov; tasdiqda qayta
+        // hisoblanmasin: bugun E qayerga yozilgan bo'lsa, aynan o'sha.
+        const chargedCashboxType = actorExpenseCashbox
+          ? actorExpenseCashboxType
+          : null;
+        const deferredLegs = this.resolveExtraCostSettlementLegs({
+          extraCost,
+          chargedCashboxType,
+        });
+        deferredApproval = await this.recordDeferredExtraCost(tx, {
+          order,
+          requester,
+          action: 'sell',
+          amount: extraCost,
+          proofFiles,
+          dto: dto ?? {},
+          items: saleItems,
+          snapshot: {
+            charged_cashbox_type: chargedCashboxType,
+            charged_user_id: chargedCashboxType ? actorExpenseUserId : null,
+            courier_id: courierCashbox ? actorCourierId : null,
+            branch_id: settlementBranchId ?? null,
+            market_id: order.market_id ? String(order.market_id) : null,
+            legs: {
+              courier: deferredLegs.courier,
+              branch: deferredLegs.branch,
+              market: extraCost,
+            },
+            chain_start_status: this.resolveSettlementStartStatus({
+              hasCourier: Boolean(courierCashbox),
+              branchId: settlementBranchId ?? null,
+            }),
+            ledger_kind: 'sell_extra_cost',
+            operation_at: new Date(Number(soldAt)).toISOString(),
+            order_number: orderNumberOf(order.id) || null,
+          },
+        });
+      }
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
@@ -10073,11 +11544,11 @@ export class OrderLifecycleService {
         });
       }
 
-      if (extraCost > 0) {
+      if (appliedExtraCost > 0) {
         await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: extraCost,
+          amount: appliedExtraCost,
           operation_type: Operation_type.EXPENSE,
           source_type: Source_type.EXTRA_COST,
           source_id: String(order.id),
@@ -10089,7 +11560,7 @@ export class OrderLifecycleService {
           await pay({
             user_id: actorExpenseUserId,
             cashbox_type: actorExpenseCashboxType,
-            amount: extraCost,
+            amount: appliedExtraCost,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.EXTRA_COST,
             source_id: String(order.id),
@@ -10103,7 +11574,7 @@ export class OrderLifecycleService {
           'FINANCE',
           'finance.financial_balance.record',
           {
-            amount: -extraCost,
+            amount: -appliedExtraCost,
             source_type: 'sell_extra_cost',
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
@@ -10168,7 +11639,8 @@ export class OrderLifecycleService {
           paid_amount: paidAfter,
           // Buyurtmada SAQLANADI: ilgari faqat kassa tarixida qolardi va
           // hamkorga (BeePost) umuman yetib bormasdi.
-          extra_cost: extraCost,
+          // (SPEC v2) Kechiktirilganda 0 — tasdiq yozadi.
+          extra_cost: appliedExtraCost,
           sold_at: soldAt,
           // fix3 C13 (CODE-09): sotilgan buyurtmada eski "qaytarish so'rovi"
           // belgisi qolmaydi (qisman sotuv ham tozalaydi). Qolsa, u
@@ -10239,7 +11711,7 @@ export class OrderLifecycleService {
           marketPaidLegs.courier,
         branch_amount: branchNet - extraCostLegs.branch - marketPaidLegs.branch,
         market_amount:
-          collectible - marketTariff - extraCost - marketPaidAtSale,
+          collectible - marketTariff - appliedExtraCost - marketPaidAtSale,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -10285,7 +11757,17 @@ export class OrderLifecycleService {
         status: nextStatus,
         to_be_paid: netToBePaid,
         paid_amount: paidAfter,
-        extra_cost: extraCost,
+        extra_cost: appliedExtraCost,
+        ...(deferredApproval
+          ? {
+              extra_cost_request: {
+                id: String(deferredApproval.id),
+                amount: extraCost,
+                status: 'pending',
+                mode: 'deferred',
+              },
+            }
+          : {}),
         // T0UGh8bL — "kim marketga qancha berdi" nizosi uchun iz.
         ...(marketPaidAtSale > 0
           ? { sale_market_paid_amount: marketPaidAtSale }
@@ -10317,6 +11799,20 @@ export class OrderLifecycleService {
      * kiritilganda PAID / PARTLY_PAID ni darhol ko'rsatadi, qayta so'ramaydi.
      * Ilgari `data: {}` edi — qo'shimcha maydonlar eski klientni buzmaydi.
      */
+    // (SPEC v2 §2) Kechiktirilgan so'rov: market egasiga xabar (commit'dan
+    // keyin, best-effort) va javobda `extra_cost_request` (HECH QACHON 202).
+    let extraCostRequest: Awaited<
+      ReturnType<OrderLifecycleService['deferredExtraCostResponse']>
+    > | null = null;
+    if (deferredApproval) {
+      extraCostRequest = await this.deferredExtraCostResponse(deferredApproval);
+      await this.notifyDeferredExtraCostRequested(
+        deferredApproval,
+        order,
+        extraCostRequest.items,
+      );
+    }
+
     return successRes(
       {
         id: String(order.id),
@@ -10324,6 +11820,7 @@ export class OrderLifecycleService {
         to_be_paid: netToBePaid,
         paid_amount: paidAfter,
         sale_market_paid_amount: marketPaidAtSale,
+        ...(extraCostRequest ? { extra_cost_request: extraCostRequest } : {}),
       },
       200,
       'Order sold',
@@ -10390,11 +11887,6 @@ export class OrderLifecycleService {
 
     const extraCost = this.wholeExtraCost(dto?.extraCost);
     const totalPrice = Number(order.total_price ?? 0);
-    const finalComment = this.generateSaleComment(
-      order.comment,
-      dto?.comment,
-      extraCost,
-    );
 
     // The market is needed for the proof policy regardless of extra cost, since
     // some conditions (e.g. cancelling a zero-total order) apply with no expense.
@@ -10460,16 +11952,37 @@ export class OrderLifecycleService {
       proofFileKeys: dto?.proofFileKeys,
       proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
-    const pendingApproval = await this.requestExtraCostApprovalIfNeeded({
+    /**
+     * (SPEC v2) Kechiktirilgan rejim: bekor qilish HOZIR E = 0 bilan
+     * (kassa, daftar, kredit qatori, `extra_cost`, izoh), E — alohida
+     * `pending` so'rov. Kassa tekshiruvlari (pastda) o'zgarmaydi: snapshot
+     * bugungi qoida bilan qaysi kassa yechilishini yozib qo'yadi.
+     */
+    const deferExtraCost = this.shouldDeferExtraCost({
+      extraCost,
+      market,
       order,
       requester,
-      action: 'cancel',
-      extraCost,
-      proofFiles,
-      dto: dto ?? {},
-      market,
       options,
     });
+    const appliedExtraCost = deferExtraCost ? 0 : extraCost;
+    const finalComment = this.generateSaleComment(
+      order.comment,
+      dto?.comment,
+      appliedExtraCost,
+    );
+    const pendingApproval = deferExtraCost
+      ? null
+      : await this.requestExtraCostApprovalIfNeeded({
+          order,
+          requester,
+          action: 'cancel',
+          extraCost,
+          proofFiles,
+          dto: dto ?? {},
+          market,
+          options,
+        });
     if (pendingApproval) {
       return pendingApproval;
     }
@@ -10514,12 +12027,14 @@ export class OrderLifecycleService {
 
     // Qo'shimcha xarajat daftar oyoqlari + bekor qilingan buyurtma zanjirdagi
     // qaysi filialga tegishli ekani (kredit qatorini ochish uchun).
+    // (SPEC v2) Kechiktirilganda ham shu qoida — lekin snapshot'ga yoziladi.
     const extraCostLegs = this.resolveExtraCostSettlementLegs({
       extraCost,
       chargedCashboxType: actorExpenseCashbox ? actorExpenseCashboxType : null,
     });
     const settlementBranchId =
       extraCost > 0 ? await this.lookup.resolveSettlementBranchId(order) : null;
+    let deferredApproval: OrderExtraCostApproval | null = null;
 
     // Atomic block: the extra-cost cashbox movements (outbox enqueues) and the
     // status flip to CANCELLED must commit together — otherwise a crash could
@@ -10543,26 +12058,62 @@ export class OrderLifecycleService {
         id,
         requester,
         options,
-        extraCost > 0
+        appliedExtraCost > 0
           ? {
               action: 'cancel',
-              amount: extraCost,
+              amount: appliedExtraCost,
               marketId: order.market_id,
               proofFiles,
               payload: { ...(dto ?? {}), extraCost, proofFileKeys: proofFiles },
+              items: extraCostItemsFromOrderItems(order.items),
             }
           : undefined,
       );
+      if (deferExtraCost) {
+        // (SPEC v2 §2) Bugungi bekor qilishdagi E yozuvining AYNAN nusxasi
+        // (HQ menejeri bekorida HQ filial kassasi ham) — tasdiqda yoziladi.
+        const chargedCashboxType = actorExpenseCashbox
+          ? actorExpenseCashboxType
+          : null;
+        deferredApproval = await this.recordDeferredExtraCost(tx, {
+          order,
+          requester,
+          action: 'cancel',
+          amount: extraCost,
+          proofFiles,
+          dto: dto ?? {},
+          items: extraCostItemsFromOrderItems(order.items),
+          snapshot: {
+            charged_cashbox_type: chargedCashboxType,
+            charged_user_id: chargedCashboxType ? actorExpenseUserId : null,
+            courier_id: extraCostLegs.courier > 0 ? actorCourierId : null,
+            branch_id: settlementBranchId ?? null,
+            market_id: order.market_id ? String(order.market_id) : null,
+            legs: {
+              courier: extraCostLegs.courier,
+              branch: extraCostLegs.branch,
+              market: extraCost,
+            },
+            chain_start_status: this.resolveSettlementStartStatus({
+              hasCourier: extraCostLegs.courier > 0,
+              branchId: settlementBranchId ?? null,
+            }),
+            ledger_kind: 'cancel_extra_cost',
+            operation_at: new Date().toISOString(),
+            order_number: orderNumberOf(order.id) || null,
+          },
+        });
+      }
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
         this.updateCashboxBalance({ ...data, dedup_epoch: dedupEpoch }, tx);
 
-      if (extraCost > 0) {
+      if (appliedExtraCost > 0) {
         await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: extraCost,
+          amount: appliedExtraCost,
           operation_type: Operation_type.EXPENSE,
           source_type: Source_type.EXTRA_COST,
           source_id: String(order.id),
@@ -10574,7 +12125,7 @@ export class OrderLifecycleService {
           await pay({
             user_id: actorExpenseUserId,
             cashbox_type: actorExpenseCashboxType,
-            amount: extraCost,
+            amount: appliedExtraCost,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.EXTRA_COST,
             source_id: String(order.id),
@@ -10588,7 +12139,7 @@ export class OrderLifecycleService {
           'FINANCE',
           'finance.financial_balance.record',
           {
-            amount: -extraCost,
+            amount: -appliedExtraCost,
             source_type: 'cancel_extra_cost',
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
@@ -10621,7 +12172,7 @@ export class OrderLifecycleService {
           market_id: order.market_id ? String(order.market_id) : null,
           courier_amount: extraCostLegs.courier ? -extraCostLegs.courier : 0,
           branch_amount: extraCostLegs.branch ? -extraCostLegs.branch : 0,
-          market_amount: -extraCost,
+          market_amount: -appliedExtraCost,
           hasCourier: extraCostLegs.courier > 0,
         });
       }
@@ -10651,8 +12202,9 @@ export class OrderLifecycleService {
            * `updateFull` whitelist'i (2093e41) `extra_cost`ni `typeof` bilan
            * o'tkazadi, shuning uchun uni bu yerda uzatish yetarli. `extraCost`
            * bu yerda 0 bo'lsa ham xavfsiz: 0 yozadi (default bilan bir xil).
+           * (SPEC v2) Kechiktirilganda 0 — tasdiq yozadi.
            */
-          extra_cost: extraCost,
+          extra_cost: appliedExtraCost,
           /**
            * ⚠️ BEKOR QILINGAN BUYURTMADA MARKETGA QARZ YO'Q (pLmAsEsj).
            *
@@ -10711,12 +12263,42 @@ export class OrderLifecycleService {
       entity_id: String(order.id),
       action: 'order.cancel',
       old_value: { status: Order_status.WAITING },
-      new_value: { status: Order_status.CANCELLED, extra_cost: extraCost },
+      new_value: {
+        status: Order_status.CANCELLED,
+        extra_cost: appliedExtraCost,
+        ...(deferredApproval
+          ? {
+              extra_cost_request: {
+                id: String(deferredApproval.id),
+                amount: extraCost,
+                status: 'pending',
+                mode: 'deferred',
+              },
+            }
+          : {}),
+      },
       ...this.custody.auditActor(requester),
       metadata: { market_id: order.market_id, courier_id: actorCourierId },
       // 2WRzdWpZ: izoh (comment) ATAYLAB yo'q — unda mijoz ma'lumoti bo'lishi mumkin.
       description: ActivityDescribeUz.orderCancelled(order.id),
     });
+
+    // (SPEC v2 §2) Kechiktirilgan so'rov: market egasiga xabar va javobda
+    // `extra_cost_request` (HECH QACHON 202).
+    if (deferredApproval) {
+      const extraCostRequest =
+        await this.deferredExtraCostResponse(deferredApproval);
+      await this.notifyDeferredExtraCostRequested(
+        deferredApproval,
+        order,
+        extraCostRequest.items,
+      );
+      return successRes(
+        { id, extra_cost_request: extraCostRequest },
+        200,
+        'Order canceled',
+      );
+    }
 
     return successRes({ id }, 200, 'Order canceled');
   }
@@ -11494,32 +13076,45 @@ export class OrderLifecycleService {
       proofFileKeys: dto?.proofFileKeys,
       proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
-    const pendingApproval = await this.requestExtraCostApprovalIfNeeded({
+    // (SPEC v2) Kechiktirilgan rejim — `sellOrder` dagi kabi: qisman sotuv
+    // HOZIR E = 0 bilan, E alohida `pending` so'rov (sotilgan tovarlar bilan).
+    const deferExtraCost = this.shouldDeferExtraCost({
+      extraCost,
+      market,
       order,
       requester,
-      action: 'partly_sell',
-      extraCost,
-      proofFiles,
-      dto: dto ?? {},
-      market,
       options,
     });
+    const appliedExtraCost = deferExtraCost ? 0 : extraCost;
+    const pendingApproval = deferExtraCost
+      ? null
+      : await this.requestExtraCostApprovalIfNeeded({
+          order,
+          requester,
+          action: 'partly_sell',
+          extraCost,
+          proofFiles,
+          dto: dto ?? {},
+          market,
+          options,
+        });
     if (pendingApproval) {
       return pendingApproval;
     }
     const finalComment = this.generateSaleComment(
       order.comment,
       dto?.comment,
-      extraCost,
+      appliedExtraCost,
       ['Buyurtma arzonroqqa sotildi!'],
     );
 
     // Qo'shimcha xarajat AYNAN qaysi kassadan yechiladi — daftar oyoqlari ham
     // shuncha kamayadi (`sellOrder` bilan bir xil).
     const extraCostLegs = this.resolveExtraCostSettlementLegs({
-      extraCost,
+      extraCost: appliedExtraCost,
       chargedCashboxType: actorExpenseCashbox ? actorExpenseCashboxType : null,
     });
+    let deferredApproval: OrderExtraCostApproval | null = null;
 
     const existingItems = await this.orderItemRepo.find({
       where: { order_id: String(order.id) },
@@ -11694,16 +13289,58 @@ export class OrderLifecycleService {
         id,
         requester,
         options,
-        extraCost > 0
+        appliedExtraCost > 0
           ? {
               action: 'partly_sell',
-              amount: extraCost,
+              amount: appliedExtraCost,
               marketId: order.market_id,
               proofFiles,
               payload: { ...(dto ?? {}), extraCost, proofFileKeys: proofFiles },
+              items: extraCostItemsFromPartlySell(itemMatches),
             }
           : undefined,
       );
+      if (deferExtraCost) {
+        // (SPEC v2 §2) E — alohida `pending` so'rov (sotilgan / qaytgan
+        // miqdorlar bilan); bugungi qisman sotuvdagi E yozuvining nusxasi.
+        const chargedCashboxType = actorExpenseCashbox
+          ? actorExpenseCashboxType
+          : null;
+        const deferredLegs = this.resolveExtraCostSettlementLegs({
+          extraCost,
+          chargedCashboxType,
+        });
+        deferredApproval = await this.recordDeferredExtraCost(tx, {
+          order,
+          requester,
+          action: 'partly_sell',
+          amount: extraCost,
+          proofFiles,
+          dto: dto ?? {},
+          items: extraCostItemsFromPartlySell(itemMatches),
+          snapshot: {
+            charged_cashbox_type: chargedCashboxType,
+            charged_user_id: chargedCashboxType ? actorExpenseUserId : null,
+            courier_id: courierCashbox ? actorCourierId : null,
+            branch_id: settlementBranchId ?? null,
+            market_id: order.market_id ? String(order.market_id) : null,
+            legs: {
+              courier: deferredLegs.courier,
+              branch: deferredLegs.branch,
+              market: extraCost,
+            },
+            chain_start_status: this.resolveSettlementStartStatus({
+              hasCourier: Boolean(courierCashbox),
+              branchId: settlementBranchId ?? null,
+            }),
+            ledger_kind: 'sell_extra_cost',
+            operation_at: new Date(
+              Number(partlySoldAt) || Date.now(),
+            ).toISOString(),
+            order_number: orderNumberOf(order.id) || null,
+          },
+        });
+      }
       const txOrderItemRepo = tx.getRepository(OrderItem);
       const pay = (
         // `typeof this.…` bu yerda TS 5.9 da hal bo'lmaydi (metodda boshqa
@@ -11807,11 +13444,11 @@ export class OrderLifecycleService {
         });
       }
 
-      if (extraCost > 0) {
+      if (appliedExtraCost > 0) {
         await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: extraCost,
+          amount: appliedExtraCost,
           operation_type: Operation_type.EXPENSE,
           source_type: Source_type.EXTRA_COST,
           source_id: String(order.id),
@@ -11823,7 +13460,7 @@ export class OrderLifecycleService {
           await pay({
             user_id: actorExpenseUserId,
             cashbox_type: actorExpenseCashboxType,
-            amount: extraCost,
+            amount: appliedExtraCost,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.EXTRA_COST,
             source_id: String(order.id),
@@ -11837,7 +13474,7 @@ export class OrderLifecycleService {
           'FINANCE',
           'finance.financial_balance.record',
           {
-            amount: -extraCost,
+            amount: -appliedExtraCost,
             source_type: 'sell_extra_cost',
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
@@ -11861,8 +13498,9 @@ export class OrderLifecycleService {
            * ⚠️ Qisman sotuvda ham xarajat buyurtmaga yoziladi (audit M5).
            * Rollback xarajatni aynan shu snapshotdan qaytaradi; ilgari bu
            * yo'l uni yozmasdi — rollback eski (yoki 0) qiymatni ko'rardi.
+           * (SPEC v2) Kechiktirilganda 0 — tasdiq yozadi.
            */
-          extra_cost: extraCost,
+          extra_cost: appliedExtraCost,
           market_tariff: marketTariff,
           courier_tariff: courierTariff,
           courier_share: courierShare,
@@ -11917,7 +13555,7 @@ export class OrderLifecycleService {
         // kassadan farq qilardi.
         courier_amount: collectible - courierShare - extraCostLegs.courier,
         branch_amount: branchNet - extraCostLegs.branch,
-        market_amount: collectible - marketTariff - extraCost,
+        market_amount: collectible - marketTariff - appliedExtraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -12079,6 +13717,23 @@ export class OrderLifecycleService {
       requester,
       path: 'partly_sell',
     });
+
+    // (SPEC v2 §2) Kechiktirilgan so'rov: market egasiga xabar va javobda
+    // `extra_cost_request` (HECH QACHON 202).
+    if (deferredApproval) {
+      const extraCostRequest =
+        await this.deferredExtraCostResponse(deferredApproval);
+      await this.notifyDeferredExtraCostRequested(
+        deferredApproval,
+        order,
+        extraCostRequest.items,
+      );
+      return successRes(
+        { extra_cost_request: extraCostRequest },
+        200,
+        'Order qisman sotildi',
+      );
+    }
 
     return successRes({}, 200, 'Order qisman sotildi');
   }

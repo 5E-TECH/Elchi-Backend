@@ -137,6 +137,9 @@ function makeService(
     findById: jest.fn().mockResolvedValue(ORDER),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+    // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+    // (bugungi darhol yozish yo'li qamraladi).
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     lockWaitingOrder: jest.fn().mockResolvedValue(undefined),
     updateFull: jest.fn().mockResolvedValue(undefined),
     queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),

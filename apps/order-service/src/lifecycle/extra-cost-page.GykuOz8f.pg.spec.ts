@@ -8,6 +8,7 @@ import { ExtraCostAutoApprove1716000000123 } from '../../../../migrations/171600
 import { ExtraCostApprovalVoidReversed1716000000206 } from '../../../../migrations/1716000000206-ExtraCostApprovalVoidReversed';
 import { ExtraCostAutoApproveFrom1716000000208 } from '../../../../migrations/1716000000208-ExtraCostAutoApproveFrom';
 import { ExtraCostImmediateRows1716000000210 } from '../../../../migrations/1716000000210-ExtraCostImmediateRows';
+import { ExtraCostDeferred1716000000219 } from '../../../../migrations/1716000000219-ExtraCostDeferred';
 import { Branch } from '../entities/branch.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { OrderExtraCostApproval } from '../entities/order-extra-cost-approval.entity';
@@ -218,6 +219,18 @@ const T = (minute: number) => new Date(Date.UTC(2026, 10, 1, 8, minute, 0));
         await new ExtraCostApprovalVoidReversed1716000000206().up(runner);
         await new ExtraCostAutoApproveFrom1716000000208().up(runner);
         await new ExtraCostImmediateRows1716000000210().up(runner);
+        // (SPEC v2) `mode` / `items` / `deferred_snapshot` ustunlari —
+        // migratsiya 219 `order_settlement` ga ham tegadi, shuning uchun
+        // eski unikal indeksli minimal jadval.
+        await runner.query(`
+          CREATE TABLE order_schema.order_settlement (
+            id bigserial PRIMARY KEY,
+            order_id bigint NOT NULL
+          )`);
+        await runner.query(
+          'CREATE UNIQUE INDEX "IDX_order_settlement_order_id" ON order_schema.order_settlement (order_id)',
+        );
+        await new ExtraCostDeferred1716000000219().up(runner);
       } finally {
         await runner.release();
       }

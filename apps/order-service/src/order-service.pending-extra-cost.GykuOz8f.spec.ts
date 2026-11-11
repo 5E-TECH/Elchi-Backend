@@ -58,9 +58,13 @@ function build(query: jest.Mock) {
   return { service, logger };
 }
 
+// (SPEC v2) Oxirgi so'rov (`extra_cost_request`) alohida so'rovda — bu
+// yerda faqat `pending_extra_cost_approval` so'rovi sanaladi.
 const pendingCalls = (query: jest.Mock) =>
-  (query.mock.calls as unknown[][]).filter(([sql]) =>
-    String(sql).includes('order_extra_cost_approvals'),
+  (query.mock.calls as unknown[][]).filter(
+    ([sql]) =>
+      String(sql).includes('order_extra_cost_approvals') &&
+      String(sql).includes(`"status" = 'pending'`),
   );
 
 const flags = async (service: OrderServiceService) => {
@@ -120,6 +124,9 @@ describe('GykuOz8f — pending_extra_cost_approval (buyurtma javobida)', () => {
     expect(sql).toMatch(/"status" = 'pending'/);
     expect(sql).toMatch(/"is_deleted" = false/);
     expect(sql).toMatch(/"order_id" = ANY\(\$1::bigint\[\]\)/);
+    // (SPEC v2) Faqat eski (replay) so'rovlar — kechiktirilgan so'rovli
+    // sotilgan buyurtmada «amal bajarilmagan» belgisi chiqmasin.
+    expect(sql).toMatch(/"mode" = 'replay'/);
   });
 
   it('sahifada kutilayotgan buyurtma yo‘q — so‘rov ketmaydi, hammasi null', async () => {

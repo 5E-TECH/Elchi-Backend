@@ -137,6 +137,8 @@ function makeRollbackService(
 
   const s = Object.create(OrderLifecycleService.prototype) as Svc;
   Object.assign(s, {
+    // (SPEC v2) rollback kechiktirilgan E so'rovlarini o'qiydi (bu yerda yo'q).
+    extraCostApprovalRepo: { find: jest.fn().mockResolvedValue([]) },
     logger: { warn: mocks.loggerWarn, log: jest.fn(), error: jest.fn() },
     dataSource: { createQueryRunner: mocks.createQueryRunner },
     orderSettlementRepo: {
@@ -819,6 +821,8 @@ function makeSellService(
 
   const s = Object.create(OrderLifecycleService.prototype) as Svc;
   Object.assign(s, {
+    // (SPEC v2) rollback kechiktirilgan E so'rovlarini o'qiydi (bu yerda yo'q).
+    extraCostApprovalRepo: { find: jest.fn().mockResolvedValue([]) },
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
     dataSource: { createQueryRunner: mocks.createQueryRunner },
     logisticsClient: {
@@ -888,6 +892,9 @@ function makeSellService(
     findById: jest.fn().mockResolvedValue(order),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+    // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+    // (bugungi darhol yozish yo'li qamraladi).
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     lockWaitingOrder: jest.fn().mockResolvedValue(undefined),
     resolveHolderFromState: jest.fn().mockResolvedValue({
       holder_type: 'COURIER',

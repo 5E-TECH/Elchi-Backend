@@ -55,6 +55,13 @@ const SETTLEMENT_LEVEL_UZ: Readonly<Record<SettlementLevel, string>> = {
 const SETTLEMENT_AUDIT_ORDER_IDS_MAX = 200;
 
 /**
+ * (SPEC v2) FIFO yopgan QATORLAR buyurtma id lari → takrorsiz BUYURTMALAR
+ * (tartib saqlanadi). Kechiktirilgan E da bir buyurtmaning sotuv va E
+ * qatorlari birga yopiladi — jurnal / javobda u bitta buyurtma.
+ */
+const uniqueOrderIds = (ids: string[]): string[] => [...new Set(ids)];
+
+/**
  * HQ id sini kutishning yuqori chegarasi. Kesh odatda issiq (OrderLookupService
  * modul ishga tushganda to'ldiradi); sovuq kesh + branch-service ishlamayotgan
  * holatda yig'indilar va advance 2×5 s RPC timeout'ini kutib qolmasligi uchun.
@@ -409,16 +416,52 @@ export class OrderSettlementService {
     );
   }
 
-  /** Return the per-order settlement row (status + leg stamps) for one order. */
+  /**
+   * Return the per-order settlement row (status + leg stamps) for one order.
+   *
+   * (SPEC v2) Buyurtmada endi bir nechta qator bo'lishi mumkin: sotuv qatori
+   * (`kind = 'sale'`) javobning o'zi bo'lib qoladi (shakl o'zgarmaydi),
+   * kechiktirilgan qo'shimcha xarajat qatorlari esa `extra_rows` da. Sotuv
+   * qatori bo'lmasa (masalan, E = 0 bilan bekor qilingan buyurtma, E keyin
+   * tasdiqlangan) — birinchi E qatori asos bo'ladi.
+   */
   async getSettlementByOrderId(orderId: string) {
     const id = String(orderId ?? '').trim();
     if (!id) {
       this.badRequest('order id is required');
     }
-    const settlement = await this.orderSettlementRepo.findOne({
-      where: { order_id: id },
+    const rows = await this.orderSettlementRepo.find({
+      where: { order_id: id, isDeleted: false },
+      order: { id: 'ASC' },
     });
-    return successRes(settlement ?? null, 200, 'Order settlement');
+    if (!rows?.length) {
+      return successRes(null, 200, 'Order settlement');
+    }
+    const sale = rows.find((row) => (row.kind ?? 'sale') === 'sale') ?? null;
+    const extraRows = rows.filter((row) => (row.kind ?? 'sale') !== 'sale');
+    // Rollback'da qaytarilgan (kompensatsiyasi bor) E qatorlari — faqat tarix,
+    // asos bo'la olmaydi (aks holda qaytarilgan buyurtma «market_settled»
+    // bo'lib ko'rinardi).
+    const reversedApprovalIds = new Set(
+      extraRows
+        .filter((row) => row.kind === 'extra_cost_reversal')
+        .map((row) => String(row.extra_cost_approval_id ?? '')),
+    );
+    const base =
+      sale ??
+      extraRows.find(
+        (row) =>
+          !reversedApprovalIds.has(String(row.extra_cost_approval_id ?? '')),
+      ) ??
+      null;
+    if (!base) {
+      return successRes(null, 200, 'Order settlement');
+    }
+    return successRes(
+      { ...base, extra_rows: extraRows },
+      200,
+      'Order settlement',
+    );
   }
 
   /**
@@ -830,7 +873,11 @@ export class OrderSettlementService {
     const rows = await this.orderSettlementRepo
       .createQueryBuilder('settlement')
       .select('settlement.branch_id', 'branch_id')
-      .addSelect('COUNT(*)', 'count')
+      // (SPEC v2) «N ta sotuvi» — faqat sotuv qatorlari; kechiktirilgan E ning
+      // kredit qatori (−E) sotuv emas. Summa esa HAMMA turdan: kredit qator
+      // yolg'iz qolsa ham kuryer kassasi manfiy bo'lib, to'siq pul orqali
+      // saqlanadi.
+      .addSelect(`COUNT(*) FILTER (WHERE settlement.kind = 'sale')`, 'count')
       .addSelect('COALESCE(SUM(settlement.courier_amount), 0)', 'amount')
       .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('settlement.status = :status', {
@@ -929,6 +976,12 @@ export class OrderSettlementService {
          * qaytarilgan eski so'rov ham sanalib, kuryerni o'tkazish va
          * filialdan chiqarish abadiy 409 bilan to'silardi.
          */
+        /**
+         * (SPEC v2) Kechiktirilgan (`deferred`) so'rov — buyurtma allaqachon
+         * sotilgan/bekor qilingan, lekin tasdiqlansa KURYER kassasidan E
+         * yechiladi: buyurtma holatidan qat'i nazar so'rovchi bo'yicha
+         * sanaladi. Eski (`replay`) so'rovlar — avvalgi filtr bilan.
+         */
         this.dataSource
           .getRepository(OrderExtraCostApproval)
           .createQueryBuilder('a')
@@ -938,16 +991,35 @@ export class OrderSettlementService {
             pending: 'pending',
             isDeleted: false,
           })
-          .andWhere('o.isDeleted = :isDeleted AND o.status = :waiting', {
-            isDeleted: false,
-            waiting: Order_status.WAITING,
-          })
           .andWhere(
-            new Brackets((w) => {
-              w.where(
-                'o.holder_type = :courierHolder AND o.holder_courier_id = :courierId',
-                { courierHolder: OrderHolderType.COURIER, courierId },
-              ).orWhere('o.courier_id = :courierId', { courierId });
+            new Brackets((outer) => {
+              outer
+                .where('a.mode = :deferredMode', { deferredMode: 'deferred' })
+                .orWhere(
+                  new Brackets((replay) => {
+                    replay
+                      .where(
+                        'o.isDeleted = :orderNotDeleted AND o.status = :waiting',
+                        {
+                          orderNotDeleted: false,
+                          waiting: Order_status.WAITING,
+                        },
+                      )
+                      .andWhere(
+                        new Brackets((w) => {
+                          w.where(
+                            'o.holder_type = :courierHolder AND o.holder_courier_id = :courierId',
+                            {
+                              courierHolder: OrderHolderType.COURIER,
+                              courierId,
+                            },
+                          ).orWhere('o.courier_id = :courierId', {
+                            courierId,
+                          });
+                        }),
+                      );
+                  }),
+                );
             }),
           )
           .getCount(),
@@ -1033,6 +1105,8 @@ export class OrderSettlementService {
       .andWhere('courier_id IS NULL')
       .andWhere('branch_id IS NULL')
       .andWhere('is_deleted = :isDeleted', { isDeleted: false })
+      // (SPEC v2) Faqat sotuv qatori — E qatorlari kargo puli emas.
+      .andWhere('kind = :saleKind', { saleKind: 'sale' })
       .execute();
 
     return successRes(
@@ -1087,6 +1161,9 @@ export class OrderSettlementService {
         .andWhere('s.courier_id IS NULL')
         .andWhere('s.branch_id IS NULL')
         .andWhere('s.isDeleted = :isDeleted', { isDeleted: false })
+        // (SPEC v2) E ning market qatori ham BRANCH_SETTLED va kuryersiz/
+        // filialsiz — u kargo yo'li emas, tegilmaydi.
+        .andWhere('s.kind = :saleKind', { saleKind: 'sale' })
         .orderBy('s.createdAt', 'ASC')
         .addOrderBy('s.id', 'ASC')
         .setLock('pessimistic_write')
@@ -1113,6 +1190,7 @@ export class OrderSettlementService {
         order_id: In(orderIds),
         status: SettlementStatus.MARKET_SETTLED,
         isDeleted: false,
+        kind: 'sale',
       },
       select: { order_id: true },
     });
@@ -1504,7 +1582,7 @@ export class OrderSettlementService {
           { key: params.claimKey },
           {
             response: {
-              settled_order_ids: settledOrderIds,
+              settled_order_ids: uniqueOrderIds(settledOrderIds),
               allocated,
               leftover: leftoverOut,
             },
@@ -1521,7 +1599,7 @@ export class OrderSettlementService {
           lumpSum,
           allocated,
           carryPersisted,
-          settledCount: settledOrderIds.length,
+          settledCount: uniqueOrderIds(settledOrderIds).length,
         });
       }
 
@@ -1558,7 +1636,10 @@ export class OrderSettlementService {
     }
 
     return {
-      settled_order_ids: settledOrderIds,
+      // (SPEC v2) Buyurtmalar ro'yxati — takrorsiz: kechiktirilgan E da bitta
+      // buyurtmaning sotuv va E qatorlari birga yopiladi («2 ta buyurtma»
+      // emas). Qatorlar soni (C8 tekshiruvi) yuqorida xom massivda.
+      settled_order_ids: uniqueOrderIds(settledOrderIds),
       allocated,
       // Qoldiq mexanizmi yoqilgan bo'lsa — saqlangan qoldiq (keyingi to'lovga
       // o'tadi); aks holda avvalgidek taqsimlanmagan summa.
@@ -1787,6 +1868,66 @@ export class OrderSettlementService {
       } catch {
         // Best-effort — qoldiq keyingi to'lovda qo'llanadi.
       }
+    }
+  }
+
+  /**
+   * (SPEC v2 §3.7) Kechiktirilgan qo'shimcha xarajat tasdiqlangach —
+   * «turtki»: E qatorlari (−E) paydo bo'ldi, oldin to'lov to'xtab qolgan
+   * (qoldiq — carry — saqlangan) tomonlar uchun mavjud qoldiq darhol
+   * qo'llanadi: kuryer → filial → HQ → market (`advanceSettlement` kaskadi
+   * bilan bir xil). Pul ko'chirmaydi, faqat holat; musbat qoldiq bo'lmasa
+   * hech narsa qilmaydi (idempotent). Best-effort — xato yutiladi, qoldiq
+   * keyingi to'lovda baribir qo'llanadi.
+   */
+  async nudgeExtraCostSettlement(data: {
+    courier_id?: string | null;
+    branch_id?: string | null;
+    market_id?: string | null;
+    requester_id?: string | null;
+  }): Promise<void> {
+    const requesterId = String(data?.requester_id ?? 'system');
+    const clean = (value: string | null | undefined) => {
+      const id = String(value ?? '').trim();
+      return /^\d+$/.test(id) ? id : null;
+    };
+    const courierId = clean(data?.courier_id);
+    const branchId = clean(data?.branch_id);
+    const marketId = clean(data?.market_id);
+    try {
+      const configs = this.buildSettlementConfigs(requesterId);
+      if (courierId) {
+        await this.applyPendingCarries(
+          'courier_to_branch',
+          [courierId],
+          configs,
+          requesterId,
+        );
+      }
+      if (branchId) {
+        // C10: HQ nomidagi qoldiq qo'llanmaydi (advanceSettlement kabi).
+        const hqBranchId = await this.resolveHqBranchId();
+        if (branchId !== hqBranchId) {
+          await this.applyPendingCarries(
+            'branch_to_hq',
+            [branchId],
+            configs,
+            requesterId,
+          );
+        }
+      }
+      if (marketId) {
+        await this.applyPendingCarries(
+          'hq_to_market',
+          [marketId],
+          configs,
+          requesterId,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `extra cost settlement nudge failed: ${(error as Error)?.message ?? error}`,
+      );
     }
   }
 

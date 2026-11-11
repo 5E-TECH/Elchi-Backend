@@ -154,6 +154,8 @@ function makeWorld(opts: { markets: Row[]; couriers: Row[]; orders: Row[] }) {
 
   const s = Object.create(OrderLifecycleService.prototype) as Row;
   Object.assign(s, {
+    // (SPEC v2) rollback kechiktirilgan E so'rovlarini o'qiydi (bu yerda yo'q).
+    extraCostApprovalRepo: { find: jest.fn().mockResolvedValue([]) },
     dataSource: { createQueryRunner: jest.fn(createQueryRunner) },
     logisticsClient: {
       send: jest.fn((_pattern: unknown, payload: { id: string }) =>
@@ -229,6 +231,9 @@ function makeWorld(opts: { markets: Row[]; couriers: Row[]; orders: Row[] }) {
     ),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+    // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+    // (bugungi darhol yozish yo'li qamraladi).
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     lockWaitingOrder: jest.fn().mockResolvedValue(undefined),
     queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),
   });

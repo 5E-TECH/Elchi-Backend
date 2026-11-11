@@ -163,6 +163,9 @@ function makeService(
     findById: jest.fn().mockResolvedValue(order),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: mocks.requestApproval,
+    // (SPEC v2) Bu spec bugungi darhol / eski (replay) yo'llarni qamraydi;
+    // kechiktirilgan rejim — `extra-cost-deferred.spec.ts`.
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     lockWaitingOrder: jest.fn().mockResolvedValue(undefined),
     updateFull: mocks.updateFull,
     queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),

@@ -1,5 +1,5 @@
 import { Column, Entity, Index } from 'typeorm';
-import { BaseEntity, numericTransformer } from '@app/common';
+import { BaseEntity, Cashbox_type, numericTransformer } from '@app/common';
 
 export type ExtraCostApprovalAction = 'sell' | 'cancel' | 'partly_sell';
 /**
@@ -10,6 +10,44 @@ export type ExtraCostApprovalAction = 'sell' | 'cancel' | 'partly_sell';
  */
 export type ExtraCostApprovalStatus =
   'pending' | 'approved' | 'rejected' | 'void' | 'reversed';
+
+/**
+ * (SPEC v2, migratsiya 219) `replay` — eski xulq: tasdiqda amal qayta ijro
+ * bo'ladi. `deferred` — amal darhol E = 0 bilan bajarilgan, tasdiq faqat E ni
+ * alohida tranzaksiya qilib yozadi, rad etish hech narsa yozmaydi.
+ */
+export type ExtraCostApprovalMode = 'replay' | 'deferred';
+
+/** So'rov qaysi tovarlar uchun (snapshot; nom o'qishda katalogdan). */
+export interface ExtraCostApprovalItem {
+  order_item_id: string | null;
+  product_id: string | null;
+  product_name: string | null;
+  quantity: number;
+  sold_quantity?: number;
+  returned_quantity?: number;
+}
+
+/**
+ * Kechiktirilgan E ni tasdiqda QAYTA HISOBLAMASDAN yozish uchun so'rov
+ * paytidagi holat — bugungi kod E ni qayerga yozgan bo'lsa, aynan o'sha.
+ */
+export interface ExtraCostDeferredSnapshot {
+  /**
+   * E yechiladigan kassa turi — `Cashbox_type` QIYMATI ('couriers' /
+   * 'branch'); `null` — kassa yo'q (HQ menejeri sotuvi: faqat market −E).
+   */
+  charged_cashbox_type: Cashbox_type.FOR_COURIER | Cashbox_type.BRANCH | null;
+  charged_user_id: string | null;
+  courier_id: string | null;
+  branch_id: string | null;
+  market_id: string | null;
+  legs: { courier: number; branch: number; market: number };
+  chain_start_status: string;
+  ledger_kind: 'sell_extra_cost' | 'cancel_extra_cost';
+  operation_at: string;
+  order_number: string | null;
+}
 
 /** (hwTkXsGi) Bitta buyurtmada bittadan ortiq ochiq so'rov yo'q — migratsiya 206. */
 export const EXTRA_COST_PENDING_UNIQUE_INDEX =
@@ -66,6 +104,24 @@ export class OrderExtraCostApproval extends BaseEntity {
 
   @Column({ type: 'jsonb' })
   operation_payload!: Record<string, unknown>;
+
+  /** (SPEC v2) Eski qatorlar — `replay`. */
+  @Column({ type: 'varchar', length: 16, default: 'replay' })
+  mode!: ExtraCostApprovalMode;
+
+  @Column({ type: 'jsonb', nullable: true })
+  items!: ExtraCostApprovalItem[] | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  deferred_snapshot!: ExtraCostDeferredSnapshot | null;
+
+  /**
+   * (SPEC v2 §3.5) Tasdiqdagi ortiqcha market buyurtmalariga qo'llangan
+   * vaqt — `order.extra_cost.apply_overage` ning AYNAN BIR MARTA belgisi
+   * (qayta yetkazish / qayta ishga tushish ikkinchi marta qo'llamasin).
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  overage_applied_at!: Date | null;
 
   @Column({ type: 'varchar', length: 20, default: 'pending' })
   status!: ExtraCostApprovalStatus;

@@ -22,6 +22,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-12 — Qo'shimcha xarajat alohida tranzaksiya: buyurtma darhol sotiladi / bekor qilinadi, xarajat market tasdig'ini kutadi (SPEC v2)
+
+Deploy: order-service + finance-service (gateway DTO o'zgarmagan — `openapi.json` qayta yaratilmadi). **Migratsiya `1716000000219`** (`order_extra_cost_approval`: `mode` (`'replay'` sukut), `items` jsonb, `deferred_snapshot` jsonb; `order_settlement`: `kind` (`'sale'` sukut), `extra_cost_approval_id`; buyurtmaga bitta `order_settlement` cheklovi endi faqat `kind='sale'` uchun). Eski qatorlar o'zgarmaydi.
+
+Qachon: kuryer yoki menejer (HQ menejeri ham) sotadi / qisman sotadi / bekor qiladi, qo'shimcha xarajat > 0, market «tasdiq talab qilinadi» yoqilgan. Hamkor (partner) buyurtmasi, admin/superadmin so'rovi — avvalgidek 202 / `approval_required` (replay).
+
+- ⚠️ `POST /orders/sell/:id`, `/orders/partly-sell/:id`, `/orders/cancel/:id` (yuqoridagi holatda) — **202 emas**: amal darhol bajariladi (200), holat SOLD / PAID / PARTLY_PAID / CANCELLED; xarajat hozircha 0 (kassa, `extra_cost`, `to_be_paid` xarajatsiz). Javob `data` ga `extra_cost_request` qo'shiladi: `{ id, status: 'pending', mode: 'deferred', action, amount, items: [{ order_item_id, product_id, product_name, quantity, sold_quantity?, returned_quantity? }], auto_approve_at, created_at, decided_at, reject_reason, reject_reason_label, immediate, auto_approved }`. «To'langan summa» (X) chegarasi baribir so'ralgan xarajat bilan: X ≤ narx − tarif − xarajat (oshsa 400).
+- 🆕 Har buyurtma javobida (ro'yxatlar, `GET /orders/:id`, QR, skaner — `enrichOrders` ishlatadigan hamma joy) `extra_cost_request` — buyurtmaning OXIRGI so'rovi (har qanday holat / rejim, yuqoridagi shakl) yoki `null`. Holatlar: `pending` · `approved` · `rejected` · `void` · `reversed`. Logist ko'rinishida (narx maydonlari yashirin) bu maydon ham yo'q.
+- ✏️ `pending_extra_cost_approval` endi **faqat eski (replay) so'rov** uchun, «kutilmoqda» buyurtmada — sotilgan buyurtmada «amal bajarilmagan» chiqmaydi.
+- ✏️ `GET /orders/extra-cost-approvals` va `GET /orders/extra-costs` qatorlari, approve / reject javobidagi `approval` — `mode` (`'deferred'` | `'replay'`) va `items` (tovar nomlari bilan; eski qatorlarda buyurtma tovarlaridan, qisman sotuvda sotilgan tovarlar).
+- ✏️ `POST /orders/extra-cost-approvals/:id/approve` — kechiktirilgan so'rovda `data.operation = { mode: 'deferred', order_id, extra_cost, status, overage }` (buyurtma qayta bajarilmaydi, xarajat alohida yoziladi: market kassasi −E, kuryer/filial kassasi −E). Ikkinchi marta — 409. Market allaqachon to'langan bo'lsa buyurtma PAID bo'ladi, ortig'i keyingi buyurtmalarga hisoblanadi. Reject — pul ko'chmaydi.
+- ✏️ Orqaga qaytarish (rollback): kutilayotgan so'rov `void`; tasdiqlangani qaytariladi (`reversed`). Xarajat HQ → market to'lovida ishlatilgan bo'lsa ham rollback o'tadi (marketga E qarz qaytadi, keyingi to'lov yopadi). Kuryer C − E topshirgan bo'lsa superadmin qaytara oladi. **400** faqat shu hollarda: «Qo'shimcha xarajat krediti boshqa buyurtma hisob-kitobida ishlatilgan — hozir rollback mumkin emas (…). Kuryer bu buyurtma pulini ham topshirgach, uni superadmin qaytara oladi»; «… Buxgalteriya tuzatishi kerak»; «Rollback holati o'zgargan (…) — qayta urinib ko'ring». Xabarni o'zgartirmasdan ko'rsating.
+- ✏️ Kuryerni o'tkazish / o'chirish tekshiruvi: kuryerning kutilayotgan kechiktirilgan so'rovlari buyurtma holatidan qat'i nazar `pending_extra_cost_approvals` da sanaladi.
+- 🟢 Telegram / kabinet xabarlari: kechiktirilgan so'rovda «buyurtma allaqachon sotilgan / bekor qilingan», tovarlar ro'yxati; tasdiq / rad xabarlarida ham tovarlar. Eski (replay) matnlar o'zgarmagan.
+
+**Frontend action items:**
+- 🔧 Sell / partly-sell / cancel javobida `data.extra_cost_request.status === 'pending' && mode === 'deferred'` → amal BAJARILDI: dialog yopilsin, muvaffaqiyat + «X so'm qo'shimcha xarajat market tasdig'ini kutmoqda». 202 / `approval_required` ishlovi eski (replay) uchun qolsin.
+- 🔧 Dialog ogohlantirishi (tasdiq talab qilinadi va xarajat > 0): «Buyurtma darhol sotiladi (bekor qilinadi). Qo'shimcha xarajat alohida — market tasdig'ini kutadi. Naqdni to'liq topshiring: tasdiqlansa, xarajat keyingi topshirishda hisobga olinadi.» (uz/ru/en).
+- 🔧 `extra_cost_request` belgisi holat yonida (kuryer, menejer/admin, market ro'yxatlari, skaner, buyurtma tafsiloti): `pending` → «Xarajat kutilmoqda · 20 000», `approved` → «Xarajat tasdiqlangan · 20 000», `rejected` → «Xarajat rad etildi». Kechiktirilgan so'rov uchun 30 soniyalik polling kerak emas.
+- 🔧 Buyurtma tafsiloti: «Qo'shimcha xarajat» qatori (summa, holat, qaysi tovarlar uchun, rad sababi).
+
 ### 2026-11-11 — Filialdan «Marketga o'tkazma»: filial pulni HQ'ga bermay marketga o'tkazgan (superadmin/admin)
 
 Deploy: api-gateway + finance-service (migratsiya yo'q). `openapi.json` yangilandi (`market_id`).

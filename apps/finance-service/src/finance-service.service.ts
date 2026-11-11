@@ -233,6 +233,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private readonly pendingFollowUps = new Set<Promise<void>>();
   private static readonly FOLLOW_UP_DRAIN_TIMEOUT_MS = 5_000;
 
+  /**
+   * (SPEC v2) Kechiktirilgan qo'shimcha xarajat ortiqchasi — HOZIR
+   * bajarilayotgan ishlar (`dedup_key` → promise). Bir vaqtda kelgan takror
+   * (outbox timeout'dan keyingi qayta yuborish) AYNI promise'ni oladi —
+   * birinchisining HAQIQIY natijasini (xato bo'lsa xatoni, outbox qayta
+   * yuboradi). Aynan bir marta qo'llash xotirada EMAS: order-service
+   * `overage_applied_at` belgisi bilan bitta tranzaksiyada (qayta ishga
+   * tushish / qayta yetkazish ham ikkinchi marta qo'llamaydi).
+   */
+  private readonly extraCostOverageRuns = new Map<
+    string,
+    Promise<{ applied: boolean; duplicate: boolean }>
+  >();
+
   constructor(
     @InjectRepository(Cashbox)
     private readonly cashboxRepo: Repository<Cashbox>,
@@ -1112,6 +1126,112 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       this.pendingFollowUps.delete(sync);
     });
     return sync;
+  }
+
+  /**
+   * (SPEC v2 §3.5) Kechiktirilgan qo'shimcha xarajat tasdiqlandi va buyurtma
+   * to'langan qismi yangi sof qarzdan (to_be_paid − E) oshib ketdi —
+   * ortiqcha (`amount`) marketning KEYINGI buyurtmalariga FIFO bo'yicha
+   * qo'llanadi, PUL KO'CHMAYDI. Oddiy to'lov sinxroni bilan BIR navbatda
+   * (`marketOrderSyncChains`), ikki qadam:
+   *   1. `order.extra_cost.apply_overage` — order-service ortiqchani bitta
+   *      tranzaksiyada, AYNAN BIR MARTA qo'llaydi (`overage_applied_at`
+   *      belgisi; takror — hech narsa qilmaydi, `duplicate: true`);
+   *   2. `market_leg` — FOR_MARKET −E (tasdiq uni alohida oyoq qilib
+   *      yubormagan), qo'llashdan KEYIN, `updateBalance` dedup'i bilan
+   *      (`extra-cost:<id>` — qayta urinishda ikkinchi marta yozilmaydi).
+   * Tartib sababi: −E tushgan zahoti kelgan sotuv manfiy balansdan E ni
+   * avtomatik to'lardi va ortiqcha o'sha buyurtmaga ikkinchi marta tushardi.
+   *
+   * order-service outbox'idan keladi (doimiy `finance.*`): xato bo'lsa
+   * promise reject bo'ladi — outbox qayta yuboradi; ikkala qadam ham
+   * idempotent, ya'ni qayta yuborish, timeout'dan keyingi takror va finance
+   * qayta ishga tushishi natijani o'zgartirmaydi.
+   */
+  scheduleExtraCostOverageSync(input: {
+    market_id?: string | null;
+    amount?: number | string | null;
+    approval_id?: string | number | null;
+    order_id?: string | number | null;
+    dedup_key?: string | null;
+    market_leg?: UpdateCashboxBalanceDto | null;
+  }): Promise<{ applied: boolean; duplicate: boolean }> {
+    const marketId = String(input?.market_id ?? '').trim();
+    const amount = Number(input?.amount ?? 0);
+    const approvalId = String(input?.approval_id ?? '').trim();
+    if (!/^\d+$/.test(marketId) || !(amount > 0) || !/^\d+$/.test(approvalId)) {
+      this.logger.warn(
+        `extra cost overage: noto'g'ri hodisa (market_id=${marketId}, amount=${String(input?.amount)}, approval_id=${approvalId}) — e'tiborsiz`,
+      );
+      return Promise.resolve({ applied: false, duplicate: false });
+    }
+    const key =
+      String(input?.dedup_key ?? '').trim() ||
+      `extra-cost-overage:${approvalId}`;
+    const inFlight = this.extraCostOverageRuns.get(key);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    let outcome: { applied: boolean; duplicate: boolean } = {
+      applied: false,
+      duplicate: false,
+    };
+    let failure: unknown = null;
+    const run = async () => {
+      try {
+        const response = await rmqSend<{
+          data?: { applied?: boolean; duplicate?: boolean };
+        }>(
+          this.orderClient,
+          { cmd: 'order.extra_cost.apply_overage' },
+          { approval_id: approvalId, market_id: marketId, amount },
+        );
+        if (input?.market_leg) {
+          await this.updateBalance(input.market_leg);
+        }
+        outcome = {
+          applied: Boolean(response?.data?.applied),
+          duplicate: Boolean(response?.data?.duplicate),
+        };
+      } catch (error) {
+        failure = error;
+        this.logger.warn(
+          `extra cost overage sync failed (market_id=${marketId}, approval_id=${approvalId}, amount=${amount}): ${this.rpcErrorMessage(error, 'unknown sync error')}`,
+        );
+      }
+    };
+    const previous = this.marketOrderSyncChains.get(marketId);
+    const sync = (previous ?? Promise.resolve())
+      .then(run)
+      .catch(() => undefined);
+    this.marketOrderSyncChains.set(marketId, sync);
+    void sync.then(() => {
+      if (this.marketOrderSyncChains.get(marketId) === sync) {
+        this.marketOrderSyncChains.delete(marketId);
+      }
+    });
+    this.pendingFollowUps.add(sync);
+    void sync.then(() => {
+      this.pendingFollowUps.delete(sync);
+    });
+    const result = sync.then(() => {
+      if (failure) {
+        if (failure instanceof Error) throw failure;
+        throw new Error(
+          this.rpcErrorMessage(failure, 'extra cost overage sync failed'),
+        );
+      }
+      return outcome;
+    });
+    this.extraCostOverageRuns.set(key, result);
+    const release = () => {
+      if (this.extraCostOverageRuns.get(key) === result) {
+        this.extraCostOverageRuns.delete(key);
+      }
+    };
+    void result.then(release, release);
+    return result;
   }
 
   /** T6 — xodim ismlari (`created_by_name`); identity javob bermasa — null. */

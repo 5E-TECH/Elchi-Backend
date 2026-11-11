@@ -16,6 +16,7 @@ import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { Branch } from '../entities/branch.entity';
 import { OrderSettlement } from '../entities/order-settlement.entity';
 import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity';
+import { OrderExtraCostApproval } from '../entities/order-extra-cost-approval.entity';
 import { OrderLifecycleService } from './order-lifecycle.service';
 import {
   findReplaceableOrders,
@@ -93,6 +94,9 @@ const MONEY_COLUMNS = `status, total_price, to_be_paid, paid_amount,
           Branch,
           OrderSettlement,
           OrderSettlementCarry,
+          // Sotuv tranzaksiyasi ochiq qo'shimcha xarajat so'rovlarini yopadi
+          // (hwTkXsGi) va kechiktirilgan E ni yozadi (SPEC v2).
+          OrderExtraCostApproval,
           OutboxEvent,
           IdempotencyKey,
         ],

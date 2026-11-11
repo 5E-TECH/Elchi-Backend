@@ -340,6 +340,8 @@ function makeWorld(opts: { carryTable?: boolean } = {}) {
 
   const lifecycle = Object.create(OrderLifecycleService.prototype) as Row;
   Object.assign(lifecycle, {
+    // (SPEC v2) rollback kechiktirilgan E so'rovlarini o'qiydi (bu yerda yo'q).
+    extraCostApprovalRepo: { find: jest.fn().mockResolvedValue([]) },
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
     dataSource,
     orderSettlementRepo: settlementRepo,
@@ -361,6 +363,9 @@ function makeWorld(opts: { carryTable?: boolean } = {}) {
     syncOrderToSearch: jest.fn().mockResolvedValue(undefined),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+    // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+    // (bugungi darhol yozish yo'li qamraladi).
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),
   });
   const svc = lifecycle as unknown as OrderLifecycleService;

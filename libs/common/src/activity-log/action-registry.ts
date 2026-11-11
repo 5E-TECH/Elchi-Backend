@@ -571,6 +571,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'clock',
     'amber',
   ),
+  // (SPEC v2) Kechiktirilgan E ni market / admin qo'lda tasdiqladi.
+  'order.extra_cost_approved': entry(
+    "Qo'shimcha xarajat tasdiqlandi",
+    'order',
+    'check',
+    'green',
+  ),
   'notification.tg_linked': entry(
     'Telegram akkaunt ulandi',
     'notification',

@@ -21,13 +21,20 @@ import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.e
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 import type { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 import {
+  computeExtraCostAutoApproveAt,
   pendingExtraCostApprovalView,
   type PendingExtraCostApprovalView,
 } from './lifecycle/extra-cost-page';
 import {
+  legacyExtraCostItems,
+  withExtraCostItemNames,
+} from './lifecycle/extra-cost-deferred';
+import {
   ActivityLogService,
   ActivityLogQuery,
   BranchTransferBatchStatus,
+  EXTRA_COST_REJECT_REASON_LABELS,
+  type ExtraCostRejectReason,
   courierPostOrdersQuery,
   dispatchNoteBranchId,
   FULFILLMENT_SOURCES,
@@ -476,6 +483,37 @@ const WAREHOUSE_ID_MAX = BigInt('9223372036854775807');
  */
 const isWarehouseIdParam = (value: string): boolean =>
   /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= WAREHOUSE_ID_MAX;
+
+/** (SPEC v2) `extra_cost_request` so'raladigan buyurtma holatlari. */
+const EXTRA_COST_REQUEST_ORDER_STATUSES: readonly Order_status[] = [
+  Order_status.WAITING,
+  Order_status.SOLD,
+  Order_status.PAID,
+  Order_status.PARTLY_PAID,
+  Order_status.CANCELLED,
+  Order_status.CANCELLED_SENT,
+  Order_status.CLOSED,
+  Order_status.RETURNED_TO_MARKET,
+];
+
+/** (SPEC v2) `loadLatestExtraCostRequests` qatori (xom SQL). */
+type LatestExtraCostRow = Pick<
+  OrderExtraCostApproval,
+  | 'action'
+  | 'amount'
+  | 'status'
+  | 'mode'
+  | 'items'
+  | 'operation_payload'
+  | 'createdAt'
+  | 'decided_at'
+  | 'reject_reason'
+  | 'immediate'
+  | 'auto_approved'
+  | 'auto_approve_from'
+  | 'auto_retry_at'
+  | 'reminder_sent_at'
+> & { id: unknown; order_id: unknown };
 
 @Injectable()
 export class OrderServiceService {
@@ -2987,6 +3025,7 @@ export class OrderServiceService {
       warehouseRefs,
       cancelReturnContext,
       pendingExtraCosts,
+      latestExtraCostRows,
     ] = await Promise.all([
       marketIds.length
         ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
@@ -3032,6 +3071,7 @@ export class OrderServiceService {
         : Promise.resolve(new Map<string, WarehouseRef>()),
       this.loadCancelReturnContext(rows),
       this.loadPendingExtraCostApprovals(rows),
+      this.loadLatestExtraCostRequests(rows),
     ]);
 
     const toMap = (arr: Array<{ id: string; [key: string]: any }>) =>
@@ -3169,7 +3209,116 @@ export class OrderServiceService {
       // xil): faqat «kutilmoqda» buyurtmada ochiq so'rov bo'lsa.
       pending_extra_cost_approval:
         pendingExtraCosts.get(String(row.id)) ?? null,
+      // (SPEC v2) Buyurtmaning OXIRGI qo'shimcha xarajat so'rovi (har qanday
+      // holat / rejim) — kechiktirilgan E («Xarajat kutilmoqda · 20 000»)
+      // shundan ko'rinadi.
+      extra_cost_request: this.extraCostRequestOf(
+        row,
+        latestExtraCostRows.get(String(row.id)),
+        productMap,
+      ),
     }));
+  }
+
+  /**
+   * (SPEC v2 §6) `extra_cost_request` — oxirgi so'rovning qisqa ko'rinishi
+   * (lifecycle amal javobidagi bilan bir xil shakl). Tovar nomlari
+   * `enrichOrders` allaqachon olgan katalog xaritasidan (so'rov tovarlari —
+   * shu buyurtmaning tovarlari); eski qatorlarda tovarlar buyurtmadan.
+   */
+  private extraCostRequestOf(
+    order: Order,
+    row: LatestExtraCostRow | undefined,
+    productMap: Map<string, { id: string; [key: string]: any }>,
+  ) {
+    if (!row) return null;
+    const names = new Map<string, string>();
+    for (const [id, product] of productMap) {
+      const name = typeof product?.name === 'string' ? product.name.trim() : '';
+      if (name) names.set(id, name);
+    }
+    const items = withExtraCostItemNames(
+      Array.isArray(row.items)
+        ? row.items
+        : legacyExtraCostItems({
+            action: row.action,
+            payload: row.operation_payload,
+            orderItems: order.items ?? [],
+          }),
+      names,
+    );
+    const rejectReason = row.reject_reason ?? null;
+    return {
+      id: String(row.id),
+      status: row.status,
+      mode: row.mode ?? 'replay',
+      action: row.action,
+      amount: Number(row.amount ?? 0),
+      items,
+      auto_approve_at: computeExtraCostAutoApproveAt(row),
+      created_at: row.createdAt ? new Date(row.createdAt).toISOString() : null,
+      decided_at: row.decided_at
+        ? new Date(row.decided_at).toISOString()
+        : null,
+      reject_reason: rejectReason,
+      reject_reason_label: rejectReason
+        ? (EXTRA_COST_REJECT_REASON_LABELS[
+            rejectReason as ExtraCostRejectReason
+          ] ?? null)
+        : null,
+      immediate: Boolean(row.immediate),
+      auto_approved: Boolean(row.auto_approved),
+    };
+  }
+
+  /**
+   * (SPEC v2 §6) Sahifadagi buyurtmalarning OXIRGI (o'chirilmagan)
+   * qo'shimcha xarajat so'rovi — BITTA so'rov (`DISTINCT ON`). Xato
+   * boyitishni yiqitmaydi — maydon `null`.
+   */
+  private async loadLatestExtraCostRequests(
+    rows: Order[],
+  ): Promise<Map<string, LatestExtraCostRow>> {
+    const result = new Map<string, LatestExtraCostRow>();
+    // So'rov faqat «kutilmoqda» dan keyingi holatlarda bo'lishi mumkin
+    // (sotish / bekor qilish shu yerda yoziladi) — boshqa sahifalarga
+    // (yangi, yo'lda) ortiqcha so'rov ketmaydi.
+    const ids = [
+      ...new Set(
+        rows
+          .filter((row) =>
+            EXTRA_COST_REQUEST_ORDER_STATUSES.includes(row.status),
+          )
+          .map((row) => String(row.id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    ];
+    if (!ids.length) return result;
+    try {
+      const approvals: LatestExtraCostRow[] = await this.dataSource.query(
+        `SELECT DISTINCT ON ("order_id")
+                "id"::text AS "id", "order_id"::text AS "order_id", "action",
+                "amount", "status", "mode", "items", "operation_payload",
+                "createdAt", "decided_at", "reject_reason", "immediate",
+                "auto_approved", "auto_approve_from", "auto_retry_at",
+                "reminder_sent_at"
+           FROM "order_schema"."order_extra_cost_approvals"
+          WHERE "order_id" = ANY($1::bigint[])
+            AND "is_deleted" = false
+          ORDER BY "order_id", "createdAt" DESC, "id" DESC`,
+        [ids],
+      );
+      for (const approval of approvals ?? []) {
+        result.set(String(approval.order_id), approval);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `enrichOrders: qo'shimcha xarajat so'rovlarini o'qib bo'lmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return result;
   }
 
   /**
@@ -3213,6 +3362,7 @@ export class OrderServiceService {
           WHERE "order_id" = ANY($1::bigint[])
             AND "status" = 'pending'
             AND "is_deleted" = false
+            AND "mode" = 'replay'
           ORDER BY "createdAt" ASC`,
         [ids],
       );

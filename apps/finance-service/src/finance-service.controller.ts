@@ -497,6 +497,30 @@ export class FinanceServiceController {
     );
   }
 
+  /**
+   * (SPEC v2) Kechiktirilgan qo'shimcha xarajat tasdig'idan keyingi
+   * ortiqcha — market buyurtmalari FIFO'siga (pul ko'chmaydi), keyin
+   * FOR_MARKET −E (`market_leg`). Faqat order-service outbox'i yuboradi;
+   * gateway'da marshrut yo'q.
+   */
+  @MessagePattern({ cmd: 'finance.market.extra_cost_overage' })
+  applyExtraCostOverage(
+    @Payload()
+    data: {
+      market_id?: string;
+      amount?: number;
+      approval_id?: string;
+      order_id?: string;
+      dedup_key?: string;
+      market_leg?: UpdateCashboxBalanceDto | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.scheduleExtraCostOverageSync(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.financial_balance.history' })
   findFinancialBalanceHistory(
     @Payload()

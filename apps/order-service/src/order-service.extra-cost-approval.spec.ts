@@ -9,10 +9,16 @@ import {
   extraCostManager,
 } from './testing/extra-cost-kit-spec';
 
+/**
+ * (SPEC v2) Bu spec ESKI (replay, 202) yo'lni qamraydi. Endi u faqat hamkor
+ * buyurtmasida (`external_id`) ochiladi — oddiy buyurtmada E kechiktiriladi
+ * (`extra-cost-deferred.spec.ts`). Shuning uchun buyurtma hamkorniki.
+ */
 describe('OrderServiceService extra cost approval flow', () => {
   const order = {
     id: '7001',
     status: Order_status.WAITING,
+    external_id: 'BP-7001',
     post_id: '9001',
     market_id: '501',
     total_price: 250000,

@@ -90,6 +90,8 @@ export type ExtraCostDecisionApproval = {
   action: unknown;
   amount: unknown;
   closed_reason?: unknown;
+  /** (SPEC v2) 'deferred' — amal allaqachon bajarilgan, E alohida. */
+  mode?: unknown;
 };
 
 const text = (value: unknown): string =>
@@ -120,6 +122,8 @@ export function buildExtraCostDecisionNotice(input: {
   autoApproveMinutes?: number;
   rejectLabel?: string | null;
   comment?: string | null;
+  /** (SPEC v2) Kechiktirilgan so'rov tovarlari: «Telefon g'ilofi ×1, …». */
+  products?: string | null;
 }): {
   type: ExtraCostNotificationType;
   title: string;
@@ -130,6 +134,51 @@ export function buildExtraCostDecisionNotice(input: {
   const orderId = text(input.approval.order_id);
   const orderNumber = formatOrderNumber(orderId) ?? `#${orderId}`;
   const amount = formatSom(input.approval.amount);
+  /**
+   * (SPEC v2) Kechiktirilgan so'rov: buyurtma ALLAQACHON sotilgan / bekor
+   * qilingan — «kutilmoqda holatida qoldi: qayta soting» degan matn noto'g'ri
+   * (kuryerni qayta sotishga undardi). Eski (replay) matnlar o'zgarmagan.
+   */
+  if (text(input.approval.mode) === 'deferred') {
+    const products = text(input.products);
+    const productsPart = products ? ` (${products})` : '';
+    if (input.kind === 'approved') {
+      const auto = input.autoApproved
+        ? ` Market ${formatExtraCostWaitPeriod(input.autoApproveMinutes ?? 1440)} ichida javob bermadi — avtomatik tasdiqlandi.`
+        : '';
+      return {
+        type: 'order.extra_cost_approved',
+        title: `✅ ${orderNumber}: qo'shimcha xarajat tasdiqlandi`,
+        body:
+          `${orderNumber}: ${amount} qo'shimcha xarajat tasdiqlandi${productsPart} — ` +
+          `keyingi topshirishda hisobga olinadi.${auto}`,
+        link: '/extra-costs?tab=approved',
+        status: 'approved',
+      };
+    }
+    if (input.kind === 'rejected') {
+      const label = text(input.rejectLabel);
+      const comment = text(input.comment);
+      const reason = label
+        ? comment
+          ? `${label}: ${comment}`
+          : label
+        : comment;
+      const state =
+        text(input.approval.action) === 'cancel'
+          ? 'bekor qilingan'
+          : 'sotilgan';
+      return {
+        type: 'order.extra_cost_rejected',
+        title: `❌ ${orderNumber}: qo'shimcha xarajat rad etildi`,
+        body:
+          `${orderNumber}: ${amount} qo'shimcha xarajat rad etildi${reason ? ` (${reason})` : ''}${productsPart} — ` +
+          `buyurtma ${state} holida qoladi, naqdni to'liq topshirasiz.`,
+        link: '/extra-costs?tab=cancelled',
+        status: 'rejected',
+      };
+    }
+  }
   if (input.kind === 'approved') {
     const auto = input.autoApproved
       ? ` Market ${formatExtraCostWaitPeriod(input.autoApproveMinutes ?? 1440)} ichida javob bermadi — avtomatik tasdiqlandi.`

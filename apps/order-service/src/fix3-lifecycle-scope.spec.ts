@@ -694,6 +694,9 @@ function makeSellHarness(orderOver: Row = {}, approvalRows: Row[] = []) {
     findById: jest.fn().mockResolvedValue(order),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+    // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+    // (bugungi darhol yozish yo'li qamraladi).
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     lockWaitingOrder: jest.fn().mockResolvedValue(undefined),
     updateFull: jest.fn((_id: string, dto: Row) => {
       updates.push(dto);
@@ -997,9 +1000,12 @@ function makeApprovalService(
   pendingApproval: Row | null,
   changedTo: string | null = null,
 ) {
+  // (SPEC v2) Eski (replay) so'rov yo'li endi hamkor buyurtmasida qoladi —
+  // oddiy buyurtmada E kechiktiriladi (`extra-cost-deferred.spec.ts`).
   const order = {
     id: '7001',
     status: Order_status.WAITING,
+    external_id: 'BP-7001',
     post_id: '9001',
     market_id: '501',
     total_price: 250000,

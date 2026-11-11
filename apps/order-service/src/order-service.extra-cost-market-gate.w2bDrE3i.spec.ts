@@ -33,8 +33,12 @@ describe('w2bDrE3i — market qo`shimcha xarajat darvozasi', () => {
   const COURIER = { id: '301', roles: ['courier'], branch_id: '77' };
   const MANAGER = { id: '201', roles: ['manager'], branch_id: '77' };
 
+  // (SPEC v2) Eski (replay) yo'l — faqat hamkor buyurtmasida.
+  let partnerOrder = false;
+
   function makeService(market: Record<string, unknown>) {
-    const orderRepo = { findOne: jest.fn().mockResolvedValue(order) };
+    const current = partnerOrder ? { ...order, external_id: 'BP-7001' } : order;
+    const orderRepo = { findOne: jest.fn().mockResolvedValue(current) };
     const extraCostApprovalRepo = extraCostApprovalTable();
     const dataSource = extraCostDataSource(
       extraCostManager({ table: extraCostApprovalRepo, orderRepo }),
@@ -162,16 +166,35 @@ describe('w2bDrE3i — market qo`shimcha xarajat darvozasi', () => {
   });
 
   describe('extra_cost_requires_approval', () => {
-    it('⭐ TC4: true — avvalgidek market tasdig`i (202)', async () => {
-      const { service, extraCostApprovalRepo } = makeService({
+    it('⭐ TC4: true — market tasdig`i: oddiy buyurtmada KECHIKTIRILGAN (SPEC v2), hamkor buyurtmasida avvalgidek 202', async () => {
+      // (SPEC v2) Oddiy buyurtma: sotuv darhol, E — alohida `pending` so'rov.
+      const deferred = makeService({
         extra_cost_enabled: true,
         extra_cost_requires_approval: true,
       });
-      const res: any = await service.sellOrder(COURIER, '7001', {
-        extraCost: 12000,
-      });
-      expect(res.statusCode).toBe(202);
-      expect(extraCostApprovalRepo.save).toHaveBeenCalled();
+      expect(
+        (deferred.service as any).shouldDeferExtraCost({
+          extraCost: 12000,
+          market: { extra_cost_requires_approval: true },
+          order,
+          requester: COURIER,
+        }),
+      ).toBe(true);
+      // Hamkor buyurtmasi — eski (replay) yo'l: 202 + so'rov.
+      partnerOrder = true;
+      try {
+        const { service, extraCostApprovalRepo } = makeService({
+          extra_cost_enabled: true,
+          extra_cost_requires_approval: true,
+        });
+        const res: any = await service.sellOrder(COURIER, '7001', {
+          extraCost: 12000,
+        });
+        expect(res.statusCode).toBe(202);
+        expect(extraCostApprovalRepo.save).toHaveBeenCalled();
+      } finally {
+        partnerOrder = false;
+      }
     });
 
     it('⭐ TC4: false — tasdiqsiz (tasdiq so`rovi yaratilmaydi, null qaytadi)', async () => {
@@ -207,11 +230,25 @@ describe('w2bDrE3i — market qo`shimcha xarajat darvozasi', () => {
     });
   });
 
-  it('⭐ TC6 ortga-moslik: maydonlar yo`q (eski identity javobi) — ochiq + tasdiq (202)', async () => {
-    const { service } = makeService({});
-    const res: any = await service.sellOrder(COURIER, '7001', {
-      extraCost: 12000,
-    });
-    expect(res.statusCode).toBe(202);
+  it('⭐ TC6 ortga-moslik: maydonlar yo`q (eski identity javobi) — ochiq + tasdiq (hamkor buyurtmasida 202, oddiysida kechiktirilgan)', async () => {
+    const plain = makeService({});
+    expect(
+      (plain.service as any).shouldDeferExtraCost({
+        extraCost: 12000,
+        market: {},
+        order,
+        requester: COURIER,
+      }),
+    ).toBe(true);
+    partnerOrder = true;
+    try {
+      const { service } = makeService({});
+      const res: any = await service.sellOrder(COURIER, '7001', {
+        extraCost: 12000,
+      });
+      expect(res.statusCode).toBe(202);
+    } finally {
+      partnerOrder = false;
+    }
   });
 });

@@ -1082,6 +1082,27 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * (SPEC v2 §3.5) Kechiktirilgan E tasdig'idagi ortiqcha — market
+   * buyurtmalariga (pul ko'chmaydi), aynan bir marta. Faqat finance
+   * (`finance.market.extra_cost_overage`, market sinxroni navbatida)
+   * chaqiradi; gateway'da marshrut yo'q.
+   */
+  @MessagePattern({ cmd: 'order.extra_cost.apply_overage' })
+  applyExtraCostOverage(
+    @Payload()
+    data: {
+      approval_id?: string;
+      market_id?: string;
+      amount?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.applyDeferredExtraCostOverage(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.extra_cost_approval.reject' })
   rejectExtraCostApproval(
     @Payload()

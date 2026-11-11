@@ -18,6 +18,7 @@ import { OrderCustodyEvent } from './entities/order-custody-event.entity';
 import { Branch } from './entities/branch.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
 import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { FinanceServiceService } from '../../finance-service/src/finance-service.service';
@@ -95,6 +96,9 @@ const COURIER_TARIFF = 30000;
           Branch,
           OrderSettlement,
           OrderSettlementCarry,
+          // Sotuv tranzaksiyasi ochiq qo'shimcha xarajat so'rovlarini yopadi
+          // (hwTkXsGi) va kechiktirilgan E ni yozadi (SPEC v2).
+          OrderExtraCostApproval,
           OutboxEvent,
           IdempotencyKey,
         ],
@@ -202,6 +206,9 @@ const COURIER_TARIFF = 30000;
         queueExternalStatusSync: jest.fn().mockResolvedValue(undefined),
         enforceOperationProof: jest.fn().mockResolvedValue([]),
         requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+        // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+        // (bugungi darhol yozish yo'li qamraladi).
+        shouldDeferExtraCost: jest.fn().mockReturnValue(false),
       });
       lifecycle = instance;
 

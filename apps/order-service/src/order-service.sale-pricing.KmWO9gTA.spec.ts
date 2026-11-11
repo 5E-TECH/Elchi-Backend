@@ -252,6 +252,8 @@ function makeSaleWorld(opts: WorldOpts = {}) {
 
   const s = Object.create(OrderLifecycleService.prototype) as Svc;
   Object.assign(s, {
+    // (SPEC v2) rollback kechiktirilgan E so'rovlarini o'qiydi (bu yerda yo'q).
+    extraCostApprovalRepo: { find: jest.fn().mockResolvedValue([]) },
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
     dataSource: { createQueryRunner: jest.fn(() => queryRunner) },
     logisticsClient: {
@@ -302,6 +304,9 @@ function makeSaleWorld(opts: WorldOpts = {}) {
     findById: jest.fn(() => Promise.resolve({ ...order })),
     enforceOperationProof: jest.fn().mockResolvedValue([]),
     requestExtraCostApprovalIfNeeded: jest.fn().mockResolvedValue(null),
+    // (SPEC v2) «tasdiq kerak emas» — kechiktirilgan rejim ham yo'q
+    // (bugungi darhol yozish yo'li qamraladi).
+    shouldDeferExtraCost: jest.fn().mockReturnValue(false),
     lockWaitingOrder: jest.fn().mockResolvedValue(undefined),
     resolveHolderFromState: jest.fn().mockResolvedValue({
       holder_type: 'COURIER',
@@ -348,6 +353,8 @@ function makeRollbackWorld(order: Row, settlement: Row, market: Row = MARKET) {
   };
   const s = Object.create(OrderLifecycleService.prototype) as Svc;
   Object.assign(s, {
+    // (SPEC v2) rollback kechiktirilgan E so'rovlarini o'qiydi (bu yerda yo'q).
+    extraCostApprovalRepo: { find: jest.fn().mockResolvedValue([]) },
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
     dataSource: { createQueryRunner: jest.fn(() => queryRunner) },
     orderSettlementRepo: { findOne: jest.fn().mockResolvedValue(settlement) },
@@ -438,6 +445,8 @@ function makeProviderWorld(opts: { market?: Row; quote?: Row } = {}) {
   };
   const s = Object.create(OrderLifecycleService.prototype) as Svc;
   Object.assign(s, {
+    // (SPEC v2) rollback kechiktirilgan E so'rovlarini o'qiydi (bu yerda yo'q).
+    extraCostApprovalRepo: { find: jest.fn().mockResolvedValue([]) },
     logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
     dataSource: { createQueryRunner: jest.fn(() => queryRunner) },
     logisticsClient: {

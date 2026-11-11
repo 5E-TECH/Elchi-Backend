@@ -418,13 +418,32 @@ describe('OrderSettlementService.getCourierTransferCheck', () => {
       'a.status = :pending AND a.isDeleted = :isDeleted',
       { pending: 'pending', isDeleted: false },
     );
-    expect(qb.andWhere).toHaveBeenCalledWith(
-      'o.isDeleted = :isDeleted AND o.status = :waiting',
-      { isDeleted: false, waiting: Order_status.WAITING },
-    );
-    const holder = (qb.andWhere.mock.calls as unknown[][])
+    // (SPEC v2) Kechiktirilgan (`deferred`) so'rov — buyurtma holatidan
+    // qat'i nazar so'rovchi bo'yicha; eski (`replay`) so'rov — avvalgidek
+    // buyurtma «kutilmoqda» va shu kuryerda.
+    const outer = (qb.andWhere.mock.calls as unknown[][])
       .map(([condition]) => condition)
       .find((condition) => condition instanceof Brackets) as Brackets;
+    const outerQb = {
+      where: jest.fn().mockReturnThis(),
+      orWhere: jest.fn().mockReturnThis(),
+    };
+    outer.whereFactory(outerQb as never);
+    expect(outerQb.where).toHaveBeenCalledWith('a.mode = :deferredMode', {
+      deferredMode: 'deferred',
+    });
+    const replay = outerQb.orWhere.mock.calls[0][0] as Brackets;
+    expect(replay).toBeInstanceOf(Brackets);
+    const replayQb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+    };
+    replay.whereFactory(replayQb as never);
+    expect(replayQb.where).toHaveBeenCalledWith(
+      'o.isDeleted = :orderNotDeleted AND o.status = :waiting',
+      { orderNotDeleted: false, waiting: Order_status.WAITING },
+    );
+    const holder = replayQb.andWhere.mock.calls[0][0] as Brackets;
     const inner = { where: jest.fn().mockReturnThis(), orWhere: jest.fn() };
     holder.whereFactory(inner as never);
     expect(inner.where).toHaveBeenCalledWith(
