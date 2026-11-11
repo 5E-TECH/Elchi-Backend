@@ -61,7 +61,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **finance-service** | `finance_schema` | `cashbox`, `cashbox_history`, `shift`, `user_salary`, `operator_earning`, `operator_payment`, `financial_balance_history`, `payment_corrections` (T6), `cashbox_receipts` (T3) | Cashboxes (main/courier/market/branch), payments, shifts, salaries, operator earnings, company P&L ledger |
 | **branch-service** | `branch_schema` | `branch`, `branch_config`, `branch_user` | Branch tree (HQ→regional→pickup), per-branch config (ownership/compensation), branch staff, transfer-batch orchestration, branch analytics/dashboard |
 | **investor-service** | `investor_schema` | `investor`, `investment`, `profit_share` | Investor capital, investments, profit-share calculation/payout |
-| **integration-service** | `integration_schema` | `external_integration`, `provider_shipment`, `provider_receivable`, `provider_remittance`, `sync_queue`, `sync_history`, `provider_webhook_log` | External providers (cargo/marketplace): credentials (AES-encrypted), sync queue, dispatch shipments, COD receivables/remittances, inbound HMAC webhooks |
+| **integration-service** | `integration_schema` | `external_integration`, `provider_shipment`, `provider_receivable`, `provider_remittance`, `sync_queue`, `sync_history`, `provider_webhook_log`, `carrier_accounts` | External providers (cargo/marketplace): credentials (AES-encrypted), sync queue, dispatch shipments, COD receivables/remittances, inbound HMAC webhooks; Carrier API keys (external carrier = one courier) |
 | **notification-service** | `notification_schema` | `telegram_market`, `notification` | Per-user in-app notification inbox (dispatch/list/read/unread) + realtime socket.io push + Telegram group notifications (configs, connect-by-token, send) |
 | **analytics-service** | — (no DB; aggregator) | — | Dashboards, KPI, revenue, reports — **reads other services** (order/finance/branch/identity) via RMQ; stores nothing |
 | **file-service** | `file_schema` (only the ownership registry; objects in MinIO) | `file_objects` | Upload/download (signed URLs), PDF & QR generation in MinIO, per-object ownership registry (dgvwZasd B) |
@@ -671,7 +671,27 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   list never bypasses the MAIN requirement). Rollback hazard: pre-BE-A finance
   code applies `shift.account_check.enabled` globally (branches too); pair a
   code rollback with `migration:revert` of 215 or PATCH
-  account_check_enabled=false first. Flow: gateway `POST /finance/shift/account-photo`
+  account_check_enabled=false first. BE-B (2026-11-10, no migration): on an
+  AUTO-closed MAIN shift (`close_reason = 'auto'`) SA/ADMIN may upload a card
+  photo within 24 h of `closed_at` (`SHIFT_LATE_PHOTO_WINDOW_MS`) via
+  `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` →
+  `finance.shift.account_check.late_photo` (row FOR UPDATE: entered, difference
+  vs the auto-close SNAPSHOT `expected_balance`, confirmed_at/by = uploader,
+  new `ai_request_id`, realtime `finance.shift.account_checked` + `late: true`;
+  codes `SHIFT_LATE_PHOTO_{MAIN_ONLY,NOT_AUTO_CLOSED,EXPIRED,CARD_NOT_IN_SHIFT}`
+  in libs/common), and every report row gets computed `photo_status` /
+  `late_upload_deadline` / `late_uploaded` / `can_upload_late` (rules file;
+  gateway ANDs the latter with SA/ADMIN). A cashier's pre-close draft photo
+  replaced by a late upload is evidence: its file is never deleted
+  (`previous_photo_file_key` is returned — and deleted by the gateway — only
+  for a superseded LATE upload); old key + AI readings go to the activity-log
+  `old_value` (no `ai_raw`), metadata `replaced_photo_key` /
+  `kept_pre_close_photo`. The cashier's pre-close draft `comment` never
+  satisfies the late "difference ≠ 0 → comment" rule and is replaced (kept in
+  `old_value.comment`); only an earlier LATE upload's comment carries over
+  when a re-upload omits it. `recordAtAutoClose` also re-snapshots draft rows of
+  cards archived mid-shift (expected = the card's stored `balance` at close —
+  0 only for a deleted card; `not_required`). Flow: gateway `POST /finance/shift/account-photo`
   (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
   IPTC/text chunks, file-service folder `shift-check`, private, signed URL
   300 s) → `finance.shift.account_check.attach_photo` (draft row, expected
@@ -694,7 +714,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   {get,update}` (`GET|PATCH /finance/shift/settings`; PATCH SUPERADMIN only).
   Activity-log: `finance.shift_settings_updated`,
   `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
-  shift close metadata `accounts`.
+  `finance.shift_late_photo_uploaded` (BE-B), shift close metadata `accounts`.
 - **«Kun tartibi» — shift auto-OPEN + late alert (2026-11-11, migr
   `1716000000216`):** `shifts.opened_by` nullable + `opened_by_system`
   (CHECK `opened_by IS NOT NULL OR opened_by_system`), `shift_schedule_claims.
@@ -995,6 +1015,21 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   base tariff at sale). Measures without `external_product_id` are not stored
   (logged). Marketplace repo is separate: its `ElchiTariffInput` and checkout
   still send no measures — tracked outside this repo.
+- **Carrier API (2026-11-10):** `carrier_accounts` (migration 218) — an
+  external delivery company works as ONE courier user. `CarrierAccountService`
+  (`src/carrier/`): `integration.carrier.{validate_key,create,list,update,
+  rotate_key,set_active}`; key `elc_…` stored as SHA-256 hash, shown once;
+  `courier_user_id` unique among non-deleted rows; create / rotate-key /
+  status(true) check via `identity.user.find_by_ids` that the user is an
+  active COURIER (identity down → 503). `validate_key` returns
+  `courier_active` — the bound courier is re-checked on EVERY request (30 s
+  in-memory cache per replica; identity down → 503, not cached), so blocking /
+  deleting the courier stops the key. Writes touch only the changed columns
+  (`repo.update`), ip_allowlist is validated + canonicalized
+  (`libs/common/src/security/ip-allowlist-rule.ts`: IPv4, IPv4 CIDR without
+  host bits, IPv6; no IPv6 CIDR), ids are BIGINT-bounded. Separate from
+  `partners` on purpose: a carrier key can't reach `/partner/*` and vice
+  versa. See §5.5.
 
 ### investor-service (`investor_schema`)
 - **Entities:** `investor`, `investment`, `profit_share`.
@@ -1724,6 +1759,69 @@ Sync queue processes provider order feeds. COD `provider_receivable` accrues;
 to `integration.webhook.receive`, which verifies the **HMAC** with the per-provider
 secret (secret never reaches the gateway).
 **Details:** memory `pcs_parity_initiative.md`.
+
+**Carrier API (`/carrier/*`, 2026-11-10)** — the opposite of the dispatch
+flow above: the external company pulls from US, acting as one courier.
+`CarrierApiKeyGuard` (`X-Api-Key: elc_…`, IP allowlist via
+`CF-Connecting-IP`, `CarrierThrottlerGuard` 120/min) sets `req.carrier`;
+`CarrierGatewayController` forwards every action with requester
+`{ id: courier_user_id, roles: ['courier'] }` to the EXISTING courier RMQ
+commands, so ownership checks, the status machine, the FOR_COURIER cashbox,
+settlement FIFO and tracking are unchanged (no `markByProvider`, no
+`provider_receivable`):
+- `POST /carrier/scan {qr_token}` — `order.find_by_qr_enriched`; only an order
+  whose `courier_id`/`holder_courier_id` is that courier (else 404, same text
+  as not-found — unlike internal couriers, who may QR-look-up any parcel);
+  `on the road` → `logistics.post.receive_order` (→ `waiting`).
+- `POST /carrier/orders/:id/status` — `sold|partly_sold|cancelled|rollback` →
+  `order.sell|partly_sell|cancel|rollback_waiting` (`target_status: waiting`);
+  `Idempotency-Key` REQUIRED (400 `CARRIER_IDEMPOTENCY_KEY_REQUIRED`) →
+  `resolveOrderCreateRequestId(courier_user_id, key)`. order-service
+  courier-op keys never expire, so after the op a RAW re-read
+  (`order.find_by_id`) compares the status: not a target AND unchanged →
+  409 `CARRIER_IDEMPOTENCY_KEY_STALE` (silent replay of an older attempt);
+  raw read fails → 503. The enriched re-read only builds the body
+  (`refreshed:false, order:null` on failure — never 5xx after commit).
+  Downstream 404 after the ownership check → 503 (partly-sell item mismatch
+  → 400). Optional multipart `proof` (type/size checked like file-service,
+  `order-proof-upload.ts`, shared with `/orders/sell|cancel|partly-sell`).
+  v1 has no `extraCost`/`paidAmount` (the 202 market-approval path doesn't
+  fit a machine client).
+- `POST /carrier/returns {order_ids}` — cancelled parcels (incl. partly-sell
+  remainders) → `logistics.post.cancel.create` with the courier requester;
+  repeats are idempotent (an order whose `canceled_post_id` post has
+  `courier_id` = the carrier courier counts as the carrier's own — also for
+  scan/status ownership after custody moved to the branch).
+- `GET /carrier/orders` (`order.find_all_enriched`, `courier_ids=[id]`),
+  `GET /carrier/cashbox` (`finance.cashbox.my`, FOR_COURIER; history window
+  `from`/`to` YYYY-MM-DD, default last 30 days, max 92). Scan also receives
+  `waiting_customer`. Rows whose geo/customer/market enrichment came back
+  empty (enrichOrders swallows RPC errors) → retry once, then 503 — SOATO
+  never silently null.
+- Responses use `toCarrierOrderView` / `toCarrierCashboxView`, allowlists —
+  internal order fields and staff data never leak; region/district are
+  `{ id, soato_code }` (only a valid 4/7-digit code, else null). Rate limit:
+  `CarrierThrottlerGuard` keys per carrier across ALL endpoints
+  (`CARRIER_THROTTLE_LIMIT/TTL_MS`, read per request). Related fixes outside
+  the gateway: logistics `receiveOrderWithScannerCourier` accepts only
+  `on the road`/`waiting_customer` (status guard 2026-11-07; anything else,
+  incl. WAITING, → 400 `order_not_receivable`) — a concurrent duplicate carrier
+  scan treats that 400 as a plain re-scan (re-read, `received:false`); order-service
+  `mergePartialChildrenBack` keys lines by product_id or product_name and skips
+  remainders already put into a return post. Admin: `/admin/carriers` (SA/ADMIN).
+  Public contract: `docs/public/CARRIER_API.md` (doc↔DTO spec
+  `carrier-api-docs-contract.spec.ts`).
+- Separate Swagger for carriers: `/carrier-docs` (+ `-json`), built by
+  `carrier-swagger.ts` from the gateway doc filtered to `/carrier/*` (unused
+  schemas and other security schemes pruned; `X-Api-Key` = `carrier-api-key`
+  scheme). Independent of `/api`: in production (staging image too) mounted
+  ONLY with `CARRIER_SWAGGER_ENABLED=true` + `CARRIER_SWAGGER_PASSWORD`
+  (Basic Auth; no password → stays closed). Its description is the quickstart
+  (`CARRIER_SWAGGER_GUIDE` = `docs/public/CARRIER_API_QUICKSTART.md`, spec
+  keeps them equal). `npm run openapi:generate` also writes
+  `docs/public/carrier-openapi.json` (servers: production + test
+  `test-api.elchipochta.uz`, `CARRIER_API_SERVERS`); CI drift gate checks both
+  specs. Guide/quickstart examples use `BASE_URL` + a «Muhitlar» table.
 
 ---
 

@@ -26,6 +26,10 @@ import { ClientIpThrottlerGuard } from './auth/client-ip-throttler.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { PartnerGatewayController } from './partner-gateway.controller';
 import { PartnerAdminGatewayController } from './partner-admin-gateway.controller';
+import { CarrierApiKeyGuard } from './auth/carrier-api-key.guard';
+import { CarrierThrottlerGuard } from './auth/carrier-throttler.guard';
+import { CarrierGatewayController } from './carrier-gateway.controller';
+import { CarrierAdminGatewayController } from './carrier-admin-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
@@ -163,6 +167,9 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     AuditGatewayController,
     PartnerGatewayController,
     PartnerAdminGatewayController,
+    // Carrier API — tashqi yetkazuvchi = bitta kurier (X-Api-Key, /carrier/*).
+    CarrierGatewayController,
+    CarrierAdminGatewayController,
     AiGatewayController,
     // Celz3rKJ: "Moliyaviy balans → AI xarajat" paneli (/ai-usage/*).
     AiUsageGatewayController,
@@ -208,6 +215,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     SelfGuard,
     PartnerApiKeyGuard,
     PartnerThrottlerGuard,
+    CarrierApiKeyGuard,
+    CarrierThrottlerGuard,
     // ai-parse: foydalanuvchi (JWT sub) bo'yicha alohida 'ai-user' limiti —
     // faqat @UseGuards orqali, global APP_GUARD EMAS.
     UserThrottlerGuard,

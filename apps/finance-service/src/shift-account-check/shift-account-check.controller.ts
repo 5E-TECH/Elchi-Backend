@@ -10,7 +10,8 @@ import { ShiftAccountCheckService } from './shift-account-check.service';
 
 /**
  * kiZgTybn — smena yopishda karta qoldig'ini tasdiqlash (gateway:
- * `/finance/shift/account-photo`, `/finance/shift/settings`). Hisobot —
+ * `/finance/shift/account-photo`, `/finance/shift/settings`, BE-B
+ * `/finance/shift/:shift_id/accounts/:card_id/late-photo`). Hisobot —
  * `finance.shift.report` (FinanceServiceController).
  */
 @Controller()
@@ -47,6 +48,17 @@ export class ShiftAccountCheckController {
   ) {
     return executeAndAck(this.rmqService, context, () =>
       this.checks.attachPhoto(data ?? {}),
+    );
+  }
+
+  /** BE-B — avto-yopilgan MAIN smenasiga karta rasmini 24 soat ichida keyin yuklash. */
+  @MessagePattern({ cmd: 'finance.shift.account_check.late_photo' })
+  attachLatePhoto(
+    @Payload() data: Parameters<ShiftAccountCheckService['attachLatePhoto']>[0],
+    @Ctx() context: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.checks.attachLatePhoto(data ?? {}),
     );
   }
 

@@ -49,7 +49,11 @@ export const FINANCE_REALTIME_EVENTS = {
    * open_reason: 'auto', opened_at }` (FE `realtimeFinance.ts`).
    */
   shiftAutoOpened: 'finance.shift.auto_opened',
-  /** Karta qoldig'ining AI tekshiruvi tugadi (kiZgTybn). */
+  /**
+   * Karta qoldig'ining AI tekshiruvi tugadi (kiZgTybn). BE-B: avto-yopilgan
+   * MAIN smenasiga rasm keyin yuklanganda ham (`late: true`) — hisobot qayta
+   * o'qilsin.
+   */
   shiftAccountChecked: 'finance.shift.account_checked',
   /**
    * Kassa kartasi o'zgardi (yaratish, nom / tafsilot, holat, asosiy qilish,
@@ -213,6 +217,11 @@ export function buildShiftAccountCheckedMessage(input: {
   card_id: string | number;
   ai_status: string;
   checked_at?: Date | string | null;
+  /**
+   * BE-B: rasm avto-yopilgan smenaga KEYIN yuklangan (yuklash va uning AI
+   * natijasi) — payload'da `late: true`; aks holda maydon yo'q (avvalgi shakl).
+   */
+  late?: boolean;
 }): RealtimeNotifyMessage {
   return {
     event: FINANCE_REALTIME_EVENTS.shiftAccountChecked,
@@ -222,6 +231,7 @@ export function buildShiftAccountCheckedMessage(input: {
       card_id: String(input.card_id),
       ai_status: String(input.ai_status),
       checked_at: toIso(input.checked_at),
+      ...(input.late ? { late: true } : {}),
     },
     targets: shiftTargets(input.shift),
   };

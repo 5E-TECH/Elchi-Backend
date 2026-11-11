@@ -152,6 +152,41 @@ describe('rWdLuoP3 — finance realtime hodisalari (nomlar, payload, nishonlar)'
     expect(message.targets[0]).toEqual({ role: 'manager', branch_id: '15' });
   });
 
+  it('BE-B: keyin yuklangan rasm — o‘sha `finance.shift.account_checked`, payload’da `late: true`; summasiz', () => {
+    const late = buildShiftAccountCheckedMessage({
+      shift: { ...mainShift, closed_by: null },
+      card_id: '3',
+      ai_status: 'pending',
+      checked_at: '2026-10-25T14:00:00.000Z',
+      late: true,
+    });
+    expect(late.event).toBe('finance.shift.account_checked');
+    expect(late.payload).toEqual({
+      shift_id: '31',
+      cashbox_user_id: '0',
+      cashbox_type: 'main',
+      branch_id: null,
+      card_id: '3',
+      ai_status: 'pending',
+      checked_at: '2026-10-25T14:00:00.000Z',
+      late: true,
+    });
+    expect(late.targets).toEqual([
+      { role: 'superadmin' },
+      { role: 'admin' },
+      { role: 'registrator' },
+      { user_id: '5' },
+    ]);
+    // `late: false` — avvalgi shakl (maydon yo'q).
+    const regular = buildShiftAccountCheckedMessage({
+      shift: mainShift,
+      card_id: '3',
+      ai_status: 'match',
+      late: false,
+    });
+    expect(regular.payload).not.toHaveProperty('late');
+  });
+
   it('`finance.cashbox.card_changed` — faqat superadmin/admin (kartalar MAIN kassada), takrorsiz karta id lari', () => {
     const message = buildCashboxCardChangedMessage({
       action: 'transfer',

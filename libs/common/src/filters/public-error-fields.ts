@@ -1,5 +1,6 @@
 import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
 import { CASHBOX_RECEIPT_ERROR_CODES as RC } from '../finance/cashbox-receipt';
+import { SHIFT_LATE_PHOTO_ERROR_CODES as SLP } from '../finance/shift-account-check';
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
@@ -9,6 +10,7 @@ import {
   ORDER_INTAKE_CLOSED,
   ORDER_RECEIVE_CLOSED,
 } from '../order/order-intake';
+import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -111,6 +113,12 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [SESSION_TOO_NEW]: ['available_at'],
   // (NDmZMzCP) identity javob bermadi — 503, qayta urinish (chiqish emas).
   [SESSION_CHECK_UNAVAILABLE]: [],
+  // Carrier API (`/carrier/*`) — tashqi yetkazuvchi kodga tayanadi (§3).
+  [CARRIER.KEY_CHECK_UNAVAILABLE]: [],
+  [CARRIER.COURIER_INACTIVE]: [],
+  [CARRIER.IDEMPOTENCY_KEY_REQUIRED]: [],
+  [CARRIER.IDEMPOTENCY_KEY_STALE]: [],
+  [CARRIER.TEMPORARILY_UNAVAILABLE]: [],
   // (NDmZMzCP) login qulfi — 429, qancha soniyadan keyin urinish mumkin.
   [LOGIN_LOCKED]: ['retry_after_seconds'],
   // (NDmZMzCP) zaif/vaqtinchalik parol — avval parolni almashtirish, 403.
@@ -147,6 +155,13 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (T1 K1 s6xY4f5C) hamkor sotuvchisi / market allaqachon bog'langan — 409.
   [PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN]: [],
   [PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN]: [],
+  // (BE-B) avto-yopilgan ASOSIY kassa smenasiga karta rasmini keyin yuklash:
+  // 400 MAIN_ONLY, 409 NOT_AUTO_CLOSED / EXPIRED (`deadline` — ISO, oyna
+  // qachon tugagan), 404 CARD_NOT_IN_SHIFT.
+  [SLP.MAIN_ONLY]: [],
+  [SLP.NOT_AUTO_CLOSED]: [],
+  [SLP.EXPIRED]: ['deadline'],
+  [SLP.CARD_NOT_IN_SHIFT]: [],
   // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),

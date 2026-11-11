@@ -16,6 +16,7 @@ import {
   gatewayCorsDelegate,
   setupGatewaySwagger,
 } from './gateway-http.setup';
+import { CARRIER_SWAGGER_PATH, setupCarrierSwagger } from './carrier-swagger';
 import {
   RpcExceptionFilter,
   AllExceptionsFilter,
@@ -99,6 +100,25 @@ async function bootstrap() {
   } catch (error) {
     // Swagger schema xatosi bo'lsa ham API ishlashda davom etadi.
     app.get(Logger).error({ err: error }, 'Swagger initialization failed');
+  }
+
+  // Carrier API — tashqi yetkazuvchi uchun ALOHIDA Swagger (faqat /carrier/*).
+  // Asosiy Swagger'dan mustaqil: production'da ham aniq yoqilsa ishlaydi.
+  try {
+    const carrierDocs = setupCarrierSwagger(app);
+    app
+      .get(Logger)
+      .log(
+        carrierDocs === 'mounted'
+          ? `Carrier API Swagger: /${CARRIER_SWAGGER_PATH}`
+          : carrierDocs === 'disabled_no_password'
+            ? 'Carrier API Swagger o`chiq: production’da CARRIER_SWAGGER_PASSWORD shart'
+            : 'Carrier API Swagger o`chiq (CARRIER_SWAGGER_ENABLED)',
+      );
+  } catch (error) {
+    app
+      .get(Logger)
+      .error({ err: error }, 'Carrier Swagger initialization failed');
   }
 
   // Flush pending Sentry events on SIGTERM/SIGINT so the process exits

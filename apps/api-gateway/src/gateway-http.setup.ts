@@ -7,6 +7,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import basicAuth from 'express-basic-auth';
 import type { Server } from 'http';
+import { CARRIER_API_KEY_SCHEME } from './carrier-swagger';
 
 /**
  * (oFfOWGuo) Gateway HTTP sozlamalari — main.ts dan ajratildi, spec'lar
@@ -235,15 +236,22 @@ export function setupGatewaySwagger(
     .setDescription('API Gateway docs for all microservice routes')
     .setVersion('1.0.0')
     .addBearerAuth()
+    // `/carrier/*` (`@ApiSecurity`) shu sxemaga ishora qiladi — alohida
+    // carrier hujjati: `carrier-swagger.ts` (`/carrier-docs`).
+    .addApiKey(
+      { type: 'apiKey', name: 'X-Api-Key', in: 'header' },
+      CARRIER_API_KEY_SCHEME,
+    )
     .build();
   const document = SwaggerModule.createDocument(app, swaggerConfig);
 
   const swaggerUser = env.SWAGGER_USER || 'admin';
   const swaggerPassword = env.SWAGGER_PASSWORD ?? '';
-  // Basic Auth: /api (UI) va /api-json (xom OpenAPI schema).
+  // Basic Auth: /api (UI), /api-json va /api-yaml (xom OpenAPI schema).
+  // `-yaml` ham — prefiks `/api` uni qoplamaydi (Carrier API review).
   if (swaggerPassword) {
     app.use(
-      ['/api', '/api-json'],
+      ['/api', '/api-json', '/api-yaml'],
       basicAuth({
         users: { [swaggerUser]: swaggerPassword },
         challenge: true,

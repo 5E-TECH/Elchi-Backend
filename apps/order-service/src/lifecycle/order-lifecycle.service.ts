@@ -2301,6 +2301,15 @@ export class OrderLifecycleService {
       where: {
         parent_order_id: String(order.id),
         status: In([Order_status.CANCELLED, Order_status.WAITING]),
+        /**
+         * Qaytarish pochtasiga tushgan qoldiq (`canceled_post_id` bor) —
+         * kuryer qo'lidan CHIQQAN: filial qabul qilgach u yana `cancelled`
+         * bo'ladi (egasi filial), lekin jismonan filialda. Uni sotilgan
+         * ota buyurtmaga qo'shish kuryer qo'lida yo'q tovarni unga
+         * qaytarardi (Carrier API review). `cancelled (sent)` holatidagilar
+         * kabi bu ham alohida qoladi.
+         */
+        canceled_post_id: IsNull(),
         isDeleted: false,
       },
       order: { createdAt: 'ASC', id: 'ASC' },
@@ -2345,9 +2354,26 @@ export class OrderLifecycleService {
     const parentItems = await itemRepo.find({
       where: { order_id: String(parentOrder.id) },
     });
+    /**
+     * Qator kaliti: katalog mahsuloti — `product_id`; katalogsiz (hamkor/
+     * nomli) qator — `product_name` (ultracode review). Ilgari kalit
+     * `String(item.product_id)` edi: katalogsiz qatorlarning HAMMASI `"null"`
+     * kalitiga tushib bitta ota qatorga yig'ilardi (miqdorlar aralashardi),
+     * yangi qator yaratilganda esa `product_id` ga `"null"` satri ketardi.
+     * Bola qator nomi `partlySellOrder` da ota qatordan nusxalanadi.
+     */
+    const itemKey = (item: {
+      product_id?: string | number | null;
+      product_name?: string | null;
+    }): string =>
+      item.product_id !== null &&
+      item.product_id !== undefined &&
+      String(item.product_id) !== ''
+        ? `p:${String(item.product_id)}`
+        : `n:${String(item.product_name ?? '').trim()}`;
     const parentItemByProduct = new Map<string, OrderItem>();
     for (const item of parentItems) {
-      parentItemByProduct.set(String(item.product_id), item);
+      parentItemByProduct.set(itemKey(item), item);
     }
 
     let restoredPrice = 0;
@@ -2360,8 +2386,8 @@ export class OrderLifecycleService {
         where: { order_id: String(child.id) },
       });
       for (const childItem of childItems) {
-        const productId = String(childItem.product_id);
-        const parentItem = parentItemByProduct.get(productId);
+        const key = itemKey(childItem);
+        const parentItem = parentItemByProduct.get(key);
         if (parentItem) {
           parentItem.quantity =
             Number(parentItem.quantity ?? 0) + Number(childItem.quantity ?? 0);
@@ -2372,11 +2398,16 @@ export class OrderLifecycleService {
         const recreated = await itemRepo.save(
           itemRepo.create({
             order_id: String(parentOrder.id),
-            product_id: productId,
+            product_id:
+              childItem.product_id === null ||
+              childItem.product_id === undefined
+                ? null
+                : String(childItem.product_id),
+            product_name: childItem.product_name ?? null,
             quantity: Number(childItem.quantity ?? 0),
           }),
         );
-        parentItemByProduct.set(productId, recreated);
+        parentItemByProduct.set(key, recreated);
       }
 
       child.isDeleted = true;
