@@ -224,7 +224,7 @@ export class FindHistoryQueryDto {
   @ApiPropertyOptional({
     enum: CASHBOX_RECEIPT_FILTER_STATUSES,
     description:
-      "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: qo'lda chiqim kategoriyali; MAIN'ga click kuryer/filial o'tkazmasi). `counts` ham shu filtr bilan.",
+      "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: kategoriyali **karta (`click`)** qo'lda chiqimi; MAIN'ga click kuryer/filial o'tkazmasi). BE-C (2026-11-10): naqd qo'lda chiqim `none` ga KIRMAYDI (chek faqat karta chiqimida); eski naqd chiqimga bog'langan chek o'z AI holati bo'yicha avvalgidek topiladi. `counts` ham shu filtr bilan.",
   })
   @IsOptional()
   // Mock'langan `@app/common` (eski spec'lar) bilan ham yuklanadi.
@@ -1195,7 +1195,7 @@ export class MainCashboxSpendRequestDto extends MainCashboxManualRequestDto {
   @ApiPropertyOptional({
     example: '41',
     description:
-      "(T3) Chek qoralamasi ID si. Chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`); boshqa xodimning cheki → 403, ishlatilgan → 409 `RECEIPT_ALREADY_USED`.",
+      "(T3) Chek qoralamasi ID si (`POST /finance/receipts`, `kind=manual_expense`). BE-C (ega 2026-11-10): chek FAQAT karta chiqimida — `type: \"click\"`. Karta: chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd (`type` yo'q / `cash`) yoki `click_to_market`: chek so'ralmaydi (rasm sozlamasi yoqiq bo'lsa ham), `receipt_id` yuborilsa → 400 `RECEIPT_NOT_APPLICABLE` «Bu operatsiyada chek qo'llanmaydi» (pul o'zgarmaydi). Boshqa xodimning cheki → 403 `RECEIPT_NOT_OWNER`, ishlatilgan → 409 `RECEIPT_ALREADY_USED`.",
   })
   @IsOptional()
   @IsString()
@@ -1960,7 +1960,8 @@ export class ReceiptSummaryQueryDto {
 
   @ApiPropertyOptional({
     enum: CASHBOX_RECEIPT_FILTER_STATUSES,
-    description: "`none` — chek so'raladigan, lekin cheksiz qator",
+    description:
+      "`none` — chek so'raladigan, lekin cheksiz qator (BE-C: qo'lda chiqimdan faqat karta — `click`; naqd chiqim kirmaydi)",
   })
   @IsOptional()
   @IsIn(Array.from(CASHBOX_RECEIPT_FILTER_STATUSES ?? []))

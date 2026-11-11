@@ -3130,7 +3130,8 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Spend money from main cashbox',
     description:
-      "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy (ljVOuNz4: `CASHBOX_SPEND_COMMENT_REQUIRED=on` bo'lsa bo'sh izoh → 400 «Izoh majburiy»). `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot); `data.financial_balance_entry.expense_category` — yopiq ro'yxatdagi mosi.",
+      "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy (ljVOuNz4: `CASHBOX_SPEND_COMMENT_REQUIRED=on` bo'lsa bo'sh izoh → 400 «Izoh majburiy»). `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot); `data.financial_balance_entry.expense_category` — yopiq ro'yxatdagi mosi. " +
+      "(T3, BE-C — ega 2026-11-10) Chek FAQAT karta chiqimida (`type: \"click\"`): karta — `GET /finance/receipt-settings` → `manual_expense.photo_required` yoqiq bo'lsa `receipt_id` MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`), chek bog'lanadi va AI tahlili (avvalgidek). Naqd (`type` yo'q yoki `cash`) va `click_to_market` — chek so'ralmaydi (sozlama yoqiq bo'lsa ham), `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE` «Bu operatsiyada chek qo'llanmaydi» (pul, tarix, P&L yozilmaydi). Javobda `data.receipt: { id, ai_status } | null` (naqd — doim `null`).",
   })
   @ApiBody({ type: MainCashboxSpendRequestDto })
   async spendMoney(
@@ -3163,7 +3164,8 @@ export class FinanceGatewayController {
         // IgR4FVsR — qo'lda operatsiya P&L daftariga AYNI tranzaksiyada
         // yoziladi (alohida POST /financial-balance/entries KERAK EMAS).
         financial_ledger: true,
-        // T3 — qo'lda chiqim cheki (majburiylik finance'da, sozlama bo'yicha).
+        // T3 — qo'lda chiqim cheki (majburiylik finance'da, sozlama bo'yicha;
+        // BE-C — faqat karta `click` chiqimida, naqd + chek → 400).
         receipt_policy: { kind: 'manual_expense' },
       },
     );
@@ -4659,7 +4661,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: '(T3) Kassa cheki rasmini yuklash (qoralama)',
     description:
-      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi.",
+      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`).",
   })
   @UseInterceptors(
     FileInterceptor('photo', {
@@ -4775,7 +4777,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: '(T3-4) Kassa cheklari tekshiruvi xulosasi',
     description:
-      "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart. Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
+      "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart (BE-C, 2026-11-10: qo'lda chiqimdan faqat karta — `click`; naqd chiqim `none` ga kirmaydi). Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
   })
   async receiptChecksSummary(
     @Req() req: { user: JwtUser },

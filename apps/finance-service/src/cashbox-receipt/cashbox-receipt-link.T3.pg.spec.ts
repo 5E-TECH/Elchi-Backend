@@ -28,6 +28,7 @@ import { CashboxReceiptService } from './cashbox-receipt.service';
  * T3-2 (QlLf33Ma) — chekni qo'lda chiqim / HQ'ga o'tkazmaga bog'lash va
  * tarixda ko'rsatish, HAQIQIY Postgres (FINANCE_T3_PG_TEST_URI bo'lmasa
  * skip; o'z vaqtinchalik bazasi — migratsiya 188 `finance_schema` ga).
+ * BE-C (ega 2026-11-10) — qo'lda chiqim cheki faqat karta (`click`) da.
  */
 const pgUri = process.env.FINANCE_T3_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
@@ -218,11 +219,13 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
       ...patch,
     });
 
+  // BE-C — chek faqat karta chiqimida: sukut — karta (`click`); naqd
+  // holatlar `type: CASH` bilan alohida.
   const spend = (extra: Record<string, unknown> = {}) =>
     finance.spendMoney({
       user_id: '7',
       amount: 120_000,
-      type: PaymentMethod.CASH,
+      type: PaymentMethod.CLICK,
       created_by: '7',
       dedup_epoch: `sp-${randomUUID()}`,
       expense_category_id: categoryId,
@@ -243,9 +246,12 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
   const receiptRow = (id: string) =>
     db.getRepository(CashboxReceipt).findOneByOrFail({ id });
 
+  const cashboxOf = (user_id: string, cashbox_type: Cashbox_type) =>
+    db.getRepository(Cashbox).findOneByOrFail({ user_id, cashbox_type });
+
   // ───────────────────────── qo'lda chiqim ─────────────────────────
 
-  it('⭐ rasm yoqiq, receipt_id siz → 400 RECEIPT_REQUIRED, pul o`zgarmaydi', async () => {
+  it('⭐ karta: rasm yoqiq, receipt_id siz → 400 RECEIPT_REQUIRED, pul o`zgarmaydi', async () => {
     const before = await mainBalance();
     await expect(rpcError(spend())).resolves.toMatchObject({
       statusCode: 400,
@@ -285,7 +291,7 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
       history_id: String(res.data.history.id),
       counter_history_id: null,
       entered_amount: 120_000,
-      payment_method: 'cash',
+      payment_method: 'click',
       linked_by: '7',
       ai_status: 'pending',
       photo_required_snap: true,
@@ -364,6 +370,104 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     });
     expect(res.statusCode).toBe(200);
     expect((await receiptRow(receiptId)).branch_id).toBe('15');
+  });
+
+  // ─────────────── BE-C (ega 2026-11-10): chek faqat karta chiqimida ───────────────
+
+  it.each([
+    ['MAIN naqd', PaymentMethod.CASH, {}],
+    [
+      'filial (menejer) naqd',
+      PaymentMethod.CASH,
+      { user_id: '15', created_by: '31', cashbox_type: Cashbox_type.BRANCH },
+    ],
+    ['MAIN click_to_market', PaymentMethod.CLICK_TO_MARKET, {}],
+  ])(
+    '⭐ BE-C %s + receipt_id → 400 RECEIPT_NOT_APPLICABLE; pul, tarix, P&L yozilmaydi, chek qoralama qoladi',
+    async (_label, type, extra: Record<string, unknown>) => {
+      const branch = extra.cashbox_type === Cashbox_type.BRANCH;
+      const receiptId = branch
+        ? await upload('manual_expense', '31', ['manager'], '15')
+        : await upload('manual_expense');
+      const target = () =>
+        branch
+          ? cashboxOf('15', Cashbox_type.BRANCH)
+          : cashboxOf('0', Cashbox_type.MAIN);
+      // Jurnal jadvali testlar orasida tozalanmaydi — farq bo'yicha.
+      const expenseLogs = () =>
+        db.getRepository(ActivityLog).count({
+          where: { action: 'finance.manual_expense' } as never,
+        });
+      const logsBefore = await expenseLogs();
+      const before = await target();
+      await expect(
+        rpcError(spend({ type, receipt_id: receiptId, ...extra })),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          code: 'RECEIPT_NOT_APPLICABLE',
+          message: "Bu operatsiyada chek qo'llanmaydi",
+        }),
+      );
+      const after = await target();
+      expect(Number(after.balance)).toBe(Number(before.balance));
+      expect(Number(after.balance_cash)).toBe(Number(before.balance_cash));
+      expect(Number(after.balance_card)).toBe(Number(before.balance_card));
+      expect(await db.getRepository(CashboxHistory).count()).toBe(0);
+      expect(await db.getRepository(FinancialBalanceHistory).count()).toBe(0);
+      expect(await expenseLogs()).toBe(logsBefore);
+      expect(await receiptRow(receiptId)).toMatchObject({
+        state: 'draft',
+        history_id: null,
+      });
+      // Chek keyin karta chiqimiga biriktirilishi mumkin (qoralama yonmaydi).
+      const card = await spend({ receipt_id: receiptId, ...extra });
+      expect(card.data.receipt).toMatchObject({ id: receiptId });
+    },
+  );
+
+  it('⭐ BE-C naqd, rasm sozlamasi YOQIQ, cheksiz → 200 (RECEIPT_REQUIRED yo`q), receipt null, pul naqddan', async () => {
+    const settings = (await receipts.getSettings()) as any;
+    expect(settings.data.manual_expense).toMatchObject({
+      photo_required: true,
+      ai_enabled: true,
+    });
+    const before = await cashboxOf('0', Cashbox_type.MAIN);
+    const res = await spend({ type: PaymentMethod.CASH });
+    expect(res.statusCode).toBe(200);
+    expect(res.data.receipt).toBeNull();
+    expect(res.data.history).toMatchObject({ payment_method: 'cash' });
+    const after = await cashboxOf('0', Cashbox_type.MAIN);
+    expect(Number(after.balance_cash)).toBe(
+      Number(before.balance_cash) - 120_000,
+    );
+    expect(Number(after.balance_card)).toBe(Number(before.balance_card));
+    // `type` berilmasa — naqd (sukut), chek ham so'ralmaydi.
+    const noType = await spend({ type: undefined });
+    expect(noType.statusCode).toBe(200);
+    expect(noType.data.receipt).toBeNull();
+    // Menejer: filial kassasidan naqd — ham chek so'ralmaydi.
+    const branch = await spend({
+      type: PaymentMethod.CASH,
+      user_id: '15',
+      created_by: '31',
+      cashbox_type: Cashbox_type.BRANCH,
+    });
+    expect(branch.statusCode).toBe(200);
+    expect(branch.data.receipt).toBeNull();
+    expect(await db.getRepository(CashboxReceipt).count()).toBe(0);
+  });
+
+  it('BE-C naqd chiqim takrori (o`sha Idempotency-Key) — receipt null, pul bir marta', async () => {
+    const token = `sp-${randomUUID()}`;
+    const first = await spend({ type: PaymentMethod.CASH, dedup_epoch: token });
+    const second = await spend({
+      type: PaymentMethod.CASH,
+      dedup_epoch: token,
+    });
+    expect(first.data.receipt).toBeNull();
+    expect(second.data).toMatchObject({ idempotent: true, receipt: null });
+    expect(await db.getRepository(CashboxHistory).count()).toBe(1);
   });
 
   // ───────────────────────── HQ'ga o'tkazma ─────────────────────────
@@ -545,9 +649,17 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
   it('⭐ receipt_status filtri: pending / none / disabled; counts ham filtrlanadi; noto`g`ri → 400', async () => {
     const r1 = await upload('manual_expense');
     await spend({ receipt_id: r1 });
-    // Kategoriyali, cheksiz qo'lda chiqim (rasm o'chiq paytda) — none.
+    // BE-C — kategoriyali NAQD qo'lda chiqim (rasm yoqiq paytda ham) —
+    // none EMAS (chek faqat karta chiqimida).
+    await spend({ type: PaymentMethod.CASH });
+    // Kategoriyali, cheksiz KARTA qo'lda chiqimi (rasm o'chiq paytda) — none.
     await setSettings({ manual_expense: { photo_required: false } });
     const noReceipt = await spend();
+    // Rasm o'chiq paytdagi naqd chiqim ham — none EMAS.
+    await spend({ type: PaymentMethod.CASH });
+    // Kategoriyali click_to_market qo'lda chiqimi — none EMAS (chek faqat
+    // `click`; bog'lash tomonida RECEIPT_NOT_APPLICABLE bilan AYNI qoida).
+    await spend({ type: PaymentMethod.CLICK_TO_MARKET });
     // Kategoriyasiz ichki chiqim — none EMAS.
     await spend({ expense_category_id: undefined, receipt_policy: undefined });
     // Naqd kuryer o'tkazmasi — none EMAS.
@@ -598,6 +710,61 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     await expect(rpcError(find('salary'))).resolves.toMatchObject({
       statusCode: 400,
     });
+  });
+
+  it('⭐ BE-C: eski (2026-11-10 dan oldingi) NAQD chiqimga bog`langan chek — o`z holati bo`yicha avvalgidek; none ga tushmaydi; karta cheksiz — none', async () => {
+    // Eski qoida bo'yicha naqd chiqimga bog'langan chekni taqlid qilamiz:
+    // karta chiqimi + chek, keyin tarix va chek qatorida usul — `cash`.
+    const legacy = await upload('manual_expense');
+    const res = await spend({ receipt_id: legacy });
+    const legacyHistoryId = String(res.data.history.id);
+    await db.query(
+      `UPDATE finance_schema.cashbox_history SET payment_method = 'cash' WHERE id = $1`,
+      [legacyHistoryId],
+    );
+    await db.query(
+      `UPDATE finance_schema.cashbox_receipts SET payment_method = 'cash' WHERE id = $1`,
+      [legacy],
+    );
+    // Eski cheksiz naqd chiqim (rasm yoqiq paytda) — endi none EMAS.
+    await db.query(
+      `INSERT INTO finance_schema.cashbox_history
+         (operation_type, cashbox_id, source_type, amount, balance_after,
+          payment_method, expense_category_id, expense_category_name,
+          dedup_epoch)
+       SELECT 'expense', c.id, 'manual_expense', 5000, c.balance, 'cash', $1,
+          'Ijara', $2
+         FROM finance_schema.cashboxes c
+        WHERE c.user_id = '0' AND c.cashbox_type = 'main'`,
+      [categoryId, `legacy-${randomUUID()}`],
+    );
+    // Cheksiz KARTA chiqimi — none.
+    await setSettings({ manual_expense: { photo_required: false } });
+    const cardNoReceipt = await spend();
+
+    const find = (receipt_status: string) =>
+      finance.findAllHistory({
+        page: 0,
+        limit: 0,
+        receipt_status,
+        include_receipts: true,
+      }) as Promise<any>;
+    const pending = await find('pending');
+    expect(pending.data.items.map((i: any) => String(i.id))).toEqual([
+      legacyHistoryId,
+    ]);
+    expect(pending.data.items[0].receipt).toEqual({
+      id: legacy,
+      ai_status: 'pending',
+    });
+    const none = await find('none');
+    expect(none.data.items.map((i: any) => String(i.id))).toEqual([
+      String(cardNoReceipt.data.history.id),
+    ]);
+
+    const sum = (await receipts.summary({ requester_roles: SA })) as any;
+    expect(sum.data.counts).toMatchObject({ pending: 1, none: 1 });
+    expect(sum.data.total).toBe(2);
   });
 
   // ───────────────────────── AI (T3-3) ─────────────────────────
@@ -855,8 +1022,13 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     }
     const plus = await checked(145_000, 150_000);
     const minus = await checked(52_000, 50_000);
+    // BE-C — naqd qo'lda chiqim (rasm yoqiq) — none ga kirmaydi.
+    await spend({ type: PaymentMethod.CASH });
     await setSettings({ manual_expense: { photo_required: false } });
     await spend();
+    await spend({ type: PaymentMethod.CASH });
+    // click_to_market qo'lda chiqimi ham — none ga kirmaydi.
+    await spend({ type: PaymentMethod.CLICK_TO_MARKET });
     // Kategoriyasiz ichki chiqim — hisobga kirmaydi.
     await spend({ expense_category_id: undefined, receipt_policy: undefined });
 
@@ -1077,6 +1249,13 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
   it('xulosa by_branch: menejerning cheksiz qo`lda chiqimi filial kassasidan', async () => {
     await setSettings({ manual_expense: { photo_required: false } });
     await spend({
+      user_id: '15',
+      created_by: '31',
+      cashbox_type: Cashbox_type.BRANCH,
+    });
+    // BE-C — filialning naqd chiqimi none ga kirmaydi.
+    await spend({
+      type: PaymentMethod.CASH,
       user_id: '15',
       created_by: '31',
       cashbox_type: Cashbox_type.BRANCH,
