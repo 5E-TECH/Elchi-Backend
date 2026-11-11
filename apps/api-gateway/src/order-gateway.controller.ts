@@ -1792,10 +1792,12 @@ export class OrderGatewayController {
   }
 
   /**
-   * VRyloH62 — registrator/market operatori `operator` maydonini bo'sh
-   * qoldirsa (forma, bot, AI), buyurtmaga uning ISMI yoziladi (BeePost
+   * VRyloH62 — market operatori `operator` maydonini bo'sh qoldirsa (forma,
+   * bot, AI), buyurtmaga uning ISMI yoziladi (BeePost
    * `order.service.ts:362-365` kabi). Ilgari faqat `operator_id` yozilardi,
-   * ko'rinadigan `operator` matni bo'sh qolardi.
+   * ko'rinadigan `operator` matni bo'sh qolardi. Ega 2026-11-11: registrator
+   * operator EMAS — operator tanlamasa buyurtma operatorsiz qoladi, uning
+   * ismi ham yozilmaydi.
    *
    * Qaytaradi: to'ldiriladigan ism yoki `null` (to'ldirish kerak emas —
    * matn yozilgan, rol boshqa yoki ism olinmadi). Ism olinmasa buyurtma
@@ -1810,10 +1812,7 @@ export class OrderGatewayController {
     if (this.asStr(typed).trim()) {
       return null;
     }
-    if (
-      !roles.includes(RoleEnum.REGISTRATOR) &&
-      !roles.includes(RoleEnum.MARKET_OPERATOR)
-    ) {
+    if (!roles.includes(RoleEnum.MARKET_OPERATOR)) {
       return null;
     }
     if (preloaded !== undefined) {
@@ -1993,7 +1992,8 @@ export class OrderGatewayController {
    * takrorlanmaydi), filial esa rol bo'yicha `createOrderInternal` da
    * qo'yiladi. `region_id` — DB'dagi tuman yozuvidan. `operator` — FAQAT
    * matn; `operator_id` `createOrderInternal` da faqat ROLDAN qo'yiladi
-   * (MARKET → null, MARKET_OPERATOR/REGISTRATOR → sub), matndan HECH QACHON.
+   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null),
+   * matndan HECH QACHON.
    */
   private async createAiOrder(
     item: EligibleAiOrder,
@@ -2816,12 +2816,14 @@ export class OrderGatewayController {
               // inline mijozniki (bot, filial); mavjud mijozniki va viloyat —
               // order-service'da.
               district_id: orderCreateDistrictId(dto),
-              // Tekshirilgan tanlov; bo'lmasa — rol bo'yicha (registrator /
-              // market operatori — o'zi, qolganlar — null).
+              // Tekshirilgan tanlov; bo'lmasa — rol bo'yicha: market
+              // operatori — o'zi, qolganlar (market, registrator, admin…) —
+              // null. Ega 2026-11-11: registrator operator EMAS — tanlamasa
+              // buyurtma operatorsiz qoladi (ilgari registratorning o'zi
+              // `operator_id` bo'lib yozilardi).
               operator_id: chosenOperator
                 ? chosenOperator.id
-                : roles.includes(RoleEnum.REGISTRATOR) ||
-                    roles.includes(RoleEnum.MARKET_OPERATOR)
+                : roles.includes(RoleEnum.MARKET_OPERATOR)
                   ? req.user.sub
                   : null,
               // Filial xodimi — o'z filiali; SUPERADMIN/ADMIN — so'raganicha;
@@ -3317,8 +3319,9 @@ export class OrderGatewayController {
   }
 
   /**
-   * BUGUNGI QABUL VAQTI (ega 2026-11-09) — holat. Har qanday kirgan rol
-   * (yaratish sahifasi va «Qabul va yaratish» sarlavhasi).
+   * «KUN TARTIBI» (ega 2026-11-09 / 2026-11-11) — buyurtma yaratish va qabul
+   * qilish chegaralari holati. Har qanday kirgan rol (yaratish sahifasi,
+   * «Qabul va yaratish», kiruvchi posilkalar).
    *
    * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan — aks holda 'intake-settings'
    * buyurtma ID'si deb ushlanadi.
@@ -3328,11 +3331,14 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      'Bugungi buyurtma qabuli holati (qabul vaqti, kun almashish soati)',
+      'Buyurtma yaratish / qabul qilish chegaralari va kun almashish soati (holat)',
     description:
-      'Qabul vaqti (`cutoff_time`) qo`yilgan bo`lsa, `closes_at` dan kun almashguncha (`reopens_at`) ' +
-      'hech qanday yangi buyurtma yaratilmaydi: POST /orders, /orders/external, /orders/telegram/bot/create, ' +
-      'ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` (`reopens_at`, `cutoff_time`). ' +
+      'Ikkala chegara ham HAR ISH KUNI takrorlanadi. Yaratish chegarasi (`cutoff_time`): `closes_at` dan kun ' +
+      'almashguncha (`reopens_at`) hech qanday yangi buyurtma yaratilmaydi — POST /orders, /orders/external, ' +
+      '/orders/telegram/bot/create, ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` ' +
+      '(`reopens_at`, `cutoff_time`). Qabul qilish chegarasi (`receive_cutoff_time`): `receive_closes_at` dan ' +
+      'kun almashguncha POST /orders/receive va /orders/external/receive-by-scan → 409 `ORDER_RECEIVE_CLOSED` ' +
+      '(`reopens_at`, `receive_cutoff_time`). `receive_cutoff_time` kaliti har doim bor (`null` — cheklovsiz). ' +
       'Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.',
   })
   @ApiOkResponse({ description: ORDER_INTAKE_STATE_DESCRIPTION })
@@ -3341,7 +3347,7 @@ export class OrderGatewayController {
   }
 
   /**
-   * Bugungi qabul vaqti va kun almashish soatini o'zgartirish — FAQAT
+   * «Kun tartibi» chegaralari va kun almashish soatini o'zgartirish — FAQAT
    * SUPERADMIN (ega 2026-11-09). order-service ham rolni qayta tekshiradi.
    *
    * ⚠️ `@Patch(':id')` dan OLDIN e'lon qilingan.
@@ -3352,12 +3358,13 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      "Bugungi qabul vaqti / kun almashish soatini o'zgartirish (SUPERADMIN)",
+      "Buyurtma yaratish / qabul qilish chegaralari va kun almashish soatini o'zgartirish (SUPERADMIN)",
     description:
-      '`cutoff_time` — faqat JORIY ish kuni uchun (kun almashganda o`zi bekor bo`ladi), `null` — cheklovni ' +
-      'olib tashlash. `day_change_time` — doimiy kun almashish soati (`null` — 00:00). Kamida bittasi kerak ' +
-      '(aks holda 400). Javob — GET bilan bir xil. Activity log: `order.intake_cutoff_changed`, ' +
-      '`order.day_change_time_changed`.',
+      '`cutoff_time` va `receive_cutoff_time` — DOIMIY (har ish kuni, boshqa vaqtga o`zgartirilmaguncha), ' +
+      '`null` — chegarani olib tashlash. `day_change_time` — doimiy kun almashish soati (`null` — 00:00). ' +
+      'Bir nechta maydon birga yuborilishi mumkin, kamida bittasi kerak (aks holda 400); bittasi noto`g`ri ' +
+      'bo`lsa hech biri yozilmaydi. Javob — GET bilan bir xil. Activity log: `order.intake_cutoff_changed`, ' +
+      '`order.receive_cutoff_changed`, `order.day_change_time_changed` (faqat o`zgargan qiymat).',
   })
   @ApiBody({ type: UpdateOrderIntakeSettingsRequestDto })
   @ApiOkResponse({ description: ORDER_INTAKE_STATE_DESCRIPTION })
@@ -3371,6 +3378,9 @@ export class OrderGatewayController {
         // `undefined` — maydon yuborilmagan (o'zgarmaydi); `null` — tozalash.
         ...(dto?.cutoff_time !== undefined
           ? { cutoff_time: dto.cutoff_time }
+          : {}),
+        ...(dto?.receive_cutoff_time !== undefined
+          ? { receive_cutoff_time: dto.receive_cutoff_time }
           : {}),
         ...(dto?.day_change_time !== undefined
           ? { day_change_time: dto.day_change_time }

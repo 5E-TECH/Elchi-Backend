@@ -224,7 +224,7 @@ export class FindHistoryQueryDto {
   @ApiPropertyOptional({
     enum: CASHBOX_RECEIPT_FILTER_STATUSES,
     description:
-      "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: qo'lda chiqim kategoriyali; MAIN'ga click kuryer/filial o'tkazmasi). `counts` ham shu filtr bilan.",
+      "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: kategoriyali **karta (`click`)** qo'lda chiqimi; MAIN'ga click kuryer/filial o'tkazmasi). BE-C (2026-11-10): naqd qo'lda chiqim `none` ga KIRMAYDI (chek faqat karta chiqimida); eski naqd chiqimga bog'langan chek o'z AI holati bo'yicha avvalgidek topiladi. `counts` ham shu filtr bilan.",
   })
   @IsOptional()
   // Mock'langan `@app/common` (eski spec'lar) bilan ham yuklanadi.
@@ -430,7 +430,7 @@ export class CloseShiftRequestDto {
   @ApiPropertyOptional({
     type: () => [CloseShiftAccountRequestDto],
     description:
-      "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. `shift.account_check.enabled` yoqilgan bo'lsa kassaning HAR faol kartasi uchun majburiy (aks holda 400). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish 30 s gacha kutadi, keyin baribir yopiladi.",
+      "(kiZgTybn) Har karta / hisob qoldig'ini tasdiqlash. Shu kassa uchun tasdiqlash yoqilgan bo'lsa (ASOSIY kassa — `shift.account_check.enabled`, sukut true; FILIAL — `shift.account_check.branch_enabled`, sukut false; `GET /finance/shift/settings` → `account_check_enabled`) kassaning HAR faol kartasi uchun majburiy (aks holda 400 «Har karta qoldig'ini tasdiqlang: …»). Rasm majburiy kartada rasm yo'q — 400; farq ≠ 0, AI `mismatch` yoki kiritilgan qiymat rasmdagidan farqli — `comment` majburiy (400). AI natijasi `pending` bo'lsa yopish ~15 s gacha kutadi (`SHIFT_CLOSE_AI_WAIT_MS`, ega chegarasi 30 s), keyin baribir yopiladi.",
   })
   @IsOptional()
   @IsArray()
@@ -539,14 +539,19 @@ export class ShiftCardSettingRequestDto {
   @Matches(/^\d+$/)
   card_id!: string;
 
-  @ApiPropertyOptional({ example: true })
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "Smena yopishda shu kartaning qoldiq skrinshoti majburiy (MAIN kartalarida sukut true — `false` bilan kartama-karta o'chiriladi; `false` — AI ham o'chadi)",
+  })
   @IsOptional()
   @IsBoolean()
   require_photo_on_shift_close?: boolean;
 
   @ApiPropertyOptional({
     example: true,
-    description: 'Faqat rasm talab qilinganda yoqiladi (aks holda 400)',
+    description:
+      'Faqat rasm talab qilinganda yoqiladi (aks holda 400). MAIN kartalarida sukut true',
   })
   @IsOptional()
   @IsBoolean()
@@ -657,30 +662,106 @@ export class ShiftReportSettingsRequestDto {
   format?: 'pdf' | 'xlsx';
 }
 
+/** «Kun tartibi» (2026-11-11) — smenani jadval bo'yicha avtomatik OCHISH (qisman). */
+export class ShiftAutoOpenSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.auto_open.enabled` (sukut false). Yoqiq — belgilangan vaqtda qamrovdagi kassada ochiq smena bo'lmasa tizim uni o'zi ochadi (`opened_by_system: true`, realtime `finance.shift.auto_opened`)",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: ['09:00'],
+    description:
+      "`shift.auto_open.times` — kuniga N marta, Toshkent `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['09:00']. Yopish vaqtlari bilan bir xil vaqt — 400 `SHIFT_SCHEDULE_CONFLICT`",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, { each: true })
+  times?: string[];
+
+  @ApiPropertyOptional({
+    example: 'main',
+    enum: ['main', 'main+branches'],
+    description:
+      '`shift.auto_open.scope`: `main` — faqat asosiy kassa (sukut), `main+branches` — filial kassalari ham',
+  })
+  @IsOptional()
+  @IsIn(['main', 'main+branches'])
+  scope?: 'main' | 'main+branches';
+}
+
+/** «Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi» xabari (qisman). */
+export class ShiftLateAlertSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.late_alert.enabled` (sukut false). Yoqiq — ochish vaqtidan (`auto_open.times`) `grace_min` o'tib kassada smena ochilmagan, yoki yopish vaqtidan (`auto_close.times`) keyin smena hali ochiq bo'lsa superadminlarga xabar; tizimning avtomatik ochishi / yopishi xato bilan tugasa — darhol, sababi bilan. Kassa / smena × slot uchun bir marta",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: 15,
+    description: '`shift.late_alert.grace_min` — 0–180 daqiqa (sukut 15)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(180)
+  grace_min?: number;
+
+  @ApiPropertyOptional({
+    type: () => ShiftReportChannelsRequestDto,
+    description:
+      '`shift.late_alert.channels` — `telegram` / `in_app` (sukut: faqat in_app). Yoqiq bo`lsa kamida bittasi — aks holda 400',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  channels?: ShiftReportChannelsRequestDto;
+}
+
 /** (kiZgTybn) PATCH /finance/shift/settings — FAQAT superadmin. */
 export class UpdateShiftSettingsRequestDto {
   @ApiPropertyOptional({
     example: true,
     description:
-      'Global `shift.account_check.enabled` (sukut false): yoqilsa yopishda har faol karta uchun `accounts[]` majburiy',
+      "ASOSIY (MAIN) kassa: `shift.account_check.enabled` (sukut **true**, BE-A): yoqiq — MAIN smenasini yopishda har faol karta uchun `accounts[]` majburiy (aks holda 400). Filial kassalariga ta'sir qilmaydi — ular uchun `branch_account_check_enabled`",
   })
   @IsOptional()
   @IsBoolean()
   account_check_enabled?: boolean;
 
   @ApiPropertyOptional({
+    example: false,
+    description:
+      "(BE-A) FILIAL kassalari: `shift.account_check.branch_enabled` (sukut **false**): o'chiq — filial smenasini yopishda `accounts[]` ixtiyoriy (avvalgi oqim); yoqiq — filialning har faol kartasi majburiy",
+  })
+  @IsOptional()
+  @IsBoolean()
+  branch_account_check_enabled?: boolean;
+
+  @ApiPropertyOptional({
     example: true,
     description:
-      "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi",
+      "Global `shift.photo.required` (sukut true) — master kalit: o'chiq bo'lsa hech bir kartada rasm majburiy emas; yoqiq — karta bo'yicha `require_photo_on_shift_close` hal qiladi (MAIN kartalarida sukut true, filial kartalarida false)",
   })
   @IsOptional()
   @IsBoolean()
   photo_required?: boolean;
 
   @ApiPropertyOptional({
-    example: false,
+    example: true,
     description:
-      "Global `shift.ai_check.enabled` (sukut false) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi",
+      "Global `shift.ai_check.enabled` (sukut **true**, BE-A) — master kalit: o'chiq bo'lsa AI chaqirilmaydi; yoqiq — karta bo'yicha `ai_check_enabled` hal qiladi (MAIN kartalarida sukut true, filial kartalarida false)",
   })
   @IsOptional()
   @IsBoolean()
@@ -702,6 +783,25 @@ export class UpdateShiftSettingsRequestDto {
   @ValidateNested()
   @Type(() => ShiftAutoCloseSettingsRequestDto)
   auto_close?: ShiftAutoCloseSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftAutoOpenSettingsRequestDto,
+    description: '«Kun tartibi» (2026-11-11) — avtomatik ochish jadvali',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftAutoOpenSettingsRequestDto)
+  auto_open?: ShiftAutoOpenSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftLateAlertSettingsRequestDto,
+    description:
+      '«Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi» superadminlarga',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftLateAlertSettingsRequestDto)
+  late_alert?: ShiftLateAlertSettingsRequestDto;
 
   @ApiPropertyOptional({
     type: () => ShiftReportSettingsRequestDto,
@@ -1181,7 +1281,7 @@ export class MainCashboxSpendRequestDto extends MainCashboxManualRequestDto {
   @ApiPropertyOptional({
     example: '41',
     description:
-      "(T3) Chek qoralamasi ID si. Chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`); boshqa xodimning cheki → 403, ishlatilgan → 409 `RECEIPT_ALREADY_USED`.",
+      "(T3) Chek qoralamasi ID si (`POST /finance/receipts`, `kind=manual_expense`). BE-C (ega 2026-11-10): chek FAQAT karta chiqimida — `type: \"click\"`. Karta: chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd (`type` yo'q / `cash`) yoki `click_to_market`: chek so'ralmaydi (rasm sozlamasi yoqiq bo'lsa ham), `receipt_id` yuborilsa → 400 `RECEIPT_NOT_APPLICABLE` «Bu operatsiyada chek qo'llanmaydi» (pul o'zgarmaydi). Boshqa xodimning cheki → 403 `RECEIPT_NOT_OWNER`, ishlatilgan → 409 `RECEIPT_ALREADY_USED`.",
   })
   @IsOptional()
   @IsString()
@@ -1324,7 +1424,7 @@ export class CashboxCardDetailsRequestDto {
   @ApiPropertyOptional({
     example: true,
     description:
-      'Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi.',
+      'Smena yopishda shu kartaning qoldiq skrinshoti talab qilinadi. FAQAT superadmin (admin → 403). `false` — AI tekshiruvi ham o`chadi. Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false.',
   })
   @IsOptional()
   @IsBoolean()
@@ -1333,7 +1433,7 @@ export class CashboxCardDetailsRequestDto {
   @ApiPropertyOptional({
     example: false,
     description:
-      'Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400).',
+      'Skrinshot AI bilan tekshiriladi. FAQAT superadmin (admin → 403); faqat rasm talab qilinganda (aks holda 400). Yaratishda berilmasa (BE-A): ASOSIY kassa kartasi — true, filial kartasi — false.',
   })
   @IsOptional()
   @IsBoolean()
@@ -1946,7 +2046,8 @@ export class ReceiptSummaryQueryDto {
 
   @ApiPropertyOptional({
     enum: CASHBOX_RECEIPT_FILTER_STATUSES,
-    description: "`none` — chek so'raladigan, lekin cheksiz qator",
+    description:
+      "`none` — chek so'raladigan, lekin cheksiz qator (BE-C: qo'lda chiqimdan faqat karta — `click`; naqd chiqim kirmaydi)",
   })
   @IsOptional()
   @IsIn(Array.from(CASHBOX_RECEIPT_FILTER_STATUSES ?? []))

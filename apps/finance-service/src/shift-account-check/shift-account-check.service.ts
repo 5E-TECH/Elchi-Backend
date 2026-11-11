@@ -11,10 +11,12 @@ import { DataSource, EntityManager, In } from 'typeorm';
 import {
   ActivityLogService,
   Cashbox_type,
+  SHIFT_SCHEDULE_CONFLICT,
   maskCardLikeDigitsKeepingDates,
 } from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxCard } from '../entities/cashbox-card.entity';
+import { DEFAULT_CARD_NAME } from '../cashbox-card/cashbox-card.service';
 import { FinanceSetting } from '../entities/finance-setting.entity';
 import {
   ShiftAccountAiStatus,
@@ -28,25 +30,48 @@ import {
   SHIFT_CHECK_DEFAULTS,
   SHIFT_SETTING_KEYS,
   deriveAiStatus,
+  defaultCardShiftFlags,
   deriveEnteredOk,
+  effectiveShiftCheckSettings,
   isAiEnabled,
   isCommentRequired,
   isPhotoRequired,
   round2,
   summarizeStatuses,
   type AiCheckResult,
+  type ShiftCheckCashboxType,
+  type ShiftCheckGlobalSettings,
   type ShiftCheckSettings,
 } from './shift-account-check.rules';
 import {
   SHIFT_AUTOMATION_KEYS,
+  ShiftScheduleConflictError,
   ShiftSettingsError,
+  applySettingEntries,
+  assertShiftScheduleValid,
   parseAutoClosePatch,
+  parseAutoOpenPatch,
+  parseLateAlertPatch,
   parseReportPatch,
   readAutoCloseSettings,
+  readAutoOpenSettings,
+  readLateAlertSettings,
   readReportSettings,
   type AutoCloseSettings,
+  type AutoOpenSettings,
+  type LateAlertSettings,
   type ReportSettings,
 } from '../shift-auto-close/shift-schedule.rules';
+
+/** `loadAutomationSettings` natijasi — smena jadvali va hisobot. */
+export interface ShiftAutomationSettings {
+  auto_close: AutoCloseSettings;
+  /** «Kun tartibi» (2026-11-11). */
+  auto_open: AutoOpenSettings;
+  /** «Kun tartibi» (2026-11-11). */
+  late_alert: LateAlertSettings;
+  report: ReportSettings;
+}
 
 const MAIN_CASHBOX_USER_ID = '0';
 /**
@@ -138,6 +163,26 @@ const cashboxTypeFor = (cashboxUserId: string): Cashbox_type =>
     ? Cashbox_type.MAIN
     : Cashbox_type.BRANCH;
 
+/** BE-A — sozlama doirasi: MAIN (`'0'`) yoki filial kassasi. */
+const checkCashboxTypeFor = (cashboxUserId: string): ShiftCheckCashboxType =>
+  cashboxUserId === MAIN_CASHBOX_USER_ID ? 'main' : 'branch';
+
+/**
+ * Sozlamalar javobi: `account_check_enabled` — SHU kassa uchun amaldagi
+ * qiymat (yopish oynasi shuni ishlatadi), `main_account_check_enabled` /
+ * `branch_account_check_enabled` — ikkala global kalit (superadmin sahifasi).
+ */
+function settingsView(
+  global: ShiftCheckGlobalSettings,
+  cashboxType: ShiftCheckCashboxType,
+) {
+  return {
+    ...effectiveShiftCheckSettings(global, cashboxType),
+    main_account_check_enabled: global.account_check_enabled,
+    branch_account_check_enabled: global.branch_account_check_enabled,
+  };
+}
+
 /**
  * kiZgTybn — smena yopilishida har karta / hisob raqam qoldig'ini
  * tasdiqlash: qoralama (rasm yuklanganda), AI natijasi (asinxron), yopishda
@@ -159,7 +204,10 @@ export class ShiftAccountCheckService {
 
   // ───────────────────────── sozlamalar ─────────────────────────
 
-  async loadSettings(manager?: EntityManager): Promise<ShiftCheckSettings> {
+  /** Global qiymatlar (`finance_settings`; qator yo'q — kod sukuti). */
+  async loadGlobalSettings(
+    manager?: EntityManager,
+  ): Promise<ShiftCheckGlobalSettings> {
     const repo = (manager ?? this.dataSource.manager).getRepository(
       FinanceSetting,
     );
@@ -179,6 +227,10 @@ export class ShiftAccountCheckService {
         SHIFT_SETTING_KEYS.accountCheckEnabled,
         SHIFT_CHECK_DEFAULTS.account_check_enabled,
       ),
+      branch_account_check_enabled: pick(
+        SHIFT_SETTING_KEYS.branchAccountCheckEnabled,
+        SHIFT_CHECK_DEFAULTS.branch_account_check_enabled,
+      ),
       photo_required: pick(
         SHIFT_SETTING_KEYS.photoRequired,
         SHIFT_CHECK_DEFAULTS.photo_required,
@@ -191,12 +243,34 @@ export class ShiftAccountCheckService {
   }
 
   /**
+   * BE-A — kassa uchun AMALDAGI sozlama: MAIN (`cashbox_user_id = '0'`) —
+   * `shift.account_check.enabled`, filial — `shift.account_check.branch_enabled`;
+   * rasm / AI master kalitlari global. HAR chaqiruv joyi (sozlamalar, rasm
+   * qoralamasi va AI, qo'lda va avtomatik yopish) shu orqali o'qiydi.
+   */
+  async loadSettingsFor(
+    cashboxUserId: string,
+    manager?: EntityManager,
+  ): Promise<ShiftCheckSettings> {
+    return effectiveShiftCheckSettings(
+      await this.loadGlobalSettings(manager),
+      checkCashboxTypeFor(cashboxUserId),
+    );
+  }
+
+  /**
    * (y8Tqm9Ap / gWI4gYkw) Avtomatik yopish jadvali va hisobot yuborish
    * sozlamalari (o'sha `finance_settings` jadvali).
    */
   async loadAutomationSettings(
     manager?: EntityManager,
-  ): Promise<{ auto_close: AutoCloseSettings; report: ReportSettings }> {
+  ): Promise<ShiftAutomationSettings> {
+    return this.automationFromMap(await this.loadAutomationMap(manager));
+  }
+
+  private async loadAutomationMap(
+    manager?: EntityManager,
+  ): Promise<Map<string, unknown>> {
     const rows = await (manager ?? this.dataSource.manager)
       .getRepository(FinanceSetting)
       .find({
@@ -205,11 +279,16 @@ export class ShiftAccountCheckService {
           isDeleted: false,
         },
       });
-    const map = new Map<string, unknown>(
-      rows.map((row) => [row.key, row.value]),
-    );
+    return new Map<string, unknown>(rows.map((row) => [row.key, row.value]));
+  }
+
+  private automationFromMap(
+    map: Map<string, unknown>,
+  ): ShiftAutomationSettings {
     return {
       auto_close: readAutoCloseSettings(map),
+      auto_open: readAutoOpenSettings(map),
+      late_alert: readLateAlertSettings(map),
       report: readReportSettings(map),
     };
   }
@@ -236,6 +315,42 @@ export class ShiftAccountCheckService {
       where: { cashbox_id: cashboxId, isDeleted: false, is_active: true },
       order: { is_default: 'DESC', sort_order: 'ASC', id: 'ASC' },
     });
+  }
+
+  /**
+   * BE-A — MAIN kassada «Asosiy karta» qatori (yo'q bo'lsa) yaratiladi, aks
+   * holda «majburiy» tasdiqlash bo'sh karta ro'yxati bilan o'tib ketadi
+   * (qator avval faqat `GET /finance/cashbox/cards` da yaratilardi). Pul
+   * o'zgarmaydi (balans 0 — hosila). Rasm + AI — MAIN karta sukuti. Filial
+   * kassasiga tegilmaydi. Xato bermaydi: partial unique indekslar
+   * (`UQ_CASHBOX_CARD_DEFAULT` / `UQ_CASHBOX_CARD_NAME`) — `ON CONFLICT DO
+   * NOTHING`.
+   */
+  private async ensureMainDefaultCard(
+    manager: EntityManager,
+    cashbox: Cashbox,
+  ): Promise<void> {
+    if (cashbox.cashbox_type !== Cashbox_type.MAIN) return;
+    const cashboxId = String(cashbox.id);
+    const exists = await manager.exists(CashboxCard, {
+      where: { cashbox_id: cashboxId, is_default: true, isDeleted: false },
+    });
+    if (exists) return;
+    await manager
+      .createQueryBuilder()
+      .insert()
+      .into(CashboxCard)
+      .values({
+        cashbox_id: cashboxId,
+        name: DEFAULT_CARD_NAME,
+        balance: 0,
+        is_default: true,
+        is_active: true,
+        sort_order: 0,
+        ...defaultCardShiftFlags('main'),
+      })
+      .orIgnore()
+      .execute();
   }
 
   /**
@@ -274,19 +389,22 @@ export class ShiftAccountCheckService {
         throw new BadRequestException("cashbox_user_id noto'g'ri");
       }
       const manager = this.dataSource.manager;
-      const settings = await this.loadSettings(manager);
+      const cashboxType = checkCashboxTypeFor(cashboxUserId);
+      const global = await this.loadGlobalSettings(manager);
+      const settings = effectiveShiftCheckSettings(global, cashboxType);
       const cashbox = await this.findCashbox(manager, cashboxUserId);
+      // BE-A: yopish oynasi MAIN «Asosiy karta»sini ham ko'rsin.
+      if (cashbox) await this.ensureMainDefaultCard(manager, cashbox);
       const cards = cashbox
         ? await this.activeCards(manager, String(cashbox.id))
         : [];
       const automation = await this.loadAutomationSettings(manager);
       return successRes(
         {
-          ...settings,
+          ...settingsView(global, cashboxType),
           ...automation,
           cashbox_user_id: cashboxUserId,
-          cashbox_type:
-            cashboxUserId === MAIN_CASHBOX_USER_ID ? 'main' : 'branch',
+          cashbox_type: cashboxType,
           cards: cards.map((card) => ({
             card_id: String(card.id),
             name: card.name,
@@ -314,12 +432,19 @@ export class ShiftAccountCheckService {
   async updateSettings(input: {
     requester_id?: unknown;
     requester_roles?: unknown;
+    /** MAIN kassa (`shift.account_check.enabled`). */
     account_check_enabled?: unknown;
+    /** BE-A — filial kassalari (`shift.account_check.branch_enabled`). */
+    branch_account_check_enabled?: unknown;
     photo_required?: unknown;
     ai_check_enabled?: unknown;
     cards?: unknown;
     /** (y8Tqm9Ap) `{ enabled, times[], scope, warn_before_min }` (qisman). */
     auto_close?: unknown;
+    /** «Kun tartibi» `{ enabled, times[], scope }` (qisman). */
+    auto_open?: unknown;
+    /** «Kun tartibi» `{ enabled, grace_min, channels: {telegram, in_app} }` (qisman). */
+    late_alert?: unknown;
     /** (gWI4gYkw) `{ recipients: {superadmin|couriers|markets: {telegram, in_app}}, format }`. */
     report?: unknown;
   }) {
@@ -336,10 +461,20 @@ export class ShiftAccountCheckService {
         input?.account_check_enabled,
         'account_check_enabled',
       );
+      const branchAccountCheck = parseBool(
+        input?.branch_account_check_enabled,
+        'branch_account_check_enabled',
+      );
       const photo = parseBool(input?.photo_required, 'photo_required');
       const ai = parseBool(input?.ai_check_enabled, 'ai_check_enabled');
       if (accountCheck !== undefined) {
         globals.push([SHIFT_SETTING_KEYS.accountCheckEnabled, accountCheck]);
+      }
+      if (branchAccountCheck !== undefined) {
+        globals.push([
+          SHIFT_SETTING_KEYS.branchAccountCheckEnabled,
+          branchAccountCheck,
+        ]);
       }
       if (photo !== undefined) {
         globals.push([SHIFT_SETTING_KEYS.photoRequired, photo]);
@@ -369,14 +504,40 @@ export class ShiftAccountCheckService {
         };
       });
       // (y8Tqm9Ap / gWI4gYkw) Jadval va hisobot qabul qiluvchilari.
-      const automationBefore = await this.loadAutomationSettings();
+      // «Kun tartibi» (2026-11-11): avtomatik ochish va kechikish xabari.
+      const automationMap = await this.loadAutomationMap();
+      const automationBefore = this.automationFromMap(automationMap);
       const automation: Array<[string, unknown]> = [];
       try {
         automation.push(...parseAutoClosePatch(input?.auto_close));
+        automation.push(...parseAutoOpenPatch(input?.auto_open));
+        automation.push(
+          ...parseLateAlertPatch(
+            input?.late_alert,
+            automationBefore.late_alert,
+          ),
+        );
         automation.push(
           ...parseReportPatch(input?.report, automationBefore.report),
         );
+        if (automation.length) {
+          // PATCH dan KEYINGI jadval: ochish ∩ yopish vaqtlari, ochish
+          // yoqiq-u vaqtsiz, xabar yoqiq-u kanalsiz — 400.
+          assertShiftScheduleValid(
+            this.automationFromMap(
+              applySettingEntries(automationMap, automation),
+            ),
+          );
+        }
       } catch (error) {
+        if (error instanceof ShiftScheduleConflictError) {
+          throw new RpcException({
+            statusCode: 400,
+            message: error.message,
+            code: SHIFT_SCHEDULE_CONFLICT,
+            times: error.times.join(', '),
+          });
+        }
         if (error instanceof ShiftSettingsError) {
           throw new BadRequestException(error.message);
         }
@@ -387,7 +548,7 @@ export class ShiftAccountCheckService {
       }
 
       const before = {
-        ...(await this.loadSettings()),
+        ...(await this.loadGlobalSettings()),
         ...automationBefore,
       };
       const changedCards: Array<Record<string, unknown>> = [];
@@ -440,8 +601,9 @@ export class ShiftAccountCheckService {
           );
         }
       });
+      const globalAfter = await this.loadGlobalSettings();
       const after = {
-        ...(await this.loadSettings()),
+        ...globalAfter,
         ...(await this.loadAutomationSettings()),
       };
       await this.activityLog.log({
@@ -456,8 +618,14 @@ export class ShiftAccountCheckService {
         metadata: { cards: changedCards },
         user_id: requesterId,
       });
+      // Javob doirasi — MAIN (PATCH `account_check_enabled` — MAIN kaliti).
       return successRes(
-        { ...after, cards: changedCards },
+        {
+          ...after,
+          ...settingsView(globalAfter, 'main'),
+          cashbox_type: 'main',
+          cards: changedCards,
+        },
         200,
         'Shift check settings updated',
       );
@@ -556,7 +724,7 @@ export class ShiftAccountCheckService {
           throw new BadRequestException('Smena allaqachon yopilgan');
         }
 
-        const settings = await this.loadSettings(manager);
+        const settings = await this.loadSettingsFor(cashboxUserId, manager);
         const aiEnabled = isAiEnabled(settings, card);
         const balances = await this.systemBalances(manager, cashbox);
         const expected = balances.get(String(card.id)) ?? null;
@@ -815,6 +983,10 @@ export class ShiftAccountCheckService {
    * `closeShift` tranzaksiyasi ICHIDA (smena qatori qulflangan): kartalar
    * qoldig'i snapshot'i, validatsiya (majburiy rasm → 400, farq / AI mos
    * emas → izoh majburiy) va qatorlarni yakunlash. Pul harakati YO'Q.
+   *
+   * BE-A: tasdiqlash shu smena KASSASI bo'yicha — MAIN da sukut yoqiq (har
+   * faol karta qoldig'i + MAIN kartalarida rasm majburiy), filialda sukut
+   * o'chiq (`accounts[]` ixtiyoriy, avvalgi oqim).
    */
   async confirmAtClose(
     manager: EntityManager,
@@ -822,7 +994,10 @@ export class ShiftAccountCheckService {
     rawAccounts: unknown,
     closedBy: string,
   ): Promise<Record<string, unknown> | null> {
-    const settings = await this.loadSettings(manager);
+    const settings = await this.loadSettingsFor(
+      shiftCashboxUserId(shift),
+      manager,
+    );
     const accounts: CloseShiftAccountInput[] = Array.isArray(rawAccounts)
       ? (rawAccounts as CloseShiftAccountInput[])
       : [];
@@ -838,6 +1013,11 @@ export class ShiftAccountCheckService {
         throw new BadRequestException('Smena kassasi topilmadi');
       }
       return null;
+    }
+    // BE-A: MAIN da kartalar qatori hali yaratilmagan bo'lsa ham «Asosiy
+    // karta» majburiy (bo'sh ro'yxat bilan tasdiqlash o'tib ketmasin).
+    if (settings.account_check_enabled) {
+      await this.ensureMainDefaultCard(manager, cashbox);
     }
     const cards = await this.activeCards(manager, String(cashbox.id));
     const cardsById = new Map(cards.map((card) => [String(card.id), card]));
@@ -974,9 +1154,11 @@ export class ShiftAccountCheckService {
    * `entered_balance = NULL`, `difference = NULL`, `ai_status = not_required`,
    * `confirmed_at / confirmed_by = NULL` (tasdiqlanmagan).
    *
-   * Qamrov: tasdiqlash yoqilgan (`shift.account_check.enabled`) bo'lsa —
-   * kassaning HAR faol kartasi (hisobotda «tasdiqlanmagan» bo'lib ko'rinadi);
-   * o'chiq bo'lsa — faqat smenada qoralamasi (rasm yuklangan) bor kartalar.
+   * Qamrov: shu kassa uchun tasdiqlash yoqilgan bo'lsa (MAIN —
+   * `shift.account_check.enabled`, sukut true; filial —
+   * `shift.account_check.branch_enabled`, sukut false) — kassaning HAR faol
+   * kartasi (hisobotda «tasdiqlanmagan» bo'lib ko'rinadi); o'chiq bo'lsa —
+   * faqat smenada qoralamasi (rasm yuklangan) bor kartalar.
    * Qoralamadagi rasm kaliti va AI xom natijasi DALIL sifatida saqlanadi,
    * lekin holat `not_required` — kassir tasdiqlamagan qiymat solishtirilmaydi.
    * PUL HARAKATI YO'Q.
@@ -985,7 +1167,10 @@ export class ShiftAccountCheckService {
     manager: EntityManager,
     shift: Shift,
   ): Promise<Record<string, unknown> | null> {
-    const settings = await this.loadSettings(manager);
+    const settings = await this.loadSettingsFor(
+      shiftCashboxUserId(shift),
+      manager,
+    );
     const cashbox = await this.findCashbox(manager, shiftCashboxUserId(shift));
     if (!cashbox) return null;
     const drafts = await manager.find(ShiftAccountCheck, {
@@ -995,6 +1180,10 @@ export class ShiftAccountCheckService {
     const draftsByCard = new Map(
       drafts.map((row) => [String(row.cashbox_card_id), row]),
     );
+    if (settings.account_check_enabled) {
+      // BE-A: MAIN «Asosiy karta» qatori yo'q bo'lsa — yaratiladi.
+      await this.ensureMainDefaultCard(manager, cashbox);
+    }
     const cards = settings.account_check_enabled
       ? await this.activeCards(manager, String(cashbox.id))
       : drafts.length

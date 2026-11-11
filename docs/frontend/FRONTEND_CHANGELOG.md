@@ -22,6 +22,216 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-11 — Filial kassasi qarzga ishlaydi: HQ filialdan qarzidan ortiq qabul qiladi
+
+Deploy: branch-service + finance-service + api-gateway. **Migratsiya `1716000000217`** (`branch_schema.branches.cashbox_debt_enabled boolean NOT NULL DEFAULT false` — hamma filial o'chiq, backfill yo'q).
+
+- 🆕 `PATCH /branches/:id` — `cashbox_debt_enabled: boolean` (faqat superadmin/admin; boshqa rol 403, boolean emas 400, HQ filialda `true` — 400). `GET /branches/:id` va `GET /branches` javobida ham bor (sukut `false`).
+- ✏️ `POST /finance/cashbox/payment/branch-to-main` — filialda yoqilgan bo'lsa HQ filial kassasidagidan **ortiq** summani qabul qiladi (masalan qarz 4 500 000, qabul 5 000 000): filial kassasi (naqd yoki karta tanlanmagan/Asosiy karta) manfiyga tushadi, ortig'i daftarda `branch_to_hq` qoldig'i — HQ filialga qarzdor; keyingi sotuvlar uni o'zi yopadi. Nomli karta baribir qat'iy (kartadagidan ortiq — 400). O'chiq bo'lsa — avvalgidek **400** «Naqd kassada yetarli mablag' yo'q» / «Karta hisobida yetarli mablag' yo'q».
+- ✏️ Kassa qoldig'i qoidasi: manfiy kassaga **kirim** endi rad etilmaydi (ilgari natija hali manfiy bo'lsa 400 «Naqd kassada yetarli mablag' yo'q» edi) — menejer manfiy filial kassasiga kuryer pulini qabul qila oladi. Chiqim avvalgidek qat'iy.
+- 🆕 `hq_qarzi` (HQ'ning filialga qarzi, ≥ 0): `GET /branches` har filial qatorida, `GET /managers` (menejer qatorida), `GET /finance/cashbox/manager/settlement`, `GET /finance/cashbox/manager/payable-to-hq`, `GET /finance/cashbox/all-info` (menejer) va SA/admin filial kassasi ko'rinishi (`toBranchSettlementFields`). `berilishi_kerak` avvalgidek 0 dan pastga tushmaydi.
+
+**Frontend action items:**
+- 🔧 Filial tafsiloti (superadmin/admin): «Kassa qarzga ishlaydi» kaliti → `PATCH /branches/:id { cashbox_debt_enabled }`.
+- 🔧 HQ «Pul qabul qilish» (filialdan): yoqilgan filialda summa kassadagi bilan cheklanmasin; `hq_qarzi > 0` bo'lsa «HQ qarzi: N» ko'rsatilsin.
+- 🔧 Menejer kassasi: `hq_qarzi > 0` bo'lsa «HQ'dan olinishi kerak: N».
+
+### 2026-11-11 — Menejer: «Marketga to'lov» o'z filial kassasidan va «Marketga o'tkazma» (audit M4)
+
+Deploy: finance-service + api-gateway. **Migratsiya yo'q.** Frontend `712257b2` kutgan kontrakt.
+
+- 🆕 `POST /finance/cashbox/payment/market` endi **menejerga ham** ochiq. Body o'zgarmagan: `{ market_id, amount, payment_method, card_id?, payment_date?, comment? }` + `Idempotency-Key`. Menejer — pul **o'z filial kassasidan** chiqadi (filial JWT / branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Superadmin/admin — avvalgidek HQ asosiy kassasidan.
+  - Filial kassasida yetarli naqd / karta bo'lishi shart: yetmasa **400** («Naqd kassada yetarli mablag' yo'q» / «Karta hisobida yetarli mablag' yo'q»), HQ kassasiga tegilmaydi. Marketga qarzdan oshsa — 400 (avvalgidek).
+  - `card_id` — **filial kassasining** kartasi (boshqa kassa kartasi 403, faqat `click`).
+  - Filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`).
+  - «HQ ga berilishi kerak» filial kassasidagi pul bilan birga X ga kamayadi.
+- ✏️ `POST /finance/cashbox/payment/courier` `payment_method: "click_to_market"` + `market_id` — menejer uchun endi **403 emas**. Filial kassasiga +X va darhol −X (sof 0), kuryer qarzi −X, marketga qarz −X. «Kuryerlardan olinishi kerak» va «HQ ga berilishi kerak» ikkalasi X ga kamayadi — soxta filial qarzi qolmaydi.
+- ⚠️ Bu ikki yangi shakl (filial orqali marketga o'tkazma, filialdan marketga to'lov) **tuzatib / qaytarib bo'lmaydi** (T6): tarix qatorida `correctable.allowed: false`, `reason: "unsupported_type"`.
+
+**Frontend action items:**
+- 🟢 Kontrakt FE kutganidek — o'zgarish shart emas.
+- 🔧 Menejer sahifasida «Marketga to'lov» kartalari ro'yxati — filial kassasining kartalari (`GET /finance/cashbox/cards`, menejerga o'z filiali).
+
+### 2026-11-11 — «Kun tartibi» backend: har kungi yaratish / qabul chegaralari, smenani avtomatik ochish, kechikish xabari
+
+Frontend `bahodir` («Kun tartibi» tabi, `9f44a6b0` / `eae05d7d`) kutgan kontrakt. Deploy: order-service, finance-service, api-gateway, integration-service (`libs/common` o'zgargan — hammasi). **Migratsiya `1716000000216`** (finance `shifts`).
+
+**Buyurtma chegaralari** (`GET|PATCH /orders/intake-settings`):
+- ⚠️ `cutoff_time` (buyurtma YARATISH chegarasi) endi **DOIMIY — har ish kuni takrorlanadi**, superadmin boshqa vaqtga o'zgartirmaguncha yoki `null` bilan olib tashlamaguncha (ega 2026-11-11). Avval faqat joriy ish kuni uchun edi. Eski (2026-11-09) qiymat ham har kungi bo'lib o'qiladi.
+- 🆕 `receive_cutoff_time` — yaratilgan buyurtmalarni QABUL QILISH chegarasi (doimiy). GET'da **har doim** `receive_cutoff_time` (`null` — cheklovsiz), `receive_is_open`, `receive_closes_at`, `receive_reopens_at` (`is_open` / `closes_at` / `reopens_at` bilan bir xil ma'noda) — FE `receiveSupported` shu kalit bo'yicha.
+- 🆕 Qabul yopiq: `POST /orders/receive` va `POST /orders/external/receive-by-scan` → **409** `{ code: "ORDER_RECEIVE_CLOSED", message, reopens_at, receive_cutoff_time }`. `POST /orders/external/receive` — bu tashqi import (buyurtma YARATADI), unga faqat yaratish chegarasi (`ORDER_INTAKE_CLOSED`) amal qiladi.
+- ✏️ `PATCH` bir nechta maydonni birga oladi: `{ cutoff_time?, receive_cutoff_time?, day_change_time? }`; bittasi noto'g'ri bo'lsa hech biri yozilmaydi (400); o'zgarmagan qiymat yozilmaydi va jurnalga tushmaydi. Activity log: `order.intake_cutoff_changed`, `order.receive_cutoff_changed`, `order.day_change_time_changed`.
+
+**Smena jadvali** (`GET|PATCH /finance/shift/settings`):
+- 🆕 `auto_open: { enabled, times[], scope }` (sukut `false`, `['09:00']`, `main`; qoidalar `auto_close` bilan bir xil — 1–12 vaqt, `main | main+branches`). Slot kelganda qamrovdagi kassada OCHIQ smena bo'lmasa tizim o'zi ochadi: `opened_by: null`, **`opened_by_system: true`** (smena qatorlarida yangi maydon), ochilish qoldig'i — kassaning jonli qoldig'i. Ochiq smena bor — hech narsa. Tizim smenasini kassir odatdagidek yopadi (`POST /finance/shift/close`).
+- 🆕 `late_alert: { enabled, grace_min, channels: { telegram, in_app } }` (sukut `false`, `15`, faqat `in_app`): ochish vaqtidan (`auto_open.times`) `grace_min` o'tib kassada smena ochilmagan, yoki yopish vaqtidan (`auto_close.times`) keyin smena hali ochiq — **superadminlarga** «Smena vaqtida ochilmadi / yopilmadi» (bildirishnoma turi `finance.shift_late`). Vaqtlar jadvalnikidan olinadi — avtomatika o'chiq bo'lsa ham. Tizimning avtomatik ochishi / yopishi xato bilan tugasa — darhol, sababi bilan. Kassa / smena × slot uchun bir marta.
+- 🆕 Tekshiruvlar (400): ochish va yopish ro'yxatida bir xil vaqt → `code: "SHIFT_SCHEDULE_CONFLICT"`, `times: "09:00, 23:00"`; `auto_open.enabled` + vaqtsiz; `late_alert.enabled` + kanalsiz; `grace_min` 0–180.
+- 🆕 Realtime `finance.shift.auto_opened` — payload `{ shift_id, cashbox_user_id, cashbox_type, branch_id, status: 'open', open_reason: 'auto', opened_at }`; nishon — `finance.shift.auto_closed` bilan bir xil (MAIN: superadmin/admin/registrator; filial: o'sha filial menejerlari).
+- Activity log: `finance.shift_auto_opened`.
+
+**Frontend action items:**
+- 🟢 Kontrakt FE kutganidek — o'zgarish shart emas.
+- 🔧 Kechikish xabari ochish/yopish vaqtlarini avtomatika O'CHIQ bo'lsa ham ishlatadi — «Kechikish haqida xabar» kartasi izohida buni aytish mumkin.
+- 🟢 Smena tarixida `opened_by_system: true` — «Avtomatik ochildi» belgisi uchun.
+
+### 2026-11-11 — Operator dashboardi: o'z statistikasi + registrator operator emas
+
+Deploy: analytics-service + order-service + api-gateway. **Migratsiya yo'q.** Kontrakt (maydonlar) o'zgarmagan.
+
+- ✏️ `GET /analytics/dashboard` — **market_operator** uchun `myStat` (jami / sotilgan / bekor / jarayonda / sof
+  foyda / foiz va oldingi davr solishtiruvi) endi FAQAT o'z buyurtmalari: `orders.operator_id` = operator (o'zi
+  yaratgani va market/registrator uni tanlagani; «Top operatorlar» va komissiya bilan AYNI atribut), o'z marketi
+  doirasida. Ilgari butun market raqamlari edi (ega 2026-11-11). `markets`, `topMarkets`, `topOperators` —
+  o'zgarmagan (market bo'yicha; ega: ikkala reyting ham qolsin). Market roli dashboardi o'zgarmagan.
+  🔧 FE: operator sahifasida «Top operatorlar» o'rtacha belgisi `myStat.successRate` emas — o'z marketi qatori
+  (`markets[]`) foizi bo'lsin (endi `myStat` operatorniki).
+- ✏️ `POST /orders` (va AI / bot yo'llari) — **registrator** «Operator» tanlamasa buyurtma OPERATORSIZ:
+  `operator_id = null`, `operator` matni uning ismi bilan to'ldirilmaydi (ilgari registratorning o'zi operator
+  bo'lib yozilardi). Tanlasa — tanlangan operator (o'zgarmagan). Market operatori — avvalgidek o'zi.
+  🟢 FE o'zgarishi shart emas (forma allaqachon registratorga tanlov ko'rsatadi).
+
+### 2026-11-10 — Smena yopish: ASOSIY kassada karta qoldig'i + skrinshot + AI sukut bo'yicha MAJBURIY (BE-A)
+
+Ega qarori (2026-11-10): «majburiy, superadmin kartama-karta o'chira oladi», «filiallarga default o'chiq, faqat
+asosiy kassaga», «darhol yoqilsin», AI ham «Ha, yoqilsin». Deploy: finance-service + api-gateway. **Migratsiya 215**
+(`ShiftCheckMainDefaults`). `openapi.json` yangilandi.
+
+- [2026-11-10] ⚠️ [finance] — **`POST /finance/shift/close` (ASOSIY kassa smenasi)**: endi sukut bo'yicha
+  `accounts[]` kassaning **HAR faol kartasi** uchun majburiy («Asosiy karta» ham): `{ card_id, entered_balance,
+  comment? }`. Rasm talab qilingan kartada (`GET /finance/shift/settings` → `cards[].photo_required: true`; MAIN
+  kartalarida sukut — hammasi) skrinshot yopishdan OLDIN `POST /finance/shift/account-photo` (multipart: `card_id`,
+  `photo`, ixtiyoriy `entered_balance`, `comment`) bilan yuklanadi. Xatolar (400, smena ochiq qoladi; matnlar
+  o'zgarmagan):
+  - karta tushib qolgan — `Har karta qoldig'ini tasdiqlang: Asosiy karta, Humo` (yetishmagan kartalar nomi, vergul
+    bilan);
+  - rasm yo'q — `«Humo»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang`;
+  - farq ≠ 0 / AI `mismatch` / kiritilgan ≠ rasmdagi — `«Humo»: farq bor yoki AI natijasi mos emas — izoh majburiy`;
+  - begona / takror karta — `accounts[0]: karta bu smena kassasiga tegishli emas` / `accounts[1]: karta takrorlangan`.
+  AI natijasi hali `pending` bo'lsa yopish ~15 s kutadi va baribir yopiladi (natija keyin realtime
+  `finance.shift.account_checked` bilan keladi). Muvaffaqiyatli javobda avvalgidek `data.accounts_check`
+  (`total`, `match`, `mismatch`, `pending`, …, `accounts[]`).
+- [2026-11-10] 🟢 [finance] — **Filial smenasi o'zgarmaydi**: filial kaliti sukut o'chiq — `accounts[]` ixtiyoriy,
+  filial kartalarida rasm / AI sukut o'chiq. ⚠️ Rasm / AI master kalitlari GLOBAL va migratsiya 215 ularni yoqadi:
+  superadmin avval rasm / AI bayrog'ini yoqib qo'ygan filial kartalarida (`require_photo_on_shift_close` /
+  `ai_check_enabled: true`) deploydan keyin AI ishlay boshlaydi (master avval o'chiq bo'lsa — rasm ham). Bunday karta
+  `accounts[]` da yuborilsa rasm talab qilinadi, AI `pending` da yopish ~15 s kutadi, AI `mismatch` bo'lsa izoh
+  majburiy (400). Kerak bo'lmasa superadmin kartama-karta o'chiradi: `PATCH /finance/shift/settings`
+  `cards: [{ card_id, require_photo_on_shift_close: false }]`. Avto-yopishda: MAIN — har faol karta «tasdiqlanmagan»
+  snapshot bilan yoziladi, filial — faqat rasm yuklangan kartalar (avvalgidek).
+- [2026-11-10] ✏️ [gateway, finance] — **`GET /finance/shift/settings?cashbox_user_id=`** javobi endi so'ralgan
+  KASSA uchun amaldagi qiymatni beradi va ikkala tasdiqlash kalitini alohida ko'rsatadi:
+  ```ts
+  {
+    account_check_enabled: boolean;        // SHU kassa uchun (yopish oynasi shuni ishlatadi): MAIN sukut true, filial sukut false
+    main_account_check_enabled: boolean;   // 🆕 `shift.account_check.enabled` (ASOSIY kassa), sukut true
+    branch_account_check_enabled: boolean; // 🆕 `shift.account_check.branch_enabled` (filiallar), sukut false
+    photo_required: boolean;               // global master kalit, sukut true
+    ai_check_enabled: boolean;             // global master kalit, sukut endi TRUE (avval false)
+    auto_close: {...}; report: {...};      // o'zgarmagan
+    cashbox_user_id: string; cashbox_type: 'main' | 'branch';
+    cards: Array<{ card_id, name, kind, bank_name, last4, is_default,
+      require_photo_on_shift_close: boolean; ai_check_enabled: boolean;   // karta bayroqlari
+      photo_required: boolean; ai_enabled: boolean }>;                    // hisoblangan (master && karta)
+  }
+  ```
+- [2026-11-10] ✏️ [gateway, finance] — **`PATCH /finance/shift/settings`** (faqat SUPERADMIN, boshqa rol — 403) yangi
+  ixtiyoriy maydon **`branch_account_check_enabled: boolean`** (filial kassalari kaliti). `account_check_enabled` —
+  endi faqat **ASOSIY** kassa kaliti. Boolean bo'lmagan qiymat — 400. Karta bo'yicha o'chirish avvalgidek:
+  `cards: [{ card_id, require_photo_on_shift_close: false }]` (rasm o'chsa AI ham o'chadi; AI rasmsiz yoqilsa — 400
+  `AI tekshiruvi faqat smena yopishda qoldiq rasmi talab qilinganda yoqiladi`). Javob `data`: `account_check_enabled`
+  (ASOSIY), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`,
+  `auto_close`, `report`, `cashbox_type: 'main'`, `cards: [{ card_id, old, new }]` (o'zgargan kartalar).
+- [2026-11-10] ✏️ [finance] — **Karta sukutlari**: `POST /finance/cashbox/cards` da `require_photo_on_shift_close` /
+  `ai_check_enabled` berilmasa — ASOSIY kassa kartasi **true / true**, filial kartasi (`branch_id`) **false / false**
+  (admin ham yarata oladi — bayroq yubormasa 403 yo'q). Berilgani shu sukut ustiga qo'llanadi (faqat superadmin):
+  MAIN'da `ai_check_enabled: false` — rasm qoladi, AI o'chiq; `require_photo_on_shift_close: false` — ikkalasi o'chiq.
+  MAIN «Asosiy karta» ham true / true. Uning qatori (yo'q bo'lsa) birinchi `GET /finance/cashbox/cards`,
+  `GET /finance/shift/settings` (`cashbox_user_id='0'`), MAIN smenasini yopish yoki avto-yopishda yaratiladi —
+  kartalari hali yaratilmagan yangi bazada ham MAIN yopishda «Asosiy karta» majburiy (`Har karta qoldig'ini
+  tasdiqlang: Asosiy karta`). Balans 0 (hosila) — pul o'zgarmaydi. Filial kassasida bunday qator yaratilmaydi.
+  `PATCH /finance/cashbox/cards/:id` o'zgarmagan — superadmin MAIN kartasini o'chiradi.
+- [2026-11-10] 🟢 [ops] — **Migratsiya 215 deploy paytida**: `shift.account_check.enabled`, `shift.photo.required`,
+  `shift.ai_check.enabled` = `true` (superadmin avval o'chirgan bo'lsa ham USTIGA yoziladi — «darhol yoqilsin»),
+  `shift.account_check.branch_enabled` = `false` (faqat qator yo'q bo'lsa), ASOSIY kassaning barcha o'chirilmagan
+  kartalarida (arxivlanganlar ham) rasm + AI yoqiladi. Filial kartalarining bayroqlari o'zgarmaydi, lekin rasm / AI
+  master kalitlari global — superadmin avval rasm / AI yoqqan filial kartalarida ular deploydan keyin ishlay
+  boshlaydi (AI chaqiruvi pullik; o'chirish — `PATCH /finance/shift/settings` `cards[]`); pul / balanslar o'zgarmaydi.
+  ⚠️ Deploy paytida **ochiq turgan MAIN smenasi** ham yopishda har karta qoldig'i + rasmini talab qiladi. AI master
+  yoqiq — har MAIN skrinshot AI'ga yuboriladi (`AI_DAILY_USD_CAP` ichida). Qaytarish: superadmin
+  `PATCH /finance/shift/settings` bilan global yoki kartama-karta o'chiradi. down() — `account_check` / `ai_check`
+  `false`, filial kaliti o'chadi; karta bayroqlari qaytarilmaydi (qaysini migratsiya yoqqani saqlanmaydi).
+  ⚠️ **Eski kod + yangi DB**: BE-A gacha bo'lgan finance-service `shift.account_check.enabled` ni HAMMA kassaga
+  (filiallarga ham) qo'llaydi. Migratsiya 215 dan keyin eski kod ishlasa — deploy oralig'ida (migration-runner
+  tugagan, finance-service hali almashmagan) yoki kod qaytarilganda (deploy.yml `rollback()` DB'ni qaytarmaydi) —
+  filial smenasi `accounts[]` siz yopilsa 400 `Har karta qoldig'ini tasdiqlang: …` oladi. Shuning uchun kodni
+  qaytarish `npm run migration:revert` (215 down() — `account_check` / `ai_check` = `false`) bilan birga qilinsin
+  yoki undan OLDIN superadmin `PATCH /finance/shift/settings { account_check_enabled: false }` yuborsin (bu MAIN
+  talabini ham o'chiradi). Deploy oralig'idagi filial yopishlari shu 400 ni olishi mumkin — qayta urinish yetarli.
+
+Frontend action items:
+- 🔧 MAIN «Smenani yopish» oynasi: `GET /finance/shift/settings` (`cashbox_user_id='0'`) dan `account_check_enabled`
+  va `cards[]` ni oling; `true` bo'lsa HAR karta uchun qoldiq maydoni majburiy, `cards[].photo_required: true` kartada
+  skrinshot yuklash (`POST /finance/shift/account-photo`) majburiy — yuklanmaguncha «Yopish» tugmasi o'chiq. AI holati
+  (`pending` → realtime `finance.shift.account_checked`) va izoh maydoni (`comment_required`) avvalgidek. 400 matnini
+  foydalanuvchiga to'g'ridan-to'g'ri ko'rsating.
+- 🔧 Superadmin «Smena sozlamalari»: «Asosiy kassa — qoldiq tasdiqlash» (`account_check_enabled` /
+  `main_account_check_enabled`) va yangi «Filiallar — qoldiq tasdiqlash» (`branch_account_check_enabled`) — ikki
+  alohida switch; karta ro'yxatida rasm / AI switch'lari (MAIN'da hammasi yoqiq bo'lib keladi).
+- 🟢 Filial menejeri yopish oynasi o'zgarmaydi (`account_check_enabled: false`, kartalarda sukut
+  `photo_required: false`; superadmin bayroq qo'ygan filial kartasida `cards[].photo_required` / `ai_enabled` true
+  bo'lishi mumkin — oyna shu maydonlarga qarasin). Filial UI'si hozircha shart emas.
+
+### 2026-11-10 — Kassa: qo'lda chiqim cheki faqat karta (`click`) chiqimida — naqd chiqimda chek yo'q
+
+Deploy: finance-service + api-gateway (+ libs/common; ai-service — faqat AI yordamchi tool tavsifi, ixtiyoriy).
+**Migratsiya yo'q.** `openapi.json` yangilandi. Ega qarori 2026-11-10 («faqat karta chiqimida») — qo'lda chiqim
+uchun 2026-10-29 qarorining («har qanday kategoriyali chiqimda chek») o'rniga. HQ'ga o'tkazmalar (kuryer → HQ,
+filial → HQ) qoidasi **o'zgarmadi** (avvalgidek faqat `click`).
+
+> **Deploy tartibi: FE bilan BIRGA chiqarilsin.** Eski FE (T3, 2026-10-30) naqd chiqimga ham chek yuklab
+> `receipt_id` yuboradi → yangi backend 400 `RECEIPT_NOT_APPLICABLE` (naqd chiqim o'tmaydi). Yangi FE naqdda
+> `receipt_id` yubormaydi → eski backend 400 `RECEIPT_REQUIRED`. Birga chiqarib bo'lmasa: superadmin birinchi
+> deploydan OLDIN `PATCH /finance/receipt-settings` `{ "manual_expense": { "photo_required": false } }` (AI ham
+> o'chadi; `manual_expense` yuklash → 400 `RECEIPT_DISABLED`, yangi `receipt_id` olinmaydi), ikkala deploy
+> chiqqach avvalgi qiymatlarni qayta yoqadi (sukut: `{ "manual_expense": { "photo_required": true,
+> "ai_enabled": true } }`). O'chiq paytda karta chiqimida ham chek so'ralmaydi va AI tahlili bo'lmaydi. Xuddi shu
+> eslatma PR / deploy ro'yxatida ham bo'lsin.
+
+- [2026-11-10] ⚠️ [gateway, finance] — **`PATCH /finance/cashbox/spend`**: chek endi **faqat karta chiqimida**
+  (`type: "click"`).
+  - **Karta (`click`)** — avvalgidek: `GET /finance/receipt-settings` → `manual_expense.photo_required: true` bo'lsa
+    `receipt_id` majburiy (yo'q → 400 `RECEIPT_REQUIRED` «Chek rasmini yuklang»), chek bog'lanadi, AI tahlili
+    (`data.receipt: { id, ai_status }`). Boshqa xatolar o'zgarmagan (`RECEIPT_NOT_FOUND` 400,
+    `RECEIPT_NOT_OWNER` 403, `RECEIPT_KIND_MISMATCH` 400, `RECEIPT_ALREADY_USED` 409).
+  - **Naqd** (`type: "cash"` yoki `type` yo'q — sukut naqd) va `type: "click_to_market"` — chek **so'ralmaydi**,
+    `photo_required` yoqiq bo'lsa ham: `receipt_id` siz → 200, `data.receipt: null` (`RECEIPT_REQUIRED` yo'q).
+  - Naqd / `click_to_market` + `receipt_id` → **400** `{ code: "RECEIPT_NOT_APPLICABLE", message: "Bu operatsiyada
+    chek qo'llanmaydi" }` (HQ'ga naqd o'tkazma bilan AYNI kod va matn). Pul, kassa tarixi, P&L yozuvi va jurnal
+    yozilmaydi; chek qoralama (`draft`) holatida qoladi — 24 soat ichida karta chiqimiga biriktirish mumkin.
+  - Menejer (filial kassasi) chiqimiga ham xuddi shu qoida. Takroriy `Idempotency-Key` — asl natija (naqdda
+    `receipt: null`).
+- [2026-11-10] ✏️ [finance] — **«Chek yo'q»** (`GET /finance/history?receipt_status=none`) va
+  **`GET /finance/receipts/summary`** `counts.none` (shuningdek `by_branch[].counts.none`,
+  `by_category[].counts.none`): qo'lda chiqim cheksiz qator sifatida **faqat karta (`click`) bilan to'langan
+  bo'lsa** sanaladi. Naqd qo'lda chiqim (avvalgi naqd chiqimlar ham) endi `none` ga **kirmaydi** — `counts.none`
+  kamayishi mumkin. HQ'ga o'tkazmalar qoidasi o'zgarmagan (MAIN'ga `click` kuryer / filial o'tkazmasi).
+  Faqat **kutilish** o'zgardi: eski naqd chiqimga ilgari bog'langan chek o'z AI holati bo'yicha
+  (`receipt_status=match|mismatch|…`, `counts.match` …) va tarix qatorining `receipt` blokida avvalgidek ko'rinadi.
+  `counts.none` = `GET /finance/history?receipt_status=none` jami (shu davrda) — avvalgidek bir xil predikat.
+- [2026-11-10] 🟢 [gateway] — `POST /finance/receipts` o'zgarmagan (`kind: "manual_expense"` yuklash sozlama
+  bo'yicha), lekin bunday chek faqat karta chiqimiga biriktiriladi.
+
+→ **Frontendda:**
+
+- 🔧 «Chiqim» (qo'lda chiqim) formasida chek yuklash blokini **faqat `type === "click"` (karta)** tanlanganda
+  ko'rsating. Naqd tanlanganda blokni yashiring / o'chiring, yuklangan qoralamani unuting va so'rovga **`receipt_id`
+  yubormang** (aks holda 400 `RECEIPT_NOT_APPLICABLE`). To'lov usuli karta → naqdga o'zgartirilsa `receipt_id` ni
+  tozalang.
+- 🔧 «Chek majburiy» belgisi / tekshiruvi (`manual_expense.photo_required`) — faqat karta chiqimida; naqd chiqimni
+  chek yo'qligi uchun bloklamang.
+- 🟢 `RECEIPT_NOT_APPLICABLE` — `code` bo'yicha xabar (matn backenddan). «Chek yo'q» filtri / xulosa soni — o'zgarish
+  shart emas (backend hisoblaydi), faqat yorliq yoki tooltip bo'lsa: «karta chiqimi va HQ'ga click o'tkazma».
+
 ### 2026-11-11 — Kassa kartasini o'chirish (qoldiq avval ko'chiriladi) — cards1111
 
 Deploy: finance-service + api-gateway. Migratsiya YO'Q (soft delete — mavjud `is_deleted`). `openapi.json`

@@ -10,6 +10,10 @@ import request from 'supertest';
 import { AllExceptionsFilter, RpcExceptionFilter } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { FinanceGatewayController } from './finance-gateway.controller';
+import { CloseShiftRequestDto } from './dto/finance.swagger.dto';
+
+/** @nestjs/swagger `DECORATORS.API_MODEL_PROPERTIES` (paket chuqur importga ruxsat bermaydi). */
+const API_MODEL_PROPERTIES = 'swagger/apiModelProperties';
 
 /**
  * kiZgTybn — smena yopishda karta qoldig'i:
@@ -360,6 +364,37 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
     );
   });
 
+  it('BE-A: PATCH settings — branch_account_check_enabled uzatiladi; boolean emas — 400', async () => {
+    finance.send.mockImplementation(() => of({ statusCode: 200, data: {} }));
+    const bad = await request(http())
+      .patch('/finance/shift/settings')
+      .set('x-test-role', 'superadmin')
+      .send({ branch_account_check_enabled: 'ha' });
+    expect(bad.status).toBe(400);
+    expect(cmd(finance.send, 'finance.shift.settings.update')).toHaveLength(0);
+    const denied = await request(http())
+      .patch('/finance/shift/settings')
+      .set('x-test-role', 'admin')
+      .send({ branch_account_check_enabled: true });
+    expect(denied.status).toBe(403);
+    const ok = await request(http())
+      .patch('/finance/shift/settings')
+      .set('x-test-role', 'superadmin')
+      .send({
+        branch_account_check_enabled: true,
+        account_check_enabled: true,
+      });
+    expect(ok.status).toBe(200);
+    const [[, payload]] = cmd(finance.send, 'finance.shift.settings.update');
+    expect(payload).toEqual(
+      expect.objectContaining({
+        branch_account_check_enabled: true,
+        account_check_enabled: true,
+        requester_roles: ['superadmin'],
+      }),
+    );
+  });
+
   it('GET settings — menejer faqat o‘z filiali (boshqasi 403)', async () => {
     finance.send.mockImplementation(() => of({ statusCode: 200, data: {} }));
     const own = await request(http())
@@ -456,5 +491,19 @@ describe('kiZgTybn — gateway: smena karta qoldig‘i rasmi, sozlamalar, hisobo
     expect(payload.accounts).toEqual([
       { card_id: '3', entered_balance: 100000, comment: 'ok' },
     ]);
+  });
+
+  it('BE-A: Swagger accounts — AI pending kutish ~15 s (finance sukuti), «30 s gacha kutadi» emas', () => {
+    // finance `DEFAULT_CLOSE_WAIT_MS = 15_000` (SHIFT_CLOSE_AI_WAIT_MS); MAIN
+    // da AI sukut yoqiq — har MAIN yopishga ta'sir qiladi, FE shunga qaraydi.
+    const meta = Reflect.getMetadata(
+      API_MODEL_PROPERTIES,
+      CloseShiftRequestDto.prototype,
+      'accounts',
+    ) as { description?: string };
+    expect(meta.description).toContain(
+      "AI natijasi `pending` bo'lsa yopish ~15 s gacha kutadi (`SHIFT_CLOSE_AI_WAIT_MS`, ega chegarasi 30 s)",
+    );
+    expect(meta.description).not.toContain('yopish 30 s gacha kutadi');
   });
 });

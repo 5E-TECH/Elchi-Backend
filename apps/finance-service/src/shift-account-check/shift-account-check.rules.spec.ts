@@ -1,10 +1,13 @@
 import {
+  defaultCardShiftFlags,
   deriveAiStatus,
   deriveEnteredOk,
+  effectiveShiftCheckSettings,
   isAiEnabled,
   isCommentRequired,
   isPhotoRequired,
   SHIFT_CHECK_DEFAULTS,
+  SHIFT_SETTING_KEYS,
 } from './shift-account-check.rules';
 
 /** kiZgTybn — AI holati va izoh majburiyligi qoidalari. */
@@ -82,15 +85,77 @@ describe('shift-account-check rules (kiZgTybn)', () => {
     ).toBe(true);
   });
 
-  it('global master kalitlar × karta bayroqlari (sukut: AI o‘chiq)', () => {
+  it('global master kalitlar × karta bayroqlari (BE-A sukut: rasm va AI yoqiq)', () => {
     const card = { require_photo_on_shift_close: true, ai_check_enabled: true };
     expect(isPhotoRequired(SHIFT_CHECK_DEFAULTS, card)).toBe(true);
-    expect(isAiEnabled(SHIFT_CHECK_DEFAULTS, card)).toBe(false);
+    expect(isAiEnabled(SHIFT_CHECK_DEFAULTS, card)).toBe(true);
     expect(
-      isAiEnabled({ ...SHIFT_CHECK_DEFAULTS, ai_check_enabled: true }, card),
-    ).toBe(true);
+      isAiEnabled({ ...SHIFT_CHECK_DEFAULTS, ai_check_enabled: false }, card),
+    ).toBe(false);
     expect(
       isPhotoRequired({ ...SHIFT_CHECK_DEFAULTS, photo_required: false }, card),
     ).toBe(false);
+    // Karta bayrog'i o'chiq (filial kartasi sukuti) — hech narsa majburiy emas.
+    const off = {
+      require_photo_on_shift_close: false,
+      ai_check_enabled: false,
+    };
+    expect(isPhotoRequired(SHIFT_CHECK_DEFAULTS, off)).toBe(false);
+    expect(isAiEnabled(SHIFT_CHECK_DEFAULTS, off)).toBe(false);
+  });
+
+  it('BE-A sukutlar: MAIN — tasdiqlash yoqiq, filial — o‘chiq; rasm / AI master yoqiq', () => {
+    expect(SHIFT_CHECK_DEFAULTS).toEqual({
+      account_check_enabled: true,
+      branch_account_check_enabled: false,
+      photo_required: true,
+      ai_check_enabled: true,
+    });
+    expect(SHIFT_SETTING_KEYS).toEqual({
+      accountCheckEnabled: 'shift.account_check.enabled',
+      branchAccountCheckEnabled: 'shift.account_check.branch_enabled',
+      photoRequired: 'shift.photo.required',
+      aiCheckEnabled: 'shift.ai_check.enabled',
+    });
+  });
+
+  it('BE-A amaldagi sozlama: MAIN — asosiy kalit, filial — filial kaliti; master kalitlar umumiy', () => {
+    expect(effectiveShiftCheckSettings(SHIFT_CHECK_DEFAULTS, 'main')).toEqual({
+      account_check_enabled: true,
+      photo_required: true,
+      ai_check_enabled: true,
+    });
+    expect(effectiveShiftCheckSettings(SHIFT_CHECK_DEFAULTS, 'branch')).toEqual(
+      {
+        account_check_enabled: false,
+        photo_required: true,
+        ai_check_enabled: true,
+      },
+    );
+    const flipped = {
+      account_check_enabled: false,
+      branch_account_check_enabled: true,
+      photo_required: false,
+      ai_check_enabled: false,
+    };
+    expect(effectiveShiftCheckSettings(flipped, 'main')).toEqual({
+      account_check_enabled: false,
+      photo_required: false,
+      ai_check_enabled: false,
+    });
+    expect(
+      effectiveShiftCheckSettings(flipped, 'branch').account_check_enabled,
+    ).toBe(true);
+  });
+
+  it('BE-A yangi karta sukuti: MAIN — rasm + AI, filial — o‘chiq', () => {
+    expect(defaultCardShiftFlags('main')).toEqual({
+      require_photo_on_shift_close: true,
+      ai_check_enabled: true,
+    });
+    expect(defaultCardShiftFlags('branch')).toEqual({
+      require_photo_on_shift_close: false,
+      ai_check_enabled: false,
+    });
   });
 });

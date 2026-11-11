@@ -125,6 +125,30 @@ describe('OrderGatewayController — bugungi qabul vaqti (HTTP)', () => {
     });
   });
 
+  it('PATCH «Kun tartibi» — uchala maydon birga uzatiladi', async () => {
+    await request(http()).patch('/orders/intake-settings').send({
+      cutoff_time: '10:00',
+      receive_cutoff_time: '16:00',
+      day_change_time: '00:00',
+    });
+    expect(calls()[0][1]).toEqual({
+      cutoff_time: '10:00',
+      receive_cutoff_time: '16:00',
+      day_change_time: '00:00',
+      requester: { id: '1', roles: ['superadmin'] },
+    });
+  });
+
+  it('PATCH `receive_cutoff_time: null` — qabul chegarasini olib tashlash', async () => {
+    await request(http())
+      .patch('/orders/intake-settings')
+      .send({ receive_cutoff_time: null });
+    expect(calls()[0][1]).toEqual({
+      receive_cutoff_time: null,
+      requester: { id: '1', roles: ['superadmin'] },
+    });
+  });
+
   it('PATCH — yuborilmagan maydon uzatilmaydi (o`zgarmaydi)', async () => {
     await request(http())
       .patch('/orders/intake-settings')
@@ -149,6 +173,7 @@ describe('OrderGatewayController — bugungi qabul vaqti (HTTP)', () => {
     [{ cutoff_time: '9:00' }],
     [{ cutoff_time: 600 }],
     [{ day_change_time: 'kech' }],
+    [{ receive_cutoff_time: '16:60' }],
     [{ cutoff_time: '10:00', extra: true }],
   ])('PATCH yaroqsiz tana %p — 400', async (body) => {
     const res = await request(http())

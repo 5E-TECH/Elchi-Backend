@@ -171,6 +171,7 @@ export function createMemoryBranchService() {
       // Entity sukutlari (branch.entity.ts).
       ownership: 'owned',
       per_order_share: 0,
+      cashbox_debt_enabled: false,
     }),
     'branch_schema.branches',
   );

@@ -565,6 +565,9 @@ describePg(
       };
 
       const closeManually = async () => {
+        // BE-A: MAIN tasdiqlash sukut yoqiq (har karta qoldig'i majburiy) —
+        // bu yerda faqat hisobot yuborish tekshiriladi, shuning uchun o'chiq.
+        await settings({ account_check_enabled: false });
         const res = (await service.closeShift({
           closed_by: '25',
           closing_balance_cash: 1_000_000,

@@ -162,8 +162,12 @@ export class OrderServiceController {
   ) {}
 
   /**
-   * Yangi buyurtma yaratadigan handlerlar uchun darvoza: bugungi qabul yopiq
-   * bo'lsa 409 `ORDER_INTAKE_CLOSED`, handler (va idempotency) ISHLAMAYDI.
+   * «Kun tartibi» darvozasi:
+   *  - `create` — yangi buyurtma yaratadigan handlerlar: yaratish chegarasi
+   *    o'tgan bo'lsa 409 `ORDER_INTAKE_CLOSED`;
+   *  - `receive` — HQ qabuli (`order.receive`, `order.receive_by_scan`):
+   *    qabul qilish chegarasi o'tgan bo'lsa 409 `ORDER_RECEIVE_CLOSED`.
+   * Rad etilsa handler (va idempotency) ISHLAMAYDI.
    *
    * ⚠️ IDEMPOTENCY'DAN OLDIN: `executeIdempotent` ichida rad etilsa kalit
    * `failed` bo'lib keshlanardi — hamkorning deterministik `request_id` si
@@ -173,11 +177,16 @@ export class OrderServiceController {
   private async guardOrderIntake<T>(
     context: RmqContext,
     run: () => Promise<T>,
+    gate: 'create' | 'receive' = 'create',
   ): Promise<T> {
     if (!this.orderIntake) return run();
     let rejection: Error | null = null;
     try {
-      await this.orderIntake.assertOpen();
+      if (gate === 'receive') {
+        await this.orderIntake.assertReceiveOpen();
+      } else {
+        await this.orderIntake.assertOpen();
+      }
     } catch (error) {
       // 409 — RpcException; DB xatosi — oddiy Error (executeAndAck nack qiladi).
       rejection =
@@ -751,11 +760,17 @@ export class OrderServiceController {
     data: { tokens: string[]; requester?: { id?: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.lifecycleService.receiveExternalByScan({
-        tokens: data?.tokens ?? [],
-        requester: data?.requester,
-      }),
+    // «Kun tartibi»: qabul qilish chegarasi o'tgan — 409 ORDER_RECEIVE_CLOSED.
+    return this.guardOrderIntake(
+      context,
+      () =>
+        this.executeAndAck(context, () =>
+          this.lifecycleService.receiveExternalByScan({
+            tokens: data?.tokens ?? [],
+            requester: data?.requester,
+          }),
+        ),
+      'receive',
     );
   }
 
@@ -770,12 +785,18 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.lifecycleService.receiveNewOrders(
-        data.order_ids,
-        data.search,
-        data.requester,
-      ),
+    // «Kun tartibi»: qabul qilish chegarasi o'tgan — 409 ORDER_RECEIVE_CLOSED.
+    return this.guardOrderIntake(
+      context,
+      () =>
+        this.executeAndAck(context, () =>
+          this.lifecycleService.receiveNewOrders(
+            data.order_ids,
+            data.search,
+            data.requester,
+          ),
+        ),
+      'receive',
     );
   }
 
@@ -2249,6 +2270,11 @@ export class OrderServiceController {
       startDate?: string;
       endDate?: string;
       all?: boolean;
+      /**
+       * Market operatori dashboardi (ega 2026-11-11): faqat shu operator
+       * (`orders.operator_id`) buyurtmalari. Yo'q — butun market.
+       */
+      operator_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -2258,6 +2284,7 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.all,
+        data.operator_id,
       ),
     );
   }

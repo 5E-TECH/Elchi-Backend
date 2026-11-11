@@ -39,16 +39,22 @@ export const isReceiptFilterStatus = (
 /**
  * «Chek yo'q» — chek SO'RALADIGAN, lekin cheksiz qator (ega qarori):
  *  (a) qo'lda chiqim: `manual_expense` + EXPENSE + `expense_category_id IS
- *      NOT NULL` (ichki chiqimlar kategoriyasiz — kirmaydi);
+ *      NOT NULL` (ichki chiqimlar kategoriyasiz — kirmaydi) + `click`
+ *      (BE-C, ega 2026-11-10: chek faqat karta chiqimida — naqd chiqim
+ *      kirmaydi; `isReceiptPaymentMethod` bilan AYNI qoida);
  *  (b) HQ'ga o'tkazma: MAIN INCOME, `courier_payment | branch_to_main`,
  *      `click`.
- * Naqd o'tkazma, click_to_market, kirim, maosh, sotuv, qarshi EXPENSE
- * qatorlar va T6 bilan qaytarilgan oyoqlar (`notReversedSql`) kirmaydi. Funksiyadan oldingi va rasm o'chiq paytdagilar ham
- * shu predikat bilan `none`. `h` — tarix alias'i, `c` — kassa alias'i.
+ * Naqd chiqim / o'tkazma, click_to_market, kirim, maosh, sotuv, qarshi
+ * EXPENSE qatorlar va T6 bilan qaytarilgan oyoqlar (`notReversedSql`)
+ * kirmaydi. Funksiyadan oldingi va rasm o'chiq paytdagilar ham shu predikat
+ * bilan `none`. Faqat KUTILISH o'zgardi: eski naqd chiqimga bog'langan chek
+ * holati bo'yicha (`linkedIdsSql`) avvalgidek ko'rinadi. `h` — tarix
+ * alias'i, `c` — kassa alias'i.
  */
 export const RECEIPT_EXPECTED_SQL = `(
   (h."operation_type" = 'expense' AND h."source_type" = 'manual_expense'
-    AND h."expense_category_id" IS NOT NULL)
+    AND h."expense_category_id" IS NOT NULL
+    AND h."payment_method" = 'click')
   OR (h."operation_type" = 'income'
     AND h."source_type" IN ('courier_payment', 'branch_to_main')
     AND h."payment_method" = 'click' AND c."cashbox_type" = 'main')

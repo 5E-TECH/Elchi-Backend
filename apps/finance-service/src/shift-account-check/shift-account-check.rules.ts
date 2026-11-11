@@ -7,11 +7,17 @@ import { ShiftAccountAiStatus } from '../entities/shift-account-check.types';
 
 /** Global sozlama kalitlari (`finance_settings.key`). */
 export const SHIFT_SETTING_KEYS = {
+  /** ASOSIY (MAIN) kassa smenasi uchun tasdiqlash kaliti. */
   accountCheckEnabled: 'shift.account_check.enabled',
+  /** FILIAL (BRANCH) kassalari smenasi uchun alohida kalit (BE-A). */
+  branchAccountCheckEnabled: 'shift.account_check.branch_enabled',
   photoRequired: 'shift.photo.required',
   aiCheckEnabled: 'shift.ai_check.enabled',
 } as const;
 
+export type ShiftCheckCashboxType = 'main' | 'branch';
+
+/** Bitta kassa (MAIN yoki filial) uchun AMALDAGI sozlama. */
 export interface ShiftCheckSettings {
   /** Yoqilgan — yopishda kassaning HAR faol kartasi uchun `accounts[]` majburiy. */
   account_check_enabled: boolean;
@@ -21,17 +27,62 @@ export interface ShiftCheckSettings {
   ai_check_enabled: boolean;
 }
 
+/** `finance_settings` dagi global qiymatlar (kassa turiga bog'lanmagan). */
+export interface ShiftCheckGlobalSettings {
+  /** MAIN kassa: `shift.account_check.enabled`. */
+  account_check_enabled: boolean;
+  /** Filial kassalari: `shift.account_check.branch_enabled`. */
+  branch_account_check_enabled: boolean;
+  photo_required: boolean;
+  ai_check_enabled: boolean;
+}
+
 /**
- * Sukut (qator yo'q): tasdiqlash O'CHIQ (mavjud yopish oqimi o'zgarmaydi,
- * superadmin yoqadi), rasm master kaliti YOQIQ (karta bo'yicha
- * `require_photo_on_shift_close` hal qiladi), AI O'CHIQ (pulli — superadmin
- * ataylab yoqadi).
+ * Sukut (qator yo'q). BE-A (ega 2026-11-10: «majburiy, superadmin
+ * kartama-karta o'chira oladi», «filiallarga default o'chiq, faqat asosiy
+ * kassaga», AI ham «Ha, yoqilsin»):
+ *   • MAIN kassa — tasdiqlash YOQIQ (har faol karta qoldig'i majburiy);
+ *   • filial kassalari — tasdiqlash O'CHIQ (avvalgi yopish oqimi);
+ *   • rasm va AI master kalitlari YOQIQ — qaysi kartada majburiyligini karta
+ *     bayroqlari (`require_photo_on_shift_close` / `ai_check_enabled`) hal
+ *     qiladi: MAIN kartalarida sukut true, filial kartalarida false.
  */
-export const SHIFT_CHECK_DEFAULTS: ShiftCheckSettings = {
-  account_check_enabled: false,
+export const SHIFT_CHECK_DEFAULTS: ShiftCheckGlobalSettings = {
+  account_check_enabled: true,
+  branch_account_check_enabled: false,
   photo_required: true,
-  ai_check_enabled: false,
+  ai_check_enabled: true,
 };
+
+/**
+ * Global qiymatlardan kassa uchun AMALDAGI sozlama: MAIN — asosiy kalit,
+ * filial — filial kaliti. Rasm / AI master kalitlari ikkalasida ham global.
+ */
+export function effectiveShiftCheckSettings(
+  global: ShiftCheckGlobalSettings,
+  cashboxType: ShiftCheckCashboxType,
+): ShiftCheckSettings {
+  return {
+    account_check_enabled:
+      cashboxType === 'main'
+        ? global.account_check_enabled
+        : global.branch_account_check_enabled,
+    photo_required: global.photo_required,
+    ai_check_enabled: global.ai_check_enabled,
+  };
+}
+
+/**
+ * Yangi karta yaratilganda (chaqiruvchi rasm / AI bayrog'ini bermasa) smena
+ * sozlamalari sukuti: MAIN kartasi — rasm + AI yoqiq, filial kartasi — o'chiq.
+ */
+export function defaultCardShiftFlags(cashboxType: ShiftCheckCashboxType): {
+  require_photo_on_shift_close: boolean;
+  ai_check_enabled: boolean;
+} {
+  const isMain = cashboxType === 'main';
+  return { require_photo_on_shift_close: isMain, ai_check_enabled: isMain };
+}
 
 /** AI qoldiq mosligi chegarasi: |farq| ≤ 1 so'm. */
 export const AI_MATCH_TOLERANCE = 1;
@@ -51,14 +102,14 @@ export interface CardRuleSource {
 }
 
 export function isPhotoRequired(
-  settings: ShiftCheckSettings,
+  settings: Pick<ShiftCheckSettings, 'photo_required'>,
   card: CardRuleSource,
 ): boolean {
   return Boolean(settings.photo_required && card.require_photo_on_shift_close);
 }
 
 export function isAiEnabled(
-  settings: ShiftCheckSettings,
+  settings: Pick<ShiftCheckSettings, 'ai_check_enabled'>,
   card: CardRuleSource,
 ): boolean {
   return Boolean(settings.ai_check_enabled && card.ai_check_enabled);

@@ -432,9 +432,22 @@ describePg(
       await expect(
         cards.createCard({ name: 'K', require_photo_on_shift_close: true }),
       ).rejects.toMatchObject({ error: { statusCode: 403 } });
+      // BE-A: MAIN kartasida rasm sukut yoqiq — AI rasmsiz faqat rasm aniq
+      // o'chirilganda (yoki filialda, bu yerda sukut o'chiq) 400.
       await expect(
         cards.createCard({
           name: 'K',
+          require_photo_on_shift_close: false,
+          ai_check_enabled: true,
+          allow_shift_settings: true,
+        }),
+      ).rejects.toMatchObject({
+        error: { statusCode: 400, message: expect.stringMatching(/AI/) },
+      });
+      await expect(
+        cards.createCard({
+          name: 'K',
+          branch_id: BRANCH,
           ai_check_enabled: true,
           allow_shift_settings: true,
         }),
@@ -464,6 +477,107 @@ describePg(
         require_photo_on_shift_close: false,
         ai_check_enabled: false,
       });
+    });
+
+    it('BE-A: yangi karta sukuti — MAIN rasm + AI yoqiq (Asosiy karta ham), filial o`chiq; superadmin MAIN kartasini o`chiradi', async () => {
+      await seed();
+      // MAIN — bayroq berilmagan (admin ham yaratadi, 403 yo'q): true / true.
+      const humo: any = await cards.createCard({
+        name: 'Humo HQ',
+        created_by: '2',
+      });
+      expect(humo.data.card).toMatchObject({
+        require_photo_on_shift_close: true,
+        ai_check_enabled: true,
+      });
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.card_created',
+          new_value: expect.objectContaining({
+            require_photo_on_shift_close: true,
+            ai_check_enabled: true,
+          }),
+        }),
+      );
+      // MAIN Asosiy kartasi (shu murojaatda yaratilgan) — ham yoqiq.
+      const mainList: any = await cards.listCards();
+      expect(mainList.data.cards).toHaveLength(2);
+      for (const card of mainList.data.cards) {
+        expect(card).toMatchObject({
+          require_photo_on_shift_close: true,
+          ai_check_enabled: true,
+        });
+      }
+      // MAIN: superadmin faqat AI ni o'chirib yaratadi — rasm qoladi.
+      const uz: any = await cards.createCard({
+        name: 'Uzcard HQ',
+        ai_check_enabled: false,
+        allow_shift_settings: true,
+      });
+      expect(uz.data.card).toMatchObject({
+        require_photo_on_shift_close: true,
+        ai_check_enabled: false,
+      });
+
+      // Filial — bayroqlar o'chiq (Asosiy karta ham).
+      await createBranchCard();
+      const branchList: any = await cards.listCards({ branch_id: BRANCH });
+      expect(branchList.data.cards).toHaveLength(2);
+      for (const card of branchList.data.cards) {
+        expect(card).toMatchObject({
+          require_photo_on_shift_close: false,
+          ai_check_enabled: false,
+        });
+      }
+      // Filialda superadmin aniq yoqsa — yoqiladi (AI berilmagan — o'chiq).
+      const branchOn: any = await cards.createCard({
+        name: 'Filial rasmli',
+        branch_id: BRANCH,
+        require_photo_on_shift_close: true,
+        allow_shift_settings: true,
+      });
+      expect(branchOn.data.card).toMatchObject({
+        require_photo_on_shift_close: true,
+        ai_check_enabled: false,
+      });
+
+      // PATCH: admin (ruxsatsiz) — 403; superadmin MAIN kartasini o'chiradi
+      // (rasm o'chsa AI ham o'chadi), keyin qayta yoqadi.
+      const id = String(humo.data.card.id);
+      await expect(
+        cards.updateCard({ id, require_photo_on_shift_close: false }),
+      ).rejects.toMatchObject({ error: { statusCode: 403 } });
+      const off: any = await cards.updateCard({
+        id,
+        require_photo_on_shift_close: false,
+        allow_shift_settings: true,
+      });
+      expect(off.data.card).toMatchObject({
+        require_photo_on_shift_close: false,
+        ai_check_enabled: false,
+      });
+      await expect(
+        cards.updateCard({
+          id,
+          ai_check_enabled: true,
+          allow_shift_settings: true,
+        }),
+      ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      const on: any = await cards.updateCard({
+        id,
+        require_photo_on_shift_close: true,
+        ai_check_enabled: true,
+        allow_shift_settings: true,
+      });
+      expect(on.data.card).toMatchObject({
+        require_photo_on_shift_close: true,
+        ai_check_enabled: true,
+      });
+      const stored = await db.getRepository(CashboxCard).findOneByOrFail({
+        id,
+      });
+      expect(stored.require_photo_on_shift_close).toBe(true);
+      expect(stored.ai_check_enabled).toBe(true);
     });
 
     it('PATCH Asosiy kartada: yangi maydonlar tahrirlanadi, NOMI — 400; menejer doirasi — boshqa filial kartasi 403', async () => {

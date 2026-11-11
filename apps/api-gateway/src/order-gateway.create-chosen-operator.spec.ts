@@ -364,7 +364,7 @@ describe('«Operator» tanlovi — POST /orders operator_id', () => {
   });
 
   describe('operator_id berilmasa — avvalgi xulq (har rol)', () => {
-    it('registrator: operator_id — o`zi, bo`sh matn — uning ismi', async () => {
+    it('⭐ registrator: tanlamasa — operatorsiz (o`zi ham, ismi ham yozilmaydi; ega 2026-11-11)', async () => {
       const { controller, orderClient, identityClient } = makeController();
 
       await controller.create(
@@ -373,10 +373,8 @@ describe('«Operator» tanlovi — POST /orders operator_id', () => {
       );
 
       const [sent] = sentCreates(orderClient);
-      expect(sent.dto).toMatchObject({
-        operator_id: '77',
-        operator: 'Registrator Rustam',
-      });
+      expect(sent.dto.operator_id).toBeNull();
+      expect(sent.dto).not.toHaveProperty('operator');
       expect(sent).not.toHaveProperty('verified_operator_id');
       expect(
         identityCalls(identityClient, 'identity.market_operator.selectable'),

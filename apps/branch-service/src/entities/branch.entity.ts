@@ -64,4 +64,13 @@ export class Branch extends BaseEntity {
     transformer: numericTransformer,
   })
   per_order_share!: number;
+
+  /**
+   * Filial kassasi qarzga ishlaydimi (mig 217, sukut FALSE). TRUE — HQ
+   * filialdan kassasidagidan ortiq qabul qila oladi: filial kassasi manfiyga
+   * tushadi, ortig'i `branch_to_hq` qoldig'i — HQ filialga qarzdor. Faqat
+   * admin/superadmin o'zgartiradi.
+   */
+  @Column({ type: 'boolean', default: false })
+  cashbox_debt_enabled!: boolean;
 }

@@ -11,8 +11,8 @@ import { Roles as RoleEnum } from '@app/common';
  *
  * Qoida BeePost bilan AYNI (`order.service.ts:464-485`,
  * `operator-assignment.util.ts:31-100`):
- *   • berilmasa — `null`, avvalgi xulq (matn; registrator / market
- *     operatori — o'zi);
+ *   • berilmasa — `null`, avvalgi xulq (matn; market operatori — o'zi;
+ *     registrator — 2026-11-11 dan operatorsiz, o'zi YOZILMAYDI);
  *   • berilsa — buyurtmaning YAKUNIY marketi (market — o'zi, market
  *     operatori — biriktirilgan marketi, qolganlar — tanadagi `market_id`)
  *     operatorlari ichida faol va o'chirilmagan bo'lishi SHART. Tekshiruv —

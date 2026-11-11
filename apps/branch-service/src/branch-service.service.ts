@@ -5492,9 +5492,11 @@ export class BranchServiceService implements OnModuleInit {
         data?: { branches?: Array<{ branch_id: string; amount: number }> };
       }>('order.settlement.financial_balance_summary', {});
       for (const row of summary?.data?.branches ?? []) {
+        // (2026-11-11) Qirqilmagan qiymat saqlanadi: manfiy = HQ filialga
+        // qarzdor (filial «Kassa qarzga ishlaydi» — ortiqcha qabul qoldig'i).
         payableToHqByBranchId.set(
           String(row.branch_id),
-          Math.max(Number(row.amount) || 0, 0),
+          Number(row.amount) || 0,
         );
       }
     } catch {
@@ -5524,7 +5526,10 @@ export class BranchServiceService implements OnModuleInit {
             return balance > 0 ? sum + balance : sum;
           }, 0);
         }
-        return Number(payableToHqByBranchId.get(String(item.id)) ?? 0);
+        return Math.max(
+          Number(payableToHqByBranchId.get(String(item.id)) ?? 0),
+          0,
+        );
       })(),
       // Regional branch uchun bu summa branchning HQ'ga berishi kerak bo'lgan
       // qarzidir. `olinishi_kerak` legacy maydoni saqlanadi, yangi consumerlar
@@ -5532,7 +5537,20 @@ export class BranchServiceService implements OnModuleInit {
       berilishi_kerak:
         item.type === BranchType.HQ
           ? 0
-          : Number(payableToHqByBranchId.get(String(item.id)) ?? 0),
+          : Math.max(
+              Number(payableToHqByBranchId.get(String(item.id)) ?? 0),
+              0,
+            ),
+      // (2026-11-11) HQ'ning shu filialga qarzi — HQ filialdan qarzidan ortiq
+      // qabul qilgan («Kassa qarzga ishlaydi»): manfiy filial qarzi, musbat
+      // ko'rinishda. Keyingi sotuvlar uni yopadi.
+      hq_qarzi:
+        item.type === BranchType.HQ
+          ? 0
+          : Math.max(
+              -Number(payableToHqByBranchId.get(String(item.id)) ?? 0),
+              0,
+            ),
       payment: (() => {
         const managerId = managerByBranchId.get(String(item.id));
         if (!managerId) return null;
@@ -6077,6 +6095,7 @@ export class BranchServiceService implements OnModuleInit {
       manager_id?: string | null;
       ownership?: BranchOwnership | string;
       per_order_share?: string | number;
+      cashbox_debt_enabled?: boolean;
     },
     requester?: RequesterContext,
   ) {
@@ -6094,6 +6113,7 @@ export class BranchServiceService implements OnModuleInit {
       // 8jtzNlFt: pul sozlamasi o'zgarishi ham jurnalda (eski -> yangi).
       ownership: branch.ownership ?? BranchOwnership.OWNED,
       per_order_share: Number(branch.per_order_share ?? 0),
+      cashbox_debt_enabled: branch.cashbox_debt_enabled === true,
     };
 
     if (typeof dto?.name !== 'undefined') {
@@ -6204,6 +6224,33 @@ export class BranchServiceService implements OnModuleInit {
     branch.ownership = ownershipConfig.ownership;
     branch.per_order_share = ownershipConfig.per_order_share;
 
+    // Filial kassasi qarzga ishlaydi (mig 217) — pulga ta'sir qiladi, shuning
+    // uchun faqat admin/superadmin; HQ'ning o'z kassasi uchun ma'nosi yo'q.
+    if (
+      typeof dto?.cashbox_debt_enabled !== 'undefined' &&
+      dto.cashbox_debt_enabled !== null
+    ) {
+      if (!this.isSystemPrivileged(requester)) {
+        this.forbidden(
+          "Filial kassasi qarzga ishlashini faqat admin yoki superadmin o'zgartira oladi",
+        );
+      }
+      if (typeof dto.cashbox_debt_enabled !== 'boolean') {
+        this.badRequest(
+          "cashbox_debt_enabled boolean (true/false) bo'lishi kerak",
+        );
+      }
+      if (nextType === BranchType.HQ && dto.cashbox_debt_enabled) {
+        this.badRequest(
+          "HQ filial uchun «Kassa qarzga ishlaydi» yoqilmaydi — HQ o'ziga pul topshirmaydi",
+        );
+      }
+      branch.cashbox_debt_enabled = dto.cashbox_debt_enabled;
+    }
+    if (nextType === BranchType.HQ) {
+      branch.cashbox_debt_enabled = false;
+    }
+
     if (typeof dto?.status !== 'undefined') {
       branch.status = this.parseStatus(dto.status) ?? branch.status;
     }
@@ -6237,6 +6284,7 @@ export class BranchServiceService implements OnModuleInit {
         type: saved.type,
         ownership: ownershipConfig.ownership,
         per_order_share: ownershipConfig.per_order_share,
+        cashbox_debt_enabled: saved.cashbox_debt_enabled === true,
       },
       ...this.auditActor(requester),
     });

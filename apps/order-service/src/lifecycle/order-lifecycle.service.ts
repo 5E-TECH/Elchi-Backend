@@ -7283,8 +7283,9 @@ export class OrderLifecycleService {
     const roles = new Set(
       (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
     );
-    const isOperatorRequester =
-      roles.has(Roles.REGISTRATOR) || roles.has(Roles.MARKET_OPERATOR);
+    // Ega 2026-11-11: faqat market operatori o'zi bo'ladi; registrator
+    // operator EMAS — tanlamasa buyurtma operatorsiz (null).
+    const isOperatorRequester = roles.has(Roles.MARKET_OPERATOR);
     // Formadagi tanlov faqat ishonchli yo'ldan (gateway tekshiruvi): admin
     // bo'lmagan so'rovchining `dto.operator_id` si yuqorida olib tashlangan.
     const operatorId =

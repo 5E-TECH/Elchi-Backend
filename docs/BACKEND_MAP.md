@@ -446,24 +446,31 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     `enrichOrders` adds `warehouse: { id, name, branch_id } | null`
     (`catalog.warehouse.find_by_ids`; catalog down → `{ id, name: null,
     branch_id: null }`).
-- **Bugungi qabul vaqti + kun almashish soati (2026-11-09, migration
-  `1716000000213`, Trello #756)** — `intake/order-intake.service.ts`
-  (`OrderIntakeService`), pure rules in `libs/common/src/order/order-intake.ts`.
-  Table `order_schema.order_settings` (key/value jsonb, `finance_settings`
-  shape): `intake.day_change_time` `{time:'HH:MM'}` (none → `00:00`) and
-  `intake.cutoff` `{window_start, date, cutoff_time}`. Work day = Tashkent
-  `day_change_time` → next `day_change_time` (24 h; `date` = calendar day of
-  start + 12 h). A cutoff applies only while `window_start` equals the current
-  window start, so it expires by itself at the day change. RPCs:
-  `order.intake.state`, `order.intake.update` (SUPERADMIN only, under
-  `pg_advisory_xact_lock`; a day-change edit re-anchors today's cutoff only if
-  the work-day `date` is unchanged; audit verbs `order.intake_cutoff_changed`,
-  `order.day_change_time_changed`). Gate: the controller calls `assertOpen`
-  for `order.create`, `order.external.create`, `order.receive_external`
+- **«Kun tartibi»: yaratish / qabul chegaralari + kun almashish soati
+  (2026-11-09 / 2026-11-11, migration `1716000000213`, Trello #756)** —
+  `intake/order-intake.service.ts` (`OrderIntakeService`), pure rules in
+  `libs/common/src/order/order-intake.ts`. Table `order_schema.order_settings`
+  (key/value jsonb, `finance_settings` shape): `intake.day_change_time`
+  `{time:'HH:MM'}` (none → `00:00`), `intake.cutoff` and
+  `intake.receive_cutoff` `{cutoff_time}`. Both cutoffs are PERMANENT — they
+  repeat every work day until SA changes / clears them (owner 2026-11-11; the
+  2026-11-09 `{window_start, date, cutoff_time}` shape is read as permanent).
+  Work day = Tashkent `day_change_time` → next `day_change_time` (24 h; `date`
+  = calendar day of start + 12 h); a cutoff closes at its first occurrence in
+  the window and reopens at the next day change. RPCs: `order.intake.state`
+  (also `receive_cutoff_time` (key always present), `receive_is_open`,
+  `receive_closes_at`, `receive_reopens_at`), `order.intake.update` (SUPERADMIN
+  only, several fields at once, all validated before the tx, under
+  `pg_advisory_xact_lock`; unchanged values are not written / logged; audit
+  verbs `order.intake_cutoff_changed`, `order.receive_cutoff_changed`,
+  `order.day_change_time_changed`). Gates (controller `guardOrderIntake`):
+  create — `order.create`, `order.external.create`, `order.receive_external`
   BEFORE `executeIdempotent` (a rejected partner `request_id` must not be
   cached as `failed`) → 409 `ORDER_INTAKE_CLOSED` + `reopens_at` /
-  `cutoff_time` (in `PUBLIC_ERROR_CODES`); settings unreadable (DB error) →
-  the gate FAILS OPEN with an error log (creation never stops because of it).
+  `cutoff_time`; receive — `order.receive`, `order.receive_by_scan` → 409
+  `ORDER_RECEIVE_CLOSED` + `reopens_at` / `receive_cutoff_time` (both in
+  `PUBLIC_ERROR_CODES`); settings unreadable (DB error) → both gates FAIL OPEN
+  with an error log.
   Gateway `GET|PATCH
   /orders/intake-settings` (before `:id`; GET any role, PATCH
   `@Roles(SUPERADMIN)`); ai-confirm maps the 409 to `intake_closed`. No
@@ -650,11 +657,21 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 - **Shift close — per-card balance confirmation (kiZgTybn, 2026-10-26):**
   `finance_schema.shift_account_checks` (migr 166; UNIQUE shift_id +
   cashbox_card_id) + `finance_schema.finance_settings` (key/value, SA only).
-  Global keys: `shift.account_check.enabled` (default false → `accounts[]`
-  required for EVERY active card of the shift's cashbox), `shift.photo.required`
-  (default true, master switch AND card `require_photo_on_shift_close`),
-  `shift.ai_check.enabled` (default false, master switch AND card
-  `ai_check_enabled`). Flow: gateway `POST /finance/shift/account-photo`
+  Global keys (BE-A, 2026-11-10, migr 215 sets them at deploy): settings are
+  resolved PER CASHBOX (`loadSettingsFor`): MAIN — `shift.account_check.enabled`
+  (default true → `accounts[]` required for EVERY active card of the MAIN
+  shift), branches — `shift.account_check.branch_enabled` (default false →
+  accounts optional, legacy flow); `shift.photo.required` (default true,
+  master switch AND card `require_photo_on_shift_close`),
+  `shift.ai_check.enabled` (default true, master switch AND card
+  `ai_check_enabled`). Card flags default true/true for MAIN cards (create
+  path + Asosiy karta; migr 215 flips existing MAIN cards) and false/false for
+  branch cards; SA can switch a card off. The MAIN Asosiy karta row is created
+  if missing by shift settings GET / close / auto-close too (so an empty card
+  list never bypasses the MAIN requirement). Rollback hazard: pre-BE-A finance
+  code applies `shift.account_check.enabled` globally (branches too); pair a
+  code rollback with `migration:revert` of 215 or PATCH
+  account_check_enabled=false first. Flow: gateway `POST /finance/shift/account-photo`
   (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
   IPTC/text chunks, file-service folder `shift-check`, private, signed URL
   300 s) → `finance.shift.account_check.attach_photo` (draft row, expected
@@ -678,6 +695,33 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   Activity-log: `finance.shift_settings_updated`,
   `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
   shift close metadata `accounts`.
+- **«Kun tartibi» — shift auto-OPEN + late alert (2026-11-11, migr
+  `1716000000216`):** `shifts.opened_by` nullable + `opened_by_system`
+  (CHECK `opened_by IS NOT NULL OR opened_by_system`), `shift_schedule_claims.
+  shift_id` nullable (cashbox claims). Settings in `finance_settings`
+  (`shift.auto_open.{enabled,times,scope}` default off/['09:00']/main;
+  `shift.late_alert.{enabled,grace_min,channels}` default off/15/in_app;
+  rules + PATCH parsing in `shift-auto-close/shift-schedule.rules.ts`; PATCH
+  re-validates the resulting schedule: open ∩ close times → 400
+  `SHIFT_SCHEDULE_CONFLICT` + `times` (`PUBLIC_ERROR_CODES`), enabled
+  auto-open without times / late alert without channels → 400). The same
+  scheduler tick, after auto-close: due open slots (slot ≤ now < slot+10 min)
+  → `FinanceServiceService.autoOpenShift` per cashbox in scope ('0' +
+  BRANCH cashboxes for `main+branches`): cashbox row FOR UPDATE → skip if an
+  open shift exists → `auto_open:<cashbox>:<slot>` claim → shift with
+  `opened_by NULL`, `opened_by_system true`, live opening balances → realtime
+  `finance.shift.auto_opened` (outbox, same tx) → activity
+  `finance.shift_auto_opened`. Late alert (`late_alert.enabled`): at slot +
+  `grace_min` (+10 min catch-up) — cashbox in `auto_open.scope` without an
+  open shift / a shift opened since the slot → `late_open:<cashbox>:<slot>`;
+  shift opened before an `auto_close.times` slot still open →
+  `late_close:<shift>:<slot>`; times come from the schedules even when the
+  automations are off. A failed `autoOpenShift` / `autoCloseShift` claims the
+  same key at once with the reason. Claim + `notification.dispatch`
+  (`finance.shift_late`, active superadmins via `identity.user.
+  active_ids_by_role`, channels from settings) in ONE tx. A system-opened
+  shift is closed as usual (`closeShift` falls back to the cashbox's open
+  shift); its auto-close warning has no recipient.
 - **Shift auto-close + shift report delivery (y8Tqm9Ap + gWI4gYkw,
   2026-10-26):** migr 167 adds `shifts.close_reason` (manual|auto, NULL =
   open / legacy → API `manual`), `closed_by_system`, `report_status`
@@ -735,13 +779,39 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   ≤5 s on shutdown — a crash mid-sync drops them, display-only). The sync
   pages SOLD/PARTLY_PAID orders oldest-first (100/page, ≤50 pages; remaining =
   `to_be_paid − extra_cost − paid_amount`). `payment_courier` with
-  `click_to_market` and a BRANCH receiver → 400; on the HQ path the amount must
-  not exceed the market payable (400) and a second `hq_to_market` advance is
-  enqueued (token `<token>:m`). A BRANCH cashbox may go negative only for system
+  `click_to_market`: the amount must not exceed the market payable (400) and a
+  second `hq_to_market` advance is enqueued (token `<token>:m`). (M4,
+  2026-11-11) A BRANCH receiver (manager path) is allowed: branch +X/−X (net
+  0) and a `branch_to_hq` advance (token `<token>:b`, match = branch id) is
+  enqueued between the two, so `branch_payable` drops with
+  `courier_receivable` (no phantom branch debt). `payment_market` takes
+  optional `payer_cashbox_type: 'branch'` + `payer_user_id` (branch id; set by
+  the gateway for a manager): the branch cashbox is locked and debited
+  (strict, no negative; `card_id` must be that branch's card; branch shift
+  gate R6), idempotency on the branch leg, `branch_to_hq` (`<token>:b`) then
+  `hq_to_market` (`<token>`). Both new shapes are NOT correctable (T6
+  `classifyTransfer` requires MAIN). A BRANCH cashbox may go negative only for system
   legs — a manager's manual `spend` is strict like MAIN (400). `all_info` adds
   `marketPayableTotal` (sum of positive market balances). Financial-balance
   history/analytics/top-impacts and the cashbox history date filters use
   Tashkent days for `YYYY-MM-DD`.
+- **Branch cashbox debt (2026-11-11, migration `1716000000217`
+  `branch_schema.branches.cashbox_debt_enabled`, default false):**
+  `payment_branch_main` reads the flag via `branch.find_by_id` BEFORE the
+  transaction (RPC error / HQ / non-boolean → closed) and, when on, passes
+  `allowNegativeOverride` for the branch EXPENSE leg (cash or card bucket)
+  and `allow_negative_default` to `applyCashboxCardSelection` (explicit
+  Asosiy card may go negative; a NAMED card stays strict). The full amount is
+  enqueued as the `branch_to_hq` advance — the surplus stays as that carry,
+  so `branch_payable` goes negative (HQ owes the branch) and later sales close
+  it. Gateway keeps `berilishi_kerak = max(payable, 0)` and adds
+  `hq_qarzi = max(-payable, 0)` (manager settlement, payable-to-hq, all-info,
+  SA branch view, `GET /branches`, `GET /managers` list). Toggle:
+  `PATCH /branches/:id {cashbox_debt_enabled}` — SA/ADMIN only, not on HQ.
+  `updateBalancesByMethod` now checks the non-negative rule only for EXPENSE
+  legs: an INCOME into an already-negative MAIN/BRANCH bucket is never
+  refused (a manager can receive courier cash into a branch cashbox that
+  HQ drove negative).
 - **Payment correction (T6, 2026-10-30, migr `1716000000186`):** SUPERADMIN
   only reverses or re-amounts a courier receipt (`courier_payment`, MAIN/BRANCH,
   cash/click/click_to_market) or an HQ market payment (`market_payment`).
@@ -847,7 +917,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   (default off, owner decision 2026-10-22).
 - **Cashbox receipts (T3, 2026-10-30, migr `1716000000188`):** photo + AI
   check for manual expenses (`manual_expense`) and click courier → HQ /
-  branch → HQ transfers (`courier_to_hq` / `branch_to_hq`).
+  branch → HQ transfers (`courier_to_hq` / `branch_to_hq`). Since BE-C
+  (owner 2026-11-10) a receipt applies ONLY to card (`click`) operations —
+  manual expenses too (`isReceiptPaymentMethod` in libs/common; cash /
+  click_to_market + `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`, no
+  `RECEIPT_REQUIRED`; `RECEIPT_EXPECTED_SQL` counts only click manual
+  expenses).
   `cashbox-receipt/`: `CashboxReceiptService` (settings in `finance_settings`
   `receipt.{manual_expense,hq_transfer}.{photo_required,ai_enabled}`, SA-only
   update; draft upload; `linkInTx` inside the payment tx — `spendMoney`,
@@ -1337,11 +1412,13 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   (still stripped for non-admins); without it the old rule holds
   (REGISTRATOR / MARKET_OPERATOR → requester). `/orders/external`, bot, AI
   and partner paths never send it.
-- **Intake cutoff (2026-11-09):** while today's intake is closed
-  (`order.intake.*`, order-service «Bugungi qabul vaqti» above) every create
-  path — POST /orders, /orders/external, bot, ai-confirm, external import, CRM
-  webhook, partner API — gets 409 `ORDER_INTAKE_CLOSED` until the next day
-  change. Partly-sell children (internal insert) are not affected.
+- **«Kun tartibi» cutoffs (2026-11-09 / 2026-11-11, daily):** after the
+  create cutoff (`order.intake.*`, order-service «Kun tartibi» above) every
+  create path — POST /orders, /orders/external, bot, ai-confirm, external
+  import, CRM webhook, partner API — gets 409 `ORDER_INTAKE_CLOSED` until the
+  next day change; after the receive cutoff HQ intake (`order.receive`,
+  `order.receive_by_scan`) gets 409 `ORDER_RECEIVE_CLOSED`. Partly-sell
+  children (internal insert) are not affected.
 - **Edit** (`PATCH /orders/:id`, `/:id/full` → `order.update_from_api`):
   SA/ADMIN/REGISTRATOR only. `status`, `market_id`, `to_be_paid`,
   `paid_amount` → 400 for everyone, SA included (status changes only through
@@ -1496,8 +1573,10 @@ an order — see finance-service › Pickup visits.
 - **Manager cash scope** (C3/M7/RBAC-07): own branch only — a manager receives
   cash only from couriers whose active `branch_users` row is in his branch
   (403 "Bu kuryer sizning filialingizga tegishli emas"; branch-service down →
-  503). `click_to_market` by a manager → 403 (only via the HQ/MAIN cashbox).
-  `POST /finance/cashbox/payment/market` is SA/ADMIN only.
+  503). (M4, 2026-11-11) A manager may take `click_to_market` (via his branch
+  cashbox, net 0) and `POST /finance/cashbox/payment/market` is SA/ADMIN/MANAGER
+  — a manager pays from HIS branch cashbox (branch from JWT/branch_users, 403
+  if none; HQ MAIN untouched); SA/ADMIN pay from MAIN as before.
 - **Payout idempotency** (C1/M2): `payment/courier`, `payment/market` and
   `payment/branch-to-main` honour `Idempotency-Key` (used as `dedup_epoch`;
   duplicate → `{statusCode:200, data:{idempotent:true}}`). Without a key the

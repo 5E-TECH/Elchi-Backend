@@ -190,16 +190,19 @@ describe('lifecycle.create — operator_id faqat ishonchli yo`ldan', () => {
     });
   });
 
-  it('⭐ registrator: tekshirilgan id so`rovchidan USTUN; xom dto.operator_id — so`rovchi o`zi', async () => {
+  it('⭐ registrator: tekshirilgan id yoziladi; xom dto.operator_id va tanlovsiz — operatorsiz (ega 2026-11-11)', async () => {
     const verified = makeCreateHarness();
     await verified.s.create(DTO, REGISTRATOR, {
       verifiedOperatorId: '26',
     });
     expect(verified.createdRow().operator_id).toBe('26');
 
+    // Registrator operator EMAS: xom `operator_id` olib tashlanadi va o'zi
+    // ham yozilmaydi (ilgari `REGISTRATOR.id` yozilardi).
     const raw = makeCreateHarness();
     await raw.s.create({ ...DTO, operator_id: '5' }, REGISTRATOR);
-    expect(raw.createdRow().operator_id).toBe(REGISTRATOR.id);
+    expect(raw.createdRow().operator_id).toBeNull();
+    expect(raw.createdRow().operator_id).not.toBe(REGISTRATOR.id);
   });
 
   it('market operatori: tanlovsiz — o`zi (avvalgidek), xom dto.operator_id e`tiborsiz', async () => {

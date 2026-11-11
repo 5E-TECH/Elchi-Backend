@@ -736,12 +736,15 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
 
     const report = await checks.listForShift(String(open.id));
     expect(report.map((row) => row.card_id)).toEqual([uzcard]);
-    // Avto-yopish (tasdiqlash o'chiq — faqat qoralamali kartalar): o'chirilgan
-    // karta "tasdiqlanmagan" bo'lib chiqmaydi.
+    // Avto-yopish (BE-A: MAIN'da tasdiqlash sukut yoqiq — har faol karta
+    // "tasdiqlanmagan" yoziladi): o'chirilgan karta chiqmaydi.
     const auto = (await db.transaction((manager) =>
       checks.recordAtAutoClose(manager, open),
     )) as { accounts: Array<{ card_id: string }> };
-    expect(auto.accounts.map((row) => row.card_id)).toEqual([uzcard]);
+    expect(auto.accounts.map((row) => row.card_id)).toEqual([
+      await defaultId(),
+      uzcard,
+    ]);
   });
 
   it('⭐ filial kassasi: qoldiq naqdga, filial invarianti; boshqa filial doirasi — 403; MAIN tegilmaydi', async () => {

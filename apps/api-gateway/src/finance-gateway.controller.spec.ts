@@ -358,6 +358,74 @@ describe('FinanceGatewayController', () => {
 
     expect(response.berilishi_kerak).toBe(90_000);
     expect(response.hq_ga_tollangan).toBe(40_000);
+    expect(response.hq_qarzi).toBe(0);
+  });
+
+  /**
+   * (2026-11-11) Filial «Kassa qarzga ishlaydi»: HQ qarzidan ortiq qabul
+   * qilgan — daftar `branch_payable` manfiy. Menejer «HQ'ga berilishi kerak»
+   * 0 ni, «HQ'dan olinishi kerak» (`hq_qarzi`) musbat summani ko'radi.
+   */
+  it('manfiy branch_payable — berilishi_kerak 0, hq_qarzi musbat (manager settlement + payable-to-hq)', async () => {
+    const {
+      controller,
+      financeClient,
+      identityClient,
+      branchClient,
+      orderClient,
+    } = setup();
+
+    financeClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'finance.cashbox.my') {
+        return of({
+          data: {
+            cashbox: {
+              id: 'c16',
+              user_id: '16',
+              balance: -500_000,
+              balance_cash: -500_000,
+              balance_card: 0,
+            },
+          },
+        });
+      }
+      if (pattern.cmd === 'finance.history.find_all') {
+        return of({ data: { items: [] } });
+      }
+      return of({ data: {} });
+    });
+    identityClient.send.mockReturnValue(of({ data: { id: 'manager-1' } }));
+    branchClient.send.mockReturnValue(of({ data: [] }));
+    orderClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'order.settlement.branch_summary') {
+        return of({
+          data: { branch_payable: -500_000, courier_receivable: 0 },
+        });
+      }
+      return of({ data: {} });
+    });
+    const user = { sub: 'manager-1', roles: ['manager'], branch_id: '16' };
+
+    const settlement = await (controller as any).buildManagerSettlement(user);
+    expect(settlement.berilishi_kerak).toBe(0);
+    expect(settlement.hq_qarzi).toBe(500_000);
+
+    const managerView: any = await controller.managerSettlement(
+      { user } as any,
+      {} as any,
+    );
+    expect(managerView.data).toMatchObject({
+      berilishi_kerak: 0,
+      hq_qarzi: 500_000,
+    });
+    const payable: any = await controller.managerPayableToHq(
+      { user } as any,
+      {} as any,
+    );
+    expect(payable.data).toMatchObject({
+      berilishi_kerak: 0,
+      hq_qarzi: 500_000,
+    });
   });
 
   it('scopes market payment history to the current market cashbox', async () => {
