@@ -36,8 +36,16 @@ export type ShiftReportStatus =
   where: "status = 'open' AND is_deleted = false",
 })
 export class Shift extends BaseEntity {
-  @Column({ type: 'bigint' })
-  opened_by!: string;
+  /**
+   * Smenani ochgan xodim. «Kun tartibi» (migratsiya 216): tizim jadval
+   * bo'yicha ochgan smenada NULL (`opened_by_system = true`, CHECK).
+   */
+  @Column({ type: 'bigint', nullable: true })
+  opened_by!: string | null;
+
+  /** «Kun tartibi» (migratsiya 216) — smenani tizim avtomatik ochdi. */
+  @Column({ type: 'boolean', default: false })
+  opened_by_system!: boolean;
 
   @Column({ type: 'bigint', nullable: true })
   closed_by!: string | null;

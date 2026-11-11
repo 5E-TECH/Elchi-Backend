@@ -13,6 +13,7 @@ import {
   Cashbox_type,
   SHIFT_LATE_PHOTO_ERROR_CODES,
   SHIFT_LATE_PHOTO_MESSAGES,
+  SHIFT_SCHEDULE_CONFLICT,
   maskCardLikeDigitsKeepingDates,
   type ShiftLatePhotoErrorCode,
 } from '@app/common';
@@ -52,14 +53,33 @@ import {
 } from './shift-account-check.rules';
 import {
   SHIFT_AUTOMATION_KEYS,
+  ShiftScheduleConflictError,
   ShiftSettingsError,
+  applySettingEntries,
+  assertShiftScheduleValid,
   parseAutoClosePatch,
+  parseAutoOpenPatch,
+  parseLateAlertPatch,
   parseReportPatch,
   readAutoCloseSettings,
+  readAutoOpenSettings,
+  readLateAlertSettings,
   readReportSettings,
   type AutoCloseSettings,
+  type AutoOpenSettings,
+  type LateAlertSettings,
   type ReportSettings,
 } from '../shift-auto-close/shift-schedule.rules';
+
+/** `loadAutomationSettings` natijasi — smena jadvali va hisobot. */
+export interface ShiftAutomationSettings {
+  auto_close: AutoCloseSettings;
+  /** «Kun tartibi» (2026-11-11). */
+  auto_open: AutoOpenSettings;
+  /** «Kun tartibi» (2026-11-11). */
+  late_alert: LateAlertSettings;
+  report: ReportSettings;
+}
 
 const MAIN_CASHBOX_USER_ID = '0';
 /**
@@ -271,7 +291,13 @@ export class ShiftAccountCheckService {
    */
   async loadAutomationSettings(
     manager?: EntityManager,
-  ): Promise<{ auto_close: AutoCloseSettings; report: ReportSettings }> {
+  ): Promise<ShiftAutomationSettings> {
+    return this.automationFromMap(await this.loadAutomationMap(manager));
+  }
+
+  private async loadAutomationMap(
+    manager?: EntityManager,
+  ): Promise<Map<string, unknown>> {
     const rows = await (manager ?? this.dataSource.manager)
       .getRepository(FinanceSetting)
       .find({
@@ -280,11 +306,16 @@ export class ShiftAccountCheckService {
           isDeleted: false,
         },
       });
-    const map = new Map<string, unknown>(
-      rows.map((row) => [row.key, row.value]),
-    );
+    return new Map<string, unknown>(rows.map((row) => [row.key, row.value]));
+  }
+
+  private automationFromMap(
+    map: Map<string, unknown>,
+  ): ShiftAutomationSettings {
     return {
       auto_close: readAutoCloseSettings(map),
+      auto_open: readAutoOpenSettings(map),
+      late_alert: readLateAlertSettings(map),
       report: readReportSettings(map),
     };
   }
@@ -437,6 +468,10 @@ export class ShiftAccountCheckService {
     cards?: unknown;
     /** (y8Tqm9Ap) `{ enabled, times[], scope, warn_before_min }` (qisman). */
     auto_close?: unknown;
+    /** «Kun tartibi» `{ enabled, times[], scope }` (qisman). */
+    auto_open?: unknown;
+    /** «Kun tartibi» `{ enabled, grace_min, channels: {telegram, in_app} }` (qisman). */
+    late_alert?: unknown;
     /** (gWI4gYkw) `{ recipients: {superadmin|couriers|markets: {telegram, in_app}}, format }`. */
     report?: unknown;
   }) {
@@ -496,14 +531,40 @@ export class ShiftAccountCheckService {
         };
       });
       // (y8Tqm9Ap / gWI4gYkw) Jadval va hisobot qabul qiluvchilari.
-      const automationBefore = await this.loadAutomationSettings();
+      // «Kun tartibi» (2026-11-11): avtomatik ochish va kechikish xabari.
+      const automationMap = await this.loadAutomationMap();
+      const automationBefore = this.automationFromMap(automationMap);
       const automation: Array<[string, unknown]> = [];
       try {
         automation.push(...parseAutoClosePatch(input?.auto_close));
+        automation.push(...parseAutoOpenPatch(input?.auto_open));
+        automation.push(
+          ...parseLateAlertPatch(
+            input?.late_alert,
+            automationBefore.late_alert,
+          ),
+        );
         automation.push(
           ...parseReportPatch(input?.report, automationBefore.report),
         );
+        if (automation.length) {
+          // PATCH dan KEYINGI jadval: ochish ∩ yopish vaqtlari, ochish
+          // yoqiq-u vaqtsiz, xabar yoqiq-u kanalsiz — 400.
+          assertShiftScheduleValid(
+            this.automationFromMap(
+              applySettingEntries(automationMap, automation),
+            ),
+          );
+        }
       } catch (error) {
+        if (error instanceof ShiftScheduleConflictError) {
+          throw new RpcException({
+            statusCode: 400,
+            message: error.message,
+            code: SHIFT_SCHEDULE_CONFLICT,
+            times: error.times.join(', '),
+          });
+        }
         if (error instanceof ShiftSettingsError) {
           throw new BadRequestException(error.message);
         }

@@ -44,6 +44,12 @@ export const FINANCE_REALTIME_EVENTS = {
   /** Smena jadval bo'yicha avtomatik yopildi (y8Tqm9Ap). */
   shiftAutoClosed: 'finance.shift.auto_closed',
   /**
+   * «Kun tartibi» (2026-11-11) — smena jadval bo'yicha avtomatik OCHILDI.
+   * Payload `{ shift_id, cashbox_user_id, cashbox_type, branch_id, status,
+   * open_reason: 'auto', opened_at }` (FE `realtimeFinance.ts`).
+   */
+  shiftAutoOpened: 'finance.shift.auto_opened',
+  /**
    * Karta qoldig'ining AI tekshiruvi tugadi (kiZgTybn). BE-B: avto-yopilgan
    * MAIN smenasiga rasm keyin yuklanganda ham (`late: true`) — hisobot qayta
    * o'qilsin.
@@ -92,6 +98,7 @@ export interface ShiftRealtimeSource {
   opened_by?: string | number | null;
   closed_by?: string | number | null;
   closed_at?: Date | string | null;
+  opened_at?: Date | string | null;
 }
 
 export type CashboxCardAction =
@@ -179,6 +186,27 @@ export function buildShiftClosedMessage(
       closed_at: toIso(shift.closed_at),
       closed_by: isUserId(shift.closed_by) ? String(shift.closed_by) : null,
       opened_by: isUserId(shift.opened_by) ? String(shift.opened_by) : null,
+    },
+    targets: shiftTargets(shift),
+  };
+}
+
+/**
+ * «Kun tartibi» — smena jadval bo'yicha avtomatik ochildi. Nishonlar smena
+ * yopilishi bilan bir xil (ochuvchi xodim yo'q — faqat rollar / filial
+ * menejerlari): kassa sahifasi smena va kassani qayta o'qiydi.
+ */
+export function buildShiftAutoOpenedMessage(
+  shift: ShiftRealtimeSource,
+): RealtimeNotifyMessage {
+  return {
+    event: FINANCE_REALTIME_EVENTS.shiftAutoOpened,
+    payload: {
+      shift_id: String(shift.id),
+      ...shiftScope(shift),
+      status: 'open',
+      open_reason: 'auto',
+      opened_at: toIso(shift.opened_at),
     },
     targets: shiftTargets(shift),
   };
@@ -345,6 +373,14 @@ export class FinanceRealtimeService {
     manager?: EntityManager,
   ): Promise<void> {
     return this.enqueue(() => buildShiftClosedMessage(shift, reason), manager);
+  }
+
+  /** «Kun tartibi» — smena avtomatik ochildi (`finance.shift.auto_opened`). */
+  shiftAutoOpened(
+    shift: ShiftRealtimeSource,
+    manager?: EntityManager,
+  ): Promise<void> {
+    return this.enqueue(() => buildShiftAutoOpenedMessage(shift), manager);
   }
 
   /** (kiZgTybn) Karta qoldig'ining AI tekshiruvi natijasi smena yopish oynasiga. */

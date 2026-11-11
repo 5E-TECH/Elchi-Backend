@@ -69,6 +69,7 @@ import {
   Order_status,
   PaymentMethod,
   Source_type,
+  isReceiptPaymentMethod,
   rmqSend,
   OutboxService,
   tashkentDayRange,
@@ -125,6 +126,8 @@ import { ShiftScheduleClaim } from './entities/shift-schedule-claim.entity';
 import {
   autoCloseClaimKey,
   autoClosedLabel,
+  autoOpenClaimKey,
+  autoOpenedLabel,
 } from './shift-auto-close/shift-schedule.rules';
 import {
   attachCorrectionViews,
@@ -191,6 +194,14 @@ export interface MarketPaymentInput {
   transfer_source_user_id?: string;
   // 3PE0B03q — CLICK to'lov MAIN kassaning qaysi nomli kartasidan.
   card_id?: string;
+  /**
+   * Audit M4 (2026-11-11) — pul QAYSI kassadan chiqadi. Sukut — HQ (MAIN).
+   * `branch` — menejerning «Marketga to'lov»i: o'z filial kassasidan
+   * (`payer_user_id` = filial id, gateway JWT'dan qo'yadi). `card_id` shu
+   * filial kassasining kartasi bo'lishi shart.
+   */
+  payer_cashbox_type?: Cashbox_type;
+  payer_user_id?: string;
 }
 
 /** (8OYPuz7J) Smena qatori + ochgan / yopgan xodim ismi (identity'dan). */
@@ -287,7 +298,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   /**
    * T3 — gateway'ning `receipt_policy` si (faqat 3 HTTP yo'li: qo'lda
    * chiqim, kuryer → HQ, filial → HQ). Ichki RMQ chaqiruvlarida yo'q —
-   * chek talab qilinmaydi.
+   * chek talab qilinmaydi. BE-C (2026-11-10): uchalasida ham chek faqat
+   * karta (`click`) to'lovida qo'llanadi (`isReceiptPaymentMethod`).
    */
   private receiptRequest(
     data: {
@@ -337,7 +349,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         leg.operation_type === Operation_type.EXPENSE,
     );
     const applicable =
-      ctx.payment_method === PaymentMethod.CLICK && Boolean(income);
+      isReceiptPaymentMethod(ctx.payment_method) && Boolean(income);
     return this.receipts.linkInTx(manager, request, {
       applicable,
       history_id: String(income?.id ?? ''),
@@ -1611,16 +1623,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // (2026-11-11) Faqat CHIQIM tekshiriladi: kirim qoldiqni hech qachon
+    // yomonlashtirmaydi. Ilgari manfiy kassaga (filial «Kassa qarzga
+    // ishlaydi», tizim oyoqlari) kirim ham, natija hali manfiy bo'lsa, 400
+    // bilan rad etilardi — menejer kuryer pulini qabul qila olmasdi.
+    const isExpense = sign < 0;
     if (resolvedMethod === PaymentMethod.CASH) {
       const nextCash = Number(cashbox.balance_cash) + sign * amount;
-      if (!allowNegativeBalance && nextCash < 0) {
+      if (!allowNegativeBalance && isExpense && nextCash < 0) {
         throw new BadRequestException("Naqd kassada yetarli mablag' yo'q");
       }
       cashbox.balance_cash = nextCash;
     } else {
       // isCardMethod — CLICK / CLICK_TO_MARKET (boshqasi yuqorida 400).
       const nextCard = Number(cashbox.balance_card) + sign * amount;
-      if (!allowNegativeBalance && nextCard < 0) {
+      if (!allowNegativeBalance && isExpense && nextCard < 0) {
         throw new BadRequestException("Karta hisobida yetarli mablag' yo'q");
       }
       cashbox.balance_card = nextCard;
@@ -2042,13 +2059,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
         // T3 — qo'lda chiqim cheki: AYNI tranzaksiyada bog'lanadi (xato —
         // pul ham rollback). Chek talab qilinsa-yu yo'q bo'lsa — 400.
+        // BE-C (ega 2026-11-10) — faqat karta (`click`) chiqimida: naqd
+        // chiqimda chek so'ralmaydi, `receipt_id` → 400
+        // RECEIPT_NOT_APPLICABLE (HQ'ga o'tkazmalar bilan bir xil).
         const linkedReceipt =
           options?.receipt && this.receipts
             ? await this.receipts.linkInTx(
                 queryRunner.manager,
                 options.receipt,
                 {
-                  applicable: true,
+                  applicable: isReceiptPaymentMethod(paymentMethod),
                   history_id: String(savedHistory.id),
                   entered_amount: Number(dto.amount),
                   payment_method: paymentMethod,
@@ -3430,6 +3450,124 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * «Kun tartibi» (2026-11-11) — jadval sloti kelganda kassada OCHIQ smena
+   * bo'lmasa, tizim uni o'zi ochadi (`opened_by = NULL`,
+   * `opened_by_system = true`, migratsiya 216).
+   *
+   * Kafolatlar (bitta tranzaksiya):
+   *  - kassa qatori FOR UPDATE — `openShift` bilan bir xil «bitta kassa —
+   *    bitta ochiq smena» qulfi (kassir shu lahzada ochsa — ikkinchisi ko'radi);
+   *  - `auto_open:<kassa>:<slot>` kaliti (PRIMARY KEY) — bir nechta finance
+   *    replikasi slotni bir marta bajaradi;
+   *  - ochilish qoldig'i — kassaning JONLI qoldig'i (`openShift` kabi);
+   *  - realtime `finance.shift.auto_opened` — outbox, shu tranzaksiyada.
+   * Pul harakati YO'Q.
+   */
+  async autoOpenShift(input: {
+    cashbox_user_id: string;
+    slot_key: string;
+    slot_at: Date;
+  }): Promise<{ opened: boolean; reason: string; shift_id: string | null }> {
+    const cashboxUserId = String(input.cashbox_user_id);
+    this.assertBigIntId(cashboxUserId, 'cashbox_user_id');
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let saved: Shift | null = null;
+    try {
+      const manager = queryRunner.manager;
+      const cashbox = await manager.findOne(Cashbox, {
+        where: {
+          user_id: cashboxUserId,
+          cashbox_type: FinanceServiceService.shiftCashboxType(cashboxUserId),
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!cashbox) {
+        await queryRunner.rollbackTransaction();
+        return { opened: false, reason: 'no_cashbox', shift_id: null };
+      }
+      const open = await this.findOpenShiftForCashbox(manager, cashboxUserId);
+      if (open) {
+        await queryRunner.rollbackTransaction();
+        return {
+          opened: false,
+          reason: 'already_open',
+          shift_id: String(open.id),
+        };
+      }
+      const claim = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(ShiftScheduleClaim)
+        .values({
+          key: autoOpenClaimKey(cashboxUserId, input.slot_key),
+          shift_id: null,
+          kind: 'auto_open',
+          slot: input.slot_key,
+        })
+        .orIgnore()
+        .returning(['key'])
+        .execute();
+      if (!Array.isArray(claim.raw) || !claim.raw.length) {
+        await queryRunner.rollbackTransaction();
+        return { opened: false, reason: 'claimed', shift_id: null };
+      }
+      const shift = manager.create(Shift, {
+        opened_by: null,
+        opened_by_system: true,
+        opened_at: new Date(),
+        status: ShiftStatus.OPEN,
+        opening_balance_cash: Number(cashbox.balance_cash ?? 0),
+        opening_balance_card: Number(cashbox.balance_card ?? 0),
+        comment: null,
+        cashbox_user_id: cashboxUserId,
+      });
+      saved = await manager.save(shift);
+      await manager.update(
+        ShiftScheduleClaim,
+        { key: autoOpenClaimKey(cashboxUserId, input.slot_key) },
+        { shift_id: String(saved.id) },
+      );
+      await this.financeRealtime?.shiftAutoOpened(saved, manager);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Shift',
+      entity_id: saved.id,
+      action: 'finance.shift_auto_opened',
+      new_value: {
+        status: saved.status,
+        opened_at: saved.opened_at,
+        opened_by_system: true,
+        opening_balance_cash: saved.opening_balance_cash,
+        opening_balance_card: saved.opening_balance_card,
+      },
+      user_id: null,
+      metadata: {
+        description: 'Smena tizim tomonidan avtomatik ochildi',
+        label: autoOpenedLabel(saved.opened_at),
+        slot: input.slot_key,
+        cashbox_user_id: cashboxUserId,
+      },
+    });
+    return {
+      opened: true,
+      reason: 'auto_opened',
+      shift_id: String(saved.id),
+    };
+  }
+
+  /**
    * (y8Tqm9Ap) Smenani yopish HISOBI — qo'lda (`closeShift`) va avtomatik
    * (`autoCloseShift`) yopishda AYNAN bir xil: oyna `opened_at → closeTime`,
    * faqat smena kassasi bo'yicha kirim/chiqim, konvertatsiya, kutilgan qoldiq
@@ -4195,7 +4333,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * tizim chaqiruvchilari yubormaydi — ikki marta yozilmaydi.
      */
     financial_ledger?: boolean;
-    /** T3 — faqat gateway'ning qo'lda chiqimi: `{ kind: 'manual_expense' }`. */
+    /**
+     * T3 — faqat gateway'ning qo'lda chiqimi: `{ kind: 'manual_expense' }`.
+     * BE-C — chek faqat `type=click` da (naqd + `receipt_id` → 400).
+     */
     receipt_policy?: { kind?: unknown };
     receipt_id?: unknown;
   }) {
@@ -4638,6 +4779,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         receiverCashbox,
         clickMarketCashbox,
         advancePayload,
+        branchAdvancePayload,
         marketAdvancePayload,
         pickupFifoAmount,
         dedupKey,
@@ -4659,6 +4801,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
       await this.tryPublishAdvanceNow(advancePayload);
+      if (branchAdvancePayload) {
+        await this.tryPublishAdvanceNow(branchAdvancePayload);
+      }
       if (marketAdvancePayload) {
         await this.tryPublishAdvanceNow(marketAdvancePayload);
       }
@@ -4785,6 +4930,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         clickMarketCashbox: Cashbox | null;
         courierHistory: CashboxHistory;
         advancePayload: Record<string, unknown>;
+        /** Audit M4 — menejer yo'lidagi marketga o'tkazma: filial → HQ. */
+        branchAdvancePayload: Record<string, unknown> | null;
         marketAdvancePayload: Record<string, unknown> | null;
         /** B824gOu5 — market FIFO hovuziga qo'shilgan pickup haqi. */
         pickupFifoAmount: number;
@@ -4800,24 +4947,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       );
     }
     /**
-     * ⚠️ AUDIT M4. "Marketga o'tkazma" filial kassasi orqali TAQIQLANADI.
-     *
-     * Menejer yo'lida qabul qiluvchi — filial kassasi: unga +X, darhol −X
-     * (MARKET_PAYMENT) yozilardi, market kassasi esa −X. Ledger'da faqat
-     * `courier_to_branch` siljirdi — kuryer qatorlari COURIER_SETTLED
-     * ("pul filialda, HQ'ga qarz") bo'lardi, filial kassasi esa 0. Natijada
-     * abadiy soxta filial qarzi paydo bo'lardi (filial → HQ "Insufficient
-     * cash balance" bilan to'xtardi) va kompaniya holati X ga oshib
-     * ko'rinardi. Bu usul faqat HQ (MAIN) kassasi orqali qoladi.
+     * AUDIT M4 (2026-11-11) — "Marketga o'tkazma" menejer yo'lida (qabul
+     * qiluvchi — filial kassasi) ham ochiq. Filial kassasiga +X va darhol −X
+     * (MARKET_PAYMENT) yoziladi — sof 0. Ilgari daftarda faqat
+     * `courier_to_branch` siljirdi: kuryer qatorlari COURIER_SETTLED ("pul
+     * filialda, HQ'ga qarz") bo'lardi, filial kassasida esa pul yo'q edi —
+     * abadiy soxta filial qarzi. Shu sabab usul taqiqlangan edi. Endi pastda
+     * shu tranzaksiyada `branch_to_hq` siljishi ham navbatga qo'yiladi
+     * (`clickViaBranch`): pul filialda to'xtamadi, HQ nomidan marketga ketdi.
      */
-    if (
+    const clickViaBranch =
       isClickToMarket &&
-      (data.receiver_cashbox_type ?? Cashbox_type.MAIN) === Cashbox_type.BRANCH
-    ) {
-      throw new BadRequestException(
-        "Marketga o'tkazma (click_to_market) faqat HQ kassasi orqali qabul qilinadi — filial kassasi bu usulda qabul qila olmaydi",
-      );
-    }
+      (data.receiver_cashbox_type ?? Cashbox_type.MAIN) === Cashbox_type.BRANCH;
 
     // Lock order: courier → main → market. Same order in paymentsToMarket
     // and updateBalance to avoid deadlocks across concurrent payments.
@@ -5067,6 +5208,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       dedupKey,
     );
     /**
+     * AUDIT M4 — menejer yo'lida (filial kassasi) marketga o'tkazma: filial
+     * → HQ bo'g'ini ham AYNI summaga yopiladi (token `:b`). Filial kassasi
+     * sof 0 o'zgardi, shuning uchun «HQ ga berilishi kerak» ham kuryer
+     * qarzi bilan birga X ga kamayishi kerak — aks holda filialda yo'q pul
+     * filial qarzi bo'lib qolardi. Tartib: kuryer → filial → HQ → market
+     * (outbox tartibi; boshqacha yetkazilsa ham order-service qoldiqlari
+     * kaskadda bir xil natija beradi).
+     */
+    const branchAdvancePayload = clickViaBranch
+      ? await this.enqueueSettlementAdvance(
+          manager,
+          'branch_to_hq',
+          receiverUserId,
+          Number(data.amount),
+          data.created_by,
+          dedupKey ? `${dedupKey}:b` : '',
+        )
+      : null;
+    /**
      * Marketga o'tkazma — market bo'g'ini ham yopiladi (audit M4): ayni
      * tranzaksiyada `hq_to_market` siljishi navbatga qo'yiladi. Ilgari
      * faqat `courier_to_branch` siljirdi va market qatorlari hech qachon
@@ -5137,6 +5297,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       clickMarketCashbox,
       courierHistory: savedCourierHistory,
       advancePayload,
+      branchAdvancePayload,
       marketAdvancePayload,
       pickupFifoAmount,
     };
@@ -5277,6 +5438,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     receipt_policy?: { kind?: unknown };
     receipt_id?: unknown;
   }) {
+    // (2026-11-11) Filial kassasi qarzga ishlaydimi — tranzaksiya va
+    // qulflardan OLDIN o'qiladi (RPC qulf ichida kutmasin). Xato — yopiq.
+    const branchDebtEnabled = await this.isBranchCashboxDebtEnabled(
+      String(data.branch_id ?? ''),
+    );
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -5374,11 +5540,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      // (2026-11-11) «Kassa qarzga ishlaydi» yoqilgan filial: HQ kassadagidan
+      // ortiq qabul qila oladi — filial kassasi (naqd yoki Asosiy karta)
+      // manfiyga tushadi. Ortig'i `enqueueSettlementAdvance` da `branch_to_hq`
+      // qoldig'i bo'lib qoladi: filial qarzi manfiy = HQ filialga qarzdor,
+      // keyingi sotuvlar uni o'zi yopadi. Nomli karta baribir qat'iy
+      // (haqiqiy karta qoldig'idan ortiq chiqmaydi).
       this.updateBalancesByMethod(
         branchCashbox,
         Number(data.amount),
         Operation_type.EXPENSE,
         data.payment_method ?? PaymentMethod.CASH,
+        branchDebtEnabled,
       );
       // Zv3MLn0a — filial oyog'i: tanlangan filial kartasidan (yo'q — Asosiy).
       const branchCardId = await applyCashboxCardSelection(
@@ -5389,6 +5562,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           operation: Operation_type.EXPENSE,
           amount: Number(data.amount),
           payment_method: data.payment_method ?? PaymentMethod.CASH,
+          allow_negative_default: branchDebtEnabled,
         },
       );
       await queryRunner.manager.save(branchCashbox);
@@ -5454,9 +5628,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const linkedReceipt =
         receiptRequest && this.receipts
           ? await this.receipts.linkInTx(queryRunner.manager, receiptRequest, {
-              applicable:
-                (data.payment_method ?? PaymentMethod.CASH) ===
-                PaymentMethod.CLICK,
+              applicable: isReceiptPaymentMethod(
+                data.payment_method ?? PaymentMethod.CASH,
+              ),
               history_id: String(mainHistory.id),
               counter_history_id: String(branchHistory.id),
               entered_amount: Number(data.amount),
@@ -5545,12 +5719,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           "To'lov allaqachon bajarilgan (takroriy so'rov)",
         );
       }
-      const { marketCashbox, advancePayload, dedupKey, pickupFifoAmount } =
-        applied;
+      const {
+        marketCashbox,
+        advancePayload,
+        branchAdvancePayload,
+        dedupKey,
+        pickupFifoAmount,
+      } = applied;
 
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
       // 2 s bilan cheklangan — gateway'ning 8 s chegarasidan ancha kichik.
+      // Audit M4: filial kassasidan to'lovda avval filial → HQ.
+      if (branchAdvancePayload) {
+        await this.tryPublishAdvanceNow(branchAdvancePayload);
+      }
       await this.tryPublishAdvanceNow(advancePayload);
       auditedMarketCashboxId = String(marketCashbox.id);
       /**
@@ -5592,6 +5775,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             market_id: data.market_id,
             amount: Number(data.amount),
             created_by: data.created_by ?? null,
+            // Audit M4 — pul qaysi kassadan (sukut — HQ).
+            payer_cashbox_type: data.payer_cashbox_type ?? Cashbox_type.MAIN,
+            ...(data.payer_cashbox_type === Cashbox_type.BRANCH
+              ? { payer_user_id: data.payer_user_id ?? null }
+              : {}),
           },
           description: ActivityDescribeUz.marketPayment(
             data.market_id,
@@ -5624,6 +5812,39 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     throw new BadRequestException(
       `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
     );
+  }
+
+  /**
+   * (2026-11-11) Filial kassasi qarzga ishlaydimi (`branch_schema.branches.
+   * cashbox_debt_enabled`, mig 217). Client yo'q, id noto'g'ri, filial HQ yoki
+   * xato — yopiq (`false`): avvalgi qat'iy xulq.
+   */
+  private async isBranchCashboxDebtEnabled(branchId: string): Promise<boolean> {
+    if (!this.branchClient || !/^\d+$/.test(branchId)) return false;
+    try {
+      const response = await rmqSend<unknown>(
+        this.branchClient,
+        { cmd: 'branch.find_by_id' },
+        {
+          id: branchId,
+          requester: FinanceServiceService.SYSTEM_BRANCH_REQUESTER,
+        },
+        { timeoutMs: 3000, retries: 0 },
+      );
+      const branch = this.extractResponseData<{
+        type?: unknown;
+        cashbox_debt_enabled?: unknown;
+      }>(response);
+      return (
+        String(branch?.type ?? '').toUpperCase() !== 'HQ' &&
+        branch?.cashbox_debt_enabled === true
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Filial ${branchId} kassa qarzi sozlamasini o'qib bo'lmadi: ${(err as Error).message}`,
+      );
+      return false;
+    }
   }
 
   private async isMarketCashboxDebtEnabled(marketId: string): Promise<boolean> {
@@ -5671,10 +5892,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         idempotent: false;
         transferId: string;
         dedupKey: string;
+        /** Pul chiqqan kassa — MAIN yoki (audit M4) menejerning filial kassasi. */
         mainCashbox: Cashbox;
         marketCashbox: Cashbox;
         marketHistory: CashboxHistory;
         advancePayload: Record<string, unknown>;
+        /** Audit M4 — filial kassasidan to'lovda `branch_to_hq` siljishi. */
+        branchAdvancePayload: Record<string, unknown> | null;
         /** B824gOu5 — FIFO hovuziga qo'shilgan pickup haqi. */
         pickupFifoAmount: number;
       }
@@ -5682,17 +5906,29 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     this.assertBigIntId(data.market_id, 'market_id');
     this.assertPositiveAmount(Number(data.amount));
     const transferSourceUserId = this.resolveTransferSourceUserId(data);
+    const payer = this.resolveMarketPayer(data);
 
-    // Lock order: main → market (same order as paymentsFromCourier to avoid
-    // cross-method deadlocks).
+    // Lock order: payer (main / branch) → market (same order as
+    // paymentsFromCourier: receiver → market) to avoid cross-method deadlocks.
+    // `mainCashbox` — pul chiqadigan kassa (menejer yo'lida filial kassasi).
     const mainCashbox = await manager.findOne(Cashbox, {
-      where: {
-        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
-        cashbox_type: Cashbox_type.MAIN,
-      },
+      where: payer.isBranch
+        ? {
+            user_id: payer.userId,
+            cashbox_type: Cashbox_type.BRANCH,
+            isDeleted: false,
+          }
+        : {
+            user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+            cashbox_type: Cashbox_type.MAIN,
+          },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!mainCashbox) throw new NotFoundException('Asosiy kassa topilmadi');
+    if (!mainCashbox) {
+      throw new NotFoundException(
+        payer.isBranch ? 'Filial kassasi topilmadi' : 'Asosiy kassa topilmadi',
+      );
+    }
 
     const marketCashbox = await manager.findOne(Cashbox, {
       where: {
@@ -5719,12 +5955,15 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return { idempotent: true };
     }
 
-    // (QTCUUgjA) Pul MAIN kassadan chiqadi — ochiq smena shart (darvoza
-    // yoqilgan bo'lsa). Idempotentlikdan KEYIN.
+    // (QTCUUgjA) Pul chiqadigan kassada (MAIN yoki menejer yo'lida filial)
+    // ochiq smena shart (darvoza yoqilgan bo'lsa; filial — faqat `all`, R6).
+    // Idempotentlikdan KEYIN.
     if (!opts.skipShiftGate) {
       await this.requireOpenShift(manager, {
-        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
-        cashbox_type: Cashbox_type.MAIN,
+        user_id: payer.isBranch
+          ? payer.userId
+          : FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: payer.isBranch ? Cashbox_type.BRANCH : Cashbox_type.MAIN,
       });
     }
 
@@ -5821,6 +6060,22 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // Advance the per-order FIFO settlement ledger (HQ → market) in the SAME
     // transaction as the cashbox move (Faza 2a). Reliable outbox delivery to
     // order-service replaces the old best-effort gateway bridge.
+    /**
+     * AUDIT M4 — filial kassasidan to'lov: pul filialdan HQ nomidan marketga
+     * ketdi, ya'ni filial HQ'ga X topshirgan bilan teng. Avval `branch_to_hq`
+     * (token `:b`) — «HQ ga berilishi kerak» filial kassasidagi pul bilan
+     * birga X ga kamayadi; so'ng odatdagi `hq_to_market`.
+     */
+    const branchAdvancePayload = payer.isBranch
+      ? await this.enqueueSettlementAdvance(
+          manager,
+          'branch_to_hq',
+          payer.userId,
+          Number(data.amount),
+          data.created_by,
+          dedupKey ? `${dedupKey}:b` : '',
+        )
+      : null;
     const pickupFifoAmount = opts.skipPickupFifo
       ? 0
       : await this.claimPickupFifoInTx(
@@ -5864,8 +6119,36 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       marketCashbox,
       marketHistory,
       advancePayload,
+      branchAdvancePayload,
       pickupFifoAmount,
     };
+  }
+
+  /**
+   * Audit M4 — marketga to'lov qaysi kassadan. `payer_cashbox_type` yo'q yoki
+   * `main` — HQ (avvalgidek). `branch` — menejerning filial kassasi,
+   * `payer_user_id` (filial id) majburiy. Boshqa tur — 400 (kuryer / market
+   * kassasidan marketga to'lov yo'q).
+   */
+  private resolveMarketPayer(data: MarketPaymentInput): {
+    isBranch: boolean;
+    userId: string;
+  } {
+    const type = data.payer_cashbox_type ?? Cashbox_type.MAIN;
+    if (type === Cashbox_type.MAIN) {
+      return {
+        isBranch: false,
+        userId: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+      };
+    }
+    if (type !== Cashbox_type.BRANCH) {
+      throw new BadRequestException(
+        "Marketga to'lov faqat asosiy yoki filial kassasidan qilinadi",
+      );
+    }
+    const userId = String(data.payer_user_id ?? '').trim();
+    this.assertBigIntId(userId, 'payer_user_id');
+    return { isBranch: true, userId };
   }
 
   async allCashboxesTotal(filters?: {

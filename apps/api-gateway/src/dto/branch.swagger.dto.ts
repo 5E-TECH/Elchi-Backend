@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNumberString,
   IsOptional,
@@ -200,6 +201,15 @@ export class UpdateBranchRequestDto {
   @Transform(moneyToString)
   @Matches(PER_ORDER_SHARE_PATTERN, { message: PER_ORDER_SHARE_MESSAGE })
   per_order_share?: string;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "Filial kassasi qarzga ishlaydimi (sukut FALSE, faqat admin/superadmin). TRUE — HQ filialdan kassasidagi puldan ortiq qabul qila oladi: filial kassasi manfiyga tushadi, ortig'i HQ'ning filialga qarzi («HQ qarzi») bo'lib qoladi va keyingi sotuvlar uni yopadi; FALSE — ortiqcha qabul 400.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  cashbox_debt_enabled?: boolean;
 }
 
 export class AssignBranchUserRequestDto {

@@ -467,8 +467,9 @@ export class CashboxReceiptService {
    * saqlangandan keyin): chekni operatsiyaga bog'laydi. Xato → throw →
    * butun tranzaksiya (pul ham) rollback.
    *
-   *  - `applicable:false` (naqd / click_to_market o'tkazma) + `receipt_id`
-   *    → 400 `RECEIPT_NOT_APPLICABLE`; `receipt_id` siz — `null`;
+   *  - `applicable:false` (naqd chiqim — BE-C; naqd / click_to_market
+   *    o'tkazma) + `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`; `receipt_id`
+   *    siz — `null` (rasm sozlamasi yoqiq bo'lsa ham);
    *  - rasm majburiy va `receipt_id` yo'q → 400 `RECEIPT_REQUIRED`; rasm
    *    o'chiq va yo'q → `null`;
    *  - chek qatori FOR UPDATE: yo'q → 400 `RECEIPT_NOT_FOUND`; boshqa

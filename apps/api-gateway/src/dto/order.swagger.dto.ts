@@ -365,7 +365,7 @@ export class CreateOrderRequestDto {
   @ApiPropertyOptional({
     example: 'Operator',
     description:
-      "Bo'sh bo'lsa registrator / market operatori uchun server uning ismini yozadi (VRyloH62)",
+      "Bo'sh bo'lsa market operatori uchun server uning ismini yozadi (VRyloH62); registrator — yozilmaydi (2026-11-11)",
   })
   @IsOptional()
   @IsString()
@@ -385,7 +385,7 @@ export class CreateOrderRequestDto {
       "o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» " +
       "(superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi " +
       "yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). " +
-      "Berilmasa — avvalgidek: `operator` matni; registrator / market operatori — o'zi.",
+      "Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11).",
   })
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => {

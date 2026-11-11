@@ -291,6 +291,7 @@ jobs:
           apps/finance-service/src/shift-account-check/shift-late-photo.BE-B.pg.spec.ts
           apps/finance-service/src/shift-auto-close/shift-auto-close-report.y8Tqm9Ap.pg.spec.ts
           apps/finance-service/src/cashbox-card-branch.Zv3MLn0a.pg.spec.ts
+          apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
@@ -298,6 +299,9 @@ jobs:
           # T8: spec o'z vaqtinchalik bazasini yaratadi (migratsiya 187 `order_schema`
           # ga yozadi) va oxirida o'chiradi — elchi_e_test faqat ulanish uchun.
           ORDER_T8_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # Operator dashboardi (ega 2026-11-11): getMarketStat operator doirasi —
+          # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
+          ORDER_MARKET_STAT_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # T3: kassa cheki — o'z vaqtinchalik bazasi (migratsiya 188 `finance_schema`).
           FINANCE_T3_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # Xarajat kategoriyalari (migratsiya 129/197/214, standart kategoriya qulfi —

@@ -224,7 +224,7 @@ export class FindHistoryQueryDto {
   @ApiPropertyOptional({
     enum: CASHBOX_RECEIPT_FILTER_STATUSES,
     description:
-      "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: qo'lda chiqim kategoriyali; MAIN'ga click kuryer/filial o'tkazmasi). `counts` ham shu filtr bilan.",
+      "(T3) Chek holati: AI holatlari yoki `none` — «Chek yo'q» (chek so'raladigan, lekin cheksiz: kategoriyali **karta (`click`)** qo'lda chiqimi; MAIN'ga click kuryer/filial o'tkazmasi). BE-C (2026-11-10): naqd qo'lda chiqim `none` ga KIRMAYDI (chek faqat karta chiqimida); eski naqd chiqimga bog'langan chek o'z AI holati bo'yicha avvalgidek topiladi. `counts` ham shu filtr bilan.",
   })
   @IsOptional()
   // Mock'langan `@app/common` (eski spec'lar) bilan ham yuklanadi.
@@ -710,6 +710,73 @@ export class ShiftReportSettingsRequestDto {
   format?: 'pdf' | 'xlsx';
 }
 
+/** «Kun tartibi» (2026-11-11) — smenani jadval bo'yicha avtomatik OCHISH (qisman). */
+export class ShiftAutoOpenSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.auto_open.enabled` (sukut false). Yoqiq — belgilangan vaqtda qamrovdagi kassada ochiq smena bo'lmasa tizim uni o'zi ochadi (`opened_by_system: true`, realtime `finance.shift.auto_opened`)",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: ['09:00'],
+    description:
+      "`shift.auto_open.times` — kuniga N marta, Toshkent `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['09:00']. Yopish vaqtlari bilan bir xil vaqt — 400 `SHIFT_SCHEDULE_CONFLICT`",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, { each: true })
+  times?: string[];
+
+  @ApiPropertyOptional({
+    example: 'main',
+    enum: ['main', 'main+branches'],
+    description:
+      '`shift.auto_open.scope`: `main` — faqat asosiy kassa (sukut), `main+branches` — filial kassalari ham',
+  })
+  @IsOptional()
+  @IsIn(['main', 'main+branches'])
+  scope?: 'main' | 'main+branches';
+}
+
+/** «Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi» xabari (qisman). */
+export class ShiftLateAlertSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.late_alert.enabled` (sukut false). Yoqiq — ochish vaqtidan (`auto_open.times`) `grace_min` o'tib kassada smena ochilmagan, yoki yopish vaqtidan (`auto_close.times`) keyin smena hali ochiq bo'lsa superadminlarga xabar; tizimning avtomatik ochishi / yopishi xato bilan tugasa — darhol, sababi bilan. Kassa / smena × slot uchun bir marta",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: 15,
+    description: '`shift.late_alert.grace_min` — 0–180 daqiqa (sukut 15)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(180)
+  grace_min?: number;
+
+  @ApiPropertyOptional({
+    type: () => ShiftReportChannelsRequestDto,
+    description:
+      '`shift.late_alert.channels` — `telegram` / `in_app` (sukut: faqat in_app). Yoqiq bo`lsa kamida bittasi — aks holda 400',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  channels?: ShiftReportChannelsRequestDto;
+}
+
 /** (kiZgTybn) PATCH /finance/shift/settings — FAQAT superadmin. */
 export class UpdateShiftSettingsRequestDto {
   @ApiPropertyOptional({
@@ -764,6 +831,25 @@ export class UpdateShiftSettingsRequestDto {
   @ValidateNested()
   @Type(() => ShiftAutoCloseSettingsRequestDto)
   auto_close?: ShiftAutoCloseSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftAutoOpenSettingsRequestDto,
+    description: '«Kun tartibi» (2026-11-11) — avtomatik ochish jadvali',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftAutoOpenSettingsRequestDto)
+  auto_open?: ShiftAutoOpenSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftLateAlertSettingsRequestDto,
+    description:
+      '«Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi» superadminlarga',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftLateAlertSettingsRequestDto)
+  late_alert?: ShiftLateAlertSettingsRequestDto;
 
   @ApiPropertyOptional({
     type: () => ShiftReportSettingsRequestDto,
@@ -1243,7 +1329,7 @@ export class MainCashboxSpendRequestDto extends MainCashboxManualRequestDto {
   @ApiPropertyOptional({
     example: '41',
     description:
-      "(T3) Chek qoralamasi ID si. Chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`); boshqa xodimning cheki → 403, ishlatilgan → 409 `RECEIPT_ALREADY_USED`.",
+      "(T3) Chek qoralamasi ID si (`POST /finance/receipts`, `kind=manual_expense`). BE-C (ega 2026-11-10): chek FAQAT karta chiqimida — `type: \"click\"`. Karta: chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd (`type` yo'q / `cash`) yoki `click_to_market`: chek so'ralmaydi (rasm sozlamasi yoqiq bo'lsa ham), `receipt_id` yuborilsa → 400 `RECEIPT_NOT_APPLICABLE` «Bu operatsiyada chek qo'llanmaydi» (pul o'zgarmaydi). Boshqa xodimning cheki → 403 `RECEIPT_NOT_OWNER`, ishlatilgan → 409 `RECEIPT_ALREADY_USED`.",
   })
   @IsOptional()
   @IsString()
@@ -2008,7 +2094,8 @@ export class ReceiptSummaryQueryDto {
 
   @ApiPropertyOptional({
     enum: CASHBOX_RECEIPT_FILTER_STATUSES,
-    description: "`none` — chek so'raladigan, lekin cheksiz qator",
+    description:
+      "`none` — chek so'raladigan, lekin cheksiz qator (BE-C: qo'lda chiqimdan faqat karta — `click`; naqd chiqim kirmaydi)",
   })
   @IsOptional()
   @IsIn(Array.from(CASHBOX_RECEIPT_FILTER_STATUSES ?? []))

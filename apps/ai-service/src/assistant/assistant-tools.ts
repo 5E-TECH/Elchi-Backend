@@ -888,7 +888,7 @@ const TOOL_SPECS: readonly AssistantToolSpec[] = [
   {
     name: 'get_receipt_checks',
     description:
-      "Kassa CHEKLARI tekshiruvi (qo'lda chiqim, kuryer → HQ va filial → HQ click o'tkazmalari) davr bo'yicha: AI holati soni " +
+      "Kassa CHEKLARI tekshiruvi (karta bilan qo'lda chiqim, kuryer → HQ va filial → HQ click o'tkazmalari; naqdda chek yo'q) davr bo'yicha: AI holati soni " +
       '(match — summa mos, mismatch — farq bor, unreadable, pending, error, disabled, none — chek so‘raladigan, lekin yuklanmagan), ' +
       "farqlar yig'indisi (Σ|farq|), filial va xarajat kategoriyasi kesimi, eng katta farqli 15 chek. «Cheklar mosmi», «qaysi chiqimda chek yo'q» savollarida chaqiring.",
     input_schema: {

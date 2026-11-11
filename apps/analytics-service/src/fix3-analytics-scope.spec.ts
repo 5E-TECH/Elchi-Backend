@@ -190,6 +190,53 @@ describe('FIX3 A7 — analytics scoping', () => {
       ]);
     });
 
+    // Ega 2026-11-11: operator dashboardida KPI/grafiklar (`myStat`) — faqat
+    // o'z buyurtmalari; reytinglar (`markets`, `topMarkets`, `topOperators`)
+    // avvalgidek market bo'yicha.
+    const marketStatPayload = () =>
+      rmqSendMock.mock.calls.find(
+        ([, pattern]) => pattern?.cmd === 'order.analytics.market_stat',
+      )?.[2];
+    const topOperatorsPayload = () =>
+      rmqSendMock.mock.calls.find(
+        ([, pattern]) =>
+          pattern?.cmd === 'order.analytics.top_operators_by_market',
+      )?.[2];
+
+    it("⭐ market operatori: myStat — o'z marketida FAQAT o'z buyurtmalari (operator_id)", async () => {
+      route('7');
+
+      await service.getDashboard(
+        { id: '900', roles: ['market_operator'] },
+        {} as any,
+      );
+
+      expect(marketStatPayload()).toEqual(
+        expect.objectContaining({
+          requester: expect.objectContaining({ id: '7' }),
+          operator_id: '900',
+        }),
+      );
+      // «Top operatorlar» — butun market operatorlari (o'zgarmagan).
+      expect(topOperatorsPayload()).toEqual({
+        requester: expect.objectContaining({ id: '7' }),
+      });
+      expect(topOperatorsPayload()).not.toHaveProperty('operator_id');
+    });
+
+    it('market: myStat — butun market (operator_id yuborilmaydi)', async () => {
+      route(null);
+
+      await service.getDashboard({ id: '5', roles: ['market'] }, {} as any);
+
+      expect(marketStatPayload()).toEqual(
+        expect.objectContaining({
+          requester: expect.objectContaining({ id: '5' }),
+        }),
+      );
+      expect(marketStatPayload()).not.toHaveProperty('operator_id');
+    });
+
     it("marketi aniqlanmagan operator — bo'sh ro'yxat (fail-closed)", async () => {
       route(null);
 

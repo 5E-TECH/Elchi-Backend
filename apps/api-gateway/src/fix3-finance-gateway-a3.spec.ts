@@ -42,7 +42,8 @@ import { FindCashboxByUserQueryDto } from './dto/finance.swagger.dto';
 /**
  * FIX3 / A3 — finance-gateway tuzatishlari: C1 (idempotentlik barmoq izi),
  * C2 (kassa sahifasi sana filtri), C3 (menejer kuryer naqdi — faqat o'z
- * filiali), M4 (menejer "Marketga o'tkazma" qila olmaydi), M16, BE-PAY-14,
+ * filiali), M4 (2026-11-11: menejer marketga o'z filial kassasidan to'laydi va
+ * "Marketga o'tkazma" qila oladi), M16, BE-PAY-14,
  * CODE-08 (registrator tarixi).
  *
  * Mock'lar `cmd` bo'yicha javob beradi; ro'yxatda yo'q `cmd` kelsa xato —
@@ -287,25 +288,85 @@ describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
   });
 });
 
-describe('M4 — menejer "Marketga o`tkazma" qila olmaydi', () => {
-  it('click_to_market → 403, hech qanday RPC chaqirilmaydi', async () => {
+describe('M4 (2026-11-11) — menejer «Marketga to`lov» o`z filial kassasidan', () => {
+  const body = {
+    market_id: '201',
+    amount: 300_000,
+    payment_method: 'cash',
+  } as any;
+  /** JWT'da `branch_id` yo'q — filial branch-service'dan aniqlanadi. */
+  const managerWithoutJwtBranch = {
+    user: { sub: '208', roles: ['manager'] },
+  } as any;
+
+  it('menejer — finance`ga payer = filial kassasi (filial JWT`dan)', async () => {
     const env = setup();
+    route(env.financeClient, {
+      'finance.cashbox.payment_market': () => ({ statusCode: 200 }),
+    });
+
+    await env.controller.paymentToMarket(manager15, body, 'idem-m4');
+
+    expect(
+      payloadOf(env.financeClient, 'finance.cashbox.payment_market'),
+    ).toEqual({
+      market_id: '201',
+      amount: 300_000,
+      payment_method: 'cash',
+      created_by: '208',
+      dedup_epoch: 'idem-m4',
+      payer_cashbox_type: 'branch',
+      payer_user_id: '15',
+    });
+  });
+
+  it('menejer filiali JWT`da yo`q — branch-service`dan aniqlanadi', async () => {
+    const env = setup();
+    route(env.branchClient, {
+      'branch.user.find_by_user': () => ({ data: { branch_id: '15' } }),
+    });
+    route(env.financeClient, {
+      'finance.cashbox.payment_market': () => ({ statusCode: 200 }),
+    });
+
+    await env.controller.paymentToMarket(managerWithoutJwtBranch, body);
+
+    expect(
+      payloadOf(env.financeClient, 'finance.cashbox.payment_market'),
+    ).toEqual(
+      expect.objectContaining({
+        payer_cashbox_type: 'branch',
+        payer_user_id: '15',
+      }),
+    );
+  });
+
+  it('menejer filiali topilmasa → 403, finance chaqirilmaydi', async () => {
+    const env = setup();
+    route(env.branchClient, {
+      'branch.user.find_by_user': () => ({ data: null }),
+    });
 
     await expect(
-      env.controller.paymentFromCourier(manager15, {
-        courier_id: '209',
-        amount: 300_000,
-        payment_method: 'click_to_market',
-        market_id: '201',
-      } as any),
-    ).rejects.toMatchObject({
-      status: 403,
-      message:
-        "Marketga o'tkazma (click_to_market) faqat HQ kassasi orqali (superadmin/admin) qabul qilinadi",
-    });
+      env.controller.paymentToMarket(managerWithoutJwtBranch, body),
+    ).rejects.toMatchObject({ status: 403 });
     expect(env.financeClient.send).not.toHaveBeenCalled();
-    expect(env.branchClient.send).not.toHaveBeenCalled();
-    expect(env.identityClient.send).not.toHaveBeenCalled();
+  });
+
+  it('superadmin — HQ kassasidan (payer yuborilmaydi)', async () => {
+    const env = setup();
+    route(env.financeClient, {
+      'finance.cashbox.payment_market': () => ({ statusCode: 200 }),
+    });
+
+    await env.controller.paymentToMarket(superadmin, body, 'idem-hq');
+
+    const payload = payloadOf(
+      env.financeClient,
+      'finance.cashbox.payment_market',
+    );
+    expect(payload).not.toHaveProperty('payer_cashbox_type');
+    expect(payload).not.toHaveProperty('payer_user_id');
   });
 });
 
@@ -381,6 +442,34 @@ describe('C3 / M7 / RBAC-07 — menejer faqat O`Z filiali kuryeridan naqd oladi'
         receiver_user_id: '15',
         receiver_cashbox_type: 'branch',
         dedup_epoch: 'idem-9',
+      }),
+    );
+  });
+
+  it('M4 (2026-11-11): «Marketga o`tkazma» ham qabul qilinadi — qabul qiluvchi filial 15', async () => {
+    const env = managerEnv({ resolvedBranch: '15' });
+
+    await env.controller.paymentFromCourier(
+      manager15,
+      {
+        courier_id: '209',
+        amount: 300_000,
+        payment_method: 'click_to_market',
+        market_id: '201',
+      } as any,
+      'idem-ctm',
+    );
+
+    expect(
+      payloadOf(env.financeClient, 'finance.cashbox.payment_courier'),
+    ).toEqual(
+      expect.objectContaining({
+        courier_id: '209',
+        payment_method: 'click_to_market',
+        market_id: '201',
+        receiver_user_id: '15',
+        receiver_cashbox_type: 'branch',
+        dedup_epoch: 'idem-ctm',
       }),
     );
   });

@@ -202,7 +202,8 @@ describe('fix3 A2 — order create hardening', () => {
     }
     expect(dto.branch_id).toBe('21');
     expect(dto.source).toBe('branch');
-    expect(dto.operator_id).toBe('300');
+    // Ega 2026-11-11: registrator operator EMAS — tanlamasa operatorsiz.
+    expect(dto.operator_id).toBeNull();
   });
 
   it('REGISTRATOR: boshqa filial branch_id yuborsa avvalgidek 400 (himoya kuchsizlanmadi)', async () => {

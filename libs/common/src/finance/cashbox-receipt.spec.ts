@@ -1,10 +1,13 @@
 import {
   CASHBOX_RECEIPT_ERROR_CODES,
   CASHBOX_RECEIPT_MESSAGES,
+  CASHBOX_RECEIPT_PAYMENT_METHOD,
   applyReceiptSettingsPatch,
+  isReceiptPaymentMethod,
   receiptSettingGroupOf,
   type CashboxReceiptSettings,
 } from './cashbox-receipt';
+import { PaymentMethod } from '../enums';
 import { PUBLIC_ERROR_CODES } from '../filters/public-error-fields';
 
 /** T3 (QlLf33Ma) — chek sozlamasi qoidasi va kodlar. */
@@ -64,5 +67,25 @@ describe('applyReceiptSettingsPatch', () => {
       expect(CASHBOX_RECEIPT_MESSAGES[code]).toBeTruthy();
       expect(PUBLIC_ERROR_CODES).toHaveProperty(code);
     }
+  });
+});
+
+/** BE-C (ega 2026-11-10) — chek faqat karta (`click`) operatsiyasida. */
+describe('isReceiptPaymentMethod', () => {
+  it('faqat click — chek qo`llanadi', () => {
+    expect(CASHBOX_RECEIPT_PAYMENT_METHOD).toBe('click');
+    expect(isReceiptPaymentMethod(PaymentMethod.CLICK)).toBe(true);
+    expect(isReceiptPaymentMethod('click')).toBe(true);
+  });
+
+  it.each([
+    [PaymentMethod.CASH],
+    [PaymentMethod.CLICK_TO_MARKET],
+    [undefined],
+    [null],
+    [''],
+    ['CLICK'],
+  ])('%p — chek qo`llanmaydi', (method) => {
+    expect(isReceiptPaymentMethod(method)).toBe(false);
   });
 });

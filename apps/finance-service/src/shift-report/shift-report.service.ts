@@ -849,6 +849,14 @@ export class ShiftReportService {
   }
 
   /**
+   * «Kun tartibi» — kechikish xabari ham shu ro'yxatga yuboriladi
+   * (`ShiftAutoCloseScheduler`). Identity javob bermasa — XATO.
+   */
+  activeSuperadminIds(): Promise<string[]> {
+    return this.superadminIds();
+  }
+
+  /**
    * Faol superadminlar (aniq `recipient_ids` — rol/broadcast EMAS). Identity
    * javob bermasa — XATO (da'vo bo'shatiladi, keyingi tick qayta uradi):
    * superadminsiz "yuborildi" deb yozilmasin.

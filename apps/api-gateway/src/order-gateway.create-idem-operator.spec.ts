@@ -145,7 +145,7 @@ describe('gpCIsGjH — Idempotency-Key → request_id', () => {
 });
 
 describe('VRyloH62 — operator ismi va raqamlari', () => {
-  it('⭐ TC1: registrator `operator` ni bo`sh qoldirsa — uning ismi yoziladi', async () => {
+  it('⭐ TC1 (ega 2026-11-11): registrator `operator` ni bo`sh qoldirsa — operatorsiz, ismi yozilmaydi', async () => {
     const { controller, orderClient } = makeController({
       userName: 'Registrator Rustam',
     });
@@ -153,10 +153,9 @@ describe('VRyloH62 — operator ismi va raqamlari', () => {
       { ...dto, market_id: '121' } as any,
       userReq('77', ['registrator']),
     );
-    expect(sentCreate(orderClient).dto).toMatchObject({
-      operator: 'Registrator Rustam',
-      operator_id: '77',
-    });
+    const sent = sentCreate(orderClient).dto;
+    expect(sent.operator_id).toBeNull();
+    expect(sent).not.toHaveProperty('operator');
   });
 
   it('registrator `operator` ni o`zi yozgan bo`lsa — o`zgarmaydi', async () => {

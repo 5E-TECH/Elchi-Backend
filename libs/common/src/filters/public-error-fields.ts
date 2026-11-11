@@ -6,7 +6,10 @@ import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
-import { ORDER_INTAKE_CLOSED } from '../order/order-intake';
+import {
+  ORDER_INTAKE_CLOSED,
+  ORDER_RECEIVE_CLOSED,
+} from '../order/order-intake';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -72,6 +75,11 @@ export const OLD_PASSWORD_INVALID = 'OLD_PASSWORD_INVALID';
  */
 export const PASSWORD_SMS_COOLDOWN = 'PASSWORD_SMS_COOLDOWN';
 export const PASSWORD_SMS_DAILY_LIMIT = 'PASSWORD_SMS_DAILY_LIMIT';
+/**
+ * («Kun tartibi», 2026-11-11) Smena jadvalida bir vaqt ham ochish, ham yopish
+ * ro'yxatida — 400; `times` — to'qnashgan vaqtlar (`"09:00, 23:00"`).
+ */
+export const SHIFT_SCHEDULE_CONFLICT = 'SHIFT_SCHEDULE_CONFLICT';
 
 export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (BOT-3d) kuryer amali Idempotency-Key: boshqa amal/buyurtma/tana — 422;
@@ -116,6 +124,8 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (aidsxJ2H) parol SMS'ini qayta yuborish chegarasi — 429.
   [PASSWORD_SMS_COOLDOWN]: ['retry_after_seconds'],
   [PASSWORD_SMS_DAILY_LIMIT]: ['retry_after_seconds'],
+  // («Kun tartibi») smena jadvali: ochish va yopish vaqti bir xil — 400.
+  [SHIFT_SCHEDULE_CONFLICT]: ['times'],
   // (XtcEyQjb) to'xtatilgan omborga kirim — 409.
   [WAREHOUSE_ERROR_CODES.PAUSED]: [],
   // (XtcEyQjb) market operatoriga «Ombordagi qoldiq» yopiq — 403.
@@ -132,6 +142,9 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (2026-11-09) bugungi buyurtma qabuli yopiq — 409; `reopens_at` — kun
   // almashadigan lahza (ISO), `cutoff_time` — qo'yilgan qabul vaqti (HH:MM).
   [ORDER_INTAKE_CLOSED]: ['reopens_at', 'cutoff_time'],
+  // (2026-11-11 «Kun tartibi») buyurtmani qabul qilish vaqti tugagan — 409;
+  // `receive_cutoff_time` — qo'yilgan qabul chegarasi (HH:MM).
+  [ORDER_RECEIVE_CLOSED]: ['reopens_at', 'receive_cutoff_time'],
   // (T1 K1 s6xY4f5C) hamkor sotuvchisi / market allaqachon bog'langan — 409.
   [PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN]: [],
   [PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN]: [],

@@ -134,6 +134,7 @@ describe('OrderServiceController', () => {
       range.startDate,
       range.endDate,
       true,
+      undefined,
     );
   });
 });

@@ -20,8 +20,9 @@ import { SHIFT_LATE_PHOTO_WINDOW_MS } from './shift-account-check.rules';
  *  • rasm / AI master kalitlari GLOBAL — migratsiya ularni yoqadi, superadmin
  *    bayroq qo'ygan filial kartalari ta'sirlanadi («filialga tegilmaydi» emas);
  *  • eski kod + yangi DB (deploy oralig'i / kodni qaytarish) xavfi va chorasi.
- * BE-B (o'sha kun, keyinroq) yozuvi BE-A dan TEPADA turadi — BE-A esa darhol
- * undan keyin (eng yangisi tepada); BE-B matni ham kod bilan solishtiriladi.
+ * BE-B (o'sha kun, keyinroq) yozuvi BE-A dan yuqorida turadi (eng yangisi
+ * tepada; oralarida boshqa yozuvlar bo'lishi mumkin); BE-B matni ham kod bilan
+ * solishtiriladi.
  */
 const CHANGELOG = readFileSync(
   join(__dirname, '../../../../docs/frontend/FRONTEND_CHANGELOG.md'),
@@ -31,7 +32,7 @@ const CHANGELOG = readFileSync(
 const BEA_HEADING =
   "### 2026-11-10 — Smena yopish: ASOSIY kassada karta qoldig'i + skrinshot + AI sukut bo'yicha MAJBURIY (BE-A)";
 const BEB_HEADING =
-  '### 2026-11-10 — Avto-yopilgan ASOSIY kassa smenasiga 24 soat ichida karta rasmini keyin yuklash (BE-B)';
+  '### 2026-11-11 — Avto-yopilgan ASOSIY kassa smenasiga 24 soat ichida karta rasmini keyin yuklash (BE-B)';
 
 /** Yozuv matni: sarlavhadan keyingi `### ` gacha. */
 function entryAfter(heading: string): string {
@@ -59,12 +60,18 @@ function headingsAfterMarker(): string[] {
 describe('BE-A FRONTEND_CHANGELOG ↔ kod (migratsiya 215)', () => {
   const entry = beaEntry();
 
-  it('yozuv «Yangi yozuvlar shu yerga» belgisidan keyin tepada — faqat BE-B (keyingi o‘zgarish) undan yuqorida', () => {
-    const [first, second] = headingsAfterMarker();
-    // BE-B — BE-A ustiga qurilgan keyingi yozuv (eng yangisi tepada).
-    expect(first).toBe(BEB_HEADING);
-    expect(second).toBe(BEA_HEADING);
-    expect(second).toMatch(/^### 2026-11-10 — Smena yopish: ASOSIY kassada/);
+  // 2026-11-11: «eng tepada» sharti olib tashlandi — jurnal «eng yangisi
+  // tepada», ya'ni har yangi yozuv (masalan 2026-11-11 operator dashboardi)
+  // bu yozuvni pastga suradi va test qizil bo'lardi. Talab — yozuv
+  // «Yozuvlar» bo'limida, belgidan KEYIN turishi; BE-B (keyinroq) undan
+  // yuqorida (oralarida boshqa yozuvlar bo'lishi mumkin).
+  it('yozuv «Yangi yozuvlar shu yerga» belgisidan keyin (Yozuvlar bo`limida), BE-B undan yuqorida', () => {
+    const headings = headingsAfterMarker();
+    const bea = headings.indexOf(BEA_HEADING);
+    const beb = headings.indexOf(BEB_HEADING);
+    expect(bea).toBeGreaterThanOrEqual(0);
+    expect(beb).toBeGreaterThanOrEqual(0);
+    expect(beb).toBeLessThan(bea);
   });
 
   it('AI pending kutishi ~15 s (30 s emas)', () => {

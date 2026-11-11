@@ -51,6 +51,8 @@ describe('katalog (Eh8y21Ha TC12 analogi)', () => {
       'finance.shift_closed',
       'finance.shift_auto_closed',
       'finance.shift_auto_close_warning',
+      // «Kun tartibi» (2026-11-11) — smena vaqtida ochilmadi / yopilmadi.
+      'finance.shift_late',
       'finance.payment_corrected',
     ]);
     FINANCE_NOTIFICATION_TYPES.forEach((type) =>

@@ -1014,11 +1014,26 @@ export class AnalyticsServiceService {
         requester,
         roles,
       );
+      // Ega 2026-11-11: market OPERATORI dashboardida KPI va grafiklar
+      // (`myStat`) — faqat o'z buyurtmalari (`orders.operator_id` = o'zi),
+      // marketniki emas. Reytinglar («Top operatorlar», «Marketlar bo'yicha
+      // sotuv foizi») o'zgarmaydi — ega: ikkalasi ham qolsin.
+      const ownOperatorId =
+        roles.has(Roles.MARKET_OPERATOR) &&
+        !roles.has(Roles.MARKET) &&
+        requester?.id != null &&
+        String(requester.id).trim() !== ''
+          ? String(requester.id).trim()
+          : undefined;
       const [myStat, markets, topMarkets, topOperators] = await Promise.all([
         this.readPart(
           this.orderClient,
           'order.analytics.market_stat',
-          { requester: marketRequester, ...dashboardRange },
+          {
+            requester: marketRequester,
+            ...dashboardRange,
+            ...(ownOperatorId ? { operator_id: ownOperatorId } : {}),
+          },
           failedParts,
           'myStat',
         ),

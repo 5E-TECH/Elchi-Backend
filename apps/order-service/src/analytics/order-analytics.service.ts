@@ -2687,6 +2687,14 @@ export class OrderAnalyticsService {
     startDate?: string,
     endDate?: string,
     all = false,
+    /**
+     * Market operatori dashboardi (ega 2026-11-11: «operator dashboardida
+     * o'ziniki emas, marketning umumiy statistikasi ko'rinyapti»): berilsa —
+     * faqat `operator_id` shu operator bo'lgan buyurtmalar (o'zi yaratgani va
+     * market/registrator uni tanlagani; «Top operatorlar» va komissiya bilan
+     * AYNI atribut). Market doirasi saqlanadi.
+     */
+    operatorId?: string,
   ) {
     const { start, end, applied_range } = this.analyticsDateRange(
       startDate,
@@ -2696,12 +2704,22 @@ export class OrderAnalyticsService {
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
+    const ownOperatorId =
+      operatorId != null && String(operatorId).trim() !== ''
+        ? String(operatorId).trim()
+        : null;
 
-    const base = () =>
-      this.orderRepo
+    const base = () => {
+      const qb = this.orderRepo
         .createQueryBuilder('o')
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
         .andWhere('o.market_id = :marketId', { marketId });
+      return ownOperatorId
+        ? qb.andWhere('o.operator_id = :operatorId', {
+            operatorId: ownOperatorId,
+          })
+        : qb;
+    };
 
     const inRange = () =>
       base().andWhere('o.createdAt BETWEEN :start AND :end', { start, end });
