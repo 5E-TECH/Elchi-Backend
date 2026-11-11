@@ -1,21 +1,24 @@
 import { RpcException } from '@nestjs/microservices';
 import {
   ORDER_INTAKE_CLOSED,
-  activeOrderIntakeCutoff,
+  ORDER_RECEIVE_CLOSED,
+  cutoffInstant,
   formatClockTime,
   formatTashkentDateTime,
   orderIntakeClosedError,
   orderIntakeClosedPartnerMessage,
+  orderReceiveClosedError,
   parseClockTime,
   readOrderIntakeClosed,
   resolveOrderIntakeState,
   resolveOrderIntakeWindow,
+  storedCutoffTime,
 } from './order-intake';
 
 /** Toshkent devor soati → UTC lahza (UTC+5, yozgi vaqt yo'q). */
 const tashkent = (iso: string) => new Date(`${iso}+05:00`);
 
-describe('order-intake — bugungi qabul vaqti va kun almashish soati', () => {
+describe('order-intake — «Kun tartibi»: chegaralar va kun almashish soati', () => {
   describe('parseClockTime / formatClockTime', () => {
     it.each([
       ['00:00', 0],
@@ -96,9 +99,8 @@ describe('order-intake — bugungi qabul vaqti va kun almashish soati', () => {
     });
   });
 
-  describe('resolveOrderIntakeState', () => {
-    const windowStart = (dayChange: number, now: Date) =>
-      resolveOrderIntakeWindow(now, dayChange).start.toISOString();
+  describe('resolveOrderIntakeState — doimiy (har kungi) chegaralar', () => {
+    const cutoff = (time: string | null) => ({ cutoff_time: time });
 
     it('sozlama yo`q — cheklovsiz, kun 00:00 (avvalgi xulq)', () => {
       const now = tashkent('2026-11-09T15:00:00');
@@ -109,6 +111,10 @@ describe('order-intake — bugungi qabul vaqti va kun almashish soati', () => {
         is_open: true,
         closes_at: null,
         reopens_at: null,
+        receive_cutoff_time: null,
+        receive_is_open: true,
+        receive_closes_at: null,
+        receive_reopens_at: null,
         day_change_time: '00:00',
         day_started_at: tashkent('2026-11-09T00:00:00').toISOString(),
         next_day_change_at: tashkent('2026-11-10T00:00:00').toISOString(),
@@ -116,14 +122,9 @@ describe('order-intake — bugungi qabul vaqti va kun almashish soati', () => {
     });
 
     it('10:00 gacha: 09:59 ochiq, 10:00 dan kun almashguncha yopiq', () => {
-      const cutoff = {
-        window_start: windowStart(0, tashkent('2026-11-09T08:00:00')),
-        date: '2026-11-09',
-        cutoff_time: '10:00',
-      };
       const before = resolveOrderIntakeState({
         now: tashkent('2026-11-09T09:59:59'),
-        cutoff,
+        cutoff: cutoff('10:00'),
       });
       expect(before.is_open).toBe(true);
       expect(before.cutoff_time).toBe('10:00');
@@ -133,122 +134,153 @@ describe('order-intake — bugungi qabul vaqti va kun almashish soati', () => {
       expect(before.reopens_at).toBe(
         tashkent('2026-11-10T00:00:00').toISOString(),
       );
-
-      const at = resolveOrderIntakeState({
-        now: tashkent('2026-11-09T10:00:00'),
-        cutoff,
-      });
-      expect(at.is_open).toBe(false);
-
-      const late = resolveOrderIntakeState({
-        now: tashkent('2026-11-09T23:59:59'),
-        cutoff,
-      });
-      expect(late.is_open).toBe(false);
+      for (const at of ['2026-11-09T10:00:00', '2026-11-09T23:59:59']) {
+        expect(
+          resolveOrderIntakeState({
+            now: tashkent(at),
+            cutoff: cutoff('10:00'),
+          }).is_open,
+        ).toBe(false);
+      }
     });
 
-    it('kun almashganda cheklov o`zi bekor bo`ladi', () => {
-      const cutoff = {
-        window_start: windowStart(0, tashkent('2026-11-09T08:00:00')),
-        date: '2026-11-09',
-        cutoff_time: '10:00',
-      };
-      const nextDay = resolveOrderIntakeState({
+    it('⭐ HAR KUNI takrorlanadi: ertasi kuni 00:00 da ochiladi, 10:00 da yana yopiladi', () => {
+      const stored = cutoff('10:00');
+      const midnight = resolveOrderIntakeState({
         now: tashkent('2026-11-10T00:00:00'),
-        cutoff,
+        cutoff: stored,
       });
-      expect(nextDay).toMatchObject({
+      expect(midnight).toMatchObject({
         is_open: true,
-        cutoff_time: null,
-        closes_at: null,
-        reopens_at: null,
+        cutoff_time: '10:00',
         date: '2026-11-10',
+        closes_at: tashkent('2026-11-10T10:00:00').toISOString(),
       });
-      // Ertasi kuni soat 10:00 dan keyin ham — ochiq (kechagi cheklov).
       expect(
         resolveOrderIntakeState({
-          now: tashkent('2026-11-10T11:00:00'),
-          cutoff,
+          now: tashkent('2026-11-10T10:30:00'),
+          cutoff: stored,
         }).is_open,
-      ).toBe(true);
+      ).toBe(false);
+      // Bir hafta keyin ham — o'sha chegara.
+      expect(
+        resolveOrderIntakeState({
+          now: tashkent('2026-11-17T11:00:00'),
+          cutoff: stored,
+        }),
+      ).toMatchObject({ is_open: false, cutoff_time: '10:00' });
     });
 
-    it('kun 18:00 da almashsa — qabul 10:00 da yopilib, 18:00 da ochiladi', () => {
-      const now = tashkent('2026-11-09T08:00:00');
-      const cutoff = {
-        window_start: windowStart(18 * 60, now),
+    it('eski (2026-11-09) shakl — `window_start` e`tiborsiz, chegara har kungi', () => {
+      const legacy = {
+        window_start: tashkent('2026-11-09T00:00:00').toISOString(),
         date: '2026-11-09',
         cutoff_time: '10:00',
       };
+      expect(storedCutoffTime(legacy)).toBe('10:00');
+      expect(
+        resolveOrderIntakeState({
+          now: tashkent('2026-11-12T11:00:00'),
+          cutoff: legacy,
+        }),
+      ).toMatchObject({ is_open: false, cutoff_time: '10:00' });
+    });
+
+    it('qabul qilish chegarasi — o`z oynasi, yaratish chegarasidan mustaqil', () => {
+      const at = (iso: string) =>
+        resolveOrderIntakeState({
+          now: tashkent(iso),
+          cutoff: cutoff('10:00'),
+          receiveCutoff: cutoff('16:00'),
+        });
+      expect(at('2026-11-09T12:00:00')).toMatchObject({
+        is_open: false,
+        receive_is_open: true,
+        receive_cutoff_time: '16:00',
+        receive_closes_at: tashkent('2026-11-09T16:00:00').toISOString(),
+        receive_reopens_at: tashkent('2026-11-10T00:00:00').toISOString(),
+      });
+      expect(at('2026-11-09T16:00:00').receive_is_open).toBe(false);
+      expect(at('2026-11-10T00:00:00')).toMatchObject({
+        is_open: true,
+        receive_is_open: true,
+      });
+      // Faqat qabul chegarasi — yaratish cheklovsiz.
+      expect(
+        resolveOrderIntakeState({
+          now: tashkent('2026-11-09T17:00:00'),
+          receiveCutoff: cutoff('16:00'),
+        }),
+      ).toMatchObject({
+        cutoff_time: null,
+        is_open: true,
+        closes_at: null,
+        receive_is_open: false,
+      });
+    });
+
+    it('kun 18:00 da almashsa — 10:00 da yopilib, 18:00 da ochiladi', () => {
       const closed = resolveOrderIntakeState({
         now: tashkent('2026-11-09T12:00:00'),
         dayChangeTime: '18:00',
-        cutoff,
+        cutoff: cutoff('10:00'),
+        receiveCutoff: cutoff('16:00'),
       });
-      expect(closed.is_open).toBe(false);
-      expect(closed.closes_at).toBe(
-        tashkent('2026-11-09T10:00:00').toISOString(),
-      );
-      expect(closed.reopens_at).toBe(
-        tashkent('2026-11-09T18:00:00').toISOString(),
-      );
-      expect(closed.day_change_time).toBe('18:00');
-
+      expect(closed).toMatchObject({
+        is_open: false,
+        closes_at: tashkent('2026-11-09T10:00:00').toISOString(),
+        reopens_at: tashkent('2026-11-09T18:00:00').toISOString(),
+        receive_is_open: true,
+        receive_closes_at: tashkent('2026-11-09T16:00:00').toISOString(),
+        day_change_time: '18:00',
+      });
       const reopened = resolveOrderIntakeState({
         now: tashkent('2026-11-09T18:00:00'),
         dayChangeTime: '18:00',
-        cutoff,
+        cutoff: cutoff('10:00'),
       });
-      expect(reopened.is_open).toBe(true);
-      expect(reopened.date).toBe('2026-11-10');
+      expect(reopened).toMatchObject({
+        is_open: true,
+        date: '2026-11-10',
+        closes_at: tashkent('2026-11-10T10:00:00').toISOString(),
+      });
     });
 
-    it('kun 18:00 da almashsa, kechqurun qo`yilgan 10:00 — ertalabki 10:00', () => {
-      const now = tashkent('2026-11-09T20:00:00');
+    it('chegara = kun almashish soati — butun ish kuni yopiq', () => {
       const state = resolveOrderIntakeState({
-        now,
-        dayChangeTime: '18:00',
-        cutoff: {
-          window_start: windowStart(18 * 60, now),
-          date: '2026-11-10',
-          cutoff_time: '10:00',
-        },
-      });
-      expect(state.is_open).toBe(true);
-      expect(state.closes_at).toBe(
-        tashkent('2026-11-10T10:00:00').toISOString(),
-      );
-    });
-
-    it('cheklov = kun almashish soati — butun ish kuni yopiq', () => {
-      const now = tashkent('2026-11-09T08:00:00');
-      const state = resolveOrderIntakeState({
-        now,
-        cutoff: {
-          window_start: windowStart(0, now),
-          date: '2026-11-09',
-          cutoff_time: '00:00',
-        },
+        now: tashkent('2026-11-09T08:00:00'),
+        cutoff: cutoff('00:00'),
       });
       expect(state.is_open).toBe(false);
       expect(state.closes_at).toBe(state.day_started_at);
     });
 
     it('buzilgan sozlama — e`tiborsiz (fail open, sukut 00:00)', () => {
-      const now = tashkent('2026-11-09T12:00:00');
       const state = resolveOrderIntakeState({
-        now,
+        now: tashkent('2026-11-09T12:00:00'),
         dayChangeTime: '25:00',
-        cutoff: { window_start: 'yaroqsiz', cutoff_time: '10:00' },
+        cutoff: { cutoff_time: '99:99' },
+        receiveCutoff: 'yaroqsiz',
       });
-      expect(state.is_open).toBe(true);
-      expect(state.day_change_time).toBe('00:00');
-      expect(
-        activeOrderIntakeCutoff(
-          { window_start: windowStart(0, now), cutoff_time: '99:99' },
-          resolveOrderIntakeWindow(now, 0),
-        ),
-      ).toBeNull();
+      expect(state).toMatchObject({
+        is_open: true,
+        cutoff_time: null,
+        receive_is_open: true,
+        receive_cutoff_time: null,
+        day_change_time: '00:00',
+      });
+      expect(storedCutoffTime(null)).toBeNull();
+      expect(storedCutoffTime({ cutoff_time: 600 })).toBeNull();
+    });
+
+    it('cutoffInstant — ish kuni ichidagi birinchi shu soat', () => {
+      const window = resolveOrderIntakeWindow(
+        tashkent('2026-11-09T20:00:00'),
+        18 * 60,
+      );
+      expect(cutoffInstant(window, 10 * 60, 18 * 60).toISOString()).toBe(
+        tashkent('2026-11-10T10:00:00').toISOString(),
+      );
     });
   });
 
@@ -267,6 +299,22 @@ describe('order-intake — bugungi qabul vaqti va kun almashish soati', () => {
         reopens_at: state.reopens_at,
       });
       expect(error.message).toContain('10:00 gacha edi');
+      expect(error.message).toContain('10.11.2026 00:00');
+    });
+
+    it('409 ORDER_RECEIVE_CLOSED — qabul qilish chegarasi bilan', () => {
+      const error = orderReceiveClosedError({
+        receive_cutoff_time: '16:00',
+        receive_reopens_at: tashkent('2026-11-10T00:00:00').toISOString(),
+      });
+      expect(error).toMatchObject({
+        statusCode: 409,
+        code: ORDER_RECEIVE_CLOSED,
+        receive_cutoff_time: '16:00',
+        reopens_at: tashkent('2026-11-10T00:00:00').toISOString(),
+      });
+      expect(error.message).toContain('qabul qilish vaqti tugagan');
+      expect(error.message).toContain('16:00 gacha edi');
       expect(error.message).toContain('10.11.2026 00:00');
     });
 

@@ -662,6 +662,73 @@ export class ShiftReportSettingsRequestDto {
   format?: 'pdf' | 'xlsx';
 }
 
+/** «Kun tartibi» (2026-11-11) — smenani jadval bo'yicha avtomatik OCHISH (qisman). */
+export class ShiftAutoOpenSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.auto_open.enabled` (sukut false). Yoqiq — belgilangan vaqtda qamrovdagi kassada ochiq smena bo'lmasa tizim uni o'zi ochadi (`opened_by_system: true`, realtime `finance.shift.auto_opened`)",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: ['09:00'],
+    description:
+      "`shift.auto_open.times` — kuniga N marta, Toshkent `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['09:00']. Yopish vaqtlari bilan bir xil vaqt — 400 `SHIFT_SCHEDULE_CONFLICT`",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, { each: true })
+  times?: string[];
+
+  @ApiPropertyOptional({
+    example: 'main',
+    enum: ['main', 'main+branches'],
+    description:
+      '`shift.auto_open.scope`: `main` — faqat asosiy kassa (sukut), `main+branches` — filial kassalari ham',
+  })
+  @IsOptional()
+  @IsIn(['main', 'main+branches'])
+  scope?: 'main' | 'main+branches';
+}
+
+/** «Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi» xabari (qisman). */
+export class ShiftLateAlertSettingsRequestDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "`shift.late_alert.enabled` (sukut false). Yoqiq — ochish vaqtidan (`auto_open.times`) `grace_min` o'tib kassada smena ochilmagan, yoki yopish vaqtidan (`auto_close.times`) keyin smena hali ochiq bo'lsa superadminlarga xabar; tizimning avtomatik ochishi / yopishi xato bilan tugasa — darhol, sababi bilan. Kassa / smena × slot uchun bir marta",
+  })
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: 15,
+    description: '`shift.late_alert.grace_min` — 0–180 daqiqa (sukut 15)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(180)
+  grace_min?: number;
+
+  @ApiPropertyOptional({
+    type: () => ShiftReportChannelsRequestDto,
+    description:
+      '`shift.late_alert.channels` — `telegram` / `in_app` (sukut: faqat in_app). Yoqiq bo`lsa kamida bittasi — aks holda 400',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  channels?: ShiftReportChannelsRequestDto;
+}
+
 /** (kiZgTybn) PATCH /finance/shift/settings — FAQAT superadmin. */
 export class UpdateShiftSettingsRequestDto {
   @ApiPropertyOptional({
@@ -716,6 +783,25 @@ export class UpdateShiftSettingsRequestDto {
   @ValidateNested()
   @Type(() => ShiftAutoCloseSettingsRequestDto)
   auto_close?: ShiftAutoCloseSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftAutoOpenSettingsRequestDto,
+    description: '«Kun tartibi» (2026-11-11) — avtomatik ochish jadvali',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftAutoOpenSettingsRequestDto)
+  auto_open?: ShiftAutoOpenSettingsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftLateAlertSettingsRequestDto,
+    description:
+      '«Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi» superadminlarga',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftLateAlertSettingsRequestDto)
+  late_alert?: ShiftLateAlertSettingsRequestDto;
 
   @ApiPropertyOptional({
     type: () => ShiftReportSettingsRequestDto,

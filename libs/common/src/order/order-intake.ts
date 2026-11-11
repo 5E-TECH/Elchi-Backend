@@ -2,14 +2,22 @@ import { RpcException } from '@nestjs/microservices';
 import { TASHKENT_OFFSET_MINUTES } from '../time/tashkent-time';
 
 /**
- * BUGUNGI QABUL VAQTI + KUN ALMASHISH SOATI (ega 2026-11-09, FE kontrakti
- * Elchi-Frontend `entities/order-intake/model.ts`; Trello #756).
+ * «KUN TARTIBI» — BUYURTMA YARATISH / QABUL QILISH CHEGARALARI + KUN ALMASHISH
+ * SOATI (ega 2026-11-09 / 2026-11-11, FE kontrakti Elchi-Frontend
+ * `entities/order-intake/model.ts`; Trello #756).
  *
- * Superadmin BUGUNGI ish kuni uchun qabul tugash vaqtini qo'yadi (masalan
- * `10:00`): shu lahzadan KUN ALMASHGUNCHA hech qanday yangi buyurtma
- * yaratilmaydi — qo'lda (POST /orders), bot, AI tasdiqlash, tashqi import,
- * CRM webhook va hamkor API. Kun almashganda cheklov O'ZI bekor bo'ladi
- * (u faqat o'sha ish kuni oynasiga bog'langan).
+ * Ikkala chegara ham DOIMIY — HAR ISH KUNI takrorlanadi, superadmin boshqa
+ * vaqtga o'zgartirmaguncha yoki olib tashlamaguncha (ega 2026-11-11; avval
+ * yaratish chegarasi faqat joriy ish kuni uchun edi):
+ *  - `cutoff_time` (masalan `10:00`) — shu lahzadan KUN ALMASHGUNCHA hech
+ *    qanday yangi buyurtma YARATILMAYDI: qo'lda (POST /orders), bot, AI
+ *    tasdiqlash, tashqi import, CRM webhook va hamkor API → 409
+ *    `ORDER_INTAKE_CLOSED`;
+ *  - `receive_cutoff_time` (masalan `16:00`) — yaratilgan buyurtmalarni HQ
+ *    QABUL QILISHI (`order.receive`, `order.receive_by_scan`) kun almashguncha
+ *    to'xtaydi → 409 `ORDER_RECEIVE_CLOSED`.
+ * Kun almashganda yangi ish kuni ochiq boshlanadi va chegara yana shu soatda
+ * yopadi.
  *
  * ISH KUNI — Toshkent vaqti bo'yicha «kun almashish soati»dan (sukut `00:00`)
  * keyingi kun almashish soatigacha bo'lgan 24 soatlik oyna. Masalan kun
@@ -26,6 +34,12 @@ import { TASHKENT_OFFSET_MINUTES } from '../time/tashkent-time';
 /** Xato kodi — 409; `PUBLIC_ERROR_CODES` da `reopens_at`, `cutoff_time` bilan. */
 export const ORDER_INTAKE_CLOSED = 'ORDER_INTAKE_CLOSED';
 
+/**
+ * Xato kodi — 409 (buyurtmani qabul qilish vaqti tugagan); `PUBLIC_ERROR_CODES`
+ * da `reopens_at`, `receive_cutoff_time` bilan.
+ */
+export const ORDER_RECEIVE_CLOSED = 'ORDER_RECEIVE_CLOSED';
+
 /** Kun almashish soati berilmagan / buzilgan bo'lsa — Toshkent yarim tuni. */
 export const ORDER_INTAKE_DEFAULT_DAY_CHANGE_TIME = '00:00';
 
@@ -33,15 +47,24 @@ export const ORDER_INTAKE_DEFAULT_DAY_CHANGE_TIME = '00:00';
 export const ORDER_INTAKE_SETTING_KEYS = Object.freeze({
   /** `{ time: 'HH:MM' }` — doimiy sozlama. */
   dayChangeTime: 'intake.day_change_time',
-  /** `{ window_start: ISO, date: 'YYYY-MM-DD', cutoff_time: 'HH:MM' | null }`. */
+  /**
+   * Yaratish chegarasi — `{ cutoff_time: 'HH:MM' | null }`, DOIMIY. 2026-11-09
+   * dagi eski shakl (`window_start`, `date` bilan) ham o'qiladi — qo'shimcha
+   * maydonlar e'tiborsiz, ya'ni u ham har kungi bo'lib qoladi.
+   */
   cutoff: 'intake.cutoff',
+  /** Qabul qilish chegarasi — `{ cutoff_time: 'HH:MM' | null }`, DOIMIY. */
+  receiveCutoff: 'intake.receive_cutoff',
 });
 
 /** order-service RMQ naqshlari. */
 export const ORDER_INTAKE_RPC = Object.freeze({
   /** `{}` → `OrderIntakeState` (har rol o'qiydi). */
   STATE: 'order.intake.state',
-  /** `{ cutoff_time?, day_change_time?, requester }` — faqat SUPERADMIN. */
+  /**
+   * `{ cutoff_time?, receive_cutoff_time?, day_change_time?, requester }` —
+   * faqat SUPERADMIN; bir nechta maydon birga.
+   */
   UPDATE: 'order.intake.update',
 });
 
@@ -128,81 +151,101 @@ export function resolveOrderIntakeWindow(
   };
 }
 
-/** `intake.cutoff` sozlamasining DB'dagi shakli. */
+/** `intake.cutoff` / `intake.receive_cutoff` sozlamasining DB'dagi shakli. */
 export interface StoredOrderIntakeCutoff {
-  window_start: string;
-  date: string;
   cutoff_time: string | null;
 }
 
 /**
- * Saqlangan cheklov AYNAN shu ish kuni oynasiga tegishli bo'lsagina amal
- * qiladi (`window_start` mos kelishi shart). Kecha qo'yilgan cheklov, yoki
- * kun almashish soati o'zgargandan keyin eski oynaniki — hisobga olinmaydi.
+ * Saqlangan DOIMIY chegara (`HH:MM`) yoki `null` — cheklovsiz / buzuq qiymat.
+ * Eski (2026-11-09) shakldagi `window_start` / `date` e'tiborsiz: chegara har
+ * ish kuniga tegishli.
  */
-export function activeOrderIntakeCutoff(
-  stored: unknown,
-  window: OrderIntakeWindow,
-): string | null {
+export function storedCutoffTime(stored: unknown): string | null {
   if (!stored || typeof stored !== 'object') return null;
-  const value = stored as Partial<StoredOrderIntakeCutoff>;
-  if (typeof value.window_start !== 'string') return null;
-  const storedStart = Date.parse(value.window_start);
-  if (!Number.isFinite(storedStart)) return null;
-  if (storedStart !== window.start.getTime()) return null;
-  return parseClockTime(value.cutoff_time) === null
-    ? null
-    : String(value.cutoff_time).trim();
+  const value = (stored as Partial<StoredOrderIntakeCutoff>).cutoff_time;
+  return parseClockTime(value) === null ? null : String(value).trim();
+}
+
+/**
+ * Ish kuni ICHIDAGI birinchi `cutoff` soati: kun `18:00` da almashsa va
+ * chegara `10:00` bo'lsa — ertalabki 10:00 (oyna boshidan 16 soat keyin).
+ * Chegara kun almashish soatiga teng — oyna boshi, ya'ni butun ish kuni yopiq.
+ */
+export function cutoffInstant(
+  window: OrderIntakeWindow,
+  cutoffMinutes: number,
+  dayChangeMinutes: number,
+): Date {
+  return new Date(
+    window.start.getTime() +
+      mod(cutoffMinutes - dayChangeMinutes, DAY_MINUTES) * MINUTE_MS,
+  );
 }
 
 /** `GET /orders/intake-settings` javobi (FE `normalizeOrderIntake`). */
 export interface OrderIntakeState {
-  /** Bugungi qabul tugash vaqti yoki `null` — cheklovsiz. */
+  /** Buyurtma YARATISH chegarasi (har kuni) yoki `null` — cheklovsiz. */
   cutoff_time: string | null;
   /** Ish kuni sanasi (`YYYY-MM-DD`). */
   date: string;
   is_open: boolean;
-  /** Qabul yopiladigan / yopilgan lahza (ISO) yoki `null`. */
+  /** Yaratish yopiladigan / yopilgan lahza (ISO) yoki `null`. */
   closes_at: string | null;
-  /** Cheklov bo'lsa — keyingi kun almashishi (ISO), bo'lmasa `null`. */
+  /** Chegara bo'lsa — keyingi kun almashishi (ISO), bo'lmasa `null`. */
   reopens_at: string | null;
+  /**
+   * Buyurtmalarni QABUL QILISH chegarasi (har kuni) yoki `null`. Kalit HAR
+   * DOIM bor — FE shu bo'yicha yangi backendni taniydi (`receiveSupported`).
+   */
+  receive_cutoff_time: string | null;
+  receive_is_open: boolean;
+  receive_closes_at: string | null;
+  receive_reopens_at: string | null;
   /** Kun almashish soati (`HH:MM`, Toshkent). */
   day_change_time: string;
   /** Joriy ish kuni boshlangan lahza (ISO). */
   day_started_at: string;
-  /** Keyingi kun almashish lahzasi (ISO) — cheklovdan qat'i nazar. */
+  /** Keyingi kun almashish lahzasi (ISO) — chegaralardan qat'i nazar. */
   next_day_change_at: string;
 }
 
-/**
- * Sozlamalar + hozirgi vaqt → holat. Cheklov vaqti ish kuni ICHIDAGI
- * birinchi shu soat: kun `18:00` da almashsa va cheklov `10:00` bo'lsa —
- * ertalabki 10:00 (oyna boshidan 16 soat keyin). Cheklov kun almashish
- * soatiga teng bo'lsa — oyna boshida, ya'ni butun ish kuni yopiq.
- */
+/** Sozlamalar + hozirgi vaqt → holat (ikkala chegara ham shu ish kuni uchun). */
 export function resolveOrderIntakeState(input: {
   now: Date;
   dayChangeTime?: unknown;
   cutoff?: unknown;
+  receiveCutoff?: unknown;
 }): OrderIntakeState {
   const dayChangeMinutes =
     parseClockTime(input.dayChangeTime) ?? DEFAULT_DAY_CHANGE_MINUTES;
   const window = resolveOrderIntakeWindow(input.now, dayChangeMinutes);
-  const cutoffTime = activeOrderIntakeCutoff(input.cutoff, window);
-  const cutoffMinutes = parseClockTime(cutoffTime);
-  const closesAt =
-    cutoffMinutes === null
-      ? null
-      : new Date(
-          window.start.getTime() +
-            mod(cutoffMinutes - dayChangeMinutes, DAY_MINUTES) * MINUTE_MS,
-        );
+  const gate = (stored: unknown) => {
+    const time = storedCutoffTime(stored);
+    const minutes = parseClockTime(time);
+    const closesAt =
+      minutes === null
+        ? null
+        : cutoffInstant(window, minutes, dayChangeMinutes);
+    return {
+      time: minutes === null ? null : time,
+      isOpen: closesAt === null || input.now.getTime() < closesAt.getTime(),
+      closesAt: closesAt ? closesAt.toISOString() : null,
+      reopensAt: closesAt ? window.end.toISOString() : null,
+    };
+  };
+  const create = gate(input.cutoff);
+  const receive = gate(input.receiveCutoff);
   return {
-    cutoff_time: cutoffMinutes === null ? null : cutoffTime,
+    cutoff_time: create.time,
     date: window.date,
-    is_open: closesAt === null || input.now.getTime() < closesAt.getTime(),
-    closes_at: closesAt ? closesAt.toISOString() : null,
-    reopens_at: closesAt ? window.end.toISOString() : null,
+    is_open: create.isOpen,
+    closes_at: create.closesAt,
+    reopens_at: create.reopensAt,
+    receive_cutoff_time: receive.time,
+    receive_is_open: receive.isOpen,
+    receive_closes_at: receive.closesAt,
+    receive_reopens_at: receive.reopensAt,
     day_change_time: formatClockTime(dayChangeMinutes),
     day_started_at: window.start.toISOString(),
     next_day_change_at: window.end.toISOString(),
@@ -241,6 +284,43 @@ export function orderIntakeClosedError(
     code: ORDER_INTAKE_CLOSED,
     reopens_at: state.reopens_at,
     cutoff_time: state.cutoff_time,
+  };
+}
+
+/** Qabul qilish yopiq xatosining tanasi (`RpcException` ga beriladi). */
+export interface OrderReceiveClosedError {
+  statusCode: 409;
+  message: string;
+  code: typeof ORDER_RECEIVE_CLOSED;
+  reopens_at: string | null;
+  receive_cutoff_time: string | null;
+}
+
+export function orderReceiveClosedMessage(state: {
+  receive_cutoff_time: string | null;
+  receive_reopens_at: string | null;
+}): string {
+  const until = state.receive_cutoff_time
+    ? ` (${state.receive_cutoff_time} gacha edi)`
+    : '';
+  const reopen = state.receive_reopens_at
+    ? ` — ${formatTashkentDateTime(new Date(state.receive_reopens_at))} dan`
+    : '';
+  return (
+    `Bugungi buyurtma qabul qilish vaqti tugagan${until}. ` +
+    `Buyurtmalarni kun almashgach${reopen} qabul qilish mumkin`
+  );
+}
+
+export function orderReceiveClosedError(
+  state: Pick<OrderIntakeState, 'receive_cutoff_time' | 'receive_reopens_at'>,
+): OrderReceiveClosedError {
+  return {
+    statusCode: 409,
+    message: orderReceiveClosedMessage(state),
+    code: ORDER_RECEIVE_CLOSED,
+    reopens_at: state.receive_reopens_at,
+    receive_cutoff_time: state.receive_cutoff_time,
   };
 }
 

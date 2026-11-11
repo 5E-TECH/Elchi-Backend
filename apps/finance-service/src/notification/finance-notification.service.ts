@@ -55,6 +55,8 @@ export const FINANCE_NOTIFICATION_TYPES = [
   'finance.shift_closed',
   'finance.shift_auto_closed',
   'finance.shift_auto_close_warning',
+  // «Kun tartibi» (2026-11-11) — smena vaqtida ochilmadi / yopilmadi.
+  'finance.shift_late',
   // (T6-BE-4) superadmin to'lovni qaytardi / summasini tuzatdi.
   'finance.payment_corrected',
 ] as const;
@@ -143,6 +145,94 @@ export function buildShiftAutoCloseWarningPayload(
     ...(groupKey ? { group_key: groupKey } : {}),
     channels: [...entry.default_channels],
     client_request_id: deterministicUuid(`shift-warn:${shiftId}:${input.slot}`),
+  };
+}
+
+export interface ShiftLateAlertInput {
+  /** `open` — vaqtida ochilmadi, `close` — vaqtida yopilmadi. */
+  kind: 'open' | 'close';
+  /** `'0'` — asosiy kassa, aks holda filial ID si. */
+  cashbox_user_id: string;
+  /** Yopilmagan smena (`close`) yoki tizim ochgan / ochmagan holatda null. */
+  shift_id?: string | number | null;
+  /** `YYYY-MM-DDTHH:MM` (Toshkent). */
+  slot: string;
+  /** `HH:MM` (Toshkent). */
+  time: string;
+  grace_min: number;
+  /** Tizimning avtomatik ochishi / yopishi xatosi (bo'lsa). */
+  reason?: string | null;
+  /** Faol superadminlar. */
+  recipient_ids: Array<string | number>;
+  /** `late_alert.channels` — Telegram / ilova ichida. */
+  channels: { telegram: boolean; in_app: boolean };
+}
+
+/**
+ * «Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi»
+ * superadminlarga. Kanal tanlanmagan yoki oluvchi yo'q — `null`.
+ */
+export function buildShiftLateAlertPayload(
+  input: ShiftLateAlertInput,
+): FinanceNotificationPayload | null {
+  const type: FinanceNotificationType = 'finance.shift_late';
+  const entry = findNotificationType(type);
+  const recipients = [...new Set(input.recipient_ids.filter(isId).map(String))];
+  const channels: string[] = [];
+  if (input.channels.in_app) channels.push('in_app', 'realtime');
+  if (input.channels.telegram) channels.push('telegram');
+  if (!entry || !recipients.length || !channels.length) return null;
+  const isMain = input.cashbox_user_id === '0';
+  const where = isMain
+    ? 'Asosiy kassada'
+    : `Filial #${input.cashbox_user_id} kassasida`;
+  const shiftId =
+    input.shift_id !== undefined &&
+    input.shift_id !== null &&
+    isId(input.shift_id)
+      ? String(input.shift_id)
+      : null;
+  const reason = String(input.reason ?? '')
+    .trim()
+    .slice(0, 200);
+  const data: Record<string, unknown> = {
+    kind: input.kind,
+    cashbox_user_id: input.cashbox_user_id,
+    cashbox_type: isMain ? 'main' : 'branch',
+    branch_id: isMain ? null : input.cashbox_user_id,
+    shift_id: shiftId,
+    slot: input.slot,
+    time: input.time,
+    grace_min: input.grace_min,
+    failed: Boolean(reason),
+  };
+  const groupKey = renderNotificationGroupKey(entry.group_key_pattern, data);
+  const title =
+    input.kind === 'open'
+      ? '⚠️ Smena vaqtida ochilmadi'
+      : '⚠️ Smena vaqtida yopilmadi';
+  const body =
+    input.kind === 'open'
+      ? reason
+        ? `${where} smena soat ${input.time} da avtomatik ochilishi kerak edi — tizim ocha olmadi: ${reason}.`
+        : `${where} smena soat ${input.time} da ochilishi kerak edi — ${input.grace_min} daqiqa o'tib ham ochilmagan.`
+      : reason
+        ? `${where} smena${shiftId ? ` #${shiftId}` : ''} soat ${input.time} da avtomatik yopilishi kerak edi — tizim yopa olmadi: ${reason}.`
+        : `${where} smena${shiftId ? ` #${shiftId}` : ''} soat ${input.time} da yopilishi kerak edi — ${input.grace_min} daqiqa o'tib ham ochiq.`;
+  return {
+    type,
+    category: entry.category,
+    priority: entry.priority,
+    title,
+    body,
+    data,
+    link: isMain ? '/payments/main-cashbox' : '/ops?tab=daily-schedule',
+    recipient_ids: recipients,
+    ...(groupKey ? { group_key: groupKey } : {}),
+    channels,
+    client_request_id: deterministicUuid(
+      `shift-late:${input.kind}:${input.cashbox_user_id}:${shiftId ?? '-'}:${input.slot}`,
+    ),
   };
 }
 
@@ -675,6 +765,27 @@ export class FinanceNotificationService {
       () => payload,
       manager,
     );
+    return true;
+  }
+
+  /**
+   * «Kun tartibi» — «Smena vaqtida ochilmadi / yopilmadi» superadminlarga.
+   * Slot kaliti bilan BITTA tranzaksiyada (bir marta). `false` — yuboriladigan
+   * narsa yo'q (kanal / oluvchi yo'q).
+   */
+  async shiftLateAlert(
+    input: ShiftLateAlertInput,
+    manager?: EntityManager,
+  ): Promise<boolean> {
+    let built: FinanceNotificationPayload | null = null;
+    try {
+      built = buildShiftLateAlertPayload(input);
+    } catch {
+      built = null;
+    }
+    if (!built) return false;
+    const payload = built;
+    await this.enqueueSafely('finance.shift_late', () => payload, manager);
     return true;
   }
 

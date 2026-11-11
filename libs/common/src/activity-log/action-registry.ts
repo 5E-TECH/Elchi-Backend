@@ -140,9 +140,17 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'tag',
     'amber',
   ),
-  // (2026-11-09) superadmin bugungi qabul vaqtini qo'ydi / olib tashladi.
+  // (2026-11-09 / 2026-11-11) superadmin buyurtma yaratish chegarasini
+  // (har kungi) qo'ydi / o'zgartirdi / olib tashladi.
   'order.intake_cutoff_changed': entry(
-    "Bugungi qabul vaqti o'zgardi",
+    "Buyurtma yaratish chegarasi o'zgardi",
+    'order',
+    'clock',
+    'amber',
+  ),
+  // (2026-11-11 «Kun tartibi») buyurtmani qabul qilish chegarasi (har kungi).
+  'order.receive_cutoff_changed': entry(
+    "Buyurtma qabul qilish chegarasi o'zgardi",
     'order',
     'clock',
     'amber',
@@ -215,6 +223,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'finance',
     'clock',
     'amber',
+  ),
+  // (2026-11-11 «Kun tartibi») jadval bo'yicha kassada smena tizim ochdi.
+  'finance.shift_auto_opened': entry(
+    'Smena tizim tomonidan avtomatik ochildi',
+    'finance',
+    'clock',
+    'blue',
   ),
   'finance.shift_report_sent': entry(
     'Smena hisoboti yuborildi',

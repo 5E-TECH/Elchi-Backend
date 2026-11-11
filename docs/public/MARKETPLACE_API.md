@@ -475,8 +475,8 @@ YARATILMAYDI**:
 
 #### Bugungi qabul yopiq — `409 ORDER_INTAKE_CLOSED`
 
-Elchi ba'zi kunlari qabulni belgilangan soatda yopadi (masalan 10:00). Shundan
-keyin **ish kuni almashguncha** yangi posilka qabul qilinmaydi:
+Elchi qabulni har kuni belgilangan soatda yopishi mumkin (masalan 10:00).
+Shundan keyin **ish kuni almashguncha** yangi posilka qabul qilinmaydi:
 
 ```json
 {

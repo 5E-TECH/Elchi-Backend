@@ -22,6 +22,44 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-11 — Menejer: «Marketga to'lov» o'z filial kassasidan va «Marketga o'tkazma» (audit M4)
+
+Deploy: finance-service + api-gateway. **Migratsiya yo'q.** Frontend `712257b2` kutgan kontrakt.
+
+- 🆕 `POST /finance/cashbox/payment/market` endi **menejerga ham** ochiq. Body o'zgarmagan: `{ market_id, amount, payment_method, card_id?, payment_date?, comment? }` + `Idempotency-Key`. Menejer — pul **o'z filial kassasidan** chiqadi (filial JWT / branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Superadmin/admin — avvalgidek HQ asosiy kassasidan.
+  - Filial kassasida yetarli naqd / karta bo'lishi shart: yetmasa **400** («Naqd kassada yetarli mablag' yo'q» / «Karta hisobida yetarli mablag' yo'q»), HQ kassasiga tegilmaydi. Marketga qarzdan oshsa — 400 (avvalgidek).
+  - `card_id` — **filial kassasining** kartasi (boshqa kassa kartasi 403, faqat `click`).
+  - Filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`).
+  - «HQ ga berilishi kerak» filial kassasidagi pul bilan birga X ga kamayadi.
+- ✏️ `POST /finance/cashbox/payment/courier` `payment_method: "click_to_market"` + `market_id` — menejer uchun endi **403 emas**. Filial kassasiga +X va darhol −X (sof 0), kuryer qarzi −X, marketga qarz −X. «Kuryerlardan olinishi kerak» va «HQ ga berilishi kerak» ikkalasi X ga kamayadi — soxta filial qarzi qolmaydi.
+- ⚠️ Bu ikki yangi shakl (filial orqali marketga o'tkazma, filialdan marketga to'lov) **tuzatib / qaytarib bo'lmaydi** (T6): tarix qatorida `correctable.allowed: false`, `reason: "unsupported_type"`.
+
+**Frontend action items:**
+- 🟢 Kontrakt FE kutganidek — o'zgarish shart emas.
+- 🔧 Menejer sahifasida «Marketga to'lov» kartalari ro'yxati — filial kassasining kartalari (`GET /finance/cashbox/cards`, menejerga o'z filiali).
+
+### 2026-11-11 — «Kun tartibi» backend: har kungi yaratish / qabul chegaralari, smenani avtomatik ochish, kechikish xabari
+
+Frontend `bahodir` («Kun tartibi» tabi, `9f44a6b0` / `eae05d7d`) kutgan kontrakt. Deploy: order-service, finance-service, api-gateway, integration-service (`libs/common` o'zgargan — hammasi). **Migratsiya `1716000000216`** (finance `shifts`).
+
+**Buyurtma chegaralari** (`GET|PATCH /orders/intake-settings`):
+- ⚠️ `cutoff_time` (buyurtma YARATISH chegarasi) endi **DOIMIY — har ish kuni takrorlanadi**, superadmin boshqa vaqtga o'zgartirmaguncha yoki `null` bilan olib tashlamaguncha (ega 2026-11-11). Avval faqat joriy ish kuni uchun edi. Eski (2026-11-09) qiymat ham har kungi bo'lib o'qiladi.
+- 🆕 `receive_cutoff_time` — yaratilgan buyurtmalarni QABUL QILISH chegarasi (doimiy). GET'da **har doim** `receive_cutoff_time` (`null` — cheklovsiz), `receive_is_open`, `receive_closes_at`, `receive_reopens_at` (`is_open` / `closes_at` / `reopens_at` bilan bir xil ma'noda) — FE `receiveSupported` shu kalit bo'yicha.
+- 🆕 Qabul yopiq: `POST /orders/receive` va `POST /orders/external/receive-by-scan` → **409** `{ code: "ORDER_RECEIVE_CLOSED", message, reopens_at, receive_cutoff_time }`. `POST /orders/external/receive` — bu tashqi import (buyurtma YARATADI), unga faqat yaratish chegarasi (`ORDER_INTAKE_CLOSED`) amal qiladi.
+- ✏️ `PATCH` bir nechta maydonni birga oladi: `{ cutoff_time?, receive_cutoff_time?, day_change_time? }`; bittasi noto'g'ri bo'lsa hech biri yozilmaydi (400); o'zgarmagan qiymat yozilmaydi va jurnalga tushmaydi. Activity log: `order.intake_cutoff_changed`, `order.receive_cutoff_changed`, `order.day_change_time_changed`.
+
+**Smena jadvali** (`GET|PATCH /finance/shift/settings`):
+- 🆕 `auto_open: { enabled, times[], scope }` (sukut `false`, `['09:00']`, `main`; qoidalar `auto_close` bilan bir xil — 1–12 vaqt, `main | main+branches`). Slot kelganda qamrovdagi kassada OCHIQ smena bo'lmasa tizim o'zi ochadi: `opened_by: null`, **`opened_by_system: true`** (smena qatorlarida yangi maydon), ochilish qoldig'i — kassaning jonli qoldig'i. Ochiq smena bor — hech narsa. Tizim smenasini kassir odatdagidek yopadi (`POST /finance/shift/close`).
+- 🆕 `late_alert: { enabled, grace_min, channels: { telegram, in_app } }` (sukut `false`, `15`, faqat `in_app`): ochish vaqtidan (`auto_open.times`) `grace_min` o'tib kassada smena ochilmagan, yoki yopish vaqtidan (`auto_close.times`) keyin smena hali ochiq — **superadminlarga** «Smena vaqtida ochilmadi / yopilmadi» (bildirishnoma turi `finance.shift_late`). Vaqtlar jadvalnikidan olinadi — avtomatika o'chiq bo'lsa ham. Tizimning avtomatik ochishi / yopishi xato bilan tugasa — darhol, sababi bilan. Kassa / smena × slot uchun bir marta.
+- 🆕 Tekshiruvlar (400): ochish va yopish ro'yxatida bir xil vaqt → `code: "SHIFT_SCHEDULE_CONFLICT"`, `times: "09:00, 23:00"`; `auto_open.enabled` + vaqtsiz; `late_alert.enabled` + kanalsiz; `grace_min` 0–180.
+- 🆕 Realtime `finance.shift.auto_opened` — payload `{ shift_id, cashbox_user_id, cashbox_type, branch_id, status: 'open', open_reason: 'auto', opened_at }`; nishon — `finance.shift.auto_closed` bilan bir xil (MAIN: superadmin/admin/registrator; filial: o'sha filial menejerlari).
+- Activity log: `finance.shift_auto_opened`.
+
+**Frontend action items:**
+- 🟢 Kontrakt FE kutganidek — o'zgarish shart emas.
+- 🔧 Kechikish xabari ochish/yopish vaqtlarini avtomatika O'CHIQ bo'lsa ham ishlatadi — «Kechikish haqida xabar» kartasi izohida buni aytish mumkin.
+- 🟢 Smena tarixida `opened_by_system: true` — «Avtomatik ochildi» belgisi uchun.
+
 ### 2026-11-11 — Operator dashboardi: o'z statistikasi + registrator operator emas
 
 Deploy: analytics-service + order-service + api-gateway. **Migratsiya yo'q.** Kontrakt (maydonlar) o'zgarmagan.

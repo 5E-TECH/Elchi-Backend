@@ -3365,12 +3365,12 @@
     },
     "/orders/intake-settings": {
       "get": {
-        "description": "Qabul vaqti (`cutoff_time`) qo`yilgan bo`lsa, `closes_at` dan kun almashguncha (`reopens_at`) hech qanday yangi buyurtma yaratilmaydi: POST /orders, /orders/external, /orders/telegram/bot/create, ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` (`reopens_at`, `cutoff_time`). Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.",
+        "description": "Ikkala chegara ham HAR ISH KUNI takrorlanadi. Yaratish chegarasi (`cutoff_time`): `closes_at` dan kun almashguncha (`reopens_at`) hech qanday yangi buyurtma yaratilmaydi — POST /orders, /orders/external, /orders/telegram/bot/create, ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` (`reopens_at`, `cutoff_time`). Qabul qilish chegarasi (`receive_cutoff_time`): `receive_closes_at` dan kun almashguncha POST /orders/receive va /orders/external/receive-by-scan → 409 `ORDER_RECEIVE_CLOSED` (`reopens_at`, `receive_cutoff_time`). `receive_cutoff_time` kaliti har doim bor (`null` — cheklovsiz). Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.",
         "operationId": "OrderGatewayController_getIntakeSettings",
         "parameters": [],
         "responses": {
           "200": {
-            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
+            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, receive_cutoff_time: '16:00' | null, receive_is_open: boolean, receive_closes_at: ISO | null, receive_reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
           }
         },
         "security": [
@@ -3378,14 +3378,14 @@
             "bearer": []
           }
         ],
-        "summary": "Bugungi buyurtma qabuli holati (qabul vaqti, kun almashish soati)",
+        "summary": "Buyurtma yaratish / qabul qilish chegaralari va kun almashish soati (holat)",
         "tags": [
           "Orders"
         ],
         "x-roles": null
       },
       "patch": {
-        "description": "`cutoff_time` — faqat JORIY ish kuni uchun (kun almashganda o`zi bekor bo`ladi), `null` — cheklovni olib tashlash. `day_change_time` — doimiy kun almashish soati (`null` — 00:00). Kamida bittasi kerak (aks holda 400). Javob — GET bilan bir xil. Activity log: `order.intake_cutoff_changed`, `order.day_change_time_changed`.",
+        "description": "`cutoff_time` va `receive_cutoff_time` — DOIMIY (har ish kuni, boshqa vaqtga o`zgartirilmaguncha), `null` — chegarani olib tashlash. `day_change_time` — doimiy kun almashish soati (`null` — 00:00). Bir nechta maydon birga yuborilishi mumkin, kamida bittasi kerak (aks holda 400); bittasi noto`g`ri bo`lsa hech biri yozilmaydi. Javob — GET bilan bir xil. Activity log: `order.intake_cutoff_changed`, `order.receive_cutoff_changed`, `order.day_change_time_changed` (faqat o`zgargan qiymat).",
         "operationId": "OrderGatewayController_updateIntakeSettings",
         "parameters": [],
         "requestBody": {
@@ -3400,7 +3400,7 @@
         },
         "responses": {
           "200": {
-            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
+            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, receive_cutoff_time: '16:00' | null, receive_is_open: boolean, receive_closes_at: ISO | null, receive_reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
           }
         },
         "security": [
@@ -3408,7 +3408,7 @@
             "bearer": []
           }
         ],
-        "summary": "Bugungi qabul vaqti / kun almashish soatini o'zgartirish (SUPERADMIN)",
+        "summary": "Buyurtma yaratish / qabul qilish chegaralari va kun almashish soatini o'zgartirish (SUPERADMIN)",
         "tags": [
           "Orders"
         ],
@@ -9323,6 +9323,7 @@
     },
     "/finance/cashbox/payment/market": {
       "post": {
+        "description": "Superadmin/admin — HQ asosiy kassasidan. (2026-11-11, audit M4) Menejer — O'Z FILIAL KASSASIDAN (filial JWT/branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Menejer yo'lida: filial kassasida yetarli naqd/karta bo'lishi shart (yo'q → 400, HQ kassasiga tegilmaydi), `card_id` — filial kassasining kartasi (`GET /finance/cashbox/cards?cashbox_id=<filial kassa id>`), filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`). Daftar: filial → HQ va HQ → market bo'g'inlari AYNI summaga yopiladi — «HQ ga berilishi kerak» filial kassasidagi pul bilan birga kamayadi.",
         "operationId": "FinanceGatewayController_paymentToMarket",
         "parameters": [
           {
@@ -9360,7 +9361,8 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "manager"
         ]
       }
     },
@@ -11137,7 +11139,7 @@
     },
     "/finance/shift/settings": {
       "get": {
-        "description": "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+        "description": "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
         "operationId": "FinanceGatewayController_getShiftSettings",
         "parameters": [
           {
@@ -11173,7 +11175,7 @@
         ]
       },
       "patch": {
-        "description": "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`.",
+        "description": "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, «Kun tartibi» `auto_open` va `late_alert` (ochish va yopish vaqti bir xil — 400 `SHIFT_SCHEDULE_CONFLICT` + `times`; ochish yoqiq-u vaqtsiz yoki xabar yoqiq-u kanalsiz — 400), `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`.",
         "operationId": "FinanceGatewayController_updateShiftSettings",
         "parameters": [],
         "requestBody": {
@@ -26901,13 +26903,19 @@
             "type": "string",
             "nullable": true,
             "example": "10:00",
-            "description": "BUGUNGI ish kuni uchun qabul tugash vaqti (Toshkent, `HH:MM`). Shu vaqtdan kun almashguncha yangi buyurtma yaratilmaydi (409 `ORDER_INTAKE_CLOSED`). `null` — cheklovni olib tashlash. O'tgan vaqt qo'yilsa qabul darhol yopiladi. Kun almashganda o'zi bekor bo'ladi."
+            "description": "Buyurtma YARATISH chegarasi (Toshkent, `HH:MM`) — HAR ISH KUNI takrorlanadi, boshqa vaqtga o'zgartirilmaguncha. Shu vaqtdan kun almashguncha yangi buyurtma yaratilmaydi (409 `ORDER_INTAKE_CLOSED`). `null` — chegarani olib tashlash. Bugun o'tgan vaqt qo'yilsa yaratish darhol yopiladi."
+          },
+          "receive_cutoff_time": {
+            "type": "string",
+            "nullable": true,
+            "example": "16:00",
+            "description": "Yaratilgan buyurtmalarni QABUL QILISH chegarasi (Toshkent, `HH:MM`) — har ish kuni. Shu vaqtdan kun almashguncha `POST /orders/receive` va `POST /orders/external/receive-by-scan` → 409 `ORDER_RECEIVE_CLOSED`. `null` — chegarani olib tashlash."
           },
           "day_change_time": {
             "type": "string",
             "nullable": true,
             "example": "00:00",
-            "description": "Kun almashish soati (Toshkent, `HH:MM`, sukut `00:00`) — ish kuni shu soatdan keyingi kun shu soatgacha. `null` — sukutga qaytarish. Hozircha faqat bugungi qabul oynasini belgilaydi (hisobot / pochta / smena kunlari 00:00 bo`yicha qoladi)."
+            "description": "Kun almashish soati (Toshkent, `HH:MM`, sukut `00:00`) — ish kuni shu soatdan keyingi kun shu soatgacha. `null` — sukutga qaytarish. Faqat buyurtma yaratish / qabul qilish oynasini belgilaydi (hisobot / pochta / smena kunlari 00:00 bo`yicha qoladi)."
           }
         }
       },
@@ -29725,6 +29733,35 @@
           }
         }
       },
+      "ShiftAutoOpenSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "`shift.auto_open.enabled` (sukut false). Yoqiq — belgilangan vaqtda qamrovdagi kassada ochiq smena bo'lmasa tizim uni o'zi ochadi (`opened_by_system: true`, realtime `finance.shift.auto_opened`)"
+          },
+          "times": {
+            "example": [
+              "09:00"
+            ],
+            "description": "`shift.auto_open.times` — kuniga N marta, Toshkent `HH:MM` (1–12 ta; takrorlar olib tashlanadi, tartiblanadi). Sukut ['09:00']. Yopish vaqtlari bilan bir xil vaqt — 400 `SHIFT_SCHEDULE_CONFLICT`",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "example": "main",
+            "enum": [
+              "main",
+              "main+branches"
+            ],
+            "description": "`shift.auto_open.scope`: `main` — faqat asosiy kassa (sukut), `main+branches` — filial kassalari ham"
+          }
+        }
+      },
       "ShiftReportChannelsRequestDto": {
         "type": "object",
         "properties": {
@@ -29736,6 +29773,29 @@
             "type": "boolean",
             "example": true,
             "description": "Tizim (ichki bildirishnoma)"
+          }
+        }
+      },
+      "ShiftLateAlertSettingsRequestDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "`shift.late_alert.enabled` (sukut false). Yoqiq — ochish vaqtidan (`auto_open.times`) `grace_min` o'tib kassada smena ochilmagan, yoki yopish vaqtidan (`auto_close.times`) keyin smena hali ochiq bo'lsa superadminlarga xabar; tizimning avtomatik ochishi / yopishi xato bilan tugasa — darhol, sababi bilan. Kassa / smena × slot uchun bir marta"
+          },
+          "grace_min": {
+            "type": "number",
+            "example": 15,
+            "description": "`shift.late_alert.grace_min` — 0–180 daqiqa (sukut 15)"
+          },
+          "channels": {
+            "description": "`shift.late_alert.channels` — `telegram` / `in_app` (sukut: faqat in_app). Yoqiq bo`lsa kamida bittasi — aks holda 400",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+              }
+            ]
           }
         }
       },
@@ -29809,6 +29869,22 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/ShiftAutoCloseSettingsRequestDto"
+              }
+            ]
+          },
+          "auto_open": {
+            "description": "«Kun tartibi» (2026-11-11) — avtomatik ochish jadvali",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftAutoOpenSettingsRequestDto"
+              }
+            ]
+          },
+          "late_alert": {
+            "description": "«Kun tartibi» (2026-11-11) — «Smena vaqtida ochilmadi / yopilmadi» superadminlarga",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftLateAlertSettingsRequestDto"
               }
             ]
           },

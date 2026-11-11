@@ -679,29 +679,133 @@ describe('M4 — "Marketga o`tkazma" (click_to_market)', () => {
     balance_card: 0,
   });
 
-  it('filial kassasi orqali → 400, hech narsa qulflanmaydi/ko`chmaydi', async () => {
+  it('(2026-11-11) filial kassasi orqali ochiq: filial sof 0, kuryer → filial → HQ → market siljishlari', async () => {
     const env = makeService();
+    const branchCashbox = {
+      id: 'br-15',
+      user_id: '15',
+      cashbox_type: 'branch',
+      balance: 50_000,
+      balance_cash: 50_000,
+      balance_card: 0,
+    };
+    env.manager.findOne
+      .mockResolvedValueOnce(courierCashbox())
+      .mockResolvedValueOnce(null) // isDuplicateTransfer
+      .mockResolvedValueOnce(branchCashbox)
+      .mockResolvedValueOnce(marketCashbox(1_000_000));
+    jest
+      .spyOn(env.service as any, 'scheduleMarketPaymentFollowUp')
+      .mockResolvedValue(undefined);
 
-    const error: unknown = await env.service
-      .paymentsFromCourier({
-        courier_id: '209',
-        amount: 300_000,
-        payment_method: 'click_to_market' as any,
-        market_id: '201',
-        receiver_user_id: '15',
-        receiver_cashbox_type: 'branch' as any,
-        dedup_epoch: 'tok-1',
-      })
-      .catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(RpcException);
-    expect((error as RpcException).getError()).toMatchObject({
-      statusCode: 400,
+    const res: any = await env.service.paymentsFromCourier({
+      courier_id: '209',
+      amount: 300_000,
+      payment_method: 'click_to_market' as any,
+      market_id: '201',
+      receiver_user_id: '15',
+      receiver_cashbox_type: 'branch' as any,
+      created_by: '15001',
+      dedup_epoch: 'tok-1',
     });
-    expect(env.manager.findOne).not.toHaveBeenCalled();
-    expect(env.manager.save).not.toHaveBeenCalled();
-    expect(env.outbox.enqueue).not.toHaveBeenCalled();
+
+    expect(res.statusCode).toBe(201);
+    // Filial kassasi: +300 000 −300 000 → 50 000 (o'zgarmadi).
+    expect(branchCashbox).toMatchObject({
+      balance: 50_000,
+      balance_cash: 50_000,
+      balance_card: 0,
+    });
+    expect(
+      env.outbox.enqueue.mock.calls.map((call: any[]) => [
+        call[2].level,
+        call[2].match_value,
+        call[2].amount,
+        call[2].request_id,
+      ]),
+    ).toEqual([
+      ['courier_to_branch', '209', 300_000, 'tok-1'],
+      ['branch_to_hq', '15', 300_000, 'tok-1:b'],
+      ['hq_to_market', '201', 300_000, 'tok-1:m'],
+    ]);
+    // Uchala siljish ham commit'dan keyin darhol yuboriladi.
+    expect(env.orderClient.send).toHaveBeenCalledTimes(3);
   });
+
+  it('(2026-11-11) menejer «Marketga to`lov» — filial kassasi qulflanadi, smena darvozasi filialda', async () => {
+    const env = makeService();
+    const branchCashbox = {
+      id: 'br-15',
+      user_id: '15',
+      cashbox_type: 'branch',
+      balance: 400_000,
+      balance_cash: 400_000,
+      balance_card: 0,
+    };
+    env.manager.findOne
+      .mockResolvedValueOnce(branchCashbox)
+      .mockResolvedValueOnce(marketCashbox(1_000_000))
+      .mockResolvedValueOnce(null); // isDuplicateTransfer
+    const gate = jest
+      .spyOn(env.service, 'requireOpenShift')
+      .mockResolvedValue(undefined);
+    jest
+      .spyOn(env.service as any, 'scheduleMarketPaymentFollowUp')
+      .mockResolvedValue(undefined);
+
+    const res: any = await env.service.paymentsToMarket({
+      market_id: '201',
+      amount: 100_000,
+      payment_method: 'cash' as any,
+      payer_cashbox_type: 'branch' as any,
+      payer_user_id: '15',
+      dedup_epoch: 'tok-9',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(env.manager.findOne.mock.calls[0][1]).toMatchObject({
+      where: { user_id: '15', cashbox_type: 'branch', isDeleted: false },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(gate).toHaveBeenCalledWith(expect.anything(), {
+      user_id: '15',
+      cashbox_type: 'branch',
+    });
+    expect(branchCashbox.balance_cash).toBe(300_000);
+    expect(
+      env.outbox.enqueue.mock.calls.map((call: any[]) => [
+        call[2].level,
+        call[2].request_id,
+      ]),
+    ).toEqual([
+      ['branch_to_hq', 'tok-9:b'],
+      ['hq_to_market', 'tok-9'],
+    ]);
+  });
+
+  it.each([
+    [{ payer_cashbox_type: 'branch' }],
+    [{ payer_cashbox_type: 'branch', payer_user_id: 'x' }],
+    [{ payer_cashbox_type: 'couriers', payer_user_id: '15' }],
+  ])(
+    'marketga to`lov — noto`g`ri payer %p → 400, kassa qulflanmaydi',
+    async (payer) => {
+      const env = makeService();
+      const error: unknown = await env.service
+        .paymentsToMarket({
+          market_id: '201',
+          amount: 1_000,
+          payment_method: 'cash' as any,
+          dedup_epoch: 'tok-10',
+          ...(payer as any),
+        })
+        .catch((caught: unknown) => caught);
+      expect((error as RpcException).getError()).toMatchObject({
+        statusCode: 400,
+      });
+      expect(env.manager.findOne).not.toHaveBeenCalled();
+    },
+  );
 
   it('marketga qarzdan oshsa → 400, pul ko`chmaydi', async () => {
     const env = makeService();
