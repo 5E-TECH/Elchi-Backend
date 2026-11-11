@@ -804,6 +804,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `hq_qarzi = max(-payable, 0)` (manager settlement, payable-to-hq, all-info,
   SA branch view, `GET /branches`, `GET /managers` list). Toggle:
   `PATCH /branches/:id {cashbox_debt_enabled}` — SA/ADMIN only, not on HQ.
+  `updateBalancesByMethod` now checks the non-negative rule only for EXPENSE
+  legs: an INCOME into an already-negative MAIN/BRANCH bucket is never
+  refused (a manager can receive courier cash into a branch cashbox that
+  HQ drove negative).
 - **Courier cashbox debt (2026-11-11, no migration — reuses
   `admins.cashbox_debt_enabled` from `1716000000207`):** `payment_courier`
   over-remit guard (amount > courier balance → 400) is skipped when identity

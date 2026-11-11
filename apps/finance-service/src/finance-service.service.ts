@@ -1623,16 +1623,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // (2026-11-11) Faqat CHIQIM tekshiriladi: kirim qoldiqni hech qachon
+    // yomonlashtirmaydi. Ilgari manfiy kassaga (filial «Kassa qarzga
+    // ishlaydi», tizim oyoqlari) kirim ham, natija hali manfiy bo'lsa, 400
+    // bilan rad etilardi — menejer kuryer pulini qabul qila olmasdi.
+    const isExpense = sign < 0;
     if (resolvedMethod === PaymentMethod.CASH) {
       const nextCash = Number(cashbox.balance_cash) + sign * amount;
-      if (!allowNegativeBalance && nextCash < 0) {
+      if (!allowNegativeBalance && isExpense && nextCash < 0) {
         throw new BadRequestException("Naqd kassada yetarli mablag' yo'q");
       }
       cashbox.balance_cash = nextCash;
     } else {
       // isCardMethod — CLICK / CLICK_TO_MARKET (boshqasi yuqorida 400).
       const nextCard = Number(cashbox.balance_card) + sign * amount;
-      if (!allowNegativeBalance && nextCard < 0) {
+      if (!allowNegativeBalance && isExpense && nextCard < 0) {
         throw new BadRequestException("Karta hisobida yetarli mablag' yo'q");
       }
       cashbox.balance_card = nextCard;

@@ -28,6 +28,7 @@ Deploy: branch-service + finance-service + api-gateway. **Migratsiya `1716000000
 
 - 🆕 `PATCH /branches/:id` — `cashbox_debt_enabled: boolean` (faqat superadmin/admin; boshqa rol 403, boolean emas 400, HQ filialda `true` — 400). `GET /branches/:id` va `GET /branches` javobida ham bor (sukut `false`).
 - ✏️ `POST /finance/cashbox/payment/branch-to-main` — filialda yoqilgan bo'lsa HQ filial kassasidagidan **ortiq** summani qabul qiladi (masalan qarz 4 500 000, qabul 5 000 000): filial kassasi (naqd yoki karta tanlanmagan/Asosiy karta) manfiyga tushadi, ortig'i daftarda `branch_to_hq` qoldig'i — HQ filialga qarzdor; keyingi sotuvlar uni o'zi yopadi. Nomli karta baribir qat'iy (kartadagidan ortiq — 400). O'chiq bo'lsa — avvalgidek **400** «Naqd kassada yetarli mablag' yo'q» / «Karta hisobida yetarli mablag' yo'q».
+- ✏️ Kassa qoldig'i qoidasi: manfiy kassaga **kirim** endi rad etilmaydi (ilgari natija hali manfiy bo'lsa 400 «Naqd kassada yetarli mablag' yo'q» edi) — menejer manfiy filial kassasiga kuryer pulini qabul qila oladi. Chiqim avvalgidek qat'iy.
 - 🆕 `hq_qarzi` (HQ'ning filialga qarzi, ≥ 0): `GET /branches` har filial qatorida, `GET /managers` (menejer qatorida), `GET /finance/cashbox/manager/settlement`, `GET /finance/cashbox/manager/payable-to-hq`, `GET /finance/cashbox/all-info` (menejer) va SA/admin filial kassasi ko'rinishi (`toBranchSettlementFields`). `berilishi_kerak` avvalgidek 0 dan pastga tushmaydi.
 
 **Frontend action items:**

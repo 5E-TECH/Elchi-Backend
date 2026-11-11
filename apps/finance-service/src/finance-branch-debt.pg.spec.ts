@@ -190,6 +190,44 @@ describePg('Filial kassasi qarzga ishlaydi — haqiqiy Postgres', () => {
     );
   });
 
+  it('⭐ manfiy filial kassasiga menejer kuryer pulini qabul qiladi (kirim rad etilmaydi), chiqim baribir qat`iy', async () => {
+    branchReply({ id: BRANCH, type: 'REGIONAL', cashbox_debt_enabled: true });
+    await seed('209', Cashbox_type.FOR_COURIER, 335_000);
+    await receive(5_000_000, 'gw:b-7');
+    expect(Number((await box(BRANCH, Cashbox_type.BRANCH)).balance_cash)).toBe(
+      -500_000,
+    );
+
+    // Kirim natijasi hali manfiy (−165 000) — baribir o'tadi.
+    await service.paymentsFromCourier({
+      courier_id: '209',
+      amount: 335_000,
+      payment_method: PaymentMethod.CASH,
+      created_by: '8',
+      dedup_epoch: 'gw:c-7',
+      receiver_user_id: BRANCH,
+      receiver_cashbox_type: Cashbox_type.BRANCH,
+    } as never);
+    expect(Number((await box(BRANCH, Cashbox_type.BRANCH)).balance_cash)).toBe(
+      -165_000,
+    );
+    expect(Number((await box('209', Cashbox_type.FOR_COURIER)).balance)).toBe(
+      0,
+    );
+
+    // Qo'lda chiqim manfiy kassadan — avvalgidek 400.
+    await expect(
+      service.spendMoney({
+        user_id: BRANCH,
+        amount: 1_000,
+        cashbox_type: Cashbox_type.BRANCH,
+        created_by: '8',
+      } as never),
+    ).rejects.toMatchObject({
+      error: { statusCode: 400, message: "Naqd kassada yetarli mablag' yo'q" },
+    });
+  });
+
   it('yoqiq — karta (Asosiy, karta tanlanmagan) ham manfiyga tushadi', async () => {
     branchReply({ id: BRANCH, type: 'REGIONAL', cashbox_debt_enabled: true });
 
