@@ -253,6 +253,14 @@ const NO_ROLES_WHITELIST: readonly string[] = [
   'POST /partner/shipments',
   'POST /partner/shipments/:id/cancel',
   'POST /partner/shipments/status',
+  // Carrier API — o'z API-kalit guard'i (CarrierApiKeyGuard), kalit bitta
+  // kurierga bog'langan; JWT rollari bu yo'lga umuman kira olmaydi.
+  'GET /carrier/cashbox',
+  'GET /carrier/orders',
+  'GET /carrier/ping',
+  'POST /carrier/orders/:id/status',
+  'POST /carrier/returns',
+  'POST /carrier/scan',
   // Ochiq narx kalkulyatori (mSkzzNBJ).
   'GET /public/delivery-tariffs',
   'POST /public/delivery-quote',
@@ -272,8 +280,16 @@ const NO_ROLES_WHITELIST: readonly string[] = [
 /** LOGIST moliya yopiqligi qamrovi — yo'l naqshi (kontrollerdan qat'i nazar). */
 const FINANCE_PATH_RE =
   /^\/(finance|investors|investments|profits|analytics|ai-usage)(\/|$)|cashbox|settlement|payment|salary|revenue/i;
-/** Moliya bo'lmagan, lekin naqshga tushadigan texnik yo'l. */
-const FINANCE_PATH_EXCEPTIONS = new Set(['GET /finance/health']);
+/**
+ * Moliya bo'lmagan, lekin naqshga tushadigan texnik yo'l — yoki JWT roli
+ * umuman kira olmaydigan yo'l: `/carrier/cashbox` faqat Carrier API kaliti
+ * bilan ochiladi (`CarrierApiKeyGuard`) va faqat O'Z kurier kassasini
+ * ko'rsatadi, ya'ni LOGIST (yoki boshqa JWT roli) unga yetib bormaydi.
+ */
+const FINANCE_PATH_EXCEPTIONS = new Set([
+  'GET /finance/health',
+  'GET /carrier/cashbox',
+]);
 
 describe('gShYHHGj — gateway RBAC xaritasi (metadata’dan avtomatik)', () => {
   const { routes, controllers, registered } = collectGatewayRoutes();
