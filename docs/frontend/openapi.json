@@ -11321,7 +11321,7 @@
     },
     "/finance/receipts": {
       "post": {
-        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`).",
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
         "operationId": "FinanceGatewayController_uploadReceipt",
         "parameters": [],
         "requestBody": {
@@ -30171,7 +30171,7 @@
           "receipt_id": {
             "type": "string",
             "example": "41",
-            "description": "(T3) Chek qoralamasi ID si. Faqat superadmin/admin'ning HQ'ga `click` qabulida; chek rasmi yoqiq bo'lsa `click` da MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd, click_to_market yoki menejer qabuli + chek → 400 `RECEIPT_NOT_APPLICABLE`."
+            "description": "(T3) Chek qoralamasi ID si. Faqat superadmin/admin'ning HQ'ga `click` yoki `click_to_market` («Marketga o'tkazma», 2026-11-12) qabulida; `hq_transfer` chek rasmi yoqiq bo'lsa ikkalasida ham MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`), o'chiq — so'ralmaydi. Naqd yoki menejer qabuli + chek → 400 `RECEIPT_NOT_APPLICABLE`."
           },
           "courier_id": {
             "type": "string",
@@ -30286,7 +30286,7 @@
           "receipt_id": {
             "type": "string",
             "example": "41",
-            "description": "(T3) Chek qoralamasi ID si. Faqat `click` da; chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd + chek → 400 `RECEIPT_NOT_APPLICABLE`."
+            "description": "(T3) Chek qoralamasi ID si. `click` va `click_to_market` («Marketga o'tkazma», 2026-11-12) da; `hq_transfer` chek rasmi yoqiq bo'lsa ikkalasida ham MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`), o'chiq — so'ralmaydi. Naqd + chek → 400 `RECEIPT_NOT_APPLICABLE`."
           },
           "branch_id": {
             "type": "string",
@@ -30332,7 +30332,7 @@
           "market_id": {
             "type": "string",
             "example": "2002",
-            "description": "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda chek (`receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`) va karta (`card_id` / `branch_card_id` → 400) yo'q. Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin."
+            "description": "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda karta (`card_id` / `branch_card_id` → 400) yo'q; chek — «O'tkazma» bilan bir xil (`hq_transfer` sozlamasi, `receipt_id`). Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin."
           }
         },
         "required": [

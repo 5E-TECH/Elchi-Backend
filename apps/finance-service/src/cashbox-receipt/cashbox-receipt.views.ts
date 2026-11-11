@@ -43,8 +43,9 @@ export const isReceiptFilterStatus = (
  *      (BE-C, ega 2026-11-10: chek faqat karta chiqimida — naqd chiqim
  *      kirmaydi; `isReceiptPaymentMethod` bilan AYNI qoida);
  *  (b) HQ'ga o'tkazma: MAIN INCOME, `courier_payment | branch_to_main`,
- *      `click`.
- * Naqd chiqim / o'tkazma, click_to_market, kirim, maosh, sotuv, qarshi
+ *      `click` yoki `click_to_market` («Marketga o'tkazma» — Dilshod
+ *      2026-11-12; `isTransferReceiptPaymentMethod` bilan AYNI qoida).
+ * Naqd chiqim / o'tkazma, click_to_market chiqim, kirim, maosh, sotuv, qarshi
  * EXPENSE qatorlar va T6 bilan qaytarilgan oyoqlar (`notReversedSql`)
  * kirmaydi. Funksiyadan oldingi va rasm o'chiq paytdagilar ham shu predikat
  * bilan `none`. Faqat KUTILISH o'zgardi: eski naqd chiqimga bog'langan chek
@@ -57,7 +58,8 @@ export const RECEIPT_EXPECTED_SQL = `(
     AND h."payment_method" = 'click')
   OR (h."operation_type" = 'income'
     AND h."source_type" IN ('courier_payment', 'branch_to_main')
-    AND h."payment_method" = 'click' AND c."cashbox_type" = 'main')
+    AND h."payment_method" IN ('click', 'click_to_market')
+    AND c."cashbox_type" = 'main')
 )`;
 
 /**

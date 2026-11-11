@@ -467,8 +467,9 @@ export class CashboxReceiptService {
    * saqlangandan keyin): chekni operatsiyaga bog'laydi. Xato → throw →
    * butun tranzaksiya (pul ham) rollback.
    *
-   *  - `applicable:false` (naqd chiqim — BE-C; naqd / click_to_market
-   *    o'tkazma) + `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`; `receipt_id`
+   *  - `applicable:false` (naqd / click_to_market chiqim — BE-C; naqd
+   *    o'tkazma — HQ'ga o'tkazmada click_to_market 2026-11-12 dan chekli)
+   *    + `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`; `receipt_id`
    *    siz — `null` (rasm sozlamasi yoqiq bo'lsa ham);
    *  - rasm majburiy va `receipt_id` yo'q → 400 `RECEIPT_REQUIRED`; rasm
    *    o'chiq va yo'q → `null`;
@@ -1005,7 +1006,9 @@ export class CashboxReceiptService {
 
   /**
    * `card_mismatch` uchun kutilgan last4: o'tkazmada — HQ (MAIN) kassa
-   * kartalari; chiqimda — to'lov qilingan karta (click). Topilmasa — [].
+   * kartalari; chiqimda — to'lov qilingan karta (click). «Marketga o'tkazma»
+   * (`click_to_market`) da pul market kartasiga ketgan — HQ kartalari bilan
+   * solishtirilmaydi ([]). Topilmasa — [].
    */
   private async expectedCardLast4(
     manager: EntityManager,
@@ -1019,6 +1022,7 @@ export class CashboxReceiptService {
         });
         return card?.last4 ? [String(card.last4)] : [];
       }
+      if (row.payment_method === 'click_to_market') return [];
       const main = await manager.findOne(Cashbox, {
         where: {
           user_id: '0',

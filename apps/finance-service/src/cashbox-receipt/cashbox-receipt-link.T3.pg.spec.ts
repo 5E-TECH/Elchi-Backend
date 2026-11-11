@@ -520,45 +520,161 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     expect(await mainBalance()).toBe(before);
   });
 
-  it.each([[PaymentMethod.CASH], [PaymentMethod.CLICK_TO_MARKET]])(
-    '⭐ %s + receipt_id → 400 RECEIPT_NOT_APPLICABLE; %s cheksiz — o`tadi, receipt null',
-    async (method) => {
-      const receiptId = await upload('courier_to_hq');
-      const extra =
-        method === PaymentMethod.CLICK_TO_MARKET ? { market_id: '501' } : {};
-      if (method === PaymentMethod.CLICK_TO_MARKET) {
-        await db.getRepository(Cashbox).save(
-          db.getRepository(Cashbox).create({
-            user_id: '501',
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            // HQ marketga qarzdor (click_to_market chegarasi).
-            balance: 500_000,
-            balance_cash: 500_000,
-            balance_card: 0,
-          }),
-        );
-      }
-      await expect(
-        rpcError(
-          payCourier({
-            payment_method: method,
-            receipt_id: receiptId,
-            ...extra,
-          }),
-        ),
-      ).resolves.toEqual(
-        expect.objectContaining({
-          statusCode: 400,
-          code: 'RECEIPT_NOT_APPLICABLE',
+  it('⭐ naqd + receipt_id → 400 RECEIPT_NOT_APPLICABLE; naqd cheksiz — o`tadi, receipt null', async () => {
+    const receiptId = await upload('courier_to_hq');
+    await expect(
+      rpcError(
+        payCourier({
+          payment_method: PaymentMethod.CASH,
+          receipt_id: receiptId,
         }),
-      );
-      if (method === PaymentMethod.CASH) {
-        const res = await payCourier({ payment_method: method });
-        expect(res.statusCode).toBe(201);
-        expect(res.data.receipt).toBeNull();
-      }
-    },
-  );
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        statusCode: 400,
+        code: 'RECEIPT_NOT_APPLICABLE',
+      }),
+    );
+    const res = await payCourier({ payment_method: PaymentMethod.CASH });
+    expect(res.statusCode).toBe(201);
+    expect(res.data.receipt).toBeNull();
+  });
+
+  // ─── (Dilshod 2026-11-12) «Marketga o'tkazma» — «O'tkazma» bilan bir xil ───
+
+  const seedMarket501 = () =>
+    db.getRepository(Cashbox).save(
+      db.getRepository(Cashbox).create({
+        user_id: '501',
+        cashbox_type: Cashbox_type.FOR_MARKET,
+        // HQ marketga qarzdor (click_to_market chegarasi).
+        balance: 500_000,
+        balance_cash: 500_000,
+        balance_card: 0,
+      }),
+    );
+
+  it('⭐ click_to_market, rasm YOQIQ: cheksiz → 400 RECEIPT_REQUIRED (pul o`zgarmaydi); chek bilan → bog`lanadi (MAIN INCOME + kuryer EXPENSE)', async () => {
+    await seedMarket501();
+    const before = await mainBalance();
+    const marketBefore = Number(
+      (await cashboxOf('501', Cashbox_type.FOR_MARKET)).balance,
+    );
+    await expect(
+      rpcError(
+        payCourier({
+          payment_method: PaymentMethod.CLICK_TO_MARKET,
+          market_id: '501',
+        }),
+      ),
+    ).resolves.toMatchObject({ statusCode: 400, code: 'RECEIPT_REQUIRED' });
+    expect(await mainBalance()).toBe(before);
+    expect(
+      Number((await cashboxOf('501', Cashbox_type.FOR_MARKET)).balance),
+    ).toBe(marketBefore);
+
+    const receiptId = await upload('courier_to_hq');
+    const res = await payCourier({
+      payment_method: PaymentMethod.CLICK_TO_MARKET,
+      market_id: '501',
+      receipt_id: receiptId,
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.data.receipt).toMatchObject({
+      id: receiptId,
+      ai_status: 'pending',
+    });
+    const legs = await db.getRepository(CashboxHistory).find({
+      where: { transfer_id: res.data.transfer_id },
+      relations: ['cashbox'],
+    });
+    const income = legs.find(
+      (l) =>
+        l.cashbox.cashbox_type === Cashbox_type.MAIN &&
+        l.operation_type === ('income' as never),
+    );
+    const expense = legs.find(
+      (l) => l.cashbox.cashbox_type === Cashbox_type.FOR_COURIER,
+    );
+    expect(await receiptRow(receiptId)).toMatchObject({
+      state: 'linked',
+      history_id: String(income?.id),
+      counter_history_id: String(expense?.id),
+      courier_id: '301',
+      payment_method: 'click_to_market',
+      entered_amount: 90_000,
+    });
+  });
+
+  it('click_to_market, rasm O`CHIQ → cheksiz o`tadi, receipt null; MAIN INCOME oyog`i «Chek yo`q» (none) da, MAIN/market chiqimlari emas', async () => {
+    await seedMarket501();
+    await setSettings({ hq_transfer: { photo_required: false } });
+    const res = await payCourier({
+      payment_method: PaymentMethod.CLICK_TO_MARKET,
+      market_id: '501',
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.data.receipt).toBeNull();
+    const income = await db.getRepository(CashboxHistory).findOneOrFail({
+      where: {
+        transfer_id: res.data.transfer_id,
+        operation_type: 'income' as never,
+      },
+    });
+    const none = (await finance.findAllHistory({
+      page: 0,
+      limit: 0,
+      receipt_status: 'none',
+      include_receipts: true,
+    })) as any;
+    expect(none.data.items.map((i: any) => String(i.id))).toEqual([
+      String(income.id),
+    ]);
+  });
+
+  it('click_to_market cheki — AI: pul market kartasiga, HQ kartasi bilan solishtirilmaydi (card_mismatch yo`q)', async () => {
+    await seedMarket501();
+    const main = await cashboxOf('0', Cashbox_type.MAIN);
+    await db.getRepository(CashboxCard).save(
+      db.getRepository(CashboxCard).create({
+        cashbox_id: String(main.id),
+        name: 'HQ karta',
+        last4: '1111',
+      } as never),
+    );
+    const receiptId = await upload('courier_to_hq');
+    const res = await payCourier({
+      payment_method: PaymentMethod.CLICK_TO_MARKET,
+      market_id: '501',
+      receipt_id: receiptId,
+    });
+    await receipts.applyAiResult({
+      receipt_id: receiptId,
+      ai_request_id: String(res.data.receipt.ai_request_id),
+      result: aiOk({ amount: 90_000, recipient_card_last4: '9999' }),
+    });
+    expect(await receiptRow(receiptId)).toMatchObject({
+      ai_status: 'match',
+      ai_flags: [],
+    });
+    // Nazorat: oddiy «O'tkazma» (click) — o'sha natija card_mismatch beradi.
+    const clickReceipt = await upload('courier_to_hq');
+    const click = await payCourier({ receipt_id: clickReceipt });
+    await receipts.applyAiResult({
+      receipt_id: clickReceipt,
+      ai_request_id: String(click.data.receipt.ai_request_id),
+      result: aiOk({ amount: 90_000, recipient_card_last4: '9999' }),
+    });
+    // (bir xil test rasmi — duplicate_photo ham bo'ladi; bizga card_mismatch.)
+    expect((await receiptRow(clickReceipt)).ai_flags).toEqual(
+      expect.arrayContaining(['card_mismatch']),
+    );
+    // Jurnal jadvali testlar orasida tozalanmaydi — keyingi AI testi
+    // `receipt_ai_checked` ni o'zi sanaydi.
+    await db
+      .getRepository(ActivityLog)
+      .delete({ action: 'finance.receipt_ai_checked' });
+  });
 
   it('kuryer to`lovi takrori → asl chek', async () => {
     const receiptId = await upload('courier_to_hq');

@@ -1014,7 +1014,7 @@ export class PaymentFromCourierRequestDto {
   @ApiPropertyOptional({
     example: '41',
     description:
-      "(T3) Chek qoralamasi ID si. Faqat superadmin/admin'ning HQ'ga `click` qabulida; chek rasmi yoqiq bo'lsa `click` da MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd, click_to_market yoki menejer qabuli + chek → 400 `RECEIPT_NOT_APPLICABLE`.",
+      "(T3) Chek qoralamasi ID si. Faqat superadmin/admin'ning HQ'ga `click` yoki `click_to_market` («Marketga o'tkazma», 2026-11-12) qabulida; `hq_transfer` chek rasmi yoqiq bo'lsa ikkalasida ham MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`), o'chiq — so'ralmaydi. Naqd yoki menejer qabuli + chek → 400 `RECEIPT_NOT_APPLICABLE`.",
   })
   @IsOptional()
   @IsString()
@@ -1135,7 +1135,7 @@ export class PaymentBranchToMainRequestDto {
   @ApiPropertyOptional({
     example: '41',
     description:
-      "(T3) Chek qoralamasi ID si. Faqat `click` da; chek rasmi yoqiq bo'lsa MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`). Naqd + chek → 400 `RECEIPT_NOT_APPLICABLE`.",
+      "(T3) Chek qoralamasi ID si. `click` va `click_to_market` («Marketga o'tkazma», 2026-11-12) da; `hq_transfer` chek rasmi yoqiq bo'lsa ikkalasida ham MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`), o'chiq — so'ralmaydi. Naqd + chek → 400 `RECEIPT_NOT_APPLICABLE`.",
   })
   @IsOptional()
   @IsString()
@@ -1211,7 +1211,7 @@ export class PaymentBranchToMainRequestDto {
   @ApiPropertyOptional({
     example: '2002',
     description:
-      "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda chek (`receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`) va karta (`card_id` / `branch_card_id` → 400) yo'q. Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin.",
+      "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda karta (`card_id` / `branch_card_id` → 400) yo'q; chek — «O'tkazma» bilan bir xil (`hq_transfer` sozlamasi, `receipt_id`). Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin.",
   })
   @IsOptional()
   @IsString()
