@@ -11,8 +11,11 @@ import { DataSource, EntityManager, In } from 'typeorm';
 import {
   ActivityLogService,
   Cashbox_type,
+  SHIFT_LATE_PHOTO_ERROR_CODES,
+  SHIFT_LATE_PHOTO_MESSAGES,
   SHIFT_SCHEDULE_CONFLICT,
   maskCardLikeDigitsKeepingDates,
+  type ShiftLatePhotoErrorCode,
 } from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxCard } from '../entities/cashbox-card.entity';
@@ -35,10 +38,15 @@ import {
   effectiveShiftCheckSettings,
   isAiEnabled,
   isCommentRequired,
+  isLateUploaded,
   isPhotoRequired,
+  latePhotoBlock,
+  latePhotoFields,
+  lateUploadDeadline,
   round2,
   summarizeStatuses,
   type AiCheckResult,
+  type LatePhotoShiftSource,
   type ShiftCheckCashboxType,
   type ShiftCheckGlobalSettings,
   type ShiftCheckSettings,
@@ -95,6 +103,25 @@ export interface CloseShiftAccountInput {
 function forbidden(message: string): never {
   throw new RpcException({ statusCode: 403, message });
 }
+
+/** BE-B — kodli xato (`PUBLIC_ERROR_CODES`: kod va ruxsat etilgan maydonlar FE'ga yetadi). */
+function latePhotoFail(
+  statusCode: number,
+  code: ShiftLatePhotoErrorCode,
+  extra: Record<string, unknown> = {},
+): never {
+  throw new RpcException({
+    statusCode,
+    code,
+    message: SHIFT_LATE_PHOTO_MESSAGES[code],
+    ...extra,
+  });
+}
+
+const rolesOf = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.map((role) => scalarText(role).toLowerCase())
+    : [];
 
 function toRpcError(error: unknown): never {
   if (error instanceof RpcException) throw error;
@@ -789,7 +816,7 @@ export class ShiftAccountCheckService {
 
       return successRes(
         {
-          check: this.view(outcome.saved, outcome.card),
+          check: this.view(outcome.saved, outcome.card, outcome.shift),
           shift_id: String(outcome.shift.id),
           ai_enabled: outcome.aiEnabled,
           ai_request_id: outcome.saved.ai_request_id,
@@ -807,13 +834,269 @@ export class ShiftAccountCheckService {
     }
   }
 
+  // ───────────────── BE-B: avto-yopilgan smenaga rasmni keyin yuklash ─────────────────
+
+  /**
+   * BE-B (ega 2026-11-10: «24 soat ichida keyin yuklash») — AVTOMATIK
+   * yopilgan ASOSIY kassa smenasiga karta qoldig'i rasmini keyin yuklash
+   * (gateway `POST /finance/shift/:shift_id/accounts/:card_id/late-photo`,
+   * faqat superadmin / admin — gateway `@Roles` + bu yerda `requester_roles`).
+   *
+   * Guard tartibi: smena yo'q → 404; MAIN emas → 400
+   * `SHIFT_LATE_PHOTO_MAIN_ONLY`; ochiq / qo'lda yopilgan → 409
+   * `SHIFT_LATE_PHOTO_NOT_AUTO_CLOSED`; `now > closed_at + 24 soat` → 409
+   * `SHIFT_LATE_PHOTO_EXPIRED` (`deadline`); kartaning snapshot qatori yo'q →
+   * 404 `SHIFT_LATE_PHOTO_CARD_NOT_IN_SHIFT`.
+   *
+   * Bitta tranzaksiya, qator FOR UPDATE: rasm kaliti / vaqti / yuklovchi,
+   * kiritilgan qoldiq, farq = kiritilgan − SNAPSHOT `expected_balance`
+   * (avto-yopish paytidagi haqiqat — joriy balansdan QAYTA HISOBLANMAYDI),
+   * izoh (yopishdagi qoida: farq ≠ 0 — majburiy, 400; kassirning yopishdan
+   * oldingi qoralama izohi hisobga olinmaydi va almashtiriladi — faqat
+   * avvalgi KEYIN yuklash izohi qayta yuklashda qoladi), `confirmed_at /
+   * confirmed_by` = hozir / yuklovchi. AI — qoralama / yopish qoidasi
+   * (master kalit && karta bayrog'i): `pending` + YANGI `ai_request_id`
+   * (oldingi rasmning kechikkan natijasi e'tiborsiz), aks holda `disabled`.
+   * Oyna ichida qayta yuklash mumkin — oxirgisi yutadi (oldingi KEYIN
+   * yuklangan rasm fayli gateway'da o'chiriladi). Kassirning smena
+   * yopilishidan OLDINGI qoralama rasmi va AI natijasi DALIL — fayl
+   * o'chirilmaydi (`previous_photo_file_key = null`), eski kalit va AI
+   * qiymatlari activity-log `old_value` da qoladi. Realtime
+   * `finance.shift.account_checked` (`late: true`) shu tranzaksiyada.
+   * PUL HARAKATI YO'Q (balanslar o'qilmaydi ham).
+   */
+  async attachLatePhoto(input: {
+    shift_id?: unknown;
+    card_id?: unknown;
+    photo_file_key?: unknown;
+    entered_balance?: unknown;
+    comment?: unknown;
+    requester_id?: unknown;
+    requester_roles?: unknown;
+  }) {
+    try {
+      const roles = rolesOf(input?.requester_roles);
+      if (!roles.includes('superadmin') && !roles.includes('admin')) {
+        forbidden('Rasmni keyin faqat superadmin yoki admin yuklaydi');
+      }
+      const shiftId = assertId(input?.shift_id, 'shift_id');
+      const cardId = assertId(input?.card_id, 'card_id');
+      const photoKey = scalarText(input?.photo_file_key);
+      if (!photoKey || photoKey.length > 500) {
+        throw new BadRequestException("photo_file_key noto'g'ri");
+      }
+      const requesterId = assertId(input?.requester_id, 'requester_id');
+      if (
+        input?.entered_balance === undefined ||
+        input?.entered_balance === null ||
+        input?.entered_balance === ''
+      ) {
+        throw new BadRequestException('entered_balance majburiy');
+      }
+      const entered = parseMoney(input.entered_balance, 'entered_balance');
+      const comment = scalarText(input?.comment).slice(0, 1000) || null;
+      const now = new Date();
+
+      const outcome = await this.dataSource.transaction(async (manager) => {
+        const shift = await manager.findOne(Shift, {
+          where: { id: shiftId, isDeleted: false },
+          lock: { mode: 'pessimistic_read' },
+        });
+        if (!shift) throw new NotFoundException('Smena topilmadi');
+        const block = latePhotoBlock(shift, now);
+        if (block === 'main_only') {
+          latePhotoFail(400, SHIFT_LATE_PHOTO_ERROR_CODES.MAIN_ONLY);
+        }
+        if (block === 'not_auto_closed') {
+          latePhotoFail(409, SHIFT_LATE_PHOTO_ERROR_CODES.NOT_AUTO_CLOSED);
+        }
+        if (block === 'expired') {
+          latePhotoFail(409, SHIFT_LATE_PHOTO_ERROR_CODES.EXPIRED, {
+            deadline: lateUploadDeadline(shift)?.toISOString() ?? null,
+          });
+        }
+        const row = await manager.findOne(ShiftAccountCheck, {
+          where: {
+            shift_id: shiftId,
+            cashbox_card_id: cardId,
+            isDeleted: false,
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!row) {
+          latePhotoFail(404, SHIFT_LATE_PHOTO_ERROR_CODES.CARD_NOT_IN_SHIFT);
+        }
+        // O'chirilgan / arxivlangan karta ham (snapshot — tarix) qabul qilinadi.
+        const card = await manager.findOne(CashboxCard, {
+          where: { id: cardId },
+        });
+        const settings = await this.loadSettingsFor(
+          shiftCashboxUserId(shift),
+          manager,
+        );
+        const aiEnabled = card ? isAiEnabled(settings, card) : false;
+        const expected =
+          row.expected_balance == null ? null : Number(row.expected_balance);
+        const difference = expected == null ? null : round2(entered - expected);
+        // Kassirning yopishdan oldingi qoralama rasmi va AI natijasi DALIL —
+        // fayl o'chirilmaydi, eski qiymatlar activity-log'da (old_value).
+        // Vaqti noma'lum rasm ham (keyin yuklangani isbotlanmagan) — dalil.
+        const previousKey = row.photo_file_key;
+        const preCloseEvidence =
+          Boolean(previousKey) && !isLateUploaded(row, shift);
+        const before = {
+          entered_balance: row.entered_balance,
+          difference: row.difference,
+          comment: row.comment,
+          photo_file_key: row.photo_file_key,
+          photo_uploaded_at: row.photo_uploaded_at,
+          photo_uploaded_by:
+            row.photo_uploaded_by == null
+              ? null
+              : String(row.photo_uploaded_by),
+          ai_status: row.ai_status,
+          // `ai_raw` yozilmaydi (gateway uni faqat superadminga beradi,
+          // activity-log'ni admin ham o'qiydi) — muvaffaqiyatli natijada u
+          // aynan shu maydonlardan iborat.
+          ai_read_balance: row.ai_read_balance,
+          ai_last4_detected: row.ai_last4_detected,
+          ai_date_detected: row.ai_date_detected,
+          ai_confidence: row.ai_confidence,
+          ai_entered_ok: row.ai_entered_ok,
+          ai_model: row.ai_model,
+          ai_checked_at: row.ai_checked_at,
+          confirmed_at: row.confirmed_at,
+          confirmed_by:
+            row.confirmed_by == null ? null : String(row.confirmed_by),
+        };
+        // Kassirning yopishdan oldingi qoralama izohi — boshqa qiymat uchun
+        // yozilgan (activity-log old_value.comment da qoladi); faqat avvalgi
+        // KEYIN yuklash izohi qayta yuklashda saqlanadi.
+        const priorComment = isLateUploaded(row, shift) ? row.comment : null;
+        const nextComment = comment ?? priorComment;
+        if (
+          isCommentRequired({
+            difference,
+            ai_status: null,
+            ai_entered_ok: null,
+          }) &&
+          !scalarText(nextComment)
+        ) {
+          throw new BadRequestException(
+            `«${card?.name ?? `#${cardId}`}»: ${ACCOUNT_COMMENT_REQUIRED_MESSAGE}`,
+          );
+        }
+        row.comment = nextComment;
+
+        row.photo_file_key = photoKey;
+        row.photo_uploaded_at = now;
+        row.photo_uploaded_by = requesterId;
+        row.entered_balance = entered;
+        row.difference = difference;
+        row.ai_enabled_snap = aiEnabled;
+        row.ai_read_balance = null;
+        row.ai_last4_detected = null;
+        row.ai_date_detected = null;
+        row.ai_confidence = null;
+        row.ai_entered_ok = null;
+        row.ai_model = null;
+        row.ai_checked_at = null;
+        row.ai_raw = null;
+        row.ai_request_id = aiEnabled ? randomUUID() : null;
+        row.ai_status = aiEnabled
+          ? ShiftAccountAiStatus.PENDING
+          : ShiftAccountAiStatus.DISABLED;
+        row.confirmed_at = now;
+        row.confirmed_by = requesterId;
+        const saved = await manager.save(row);
+        // Hisobot sahifasi qayta o'qisin (AI natijasi keyin yana shu hodisa).
+        await this.realtime?.shiftAccountChecked(
+          {
+            shift,
+            card_id: cardId,
+            ai_status: saved.ai_status,
+            checked_at: now,
+            late: true,
+          },
+          manager,
+        );
+        return {
+          saved,
+          shift,
+          card,
+          previousKey,
+          preCloseEvidence,
+          aiEnabled,
+          before,
+        };
+      });
+
+      await this.activityLog.log({
+        entity_type: 'ShiftAccountCheck',
+        entity_id: String(outcome.saved.id),
+        action: 'finance.shift_late_photo_uploaded',
+        old_value: outcome.before,
+        new_value: {
+          entered_balance: outcome.saved.entered_balance,
+          difference: outcome.saved.difference,
+          photo_uploaded_at: outcome.saved.photo_uploaded_at,
+          photo_uploaded_by: requesterId,
+          ai_status: outcome.saved.ai_status,
+          confirmed_at: outcome.saved.confirmed_at,
+          confirmed_by: requesterId,
+        },
+        metadata: {
+          shift_id: shiftId,
+          card_id: cardId,
+          entered: outcome.saved.entered_balance,
+          expected: outcome.saved.expected_balance,
+          difference: outcome.saved.difference,
+          closed_at: outcome.shift.closed_at,
+          deadline: lateUploadDeadline(outcome.shift)?.toISOString() ?? null,
+          replaced_photo: Boolean(outcome.previousKey),
+          replaced_photo_key: outcome.previousKey ?? null,
+          kept_pre_close_photo: outcome.preCloseEvidence,
+        },
+        user_id: requesterId,
+      });
+
+      return successRes(
+        {
+          check: this.view(
+            outcome.saved,
+            outcome.card ?? undefined,
+            outcome.shift,
+            now,
+          ),
+          shift_id: String(outcome.shift.id),
+          ai_enabled: outcome.aiEnabled,
+          ai_request_id: outcome.saved.ai_request_id,
+          // Gateway shu kalitni o'chiradi — kassirning yopishdan oldingi
+          // qoralamasi (dalil) hech qachon qaytarilmaydi.
+          previous_photo_file_key:
+            !outcome.preCloseEvidence &&
+            outcome.previousKey &&
+            outcome.previousKey !== outcome.saved.photo_file_key
+              ? outcome.previousKey
+              : null,
+        },
+        201,
+        'Shift account late photo attached',
+      );
+    } catch (error) {
+      toRpcError(error);
+    }
+  }
+
   // ───────────────────────── AI natijasi ─────────────────────────
 
   /**
    * AI natijasi (gateway fon vazifasidan). `ai_request_id` mos kelmasa (rasm
    * almashtirilgan) — e'tiborsiz. Smena yopilgan bo'lsa ham yoziladi
-   * (natija hisobotga keyin tushadi). Realtime `finance.shift.account_checked`
-   * shu tranzaksiyada (outbox).
+   * (natija hisobotga keyin tushadi) — BE-B: avto-yopilgan smenaga KEYIN
+   * yuklangan rasm natijasi ham (solishtirish — yopish snapshot'i
+   * `expected_balance` bilan). Realtime `finance.shift.account_checked` shu
+   * tranzaksiyada (outbox); keyin yuklangan rasmda payload'da `late: true`.
    */
   async applyAiResult(input: {
     shift_id?: unknown;
@@ -905,10 +1188,11 @@ export class ShiftAccountCheckService {
             card_id: cardId,
             ai_status: saved.ai_status,
             checked_at: saved.ai_checked_at,
+            late: isLateUploaded(saved, shift),
           },
           manager,
         );
-        return { saved, card };
+        return { saved, card, shift };
       });
 
       if (!outcome) {
@@ -931,7 +1215,11 @@ export class ShiftAccountCheckService {
       return successRes(
         {
           applied: true,
-          check: this.view(outcome.saved, outcome.card ?? undefined),
+          check: this.view(
+            outcome.saved,
+            outcome.card ?? undefined,
+            outcome.shift,
+          ),
         },
         200,
         'AI result applied',
@@ -1157,7 +1445,9 @@ export class ShiftAccountCheckService {
    * Qamrov: shu kassa uchun tasdiqlash yoqilgan bo'lsa (MAIN —
    * `shift.account_check.enabled`, sukut true; filial —
    * `shift.account_check.branch_enabled`, sukut false) — kassaning HAR faol
-   * kartasi (hisobotda «tasdiqlanmagan» bo'lib ko'rinadi); o'chiq bo'lsa —
+   * kartasi (hisobotda «tasdiqlanmagan» bo'lib ko'rinadi) + smena ichida
+   * arxivlangan, lekin qoralamasi bor kartalar (BE-B: ularning qatori ham
+   * yopish paytidagi qoldiq bilan qayta snapshot qilinadi); o'chiq bo'lsa —
    * faqat smenada qoralamasi (rasm yuklangan) bor kartalar.
    * Qoralamadagi rasm kaliti va AI xom natijasi DALIL sifatida saqlanadi,
    * lekin holat `not_required` — kassir tasdiqlamagan qiymat solishtirilmaydi.
@@ -1186,13 +1476,20 @@ export class ShiftAccountCheckService {
     }
     const cards = settings.account_check_enabled
       ? await this.activeCards(manager, String(cashbox.id))
-      : drafts.length
-        ? await manager.find(CashboxCard, {
-            where: {
-              id: In(drafts.map((row) => String(row.cashbox_card_id))),
-            },
-          })
-        : [];
+      : [];
+    // BE-B: smena ichida arxivlangan kartaning qoralamasi ham avto-yopish
+    // SNAPSHOT'iga aylanadi — keyin yuklash farqi / AI eskirgan (qoralama
+    // paytidagi) `expected_balance` bilan hisoblanmasin. O'chiq bo'lsa —
+    // faqat qoralamasi bor kartalar (avvalgidek).
+    const covered = new Set(cards.map((card) => String(card.id)));
+    const extraIds = drafts
+      .map((row) => String(row.cashbox_card_id))
+      .filter((id) => !covered.has(id));
+    if (extraIds.length) {
+      cards.push(
+        ...(await manager.find(CashboxCard, { where: { id: In(extraIds) } })),
+      );
+    }
     if (!cards.length) return null;
     const balances = await this.systemBalances(manager, cashbox);
     const results: ShiftAccountCheck[] = [];
@@ -1232,23 +1529,43 @@ export class ShiftAccountCheckService {
 
   // ───────────────────────── hisobot ─────────────────────────
 
-  /** Smena kartalari natijalari (hisobot uchun; kartaning tafsilotlari bilan). */
-  async listForShift(shiftId: string): Promise<Array<Record<string, unknown>>> {
+  /**
+   * Smena kartalari natijalari (hisobot uchun; kartaning tafsilotlari bilan).
+   * BE-B: har qatorda `photo_status`, `late_upload_deadline`, `late_uploaded`,
+   * `can_upload_late` — smena qatoridan hisoblanadi (`shift` berilmasa
+   * o'qiladi).
+   */
+  async listForShift(
+    shiftId: string,
+    shift?: LatePhotoShiftSource | null,
+    now: Date = new Date(),
+  ): Promise<Array<Record<string, unknown>>> {
     const rows = await this.dataSource.manager.find(ShiftAccountCheck, {
       where: { shift_id: shiftId, isDeleted: false },
       order: { cashbox_card_id: 'ASC' },
     });
     if (!rows.length) return [];
+    const source: LatePhotoShiftSource =
+      shift ??
+      (await this.dataSource.manager.findOne(Shift, {
+        where: { id: shiftId },
+      })) ??
+      {};
     const cards = await this.dataSource.manager.find(CashboxCard, {
       where: { id: In(rows.map((row) => String(row.cashbox_card_id))) },
     });
     const byId = new Map(cards.map((card) => [String(card.id), card]));
     return rows.map((row) =>
-      this.view(row, byId.get(String(row.cashbox_card_id))),
+      this.view(row, byId.get(String(row.cashbox_card_id)), source, now),
     );
   }
 
-  view(row: ShiftAccountCheck, card?: CashboxCard): Record<string, unknown> {
+  view(
+    row: ShiftAccountCheck,
+    card: CashboxCard | undefined,
+    shift: LatePhotoShiftSource,
+    now: Date = new Date(),
+  ): Record<string, unknown> {
     return {
       id: String(row.id),
       shift_id: String(row.shift_id),
@@ -1288,6 +1605,8 @@ export class ShiftAccountCheckService {
       ai_enabled_snap: row.ai_enabled_snap,
       confirmed_at: row.confirmed_at,
       confirmed_by: row.confirmed_by == null ? null : String(row.confirmed_by),
+      // BE-B: rasm holati va avto-yopilgan MAIN smenasiga keyin yuklash oynasi.
+      ...latePhotoFields(row, shift, now),
     };
   }
 

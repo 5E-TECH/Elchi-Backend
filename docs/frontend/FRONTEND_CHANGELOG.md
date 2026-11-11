@@ -33,6 +33,96 @@ Deploy: finance-service + api-gateway + ai-service. Migratsiya yo'q. `openapi.js
 - 🔧 Smenalar sahifasi: `from_date`/`to_date` ni `YYYY-MM-DD` ko'rinishida yuborish yetarli — tanlangan kunlar to'liq kiradi. Agar `to_date` ga +1 kun qo'shish, ISO chegaralarni qo'lda hisoblash (`T00:00:00+05:00` / `T23:59:59`) yoki shunga o'xshash aylanib o'tish yozilgan bo'lsa — **olib tashlang** (endi +1 kun qo'shilsa ortiqcha kun kiradi). ISO yuborayotgan bo'lsangiz — o'zgarish shart emas.
 - 🟢 AI yordamchi oynasi — o'zgarish shart emas.
 
+### 2026-11-11 — Avto-yopilgan ASOSIY kassa smenasiga 24 soat ichida karta rasmini keyin yuklash (BE-B)
+
+Ega qarori (2026-11-10): «24 soat ichida keyin yuklash». ASOSIY kassa smenasi jadval bo'yicha AVTOMATIK yopilsa
+(`close_reason: 'auto'`), kassir karta qoldig'i skrinshotlarini yuklay olmagan — superadmin / admin ularni `closed_at`
+dan keyin 24 soat ichida yuklaydi. Deploy: finance-service + api-gateway. **Migratsiya YO'Q** (hammasi mavjud
+ustunlar va smenaning `close_reason` belgisidan hisoblanadi). `openapi.json` yangilandi.
+
+- [2026-11-10] 🆕 [gateway, finance] — **`POST /finance/shift/:shift_id/accounts/:card_id/late-photo`** (superadmin,
+  admin; menejer / registrator va boshqalar — 403). Multipart — `POST /finance/shift/account-photo` bilan bir xil
+  yuklash: `photo` (jpeg / png / webp, ≤ 5 MB, EXIF tozalanadi), `entered_balance` (MAJBURIY, son ≥ 0), `comment?`
+  (≤ 1000). Tekshiruv tartibi va xatolar (`code` javob konvertida — matnni emas, kodni tekshiring):
+
+  | Holat | HTTP | `code` | `message` |
+  |---|---|---|---|
+  | smena topilmadi | 404 | — | `Smena topilmadi` |
+  | ASOSIY kassa smenasi emas (filial) | 400 | `SHIFT_LATE_PHOTO_MAIN_ONLY` | `Rasmni keyin yuklash faqat asosiy kassa smenasi uchun` |
+  | smena ochiq yoki qo'lda yopilgan | 409 | `SHIFT_LATE_PHOTO_NOT_AUTO_CLOSED` | `Rasmni keyin yuklash faqat avtomatik yopilgan smena uchun` |
+  | `closed_at` + 24 soat o'tgan | 409 | `SHIFT_LATE_PHOTO_EXPIRED` (+ `deadline`, ISO) | `Rasmni keyin yuklash muddati tugagan (smena yopilganidan 24 soat o'tdi)` |
+  | smenada bu karta qatori yo'q | 404 | `SHIFT_LATE_PHOTO_CARD_NOT_IN_SHIFT` | `Bu karta shu smena hisobotida yo'q` |
+  | farq bor, izoh yo'q | 400 | — | `«Humo»: farq bor yoki AI natijasi mos emas — izoh majburiy` |
+
+  Validatsiya (`entered_balance` yo'q / bo'sh / manfiy / son emas, `comment` > 1000, ID raqam emas, rasm yo'q /
+  turi noto'g'ri, ortiqcha maydon) — 400, fayl yuklanmaydi. Rad etilsa yuklangan fayl o'chiriladi. Natija (bitta
+  tranzaksiya, qator qulfi; PUL HARAKATI YO'Q): rasm saqlanadi, `difference = entered_balance − expected_balance`
+  (`expected_balance` — avto-yopish paytidagi SNAPSHOT, joriy balansdan qayta hisoblanmaydi; farq aniq 0 bo'lmasa izoh
+  majburiy — yopishdagi qoida), qator tasdiqlanadi (`confirmed_at` = hozir, `confirmed_by` = yuklovchi), AI yoqilgan
+  kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status: 'pending'`, aks holda `'disabled'`. 24
+  soat ichida qayta yuklash mumkin — oxirgisi yutadi (oldingi KEYIN yuklangan rasm o'chiriladi, uning kechikkan AI
+  natijasi e'tiborsiz; izoh berilmasa faqat avvalgi KEYIN yuklash izohi qoladi). Kassirning yopishdan oldingi
+  qoralama izohi farq ≠ 0 dagi izoh talabini qoplamaydi va almashtiriladi (activity-log `old_value.comment` da
+  qoladi). Kassirning smena yopilishidan OLDINGI qoralama rasmi
+  (`late_uploaded: false`, `photo_status: 'uploaded'`) almashtirilsa ham fayli **o'chirilmaydi** — dalil sifatida
+  saqlanadi, eski kaliti va AI qiymatlari activity-log `old_value` da qoladi; qatorda yangi rasm ko'rinadi. Javob **201**:
+  ```ts
+  { statusCode: 201, message: 'Shift account late photo uploaded',
+    data: AccountRow }  // `GET /finance/shift/:id/report` → `accounts[]` qatori bilan AYNAN bir xil shakl
+  ```
+- [2026-11-10] ✏️ [gateway, finance] — **`GET /finance/shift/:id/report` → `accounts[]`** (shuningdek
+  `POST /finance/shift/account-photo` javobidagi `data.check`) har qatorga yangi HISOBLANGAN maydonlar (DB'da yo'q):
+  ```ts
+  photo_status: 'not_required' | 'uploaded' | 'pending' | 'missing';
+  late_upload_deadline: string | null; // ISO: avto-yopilgan ASOSIY smenada closed_at + 24 soat, aks holda null
+  late_uploaded: boolean;              // rasm smena yopilgandan KEYIN yuklangan
+  can_upload_late: boolean;            // avto-yopilgan ASOSIY smena && hozir ≤ muddat && so'rovchi superadmin / admin
+  ```
+  `photo_status`: `uploaded` — rasm bor; `pending` — rasm talab qilingan (`photo_required_snap`), yo'q va hali
+  yuklash mumkin (ochiq smena qoralamasi yoki avto-yopilgan ASOSIY smenaning 24 soatlik oynasi); `missing` — talab
+  qilingan, yo'q, oyna yopiq yoki yo'q (qo'lda yopilgan / filial smenasi); `not_required` — talab qilinmagan.
+  `can_upload_late` finance'da faqat qoida, rolni gateway qo'shadi (chek `can_reanalyze` kabi) — menejer /
+  registratorga doim `false`. Keyin yuklangan qatorda `confirmed_by` — yuklagan superadmin / admin ID si. Smena
+  davomida arxivlangan, lekin kassir qoralamasi bor karta ham hisobotda qoladi: avto-yopishda uning
+  `expected_balance` i kartaning yopish paytidagi saqlangan qoldig'i (`balance`) bilan qayta yoziladi (0 faqat
+  o'chirilgan karta uchun), `ai_status: 'not_required'`.
+- [2026-11-10] ✏️ [finance] — **Realtime `finance.shift.account_checked`** keyin yuklashda va shu rasmning AI
+  natijasida ham chiqadi, payload'da qo'shimcha **`late: true`** (summasiz): `{ shift_id, cashbox_user_id,
+  cashbox_type, branch_id, card_id, ai_status, checked_at, late: true }`. Nishonlar avvalgidek: ASOSIY smena —
+  superadmin / admin / registrator; smenani ochgan xodim faqat smenada `opened_by` bo'lsa qo'shiladi — «Kun
+  tartibi» bo'yicha tizim avtomatik ochgan smenada (`opened_by: null`) faqat rollar. Oddiy (ochiq smena) yuklashda
+  `late` maydoni yo'q.
+- [2026-11-10] 🟢 [finance] — Activity-log: **`finance.shift_late_photo_uploaded`** («Karta qoldig'i rasmi keyin
+  yuklandi (avto-yopilgan smena)»), metadata `{ shift_id, card_id, entered, expected, difference, closed_at, deadline,
+  replaced_photo, replaced_photo_key, kept_pre_close_photo }`; `old_value` da almashtirilgan rasm kaliti, izoh va AI
+  qiymatlari (`ai_read_balance`, `ai_last4_detected`, …; `ai_raw` emas). Smena hisoboti (Telegram / PDF) avtomatik qayta yuborilmaydi — kerak bo'lsa superadmin
+  `POST /finance/shift/:id/report/resend`.
+
+Frontend action items:
+- 🔧 Smena hisoboti (avto-yopilgan ASOSIY smena, sariq banner): har karta qatorida `photo_status` belgisi —
+  `pending` «Rasm kutilmoqda — HH:MM gacha» (`late_upload_deadline`), `missing` «Rasm yuklanmagan», `uploaded` (+
+  `late_uploaded` — «Keyin yuklandi»). `can_upload_late: true` bo'lsa (faqat superadmin / admin) «Rasm yuklash»
+  tugmasi → modal: rasm, qoldiq (majburiy), izoh (kiritilgan ≠ `expected_balance` bo'lsa majburiy) →
+  `POST /finance/shift/:shift_id/accounts/:card_id/late-photo`. Xatoda `code` ga qarang: `SHIFT_LATE_PHOTO_EXPIRED` /
+  `SHIFT_LATE_PHOTO_NOT_AUTO_CLOSED` — tugmani yashiring va hisobotni qayta o'qing; boshqa 400 matnini to'g'ridan-to'g'ri
+  ko'rsating.
+- 🔧 Realtime `finance.shift.account_checked` (`late: true` bilan ham) — ochiq hisobot sahifasi
+  `GET /finance/shift/:id/report` ni qayta o'qisin (AI natijasi keyin, shu hodisa bilan keladi).
+- 🟢 Menejer / registrator: tugma ko'rinmaydi (`can_upload_late: false`), holat va muddat ko'rinadi.
+### 2026-11-11 — Filialdan «Marketga o'tkazma»: filial pulni HQ'ga bermay marketga o'tkazgan (superadmin/admin)
+
+Deploy: api-gateway + finance-service (migratsiya yo'q). `openapi.json` yangilandi (`market_id`).
+
+- ✏️ `POST /finance/cashbox/payment/branch-to-main` — `payment_method: 'click_to_market'` + `market_id` (raqamli satr). Market yo'q → 400; `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`; `card_id` / `branch_card_id` → 400; `market_id` naqd / o'tkazma bilan → 400. Idempotency-Key — avvalgidek. Javob: `{ branch_cashbox, main_cashbox, market_cashbox, transfer_id }`, takroriy → `data.idempotent: true`.
+- 🟢 Pul: filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0, tarixda iz), market kassasi −X (HQ'ning marketga qarzi kamayadi). Filial «Kassa qarzga ishlaydi» o'chiq bo'lsa karta bo'lagi yetmasa 400 «Karta hisobida yetarli mablag' yo'q». Filial va asosiy kassada smena ochiq bo'lishi kerak (filial → HQ dagidek).
+- 🟢 Tarix qatori: `source_type = 'branch_to_main'`, `payment_method = 'click_to_market'` (filial va asosiy kassada), market kassasida `market_payment`. T6 tuzatish bu o'tkazmani qaytarmaydi (409 `unsupported_type`).
+- 🟢 Menejerning kuryer `click_to_market` backend yo'li o'zgarmagan.
+
+**Frontend (bajarildi, Elchi-Frontend `dilshodbek`):**
+- Filial (`type=branch`) kassa sahifasida superadmin/admin uchun «Marketga o'tkazma»: market majburiy, tasdiq oynasida market nomi, chek va karta maydoni yo'q.
+- Kuryer kassasida «Marketga o'tkazma» faqat superadmin/admin uchun; menejer o'z kuryeridan qabul qilganda faqat «Naqd» va «O'tkazma».
+- Tarixda `branch_to_main` + `click_to_market` → «Filialdan marketga o'tkazma» (uz/ru/en).
+
 ### 2026-11-11 — Filial kassasi qarzga ishlaydi: HQ filialdan qarzidan ortiq qabul qiladi
 
 Deploy: branch-service + finance-service + api-gateway. **Migratsiya `1716000000217`** (`branch_schema.branches.cashbox_debt_enabled boolean NOT NULL DEFAULT false` — hamma filial o'chiq, backfill yo'q).

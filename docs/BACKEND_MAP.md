@@ -671,7 +671,27 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   list never bypasses the MAIN requirement). Rollback hazard: pre-BE-A finance
   code applies `shift.account_check.enabled` globally (branches too); pair a
   code rollback with `migration:revert` of 215 or PATCH
-  account_check_enabled=false first. Flow: gateway `POST /finance/shift/account-photo`
+  account_check_enabled=false first. BE-B (2026-11-10, no migration): on an
+  AUTO-closed MAIN shift (`close_reason = 'auto'`) SA/ADMIN may upload a card
+  photo within 24 h of `closed_at` (`SHIFT_LATE_PHOTO_WINDOW_MS`) via
+  `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` →
+  `finance.shift.account_check.late_photo` (row FOR UPDATE: entered, difference
+  vs the auto-close SNAPSHOT `expected_balance`, confirmed_at/by = uploader,
+  new `ai_request_id`, realtime `finance.shift.account_checked` + `late: true`;
+  codes `SHIFT_LATE_PHOTO_{MAIN_ONLY,NOT_AUTO_CLOSED,EXPIRED,CARD_NOT_IN_SHIFT}`
+  in libs/common), and every report row gets computed `photo_status` /
+  `late_upload_deadline` / `late_uploaded` / `can_upload_late` (rules file;
+  gateway ANDs the latter with SA/ADMIN). A cashier's pre-close draft photo
+  replaced by a late upload is evidence: its file is never deleted
+  (`previous_photo_file_key` is returned — and deleted by the gateway — only
+  for a superseded LATE upload); old key + AI readings go to the activity-log
+  `old_value` (no `ai_raw`), metadata `replaced_photo_key` /
+  `kept_pre_close_photo`. The cashier's pre-close draft `comment` never
+  satisfies the late "difference ≠ 0 → comment" rule and is replaced (kept in
+  `old_value.comment`); only an earlier LATE upload's comment carries over
+  when a re-upload omits it. `recordAtAutoClose` also re-snapshots draft rows of
+  cards archived mid-shift (expected = the card's stored `balance` at close —
+  0 only for a deleted card; `not_required`). Flow: gateway `POST /finance/shift/account-photo`
   (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
   IPTC/text chunks, file-service folder `shift-check`, private, signed URL
   300 s) → `finance.shift.account_check.attach_photo` (draft row, expected
@@ -694,7 +714,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   {get,update}` (`GET|PATCH /finance/shift/settings`; PATCH SUPERADMIN only).
   Activity-log: `finance.shift_settings_updated`,
   `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
-  shift close metadata `accounts`.
+  `finance.shift_late_photo_uploaded` (BE-B), shift close metadata `accounts`.
 - **«Kun tartibi» — shift auto-OPEN + late alert (2026-11-11, migr
   `1716000000216`):** `shifts.opened_by` nullable + `opened_by_system`
   (CHECK `opened_by IS NOT NULL OR opened_by_system`), `shift_schedule_claims.
@@ -1590,6 +1610,30 @@ an order — see finance-service › Pickup visits.
   gateway route is `@Roles(SUPERADMIN, ADMIN)` and the handler rejects any
   non-HQ caller with 403 `BRANCH_TO_MAIN_HQ_ONLY_MESSAGE`; the FE removed the
   manager's "HQ'ga o'tkazish" button/form (read-only HQ cashbox page).
+- **Branch → market «Marketga o'tkazma» (Dilshod 2026-11-11):** the branch
+  paid the market directly instead of handing the money to HQ. SA/ADMIN send
+  `POST /finance/cashbox/payment/branch-to-main` with
+  `payment_method: click_to_market` + `market_id` (required → 400; `receipt_id`
+  → 400 `RECEIPT_NOT_APPLICABLE`; `card_id`/`branch_card_id` → 400; `market_id`
+  with cash/click → 400, also re-checked in finance). finance
+  `paymentFromBranchToMarket` — ONE tx, same `Idempotency-Key`/`dedup_epoch`
+  dedup as branch → HQ: branch EXPENSE `branch_to_main` −X, MAIN INCOME
+  `branch_to_main` +X and MAIN EXPENSE `market_payment` −X (trace, net 0),
+  market EXPENSE `market_payment` −X (`assertMarketPayoutWithinDebt`), all four
+  legs share one `transfer_id`; ledger advances `branch_to_hq` X then
+  `hq_to_market` X (pickup FIFO like `paymentsToMarket`); after commit the
+  market order sync / partner emit runs like `paymentsToMarket`. Bucket: KARTA
+  on every leg (`updateBalancesByMethod` treats CLICK_TO_MARKET as card, same
+  as the courier click_to_market MAIN legs). The branch card bucket may go
+  negative only when the branch has «Kassa qarzga ishlaydi»
+  (`cashbox_debt_enabled`), otherwise 400 "Karta hisobida yetarli mablag'
+  yo'q". Requires an open shift on the branch and on MAIN like branch → HQ.
+  T6 payment correction does not touch this shape: `classifyTransfer` → null,
+  409 `NOT_CORRECTABLE` / `unsupported_type`. History label (FE):
+  «Filialdan marketga o'tkazma» (`branch_to_main` + `click_to_market`). The FE
+  no longer offers «Marketga o'tkazma» to a manager receiving from his own
+  courier (only «Naqd» / «O'tkazma»); the BE manager courier
+  `click_to_market` path (M4) is unchanged.
 
 ### 5.3 Branch transfer batches
 Orders move between branches in QR-coded batches (forward + return),

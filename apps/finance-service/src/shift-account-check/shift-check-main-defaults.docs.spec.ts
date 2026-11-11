@@ -1,9 +1,15 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  SHIFT_LATE_PHOTO_ERROR_CODES,
+  SHIFT_LATE_PHOTO_MESSAGES,
+} from '@app/common';
+import {
   SHIFT_CHECK_BRANCH_KEY,
   SHIFT_CHECK_MAIN_ON_KEYS,
 } from '../../../../migrations/1716000000215-ShiftCheckMainDefaults';
+import { FINANCE_REALTIME_EVENTS } from '../realtime/finance-realtime.service';
+import { SHIFT_LATE_PHOTO_WINDOW_MS } from './shift-account-check.rules';
 
 /**
  * BE-A — FRONTEND_CHANGELOG yozuvi kod / migratsiya 215 xatti-harakati bilan
@@ -14,21 +20,41 @@ import {
  *  • rasm / AI master kalitlari GLOBAL — migratsiya ularni yoqadi, superadmin
  *    bayroq qo'ygan filial kartalari ta'sirlanadi («filialga tegilmaydi» emas);
  *  • eski kod + yangi DB (deploy oralig'i / kodni qaytarish) xavfi va chorasi.
+ * BE-B (o'sha kun, keyinroq) yozuvi BE-A dan yuqorida turadi (eng yangisi
+ * tepada; oralarida boshqa yozuvlar bo'lishi mumkin); BE-B matni ham kod bilan
+ * solishtiriladi.
  */
 const CHANGELOG = readFileSync(
   join(__dirname, '../../../../docs/frontend/FRONTEND_CHANGELOG.md'),
   'utf8',
 );
 
-/** BE-A yozuvi: sarlavhadan keyingi `### ` gacha. */
-function beaEntry(): string {
-  const heading =
-    "### 2026-11-10 — Smena yopish: ASOSIY kassada karta qoldig'i + skrinshot + AI sukut bo'yicha MAJBURIY (BE-A)";
+const BEA_HEADING =
+  "### 2026-11-10 — Smena yopish: ASOSIY kassada karta qoldig'i + skrinshot + AI sukut bo'yicha MAJBURIY (BE-A)";
+const BEB_HEADING =
+  '### 2026-11-11 — Avto-yopilgan ASOSIY kassa smenasiga 24 soat ichida karta rasmini keyin yuklash (BE-B)';
+
+/** Yozuv matni: sarlavhadan keyingi `### ` gacha. */
+function entryAfter(heading: string): string {
   const start = CHANGELOG.indexOf(heading);
   expect(start).toBeGreaterThanOrEqual(0);
   const rest = CHANGELOG.slice(start + heading.length);
   // Qatorlar 120 belgida bo'linadi — matn bo'yicha solishtirish uchun bitta qator.
   return rest.slice(0, rest.search(/\n### /)).replace(/\s*\n\s*/g, ' ');
+}
+
+/** BE-A yozuvi: sarlavhadan keyingi `### ` gacha. */
+const beaEntry = (): string => entryAfter(BEA_HEADING);
+
+/** «Yangi yozuvlar shu yerga» belgisidan keyingi yozuv sarlavhalari (tartib bilan). */
+function headingsAfterMarker(): string[] {
+  const marker = CHANGELOG.indexOf(
+    '<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->',
+  );
+  expect(marker).toBeGreaterThanOrEqual(0);
+  return CHANGELOG.slice(marker)
+    .split('\n')
+    .filter((line) => line.startsWith('### '));
 }
 
 describe('BE-A FRONTEND_CHANGELOG ↔ kod (migratsiya 215)', () => {
@@ -37,17 +63,15 @@ describe('BE-A FRONTEND_CHANGELOG ↔ kod (migratsiya 215)', () => {
   // 2026-11-11: «eng tepada» sharti olib tashlandi — jurnal «eng yangisi
   // tepada», ya'ni har yangi yozuv (masalan 2026-11-11 operator dashboardi)
   // bu yozuvni pastga suradi va test qizil bo'lardi. Talab — yozuv
-  // «Yozuvlar» bo'limida, belgidan KEYIN turishi.
-  it('yozuv «Yangi yozuvlar shu yerga» belgisidan keyin (Yozuvlar bo`limida)', () => {
-    const marker = CHANGELOG.indexOf(
-      '<!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->',
-    );
-    expect(marker).toBeGreaterThanOrEqual(0);
-    const at = CHANGELOG.indexOf(
-      '\n### 2026-11-10 — Smena yopish: ASOSIY kassada',
-      marker,
-    );
-    expect(at).toBeGreaterThan(marker);
+  // «Yozuvlar» bo'limida, belgidan KEYIN turishi; BE-B (keyinroq) undan
+  // yuqorida (oralarida boshqa yozuvlar bo'lishi mumkin).
+  it('yozuv «Yangi yozuvlar shu yerga» belgisidan keyin (Yozuvlar bo`limida), BE-B undan yuqorida', () => {
+    const headings = headingsAfterMarker();
+    const bea = headings.indexOf(BEA_HEADING);
+    const beb = headings.indexOf(BEB_HEADING);
+    expect(bea).toBeGreaterThanOrEqual(0);
+    expect(beb).toBeGreaterThanOrEqual(0);
+    expect(beb).toBeLessThan(bea);
   });
 
   it('AI pending kutishi ~15 s (30 s emas)', () => {
@@ -97,5 +121,52 @@ describe('BE-A FRONTEND_CHANGELOG ↔ kod (migratsiya 215)', () => {
     expect(entry).toContain(
       '`PATCH /finance/shift/settings { account_check_enabled: false }`',
     );
+  });
+});
+
+describe('BE-B FRONTEND_CHANGELOG ↔ kod (avto-yopilgan smenaga rasmni keyin yuklash)', () => {
+  const entry = entryAfter(BEB_HEADING);
+
+  it('endpoint, rollar, migratsiya yo‘q, 24 soatlik oyna', () => {
+    expect(SHIFT_LATE_PHOTO_WINDOW_MS).toBe(24 * 3600_000);
+    expect(entry).toContain(
+      '**`POST /finance/shift/:shift_id/accounts/:card_id/late-photo`** (superadmin, admin;',
+    );
+    expect(entry).toContain("**Migratsiya YO'Q**");
+    expect(entry).toContain('Deploy: finance-service + api-gateway.');
+    expect(entry).toContain("`closed_at` + 24 soat o'tgan");
+  });
+
+  it('har xato kodi va matni koddagi bilan bir xil', () => {
+    const rows: Array<[number, keyof typeof SHIFT_LATE_PHOTO_ERROR_CODES]> = [
+      [400, 'MAIN_ONLY'],
+      [409, 'NOT_AUTO_CLOSED'],
+      [409, 'EXPIRED'],
+      [404, 'CARD_NOT_IN_SHIFT'],
+    ];
+    for (const [status, key] of rows) {
+      const code = SHIFT_LATE_PHOTO_ERROR_CODES[key];
+      expect(entry).toContain(`| ${status} | \`${code}\``);
+      expect(entry).toContain(`\`${SHIFT_LATE_PHOTO_MESSAGES[code]}\``);
+    }
+  });
+
+  it('hisobot maydonlari va realtime hodisasi (`late: true`)', () => {
+    for (const field of [
+      "photo_status: 'not_required' | 'uploaded' | 'pending' | 'missing';",
+      'late_upload_deadline: string | null;',
+      'late_uploaded: boolean;',
+      'can_upload_late: boolean;',
+    ]) {
+      expect(entry).toContain(field);
+    }
+    expect(FINANCE_REALTIME_EVENTS.shiftAccountChecked).toBe(
+      'finance.shift.account_checked',
+    );
+    expect(entry).toContain(
+      `**Realtime \`${FINANCE_REALTIME_EVENTS.shiftAccountChecked}\`**`,
+    );
+    expect(entry).toContain('**`late: true`**');
+    expect(entry).toContain('**`finance.shift_late_photo_uploaded`**');
   });
 });

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -511,6 +511,54 @@ export class ShiftAccountPhotoRequestDto {
  * ISHLATILMAYDI (fayl multer orqali keladi; whitelist uni rad etardi).
  */
 export class ShiftAccountPhotoSwaggerDto extends ShiftAccountPhotoRequestDto {
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description:
+      'Qoldiq skrinshoti: jpeg / png / webp, ≤ 5 MB (EXIF tozalanadi)',
+  })
+  photo!: unknown;
+}
+
+/**
+ * (BE-B) POST /finance/shift/:shift_id/accounts/:card_id/late-photo —
+ * multipart matn maydonlari (avto-yopilgan ASOSIY kassa smenasiga karta
+ * qoldig'i rasmini 24 soat ichida keyin yuklash).
+ */
+export class ShiftLatePhotoRequestDto {
+  @ApiProperty({
+    example: 1250000,
+    description:
+      "Karta qoldig'i (so'm), MAJBURIY, ≥ 0. Farq = shu qiymat − avto-yopish paytidagi snapshot `expected_balance`",
+  })
+  // Multipart — matn; bo'sh satr 0 ga aylanib ketmasin (yo'q deb hisoblanadi → 400).
+  @Transform(({ value }: { value: unknown }) =>
+    value === undefined ||
+    value === null ||
+    (typeof value === 'string' && value.trim() === '')
+      ? undefined
+      : Number(value),
+  )
+  @IsNumber({ allowNaN: false, allowInfinity: false })
+  @Min(0)
+  entered_balance!: number;
+
+  @ApiPropertyOptional({
+    example: 'Kassir yuklamagan — bank ilovasidan olindi',
+    description:
+      "Izoh (≤ 1000). Kiritilgan qoldiq snapshot'dan farq qilsa MAJBURIY (yopishdagi qoida)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string;
+}
+
+/**
+ * (BE-B) Faqat Swagger uchun: `photo` fayl maydoni. `@Body()` da
+ * ISHLATILMAYDI (fayl multer orqali keladi; whitelist uni rad etardi).
+ */
+export class ShiftLatePhotoSwaggerDto extends ShiftLatePhotoRequestDto {
   @ApiProperty({
     type: 'string',
     format: 'binary',
@@ -1174,6 +1222,18 @@ export class PaymentBranchToMainRequestDto {
   @IsString()
   @Matches(/^\d+$/)
   branch_card_id?: string;
+
+  // (2026-11-11, Dilshod) «Marketga o'tkazma» — filial pulni HQ'ga bermay,
+  // to'g'ridan-to'g'ri marketga o'tkazgan.
+  @ApiPropertyOptional({
+    example: '2002',
+    description:
+      "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda chek (`receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`) va karta (`card_id` / `branch_card_id` → 400) yo'q. Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  market_id?: string;
 }
 
 export class MainCashboxFilterQueryDto {

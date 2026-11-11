@@ -291,6 +291,7 @@ jobs:
           apps/finance-service/src/expense-category/expense-report.ljVOuNz4.pg.spec.ts
           apps/finance-service/src/shift-account-check/shift-check-main-defaults.migration.pg.spec.ts
           apps/finance-service/src/shift-account-check/shift-account-check.kiZgTybn.pg.spec.ts
+          apps/finance-service/src/shift-account-check/shift-late-photo.BE-B.pg.spec.ts
           apps/finance-service/src/shift-auto-close/shift-auto-close-report.y8Tqm9Ap.pg.spec.ts
           apps/finance-service/src/cashbox-card-branch.Zv3MLn0a.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
@@ -310,7 +311,8 @@ jobs:
           # ega 2026-11-11): o'z vaqtinchalik bazalari, elchi_e_test faqat ulanish uchun.
           # BE-A (migratsiya 215, smena yopishda MAIN karta tekshiruvi sukut yoqiq):
           # migratsiya spec'i va Zv3MLn0a — o'z vaqtinchalik bazasi, kiZgTybn /
-          # y8Tqm9Ap — elchi_e_test ichida o'z sxemasi.
+          # y8Tqm9Ap / BE-B (avto-yopilgan smenaga rasmni keyin yuklash) —
+          # elchi_e_test ichida o'z sxemasi.
           FINANCE_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).

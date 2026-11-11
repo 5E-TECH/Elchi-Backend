@@ -276,6 +276,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
         ai_status: 'match',
       }),
     );
+    // BE-B: ochiq smena rasmi — `late` maydoni yo'q (avvalgi shakl).
+    expect(checked[0].payload).not.toHaveProperty('late');
 
     // Uzcard — mismatch: izohsiz yopish 400, smena ochiq qoladi.
     const accounts = [

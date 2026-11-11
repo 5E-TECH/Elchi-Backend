@@ -18,6 +18,18 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: 'chore(deps)'
+    # TypeScript major (6.x, 7.x) — avtomatik PR ochilmaydi, rejali migratsiya
+    # bilan qo'lda o'tiladi. Sabab (#615, 2026-11-12): TS 6 da tsconfig
+    # sukutlari o'zgargan (baseUrl xato, rootDir, strict: true, types: []).
+    # CI'dagi build/test buziladi, prod'da esa ts-node bilan type-check
+    # qiladigan ops sidecar'lar (migration-runner db:prepare, db-reconcile,
+    # activity-log-prune) yiqiladi — CI ularni tekshirmaydi. Migratsiyada
+    # shu uch skriptni scratch DB'da ishga tushirib tekshirish majburiy.
+    # Qoida migratsiya PR'i bilan olib tashlanadi.
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
     groups:
       nestjs:
         patterns:

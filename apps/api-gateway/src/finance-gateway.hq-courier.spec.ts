@@ -7,6 +7,12 @@ import request from 'supertest';
 jest.mock('@app/common', () => ({
   // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
   ...jest.requireActual('@app/common/security/user-summary'),
+  // Chek yuklash interceptor'i `limits.fileSize: 2 * CASHBOX_RECEIPT_MAX_BYTES`.
+  // Mock'da bu konstanta bo'lmasa qiymat NaN bo'ladi: multer 2.5+ uni rad etadi
+  // va Nest FileInterceptor'ni yarata olmaydi (2.3 esa NaN'ni jim «cheksiz» qilardi).
+  CASHBOX_RECEIPT_MAX_BYTES: jest.requireActual<
+    typeof import('@app/common/finance/cashbox-receipt')
+  >('@app/common/finance/cashbox-receipt').CASHBOX_RECEIPT_MAX_BYTES,
   Cashbox_type: {
     BRANCH: 'branch',
     FOR_COURIER: 'couriers',

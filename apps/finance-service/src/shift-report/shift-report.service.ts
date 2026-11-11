@@ -703,7 +703,7 @@ export class ShiftReportService {
       marketMap.set(id, slice);
     }
 
-    const accountRows = await this.checks.listForShift(String(shift.id));
+    const accountRows = await this.checks.listForShift(String(shift.id), shift);
     const block = (kind: 'cash' | 'card'): ShiftMoneyBlock => ({
       opening_balance: num(shift[`opening_balance_${kind}`]),
       total_income: num(shift[`total_income_${kind}`]),

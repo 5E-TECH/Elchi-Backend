@@ -54,6 +54,7 @@ import {
   FinancialSource_type,
   Operation_type,
   PAYMENT_CORRECTION_ERROR_CODES,
+  PaymentMethod,
   CASHBOX_RECEIPT_ERROR_CODES,
   CASHBOX_RECEIPT_FILE_FOLDER,
   CASHBOX_RECEIPT_MAX_BYTES,
@@ -73,6 +74,8 @@ import {
   CloseShiftRequestDto,
   ShiftAccountPhotoRequestDto,
   ShiftAccountPhotoSwaggerDto,
+  ShiftLatePhotoRequestDto,
+  ShiftLatePhotoSwaggerDto,
   ShiftSettingsQueryDto,
   UpdateShiftSettingsRequestDto,
   CreateCashboxRequestDto,
@@ -2570,6 +2573,36 @@ export class FinanceGatewayController {
       throw new ForbiddenException('branch_id yuborilishi shart');
     }
 
+    // (2026-11-11, Dilshod) «Marketga o'tkazma» — filial pulni HQ'ga bermay,
+    // to'g'ridan-to'g'ri marketga o'tkazgan: market majburiy, chek va karta
+    // yo'q (kuryer click_to_market dagidek). Pul — finance, bitta tranzaksiya.
+    const isMarketTransfer =
+      dto.payment_method === PaymentMethod.CLICK_TO_MARKET;
+    const marketId = String(dto.market_id ?? '').trim();
+    if (isMarketTransfer) {
+      if (!marketId) {
+        throw new BadRequestException(
+          "«Marketga o'tkazma» da market_id bo'lishi shart",
+        );
+      }
+      if (dto.receipt_id) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: CASHBOX_RECEIPT_ERROR_CODES.NOT_APPLICABLE,
+          message: CASHBOX_RECEIPT_MESSAGES.RECEIPT_NOT_APPLICABLE,
+        });
+      }
+      if (dto.card_id || dto.branch_card_id) {
+        throw new BadRequestException(
+          "«Marketga o'tkazma» da karta tanlanmaydi (card_id / branch_card_id faqat click to'lovida)",
+        );
+      }
+    } else if (marketId) {
+      throw new BadRequestException(
+        "market_id faqat «Marketga o'tkazma» (click_to_market) usulida beriladi",
+      );
+    }
+
     await this.sendBranch(
       { cmd: 'branch.find_by_id' },
       { id: branchId, requester: this.toRequester(req.user) },
@@ -2586,6 +2619,7 @@ export class FinanceGatewayController {
         comment: dto.comment,
         created_by: req.user.sub,
         dedup_epoch: token,
+        ...(isMarketTransfer ? { market_id: marketId } : {}),
         // (3PE0B03q) "O'tkazma manbasi" — faqat audit.
         ...(dto.source_user_id
           ? { transfer_source_user_id: dto.source_user_id }
@@ -4364,11 +4398,17 @@ export class FinanceGatewayController {
     return buildFileLinkUrl(req, key);
   }
 
-  /** Hisobot / javobdagi karta qatori: kalit o'rniga imzolangan havola. */
+  /**
+   * Hisobot / javobdagi karta qatori: kalit o'rniga imzolangan havola.
+   * BE-B: finance `can_upload_late` — FAQAT qoida (avto-yopilgan MAIN smena +
+   * 24 soat oynasi); bu yerda rol bilan birlashtiriladi (chek
+   * `can_reanalyze` naqshi): faqat superadmin / admin uchun `true`.
+   */
   private withPhotoUrl(
     req: OriginRequest,
     row: Record<string, unknown>,
     includeAiRaw: boolean,
+    canUploadLateRole = false,
   ): Record<string, unknown> {
     const { photo_file_key: key, ai_raw: aiRaw, ...rest } = row;
     const photoUrl = this.shiftFileUrl(req, key);
@@ -4378,7 +4418,110 @@ export class FinanceGatewayController {
       photo_url: photoUrl,
       photo_url_expires_in: photoUrl ? SHIFT_PHOTO_URL_TTL_SECONDS : null,
       ...(includeAiRaw ? { ai_raw: aiRaw ?? null } : {}),
+      ...('can_upload_late' in rest
+        ? {
+            can_upload_late: canUploadLateRole && rest.can_upload_late === true,
+          }
+        : {}),
     };
+  }
+
+  /**
+   * (kiZgTybn) Smena karta rasmi: tur / hajm / magic-bytes tekshiruvi va
+   * EXIF/XMP tozalash (`account-photo` va BE-B `late-photo` — bir xil).
+   */
+  private cleanShiftPhoto(
+    photo: { buffer?: Buffer; mimetype?: string; size?: number } | undefined,
+  ): { mime: string; clean: Buffer } {
+    const mime = String(photo?.mimetype ?? '').toLowerCase();
+    const buffer = photo?.buffer;
+    if (!buffer || !buffer.length) {
+      throw new BadRequestException('photo fayli majburiy');
+    }
+    if (!SHIFT_PHOTO_MIME_TYPES.has(mime)) {
+      throw new BadRequestException(
+        'Faqat jpeg, png yoki webp rasm qabul qilinadi',
+      );
+    }
+    if (buffer.length > SHIFT_PHOTO_MAX_BYTES) {
+      throw new BadRequestException('Rasm hajmi 5 MB dan oshmasligi kerak');
+    }
+    if (!matchesDeclaredType(buffer, mime)) {
+      throw new BadRequestException(
+        "Fayl mazmuni e'lon qilingan turga mos emas",
+      );
+    }
+    const clean = stripImageMetadata(buffer, mime);
+    if (!clean) {
+      throw new BadRequestException("Rasm buzilgan yoki o'qib bo'lmaydi");
+    }
+    return { mime, clean };
+  }
+
+  /** (kiZgTybn) Tozalangan rasm → file-service (`shift-check`, private) → kalit. */
+  private async storeShiftPhoto(
+    req: { user: JwtUser },
+    clean: Buffer,
+    mime: string,
+  ): Promise<string> {
+    const ext =
+      mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+    const uploaded = await this.sendFile<{ data?: { key?: unknown } }>(
+      { cmd: 'file.upload' },
+      {
+        file_name: `balance.${ext}`,
+        mime_type: mime,
+        file_base64: clean.toString('base64'),
+        folder: 'shift-check',
+        owner: fileOwnerOf(req.user),
+      },
+      30000,
+    );
+    const key =
+      typeof uploaded?.data?.key === 'string' ? uploaded.data.key.trim() : '';
+    if (!key) {
+      throw new BadRequestException(
+        'Rasm saqlanmadi (file-service kalit qaytarmadi)',
+      );
+    }
+    return key;
+  }
+
+  /**
+   * (kiZgTybn) finance qatorni qabul qilgach: almashtirilgan eski rasm
+   * o'chiriladi, AI yoqilgan bo'lsa fon vazifasi (javob kutilmaydi — natija
+   * realtime orqali keladi).
+   */
+  private afterShiftPhotoAttached(
+    data: {
+      shift_id?: string;
+      ai_enabled?: boolean;
+      ai_request_id?: string | null;
+      previous_photo_file_key?: string | null;
+    },
+    cardId: string,
+    clean: Buffer,
+    mime: string,
+    user: JwtUser,
+  ): void {
+    const previousKey = data.previous_photo_file_key;
+    if (previousKey) {
+      void this.sendFile({ cmd: 'file.delete' }, { key: previousKey }).catch(
+        () => undefined,
+      );
+    }
+    if (data.ai_enabled && data.ai_request_id && data.shift_id) {
+      void this.runBalanceAiCheck({
+        shift_id: String(data.shift_id),
+        card_id: cardId,
+        ai_request_id: String(data.ai_request_id),
+        image: clean,
+        media_type: (mime === 'image/jpg'
+          ? 'image/jpeg'
+          : mime) as AiBalanceScreenshotMediaType,
+        user,
+      });
+    }
   }
 
   @Post('shift/account-photo')
@@ -4409,50 +4552,9 @@ export class FinanceGatewayController {
     @UploadedFile()
     photo: { buffer?: Buffer; mimetype?: string; size?: number } | undefined,
   ) {
-    const mime = String(photo?.mimetype ?? '').toLowerCase();
-    const buffer = photo?.buffer;
-    if (!buffer || !buffer.length) {
-      throw new BadRequestException('photo fayli majburiy');
-    }
-    if (!SHIFT_PHOTO_MIME_TYPES.has(mime)) {
-      throw new BadRequestException(
-        'Faqat jpeg, png yoki webp rasm qabul qilinadi',
-      );
-    }
-    if (buffer.length > SHIFT_PHOTO_MAX_BYTES) {
-      throw new BadRequestException('Rasm hajmi 5 MB dan oshmasligi kerak');
-    }
-    if (!matchesDeclaredType(buffer, mime)) {
-      throw new BadRequestException(
-        "Fayl mazmuni e'lon qilingan turga mos emas",
-      );
-    }
-    const clean = stripImageMetadata(buffer, mime);
-    if (!clean) {
-      throw new BadRequestException("Rasm buzilgan yoki o'qib bo'lmaydi");
-    }
+    const { mime, clean } = this.cleanShiftPhoto(photo);
     const scope = await this.resolveShiftCheckScope(req.user);
-    const ext =
-      mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
-
-    const uploaded = await this.sendFile<{ data?: { key?: unknown } }>(
-      { cmd: 'file.upload' },
-      {
-        file_name: `balance.${ext}`,
-        mime_type: mime,
-        file_base64: clean.toString('base64'),
-        folder: 'shift-check',
-        owner: fileOwnerOf(req.user),
-      },
-      30000,
-    );
-    const key =
-      typeof uploaded?.data?.key === 'string' ? uploaded.data.key.trim() : '';
-    if (!key) {
-      throw new BadRequestException(
-        'Rasm saqlanmadi (file-service kalit qaytarmadi)',
-      );
-    }
+    const key = await this.storeShiftPhoto(req, clean, mime);
 
     let attached: {
       data?: {
@@ -4484,35 +4586,115 @@ export class FinanceGatewayController {
       throw error;
     }
     const data = attached?.data ?? {};
-    const previousKey = data.previous_photo_file_key;
-    if (previousKey) {
-      void this.sendFile({ cmd: 'file.delete' }, { key: previousKey }).catch(
-        () => undefined,
-      );
-    }
-    if (data.ai_enabled && data.ai_request_id && data.shift_id) {
-      // Fon vazifasi: javob kutilmaydi (natija realtime orqali keladi).
-      void this.runBalanceAiCheck({
-        shift_id: String(data.shift_id),
-        card_id: String(dto.card_id),
-        ai_request_id: String(data.ai_request_id),
-        image: clean,
-        media_type: (mime === 'image/jpg'
-          ? 'image/jpeg'
-          : mime) as AiBalanceScreenshotMediaType,
-        user: req.user,
-      });
-    }
+    this.afterShiftPhotoAttached(
+      data,
+      String(dto.card_id),
+      clean,
+      mime,
+      req.user,
+    );
     return {
       statusCode: 201,
       message: 'Shift account photo uploaded',
       data: {
         shift_id: data.shift_id ?? null,
         ai_enabled: Boolean(data.ai_enabled),
-        check: data.check ? this.withPhotoUrl(req, data.check, false) : null,
+        check: data.check
+          ? this.withPhotoUrl(
+              req,
+              data.check,
+              false,
+              this.isPrivileged(req.user),
+            )
+          : null,
         photo_url: this.shiftFileUrl(req, key),
         photo_url_expires_in: SHIFT_PHOTO_URL_TTL_SECONDS,
       },
+    };
+  }
+
+  @Post('shift/:shift_id/accounts/:card_id/late-photo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiParam({ name: 'shift_id', description: 'Smena ID si (avto-yopilgan)' })
+  @ApiParam({
+    name: 'card_id',
+    description: 'Kassa kartasi ID si (smena hisobotidagi qator)',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: ShiftLatePhotoSwaggerDto })
+  @ApiOperation({
+    summary:
+      "(BE-B) Avto-yopilgan ASOSIY kassa smenasiga karta qoldig'i rasmini keyin yuklash (24 soat ichida)",
+    description:
+      "Faqat superadmin / admin (boshqa rol — 403). Smena jadval bo'yicha AVTOMATIK yopilsa kassir skrinshot yuklay olmagan — `closed_at` dan keyin 24 soat ichida yuklanadi (ega 2026-11-10). Multipart: `photo` — jpeg / png / webp, ≤ 5 MB, magic-bytes, EXIF tozalanadi, shaxsiy (`POST /finance/shift/account-photo` bilan bir xil); `entered_balance` — MAJBURIY, ≥ 0; `comment` — ixtiyoriy, ≤ 1000, kiritilgan qoldiq snapshot'dan farq qilsa majburiy (400 ««<karta>»: farq bor yoki AI natijasi mos emas — izoh majburiy»). Xatolar (`code`): smena yo'q — 404 «Smena topilmadi»; ASOSIY kassa smenasi emas — 400 `SHIFT_LATE_PHOTO_MAIN_ONLY`; smena ochiq yoki qo'lda yopilgan — 409 `SHIFT_LATE_PHOTO_NOT_AUTO_CLOSED`; 24 soat o'tgan — 409 `SHIFT_LATE_PHOTO_EXPIRED` (`deadline` — ISO); smenada bu karta qatori yo'q — 404 `SHIFT_LATE_PHOTO_CARD_NOT_IN_SHIFT`. Rad etilsa yuklangan fayl o'chiriladi. Oyna ichida qayta yuklash mumkin — oxirgisi yutadi (oldingi KEYIN yuklangan rasm o'chiriladi, uning kechikkan AI natijasi e'tiborsiz; kassirning smena yopilishidan OLDINGI qoralama rasmi o'chirilmaydi — dalil sifatida saqlanadi, eski kaliti va AI qiymatlari activity-log'da). Natija: farq = `entered_balance` − avto-yopish paytidagi SNAPSHOT `expected_balance` (joriy balansdan qayta hisoblanmaydi), qator tasdiqlanadi (`confirmed_at`, `confirmed_by` = yuklovchi), AI yoqilgan kartada (`shift.ai_check.enabled` + karta `ai_check_enabled`) `ai_status = pending`, aks holda `disabled`; realtime `finance.shift.account_checked` (`late: true`) — yuklashda va AI natijasida. Pul harakati YO'Q. Javob `data` — yangilangan karta qatori `GET /finance/shift/:id/report` → `accounts[]` shaklida (`photo_url`, `has_photo`, `photo_status`, `late_upload_deadline`, `late_uploaded`, `can_upload_late`, `ai_status`, `difference`, …). Activity-log: `finance.shift_late_photo_uploaded`.",
+  })
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: memoryStorage(),
+      limits: { fileSize: SHIFT_PHOTO_MAX_BYTES, files: 1 },
+    }),
+  )
+  async uploadShiftLatePhoto(
+    @Req() req: { user: JwtUser } & OriginRequest,
+    @Param('shift_id') shiftId: string,
+    @Param('card_id') cardId: string,
+    @Body() dto: ShiftLatePhotoRequestDto,
+    @UploadedFile()
+    photo: { buffer?: Buffer; mimetype?: string; size?: number } | undefined,
+  ) {
+    if (!/^\d+$/.test(String(shiftId ?? ''))) {
+      throw new BadRequestException("Smena ID si noto'g'ri");
+    }
+    if (!/^\d+$/.test(String(cardId ?? ''))) {
+      throw new BadRequestException("Karta ID si noto'g'ri");
+    }
+    const { mime, clean } = this.cleanShiftPhoto(photo);
+    const key = await this.storeShiftPhoto(req, clean, mime);
+
+    let attached: {
+      data?: {
+        check?: Record<string, unknown>;
+        shift_id?: string;
+        ai_enabled?: boolean;
+        ai_request_id?: string | null;
+        previous_photo_file_key?: string | null;
+      };
+    };
+    try {
+      attached = await this.send(
+        { cmd: 'finance.shift.account_check.late_photo' },
+        {
+          shift_id: String(shiftId),
+          card_id: String(cardId),
+          entered_balance: dto.entered_balance,
+          comment: dto.comment,
+          photo_file_key: key,
+          requester_id: String(req.user.sub),
+          requester_roles: this.getUserRoles(req.user),
+        },
+      );
+    } catch (error) {
+      // Rad etildi (muddat o'tgan, avto-yopilmagan, begona karta …) — yetim fayl qolmasin.
+      void this.sendFile({ cmd: 'file.delete' }, { key }).catch(
+        () => undefined,
+      );
+      throw error;
+    }
+    const data = attached?.data ?? {};
+    this.afterShiftPhotoAttached(data, String(cardId), clean, mime, req.user);
+    return {
+      statusCode: 201,
+      message: 'Shift account late photo uploaded',
+      data: data.check
+        ? this.withPhotoUrl(
+            req,
+            data.check,
+            this.hasRole(req.user, RoleEnum.SUPERADMIN),
+            this.isPrivileged(req.user),
+          )
+        : null,
     };
   }
 
@@ -4946,7 +5128,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar",
     description:
-      "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+      "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. (BE-B) Har karta qatorida: `photo_status` (not_required | uploaded | pending | missing — `pending`: rasm talab qilingan, yo'q, hali yuklash mumkin: smena ochiq yoki avto-yopilgan ASOSIY kassa smenasining 24 soatlik oynasi ichida; `missing`: oyna yopiq), `late_upload_deadline` (ISO, avto-yopilgan ASOSIY smenada `closed_at + 24 soat`, aks holda null), `late_uploaded` (rasm smena yopilgandan keyin yuklangan), `can_upload_late` (avto-yopilgan ASOSIY smena + oyna ichida VA so'rovchi superadmin / admin — `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` tugmasi). `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
   })
   async shiftReport(
     @Req() req: { user: JwtUser } & OriginRequest,
@@ -4967,8 +5149,10 @@ export class FinanceGatewayController {
     const data = response?.data;
     if (!data || !Array.isArray(data.accounts)) return response;
     const isSuperadmin = this.hasRole(req.user, RoleEnum.SUPERADMIN);
+    // BE-B: `can_upload_late` — qoida && superadmin / admin.
+    const canUploadLate = this.isPrivileged(req.user);
     const accounts = data.accounts.map((row) =>
-      this.withPhotoUrl(req, row, isSuperadmin),
+      this.withPhotoUrl(req, row, isSuperadmin, canUploadLate),
     );
     // (gWI4gYkw) «Hisobot kimlarga yuborildi» va hisobot fayli — faqat
     // superadmin (kuryer / market ro'yxati boshqa rollarga chiqmaydi).
