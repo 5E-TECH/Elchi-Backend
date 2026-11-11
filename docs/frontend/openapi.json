@@ -29351,6 +29351,11 @@
             "type": "string",
             "example": "7",
             "description": "Zv3MLn0a — pul chiqadigan FILIAL kassasining kartasi ID si (`GET /finance/cashbox/cards?branch_id=`). Faqat `click` to'lovida; berilmasa — filialning Asosiy kartasi. Boshqa kassa kartasi → 403, mablag' yetmasa 400."
+          },
+          "market_id": {
+            "type": "string",
+            "example": "2002",
+            "description": "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda chek (`receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`) va karta (`card_id` / `branch_card_id` → 400) yo'q. Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin."
           }
         },
         "required": [
