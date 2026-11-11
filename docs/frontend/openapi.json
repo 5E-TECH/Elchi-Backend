@@ -22210,7 +22210,7 @@
     },
     "/carrier/orders/{id}/status": {
       "post": {
-        "description": "`sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). `partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). `rollback` — faqat `sold` yoki `cancelled` holatidagi buyurtmani `waiting` ga qaytaradi (shu buyurtma hisob-kitobi yopilmagan bo‘lsa; `paid`/`partly_paid` — Elchi operatori). Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma (`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).",
+        "description": "Kuryeringiz posilkani topshirganda yoki topshira olmaganda shu so‘rovni yuboring — bizda buyurtma holati darhol o‘zgaradi. `sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). `partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). `rollback` — faqat `sold` yoki `cancelled` holatidagi buyurtmani `waiting` ga qaytaradi (shu buyurtma hisob-kitobi yopilmagan bo‘lsa; `paid`/`partly_paid` — Elchi operatori). Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma (`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).",
         "operationId": "CarrierGatewayController_updateStatus",
         "parameters": [
           {
@@ -22225,7 +22225,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "MAJBURIY (≤255 belgi). Har YANGI urinish (niyat) uchun YANGI kalit (masalan UUID). Ayni kalitni faqat shu so‘rovni qayta yuborishda ishlating (javob kelmadi, 409/429/5xx/504). Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE.",
+            "description": "MAJBURIY (≤255 belgi). Har YANGI urinish (niyat) uchun YANGI kalit (masalan UUID). Ayni kalitni faqat shu so‘rovni qayta yuborishda ishlating (javob kelmadi, 409/429/5xx/504). Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE. Swagger’da har sinov uchun YANGI UUID kiriting (masalan terminalda `uuidgen`) — maydon ataylab bo‘sh: bir kalitni takrorlasangiz 422/409 olasiz.",
             "required": true,
             "schema": {
               "type": "string"
@@ -22252,6 +22252,63 @@
                     }
                   }
                 ]
+              },
+              "examples": {
+                "sold": {
+                  "summary": "Sotildi",
+                  "value": {
+                    "status": "sold",
+                    "comment": "Mijoz qabul qildi"
+                  }
+                },
+                "sold_exchange": {
+                  "summary": "Sotildi (almashtirish, eski tovar olindi)",
+                  "value": {
+                    "status": "sold",
+                    "old_item_collected": true
+                  }
+                },
+                "partly_sold": {
+                  "summary": "Qisman sotildi (har bir qator + sotilgan dona)",
+                  "description": "2 qatorli buyurtma: 5501-qatordan 1 dona sotildi, 5502-qatordan hech narsa (`quantity: 0`). `items` da buyurtmaning HAR BIR qatori bo‘lishi shart. `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida).",
+                  "value": {
+                    "status": "partly_sold",
+                    "total_price": 150000,
+                    "items": [
+                      {
+                        "order_item_id": "5501",
+                        "quantity": 1
+                      },
+                      {
+                        "order_item_id": "5502",
+                        "quantity": 0
+                      }
+                    ],
+                    "comment": "Mijoz faqat bittasini oldi"
+                  }
+                },
+                "cancelled": {
+                  "summary": "Bekor qilindi (mijoz rad etdi)",
+                  "value": {
+                    "status": "cancelled",
+                    "reason": "CUSTOMER_REFUSED",
+                    "comment": "Mijoz rad etdi"
+                  }
+                },
+                "cancelled_other": {
+                  "summary": "Bekor qilindi (boshqa sabab — izoh majburiy)",
+                  "value": {
+                    "status": "cancelled",
+                    "reason": "OTHER",
+                    "comment": "Mijoz boshqa shaharga ko‘chib ketgan"
+                  }
+                },
+                "rollback": {
+                  "summary": "Xato natijani bekor qilish (rollback)",
+                  "value": {
+                    "status": "rollback"
+                  }
+                }
               }
             },
             "multipart/form-data": {
@@ -22271,6 +22328,63 @@
                     }
                   }
                 ]
+              },
+              "examples": {
+                "sold": {
+                  "summary": "Sotildi",
+                  "value": {
+                    "status": "sold",
+                    "comment": "Mijoz qabul qildi"
+                  }
+                },
+                "sold_exchange": {
+                  "summary": "Sotildi (almashtirish, eski tovar olindi)",
+                  "value": {
+                    "status": "sold",
+                    "old_item_collected": true
+                  }
+                },
+                "partly_sold": {
+                  "summary": "Qisman sotildi (har bir qator + sotilgan dona)",
+                  "description": "2 qatorli buyurtma: 5501-qatordan 1 dona sotildi, 5502-qatordan hech narsa (`quantity: 0`). `items` da buyurtmaning HAR BIR qatori bo‘lishi shart. `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida).",
+                  "value": {
+                    "status": "partly_sold",
+                    "total_price": 150000,
+                    "items": [
+                      {
+                        "order_item_id": "5501",
+                        "quantity": 1
+                      },
+                      {
+                        "order_item_id": "5502",
+                        "quantity": 0
+                      }
+                    ],
+                    "comment": "Mijoz faqat bittasini oldi"
+                  }
+                },
+                "cancelled": {
+                  "summary": "Bekor qilindi (mijoz rad etdi)",
+                  "value": {
+                    "status": "cancelled",
+                    "reason": "CUSTOMER_REFUSED",
+                    "comment": "Mijoz rad etdi"
+                  }
+                },
+                "cancelled_other": {
+                  "summary": "Bekor qilindi (boshqa sabab — izoh majburiy)",
+                  "value": {
+                    "status": "cancelled",
+                    "reason": "OTHER",
+                    "comment": "Mijoz boshqa shaharga ko‘chib ketgan"
+                  }
+                },
+                "rollback": {
+                  "summary": "Xato natijani bekor qilish (rollback)",
+                  "value": {
+                    "status": "rollback"
+                  }
+                }
               }
             }
           }
@@ -22392,7 +22506,7 @@
             "carrier-api-key": []
           }
         ],
-        "summary": "Yetkazish natijasi: sold | partly_sold | cancelled | rollback",
+        "summary": "Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled), rollback",
         "tags": [
           "Carrier"
         ],

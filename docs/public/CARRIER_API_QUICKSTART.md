@@ -2,6 +2,13 @@
 
 Elchi Pochta posilkalarini yetkazadigan tashqi kompaniya uchun API. Elchi'da siz **bitta kurier akkaunti** sifatida ishlaysiz: Elchi xodimi buyurtmani sizga biriktiradi, siz posilka QR'ini skanerlaysiz va yetkazish natijasini yuborasiz. Pul sizning kurier kassangizga yoziladi.
 
+## Ish tartibi (qisqa)
+
+1. `POST /carrier/scan` — posilka sizga o'tadi (`waiting`).
+2. `POST /carrier/orders/{id}/status` — natija: `sold` / `partly_sold` / `cancelled` (xato bo'lsa — `rollback`).
+3. `POST /carrier/returns` — bekor qilinganlarni qaytarish.
+4. `GET /carrier/cashbox` — kassa va naqd topshirish.
+
 ## 1. Kirish
 
 Har so'rovda `X-Api-Key` sarlavhasi (kalit `elc_` bilan boshlanadi, uni Elchi operatori beradi). Kalit faqat bir marta ko'rsatiladi — xavfsiz saqlang.

@@ -66,6 +66,7 @@ import {
 import { Public } from './auth/public.decorator';
 import {
   CARRIER_ORDER_LIST_STATUSES,
+  CARRIER_STATUS_REQUEST_EXAMPLES,
   CarrierCashboxQueryDto,
   CarrierCashboxResponseDto,
   CarrierErrorResponseDto,
@@ -711,11 +712,15 @@ export class CarrierGatewayController {
     description:
       'MAJBURIY (≤255 belgi). Har YANGI urinish (niyat) uchun YANGI kalit (masalan UUID). ' +
       'Ayni kalitni faqat shu so‘rovni qayta yuborishda ishlating (javob kelmadi, 409/429/5xx/504). ' +
-      'Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE.',
+      'Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE.' +
+      ' Swagger’da har sinov uchun YANGI UUID kiriting (masalan terminalda `uuidgen`) — maydon ataylab bo‘sh: bir kalitni takrorlasangiz 422/409 olasiz.',
   })
   @ApiOperation({
-    summary: 'Yetkazish natijasi: sold | partly_sold | cancelled | rollback',
+    summary:
+      'Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled), rollback',
     description:
+      'Kuryeringiz posilkani topshirganda yoki topshira olmaganda shu so‘rovni yuboring — ' +
+      'bizda buyurtma holati darhol o‘zgaradi. ' +
       '`sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). ' +
       '`partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga ' +
       'oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). ' +
@@ -748,6 +753,8 @@ export class CarrierGatewayController {
         },
       ],
     },
+    // Tayyor misollar — faqat JSON'da qoladi (`splitMultipartProofBodies`).
+    examples: CARRIER_STATUS_REQUEST_EXAMPLES,
   })
   @ApiOkResponse({ type: CarrierStatusResponseDto })
   @ApiBadRequestResponse({
