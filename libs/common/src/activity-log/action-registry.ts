@@ -184,6 +184,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'check',
     'blue',
   ),
+  // BE-B: avto-yopilgan ASOSIY kassa smenasiga karta rasmi 24 soat ichida keyin.
+  'finance.shift_late_photo_uploaded': entry(
+    "Karta qoldig'i rasmi keyin yuklandi (avto-yopilgan smena)",
+    'finance',
+    'upload',
+    'amber',
+  ),
   // y8Tqm9Ap / gWI4gYkw: smena avtomatik yopilishi va hisobot yuborish.
   // T3 (QlLf33Ma): kassa cheki — sozlama, yuklash, AI natijasi, qayta tahlil.
   'finance.receipt_settings_updated': entry(

@@ -3645,8 +3645,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           total: string;
         }>();
       const [named] = await this.withShiftUserNames([shift]);
+      // BE-B: qatorlarda `photo_status`, `late_upload_deadline`,
+      // `late_uploaded`, `can_upload_late` (avto-yopilgan MAIN smenasi).
       const accounts = this.shiftAccountChecks
-        ? await this.shiftAccountChecks.listForShift(shiftId)
+        ? await this.shiftAccountChecks.listForShift(shiftId, shift)
         : [];
       // (y8Tqm9Ap) Yopilish turi; eski (167 dan oldingi) yopilgan smena — manual.
       const closeReason =

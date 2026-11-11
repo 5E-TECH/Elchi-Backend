@@ -664,7 +664,17 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   list never bypasses the MAIN requirement). Rollback hazard: pre-BE-A finance
   code applies `shift.account_check.enabled` globally (branches too); pair a
   code rollback with `migration:revert` of 215 or PATCH
-  account_check_enabled=false first. Flow: gateway `POST /finance/shift/account-photo`
+  account_check_enabled=false first. BE-B (2026-11-10, no migration): on an
+  AUTO-closed MAIN shift (`close_reason = 'auto'`) SA/ADMIN may upload a card
+  photo within 24 h of `closed_at` (`SHIFT_LATE_PHOTO_WINDOW_MS`) via
+  `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` →
+  `finance.shift.account_check.late_photo` (row FOR UPDATE: entered, difference
+  vs the auto-close SNAPSHOT `expected_balance`, confirmed_at/by = uploader,
+  new `ai_request_id`, realtime `finance.shift.account_checked` + `late: true`;
+  codes `SHIFT_LATE_PHOTO_{MAIN_ONLY,NOT_AUTO_CLOSED,EXPIRED,CARD_NOT_IN_SHIFT}`
+  in libs/common), and every report row gets computed `photo_status` /
+  `late_upload_deadline` / `late_uploaded` / `can_upload_late` (rules file;
+  gateway ANDs the latter with SA/ADMIN). Flow: gateway `POST /finance/shift/account-photo`
   (jpeg/png/webp ≤5 MB, magic bytes, `stripImageMetadata` removes EXIF/XMP/
   IPTC/text chunks, file-service folder `shift-check`, private, signed URL
   300 s) → `finance.shift.account_check.attach_photo` (draft row, expected
@@ -687,7 +697,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   {get,update}` (`GET|PATCH /finance/shift/settings`; PATCH SUPERADMIN only).
   Activity-log: `finance.shift_settings_updated`,
   `finance.shift_account_photo_uploaded`, `finance.shift_account_ai_checked`,
-  shift close metadata `accounts`.
+  `finance.shift_late_photo_uploaded` (BE-B), shift close metadata `accounts`.
 - **Shift auto-close + shift report delivery (y8Tqm9Ap + gWI4gYkw,
   2026-10-26):** migr 167 adds `shifts.close_reason` (manual|auto, NULL =
   open / legacy → API `manual`), `closed_by_system`, `report_status`

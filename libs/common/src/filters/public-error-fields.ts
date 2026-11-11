@@ -1,5 +1,6 @@
 import { PAYMENT_CORRECTION_ERROR_CODES as PC } from '../finance/payment-correction';
 import { CASHBOX_RECEIPT_ERROR_CODES as RC } from '../finance/cashbox-receipt';
+import { SHIFT_LATE_PHOTO_ERROR_CODES as SLP } from '../finance/shift-account-check';
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
@@ -134,6 +135,13 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // (T1 K1 s6xY4f5C) hamkor sotuvchisi / market allaqachon bog'langan — 409.
   [PARTNER_MARKET_ERROR_CODES.SELLER_TAKEN]: [],
   [PARTNER_MARKET_ERROR_CODES.MARKET_TAKEN]: [],
+  // (BE-B) avto-yopilgan ASOSIY kassa smenasiga karta rasmini keyin yuklash:
+  // 400 MAIN_ONLY, 409 NOT_AUTO_CLOSED / EXPIRED (`deadline` — ISO, oyna
+  // qachon tugagan), 404 CARD_NOT_IN_SHIFT.
+  [SLP.MAIN_ONLY]: [],
+  [SLP.NOT_AUTO_CLOSED]: [],
+  [SLP.EXPIRED]: ['deadline'],
+  [SLP.CARD_NOT_IN_SHIFT]: [],
   // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),

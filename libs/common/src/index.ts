@@ -94,6 +94,7 @@ export * from './notification/telegram-dm-delivery';
 export * from './finance/payment-correction';
 export * from './finance/expense-category';
 export * from './finance/cashbox-receipt';
+export * from './finance/shift-account-check';
 export * from './telegram/verify-init-data';
 export * from './telegram/cabinet-links';
 export * from './telegram/telegram-events';
