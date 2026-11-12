@@ -103,4 +103,14 @@ export class UpdateMarketDto {
   @IsOptional()
   @IsString()
   default_operator_phone?: string | null;
+
+  /** (2026-11-12) «Qo'shimcha raqam» — chekda «Muammo bo'lsa»: faqat admin/superadmin. */
+  @IsOptional()
+  @IsBoolean()
+  problem_phone_enabled?: boolean;
+
+  /** `+998XXXXXXXXX` ga keltiriladi; null/'' — o'chirish (yoqiq bo'lsa — 400). */
+  @IsOptional()
+  @IsString()
+  problem_phone?: string | null;
 }

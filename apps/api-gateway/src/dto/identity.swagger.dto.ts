@@ -737,6 +737,26 @@ export class UpdateMarketExtraCostRequestDto {
   @IsOptional()
   @IsBoolean()
   cashbox_debt_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "(2026-11-12) «Qo'shimcha raqam»: TRUE — shu marketning buyurtmalari chekida «Muammo bo'lsa» o'rniga `problem_phone` chiqadi (`problem_contacts: [{source: 'market'}]`). FALSE (sukut) — viloyat logisti / umumiy raqam. Yoqishda raqam majburiy (shu so'rovda yoki avval saqlangan), aks holda 400.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  problem_phone_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    type: String,
+    example: '+998901234567',
+    nullable: true,
+    description:
+      "«Qo'shimcha raqam» — `+998XXXXXXXXX` ga keltiriladi (noto'g'ri — 400). null / '' — o'chiriladi (yoqiq holatda o'chirib bo'lmaydi — 400).",
+  })
+  @IsOptional()
+  @IsString()
+  problem_phone?: string | null;
 }
 
 /**

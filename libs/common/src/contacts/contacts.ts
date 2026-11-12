@@ -82,11 +82,15 @@ export interface ResponsibleSummary {
   role: string;
 }
 
-/** «Muammo bo'lsa» qatori — buyurtma javoblarida `problem_contacts`. */
+/**
+ * «Muammo bo'lsa» qatori — buyurtma javoblarida `problem_contacts`.
+ * `market` (2026-11-12) — marketning «Qo'shimcha raqam»i (yoqiq bo'lsa
+ * viloyat logisti / umumiy raqam o'rniga).
+ */
 export interface ProblemContact {
   name: string | null;
   phone: string;
-  source: 'logist' | 'support';
+  source: 'logist' | 'support' | 'market';
 }
 
 /** `GET /users/me/contacts` javobi. */

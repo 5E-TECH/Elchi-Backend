@@ -92,6 +92,8 @@ interface RequesterContext {
 
 interface OrderRow {
   id: string;
+  /** (2026-11-12) pochta skani qisqa qatori — «Qo'shimcha raqam» override. */
+  market_id?: string | null;
   total_price?: number;
   status?: Order_status;
   return_requested?: boolean;
@@ -4064,6 +4066,8 @@ export class LogisticsServiceService implements OnModuleInit {
             // CqBD8V4p: gateway `problem_contacts` shu id lar bilan aniqlaydi.
             region_id: order.region_id ?? null,
             district_id: order.district_id ?? null,
+            // (2026-11-12) market «Qo'shimcha raqam» override (gateway).
+            market_id: order.market_id ?? null,
             // T8: kuryer/ombor skanida maxsus belgilar.
             special_categories: Array.isArray(order.special_categories)
               ? order.special_categories

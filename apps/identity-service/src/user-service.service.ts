@@ -4214,6 +4214,8 @@ export class UserServiceService implements OnModuleInit {
       tg_group_show_customer_pii: market.tg_group_show_customer_pii,
       can_order_from_warehouse: market.can_order_from_warehouse ?? false,
       weight_volume_pricing: market.weight_volume_pricing ?? true,
+      problem_phone_enabled: market.problem_phone_enabled ?? false,
+      problem_phone: market.problem_phone ?? null,
       password_changed: false,
     };
 
@@ -4225,6 +4227,7 @@ export class UserServiceService implements OnModuleInit {
     const defaultOperatorPhone = this.resolveDefaultOperatorPhone(
       dto.default_operator_phone,
     );
+    const problemPhone = this.resolveMarketProblemPhone(dto, market, requester);
     const marketEpochBefore = Number(market.session_epoch) || 0;
 
     if (dto.phone_number && dto.phone_number !== market.phone_number) {
@@ -4342,6 +4345,11 @@ export class UserServiceService implements OnModuleInit {
       market.weight_volume_pricing = dto.weight_volume_pricing;
     }
 
+    if (problemPhone) {
+      market.problem_phone_enabled = problemPhone.enabled;
+      market.problem_phone = problemPhone.phone;
+    }
+
     const saved = await this.users.save(market);
     const revokedSessionIds = dto.password
       ? await this.revokeSessionsAfterPasswordChange(saved, {
@@ -4377,6 +4385,8 @@ export class UserServiceService implements OnModuleInit {
         tg_group_show_customer_pii: saved.tg_group_show_customer_pii,
         can_order_from_warehouse: saved.can_order_from_warehouse ?? false,
         weight_volume_pricing: saved.weight_volume_pricing ?? true,
+        problem_phone_enabled: saved.problem_phone_enabled ?? false,
+        problem_phone: saved.problem_phone ?? null,
         password_changed: Boolean(dto.password),
       },
     });
@@ -4524,6 +4534,71 @@ export class UserServiceService implements OnModuleInit {
       );
     }
     return phone;
+  }
+
+  /**
+   * (Dilshod 2026-11-12) «Qo'shimcha raqam» — chekdagi «Muammo bo'lsa».
+   * Hech biri berilmasa — `null` (o'zgarmaydi). Faqat SUPERADMIN/ADMIN (aks
+   * holda 403); `problem_phone_enabled` boolean bo'lmasa — 400 (RMQ'da
+   * ValidationPipe yo'q). Raqam `+998XXXXXXXXX` ga keltiriladi (mijoz
+   * telefoni bilan AYNI `normalizeUzPhone`), keltirib bo'lmasa — 400;
+   * null/'' — o'chiriladi. Yakuniy holat yoqiq, raqam yo'q — 400.
+   * Tekshiruvlar HECH NARSA o'zgartirilmasdan OLDIN.
+   */
+  private resolveMarketProblemPhone(
+    dto: { problem_phone_enabled?: unknown; problem_phone?: unknown },
+    market: Pick<User, 'problem_phone_enabled' | 'problem_phone'>,
+    requester?: RequesterContext,
+  ): { enabled: boolean; phone: string | null } | null {
+    if (
+      dto.problem_phone_enabled === undefined &&
+      dto.problem_phone === undefined
+    ) {
+      return null;
+    }
+    if (
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      this.forbidden(
+        "Market «Qo'shimcha raqam» sozlamasini faqat admin yoki superadmin o'zgartira oladi",
+      );
+    }
+    if (
+      dto.problem_phone_enabled !== undefined &&
+      typeof dto.problem_phone_enabled !== 'boolean'
+    ) {
+      this.badRequest(
+        "problem_phone_enabled boolean (true/false) bo'lishi kerak",
+      );
+    }
+    let phone: string | null = market.problem_phone ?? null;
+    if (dto.problem_phone !== undefined) {
+      if (
+        dto.problem_phone === null ||
+        (typeof dto.problem_phone === 'string' && !dto.problem_phone.trim())
+      ) {
+        phone = null;
+      } else {
+        const normalized = normalizeUzPhone(dto.problem_phone);
+        if (!normalized) {
+          this.badRequest(
+            "Qo'shimcha raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak",
+          );
+        }
+        phone = normalized;
+      }
+    }
+    const enabled =
+      typeof dto.problem_phone_enabled === 'boolean'
+        ? dto.problem_phone_enabled
+        : (market.problem_phone_enabled ?? false);
+    if (enabled && !phone) {
+      this.badRequest(
+        "Qo'shimcha raqam yoqilgan — telefon raqamini kiriting (+998XXXXXXXXX)",
+      );
+    }
+    return { enabled, phone };
   }
 
   async deleteMarket(id: string) {

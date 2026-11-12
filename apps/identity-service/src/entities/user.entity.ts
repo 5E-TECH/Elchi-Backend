@@ -267,6 +267,20 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   default_operator_phone: string | null;
 
+  /**
+   * (Dilshod 2026-11-12) Faqat MARKET: «Qo'shimcha raqam». TRUE — shu
+   * marketning buyurtmalari chekida «Muammo bo'lsa» o'rniga `problem_phone`
+   * (gateway `problem_contacts`, `source: 'market'`). FALSE (sukut) —
+   * avvalgidek viloyat logisti / umumiy raqam. Faqat SUPERADMIN/ADMIN
+   * o'zgartiradi (`PATCH /admin/markets/:id`, migratsiya 1716000000220).
+   */
+  @Column({ type: 'boolean', default: false })
+  problem_phone_enabled: boolean;
+
+  /** «Qo'shimcha raqam» (`+998XXXXXXXXX`); o'chiq bo'lsa saqlanadi, ishlatilmaydi. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  problem_phone: string | null;
+
   @Column({
     type: 'enum',
     enum: Where_deliver,

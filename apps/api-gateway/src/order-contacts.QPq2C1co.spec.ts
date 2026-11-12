@@ -212,7 +212,8 @@ describe('T7 B2 — problem_contacts (gateway)', () => {
     expect(identity.send).toHaveBeenCalledTimes(1);
     expect(identity.send).toHaveBeenCalledWith(
       { cmd: 'identity.contacts.problem' },
-      { region_ids: ['2', '1'], district_ids: ['10'] },
+      // (2026-11-12) qatorlar marketi ham o'sha RPC'da («Qo'shimcha raqam»).
+      { region_ids: ['2', '1'], district_ids: ['10'], market_ids: ['37'] },
     );
     expect((rows[1] as any).problem_contacts).toEqual([ANDIJON_LOGIST]);
     expect((rows[0] as any).problem_contacts).toEqual([

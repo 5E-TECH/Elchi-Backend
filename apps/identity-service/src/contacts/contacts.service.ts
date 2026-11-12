@@ -75,6 +75,8 @@ export interface UpdateContactSettingsInput {
 export interface ProblemContactsInput {
   region_ids?: unknown;
   district_ids?: unknown;
+  /** (2026-11-12) Buyurtmalar marketlari — «Qo'shimcha raqam» override. */
+  market_ids?: unknown;
 }
 
 export interface ProblemContactsResult {
@@ -82,6 +84,12 @@ export interface ProblemContactsResult {
   districts: Record<string, ProblemContact[]>;
   /** Viloyati aniqlanmagan buyurtma uchun — zaxira raqamlar. */
   fallback: ProblemContact[];
+  /**
+   * (2026-11-12) So'ralgan HAR market: «Qo'shimcha raqam» yoqiq va raqam bor
+   * — `[{ source: 'market' }]` (chekda «Muammo bo'lsa» o'rniga); aks holda
+   * `[]` (viloyat qoidasi). Eski gateway so'ramaydi — bo'sh obyekt.
+   */
+  markets: Record<string, ProblemContact[]>;
 }
 
 const asId = (value: unknown): string | null => {
@@ -855,6 +863,7 @@ export class ContactsService {
       regions: {},
       districts: {},
       fallback,
+      markets: await this.marketProblemContacts(cleanIds(input?.market_ids)),
     };
     for (const regionId of regionIds) {
       result.regions[regionId] = contactsForRegion(regionId);
@@ -865,6 +874,32 @@ export class ContactsService {
       );
     }
     return successRes(result);
+  }
+
+  /**
+   * (Dilshod 2026-11-12) Market «Qo'shimcha raqam»: yoqiq va raqam bor —
+   * `[{ name: market nomi, phone, source: 'market' }]`, aks holda `[]`.
+   * O'chirilgan / market bo'lmagan id — `[]`.
+   */
+  private async marketProblemContacts(
+    marketIds: string[],
+  ): Promise<Record<string, ProblemContact[]>> {
+    const markets: Record<string, ProblemContact[]> = {};
+    if (!marketIds.length) {
+      return markets;
+    }
+    const rows = await this.usersByIds(marketIds);
+    for (const id of marketIds) {
+      const market = rows.get(id);
+      const phone = String(market?.problem_phone ?? '').trim();
+      markets[id] =
+        market?.role === Roles.MARKET && market.problem_phone_enabled && phone
+          ? dedupeProblemContacts([
+              { name: market.name ?? null, phone, source: 'market' },
+            ])
+          : [];
+    }
+    return markets;
   }
 
   /** Filial xodimining filiali viloyati (branch-service). Xato/yo'q — null. */

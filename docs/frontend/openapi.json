@@ -1639,7 +1639,7 @@
             "bearer": []
           }
         ],
-        "summary": "Market sozlamasi: qo'shimcha xarajat (extra_cost_enabled, extra_cost_requires_approval) va kassa qarzi (cashbox_debt_enabled)",
+        "summary": "Market sozlamasi: qo'shimcha xarajat (extra_cost_enabled, extra_cost_requires_approval), kassa qarzi (cashbox_debt_enabled) va «Qo'shimcha raqam» (problem_phone_enabled, problem_phone)",
         "tags": [
           "Identity"
         ],
@@ -26516,6 +26516,17 @@
             "type": "boolean",
             "example": false,
             "description": "Market kassasi qarzga ishlaydimi (sukut FALSE). TRUE — marketga qarzdan ortiq to'lash mumkin, market kassasi manfiyga tushadi; FALSE — ortiqcha to'lov 400."
+          },
+          "problem_phone_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "(2026-11-12) «Qo'shimcha raqam»: TRUE — shu marketning buyurtmalari chekida «Muammo bo'lsa» o'rniga `problem_phone` chiqadi (`problem_contacts: [{source: 'market'}]`). FALSE (sukut) — viloyat logisti / umumiy raqam. Yoqishda raqam majburiy (shu so'rovda yoki avval saqlangan), aks holda 400."
+          },
+          "problem_phone": {
+            "type": "string",
+            "example": "+998901234567",
+            "nullable": true,
+            "description": "«Qo'shimcha raqam» — `+998XXXXXXXXX` ga keltiriladi (noto'g'ri — 400). null / '' — o'chiriladi (yoqiq holatda o'chirib bo'lmaydi — 400)."
           }
         }
       },
@@ -28471,8 +28482,10 @@
             "type": "string",
             "enum": [
               "logist",
-              "support"
-            ]
+              "support",
+              "market"
+            ],
+            "description": "`market` (2026-11-12) — market «Qo'shimcha raqam»i yoqiq: viloyat logisti / umumiy raqam o'rniga."
           }
         },
         "required": [

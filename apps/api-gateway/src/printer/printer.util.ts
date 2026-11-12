@@ -60,6 +60,8 @@ export interface PrintRow {
   region_id?: string | null;
   /** T7: buyurtma tumani (viloyat yo'q bo'lsa — tuman viloyati). */
   district_id?: string | null;
+  /** (2026-11-12) Market — «Qo'shimcha raqam» override uchun. */
+  market_id?: string | null;
   /**
    * T7 (QPq2C1co): «Muammo bo'lsa» — buyurtma viloyati logisti, u yo'q /
    * nofaol — zaxira raqamlar. Gateway `ProblemContactsService` qo'shadi.

@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-12 — Market «Qo'shimcha raqam»: yoqilsa chekdagi «Muammo bo'lsa» joyida shu raqam
+
+Dilshod: «marketlarning detailida toggle bo'lishi kerak "qo'shimcha raqam" degan; o'chiq bo'lsa default hozirgi telefon raqam ketsin, yoqilsa input chiqib telefon raqam to'ldirilsin va shu raqam chekda "Muammo bo'lsa" degan joyda ketsin».
+Deploy: api-gateway + identity-service + order-service + logistics-service, migratsiya **220** (`identity_schema.admins.problem_phone_enabled`, `problem_phone`).
+
+- ✏️ `PATCH /admin/markets/:id` (SUPERADMIN, ADMIN): yangi maydonlar `problem_phone_enabled` (boolean) va `problem_phone` (`+998XXXXXXXXX`; `null` / `''` — o'chirish). Yoqishda raqam majburiy (shu so'rovda yoki avval saqlangan) — aks holda 400; noto'g'ri raqam — 400; market o'zi — 403. O'chirilganda raqam saqlanib qoladi.
+- ✏️ `GET /users/:id` (market) va `PATCH` javobi: `problem_phone_enabled`, `problem_phone`.
+- ✏️ Buyurtma javoblaridagi `problem_contacts` (chekdagi «Muammo bo'lsa»): market sozlamasi yoqiq bo'lsa — `[{ name: <market nomi>, phone: <problem_phone>, source: 'market' }]` (viloyat logisti / umumiy raqam O'RNIGA). O'chiq — avvalgidek. Barcha yo'llar: `GET /orders`, `/orders/:id`, pochta tafsiloti va skani, filial jo'natmalari, printer (`/printer/*`). Sozlama o'zgarsa yangi chek darhol yangi raqamni oladi.
+- 🟢 `ProblemContact.source` ga `market` qo'shildi.
+
+**Frontend action items:**
+- 🔧 Market tafsiloti (admin/superadmin): «Qo'shimcha raqam» toggle; yoqilganda telefon input + saqlash; o'chirilsa `problem_phone_enabled: false`.
+
 ### 2026-11-12 — «Yo'lda» buyurtmani ham sotish / qisman sotish / bekor qilish mumkin: avval avtomatik qabul, tracking'da «Kutilmoqda» → «Sotildi / Bekor qilindi»
 
 Dilshod: «buyurtmaning statusi yo'lda bo'lsa ham sotishni yoki bekor qilishni bossa sotilib yoki bekor qilinib tracking da auto kutilmoqda bo'lsin va srazi sotildi yoki bekor qilindi ham yozilsin».

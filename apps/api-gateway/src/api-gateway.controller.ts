@@ -22,7 +22,8 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Cashbox_type, Roles as RoleEnum } from '@app/common';
-import { firstValueFrom, timeout } from 'rxjs';
+import { firstValueFrom, tap, timeout } from 'rxjs';
+import { ProblemContactsService } from './contacts/problem-contacts.service';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -144,6 +145,8 @@ export class ApiGatewayController {
     @Optional()
     @Inject('INVESTOR')
     private readonly investorClient?: ClientProxy,
+    // (2026-11-12) Market «Qo'shimcha raqam» o'zgarsa — chek keshi tozalanadi.
+    @Optional() private readonly problemContacts?: ProblemContactsService,
   ) {}
 
   private toRequester(req: { user: JwtUser }) {
@@ -2365,6 +2368,8 @@ export class ApiGatewayController {
    * qoldirilgan (ortga-moslik).
    * `cashbox_debt_enabled` — market kassasi qarzga ishlaydimi (sukut o'chiq,
    * migratsiya 207); finance marketga ortiqcha to'lovda shuni o'qiydi.
+   * `problem_phone_enabled` / `problem_phone` (2026-11-12, migratsiya 220) —
+   * «Qo'shimcha raqam»: yoqiq bo'lsa chekda «Muammo bo'lsa» o'rniga shu raqam.
    */
   @Patch('admin/markets/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -2372,7 +2377,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary:
-      "Market sozlamasi: qo'shimcha xarajat (extra_cost_enabled, extra_cost_requires_approval) va kassa qarzi (cashbox_debt_enabled)",
+      "Market sozlamasi: qo'shimcha xarajat (extra_cost_enabled, extra_cost_requires_approval), kassa qarzi (cashbox_debt_enabled) va «Qo'shimcha raqam» (problem_phone_enabled, problem_phone)",
   })
   @ApiParam({ name: 'id', description: 'Market user ID' })
   @ApiBody({ type: UpdateMarketExtraCostRequestDto })
@@ -2387,12 +2392,17 @@ export class ApiGatewayController {
     if (
       dto.extra_cost_enabled === undefined &&
       dto.extra_cost_requires_approval === undefined &&
-      dto.cashbox_debt_enabled === undefined
+      dto.cashbox_debt_enabled === undefined &&
+      dto.problem_phone_enabled === undefined &&
+      dto.problem_phone === undefined
     ) {
       throw new BadRequestException(
-        'extra_cost_enabled, extra_cost_requires_approval yoki cashbox_debt_enabled dan kamida bittasi kerak',
+        'extra_cost_enabled, extra_cost_requires_approval, cashbox_debt_enabled, problem_phone_enabled yoki problem_phone dan kamida bittasi kerak',
       );
     }
+    const touchesProblemPhone =
+      dto.problem_phone_enabled !== undefined ||
+      dto.problem_phone !== undefined;
     return this.identityClient
       .send(
         { cmd: 'identity.market.update' },
@@ -2411,11 +2421,24 @@ export class ApiGatewayController {
             ...(dto.cashbox_debt_enabled !== undefined
               ? { cashbox_debt_enabled: dto.cashbox_debt_enabled }
               : {}),
+            ...(dto.problem_phone_enabled !== undefined
+              ? { problem_phone_enabled: dto.problem_phone_enabled }
+              : {}),
+            ...(dto.problem_phone !== undefined
+              ? { problem_phone: dto.problem_phone }
+              : {}),
           },
           requester: this.toRequester(req),
         },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        tap(() => {
+          if (touchesProblemPhone) {
+            this.problemContacts?.forgetMarket(id);
+          }
+        }),
+      );
   }
 
   /**

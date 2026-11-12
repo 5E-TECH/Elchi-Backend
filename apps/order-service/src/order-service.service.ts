@@ -4435,6 +4435,8 @@ export class OrderServiceService {
           // (viloyat logisti / zaxira — `problem_contacts`) qo'shadi.
           region_id: order.region_id ? String(order.region_id) : null,
           district_id: order.district_id ? String(order.district_id) : null,
+          // (2026-11-12) gateway «Qo'shimcha raqam» override uchun.
+          market_id: order.market_id ? String(order.market_id) : null,
           products: (order.items ?? []).map((i) => ({
             name: productMap.get(String(i.product_id))?.name ?? 'N/A',
             quantity: i.quantity ?? 1,

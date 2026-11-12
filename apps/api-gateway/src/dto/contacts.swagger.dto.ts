@@ -209,7 +209,12 @@ export class ProblemContactDto {
   @ApiProperty({ type: String, nullable: true, example: 'Aziz Logist' })
   name!: string | null;
   @ApiProperty({ example: '+998901112233' }) phone!: string;
-  @ApiProperty({ enum: ['logist', 'support'] }) source!: 'logist' | 'support';
+  @ApiProperty({
+    enum: ['logist', 'support', 'market'],
+    description:
+      "`market` (2026-11-12) — market «Qo'shimcha raqam»i yoqiq: viloyat logisti / umumiy raqam o'rniga.",
+  })
+  source!: 'logist' | 'support' | 'market';
 }
 
 // ---- Javob konvertlari (`{ statusCode, message, data }`) ----

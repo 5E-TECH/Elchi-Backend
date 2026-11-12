@@ -338,3 +338,56 @@ describe('T7 — tranzaksiya ichidagi qayta tekshiruv (FOR SHARE)', () => {
     },
   );
 });
+
+/**
+ * (Dilshod 2026-11-12) Market «Qo'shimcha raqam»: `market_ids` so'ralsa,
+ * yoqiq va raqamli market — `[{ source: 'market' }]`, qolgani — `[]`.
+ */
+describe("T7 + 2026-11-12 — problemContacts: market «Qo'shimcha raqam»", () => {
+  it('⭐ yoqiq market — o`z raqami; o`chiq / raqamsiz / market emas / yo`q — []', async () => {
+    const { service, usersRepo } = build({
+      users: [
+        user({
+          id: '37',
+          role: Roles.MARKET,
+          name: 'TEST Market',
+          problem_phone_enabled: true,
+          problem_phone: '+998935550011',
+        }),
+        user({
+          id: '38',
+          role: Roles.MARKET,
+          problem_phone_enabled: false,
+          problem_phone: '+998935550012',
+        }),
+        user({ id: '39', role: Roles.MARKET, problem_phone_enabled: true }),
+        user({
+          id: '40',
+          role: Roles.COURIER,
+          problem_phone_enabled: true,
+          problem_phone: '+998935550013',
+        }),
+      ],
+      settings: { support: ['+998712001122'] },
+    });
+    const res: any = await service.problemContacts({
+      market_ids: ['37', '38', '39', '40', '41', '37'],
+    });
+    expect(res.data.markets).toEqual({
+      '37': [{ name: 'TEST Market', phone: '+998935550011', source: 'market' }],
+      '38': [],
+      '39': [],
+      '40': [],
+      '41': [],
+    });
+    // Bitta users IN so'rovi.
+    expect(usersRepo.find).toHaveBeenCalledTimes(1);
+  });
+
+  it('market_ids yo`q — markets {} (users so`rovi yo`q)', async () => {
+    const { service, usersRepo } = build({ regions: [] });
+    const res: any = await service.problemContacts({ region_ids: [] });
+    expect(res.data.markets).toEqual({});
+    expect(usersRepo.find).not.toHaveBeenCalled();
+  });
+});

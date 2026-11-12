@@ -18,6 +18,11 @@ import type { ProblemContact } from '@app/common';
  *    buyurtma javobining o'zi buzilmaydi.
  *  - Har rolga qo'shiladi (market ham yorliq chop etadi);
  *    `projectOrderPayloadForRoles` dan OLDIN chaqiriladi.
+ *  - (Dilshod 2026-11-12) Market «Qo'shimcha raqam»: qatorda `market_id`
+ *    bo'lsa market ham o'sha RPC'da so'raladi (`m:<id>` kaliti, kesh 60 s);
+ *    market sozlamasi yoqiq bo'lsa `problem_contacts` = market raqami
+ *    (`source: 'market'`), viloyat qoidasi o'rniga. Eski identity `markets`
+ *    qaytarmasa — override yo'q (avvalgidek).
  */
 
 export const PROBLEM_CONTACTS_CACHE_TTL_MS = 60_000;
@@ -29,6 +34,8 @@ const ID_PATTERN = /^\d{1,19}$/;
 export interface ProblemContactsRef {
   region_id?: unknown;
   district_id?: unknown;
+  /** (2026-11-12) «Qo'shimcha raqam» override uchun. */
+  market_id?: unknown;
 }
 
 const asId = (value: unknown): string | null => {
@@ -76,6 +83,13 @@ export function problemContactsKey(
   return districtId ? `d:${districtId}` : '-';
 }
 
+/** (2026-11-12) Market override kaliti: `m:<market_id>`; market yo'q — null. */
+export function marketContactsKey(row: Record<string, unknown>): string | null {
+  const marketId =
+    asId(row.market_id) ?? asId(row.marketId) ?? asId(nestedId(row.market));
+  return marketId ? `m:${marketId}` : null;
+}
+
 function collectOrderRows(
   value: unknown,
   rows: Array<Record<string, unknown>>,
@@ -110,6 +124,7 @@ interface ProblemContactsReply {
   regions?: Record<string, ProblemContact[]>;
   districts?: Record<string, ProblemContact[]>;
   fallback?: ProblemContact[];
+  markets?: Record<string, ProblemContact[]>;
 }
 
 @Injectable()
@@ -135,6 +150,17 @@ export class ProblemContactsService {
     return entry.contacts;
   }
 
+  /**
+   * (2026-11-12) Market sozlamasi o'zgarganda (`PATCH /admin/markets/:id`)
+   * — shu market keshi darhol tozalanadi (yangi chek 60 s kutmasin).
+   */
+  forgetMarket(marketId: unknown): void {
+    const id = asId(marketId);
+    if (id) {
+      this.cache.delete(`m:${id}`);
+    }
+  }
+
   private remember(key: string, contacts: ProblemContact[]): void {
     if (this.cache.size >= CACHE_MAX_ENTRIES) {
       this.cache.clear();
@@ -146,8 +172,9 @@ export class ProblemContactsService {
   }
 
   /**
-   * Kalitlar (`r:<id>`, `d:<id>`, `-`) → aloqalar. Keshda yo'qlari BITTA RPC
-   * bilan. identity xatosi — `null` (chaqiruvchi maydon qo'shmaydi).
+   * Kalitlar (`r:<id>`, `d:<id>`, `m:<market>`, `-`) → aloqalar. Keshda
+   * yo'qlari BITTA RPC bilan. identity xatosi — `null` (chaqiruvchi maydon
+   * qo'shmaydi). `m:` — override: yo'q / o'chiq market — `[]`.
    */
   async resolveKeys(
     keys: string[],
@@ -173,13 +200,20 @@ export class ProblemContactsService {
     const districtIds = missing
       .filter((key) => key.startsWith('d:'))
       .map((key) => key.slice(2));
+    const marketIds = missing
+      .filter((key) => key.startsWith('m:'))
+      .map((key) => key.slice(2));
     let reply: ProblemContactsReply | undefined;
     try {
       const response = await firstValueFrom(
         this.identityClient
           .send<{ data?: ProblemContactsReply }>(
             { cmd: CONTACT_PATTERNS.PROBLEM_CONTACTS },
-            { region_ids: regionIds, district_ids: districtIds },
+            {
+              region_ids: regionIds,
+              district_ids: districtIds,
+              ...(marketIds.length ? { market_ids: marketIds } : {}),
+            },
           )
           .pipe(timeout(PROBLEM_CONTACTS_RPC_TIMEOUT_MS)),
       );
@@ -197,6 +231,13 @@ export class ProblemContactsService {
     const fallback = Array.isArray(reply.fallback) ? reply.fallback : [];
     for (const key of missing) {
       const id = key.slice(2);
+      if (key.startsWith('m:')) {
+        const own = reply.markets?.[id];
+        const contacts = Array.isArray(own) ? own : [];
+        this.remember(key, contacts);
+        result.set(key, contacts);
+        continue;
+      }
       const list = key.startsWith('r:')
         ? reply.regions?.[id]
         : key.startsWith('d:')
@@ -209,15 +250,33 @@ export class ProblemContactsService {
     return result;
   }
 
+  /**
+   * Qator aloqalari: market override (`m:`) bo'sh bo'lmasa — o'shasi, aks
+   * holda viloyat / tuman / zaxira.
+   */
+  private pick(
+    resolved: Map<string, ProblemContact[]>,
+    key: string,
+    marketKey: string | null,
+  ): ProblemContact[] {
+    const own = marketKey ? resolved.get(marketKey) : undefined;
+    return own?.length ? own : (resolved.get(key) ?? []);
+  }
+
   /** Bir nechta buyurtma (printer qatorlari) uchun — tartib saqlanadi. */
   async resolveMany(
     refs: ProblemContactsRef[],
   ): Promise<Array<ProblemContact[]> | null> {
-    const keys = refs.map((ref) =>
-      problemContactsKey(ref as ProblemContactsRef & Record<string, unknown>),
-    );
-    const resolved = await this.resolveKeys(keys);
-    return resolved ? keys.map((key) => resolved.get(key) ?? []) : null;
+    const rows = refs as Array<ProblemContactsRef & Record<string, unknown>>;
+    const keys = rows.map((ref) => problemContactsKey(ref));
+    const marketKeys = rows.map((ref) => marketContactsKey(ref));
+    const resolved = await this.resolveKeys([
+      ...keys,
+      ...marketKeys.filter((key): key is string => Boolean(key)),
+    ]);
+    return resolved
+      ? keys.map((key, index) => this.pick(resolved, key, marketKeys[index]))
+      : null;
   }
 
   /**
@@ -232,14 +291,20 @@ export class ProblemContactsService {
       return payload;
     }
     const keys = rows.map((row) => problemContactsKey(row));
-    const resolved = await this.resolveKeys(keys);
+    const marketKeys = rows.map((row) => marketContactsKey(row));
+    const resolved = await this.resolveKeys([
+      ...keys,
+      ...marketKeys.filter((key): key is string => Boolean(key)),
+    ]);
     if (!resolved) {
       return payload;
     }
     rows.forEach((row, index) => {
-      row.problem_contacts = (resolved.get(keys[index]) ?? []).map(
-        (contact) => ({ ...contact }),
-      );
+      row.problem_contacts = this.pick(
+        resolved,
+        keys[index],
+        marketKeys[index],
+      ).map((contact) => ({ ...contact }));
     });
     return payload;
   }

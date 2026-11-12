@@ -62,6 +62,8 @@ const ORDERS: OrderRowLike[] = [
     // CqBD8V4p: qisqa qatorda ham (gateway `problem_contacts`).
     region_id: '6',
     district_id: '60',
+    // (2026-11-12) market «Qo'shimcha raqam» override (gateway).
+    market_id: '5',
   },
   {
     id: '701',
@@ -307,6 +309,7 @@ describe('dwJX3NjT (S2) — pochta skani mazmuni', () => {
         district: 'Buxoro tumani',
         region_id: '6',
         district_id: '60',
+        market_id: '5',
         // T8: pochta skanida maxsus belgilar (buyurtma qatoridan).
         special_categories: ['fragile', 'battery'],
       },
@@ -321,6 +324,7 @@ describe('dwJX3NjT (S2) — pochta skani mazmuni', () => {
         district: 'Kogon tumani',
         region_id: null,
         district_id: null,
+        market_id: null,
         // Qatorda ustun yo'q — xulosadan.
         special_categories: ['heavy'],
       },

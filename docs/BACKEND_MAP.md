@@ -100,6 +100,16 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   from MANAGER/BRANCH/COURIER unless SA/admin/registrator/logist; applied inside
   `projectOrderPayloadForRoles` + market lists). Printer «Muammo bo'lsa» —
   only `problem_contacts`, row omitted when empty.
+  **Market «Qo'shimcha raqam» (2026-11-12, migration 1716000000220):**
+  `admins.problem_phone_enabled` (default false) + `problem_phone`
+  (`+998XXXXXXXXX`), set only by SA/admin via `PATCH /admin/markets/:id`
+  (identity `resolveMarketProblemPhone`: enabling needs a phone → 400; market
+  itself → 403; turning off keeps the phone). `identity.contacts.problem`
+  takes `market_ids` and returns `markets: {id: [{source:'market'}] | []}`;
+  the gateway asks for row `market_id`s in the same RPC (cache key `m:<id>`,
+  cleared by `forgetMarket` on that PATCH) and, when the market's list is
+  non-empty, uses it INSTEAD of the region logist/support phones. Print rows
+  (`order.print.find`) and the short post-scan `orders[]` carry `market_id`.
 - **Auth:** `identity.login` / `identity.refresh` / `identity.logout` /
   `identity.validate` / `identity.user.profile`. Issues access+refresh JWT
   (gateway sets refresh as httpOnly cookie).
