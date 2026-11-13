@@ -96,6 +96,12 @@ const REGISTRATOR = { id: '5', roles: ['registrator'] };
 const MANAGER = { id: '31', roles: ['manager'] };
 const SUPERADMIN = { id: '1', roles: ['superadmin'] };
 const ADMIN = { id: '2', roles: ['admin'] };
+/**
+ * 2026-11-13: HQ xodimi (SA/ADMIN/REGISTRATOR) ombordan yaratgani endi `new`
+ * (pastda «2026-11-13» bloki). Darhol «qabul qilingan» zanjirlar — market
+ * yaratganda (avvalgidek) — shu yaratuvchi bilan tekshiriladi.
+ */
+const MARKET_CREATOR = { id: MARKET_ID, roles: ['market'] };
 
 (localTestDatabase ? describe : describe.skip)(
   '6kHnNH9j — ombor ↔ buyurtma oqimi, haqiqiy Postgres (pg)',
@@ -218,7 +224,7 @@ const ADMIN = { id: '2', roles: ['admin'] };
     const createOrder = (
       quantity: number,
       extra: Row = {},
-      requester: Row = REGISTRATOR,
+      requester: Row = MARKET_CREATOR,
     ) =>
       lifecycle.create(
         {
@@ -771,6 +777,115 @@ const ADMIN = { id: '2', roles: ['admin'] };
         fulfillment_source: 'HQ',
       });
       expect(await stockRow()).toEqual({ on_hand: 5, reserved: 0 });
+    });
+
+    /**
+     * Ega 2026-11-13: HQ xodimi ombordan yaratgani — oddiy buyurtma kabi
+     * `new`, HQ'da; band yaratishda. «Qabul qilish» uni ombor filialiga,
+     * pochtasiz o'tkazadi (yaratishda avval shunday edi); keyingi zanjir
+     * (kuryer → chiqim) o'zgarmaydi. O'chirilsa — band bo'shaydi.
+     */
+    describe('2026-11-13 — HQ xodimi ombordan yaratsa: `new` → qabul', () => {
+      const logisticsCmds: string[] = [];
+      beforeEach(() => {
+        logisticsCmds.length = 0;
+        Object.assign(lifecycle, {
+          identityClient: {
+            send: jest.fn(() => of({ data: [{ id: '801' }] })),
+          },
+          logisticsClient: {
+            send: jest.fn((pattern: { cmd: string }) => {
+              logisticsCmds.push(pattern.cmd);
+              return pattern.cmd === 'logistics.district.find_by_ids'
+                ? of({
+                    data: [{ id: DISTRICT_SAM, assigned_region: REGION_SAM }],
+                  })
+                : of({ data: [] });
+            }),
+          },
+        });
+      });
+
+      it('⭐ registrator: NEW, HQ`da, band → SA qabul qiladi → RECEIVED ombor filialida (pochtasiz) → kuryer → chiqim', async () => {
+        const created = await createOrder(2, {}, REGISTRATOR);
+        expect(await orderRow(created.id)).toMatchObject({
+          status: Order_status.NEW,
+          fulfillment_source: 'WAREHOUSE',
+          warehouse_id: warehouseId,
+          branch_id: HQ_BRANCH,
+          home_branch_id: BRANCH_SAM,
+          holder_type: OrderHolderType.HQ,
+          holder_branch_id: null,
+          post_id: null,
+        });
+        // Band — yaratishda, qo'riqchi o'chirilgan.
+        expect(await stockRow()).toEqual({ on_hand: 5, reserved: 2 });
+        expect(await pendingCatalog()).toEqual([]);
+
+        await lifecycle.receiveNewOrders([created.id], undefined, SUPERADMIN);
+        expect(await orderRow(created.id)).toMatchObject({
+          status: Order_status.RECEIVED,
+          fulfillment_source: 'WAREHOUSE',
+          branch_id: BRANCH_SAM,
+          home_branch_id: BRANCH_SAM,
+          holder_type: OrderHolderType.BRANCH,
+          holder_branch_id: BRANCH_SAM,
+          post_id: null,
+        });
+        expect(logisticsCmds).not.toContain('logistics.post.receive_orders');
+        // Qabul qoldiqqa tegmaydi; omborga hodisa yo'q.
+        expect(await stockRow()).toEqual({ on_hand: 5, reserved: 2 });
+        expect(await pendingCatalog()).toEqual([]);
+        const tracking: Row[] = await orderDb.query(
+          `SELECT from_status::text, to_status::text, note
+             FROM "${ORDER}".order_tracking WHERE order_id = $1 ORDER BY id`,
+          [created.id],
+        );
+        expect(tracking.map((row) => row.note)).toEqual([
+          `Order created — ombordan (#${warehouseId}), qabulni kutmoqda`,
+          `Ombor buyurtmasi qabul qilindi — ombor filialida (#${BRANCH_SAM}), pochtasiz`,
+        ]);
+
+        await assign(created.id);
+        expect((await pendingCatalog()).map((e) => e.pattern)).toEqual([
+          WAREHOUSE_RPC.OUT,
+        ]);
+        await deliver();
+        expect(await stockRow()).toEqual({ on_hand: 3, reserved: 0 });
+      });
+
+      it('⭐ `new` holatda summa/mahsulot o`zgarmaydi (400), izoh o`zgaradi; o`chirilsa — band bo`shaydi', async () => {
+        const created = await createOrder(2, {}, ADMIN);
+        expect((await orderRow(created.id)).status).toBe(Order_status.NEW);
+
+        for (const dto of [
+          { items: [{ product_id: productId, quantity: 3 }] },
+          { total_price: 175000 },
+        ]) {
+          await expect(
+            lifecycle.updateFull(created.id, dto, SUPERADMIN),
+          ).rejects.toMatchObject({
+            error: expect.objectContaining({
+              statusCode: 400,
+              message:
+                "Mahsulotlar omborda band qilingan — summa va mahsulot sonini o'zgartirib bo'lmaydi",
+            }),
+          });
+        }
+        await lifecycle.updateFull(
+          created.id,
+          { comment: 'Eshik oldida' },
+          SUPERADMIN,
+        );
+        expect(await stockRow()).toEqual({ on_hand: 5, reserved: 2 });
+
+        await lifecycle.remove(created.id, SUPERADMIN);
+        expect((await pendingCatalog()).map((e) => e.pattern)).toEqual([
+          WAREHOUSE_RPC.RELEASE,
+        ]);
+        await deliver();
+        expect(await stockRow()).toEqual({ on_hand: 5, reserved: 0 });
+      });
     });
 
     it('⭐ ro`yxat va detal: `fulfillment_source` + `warehouse { id, name, branch_id }`; `?fulfillment_source=WAREHOUSE` filtri; noto`g`ri — 400', async () => {

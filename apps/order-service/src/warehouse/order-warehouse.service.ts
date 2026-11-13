@@ -176,6 +176,67 @@ const rpcCode = (error: unknown): string | null => {
   return text(record?.code) || null;
 };
 
+/**
+ * Ega 2026-11-13: «Ombordan maxsulot yaratsa ham yangi bo'lishi kerak oddiy
+ * buyurtma yaratgandey HQ ning ishchilari yani superadmin, admin, registrator
+ * yaratsa».
+ *
+ * Shu rollar ombordan yaratgan buyurtma `new` bo'ladi va yaratilgan joyda
+ * (HQ) turadi. Ombor bandi yaratishda qilinadi. «Qabul qilish»
+ * (`receiveNewOrders`) uni ombor qaerda bo'lsa o'sha yerga qo'yadi: viloyat
+ * ombori — ombor filialiga, pochtasiz; Markaziy ombor — HQ hudud pochtasiga.
+ * Market va market operatori yaratgani — avvalgidek darhol `received`.
+ */
+const WAREHOUSE_NEW_ON_CREATE_ROLES: string[] = [
+  Roles.SUPERADMIN,
+  Roles.ADMIN,
+  Roles.REGISTRATOR,
+];
+
+/** Ombordan yaratgan buyurtmasi `new` bo'ladigan HQ xodimi (market emas). */
+export function isHqStaffWarehouseCreator(requester?: Requester): boolean {
+  const roles = (requester?.roles ?? []).map((role) =>
+    text(role).toLowerCase(),
+  );
+  if (roles.includes(Roles.MARKET) || roles.includes(Roles.MARKET_OPERATOR)) {
+    return false;
+  }
+  return WAREHOUSE_NEW_ON_CREATE_ROLES.some((role) => roles.includes(role));
+}
+
+/**
+ * HQ xodimi yaratgan, hali qabul qilinmagan VILOYAT ombori buyurtmasi:
+ * `WAREHOUSE`, uyi (`home_branch_id`) HQ emas, HQ'da turibdi, `new`,
+ * pochtasiz va partiyasiz. Qabulda u ombor filialiga o'tadi (pochtasiz) —
+ * yaratishda avval qanday bo'lgan bo'lsa, shunday. Markaziy ombor buyurtmasi
+ * (uyi HQ) bu yerga kirmaydi: u oddiy HQ qabulidan o'tadi.
+ */
+export function isRegionalWarehouseAwaitingReceive(
+  order: Pick<
+    Order,
+    | 'fulfillment_source'
+    | 'home_branch_id'
+    | 'holder_type'
+    | 'status'
+    | 'post_id'
+    | 'current_batch_id'
+  >,
+  hqBranchId: string | null | undefined,
+): boolean {
+  const hqId = text(hqBranchId);
+  const homeBranchId = text(order?.home_branch_id);
+  return (
+    order?.fulfillment_source === 'WAREHOUSE' &&
+    hqId !== '' &&
+    homeBranchId !== '' &&
+    homeBranchId !== hqId &&
+    order.holder_type === OrderHolderType.HQ &&
+    order.status === Order_status.NEW &&
+    !text(order.post_id) &&
+    !text(order.current_batch_id)
+  );
+}
+
 @Injectable()
 export class OrderWarehouseService {
   private readonly logger = new Logger(OrderWarehouseService.name);

@@ -37,6 +37,12 @@ const HQ_ID = '1';
 const REGISTRATOR = { id: '5', roles: ['registrator'] };
 const ADMIN = { id: '9', roles: ['admin'] };
 const MANAGER = { id: '41', roles: ['manager'] };
+/**
+ * 2026-11-13: HQ xodimi (SA/ADMIN/REGISTRATOR) ombordan yaratgani endi `new`
+ * (`warehouse-order-starts-new.spec.ts`). Darhol «qabul qilingan» yo'l —
+ * market yaratganda (va filialdan yaratilganda) — shu yerda tekshiriladi.
+ */
+const MARKET = { id: '121', roles: ['market'] };
 
 const HQ_PLAN: WarehouseCreatePlan = {
   warehouse_id: '9',
@@ -234,7 +240,7 @@ describe('VkKDSNNn — createOnce: Markaziy ombor buyurtmasi', () => {
     const create = (
       plan: WarehouseCreatePlan | null,
       dto: Record<string, unknown> = {},
-      requester: { id: string; roles: string[] } = REGISTRATOR,
+      requester: { id: string; roles: string[] } = MARKET,
       startedAt?: number,
     ) =>
       service.createOnce(
@@ -273,6 +279,8 @@ describe('VkKDSNNn — createOnce: Markaziy ombor buyurtmasi', () => {
 
   it('⭐ HQ`da qabul qilingan: branch/home = HQ id (dto home e`tiborsiz), egalik HQ, RECEIVED, WAREHOUSE, band shu tranzaksiyada', async () => {
     const h = makeCreate();
+    // Yaratilgan joy filial (11) — HQ emas: 2026-11-13 dan keyin ham darhol
+    // «qabul qilingan» yo'l (HQ'da yaratilgani — `new`).
     await h.create(
       HQ_PLAN,
       { home_branch_id: '11', branch_id: '11' },
@@ -439,12 +447,7 @@ describe('VkKDSNNn — createOnce: Markaziy ombor buyurtmasi', () => {
     // Oldingi RPC'lar (hudud, resolve_source, reserve) byudjetni yeb bo'lgan.
     const late = makeCreate();
     await expect(
-      late.create(
-        HQ_PLAN,
-        {},
-        REGISTRATOR,
-        Date.now() - HQ_POST_ATTACH_DEADLINE_MS,
-      ),
+      late.create(HQ_PLAN, {}, MARKET, Date.now() - HQ_POST_ATTACH_DEADLINE_MS),
     ).resolves.toMatchObject({ id: '900' });
     expect(late.queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
     expect(late.logisticsClient!.send).not.toHaveBeenCalled();
@@ -482,6 +485,153 @@ describe('VkKDSNNn — createOnce: Markaziy ombor buyurtmasi', () => {
     });
     expect(hq.logisticsClient!.send).not.toHaveBeenCalled();
     expect(hq.orderWarehouse.reserveForNewOrder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Ega 2026-11-13: HQ xodimi (superadmin, admin, registrator) ombordan
+   * yaratgan buyurtma oddiy buyurtma kabi `new`, HQ'da; band — yaratishda.
+   * Qabul (`receiveNewOrders`) — `warehouse/warehouse-order-starts-new.spec.ts`.
+   */
+  describe('2026-11-13 — HQ xodimi ombordan yaratsa: `new`', () => {
+    const SUPERADMIN = { id: '1', roles: ['superadmin'] };
+
+    it.each([
+      ['superadmin', SUPERADMIN],
+      ['admin', ADMIN],
+      ['registrator', REGISTRATOR],
+    ])(
+      '⭐ %s + viloyat ombori → NEW, HQ`da (egalik HQ), uyi — ombor filiali, pochtasiz; band shu tranzaksiyada',
+      async (_label, requester) => {
+        const h = makeCreate();
+        h.service.resolveBranchIdForOrder = jest.fn().mockResolvedValue(HQ_ID);
+        await h.create(REGIONAL_PLAN, {}, requester);
+        expect(createdRow(h)).toMatchObject({
+          status: Order_status.NEW,
+          fulfillment_source: 'WAREHOUSE',
+          warehouse_id: '3',
+          branch_id: HQ_ID,
+          home_branch_id: '11',
+          holder_type: OrderHolderType.HQ,
+          holder_branch_id: null,
+          holder_courier_id: null,
+          post_id: null,
+        });
+        expect(h.orderWarehouse.reserveForNewOrder).toHaveBeenCalledWith(
+          { order_id: '900', plan: REGIONAL_PLAN, requester },
+          h.queryRunner.manager,
+        );
+        expect(h.custody.createTrackingEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            note: 'Order created — ombordan (#3), qabulni kutmoqda',
+          }),
+          expect.anything(),
+        );
+        expect(h.activityLog.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            new_value: expect.objectContaining({
+              status: Order_status.NEW,
+              fulfillment_source: 'WAREHOUSE',
+              warehouse_id: '3',
+              branch_id: HQ_ID,
+            }),
+          }),
+        );
+        expect(h.logisticsClient!.send).not.toHaveBeenCalled();
+      },
+    );
+
+    it('⭐ Markaziy ombor → NEW, branch/home = HQ; pochtaga yaratishda BIRIKTIRILMAYDI (HQ qabulida tushadi)', async () => {
+      const h = makeCreate();
+      h.service.resolveBranchIdForOrder = jest.fn().mockResolvedValue(HQ_ID);
+      await h.create(HQ_PLAN, {}, SUPERADMIN);
+      expect(createdRow(h)).toMatchObject({
+        status: Order_status.NEW,
+        fulfillment_source: 'WAREHOUSE',
+        warehouse_id: '9',
+        branch_id: HQ_ID,
+        home_branch_id: HQ_ID,
+        holder_type: OrderHolderType.HQ,
+        post_id: null,
+      });
+      expect(h.orderWarehouse.reserveForNewOrder).toHaveBeenCalledTimes(1);
+      expect(h.custody.createTrackingEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          note: 'Order created — markaziy ombordan (#9), qabulni kutmoqda',
+        }),
+        expect.anything(),
+      );
+      expect(h.activityLog.log.mock.calls[0][0].new_value).toMatchObject({
+        status: Order_status.NEW,
+        warehouse_kind: 'HQ',
+      });
+      expect(h.logisticsClient!.send).not.toHaveBeenCalled();
+      expect(h.updateQb.execute).not.toHaveBeenCalled();
+    });
+
+    it('dto `home_branch_id` e`tiborsiz — uyi doim ombor filiali (qabul shu yerga qo`yadi)', async () => {
+      const h = makeCreate();
+      h.service.resolveBranchIdForOrder = jest.fn().mockResolvedValue(HQ_ID);
+      await h.create(REGIONAL_PLAN, { home_branch_id: '77' }, ADMIN);
+      expect(createdRow(h)).toMatchObject({
+        status: Order_status.NEW,
+        branch_id: HQ_ID,
+        home_branch_id: '11',
+      });
+    });
+
+    it('⭐ market va market operatori — avvalgidek darhol RECEIVED (ombor filialida), yaratilgan joy so`ralmaydi', async () => {
+      for (const requester of [
+        MARKET,
+        { id: '600', roles: ['market_operator'] },
+      ]) {
+        const h = makeCreate();
+        const resolveBranch = jest.fn().mockResolvedValue(HQ_ID);
+        h.service.resolveBranchIdForOrder = resolveBranch;
+        await h.create(REGIONAL_PLAN, {}, requester);
+        expect(createdRow(h)).toMatchObject({
+          status: Order_status.RECEIVED,
+          branch_id: '11',
+          home_branch_id: '11',
+          holder_type: OrderHolderType.BRANCH,
+          holder_branch_id: '11',
+        });
+        expect(resolveBranch).not.toHaveBeenCalled();
+      }
+    });
+
+    it('filial registratori (yaratilgan joy HQ emas) yoki joy aniqlanmasa — avvalgidek RECEIVED', async () => {
+      const atBranch = makeCreate();
+      atBranch.service.resolveBranchIdForOrder = jest
+        .fn()
+        .mockResolvedValue('11');
+      await atBranch.create(REGIONAL_PLAN, {}, REGISTRATOR);
+      expect(createdRow(atBranch)).toMatchObject({
+        status: Order_status.RECEIVED,
+        branch_id: '11',
+      });
+
+      const unknown = makeCreate();
+      unknown.service.resolveBranchIdForOrder = jest
+        .fn()
+        .mockRejectedValue(new Error('branch-service down'));
+      await unknown.create(REGIONAL_PLAN, {}, SUPERADMIN);
+      expect(createdRow(unknown)).toMatchObject({
+        status: Order_status.RECEIVED,
+        branch_id: '11',
+      });
+    });
+
+    it('ombor rejasisiz (HQ buyurtma) — o`zgarishsiz NEW, HQ xodimi uchun ham', async () => {
+      const h = makeCreate();
+      h.service.resolveBranchIdForOrder = jest.fn().mockResolvedValue(HQ_ID);
+      await h.create(null, {}, SUPERADMIN);
+      expect(createdRow(h)).toMatchObject({
+        status: Order_status.NEW,
+        fulfillment_source: 'HQ',
+        branch_id: HQ_ID,
+      });
+      expect(h.orderWarehouse.reserveForNewOrder).not.toHaveBeenCalled();
+    });
   });
 });
 
