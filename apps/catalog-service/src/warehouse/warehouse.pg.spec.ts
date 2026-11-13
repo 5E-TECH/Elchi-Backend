@@ -948,6 +948,289 @@ const pgCode = async (promise: Promise<unknown>) => {
         });
       });
 
+      describe('2026-11-13 — mahsulotni ombordan o`chirish (qoldiq 0 bo`lishi shart emas)', () => {
+        const movementsOf = async (warehouseId: string, productId: string) =>
+          db.query<Array<Record<string, unknown>>>(
+            `SELECT type, qty, on_hand_after, reserved_after, ref_type, note
+               FROM "${CATALOG}".stock_movements
+              WHERE warehouse_id = $1 AND product_id = $2 ORDER BY id`,
+            [warehouseId, productId],
+          );
+
+        it('⭐ qoldiq 7 bo`lsa ham o`chiriladi: qator ro`yxatdan ketadi, jurnalga ADJUST −7 «Ombordan o`chirildi: …», jurnal tarixi saqlanadi', async () => {
+          const w = await openWarehouse();
+          const p = await addProduct('Sumka');
+          const q = await addProduct('Kurtka');
+          await stockIn(w.id, [
+            { product_id: p.id, qty: 7 },
+            { product_id: q.id, qty: 2 },
+          ]);
+          await stock.setThreshold({
+            warehouse_id: w.id,
+            product_id: p.id,
+            low_stock_threshold: 3,
+            actor: ADMIN,
+          });
+          activityLog.log.mockClear();
+
+          const result = await stock.removeProduct({
+            warehouse_id: w.id,
+            product_id: p.id,
+            reason: 'Market olib ketdi',
+            actor: ADMIN,
+          });
+          expect(result).toMatchObject({
+            warehouse_id: w.id,
+            product_id: p.id,
+            product_name: 'Sumka',
+            removed: true,
+            written_off: 7,
+            reason: 'Market olib ketdi',
+          });
+          expect(result.movement_id).toEqual(expect.any(String));
+          expect(await stockRow(w.id, p.id)).toBeNull();
+          expect(await stockRow(w.id, q.id)).toEqual({
+            on_hand: 2,
+            reserved: 0,
+          });
+
+          const list = await warehouses.listStock(w.id, {});
+          expect(list.data.map((row) => row.product.id)).toEqual([q.id]);
+          expect(list.total).toBe(1);
+
+          expect(await movementsOf(w.id, p.id)).toEqual([
+            {
+              type: 'IN',
+              qty: 7,
+              on_hand_after: 7,
+              reserved_after: 0,
+              ref_type: 'stock_in',
+              note: null,
+            },
+            {
+              type: 'ADJUST',
+              qty: -7,
+              on_hand_after: 0,
+              reserved_after: 0,
+              ref_type: 'inventory',
+              note: "Ombordan o'chirildi: Market olib ketdi",
+            },
+          ]);
+          expect(activityLog.log).toHaveBeenCalledWith(
+            expect.objectContaining({
+              entity_type: 'WarehouseStock',
+              action: 'deleted',
+              old_value: {
+                warehouse_id: w.id,
+                product_id: p.id,
+                on_hand: 7,
+                reserved: 0,
+                low_stock_threshold: 3,
+              },
+            }),
+          );
+
+          // Takror — qator yo'q: 404, jurnal o'zgarmaydi.
+          expect(
+            await errorOf(
+              stock.removeProduct({
+                warehouse_id: w.id,
+                product_id: p.id,
+                actor: ADMIN,
+              }),
+            ),
+          ).toMatchObject({ statusCode: 404 });
+          expect(await movementsOf(w.id, p.id)).toHaveLength(2);
+        });
+
+        it('qoldiq 0 (tugagan) — jurnalga yozilmaydi, faqat qator o`chadi; sababsiz ham ishlaydi; to`xtatilgan omborda ham', async () => {
+          const w = await openWarehouse();
+          const p = await addProduct('Quloqchin');
+          await stockIn(w.id, [{ product_id: p.id, qty: 1 }]);
+          await stock.inventory({
+            warehouse_id: w.id,
+            lines: [{ product_id: p.id, counted: 0 }],
+            reason: 'Sanash',
+            idempotency_key: nextKey(),
+            actor: ADMIN,
+          });
+          await warehouses.setStatus(w.id, 'PAUSED', ADMIN, 'Mavsum');
+          const before = await movementCount(w.id);
+          await expect(
+            stock.removeProduct({
+              warehouse_id: w.id,
+              product_id: p.id,
+              actor: ADMIN,
+            }),
+          ).resolves.toMatchObject({
+            written_off: 0,
+            movement_id: null,
+            reason: null,
+          });
+          expect(await stockRow(w.id, p.id)).toBeNull();
+          expect(await movementCount(w.id)).toBe(before);
+        });
+
+        it('⭐ faol buyurtmada band — 409 WAREHOUSE_STOCK_RESERVED, hech narsa o`zgarmaydi; band bo`shagach — o`chiriladi', async () => {
+          const w = await openWarehouse();
+          const p = await addProduct('Smartfon');
+          await stockIn(w.id, [{ product_id: p.id, qty: 5 }]);
+          await stock.reserve({
+            order_id: '7001',
+            warehouse_id: w.id,
+            items: [{ product_id: p.id, quantity: 2 }],
+            actor: ADMIN,
+          });
+          const before = await movementCount(w.id);
+          expect(
+            await errorOf(
+              stock.removeProduct({
+                warehouse_id: w.id,
+                product_id: p.id,
+                actor: ADMIN,
+              }),
+            ),
+          ).toMatchObject({
+            statusCode: 409,
+            code: 'WAREHOUSE_STOCK_RESERVED',
+            reserved: 2,
+          });
+          expect(await stockRow(w.id, p.id)).toEqual({
+            on_hand: 5,
+            reserved: 2,
+          });
+          expect(await movementCount(w.id)).toBe(before);
+
+          await stock.release({ order_id: '7001', actor: ADMIN });
+          await expect(
+            stock.removeProduct({
+              warehouse_id: w.id,
+              product_id: p.id,
+              actor: ADMIN,
+            }),
+          ).resolves.toMatchObject({ written_off: 5 });
+          expect(await stockRow(w.id, p.id)).toBeNull();
+        });
+
+        it('⭐ kuryerdagi (OUT) dona o`chirilgandan keyin qaytsa — qator 0 dan qayta yaratiladi va dona qaytadi; keyingi kirim ham yangi qator ochadi', async () => {
+          const w = await openWarehouse();
+          const p = await addProduct('G`ilof');
+          const q = await addProduct('Zaryadka');
+          await stockIn(w.id, [
+            { product_id: p.id, qty: 4 },
+            { product_id: q.id, qty: 3 },
+          ]);
+          await stock.reserve({
+            order_id: '7002',
+            warehouse_id: w.id,
+            items: [{ product_id: p.id, quantity: 1 }],
+            actor: ADMIN,
+          });
+          await stock.out({ order_id: '7002', actor: COURIER });
+          expect(await stockRow(w.id, p.id)).toEqual({
+            on_hand: 3,
+            reserved: 0,
+          });
+
+          await stock.removeProduct({
+            warehouse_id: w.id,
+            product_id: p.id,
+            actor: ADMIN,
+          });
+          await stock.removeProduct({
+            warehouse_id: w.id,
+            product_id: q.id,
+            actor: ADMIN,
+          });
+          expect(await stockRow(w.id, p.id)).toBeNull();
+
+          const back = await stock.return({ order_id: '7002', actor: COURIER });
+          expect(back.returned).toEqual([
+            expect.objectContaining({
+              product_id: p.id,
+              quantity: 1,
+              on_hand: 1,
+            }),
+          ]);
+          expect(await stockRow(w.id, p.id)).toEqual({
+            on_hand: 1,
+            reserved: 0,
+          });
+
+          await stockIn(w.id, [{ product_id: q.id, qty: 2 }]);
+          expect(await stockRow(w.id, q.id)).toEqual({
+            on_hand: 2,
+            reserved: 0,
+          });
+          const list = await warehouses.listStock(w.id, {});
+          expect(list.data.map((row) => row.product.id).sort()).toEqual(
+            [p.id, q.id].sort(),
+          );
+        });
+
+        it('o`chirilgan mahsulot omborga band qilinmaydi (409 yetmaydi), ombor tanlovida — HQ', async () => {
+          const w = await openWarehouse();
+          const p = await addProduct('Termos');
+          await stockIn(w.id, [{ product_id: p.id, qty: 6 }]);
+          await stock.removeProduct({
+            warehouse_id: w.id,
+            product_id: p.id,
+            actor: ADMIN,
+          });
+          expect(
+            await errorOf(
+              stock.reserve({
+                order_id: '7003',
+                warehouse_id: w.id,
+                items: [{ product_id: p.id, quantity: 1 }],
+                actor: ADMIN,
+              }),
+            ),
+          ).toMatchObject({
+            statusCode: 409,
+            code: 'WAREHOUSE_STOCK_INSUFFICIENT',
+          });
+        });
+
+        it('noto`g`ri id — 400; boshqa ombor yoki yo`q ombor — 404', async () => {
+          const w = await openWarehouse();
+          const far = await openWarehouse(BRANCH_FAR);
+          const p = await addProduct('Sumka');
+          await stockIn(w.id, [{ product_id: p.id, qty: 1 }]);
+          expect(
+            await errorOf(
+              stock.removeProduct({
+                warehouse_id: w.id,
+                product_id: 'abc',
+                actor: ADMIN,
+              }),
+            ),
+          ).toMatchObject({ statusCode: 400 });
+          expect(
+            await errorOf(
+              stock.removeProduct({
+                warehouse_id: far.id,
+                product_id: p.id,
+                actor: ADMIN,
+              }),
+            ),
+          ).toMatchObject({ statusCode: 404 });
+          expect(
+            await errorOf(
+              stock.removeProduct({
+                warehouse_id: '999999',
+                product_id: p.id,
+                actor: ADMIN,
+              }),
+            ),
+          ).toMatchObject({ statusCode: 404 });
+          expect(await stockRow(w.id, p.id)).toEqual({
+            on_hand: 1,
+            reserved: 0,
+          });
+        });
+      });
+
       describe('buyurtma RPC`lari', () => {
         const setup = async (onHand = 10) => {
           const w = await openWarehouse();

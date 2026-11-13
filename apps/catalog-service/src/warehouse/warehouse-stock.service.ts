@@ -219,7 +219,7 @@ export class WarehouseStockService {
   private async ensureStockRows(
     manager: EntityManager,
     warehouseId: string,
-    products: WarehouseProductRow[],
+    products: Array<Pick<WarehouseProductRow, 'id' | 'user_id'>>,
   ) {
     if (!products.length) return;
     const t = this.tables(manager);
@@ -841,6 +841,105 @@ export class WarehouseStockService {
   }
 
   // ------------------------------------------------------------------
+  // Mahsulotni ombordan o'chirish
+  // ------------------------------------------------------------------
+
+  /**
+   * 2026-11-13 (ega: «Ombordagi qaysidir mahsulotni o'chirish imkoni bo'lishi kerak qoldiq 0 bo'lishi
+   * shart emas»): mahsulot qatori ombordan o'chiriladi, qoldig'i 0 bo'lmasa ham.
+   *  - Qolgan dona jurnalga ADJUST (−on_hand, `ref_type: 'inventory'`) bo'lib yoziladi — harakatlar
+   *    tarixi saqlanadi, qator esa ro'yxatdan ketadi (`warehouse_stock` dan o'chiriladi).
+   *  - Faol buyurtmada band dona bo'lsa (`reserved > 0`) — 409 `WAREHOUSE_STOCK_RESERVED`: band
+   *    buyurtmalar shu qatorga bog'liq (chiqim / bo'shatish), avval ular bekor qilinsin yoki kuryerga berilsin.
+   *  - Keyin kirim, inventarizatsiya yoki kuryerdan qaytish bo'lsa — qator 0 dan qayta yaratiladi.
+   *  - To'xtatilgan omborda ham ishlaydi. Takror so'rov (qator yo'q) — 404.
+   */
+  async removeProduct(input: {
+    warehouse_id: unknown;
+    product_id: unknown;
+    reason?: unknown;
+    actor?: WarehouseActorInput | null;
+  }) {
+    const warehouseId = toId(input?.warehouse_id, 'warehouse_id');
+    const productId = toId(input?.product_id, 'product_id');
+    const reason =
+      toOptionalText(input?.reason, 'reason', WAREHOUSE_NOTE_MAX) ?? null;
+    const actor = normalizeActor(input?.actor);
+
+    const result = await this.tx(async (manager) => {
+      const t = this.tables(manager);
+      const warehouse = await this.lockWarehouse(manager, warehouseId);
+      const rows = await this.lockStockRows(manager, warehouseId, [productId]);
+      const row = rows.get(productId);
+      if (!row) {
+        rpcError(404, `Mahsulot #${productId} bu omborda yo'q`);
+      }
+      const products = await loadProducts(manager, [productId]);
+      const name = products.get(productId)?.name ?? `#${productId}`;
+      if (row.reserved > 0) {
+        rpcError(
+          409,
+          `«${name}»: ${row.reserved} dona faol buyurtmalarda band — avval ular bekor qilinsin yoki kuryerga berilsin, keyin o'chiriladi`,
+          {
+            code: WAREHOUSE_ERROR_CODES.STOCK_RESERVED,
+            product_id: productId,
+            reserved: row.reserved,
+          },
+        );
+      }
+      const before = {
+        on_hand: row.on_hand,
+        reserved: row.reserved,
+        low_stock_threshold: row.low_stock_threshold,
+      };
+      let movementId: string | null = null;
+      if (row.on_hand > 0) {
+        const movement = await this.applyMovement(manager, warehouseId, row, {
+          type: 'ADJUST',
+          qty: -row.on_hand,
+          onHandDelta: -row.on_hand,
+          reservedDelta: 0,
+          refType: 'inventory',
+          refId: `remove:${row.id}`,
+          actor,
+          note: reason
+            ? `Ombordan o'chirildi: ${reason}`.slice(0, WAREHOUSE_NOTE_MAX)
+            : "Ombordan o'chirildi",
+          key: `remove:${warehouseId}:${productId}:${row.id}`,
+        });
+        movementId = movement.movement_id;
+      }
+      await manager.query(`DELETE FROM ${t.stock} WHERE "id" = $1`, [row.id]);
+      return { warehouse, row, name, before, movementId };
+    });
+
+    void this.activityLog.log({
+      entity_type: 'WarehouseStock',
+      entity_id: result.row.id,
+      action: ActivityAction.DELETED,
+      old_value: {
+        warehouse_id: warehouseId,
+        product_id: productId,
+        ...result.before,
+      },
+      user_id: actor.id,
+      user_role: actor.role,
+      metadata: { warehouse_id: warehouseId, product_id: productId, reason },
+      description: `Ombor #${warehouseId} dan «${result.name}» o'chirildi (qoldiq ${result.before.on_hand} dona)`,
+    });
+
+    return {
+      warehouse_id: warehouseId,
+      product_id: productId,
+      product_name: result.name,
+      removed: true,
+      written_off: result.before.on_hand,
+      movement_id: result.movementId,
+      reason,
+    };
+  }
+
+  // ------------------------------------------------------------------
   // Buyurtma RPC'lari (order-service)
   // ------------------------------------------------------------------
 
@@ -1353,6 +1452,16 @@ export class WarehouseStockService {
         if (todo.length) {
           const warehouseId = todo[0].row.warehouse_id;
           await this.lockWarehouse(manager, warehouseId);
+          // 2026-11-13: mahsulot ombordan o'chirilgan bo'lsa (`removeProduct`) qoldiq qatori yo'q —
+          // kuryerdan qaytgan dona omborga jismonan qaytadi, qator 0 bilan qayta yaratiladi.
+          await this.ensureStockRows(
+            manager,
+            warehouseId,
+            todo.map((item) => ({
+              id: item.row.product_id,
+              user_id: item.row.market_id,
+            })),
+          );
           const stock = await this.lockStockRows(
             manager,
             warehouseId,

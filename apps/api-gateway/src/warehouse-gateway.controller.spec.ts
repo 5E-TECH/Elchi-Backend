@@ -15,6 +15,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateWarehouseRequestDto,
   WarehouseInventoryRequestDto,
+  WarehouseRemoveProductRequestDto,
   WarehouseStockInRequestDto,
   WarehouseThresholdRequestDto,
 } from './dto/warehouse.swagger.dto';
@@ -108,6 +109,7 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
         'stockIn',
         'inventory',
         'setThreshold',
+        'removeProduct',
         'lookup',
         'updateMarketWarehouseOrder',
       ];
@@ -444,6 +446,41 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
       });
     });
 
+    it('2026-11-13 mahsulotni ombordan o`chirish — REMOVE_PRODUCT, sabab ixtiyoriy; noto`g`ri id — 404 (catalog`ga bormaydi)', async () => {
+      const { controller, catalogSend } = setup();
+      await controller.removeProduct(
+        '3',
+        '9',
+        { reason: 'Market olib ketdi' },
+        ADMIN,
+      );
+      await controller.removeProduct('3', '10', undefined, SUPERADMIN);
+      expect(catalogSend.mock.calls).toEqual([
+        [
+          { cmd: WAREHOUSE_RPC.REMOVE_PRODUCT },
+          {
+            warehouse_id: '3',
+            product_id: '9',
+            reason: 'Market olib ketdi',
+            actor: { id: '2', roles: ['admin'] },
+          },
+        ],
+        [
+          { cmd: WAREHOUSE_RPC.REMOVE_PRODUCT },
+          {
+            warehouse_id: '3',
+            product_id: '10',
+            reason: undefined,
+            actor: { id: '1', roles: ['superadmin'] },
+          },
+        ],
+      ]);
+      expect(() => controller.removeProduct('3', 'abc', {}, ADMIN)).toThrow(
+        NotFoundException,
+      );
+      expect(catalogSend).toHaveBeenCalledTimes(2);
+    });
+
     it('⭐ «Ombordan buyurtma yaratish» kaliti — identity.market.update, requester bilan; noto`g`ri id — 404', async () => {
       const { controller, identitySend } = setup();
       await controller.updateMarketWarehouseOrder(
@@ -584,6 +621,28 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
       expect(await errors(WarehouseThresholdRequestDto, {})).not.toHaveLength(
         0,
       );
+    });
+
+    it('ombordan o`chirish: sabab ixtiyoriy matn (≤1000), ortiqcha maydon — xato', async () => {
+      expect(await errors(WarehouseRemoveProductRequestDto, {})).toHaveLength(
+        0,
+      );
+      expect(
+        await errors(WarehouseRemoveProductRequestDto, {
+          reason: 'Olib ketdi',
+        }),
+      ).toHaveLength(0);
+      expect(
+        await errors(WarehouseRemoveProductRequestDto, { reason: 5 }),
+      ).not.toHaveLength(0);
+      expect(
+        await errors(WarehouseRemoveProductRequestDto, {
+          reason: 'x'.repeat(1001),
+        }),
+      ).not.toHaveLength(0);
+      expect(
+        await errors(WarehouseRemoveProductRequestDto, { qty: 1 }),
+      ).not.toHaveLength(0);
     });
   });
 });

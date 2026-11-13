@@ -304,6 +304,18 @@ export class WarehouseThresholdRequestDto {
   low_stock_threshold!: number | null;
 }
 
+/** 2026-11-13: mahsulotni ombordan o'chirish — sabab ixtiyoriy (jurnal izohiga yoziladi). */
+export class WarehouseRemoveProductRequestDto {
+  @ApiPropertyOptional({
+    example: 'Market mahsulotni olib ketdi',
+    maxLength: WAREHOUSE_NOTE_MAX,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(WAREHOUSE_NOTE_MAX)
+  reason?: string;
+}
+
 export class WarehouseOrderItemDto {
   @ApiProperty({ example: '142' })
   @IsString()
@@ -1040,6 +1052,22 @@ export class WarehouseThresholdResponseDto {
   @ApiProperty() on_hand!: number;
   @ApiProperty() reserved!: number;
   @ApiProperty() available!: number;
+}
+
+export class WarehouseRemoveProductResponseDto {
+  @ApiProperty() warehouse_id!: string;
+  @ApiProperty() product_id!: string;
+  @ApiProperty() product_name!: string;
+  @ApiProperty({ example: true }) removed!: boolean;
+  @ApiProperty({
+    description:
+      "O'chirilgan paytdagi qoldiq (dona) — jurnalga ADJUST bo'lib yozildi",
+  })
+  written_off!: number;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  movement_id!: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true })
+  reason!: string | null;
 }
 
 export class WarehouseCandidateDto {

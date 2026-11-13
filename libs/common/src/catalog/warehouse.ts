@@ -147,6 +147,11 @@ export const WAREHOUSE_ERROR_CODES = {
    * qaytadi — marketga topshirib bo'lmaydi (order-service, 409).
    */
   ORDER_RETURNS_TO_STOCK: 'WAREHOUSE_ORDER_RETURNS_TO_STOCK',
+  /**
+   * 2026-11-13: mahsulotni ombordan o'chirib bo'lmaydi — dona faol
+   * buyurtmalarda band (avval bekor qilinsin yoki kuryerga berilsin), 409.
+   */
+  STOCK_RESERVED: 'WAREHOUSE_STOCK_RESERVED',
 } as const;
 
 /** RMQ naqshlari — catalog-service `WarehouseController` bilan AYNI. */
@@ -163,6 +168,7 @@ export const WAREHOUSE_RPC = {
   STOCK_IN: 'catalog.warehouse.stock_in',
   INVENTORY: 'catalog.warehouse.inventory',
   SET_THRESHOLD: 'catalog.warehouse.set_threshold',
+  REMOVE_PRODUCT: 'catalog.warehouse.remove_product',
   MARKET_STOCK: 'catalog.warehouse.market_stock',
   AVAILABILITY: 'catalog.warehouse.availability',
   RESOLVE_SOURCE: 'catalog.warehouse.resolve_source',

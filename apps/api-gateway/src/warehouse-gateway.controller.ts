@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   GatewayTimeoutException,
   Get,
@@ -52,6 +53,8 @@ import {
   WarehouseListResponseDto,
   WarehouseLookupResponseDto,
   WarehouseMovementListResponseDto,
+  WarehouseRemoveProductRequestDto,
+  WarehouseRemoveProductResponseDto,
   WarehouseResolveSourceRequestDto,
   WarehouseResolveSourceResponseDto,
   WarehouseStatusRequestDto,
@@ -822,6 +825,31 @@ export class WarehouseGatewayController {
       warehouse_id: this.assertId(id),
       product_id: this.assertId(productId, 'Mahsulot'),
       low_stock_threshold: dto.low_stock_threshold,
+      actor: this.requester(req),
+    });
+  }
+
+  @Delete('warehouses/:id/stock/:productId')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
+  @ApiOperation({
+    summary: "Mahsulotni ombordan o'chirish (qoldiq 0 bo'lishi shart emas)",
+    description:
+      "2026-11-13: qator ombor ro'yxatidan ketadi; qolgan dona jurnalga ADJUST (−qoldiq, izoh «Ombordan o'chirildi») bo'lib yoziladi. Faol buyurtmada band dona bo'lsa — 409 `{ code: \"WAREHOUSE_STOCK_RESERVED\" }`. Qator yo'q — 404. Keyingi kirim yoki qaytish qatorni 0 dan qayta yaratadi.",
+  })
+  @ApiParam({ name: 'id', description: 'Warehouse ID' })
+  @ApiParam({ name: 'productId', description: 'Product ID' })
+  @ApiBody({ type: WarehouseRemoveProductRequestDto, required: false })
+  @ApiOkResponse({ type: WarehouseRemoveProductResponseDto })
+  removeProduct(
+    @Param('id') id: string,
+    @Param('productId') productId: string,
+    @Body() dto: WarehouseRemoveProductRequestDto | undefined,
+    @Req() req: Req,
+  ) {
+    return this.send(WAREHOUSE_RPC.REMOVE_PRODUCT, {
+      warehouse_id: this.assertId(id),
+      product_id: this.assertId(productId, 'Mahsulot'),
+      reason: dto?.reason,
       actor: this.requester(req),
     });
   }

@@ -167,6 +167,18 @@ export class WarehouseController {
     );
   }
 
+  @MessagePattern({ cmd: WAREHOUSE_RPC.REMOVE_PRODUCT })
+  removeProduct(@Payload() data: Payloadish, @Ctx() context: RmqContext) {
+    return this.run(context, () =>
+      this.stock.removeProduct({
+        warehouse_id: data?.warehouse_id,
+        product_id: data?.product_id,
+        reason: data?.reason,
+        actor: data?.actor ?? data?.requester,
+      }),
+    );
+  }
+
   @MessagePattern({ cmd: WAREHOUSE_RPC.MARKET_STOCK })
   marketStock(@Payload() data: Payloadish, @Ctx() context: RmqContext) {
     return this.run(context, () =>
