@@ -163,7 +163,10 @@ describe('6kHnNH9j — OrderWarehouseService', () => {
       const cases: Array<[Record<string, unknown>, unknown]> = [
         [createDto({ fulfillment: 'hq' }), REGISTRATOR],
         [createDto({ fulfillment: undefined }), REGISTRATOR],
+        // 2026-11-14: menejer — faqat o'z filiali bilan (gateway beradi);
+        // filialsiz — ombor yo'q, catalog'ga bormaydi.
         [createDto(), { id: '31', roles: ['manager'] }],
+        [createDto({ branch_id: 'abc' }), { id: '31', roles: ['manager'] }],
         [createDto(), { id: '77', roles: ['courier'] }],
         [createDto(), undefined],
         [
@@ -222,6 +225,85 @@ describe('6kHnNH9j — OrderWarehouseService', () => {
         items: [{ product_id: '142', quantity: 2 }],
         requester: { id: '121', roles: ['market'] },
       });
+    });
+  });
+
+  /**
+   * Ega 2026-11-14: «manager ombordan mahsulot yaratsa band ga o'tmiyabdi
+   * shuni ham yaratilsa bo'ldi band ga qo'shiladigan qilish kerak».
+   */
+  describe('planCreate — filial menejeri (2026-11-14)', () => {
+    const MANAGER = { id: '549', roles: ['manager'] };
+
+    it('⭐ menejer + o`z filiali → resolve_source `branch_id` bilan → o`z filiali ombori rejasi', async () => {
+      const { service, send } = make({
+        [WAREHOUSE_RPC.RESOLVE_SOURCE]: () => of(resolveReply('WAREHOUSE')),
+      });
+      await expect(
+        service.planCreate(createDto({ branch_id: '11' }), MANAGER),
+      ).resolves.toEqual(PLAN);
+      expect(send).toHaveBeenCalledWith(
+        { cmd: WAREHOUSE_RPC.RESOLVE_SOURCE },
+        {
+          district_id: '700',
+          branch_id: '11',
+          market_id: '121',
+          items: [{ product_id: '142', quantity: 2 }],
+          requester: { id: '549', roles: ['manager'] },
+        },
+      );
+    });
+
+    it('⭐ catalog begona filial yoki Markaziy omborni qaytarsa (eski catalog) — reja yo`q, band yo`q', async () => {
+      const other = make({
+        [WAREHOUSE_RPC.RESOLVE_SOURCE]: () => of(resolveReply('WAREHOUSE')),
+      });
+      await expect(
+        other.service.planCreate(createDto({ branch_id: '12' }), MANAGER),
+      ).resolves.toBeNull();
+      const hq = make({
+        [WAREHOUSE_RPC.RESOLVE_SOURCE]: () =>
+          of({
+            source: 'WAREHOUSE',
+            reason: 'OK',
+            region_id: '7',
+            warehouse: {
+              id: '9',
+              name: 'Markaziy',
+              branch_id: '11',
+              kind: 'HQ',
+            },
+          }),
+      });
+      await expect(
+        hq.service.planCreate(createDto({ branch_id: '11' }), MANAGER),
+      ).resolves.toBeNull();
+      const short = make({
+        [WAREHOUSE_RPC.RESOLVE_SOURCE]: () => of(resolveReply('HQ')),
+      });
+      await expect(
+        short.service.planCreate(createDto({ branch_id: '11' }), MANAGER),
+      ).resolves.toBeNull();
+    });
+
+    it('HQ xodimi/market roli bor menejer — eski qoida (filial doirasi yo`q); boshqa filial xodimlari — ombor yo`q', async () => {
+      const { service, send } = make({
+        [WAREHOUSE_RPC.RESOLVE_SOURCE]: () => of(resolveReply('WAREHOUSE')),
+      });
+      await service.planCreate(createDto({ branch_id: '11' }), {
+        id: '5',
+        roles: ['manager', 'registrator'],
+      });
+      expect(send.mock.calls[0][1]).not.toHaveProperty('branch_id');
+      for (const role of ['branch', 'operator', 'logist']) {
+        await expect(
+          service.planCreate(createDto({ branch_id: '11' }), {
+            id: '7',
+            roles: [role],
+          }),
+        ).resolves.toBeNull();
+      }
+      expect(send).toHaveBeenCalledTimes(1);
     });
   });
 

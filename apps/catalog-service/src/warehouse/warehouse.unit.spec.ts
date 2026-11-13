@@ -1175,3 +1175,204 @@ describe('VkKDSNNn — WarehouseService: Markaziy ombor pog`onasi (DB`siz)', () 
     }
   });
 });
+
+/**
+ * Ega 2026-11-14: «manager ombordan mahsulot yaratsa band ga o'tmiyabdi shuni
+ * ham yaratilsa bo'ldi band ga qo'shiladigan qilish kerak».
+ *
+ * Menejer yaratganda order-service `branch_id` (menejer filiali) beradi:
+ * nomzodlar faqat shu filial omborlari, Markaziy ombor (HQ) pog'onasi kalit
+ * yoqilgan bo'lsa ham ko'rilmaydi. `branch_id` siz — bugungidek.
+ */
+describe('2026-11-14 — WarehouseService.resolveSource: menejer filiali doirasi', () => {
+  const REGION = '7';
+  const HQ_BRANCH = '1';
+  const SAM_BRANCH = '11';
+  const URG_BRANCH = '12';
+  const HQ_WH = '5';
+  const SAM_WH = '6';
+  const URG_WH = '8';
+  const PRODUCT = '900';
+  const MARKET = '121';
+
+  const branchRows: Record<string, Record<string, unknown>> = {
+    [HQ_BRANCH]: {
+      id: HQ_BRANCH,
+      name: 'HQ',
+      type: 'HQ',
+      status: 'active',
+      region: { id: '1', name: 'Toshkent' },
+    },
+    [SAM_BRANCH]: {
+      id: SAM_BRANCH,
+      name: 'Samarqand filiali',
+      type: 'REGIONAL',
+      status: 'active',
+      region: { id: REGION, name: 'Samarqand' },
+    },
+    [URG_BRANCH]: {
+      id: URG_BRANCH,
+      name: 'Urgut filiali',
+      type: 'HYBRID',
+      status: 'active',
+      region: { id: REGION, name: 'Samarqand' },
+    },
+  };
+
+  const warehouseRow = (id: string, branchId: string, status = 'ACTIVE') => ({
+    id,
+    name: `Ombor ${id}`,
+    status,
+    branch_id: branchId,
+    isDeleted: false,
+  });
+
+  const make = (
+    warehouses: Array<ReturnType<typeof warehouseRow>>,
+    stockOf: Record<string, number> = {},
+  ) => {
+    const client = {
+      send: jest.fn((pattern: { cmd: string }, payload: { id?: string }) => {
+        if (pattern.cmd === 'branch.find_hq') {
+          return of({ data: { id: HQ_BRANCH } });
+        }
+        if (pattern.cmd === 'branch.find_by_id') {
+          const row = branchRows[String(payload?.id)];
+          return row
+            ? of({ data: row })
+            : throwError(() =>
+                Object.assign(new Error('x'), { statusCode: 404 }),
+              );
+        }
+        return throwError(() => new Error(`no ${pattern.cmd}`));
+      }),
+    };
+    const directory = new WarehouseDirectoryService(
+      client as never,
+      client as never,
+      client as never,
+    );
+    const query = jest.fn((sql: string, params: unknown[]) => {
+      if (sql.includes('"WarehouseStock"')) {
+        return Promise.resolve([
+          {
+            product_id: PRODUCT,
+            on_hand: stockOf[String(params[0])] ?? 10,
+            reserved: 0,
+          },
+        ]);
+      }
+      if (sql.includes('"Product"')) {
+        return Promise.resolve([
+          { id: PRODUCT, name: 'Mahsulot', user_id: MARKET, is_deleted: false },
+        ]);
+      }
+      return Promise.reject(new Error(`kutilmagan SQL: ${sql}`));
+    });
+    const manager = {
+      query,
+      connection: {
+        getMetadata: (entity: { name: string }) => ({
+          schema: 'catalog',
+          tableName: entity.name,
+        }),
+      },
+    };
+    const repo = {
+      find: jest.fn(() => Promise.resolve(warehouses)),
+      findOne: jest.fn(
+        ({ where }: { where: { branch_id: string; isDeleted: boolean } }) =>
+          Promise.resolve(
+            warehouses.find(
+              (w) => w.branch_id === where.branch_id && !w.isDeleted,
+            ) ?? null,
+          ),
+      ),
+    };
+    // Markaziy ombor pog'onasi YOQILGAN — menejer doirasida baribir yo'q.
+    const service = new WarehouseService(
+      repo as never,
+      { manager } as never,
+      directory,
+      { log: jest.fn(), logChange: jest.fn() } as never,
+      { get: jest.fn(() => true) } as never,
+    );
+    const stockQueriedFor = () =>
+      query.mock.calls
+        .filter(([sql]) => sql.includes('"WarehouseStock"'))
+        .map(([, params]) => String(params[0]));
+    return { service, stockQueriedFor };
+  };
+
+  const resolve = (service: WarehouseService, branchId?: string) =>
+    service.resolveSource({
+      region_id: REGION,
+      market_id: MARKET,
+      items: [{ product_id: PRODUCT, quantity: 2 }],
+      ...(branchId ? { branch_id: branchId } : {}),
+    });
+
+  it('⭐ hududda ikki filial ombori — menejer filiali berilsa faqat O`Z ombori (birinchisi o`tib ketmaydi)', async () => {
+    const { service, stockQueriedFor } = make([
+      warehouseRow(SAM_WH, SAM_BRANCH),
+      warehouseRow(URG_WH, URG_BRANCH),
+    ]);
+    await expect(resolve(service, URG_BRANCH)).resolves.toMatchObject({
+      source: 'WAREHOUSE',
+      reason: 'OK',
+      warehouse: { id: URG_WH, kind: 'REGIONAL', branch_id: URG_BRANCH },
+    });
+    expect(stockQueriedFor()).toEqual([URG_WH]);
+    // `branch_id` siz — bugungidek birinchi FAOL yetarli ombor.
+    await expect(resolve(service)).resolves.toMatchObject({
+      source: 'WAREHOUSE',
+      warehouse: { id: SAM_WH },
+    });
+  });
+
+  it('⭐ o`z omborida yetmaydi — INSUFFICIENT_STOCK (qo`shni filial va Markaziy ombor ko`rilmaydi)', async () => {
+    const { service, stockQueriedFor } = make(
+      [
+        warehouseRow(HQ_WH, HQ_BRANCH),
+        warehouseRow(SAM_WH, SAM_BRANCH),
+        warehouseRow(URG_WH, URG_BRANCH),
+      ],
+      { [URG_WH]: 1 },
+    );
+    const result = await resolve(service, URG_BRANCH);
+    expect(result).toMatchObject({
+      source: 'HQ',
+      reason: 'INSUFFICIENT_STOCK',
+      warehouse: { id: URG_WH },
+    });
+    expect(result).not.toHaveProperty('hq_reason');
+    expect(stockQueriedFor()).toEqual([URG_WH]);
+  });
+
+  it('menejer filialida shu hudud ombori yo`q (boshqa viloyat tumani) — NO_WAREHOUSE, Markaziy ombor yo`q', async () => {
+    const { service, stockQueriedFor } = make([
+      warehouseRow(HQ_WH, HQ_BRANCH),
+      warehouseRow(SAM_WH, SAM_BRANCH),
+    ]);
+    const result = await resolve(service, URG_BRANCH);
+    expect(result).toMatchObject({
+      source: 'HQ',
+      reason: 'NO_WAREHOUSE',
+      region_id: REGION,
+      warehouse: null,
+    });
+    expect(result).not.toHaveProperty('hq_reason');
+    expect(stockQueriedFor()).toEqual([]);
+  });
+
+  it('noto`g`ri branch_id — 400', async () => {
+    const { service } = make([warehouseRow(URG_WH, URG_BRANCH)]);
+    const error: unknown = await resolve(service, 'abc').catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(RpcException);
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 400,
+    });
+  });
+});

@@ -599,6 +599,46 @@ describe('VkKDSNNn — createOnce: Markaziy ombor buyurtmasi', () => {
       }
     });
 
+    /**
+     * Ega 2026-11-14: «manager ombordan mahsulot yaratsa band ga o'tmiyabdi
+     * shuni ham yaratilsa bo'ldi band ga qo'shiladigan qilish kerak». Reja
+     * faqat menejerning o'z filiali omboridan (`planCreate`); buyurtma shu
+     * filialda RECEIVED (filial paketiga tushmaydi), band — yaratishda.
+     */
+    it('⭐ 2026-11-14 menejer + o`z filiali ombori → RECEIVED o`z filialida (egalik BRANCH), WAREHOUSE, band shu tranzaksiyada', async () => {
+      const MANAGER = { id: '549', roles: ['manager'] };
+      const h = makeCreate();
+      const resolveBranch = jest.fn().mockResolvedValue('11');
+      h.service.resolveBranchIdForOrder = resolveBranch;
+      await h.create(
+        REGIONAL_PLAN,
+        { branch_id: '11', source: 'branch' },
+        MANAGER,
+      );
+      expect(createdRow(h)).toMatchObject({
+        status: Order_status.RECEIVED,
+        fulfillment_source: 'WAREHOUSE',
+        warehouse_id: '3',
+        branch_id: '11',
+        home_branch_id: '11',
+        holder_type: OrderHolderType.BRANCH,
+        holder_branch_id: '11',
+        post_id: null,
+      });
+      expect(h.orderWarehouse.reserveForNewOrder).toHaveBeenCalledWith(
+        { order_id: '900', plan: REGIONAL_PLAN, requester: MANAGER },
+        h.queryRunner.manager,
+      );
+      expect(h.custody.createTrackingEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          note: 'Order created — ombordan (#3), viloyat filialida qabul qilingan',
+        }),
+        expect.anything(),
+      );
+      expect(resolveBranch).not.toHaveBeenCalled();
+      expect(h.logisticsClient!.send).not.toHaveBeenCalled();
+    });
+
     it('filial registratori (yaratilgan joy HQ emas) yoki joy aniqlanmasa — avvalgidek RECEIVED', async () => {
       const atBranch = makeCreate();
       atBranch.service.resolveBranchIdForOrder = jest

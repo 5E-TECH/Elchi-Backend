@@ -63,13 +63,18 @@ export const WAREHOUSE_RPC_TIMEOUT_MS = 3000;
 export const WAREHOUSE_RESERVE_GUARD_DELAY_MS = 10 * 60_000;
 export const WAREHOUSE_RESERVE_GUARD_NOTE = 'order_create_guard';
 
-/** Ombordan buyurtma yaratishi mumkin bo'lganlar (qaror 5). */
+/**
+ * Ombordan buyurtma yaratishi mumkin bo'lganlar (qaror 5).
+ * Ega 2026-11-14: filial menejeri ham — faqat O'Z filiali omboridan
+ * (`isBranchManagerWarehouseCreator`).
+ */
 const WAREHOUSE_CREATOR_ROLES: string[] = [
   Roles.SUPERADMIN,
   Roles.ADMIN,
   Roles.REGISTRATOR,
   Roles.MARKET,
   Roles.MARKET_OPERATOR,
+  Roles.MANAGER,
 ];
 
 const SYSTEM_ACTOR = { id: null, role: 'system' } as const;
@@ -205,6 +210,33 @@ export function isHqStaffWarehouseCreator(requester?: Requester): boolean {
 }
 
 /**
+ * Ega 2026-11-14: «manager ombordan mahsulot yaratsa band ga o'tmiyabdi shuni
+ * ham yaratilsa bo'ldi band ga qo'shiladigan qilish kerak».
+ *
+ * Filial menejeri (HQ xodimi yoki market roli YO'Q) — ombor rejasi faqat
+ * uning O'Z filiali omboridan: gateway `branch_id` ni filial xodimi uchun
+ * o'zi qo'yadi (boshqa filial — 400), catalog nomzodlarni shu filial bilan
+ * cheklaydi, Markaziy ombor (HQ) ko'rilmaydi. Tuman qaysi viloyat omboriga
+ * tushishi — boshqalardagidek (`resolve_source`). Buyurtma ombor filialida
+ * (= menejer filiali) `received`, band yaratishda — market yaratgani kabi.
+ */
+export function isBranchManagerWarehouseCreator(
+  requester?: Requester,
+): boolean {
+  const roles = (requester?.roles ?? []).map((role) =>
+    text(role).toLowerCase(),
+  );
+  if (!roles.includes(Roles.MANAGER)) return false;
+  return ![
+    Roles.SUPERADMIN,
+    Roles.ADMIN,
+    Roles.REGISTRATOR,
+    Roles.MARKET,
+    Roles.MARKET_OPERATOR,
+  ].some((role) => roles.includes(role));
+}
+
+/**
  * HQ xodimi yaratgan, hali qabul qilinmagan VILOYAT ombori buyurtmasi:
  * `WAREHOUSE`, uyi (`home_branch_id`) HQ emas, HQ'da turibdi, `new`,
  * pochtasiz va partiyasiz. Qabulda u ombor filialiga o'tadi (pochtasiz) —
@@ -304,7 +336,8 @@ export class OrderWarehouseService {
 
   /**
    * Yaratishdan OLDIN manba (qaror 4/5): `auto` + yaratuvchi SA/ADMIN/
-   * REGISTRATOR/MARKET/MARKET_OPERATOR + hamma qator katalog mahsuloti +
+   * REGISTRATOR/MARKET/MARKET_OPERATOR (2026-11-14: va MANAGER — faqat o'z
+   * filiali ombori, `branch_id` bilan) + hamma qator katalog mahsuloti +
    * tuman (yoki viloyat) bor + `resolve_source` → `WAREHOUSE`. Aks holda
    * `null` (HQ). Market kaliti `can_order_from_warehouse` ni catalog
    * tekshiradi (fail-closed). SA/ADMIN aniq joylashuv (kuryer, pochta, holat,
@@ -322,6 +355,8 @@ export class OrderWarehouseService {
       market_id?: unknown;
       district_id?: unknown;
       region_id?: unknown;
+      /** Filial xodimi uchun gateway qo'ygan o'z filiali (menejer doirasi). */
+      branch_id?: unknown;
       status?: unknown;
       source?: unknown;
       courier_id?: unknown;
@@ -362,6 +397,14 @@ export class OrderWarehouseService {
     const regionId = idOrNull(dto.region_id);
     if (!districtId && !regionId) return null;
     const marketId = idOrNull(dto.market_id);
+    // Ega 2026-11-14: menejer — faqat o'z filiali ombori; filial noma'lum —
+    // ombor yo'q (oddiy filial buyurtmasi, fail-closed).
+    const managerBranchId = isBranchManagerWarehouseCreator(requester)
+      ? idOrNull(dto.branch_id)
+      : null;
+    if (isBranchManagerWarehouseCreator(requester) && !managerBranchId) {
+      return null;
+    }
 
     let response: unknown;
     try {
@@ -369,6 +412,7 @@ export class OrderWarehouseService {
         // Tuman bor bo'lsa — faqat u (catalog: assigned_region ?? region_id,
         // HQ pochtasi bilan AYNI tartib); aks holda viloyat.
         ...(districtId ? { district_id: districtId } : { region_id: regionId }),
+        ...(managerBranchId ? { branch_id: managerBranchId } : {}),
         market_id: marketId,
         items,
         requester: {
@@ -391,6 +435,17 @@ export class OrderWarehouseService {
     }
     const kind: WarehouseKind = warehouse?.kind === 'HQ' ? 'HQ' : 'REGIONAL';
     const resolvedRegionId = idOrNull(result?.region_id);
+    if (
+      managerBranchId &&
+      (kind !== 'REGIONAL' || branchId !== managerBranchId)
+    ) {
+      // Catalog filial filtrini bilmasa ham (eski versiya) begona ombor
+      // band qilinmaydi — buyurtma menejer filialida oddiy bo'lib qoladi.
+      this.logger.warn(
+        `Menejer ombor rejasi rad etildi: ombor #${warehouseId} (${kind}, filial ${branchId}) menejer filiali ${managerBranchId} emas — buyurtma ombordan emas`,
+      );
+      return null;
+    }
     if (kind === 'HQ') {
       // VkKDSNNn: Markaziy ombor — HQ'da qabul qilinadi va hudud pochtasiga
       // biriktiriladi; HQ id yoki hudud noaniq bo'lsa yaratilmaydi.

@@ -1549,18 +1549,31 @@ export class WarehouseService {
    * (`HQ_WAREHOUSE_REASONS`), bo'lsa `hq_warehouse` / `hq_shortages`.
    * Kalit o'chiq bo'lsa javob 1-bosqichdagi bilan AYNAN bir xil (yangi
    * maydon yo'q).
+   *
+   * Ega 2026-11-14: `branch_id` (filial menejeri yaratganda, order-service
+   * beradi) — nomzodlar faqat SHU filial omborlari; Markaziy ombor (HQ)
+   * pog'onasi ko'rilmaydi. Shu filialda hudud ombori yo'q — `NO_WAREHOUSE`.
    */
   async resolveSource(input: {
     region_id?: unknown;
     district_id?: unknown;
     items?: unknown;
     market_id?: unknown;
+    branch_id?: unknown;
     requester?: WarehouseActorInput | null;
   }) {
     const items = normalizeOrderItems(input?.items);
     const marketId = toOptionalId(input?.market_id, 'market_id');
-    const regional = await this.resolveRegional(input, items, marketId);
+    const branchId = toOptionalId(input?.branch_id, 'branch_id');
+    const regional = await this.resolveRegional(
+      input,
+      items,
+      marketId,
+      branchId,
+    );
     if (regional.source === 'WAREHOUSE') return regional;
+    // Menejer doirasi — faqat o'z filiali ombori, Markaziy ombor yo'q.
+    if (branchId) return regional;
     // I1: kalit o'chiq — javob 1-bosqichdagidek (yangi maydon yo'q).
     if (!this.hqTierEnabled()) return regional;
     // MARKET_NOT_ALLOWED, NO_ITEMS, NO_REGION, PRODUCT_INVALID — buyurtma
@@ -1631,6 +1644,8 @@ export class WarehouseService {
     },
     items: OrderItem[],
     marketId: string | null,
+    /** 2026-11-14: menejer filiali — nomzodlar faqat shu filialdan. */
+    branchId: string | null = null,
   ) {
     const requester = input?.requester ?? null;
     const isMarketCreator =
@@ -1653,7 +1668,9 @@ export class WarehouseService {
     const regionId = await this.resolveRegion(input);
     if (!regionId) return this.hqSource('NO_REGION');
 
-    const candidates = await this.candidatesForRegion(regionId);
+    const candidates = (await this.candidatesForRegion(regionId)).filter(
+      (item) => !branchId || item.branch.id === branchId,
+    );
     if (!candidates.length) {
       return this.hqSource('NO_WAREHOUSE', { region_id: regionId });
     }
