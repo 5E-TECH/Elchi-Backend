@@ -5,6 +5,7 @@ import {
   cacheMinTokensFor,
   cacheReadMultiplierFor,
   computeCacheSavedUsd,
+  assistantEffortParam,
   effortParam,
   supportsEffort,
   computeCostUsd,
@@ -118,6 +119,11 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
         (60_000 * 0.5 + 50_000 * 0.5 * 0.1 + 1_000 * 2.5) / M,
         12,
       );
+      // Tejash ham uzun so'rov tarifida (0.10 emas, 0.50).
+      expect(computeCacheSavedUsd(big)).toBeCloseTo(
+        (50_000 * 0.5 * 0.9) / M,
+        12,
+      );
     });
 
     it("M2: effort 5.5 avlodiga va 5-avlodga yuboriladi, Haiku 4.5 / Sonnet 4.6 / noma'lumga yo'q", () => {
@@ -135,6 +141,18 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
       for (const m of ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-x']) {
         expect(effortParam(m, 'low')).toEqual({});
       }
+      // Yordamchi: dev xulqi — rad etmaydigan har modelga (Sonnet 4.6,
+      // Opus 4.x, noma'lum ham) yuboriladi; faqat Haiku 4.5 ga yo'q.
+      for (const m of [
+        'claude-sonnet-4-6',
+        'claude-opus-4-8',
+        'claude-sonnet-5-5',
+      ]) {
+        expect(assistantEffortParam(m, 'medium')).toEqual({ effort: 'medium' });
+      }
+      expect(assistantEffortParam('claude-haiku-4-5-20251001', 'low')).toEqual(
+        {},
+      );
     });
   });
 
