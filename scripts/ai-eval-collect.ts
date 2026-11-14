@@ -33,7 +33,13 @@
  *     ... scripts/ai-eval-collect.ts --out=/root/ai-eval-unedited --sample-unedited=0.05 --seed=2026-11
  */
 import 'reflect-metadata';
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import * as dotenv from 'dotenv';
 import { DataSource } from 'typeorm';
@@ -144,32 +150,49 @@ export function maskCandidateText(
   names: readonly string[] = [],
 ): string {
   let out = text;
-  // Eng uzunidan boshlab, butun so'z, katta-kichik harfsiz ("Ali" →
-  // "Alisher" ichida TEGILMAYDI; "Ali Valiyev" "Ali" dan oldin).
-  const sorted = [...new Set(names.map((n) => n.trim()))]
+  // Eng uzunidan boshlab, butun so'z (o'zbek/rus qo'shimchalari bilan:
+  // "Alisherga", "Alisherning", "Малике"), katta-kichik harfsiz, apostrof
+  // variantlari bir xil ("G'ulomjon" = "Gʻulomjon" = "G‘ulomjon"). "Ali"
+  // → "Alisher" ichida TEGILMAYDI. Boshidagi #/@ olib tashlanadi
+  // ("#sevinch" → "#[ISM]").
+  const sorted = [...new Set(names.map((n) => n.trim().replace(/^[#@]+/, '')))]
     .filter((n) => n.length >= 2)
     .sort((a, b) => b.length - a.length);
   for (const n of sorted) {
-    const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escaped = n
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/['ʻʼ‘’`]/g, NAME_APOS);
     out = out.replace(
-      new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'giu'),
-      '[ISM]',
+      new RegExp(
+        `(?<![\\p{L}\\p{N}])${escaped}(${NAME_SUFFIX})(?![\\p{L}\\p{N}])`,
+        'giu',
+      ),
+      '[ISM]$1',
     );
   }
   return (
     out
-      // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta) — narxlar
-      // ("1 500 000" = 7 raqam) SAQLANADI, ular eval uchun kerak.
-      .replace(/(?<!\[TEL_)\d[\d\s\-()]{7,}\d/g, (m) =>
+      // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta va '/'
+      // ajratgichlar ham) — narxlar ("1 500 000" = 7 raqam) SAQLANADI.
+      .replace(/(?<!\[TEL_)\d[\d\s\-()./]{7,}\d/g, (m) =>
         m.replace(/\D/g, '').length >= 9 ? '[RAQAM]' : m,
       )
       .replace(
-        /\b(\d{1,4})(\s*-?\s*)(uy|xonadon|kv|kvartira|дом|кв)\b/gi,
+        /(?<![\p{L}\p{N}])(\d{1,4})(\s*-?\s*)(uy|xonadon|kvartira|kv|dom|квартира|дом|кв)(?![\p{L}\p{N}])/giu,
         '[N]$2$3',
       )
-      .replace(/\b(uy|xonadon|kv|дом|кв)\.?\s*\d{1,4}\b/gi, '$1 [N]')
+      .replace(
+        /(?<![\p{L}\p{N}])(uy|xonadon|kvartira|kv|dom|квартира|дом|кв)(\.?\s*-?\s*)\d{1,4}(?!\d)/giu,
+        '$1$2[N]',
+      )
   );
 }
+
+/** Apostrof variantlari (ism ichida). */
+const NAME_APOS = "['ʻʼ‘’`]";
+/** Ismga qo'shiladigan o'zbek/rus qo'shimchalari (ixtiyoriy). */
+const NAME_SUFFIX =
+  '(?:ga|ka|qa|ning|ni|niki|da|dan|ta|lar|larga|larning|opa|aka|xon|jon|а|у|е|ой|ом|ым|ы|и)?';
 
 /**
  * Ismlar: `customer_name` satr bo'lsa ham, tuzatishdagi `{ai, final}`
@@ -189,7 +212,7 @@ export function namesOf(value: unknown): string[] {
     if (Array.isArray(v)) v.forEach(visit);
     else if (v && typeof v === 'object') {
       for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-        if (k === 'customer_name') take(x);
+        if (k === 'customer_name' || k === 'operator') take(x);
         else visit(x);
       }
     }
@@ -267,6 +290,17 @@ export function confirmedPreview(
 /** Har satr qiymatini maskalaydi (JSON tuzilmasi buzilmaydi). */
 export function maskDeep(value: unknown, names: readonly string[]): unknown {
   if (typeof value === 'string') return maskCandidateText(value, names);
+  // Raqam ko'rinishidagi telefon (998901234567 / 901234567) — narx emas.
+  if (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    /^(?:998)?(?:20|33|5[05]|6[1-9]|7\d|88|9[013-57-9])\d{7}$/.test(
+      String(value),
+    ) &&
+    !/000$/.test(String(value))
+  ) {
+    return '[RAQAM]';
+  }
   if (Array.isArray(value)) return value.map((v) => maskDeep(v, names));
   if (value && typeof value === 'object') {
     return Object.fromEntries(
@@ -278,6 +312,9 @@ export function maskDeep(value: unknown, names: readonly string[]): unknown {
   }
   return value;
 }
+
+/** Qiymatsiz bayroqlar. */
+const BOOLEAN_FLAGS = new Set(['include-unmasked-names']);
 
 const KNOWN_FLAGS = new Set([
   'out',
@@ -296,11 +333,13 @@ function arg(name: string): string | null {
 async function main(): Promise<number> {
   for (const a of process.argv.slice(2)) {
     const m = /^--([a-z-]+)(=|$)/.exec(a);
-    if (!m || !KNOWN_FLAGS.has(m[1]) || m[2] !== '=') {
+    const isSwitch = m && BOOLEAN_FLAGS.has(m[1]) && m[2] === '';
+    if (!m || (!isSwitch && (!KNOWN_FLAGS.has(m[1]) || m[2] !== '='))) {
       console.error(`Noma'lum yoki noto'g'ri bayroq: ${a}`);
       return 2;
     }
   }
+  const includeUnmasked = process.argv.includes('--include-unmasked-names');
   const out = arg('out');
   if (!out) {
     console.error('--out=<katalog> majburiy (repo TASHQARISIDA).');
@@ -373,12 +412,19 @@ async function main(): Promise<number> {
           ]);
     });
     mkdirSync(outDir, { recursive: true, mode: 0o700 });
+    chmodSync(outDir, 0o700);
     if (sample !== null) {
       console.log(`namuna: ulush=${sample} seed=${seed}`);
     }
     let n = 0;
+    let unmaskedCount = 0;
     for (const r of rows) {
       const names = namesOf([r.raw_extraction, r.resolved_preview, r.items]);
+      const sourceText = typeof r.source_text === 'string' ? r.source_text : '';
+      // B2: ism ro'yxati bo'sh (outcome≠ok — raw_extraction yo'q) — matndagi
+      // ism va operator MASKALANMAYDI. Sukut: matn chiqarilmaydi (null).
+      const namesKnown = names.length > 0 || sourceText.trim() === '';
+      if (!namesKnown) unmaskedCount += 1;
       const candidate = {
         id: `prod-${String(r.draft_id).slice(0, 8)}`,
         category: [sample === null ? 'prod_candidate' : 'prod_unedited_sample'],
@@ -387,10 +433,11 @@ async function main(): Promise<number> {
           `outcome=${String(r.outcome)} prompt=${String(r.prompt_version)} ` +
           `kind=${String(r.source_kind)} images=${String(r.image_count)}`,
         input: {
-          text: maskCandidateText(
-            typeof r.source_text === 'string' ? r.source_text : '',
-            names,
-          ),
+          text:
+            namesKnown || includeUnmasked
+              ? maskCandidateText(sourceText, names)
+              : null,
+          names_masked: namesKnown,
         },
         // Kutilgan natija ODAM tomonidan to'ldiriladi: AI taklifi +
         // operator tuzatishlari (field_corrections.final) asosida.
@@ -420,6 +467,14 @@ async function main(): Promise<number> {
       n += 1;
     }
     console.log(`${n} ta nomzod yozildi: ${outDir} (oxirgi ${days} kun).`);
+    if (unmaskedCount > 0) {
+      console.log(
+        `${unmaskedCount} ta faylda ism ro'yxati yo'q (outcome≠ok): ` +
+          (includeUnmasked
+            ? "matn ISMLARI OCHIQ — qo'lda maskalang."
+            : 'matn chiqarilmadi (input.text = null; --include-unmasked-names bilan ochiq holda).'),
+      );
+    }
     return 0;
   } finally {
     await ds.destroy();

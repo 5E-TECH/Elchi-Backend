@@ -16,6 +16,7 @@
 \else
   \set days 30
 \endif
+-- ⚠️ days kamida 2: 4-bo'lim (tashlab ketilgan) 1 kundan eski draftlarni oladi.
 
 -- Oyna: oxirgi :days kun ichida TASDIQLANGAN (draft_item yaratilgan)
 -- buyurtmalar. edited_fields NULL ("solishtirib bo'lmadi" — preview yo'q)
@@ -39,12 +40,14 @@ SELECT e.model,
        COUNT(*) FILTER (
          WHERE e.edited ? f.field
            AND e.fc ? f.field
-           AND jsonb_typeof(e.fc -> f.field -> 'ai') IN ('null')
+           AND (jsonb_typeof(e.fc -> f.field -> 'ai') = 'null'
+                OR e.fc -> f.field -> 'ai' = '[]'::jsonb)
        ) AS ai_null,
        ROUND(100.0 * COUNT(*) FILTER (
          WHERE e.edited ? f.field
            AND e.fc ? f.field
-           AND jsonb_typeof(e.fc -> f.field -> 'ai') IN ('null')
+           AND (jsonb_typeof(e.fc -> f.field -> 'ai') = 'null'
+                OR e.fc -> f.field -> 'ai' = '[]'::jsonb)
        ) / COUNT(*), 2) AS ai_null_pct
 FROM :eval_items e
 CROSS JOIN unnest(ARRAY[
@@ -59,7 +62,7 @@ SELECT e.fc -> 'district_id' ->> 'ai' AS ai_district_id,
        COALESCE(da.name, 'unknown_district') AS ai_district,
        e.fc -> 'district_id' ->> 'final' AS final_district_id,
        COALESCE(df.name, 'unknown_district') AS final_district,
-       (da.region_id IS NOT NULL AND da.region_id = df.region_id) AS same_region,
+       COALESCE(da.region_id = df.region_id, false) AS same_region,
        COUNT(*) AS n
 FROM :eval_items e
 LEFT JOIN logistics_schema.districts da
@@ -74,6 +77,7 @@ LIMIT 100;
 \echo '=== 2b. Tuman: same_region / boshqa viloyat / AI bo''sh — jami ==='
 SELECT CASE
          WHEN e.fc -> 'district_id' ->> 'ai' IS NULL THEN 'ai_null'
+         WHEN da.id IS NULL OR df.id IS NULL THEN 'unknown_district'
          WHEN da.region_id = df.region_id THEN 'same_region'
          ELSE 'other_region'
        END AS kind,
@@ -101,13 +105,14 @@ SELECT model,
        CASE
          WHEN ai IS NULL THEN 'ai_null'
          WHEN fin IS NULL THEN 'final_null'
+         WHEN ai = 0 THEN 'ai_zero'
          WHEN ai > 0 AND fin = ai * 1000 THEN 'x1000 (ming tushib qolgan)'
          WHEN ai > 0 AND ai = fin * 1000 THEN '/1000'
          WHEN ai > 0 AND (fin = ai * 10 OR fin = ai * 100) THEN 'x10/x100 (nol yo''qolgan)'
          WHEN ai > 0 AND (ai = fin * 10 OR ai = fin * 100) THEN '/10 yoki /100'
          WHEN abs(fin - ai) <= 60000 THEN '|farq| <= 60k (dostavka?)'
-         WHEN ai > 0 AND fin > ai AND mod(fin, ai) = 0 THEN 'final = ai × N (miqdor?)'
-         WHEN fin > 0 AND ai > fin AND mod(ai, fin) = 0 THEN 'ai = final × N (dona narxi × son?)'
+         WHEN ai > 0 AND fin > ai AND mod(fin, NULLIF(ai, 0)) = 0 THEN 'final = ai × N (miqdor?)'
+         WHEN fin > 0 AND ai > fin AND mod(ai, NULLIF(fin, 0)) = 0 THEN 'ai = final × N (dona narxi × son?)'
          ELSE 'boshqa'
        END AS class,
        COUNT(*) AS n,
@@ -137,23 +142,40 @@ ORDER BY drafts DESC;
 
 \echo '=== 5. Tasdiqdan keyingi drift: orders dagi joriy qiymat ≠ tasdiqlangan qiymat ==='
 \echo '    (tasdiqlangan = field_corrections.final; tahrirlanmagan maydon tekshirilmaydi)'
-SELECT COUNT(*) FILTER (WHERE e.fc ? 'district_id') AS district_checked,
+SELECT COUNT(*) FILTER (
+         WHERE e.fc ? 'district_id' AND o.id IS NOT NULL AND NOT o.is_deleted
+       ) AS district_checked,
        COUNT(*) FILTER (
          WHERE e.fc ? 'district_id' AND o.id IS NOT NULL AND NOT o.is_deleted
            AND o.district_id::text IS DISTINCT FROM (e.fc -> 'district_id' ->> 'final')
        ) AS district_drift,
        COUNT(*) FILTER (
          WHERE jsonb_typeof(e.fc -> 'total_price' -> 'final') = 'number'
+           AND o.id IS NOT NULL AND NOT o.is_deleted AND NOT p.partly_sold
        ) AS price_checked,
        COUNT(*) FILTER (
          WHERE jsonb_typeof(e.fc -> 'total_price' -> 'final') = 'number'
-           AND o.id IS NOT NULL AND NOT o.is_deleted
+           AND o.id IS NOT NULL AND NOT o.is_deleted AND NOT p.partly_sold
            AND o.total_price::numeric <> (e.fc -> 'total_price' ->> 'final')::numeric
        ) AS price_drift,
-       COUNT(*) FILTER (WHERE o.id IS NULL) AS order_missing,
-       COUNT(*) FILTER (WHERE o.is_deleted) AS order_deleted
+       -- Qisman sotilgan buyurtmada summa qonuniy o'zgaradi — drift emas.
+       COUNT(*) FILTER (
+         WHERE jsonb_typeof(e.fc -> 'total_price' -> 'final') = 'number'
+           AND o.id IS NOT NULL AND p.partly_sold
+       ) AS price_partly_sold,
+       COUNT(*) FILTER (
+         WHERE (e.fc ? 'district_id' OR e.fc ? 'total_price') AND o.id IS NULL
+       ) AS order_missing,
+       COUNT(*) FILTER (
+         WHERE (e.fc ? 'district_id' OR e.fc ? 'total_price') AND o.is_deleted
+       ) AS order_deleted
 FROM :eval_items e
-LEFT JOIN order_schema.orders o ON o.id = e.order_id;
+LEFT JOIN order_schema.orders o ON o.id = e.order_id
+CROSS JOIN LATERAL (
+  SELECT (o.partly_sell_original_total_price IS NOT NULL
+          OR EXISTS (SELECT 1 FROM order_schema.orders c
+                     WHERE c.parent_order_id = o.id)) AS partly_sold
+) p;
 
 \echo '=== 6. Kunlik model va outcome aralashmasi (draftlar) ==='
 SELECT date_trunc('day', d.created_at AT TIME ZONE 'Asia/Tashkent')::date AS day,

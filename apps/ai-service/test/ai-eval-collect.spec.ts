@@ -92,3 +92,48 @@ describe('ai-eval-collect: PII', () => {
     expect(UNEDITED_SAMPLE_SQL).toContain('i.item_index IS NULL');
   });
 });
+
+describe('ai-eval-collect: PII (review B1–B3)', () => {
+  it('B1: operator ismi yig‘iladi va #/@ bilan ham maskalanadi', () => {
+    const names = namesOf([
+      [{ customer_name: 'Ali', operator: 'sevinch' }],
+      [{ field_corrections: { operator: { ai: 'sevinch', final: 'Malika' } } }],
+    ]);
+    expect(names.sort()).toEqual(['Ali', 'Malika', 'sevinch']);
+    expect(
+      maskCandidateText('Mutaxassis: #sevinch, Operator: Malika', names),
+    ).toBe('Mutaxassis: #[ISM], Operator: [ISM]');
+  });
+
+  it('B3: o‘zbek/rus qo‘shimchalari va apostrof variantlari', () => {
+    expect(
+      maskCandidateText('Alisherga yetkazing, Alisherning uyi', ['Alisher']),
+    ).toBe('[ISM]ga yetkazing, [ISM]ning uyi');
+    for (const v of ['Gʻulomjon', 'G‘ulomjon', 'G’ulomjon', "G'ulomjon"]) {
+      expect(maskCandidateText(`${v} aka`, ["G'ulomjon"])).toBe('[ISM] aka');
+    }
+    expect(maskCandidateText('Малике позвоните', ['Малик'])).toBe(
+      '[ISM]е позвоните',
+    );
+    expect(maskCandidateText('Alisher keldi', ['Ali'])).toBe('Alisher keldi');
+  });
+
+  it('B3: uy/kvartira (kirill ham) va nuqta/slash bilan telefon', () => {
+    expect(maskCandidateText('дом 12, кв 5, kvartira 7, 12-дом', [])).toBe(
+      'дом [N], кв [N], kvartira [N], [N]-дом',
+    );
+    for (const t of ['90.123.45.67', '901.23.45.67', '90/123/45/67']) {
+      expect(maskCandidateText(`tel ${t}`, [])).toBe('tel [RAQAM]');
+    }
+  });
+
+  it('maskDeep: raqam ko‘rinishidagi telefon maskalanadi, narx emas', () => {
+    expect(
+      maskDeep({ a: 998901234567, b: 901234567, c: 150000000 }, []),
+    ).toEqual({
+      a: '[RAQAM]',
+      b: '[RAQAM]',
+      c: 150000000,
+    });
+  });
+});
