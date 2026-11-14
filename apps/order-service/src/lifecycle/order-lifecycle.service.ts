@@ -171,7 +171,7 @@ import {
   type PostOrderDeleteOutcome,
 } from './post-order-bulk-delete';
 import {
-  isHqStaffWarehouseCreator,
+  isStaffWarehouseCreator,
   isWarehouseReserveFallback,
   OrderWarehouseService,
   type WarehouseCreatePlan,
@@ -960,36 +960,6 @@ export class OrderLifecycleService {
   private numericActorId(actorId?: string | number | null): string | null {
     const raw = String(actorId ?? '').trim();
     return /^\d+$/.test(raw) ? raw : null;
-  }
-
-  /**
-   * Ega 2026-11-13: ombor buyurtmasi oddiy buyurtma kabi `new` bo'lib
-   * yaratiladimi — yaratuvchi HQ xodimi (SA/ADMIN/REGISTRATOR, market emas)
-   * VA yaratilgan joy (oddiy buyurtmadagi `resolveBranchIdForOrder`) HQ.
-   * Filial registratori yoki HQ id / filial aniqlanmasa — avvalgidek
-   * `received` (filialda `new` turgan ombor buyurtmasi filial paketiga
-   * tushib ketmasin).
-   */
-  private async isHqStaffWarehouseCreate(
-    explicitBranchId: string | null | undefined,
-    requester?: { id: string; roles?: string[] },
-  ): Promise<boolean> {
-    if (!isHqStaffWarehouseCreator(requester)) return false;
-    try {
-      const hqId = String((await this.lookup.getHqBranchId()) ?? '').trim();
-      if (!hqId) return false;
-      const createdAt = String(
-        await this.resolveBranchIdForOrder(explicitBranchId, requester),
-      ).trim();
-      return createdAt === hqId;
-    } catch (error) {
-      this.logger.warn(
-        `Ombor buyurtmasi: yaratilgan filial aniqlanmadi — darhol qabul qilinadi: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return false;
-    }
   }
 
   private async resolveBranchIdForOrder(
@@ -8764,26 +8734,27 @@ export class OrderLifecycleService {
     // pochtasiz), kuryerga biriktirishga tayyor.
     // VkKDSNNn: Markaziy ombor (`kind: 'HQ'`) — HQ'da qabul qilingan
     // (`branch_id` = HQ id), egalik HQ; pochta commit'dan keyin biriktiriladi.
-    // Ega 2026-11-13: HQ xodimi (SA/ADMIN/REGISTRATOR) yaratsa — oddiy
-    // buyurtma kabi `new`, HQ'da; qabul `receiveNewOrders` da
-    // (`warehouseAwaitsReceive`).
+    // Ega 2026-11-13 / 2026-11-14: xodim (SA/ADMIN/REGISTRATOR/MANAGER,
+    // market emas) yaratsa — QAYERDA yaratilsa ham oddiy buyurtma kabi
+    // `new`, yaratilgan joyda (`resolveBranchIdForOrder`: HQ xodimi — HQ,
+    // menejer / filial registratori — o'z filiali); band yaratishda. Keyin
+    // oddiy oqim: HQ qabuli (`receiveNewOrders`) yoki filial paketi.
     const hqWarehousePlan = warehousePlan?.kind === 'HQ' ? warehousePlan : null;
-    const warehouseAwaitsReceive = warehousePlan
-      ? await this.isHqStaffWarehouseCreate(dto.branch_id, requester)
-      : false;
-    const resolvedBranchId = warehouseAwaitsReceive
-      ? String(await this.lookup.getHqBranchId())
-      : warehousePlan
+    const warehouseAwaitsReceive =
+      Boolean(warehousePlan) && isStaffWarehouseCreator(requester);
+    const resolvedBranchId =
+      warehousePlan && !warehouseAwaitsReceive
         ? warehousePlan.branch_id
         : await this.resolveBranchIdForOrder(dto.branch_id, requester);
     const resolvedHolder = await this.resolveHolderFromState(
       resolvedBranchId,
       dto.courier_id ?? null,
     );
-    const initialStatus =
-      warehousePlan && !warehouseAwaitsReceive
-        ? Order_status.RECEIVED
-        : (dto.status ?? Order_status.NEW);
+    const initialStatus = warehousePlan
+      ? warehouseAwaitsReceive
+        ? Order_status.NEW
+        : Order_status.RECEIVED
+      : (dto.status ?? Order_status.NEW);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -8840,9 +8811,9 @@ export class OrderLifecycleService {
         // orders pass the parent's home branch).
         // VkKDSNNn: Markaziy ombor buyurtmasida DOIM HQ id (dto e'tiborsiz) —
         // `home_branch_id = HQ id` uni Markaziy ombornikiga aylantiradi.
-        // 2026-11-13: qabulni kutayotgan ombor buyurtmasi HQ'da turadi, uyi
-        // esa DOIM ombor filiali (dto e'tiborsiz) — ombor hisobi (`out` /
-        // `return`) shunga tayanadi. Qabulda (2026-11-14) — hudud pochtasiga.
+        // 2026-11-13: qabulni kutayotgan ombor buyurtmasi yaratilgan joyda
+        // (HQ yoki menejer filiali) turadi, uyi esa DOIM ombor filiali (dto
+        // e'tiborsiz) — ombor hisobi (`out` / `return`) shunga tayanadi.
         home_branch_id: hqWarehousePlan
           ? hqWarehousePlan.branch_id
           : warehousePlan && warehouseAwaitsReceive

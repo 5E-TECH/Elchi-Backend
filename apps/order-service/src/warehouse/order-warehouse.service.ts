@@ -185,21 +185,25 @@ const rpcCode = (error: unknown): string | null => {
  * Ega 2026-11-13: «Ombordan maxsulot yaratsa ham yangi bo'lishi kerak oddiy
  * buyurtma yaratgandey HQ ning ishchilari yani superadmin, admin, registrator
  * yaratsa».
+ * Ega 2026-11-14: «qayerga yaratilsayam yangi bo'lsin va uni qabul qilsin
+ * manager va paket qilib HQ ga jo'natsin» — filial menejeri va filial
+ * registratori ham.
  *
- * Shu rollar ombordan yaratgan buyurtma `new` bo'ladi va yaratilgan joyda
- * (HQ) turadi. Ombor bandi yaratishda qilinadi. «Qabul qilish»
- * (`receiveNewOrders`) — oddiy buyurtma kabi: hudud pochtasiga (2026-11-14,
- * viloyat ombori ham; avval viloyat ombori pochtasiz ombor filialiga o'tardi).
+ * Shu rollar ombordan yaratgan buyurtma `new` bo'ladi va oddiy buyurtma kabi
+ * YARATILGAN joyda turadi (HQ xodimi — HQ, menejer / filial registratori —
+ * o'z filiali). Ombor bandi yaratishda qilinadi. Keyin oddiy oqim: HQ'da
+ * «Qabul qilish» → hudud pochtasi; filialda — paket bilan HQ'ga.
  * Market va market operatori yaratgani — avvalgidek darhol `received`.
  */
 const WAREHOUSE_NEW_ON_CREATE_ROLES: string[] = [
   Roles.SUPERADMIN,
   Roles.ADMIN,
   Roles.REGISTRATOR,
+  Roles.MANAGER,
 ];
 
-/** Ombordan yaratgan buyurtmasi `new` bo'ladigan HQ xodimi (market emas). */
-export function isHqStaffWarehouseCreator(requester?: Requester): boolean {
+/** Ombordan yaratgan buyurtmasi `new` bo'ladigan xodim (market emas). */
+export function isStaffWarehouseCreator(requester?: Requester): boolean {
   const roles = (requester?.roles ?? []).map((role) =>
     text(role).toLowerCase(),
   );
@@ -217,8 +221,8 @@ export function isHqStaffWarehouseCreator(requester?: Requester): boolean {
  * uning O'Z filiali omboridan: gateway `branch_id` ni filial xodimi uchun
  * o'zi qo'yadi (boshqa filial — 400), catalog nomzodlarni shu filial bilan
  * cheklaydi, Markaziy ombor (HQ) ko'rilmaydi. Tuman qaysi viloyat omboriga
- * tushishi — boshqalardagidek (`resolve_source`). Buyurtma ombor filialida
- * (= menejer filiali) `received`, band yaratishda — market yaratgani kabi.
+ * tushishi — boshqalardagidek (`resolve_source`). Band yaratishda; buyurtma
+ * 2026-11-14 dan `new`, menejer filialida (`isStaffWarehouseCreator`).
  */
 export function isBranchManagerWarehouseCreator(
   requester?: Requester,

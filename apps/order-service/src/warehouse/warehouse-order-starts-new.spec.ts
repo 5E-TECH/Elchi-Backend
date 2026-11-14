@@ -20,7 +20,7 @@ import { RpcException } from '@nestjs/microservices';
 import { Order_status, rmqSend as rmqSendFn } from '@app/common';
 import { OrderLifecycleService } from '../lifecycle/order-lifecycle.service';
 import { OrderHolderType, Order_source } from '../entities/order.entity';
-import { isHqStaffWarehouseCreator } from './order-warehouse.service';
+import { isStaffWarehouseCreator } from './order-warehouse.service';
 
 const rmqSend = rmqSendFn as unknown as jest.Mock;
 
@@ -194,7 +194,7 @@ function makeSvc(
   };
 }
 
-describe('2026-11-13 — isHqStaffWarehouseCreator', () => {
+describe('2026-11-13 / 11-14 — isStaffWarehouseCreator', () => {
   it.each([
     [['superadmin'], true],
     [['admin'], true],
@@ -202,18 +202,20 @@ describe('2026-11-13 — isHqStaffWarehouseCreator', () => {
     [['REGISTRATOR'], true],
     [['market'], false],
     [['market_operator'], false],
-    [['manager'], false],
+    // Ega 2026-11-14: filial menejeri ham — «qayerga yaratilsayam yangi bo'lsin».
+    [['manager'], true],
+    [['manager', 'market'], false],
     [['courier'], false],
     // Market tomoni ustun: market roli bo'lsa — avvalgidek darhol qabul.
     [['registrator', 'market'], false],
     [[], false],
   ])('%j → %s', (roles, expected) => {
-    expect(isHqStaffWarehouseCreator({ id: '5', roles })).toBe(expected);
+    expect(isStaffWarehouseCreator({ id: '5', roles })).toBe(expected);
   });
 
   it('so`rovchi yo`q (ichki yo`l) — false', () => {
-    expect(isHqStaffWarehouseCreator(undefined)).toBe(false);
-    expect(isHqStaffWarehouseCreator(null)).toBe(false);
+    expect(isStaffWarehouseCreator(undefined)).toBe(false);
+    expect(isStaffWarehouseCreator(null)).toBe(false);
   });
 });
 
