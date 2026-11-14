@@ -8,6 +8,9 @@ import type {
 import {
   AI_DRAFT_ATTACH_RETRY_DELAYS_MS,
   AI_DRAFT_COST_SQL,
+  AI_CORRECTION_PII_FIELDS,
+  AI_CORRECTIONS_RETENTION_DAYS,
+  AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL,
   AI_DRAFT_ITEM_PURGE_SQL,
   AI_DRAFT_LINK_ITEM_SQL,
   AI_DRAFT_PURGE_SQL,
@@ -406,11 +409,42 @@ describe('AiDraftService (vncdmXOy)', () => {
     ]);
     expect(AI_DRAFT_PURGE_SQL).toContain('source_text = NULL');
     expect(AI_DRAFT_PURGE_SQL).not.toContain('source_hash');
-    // J3hEDtFN #4: operator tuzatishlari (ism/manzil) ham shu muddatda.
+    // Tuzatishlardagi PII shu muddatda o'chadi; qolgani 365 kunda.
     expect(itemsRepo.query).toHaveBeenCalledWith(AI_DRAFT_ITEM_PURGE_SQL, [
       AI_DRAFT_TEXT_RETENTION_DAYS,
+      [...AI_CORRECTION_PII_FIELDS],
     ]);
-    expect(AI_DRAFT_ITEM_PURGE_SQL).toContain('field_corrections = NULL');
+    expect(itemsRepo.query).toHaveBeenCalledWith(
+      AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL,
+      [AI_CORRECTIONS_RETENTION_DAYS],
+    );
+    expect(AI_DRAFT_ITEM_PURGE_SQL).toContain('field_corrections - $2::text[]');
+    expect(AI_DRAFT_ITEM_PURGE_SQL).not.toMatch(
+      /SET field_corrections = NULL\s/,
+    );
+    expect(AI_CORRECTIONS_RETENTION_DAYS).toBeGreaterThan(
+      AI_DRAFT_TEXT_RETENTION_DAYS,
+    );
+  });
+
+  it('PII ro‘yxati: ism/telefon/manzil/izoh/operator; geo/summa/mahsulot EMAS', () => {
+    expect([...AI_CORRECTION_PII_FIELDS].sort()).toEqual([
+      'address',
+      'comment',
+      'customer_name',
+      'extra_number',
+      'operator',
+      'phone_number',
+    ]);
+    for (const kept of [
+      'region_id',
+      'district_id',
+      'total_price',
+      'items',
+      'where_deliver',
+    ]) {
+      expect(AI_CORRECTION_PII_FIELDS as readonly string[]).not.toContain(kept);
+    }
   });
 
   it('retention xatosi throw bo‘lmaydi', async () => {
