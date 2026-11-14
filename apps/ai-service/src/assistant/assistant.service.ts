@@ -14,7 +14,7 @@ import {
   type ClaudeToolLoopStep,
   type ClaudeUsage,
 } from '@app/common';
-import { computeCostUsd, roundUsd } from '../usage/ai-pricing';
+import { computeCostUsd, effortParam, roundUsd } from '../usage/ai-pricing';
 import { nextTashkentMidnight, tashkentDay } from '../usage/tashkent-day';
 import { AssistantReader } from './assistant-reader';
 import { AssistantStore, type AppendRow } from './assistant-store.service';
@@ -321,7 +321,7 @@ export class AssistantService {
         model: this.model,
         maxSteps: this.maxSteps,
         maxTokens: this.maxTokens,
-        effort: this.effort,
+        ...effortParam(this.model, this.effort),
         meta: {
           feature: 'assistant',
           requestArea: 'internal',
