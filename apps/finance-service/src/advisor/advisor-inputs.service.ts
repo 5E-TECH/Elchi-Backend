@@ -23,6 +23,7 @@ import { CashboxCard } from '../entities/cashbox-card.entity';
 import { PaymentCorrection } from '../entities/payment-correction.entity';
 import { CashboxReceiptService } from '../cashbox-receipt/cashbox-receipt.service';
 import { loadReceiptChecksSummary } from '../cashbox-receipt/cashbox-receipt.summary';
+import { notReversedSql } from '../cashbox-receipt/cashbox-receipt.views';
 
 /**
  * BE-5 (LhTIno57) — `finance.advisor.rule_inputs`: AI maslahatchi
@@ -51,6 +52,7 @@ export const R8_BASELINE_DAYS = 30;
 export const R8_MIN_COUNT = 3;
 
 const NAME_TIMEOUT_MS = 5_000;
+const NAME_CONCURRENCY = 5;
 const SYSTEM_BRANCH_REQUESTER = { id: 'system', roles: ['superadmin'] };
 const MAIN_CASHBOX_NAME = 'Asosiy kassa';
 
@@ -132,8 +134,13 @@ interface CardCheckRow {
   card_id: string;
   entered_balance: string;
   ai_read_balance: string;
+  expected_balance: string | null;
+  ai_entered_ok: boolean | null;
+  ai_last4_detected: string | null;
+  card_last4: string | null;
   ai_confidence: string | null;
-  ai_checked_at: Date;
+  /** Kursor qiymati: GREATEST(ai_checked_at, confirmed_at). */
+  seen_at: Date;
   closed_at: Date | null;
   opened_at: Date | null;
   owner: string;
@@ -142,27 +149,32 @@ interface CardCheckRow {
 
 interface ReceiptRow {
   id: string;
+  kind: string;
   ai_status: string;
   ai_flags: unknown;
   entered_amount: string | null;
   ai_amount: string | null;
   ai_difference: string | null;
+  ai_currency: string | null;
+  ai_error_reason: string | null;
   ai_date: string | null;
-  ai_recipient: string | null;
   ai_recipient_last4: string | null;
-  ai_payer: string | null;
   ai_payer_last4: string | null;
   ai_bank: string | null;
   ai_reference: string | null;
   ai_confidence: string | null;
-  ai_checked_at: Date;
+  /** Kursor qiymati: GREATEST(ai_checked_at, "updatedAt") (T6 qayta hisobi). */
+  seen_at: Date;
   history_id: string | null;
+  receipt_branch_id: string | null;
   op_at: Date | null;
   source_type: string | null;
   category_name: string | null;
   created_by: string | null;
   cashbox_type: string | null;
   owner: string | null;
+  counter_cashbox_type: string | null;
+  counter_owner: string | null;
 }
 
 interface CorrectionCounts {
@@ -172,38 +184,105 @@ interface CorrectionCounts {
   payment_edit: number;
 }
 
+/** Karta/chek summasi bo'yicha farq chegarasi (so'm) — `AI_MATCH_TOLERANCE` bilan bir xil. */
+const R7_TOLERANCE = 1;
+
 /**
- * Chek sanasi (XOM OCR matni, mintaqasiz) → ISO (+05:00 deb olinadi):
- * `DD.MM.YYYY[ HH:MM[:SS]]` yoki `YYYY-MM-DD[ HH:MM[:SS]]`; aks holda null.
+ * Chek sanasi (XOM OCR matni) → `{date_at, date_day}` (§5.4 `date_at`):
+ * - aniq mintaqa (`…Z`, `+05:00`) — o'sha bo'yicha;
+ * - sana + vaqt, mintaqasiz — Toshkent (+05:00) deb olinadi;
+ * - faqat sana — `date_at: null`, `date_day: 'YYYY-MM-DD'` (soxta 00:00 yo'q);
+ * - `dd.mm.yyyy` / `dd/mm/yyyy` / `dd-mm-yyyy` (1–2 xonali kun/oy) va
+ *   `yyyy-mm-dd`, matn ichida ham (`receipt.rules.ts` parseReceiptDate bilan
+ *   bir xil kun); kalendar tekshiriladi (31.02 — yo'q), vaqt ≤ 23:59:59.
  */
-export function parseReceiptDate(
-  raw: string | null | undefined,
-): string | null {
-  if (typeof raw !== 'string') return null;
-  const s = raw.trim();
-  let m =
-    /^(\d{2})[./](\d{2})[./](\d{4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(
-      s,
+export function parseReceiptDateTime(raw: string | null | undefined): {
+  date_at: string | null;
+  date_day: string | null;
+} {
+  const none = { date_at: null, date_day: null };
+  if (typeof raw !== 'string') return none;
+  const text = raw.trim();
+  const zoned =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.exec(
+      text,
     );
-  let y: string,
-    mo: string,
-    d: string,
-    hh = '00',
-    mi = '00',
-    ss = '00';
-  if (m) {
-    [, d, mo, y] = m;
-    if (m[4]) [hh, mi, ss] = [m[4].padStart(2, '0'), m[5], m[6] ?? '00'];
-  } else {
-    m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(
-      s,
-    );
-    if (!m) return null;
-    [, y, mo, d] = m;
-    if (m[4]) [hh, mi, ss] = [m[4].padStart(2, '0'), m[5], m[6] ?? '00'];
+  if (zoned) {
+    if (
+      !validDate(+zoned[1], +zoned[2], +zoned[3]) ||
+      !validTime(+zoned[4], +zoned[5], +(zoned[6] ?? 0))
+    ) {
+      return none;
+    }
+    const ms = Date.parse(text);
+    if (Number.isNaN(ms)) return none;
+    const at = new Date(ms);
+    return { date_at: at.toISOString(), date_day: tashkentDateKey(at) };
   }
-  const date = new Date(`${y}-${mo}-${d}T${hh}:${mi}:${ss}.000+05:00`);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  let y: number, mo: number, d: number, rest: string;
+  const iso = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
+  const dmy = /(\d{1,2})[./-](\d{1,2})[./-](\d{4})/.exec(text);
+  if (iso) {
+    [y, mo, d] = [+iso[1], +iso[2], +iso[3]];
+    rest = text.slice(iso.index + iso[0].length);
+  } else if (dmy) {
+    [d, mo, y] = [+dmy[1], +dmy[2], +dmy[3]];
+    rest = text.slice(dmy.index + dmy[0].length);
+  } else {
+    return none;
+  }
+  if (!validDate(y, mo, d)) return none;
+  const day = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const time = /^[ T,]*(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(rest);
+  if (!time) return { date_at: null, date_day: day };
+  const [hh, mi, ss] = [+time[1], +time[2], +(time[3] ?? 0)];
+  if (!validTime(hh, mi, ss)) return { date_at: null, date_day: day };
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const at = new Date(`${day}T${pad(hh)}:${pad(mi)}:${pad(ss)}.000+05:00`);
+  return { date_at: at.toISOString(), date_day: day };
+}
+
+/**
+ * R7 kursori ikki manba (karta, chek) bo'yicha, har biri o'z LIMIT'i bilan:
+ * qaysidir manba LIMIT'ga yetsa (qolgan qatorlar bor) — kursor o'sha
+ * manbaning oxirgi ko'rilgan qiymatidan oshmaydi (review S8). Aks holda —
+ * eng katta ko'rilgan qiymat; hech narsa ko'rilmasa — null (dvigatel `now`).
+ */
+export function r7Cursor(
+  sources: Array<Array<{ seen_at: Date }>>,
+): string | null {
+  const last = (rows: Array<{ seen_at: Date }>) =>
+    new Date(rows[rows.length - 1].seen_at).getTime();
+  const truncated = sources
+    .filter((rows) => rows.length >= R7_MAX_ROWS)
+    .map(last);
+  if (truncated.length) return new Date(Math.min(...truncated)).toISOString();
+  const seen = sources.filter((rows) => rows.length).map(last);
+  return seen.length ? new Date(Math.max(...seen)).toISOString() : null;
+}
+
+function validDate(y: number, mo: number, d: number): boolean {
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return (
+    t.getUTCFullYear() === y &&
+    t.getUTCMonth() === mo - 1 &&
+    t.getUTCDate() === d
+  );
+}
+
+function validTime(h: number, m: number, s: number): boolean {
+  return h >= 0 && h <= 23 && m >= 0 && m <= 59 && s >= 0 && s <= 59;
+}
+
+/** Chek valyutasi so'm emasmi (#643 semantikasi va undan oldingi qatorlar ham). */
+export function isForeignReceipt(
+  currency: string | null,
+  errorReason: string | null,
+): boolean {
+  if (errorReason === 'currency_not_uzs') return true;
+  const c = (currency ?? '').trim().toUpperCase();
+  return c !== '' && c !== 'UZS' && c !== "SO'M" && c !== 'SUM';
 }
 
 interface R3Row {
@@ -1065,7 +1144,7 @@ export class AdvisorInputsService {
     });
   }
 
-  // ─── R7 Chek yoki karta farqi (§4.2, BE-rev B4) ───────────────────────
+  // ─── R7 Chek yoki karta farqi (§4.2, BE-rev B4; #653 review) ──────────
 
   private async r7(
     since: Date,
@@ -1073,11 +1152,18 @@ export class AdvisorInputsService {
     names: NameCache,
   ): Promise<{ candidates: AiAdvisorCandidate[]; cursor: string | null }> {
     const t = this.tables();
-    // (a) karta qoldig'i: faqat TASDIQLANGAN (smena yopilgan) tekshiruvlar —
-    // qoralama qayta yuklashda `pending` ga qaytadi; kursor `ai_checked_at`.
+    // (a) karta qoldig'i: faqat TASDIQLANGAN (smena yopilgan) tekshiruvlar.
+    // AI natijasi smena OCHIQ paytda keladi, `confirmed_at` — yopishda
+    // (`confirmAtClose` `ai_status` ni yangi kutilgan qoldiq bilan qayta
+    // hisoblaydi, `ai_checked_at` ga tegmaydi). Shuning uchun kursor —
+    // GREATEST(ai_checked_at, confirmed_at): yopishdan oldingi tick qatorni
+    // ko'rmasa ham, yopishdan keyingisi ko'radi (`attachLatePhoto` ham).
+    const cardSeen = `GREATEST(k."ai_checked_at", k."confirmed_at")`;
     const cards = await this.ds.query<CardCheckRow[]>(
       `SELECT k."id"::text AS id, k."shift_id"::text AS shift_id, k."cashbox_card_id"::text AS card_id,
-              k."entered_balance", k."ai_read_balance", k."ai_confidence", k."ai_checked_at",
+              k."entered_balance", k."ai_read_balance", k."expected_balance", k."ai_entered_ok",
+              k."ai_last4_detected", cc."last4" AS card_last4, k."ai_confidence",
+              ${cardSeen} AS seen_at,
               s."closed_at", s."opened_at", COALESCE(s."cashbox_user_id", 0)::text AS owner,
               cc."name" AS card_name
          FROM ${t.checks} k
@@ -1086,45 +1172,47 @@ export class AdvisorInputsService {
         WHERE k."ai_status" = 'mismatch' AND k."confirmed_at" IS NOT NULL
           AND k."entered_balance" IS NOT NULL AND k."ai_read_balance" IS NOT NULL
           AND k."is_deleted" = false
-          AND k."ai_checked_at" >= $1 AND k."ai_checked_at" <= $2
-        ORDER BY k."ai_checked_at" ASC, k."id" ASC
+          AND ${cardSeen} >= $1 AND ${cardSeen} <= $2
+        ORDER BY ${cardSeen} ASC, k."id" ASC
         LIMIT ${R7_MAX_ROWS}`,
       [since, now],
     );
-    // (b) T3 cheki: bog'langan, AI `mismatch` yoki `card_mismatch` bayrog'i.
+    // (b) T3 cheki: bog'langan, AI `mismatch` yoki `card_mismatch`; T6 bilan
+    // qaytarilgan operatsiya cheklari — yo'q (week_summary va T3 ro'yxatlari
+    // bilan bir xil). Kursor GREATEST(ai_checked_at, updatedAt): T6 tahriri
+    // (`carryOverForCorrection`) holat/farqni qayta hisoblaydi.
+    const receiptSeen = `GREATEST(r."ai_checked_at", r."updatedAt")`;
     const receipts = await this.ds.query<ReceiptRow[]>(
-      `SELECT r."id"::text AS id, r."ai_status"::text AS ai_status, r."ai_flags",
-              r."entered_amount", r."ai_amount", r."ai_difference", r."ai_date",
-              r."ai_recipient", r."ai_recipient_last4", r."ai_payer", r."ai_payer_last4",
-              r."ai_bank", r."ai_reference", r."ai_confidence", r."ai_checked_at",
-              r."history_id"::text AS history_id,
+      `SELECT r."id"::text AS id, r."kind"::text AS kind, r."ai_status"::text AS ai_status, r."ai_flags",
+              r."entered_amount", r."ai_amount", r."ai_difference", r."ai_currency", r."ai_error_reason",
+              r."ai_date", r."ai_recipient_last4", r."ai_payer_last4",
+              r."ai_bank", r."ai_reference", r."ai_confidence", ${receiptSeen} AS seen_at,
+              r."history_id"::text AS history_id, r."branch_id"::text AS receipt_branch_id,
               h."createdAt" AS op_at, h."source_type"::text AS source_type,
               h."expense_category_name" AS category_name, h."created_by"::text AS created_by,
-              c."cashbox_type"::text AS cashbox_type, c."user_id"::text AS owner
+              c."cashbox_type"::text AS cashbox_type, c."user_id"::text AS owner,
+              cc2."cashbox_type"::text AS counter_cashbox_type, cc2."user_id"::text AS counter_owner
          FROM ${t.receipts} r
          LEFT JOIN ${t.history} h ON h."id" = r."history_id"
          LEFT JOIN ${t.cashboxes} c ON c."id" = h."cashbox_id"
+         LEFT JOIN ${t.history} h2 ON h2."id" = r."counter_history_id"
+         LEFT JOIN ${t.cashboxes} cc2 ON cc2."id" = h2."cashbox_id"
         WHERE r."state" = 'linked' AND r."is_deleted" = false
           AND (r."ai_status" = 'mismatch' OR COALESCE(r."ai_flags", '[]'::jsonb) @> '["card_mismatch"]'::jsonb)
-          AND r."ai_checked_at" >= $1 AND r."ai_checked_at" <= $2
-        ORDER BY r."ai_checked_at" ASC, r."id" ASC
+          AND r."ai_checked_at" IS NOT NULL
+          AND ${receiptSeen} >= $1 AND ${receiptSeen} <= $2
+          AND (r."history_id" IS NULL OR ${notReversedSql(t.history, 'r', 'history_id')})
+        ORDER BY ${receiptSeen} ASC, r."id" ASC
         LIMIT ${R7_MAX_ROWS}`,
       [since, now],
     );
-    const seen = [
-      ...cards.map((r) => r.ai_checked_at),
-      ...receipts.map((r) => r.ai_checked_at),
-    ]
-      .map((d) => new Date(d).getTime())
-      .filter((n) => Number.isFinite(n));
-    const cursor = seen.length
-      ? new Date(Math.max(...seen)).toISOString()
-      : null;
+    const cursor = r7Cursor([cards, receipts]);
     if (!cards.length && !receipts.length) return { candidates: [], cursor };
 
     const receiptAi = await this.receiptAiEnabled();
-    const owners = [...new Set([...cards.map((r) => r.owner)])];
-    const types = await this.cashboxTypes(owners);
+    const types = await this.cashboxTypes([
+      ...new Set(cards.map((r) => r.owner)),
+    ]);
     const candidates: AiAdvisorCandidate[] = [];
 
     for (const r of cards) {
@@ -1134,8 +1222,28 @@ export class AdvisorInputsService {
       if (branch) names.wantBranch(branch.id);
       const entered = money(r.entered_balance);
       const read = money(r.ai_read_balance);
+      const expected = moneyOrNull(r.expected_balance);
+      // `difference` — kassir xatosi (AI o'qigan − kiritilgan);
+      // `system_difference` — haqiqiy kamomad/ortiqcha (AI o'qigan − tizimdagi).
       const difference = money(read - entered);
-      const at = r.closed_at ?? r.ai_checked_at;
+      const systemDifference =
+        expected === null ? null : money(read - expected);
+      const mismatch: string[] = [];
+      if (
+        Math.abs(difference) > R7_TOLERANCE ||
+        (systemDifference !== null && Math.abs(systemDifference) > R7_TOLERANCE)
+      ) {
+        mismatch.push('amount');
+      }
+      const last4 = (r.card_last4 ?? '').trim();
+      const detected = (r.ai_last4_detected ?? '').trim();
+      if (
+        /^\d{4}$/.test(last4) &&
+        /^\d{4}$/.test(detected) &&
+        last4 !== detected
+      )
+        mismatch.push('card');
+      const at = r.closed_at ?? r.seen_at;
       const shiftDate = tashkentDateKey(new Date(r.opened_at ?? at));
       candidates.push({
         rule_key: 'R7',
@@ -1143,16 +1251,19 @@ export class AdvisorInputsService {
         fact_keys: [{ fact_key: `R7:card_check:${r.id}`, fact_at: iso(at) }],
         branch,
         subject: { kind: 'cashbox', id: r.owner, name: null },
-        headline_amount: difference,
+        headline_amount: difference !== 0 ? difference : systemDifference,
         facts: {
           source: 'card_balance',
           receipt_ai_enabled: receiptAi,
-          mismatch: ['amount'],
+          mismatch,
           cashbox,
           branch,
           entered_amount: entered,
           read_amount: read,
           difference,
+          expected_balance: expected,
+          system_difference: systemDifference,
+          entered_ok: r.ai_entered_ok,
           operation: null,
           shift: { id: r.shift_id, date: shiftDate },
           card: { id: r.card_id, name: r.card_name ?? null },
@@ -1171,7 +1282,9 @@ export class AdvisorInputsService {
           card: { id: r.card_id, name: r.card_name ?? null },
           entered_balance: entered,
           ai_read_balance: read,
+          expected_balance: expected,
           difference,
+          system_difference: systemDifference,
           ai_confidence:
             r.ai_confidence === null ? null : Number(r.ai_confidence),
         },
@@ -1180,21 +1293,37 @@ export class AdvisorInputsService {
 
     const week = receipts.length ? await this.receiptWeekSummary(now) : null;
     for (const r of receipts) {
-      const owner = r.owner ?? '0';
-      const cashbox = cashboxRef(owner, r.cashbox_type ?? 'main');
-      const branch: AiAdvisorRef | null =
-        cashbox.type === 'branch' ? { id: owner, name: null } : null;
+      const transfer = r.kind === 'courier_to_hq' || r.kind === 'branch_to_hq';
+      // O'tkazma chekida `history_id` — MAIN kirim oyog'i; jo'natuvchi —
+      // qarshi oyoq (`counter_history_id`) kassasi.
+      const ownType =
+        transfer && r.counter_owner ? r.counter_cashbox_type : r.cashbox_type;
+      const owner =
+        (transfer && r.counter_owner ? r.counter_owner : r.owner) ?? '0';
+      const cashbox = cashboxRef(owner, ownType ?? 'main');
+      const branchId =
+        r.receipt_branch_id ?? (cashbox.type === 'branch' ? owner : null);
+      const branch: AiAdvisorRef | null = branchId
+        ? { id: branchId, name: null }
+        : null;
       if (branch) names.wantBranch(branch.id);
+      if (cashbox.type === 'couriers') names.wantUser(owner);
       if (isId(r.created_by)) names.wantUser(r.created_by);
       const flags = Array.isArray(r.ai_flags)
-        ? r.ai_flags.filter((f) => typeof f === 'string')
+        ? r.ai_flags.filter((f): f is string => typeof f === 'string')
         : [];
+      const foreign = isForeignReceipt(r.ai_currency, r.ai_error_reason);
       const mismatch = [
-        ...(r.ai_status === 'mismatch' ? ['amount'] : []),
+        ...(r.ai_status === 'mismatch' && !foreign ? ['amount'] : []),
+        ...(foreign ? ['currency'] : []),
         ...(flags.includes('card_mismatch') ? ['card'] : []),
       ];
-      const difference = moneyOrNull(r.ai_difference);
-      const at = r.op_at ?? r.ai_checked_at;
+      // Valyuta so'm emas — summalarni solishtirib bo'lmaydi (#643, review B2).
+      const difference = foreign ? null : moneyOrNull(r.ai_difference);
+      const at = r.op_at ?? r.seen_at;
+      const date = foreign
+        ? { date_at: null, date_day: null }
+        : parseReceiptDateTime(r.ai_date);
       candidates.push({
         rule_key: 'R7',
         dedup_key: `R7:receipt:${r.id}`,
@@ -1204,12 +1333,17 @@ export class AdvisorInputsService {
         headline_amount: difference,
         facts: {
           source: 'receipt',
+          receipt_kind: r.kind,
           receipt_ai_enabled: receiptAi,
           mismatch,
           cashbox,
           branch,
           entered_amount: moneyOrNull(r.entered_amount),
-          read_amount: moneyOrNull(r.ai_amount),
+          read_amount: foreign ? null : moneyOrNull(r.ai_amount),
+          read_amount_original: foreign ? moneyOrNull(r.ai_amount) : null,
+          read_currency: foreign
+            ? (r.ai_currency ?? '').trim().toUpperCase() || null
+            : null,
           difference,
           operation: r.history_id
             ? {
@@ -1231,14 +1365,20 @@ export class AdvisorInputsService {
           truncated: false,
           receipt: {
             id: r.id,
+            kind: r.kind,
             ai_status: r.ai_status,
             flags,
             date: r.ai_date ?? null,
-            date_at: parseReceiptDate(r.ai_date),
-            // PII: ism faqat superadmin REST tafsilotida (§3.5); LLM/Telegram'ga kirmaydi.
-            recipient: r.ai_recipient ?? null,
+            date_at: date.date_at,
+            date_day: date.date_day,
+            amount: moneyOrNull(r.ai_amount),
+            currency: r.ai_currency ?? null,
+            error_reason: r.ai_error_reason ?? null,
+            // PII minimallashtirish (review S4, §3.5): ism saqlanmaydi —
+            // faqat oxirgi 4 raqam; maket ham faqat «··last4» ko'rsatadi.
+            recipient: null,
             recipient_last4: r.ai_recipient_last4 ?? null,
-            payer: r.ai_payer ?? null,
+            payer: null,
             payer_last4: r.ai_payer_last4 ?? null,
             bank: r.ai_bank ?? null,
             reference: r.ai_reference ?? null,
@@ -1314,6 +1454,11 @@ export class AdvisorInputsService {
     now: Date,
   ): Promise<AiAdvisorCandidate[]> {
     const ratio = positive(t.ratio, 2);
+    // Ega qarori 2026-11-14: haftada kamida `min_count` (sukut 3) ta; ≥ 1 doim.
+    const minCount = Math.max(
+      1,
+      Math.floor(positive(t.min_count, R8_MIN_COUNT)),
+    );
     const today = tashkentDateKey(now);
     const out: AiAdvisorCandidate[] = [];
     for (const monday of weeks.filter(
@@ -1334,8 +1479,15 @@ export class AdvisorInputsService {
       const baselineTotal = counted(base);
       const weeklyAvg =
         Math.round((baselineTotal / R8_BASELINE_DAYS) * 7 * 100) / 100;
-      // [TAKLIF] minimal son: bazasi 0 bo'lgan haftada 1–2 ta tuzatish ogohlantirmasin.
-      if (count < R8_MIN_COUNT || count < ratio * weeklyAvg) continue;
+      // count ≥ max(min_count, ratio × weekly_avg). Solishtiruv BUTUN sonlarda
+      // (BE-rev S9): count × 30 × 10 ≥ round(ratio × 10) × baseline × 7 —
+      // yaxlitlangan `weekly_avg` faqat ko'rsatish uchun.
+      if (count < minCount) continue;
+      if (
+        count * R8_BASELINE_DAYS * 10 <
+        Math.round(ratio * 10) * baselineTotal * 7
+      )
+        continue;
       const days = await this.correctionDays(start, end);
       const key = `R8:week:${monday}`;
       out.push({
@@ -1370,6 +1522,8 @@ export class AdvisorInputsService {
             window_days: R8_BASELINE_DAYS,
             total: baselineTotal,
             weekly_avg: weeklyAvg,
+            min_count: minCount,
+            ratio,
           },
         },
       });
@@ -1526,26 +1680,36 @@ export class AdvisorInputsService {
     return out;
   }
 
-  /** Filial nomlari (`branch.find_by_id`, kam sonli) — fail-open. */
+  /**
+   * Filial nomlari (`branch.find_by_id`) — 5 tadan PARALLEL (review S5):
+   * branch-service osilib qolsa ham 30 s `AdvisorReader` shiftidan oshmasin.
+   * Fail-open: ism yo'q — `name: null`.
+   */
   async branchNames(ids: string[]): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     if (!this.branchClient) return out;
-    for (const id of [...new Set(ids.filter(isId))]) {
-      try {
-        const response = await rmqSend<{ data?: { name?: unknown } }>(
-          this.branchClient,
-          { cmd: 'branch.find_by_id' },
-          { id, requester: SYSTEM_BRANCH_REQUESTER },
-          { timeoutMs: NAME_TIMEOUT_MS, retries: 0 },
-        );
-        const name = response?.data?.name;
-        if (typeof name === 'string' && name.trim())
-          out.set(id, name.trim().slice(0, 120));
-      } catch (error) {
-        this.logger.warn(
-          `advisor: filial nomi olinmadi (${id}) — ${short(error)}`,
-        );
-      }
+    const client = this.branchClient;
+    const unique = [...new Set(ids.filter(isId))];
+    for (let i = 0; i < unique.length; i += NAME_CONCURRENCY) {
+      await Promise.all(
+        unique.slice(i, i + NAME_CONCURRENCY).map(async (id) => {
+          try {
+            const response = await rmqSend<{ data?: { name?: unknown } }>(
+              client,
+              { cmd: 'branch.find_by_id' },
+              { id, requester: SYSTEM_BRANCH_REQUESTER },
+              { timeoutMs: NAME_TIMEOUT_MS, retries: 0 },
+            );
+            const name = response?.data?.name;
+            if (typeof name === 'string' && name.trim())
+              out.set(id, name.trim().slice(0, 120));
+          } catch (error) {
+            this.logger.warn(
+              `advisor: filial nomi olinmadi (${id}) — ${short(error)}`,
+            );
+          }
+        }),
+      );
     }
     return out;
   }

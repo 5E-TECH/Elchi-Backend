@@ -241,6 +241,7 @@ describe('advisor-text (BE-5)', () => {
       rule_key: 'R7',
       facts: {
         source: 'card_balance',
+        mismatch: ['amount'],
         cashbox: { type: 'main', owner_id: '0', name: 'Asosiy kassa' },
         card: { id: '3', name: 'Humo virtual' },
         entered_amount: 1540000,
@@ -275,6 +276,64 @@ describe('advisor-text (BE-5)', () => {
         primary: true,
       },
     ]);
+  });
+
+  it('R7 (#653 review): halol kassir — tizim farqi; boshqa karta; valyuta; o‘tkazma cheki', () => {
+    const honest = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'card_balance',
+        mismatch: ['amount'],
+        cashbox: { name: 'Asosiy kassa' },
+        card: { name: 'Humo' },
+        entered_amount: 950000,
+        read_amount: 950000,
+        difference: 0,
+        expected_balance: 1000000,
+        system_difference: -50000,
+      },
+    });
+    expect(advisorTitle(honest)).toBe(
+      "Asosiy kassa · Humo: AI o'qigan 950 000 so'm, tizimda 1 000 000 so'm (\u221250 000 so'm)",
+    );
+    expect(
+      advisorTitle(
+        base({
+          ...honest,
+          facts: { ...honest.facts, mismatch: ['card'], system_difference: 0 },
+        }),
+      ),
+    ).toBe('Asosiy kassa · Humo: rasm boshqa kartaniki');
+    const usd = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'receipt',
+        receipt_kind: 'manual_expense',
+        mismatch: ['currency'],
+        branch: { name: 'Urgut filiali' },
+        entered_amount: 1250000,
+        read_amount: null,
+        read_amount_original: 100,
+        read_currency: 'USD',
+        difference: null,
+        operation: { history_id: '9', category_name: 'Yoqilg‘i' },
+      },
+    });
+    expect(advisorTitle(usd)).toBe(
+      "Urgut filiali · Yoqilg‘i: chek so'mda emas (100 USD), kiritilgan 1 250 000 so'm",
+    );
+    const transfer = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'receipt',
+        receipt_kind: 'branch_to_hq',
+        mismatch: ['card'],
+        branch: { name: 'Urgut filiali' },
+      },
+    });
+    expect(advisorTitle(transfer)).toBe(
+      "Urgut filiali · filial → HQ o'tkazma cheki: Pul HQ kartasiga tushmagan",
+    );
   });
 
   it('sarlavha ≤ 200 belgi', () => {

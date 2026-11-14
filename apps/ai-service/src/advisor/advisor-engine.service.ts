@@ -50,6 +50,11 @@ export const ADVISOR_STATE_RULES = new Set<AiAdvisorRuleKey>([
   'R4',
   'R5',
 ]);
+/** Ochiq ogohlantirishda AYNI fakt qayta kelsa — faktlar/sarlavha yangilanadi. */
+export const ADVISOR_REFRESH_RULES = new Set<AiAdvisorRuleKey>([
+  ...ADVISOR_STATE_RULES,
+  'R7',
+]);
 export const ADVISOR_CURSOR_OVERLAP_MS = 5 * 60_000;
 export const ADVISOR_BACKFILL_WINDOW_MS = 7 * 24 * 3600_000;
 export const ADVISOR_BACKFILL_NOTIFY_MS = 24 * 3600_000;
@@ -151,9 +156,13 @@ export class AdvisorEngineService {
     }
     if (keys.includes('R6') || keys.includes('R8')) {
       const today = tashkentDay(now);
-      request.periods = { days: [addDays(today, -1)] };
-      if (tashkentIsoWeekday(now) === 1)
-        request.periods.weeks = [addDays(today, -7)];
+      // Oxirgi YOPILGAN hafta har kuni so'raladi (review S6): dushanbadagi
+      // ish yiqilsa ham hafta yo'qolmaydi; dedup_key = fact_key — takror no-op.
+      const weekday = tashkentIsoWeekday(now);
+      request.periods = {
+        days: [addDays(today, -1)],
+        weeks: [addDays(today, -(weekday - 1) - 7)],
+      };
     }
 
     try {
@@ -252,7 +261,13 @@ export class AdvisorEngineService {
           );
           return { outcome: inserted > 0 ? 'occurred' : 'noop', alertId };
         }
-        if (ADVISOR_STATE_RULES.has(c.rule_key)) {
+        if (ADVISOR_REFRESH_RULES.has(c.rule_key)) {
+          // R2/R4/R5: epizod davom etmoqda — `last_fact_at` = endi.
+          // R7: ayni chek/tekshiruv qayta tahlil / T6 tahriri — faktlar
+          // yangilanadi, hodisa vaqti o'zgarmaydi (review S1).
+          const factAt = ADVISOR_STATE_RULES.has(c.rule_key)
+            ? now
+            : maxFactAt(facts);
           await m.query(
             `UPDATE ${ALERTS}
                 SET "last_at" = $2, "last_fact_at" = GREATEST(COALESCE("last_fact_at", $3), $3),
@@ -260,7 +275,7 @@ export class AdvisorEngineService {
                     "subject" = $8::jsonb, "branch" = $9::jsonb, "branch_id" = $10,
                     "headline_amount" = $11, "updatedAt" = now()
               WHERE "id" = $1`,
-            [alertId, now, now, ...present],
+            [alertId, now, factAt, ...present],
           );
           return { outcome: 'refreshed', alertId };
         }
