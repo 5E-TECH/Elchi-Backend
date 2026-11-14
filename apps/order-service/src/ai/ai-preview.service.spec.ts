@@ -1012,6 +1012,157 @@ describe('P1-7: district_match, region_inferred, checks', () => {
     });
   });
 
+  const priceChecks = (p: { checks: { code: string }[] }) =>
+    p.checks.filter((c) => c.code === 'price_check');
+
+  it('price_check (PR #649 B2): dona narxi × miqdor — model dona narxini yozsa belgilanadi', async () => {
+    const { svc } = setup();
+    const p = await one(
+      svc,
+      raw({
+        total_price: 250000,
+        items: [{ name: 'atir sepgich', quantity: 3 }],
+        money_mentions: [{ value: 250000, kind: 'unit' }],
+      }),
+    );
+    expect(priceChecks(p)).toEqual([
+      { code: 'price_check', kind: 'mismatch', mentions: [250000] },
+    ]);
+  });
+
+  it('price_check (B3): mahsulot + dostavka, oldindan to‘lov ayirilmaydi', async () => {
+    const { svc } = setup();
+    const mentions = [
+      { value: 150000, kind: null },
+      { value: 20000, kind: 'delivery' },
+      { value: 50000, kind: 'prepaid' },
+    ];
+    const at = (total_price: number) =>
+      one(
+        svc,
+        raw({
+          total_price,
+          items: [{ name: 'atir sepgich', quantity: 1 }],
+          money_mentions: mentions,
+        }),
+      );
+    expect(priceChecks(await at(170000))).toEqual([]);
+    expect(priceChecks(await at(150000))).toEqual([
+      {
+        code: 'price_check',
+        kind: 'mismatch',
+        mentions: [150000, 20000, 50000],
+      },
+    ]);
+    expect(priceChecks(await at(120000))).toHaveLength(1);
+  });
+
+  it('price_check: ko‘p mahsulot — har mahsulot o‘z miqdori bilan; UI mentions takrorsiz', async () => {
+    const { svc } = setup();
+    let p = await one(
+      svc,
+      raw({
+        total_price: 570000,
+        items: [
+          { name: 'futbolka', quantity: 3 },
+          { name: 'shim', quantity: 2 },
+        ],
+        money_mentions: [
+          { value: 90000, kind: 'unit' },
+          { value: 150000, kind: 'unit' },
+        ],
+      }),
+    );
+    expect(priceChecks(p)).toEqual([]);
+    p = await one(
+      svc,
+      raw({
+        total_price: 15000,
+        items: [
+          { name: 'atir', quantity: 1 },
+          { name: 'krem', quantity: 1 },
+          { name: 'sovun', quantity: 1 },
+        ],
+        money_mentions: [
+          { value: 150000, kind: null },
+          { value: 150000, kind: null },
+          { value: 50000, kind: null },
+        ],
+      }),
+    );
+    expect(priceChecks(p)).toEqual([
+      { code: 'price_check', kind: 'mismatch', mentions: [150000, 50000] },
+    ]);
+  });
+
+  it('price_check: noaniq narx (oraliq / muqobil / chegirma) — tekshirilmaydi', async () => {
+    const { svc } = setup();
+    const p = await one(
+      svc,
+      raw({
+        total_price: 15000,
+        items: [{ name: 'atir sepgich', quantity: 1 }],
+        money_mentions: [{ value: 150000, kind: null, ambiguous: true }],
+      }),
+    );
+    expect(priceChecks(p)).toEqual([]);
+  });
+
+  it('price_check too_high: matnda aytilgan katta summa — ko‘tarilmaydi', async () => {
+    const { svc } = setup();
+    let p = await one(
+      svc,
+      raw({
+        total_price: 120_000_000,
+        items: [{ name: 'mashina', quantity: 1 }],
+        money_mentions: [{ value: 120_000_000, kind: null }],
+      }),
+    );
+    expect(priceChecks(p)).toEqual([]);
+    p = await one(
+      svc,
+      raw({
+        total_price: 1_200_000_000,
+        items: [{ name: 'mashina', quantity: 1 }],
+        money_mentions: [{ value: 120_000_000, kind: null }],
+      }),
+    );
+    expect(priceChecks(p)).toEqual([
+      { code: 'price_check', kind: 'too_high', mentions: [120_000_000] },
+    ]);
+  });
+
+  it('qty_check: miqdor narxning ming qismiga teng ("150 ming" → 150)', async () => {
+    const { svc } = setup();
+    let p = await one(
+      svc,
+      raw({
+        total_price: 150000,
+        items: [{ name: 'atir sepgich', quantity: 150 }],
+        money_mentions: [{ value: 150000, kind: null }],
+      }),
+    );
+    expect(p.checks).toContainEqual({ code: 'qty_check', item_index: 0 });
+    p = await one(
+      svc,
+      raw({
+        total_price: 4_000_000,
+        items: [{ name: 'televizor', quantity: 2 }],
+        money_mentions: [{ value: 2_000_000, kind: null }],
+      }),
+    );
+    expect(p.checks).toContainEqual({ code: 'qty_check', item_index: 0 });
+    p = await one(
+      svc,
+      raw({
+        total_price: 300000,
+        items: [{ name: 'atir sepgich', quantity: 2 }],
+        money_mentions: [{ value: 150000, kind: null }],
+      }),
+    );
+    expect(p.checks.filter((c) => c.code === 'qty_check')).toEqual([]);
+  });
+
   it('phone_is_market va same_phone_multi', async () => {
     const { svc } = setup({
       marketData: { phone_number: '+998 90 123 45 67' },

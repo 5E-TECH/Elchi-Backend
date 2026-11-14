@@ -14,8 +14,12 @@ import {
   isJunkRawOrder,
   normalizeUzPhone,
   normalizeProduct,
+  priceDerivableFromMentions,
   priceMismatchesMentions,
+  quantityLooksLikeMoney,
+  uniqueMentionValues,
   type MoneyMention,
+  type MoneyMentionKind,
   sanitizeExtractWarnings,
   rmqSend,
   type AiRequester,
@@ -87,7 +91,8 @@ type WhereDeliver = 'center' | 'address';
 
 /**
  * P1-7: `price_check` (kind 'too_high') — bundan katta buyurtma summasi
- * (so'm) gallyutsinatsiya bo'lishi mumkin (1.5e11 ham "Tayyor" edi).
+ * (so'm) gallyutsinatsiya bo'lishi mumkin (1.5e11 ham "Tayyor" edi). Summa
+ * matndagi eslatmalardan kelib chiqsa ("mashina 120 mln") — ko'tarilmaydi.
  */
 export const AI_PRICE_HIGH_LIMIT = 100_000_000;
 /** P1-7: `qty_check` — bundan katta miqdor shubhali. */
@@ -137,6 +142,13 @@ const phoneText = (value: unknown): string =>
     ? String(value)
     : text(value);
 
+const MONEY_MENTION_KINDS: ReadonlySet<unknown> = new Set<MoneyMentionKind>([
+  'unit',
+  'total',
+  'delivery',
+  'prepaid',
+]);
+
 /** ai-service qo'ygan `money_mentions` — RMQ chegarasi, qayta tekshiriladi. */
 function moneyMentionsOf(value: unknown): MoneyMention[] {
   if (!Array.isArray(value)) return [];
@@ -147,7 +159,10 @@ function moneyMentionsOf(value: unknown): MoneyMention[] {
     if (!Number.isFinite(v) || v <= 0) continue;
     out.push({
       value: Math.round(v),
-      kind: k === 'unit' || k === 'total' ? k : null,
+      kind: MONEY_MENTION_KINDS.has(k) ? (k as MoneyMentionKind) : null,
+      ...((m as { ambiguous?: unknown })?.ambiguous === true
+        ? { ambiguous: true as const }
+        : {}),
     });
   }
   return out;
@@ -499,24 +514,36 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
     ) {
       checks.push({ code: 'district_low_confidence' });
     }
+    // A1(a): narx matndagi eslatmalar bilan (mahsulot + dostavka, dona narxi
+    // × shu mahsulot miqdori; oldindan to'lov ayirilmaydi). Qoidalar —
+    // `libs/common/src/ai-text/money-mentions.ts`. UI'ga takrorsiz qiymatlar.
     const mentions = moneyMentionsOf(raw.money_mentions);
-    const totalQty = items.reduce((a, it) => a + (it.quantity || 0), 0);
-    if (totalPrice !== null && totalPrice > AI_PRICE_HIGH_LIMIT) {
+    const quantities = items.map((it) => it.quantity || 0);
+    const mentionValues = uniqueMentionValues(mentions);
+    if (
+      totalPrice !== null &&
+      totalPrice > AI_PRICE_HIGH_LIMIT &&
+      // Matnda aytilgan katta summa ("mashina 120 mln") — too_high emas.
+      !priceDerivableFromMentions(totalPrice, mentions, quantities)
+    ) {
       checks.push({
         code: 'price_check',
         kind: 'too_high',
-        mentions: mentions.map((m) => m.value),
+        mentions: mentionValues,
       });
-    } else if (priceMismatchesMentions(totalPrice, mentions, totalQty)) {
+    } else if (priceMismatchesMentions(totalPrice, mentions, quantities)) {
       checks.push({
         code: 'price_check',
         kind: 'mismatch',
-        mentions: mentions.map((m) => m.value),
+        mentions: mentionValues,
       });
     }
-    const mentionValues = new Set(mentions.map((m) => m.value));
+    // Miqdor > 10 yoki narxning ming/mln qismi ("150 ming" → quantity 150).
     items.forEach((it, i) => {
-      if (it.quantity > AI_QTY_CHECK_LIMIT || mentionValues.has(it.quantity)) {
+      if (
+        it.quantity > AI_QTY_CHECK_LIMIT ||
+        quantityLooksLikeMoney(it.quantity, mentions)
+      ) {
         checks.push({ code: 'qty_check', item_index: i });
       }
     });
