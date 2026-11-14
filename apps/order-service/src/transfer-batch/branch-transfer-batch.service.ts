@@ -135,6 +135,25 @@ export class BranchTransferBatchService {
     return code === '23505' || driverCode === '23505';
   }
 
+  /**
+   * Paket yaratishdagi yagonalik buzilishi (23505) — aniq 409. Xom
+   * `QueryFailedError` RMQ javobida `statusCode`siz kelardi va branch-service
+   * uni 502 «Buyurtmalar xizmati javob bermadi» qilardi (ekranda «Internet
+   * aloqasi yo'q»). Endi faqat parallel takroriy so'rovda bo'ladi
+   * (`UQ_BRANCH_TRANSFER_BATCHES_REQUEST_TARGET`, QR token).
+   */
+  private toBatchCreateError(error: unknown): unknown {
+    if (error instanceof RpcException) return error;
+    if (this.isDuplicateMessageError(error)) {
+      return new RpcException({
+        statusCode: 409,
+        message:
+          "Paket shu orada boshqa so'rov bilan yaratildi — ro'yxatni yangilab, qayta urinib ko'ring",
+      });
+    }
+    return error;
+  }
+
   private async generateTransferQrToken(
     repo: Repository<BranchTransferBatch>,
     direction: BranchTransferDirection,
@@ -482,7 +501,7 @@ export class BranchTransferBatchService {
       );
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      throw error;
+      throw this.toBatchCreateError(error);
     } finally {
       await queryRunner.release();
     }
@@ -922,7 +941,7 @@ export class BranchTransferBatchService {
       );
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      throw error;
+      throw this.toBatchCreateError(error);
     } finally {
       await queryRunner.release();
     }

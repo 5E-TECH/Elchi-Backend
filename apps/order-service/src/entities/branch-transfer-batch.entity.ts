@@ -16,9 +16,22 @@ import { BranchTransferBatchItem } from './branch-transfer-batch-item.entity';
 @Index('IDX_BRANCH_TRANSFER_BATCHES_STATUS', ['status'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_DIRECTION', ['direction'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_REQUEST_KEY', ['request_key'])
+/**
+ * Bitta so'rov (`request_key`) bir nechta paket yaratadi: filial paketi — har
+ * VILOYATga bittadan, qaytarish paketi — har MANZIL filialiga bittadan. Ular
+ * hammasi so'rovning kalitini oladi (idempotent qayta so'rov shu kalit bilan
+ * hammasini topadi). Shuning uchun yagonalik — so'rov + manzil + viloyat
+ * (migratsiya 1716000000221). Eski `(source_branch_id, request_key)` ikkinchi
+ * yangi paketda 23505 berardi → 502 (staging 2026-11-14, 5 viloyatli qabul).
+ */
 @Index(
-  'UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY',
-  ['source_branch_id', 'request_key'],
+  'UQ_BRANCH_TRANSFER_BATCHES_REQUEST_TARGET',
+  [
+    'source_branch_id',
+    'request_key',
+    'destination_branch_id',
+    'target_region_id',
+  ],
   {
     unique: true,
   },
