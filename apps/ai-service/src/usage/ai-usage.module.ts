@@ -36,6 +36,10 @@ import { AiUsageService } from './ai-usage.service';
     AiMarginService,
   ],
   exports: [
+    // BE-5: AdvisorModule audit uchun AYNI ActivityLogModule nusxasini
+    // oladi — `forService` ikkinchi marta chaqirilmasin (Nest 11 dinamik
+    // modullarni reference bo'yicha ajratadi → ikkinchi retention cron).
+    ActivityLogModule,
     AiUsageService,
     AiSpendCounterService,
     AiBudgetService,

@@ -6,9 +6,11 @@ import { Column, Entity, Index } from 'typeorm';
  * `1716000000224-AiAdvisorAlerts`. API shartnomasi v0.3 §5.
  */
 
-/** Ogohlantirish — haqiqat manbai (audit best-effort). */
+/**
+ * Ogohlantirish — haqiqat manbai (audit best-effort). Indekslar (qisman
+ * UNIQUE, `DESC` yo'nalishlari) faqat migratsiyada — `synchronize` yo'q.
+ */
 @Entity({ name: 'ai_advisor_alerts', schema: 'ai_schema' })
-@Index('IDX_AI_ADVISOR_ALERT_DEDUP', ['dedup_key', 'id'])
 export class AiAdvisorAlert extends BaseEntity {
   @Column({ type: 'varchar', length: 4 })
   rule_key!: string;

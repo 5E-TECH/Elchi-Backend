@@ -28,6 +28,8 @@ API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7
 
 - 🆕 `GET /ai/advisor/settings` (FAQAT SUPERADMIN; ADMIN — 403): `{version, rules{R1..R8}, limits{rules{<R>{<maydon>{min,max,step,unit,default}}}}, telegram, budget, schedule, updated_at, updated_by}`. Saqlangan qator bo'lmasa — `version: 1`, sukutlar, `updated_at/by: null`.
 - 🆕 `PATCH /ai/advisor/settings` — qisman, hammasi yoki hech narsa, `version` MAJBURIY. Javob — to'liq sozlamalar. O'zgarishsiz PATCH `version` ni oshirmaydi. Audit `ai.advisor.settings.update` (eski → yangi).
+- 🟢 Audit yozuvi `ai_schema.activity_logs` ga tushadi, lekin `/activity-logs` da `ai` xizmati hali YO'Q — BE-5 ning 4-qismida (audit-gateway `ai` oyog'i) ko'rinadi.
+- 🟢 Noma'lum TOP-level kalit (masalan `foo`) — gateway `forbidNonWhitelisted` bilan **kodsiz** 400; `version`/`rules` ichidagi xatolar — kodli (`AI_ADVISOR_*`).
 - 🟢 Ega javoblari (Q1/Q2): `severity` qotirilgan — R2, R6, **R7** `critical`, qolgani `warning`; `rules.R7.telegram` sukuti **`false`** (openapi misolidagi R7 `warning`/`telegram:true` eskirgan). `rules.<R>.telegram` o'zgartiriladi.
 - 🟢 `telegram`, `budget`, `schedule` — hozircha `null` (BE-1); PATCH'da yuborilsa 400 `AI_ADVISOR_INVALID_SETTING {field}`.
 - 🟢 Kodli xatolar (`code` javobga chiqadi): 400 `AI_ADVISOR_INVALID_RULE {field, min, max}` (chegara/qadam/tur), 400 `AI_ADVISOR_INVALID_SETTING {field}` (noma'lum kalit, `version` yo'q, `rules.<R>.severity`), 409 `AI_ADVISOR_SETTINGS_CONFLICT {version}` (joriy versiya). Qolgan `AI_ADVISOR_*` kodlari ham `PUBLIC_ERROR_CODES` ga qo'shildi.

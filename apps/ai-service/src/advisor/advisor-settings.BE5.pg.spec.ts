@@ -10,8 +10,24 @@ import { AdvisorSettingsService } from './advisor-settings.service';
  * PATCH versiyani oshirmaydi, audit, ogohlantirishlar jadvalining ochiq
  * qator UNIQUE indeksi va takrorlar UNIQUE (dedup_key, fact_key).
  */
-const PG_URI = process.env.AI_PG_TEST_URI;
-const describePg = PG_URI ? describe : describe.skip;
+const ADMIN_URI = process.env.AI_ADVISOR_PG_TEST_URI;
+const describePg = ADMIN_URI ? describe : describe.skip;
+
+/**
+ * Qo'riq: spec O'Z vaqtinchalik bazasini yaratadi va oxirida o'chiradi —
+ * `AI_ADVISOR_PG_TEST_URI` faqat ulanish uchun (lokal host bo'lishi shart),
+ * mavjud bazadagi jadval/qatorlarga tegilmaydi.
+ */
+function tempDbUri(admin: string, name: string): string {
+  const url = new URL(admin);
+  if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname)) {
+    throw new Error(
+      'AI_ADVISOR_PG_TEST_URI faqat lokal Postgres bo‘lishi kerak',
+    );
+  }
+  url.pathname = `/${name}`;
+  return url.toString();
+}
 
 const SA = { id: '1', roles: ['superadmin'], name: 'Test Superadmin' };
 
@@ -25,15 +41,23 @@ describePg('AdvisorSettingsService — real Postgres (BE-5)', () => {
   let service: AdvisorSettingsService;
   const log = jest.fn<Promise<void>, [Record<string, unknown>]>();
 
+  const dbName = `elchi_ai_advisor_${process.pid}_${Date.now()}`;
+  let admin: DataSource;
+
   beforeAll(async () => {
-    ds = new DataSource({ type: 'postgres', url: PG_URI, synchronize: false });
+    const uri = tempDbUri(ADMIN_URI as string, dbName);
+    admin = new DataSource({ type: 'postgres', url: ADMIN_URI });
+    await admin.initialize();
+    await admin.query(`CREATE DATABASE "${dbName}"`);
+    ds = new DataSource({ type: 'postgres', url: uri, synchronize: false });
     await ds.initialize();
     const qr = ds.createQueryRunner();
     try {
       await qr.query('CREATE SCHEMA IF NOT EXISTS ai_schema');
-      await new AiAdvisorAlerts1716000000224().down(qr);
       await new AiAdvisorAlerts1716000000224().up(qr);
       await new AiAdvisorAlerts1716000000224().up(qr); // idempotent
+      await new AiAdvisorAlerts1716000000224().down(qr);
+      await new AiAdvisorAlerts1716000000224().up(qr);
     } finally {
       await qr.release();
     }
@@ -49,6 +73,10 @@ describePg('AdvisorSettingsService — real Postgres (BE-5)', () => {
 
   afterAll(async () => {
     await ds?.destroy();
+    if (admin?.isInitialized) {
+      await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+      await admin.destroy();
+    }
   });
 
   it('qator yo‘q: version 1, sukutlar, updated_by null', async () => {

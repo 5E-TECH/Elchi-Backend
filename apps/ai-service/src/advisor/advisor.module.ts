@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ActivityLogModule, RmqModule } from '@app/common';
+import { RmqModule } from '@app/common';
+import { AiUsageModule } from '../usage/ai-usage.module';
 import { AdvisorController } from './advisor.controller';
 import {
   AiAdvisorAlert,
@@ -21,9 +22,9 @@ import { AdvisorSettingsService } from './advisor-settings.service';
       AiAdvisorAlertOccurrence,
       AiAdvisorSetting,
     ]),
-    // Ayni argument — Nest AiUsageModule'dagi bilan bitta modul nusxasini
-    // ishlatadi (ikkinchi retention scheduler yo'q).
-    ActivityLogModule.forService('ai-service'),
+    // ActivityLogService — AiUsageModule re-export qilgan YAGONA
+    // ActivityLogModule nusxasidan (forService bu yerda chaqirilmaydi).
+    AiUsageModule,
   ],
   controllers: [AdvisorController],
   providers: [AdvisorSettingsService],
