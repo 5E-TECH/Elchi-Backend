@@ -238,6 +238,17 @@ function usd(x: number): string {
   return `$${x.toFixed(2)}`;
 }
 
+/**
+ * Kalit manbasi — BITTA joy. Hozir: process.env.ANTHROPIC_API_KEY.
+ * ⚠️ Keyin (ops «AI kalitlari va modellar» UI): ai-service kalit manbasi
+ * bilan bir xil tartib — UI kaliti > env > yo'q. O'shanda faqat shu
+ * funksiya o'zgaradi. Kalit hech qachon log/manifest'ga yozilmaydi.
+ */
+async function resolveAnthropicKey(): Promise<string | null> {
+  const env = (process.env.ANTHROPIC_API_KEY ?? '').trim();
+  return Promise.resolve(env || null);
+}
+
 async function runPlan(): Promise<number> {
   const { fixtures, configs, repeat } = selected();
   const bodies = await captureBodies(fixtures);
@@ -281,9 +292,9 @@ async function runSubmit(): Promise<number> {
     console.error('--out=<katalog> majburiy.');
     return 2;
   }
-  const key = (process.env.ANTHROPIC_API_KEY ?? '').trim();
+  const key = await resolveAnthropicKey();
   if (!key) {
-    console.error("ANTHROPIC_API_KEY yo'q.");
+    console.error('Anthropic kaliti topilmadi (resolveAnthropicKey).');
     return 2;
   }
   const { fixtures, configs, repeat } = selected();
@@ -326,9 +337,9 @@ async function runSubmit(): Promise<number> {
 
 async function runCollect(): Promise<number> {
   const out = arg('out');
-  const key = (process.env.ANTHROPIC_API_KEY ?? '').trim();
+  const key = await resolveAnthropicKey();
   if (!out || !key) {
-    console.error('--out va ANTHROPIC_API_KEY majburiy.');
+    console.error('--out va Anthropic kaliti (resolveAnthropicKey) majburiy.');
     return 2;
   }
   const dir = resolve(out);
