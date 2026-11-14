@@ -38,7 +38,7 @@ Shuning uchun 2–3-qadamlarda checkout'dagi `scripts/` katalogi image ustiga
 Tekshiruv (`1` chiqishi kerak):
 
 ```sh
-grep -c UNEDITED_SAMPLE_SQL scripts/ai-eval-collect.ts
+grep -c 'export const UNEDITED_SAMPLE_SQL' scripts/ai-eval-collect.ts
 ```
 
 ## 1. Agregatlar (shaxsiy ma'lumotsiz)
@@ -75,9 +75,20 @@ docker compose -f docker-compose.prod.yml run --rm --no-deps \
 ```
 
 Har draft — bitta JSON (katalog 0700, fayllar 0600): matnda telefonlar
-`[TEL_n]`, ismlar (AI va operator yozgan) `[ISM]` (butun so'z), 9+ raqam
-`[RAQAM]`, uy/xonadon raqami `[N]`. Tuzatishlardan izoh, operator va
-telefon maskasi tashlanadi. ⚠️ Manzil (ko'cha, mahalla) maskalanMAYDI —
+`[TEL_n]`, mijoz va operator ismlari (AI va operator yozgan, `#sevinch` ham)
+`[ISM]` — butun so'z, o'zbek/rus qo'shimchalari va apostrof variantlari
+bilan; 9+ raqam (nuqta/slash bilan ham) `[RAQAM]`, uy/xonadon/квартира
+raqami `[N]`. Tuzatishlardan izoh, operator va telefon maskasi tashlanadi.
+
+⚠️ **outcome≠ok draftlar** (ai_error, truncated, …): AI natijasi yo'q, ism
+ro'yxati ham yo'q — bunday faylda `input.text = null`, `names_masked:
+false` (skript oxirida sanog'i chiqadi). Matnni ochiq olish faqat
+`--include-unmasked-names` bilan — keyin ismlarni QO'LDA maskalang.
+
+⚠️ Cheklov: ism faqat AI/operator yozgan ko'rinishda topiladi — AI kirill
+ismni lotinga o'girgan bo'lsa ("Дилноза" → "Dilnoza"), matndagi kirill
+yozuv maskalanmay qolishi mumkin; belgilovchi ko'rib chiqadi.
+ ⚠️ Manzil (ko'cha, mahalla) maskalanMAYDI —
 tuman xatolarini tahlil qilish uchun kerak (fayllar faqat serverda). Buni
 ega alohida tasdiqlashi kerak. Repo'ga kiradigan fixture qo'lda sintetik
 qilinadi (`apps/ai-service/test/fixtures/order-extract/`,
@@ -120,4 +131,4 @@ rm -rf /root/ai-eval/candidates /root/ai-eval/unedited
 | Fayl | Shaxsiy ma'lumot | Qayerga |
 |---|---|---|
 | `aggregates-*.txt` | yo'q | backend/FE sessiyaga, PR/Trello'ga |
-| `candidates/*.json`, `unedited/*.json` | manzil qoldig'i | **faqat serverda**; sintetik fixture'ga aylantiriladi |
+| `candidates/*.json`, `unedited/*.json` | manzil qoldig'i; kirill ism qolishi mumkin (`--include-unmasked-names` bilan — ochiq ismlar) | **faqat serverda**; sintetik fixture'ga aylantiriladi |
