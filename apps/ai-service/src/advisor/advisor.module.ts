@@ -9,6 +9,7 @@ import {
   AiAdvisorRuleState,
   AiAdvisorSetting,
 } from './advisor.entities';
+import { AdvisorAlertsService } from './advisor-alerts.service';
 import { AdvisorEngineService } from './advisor-engine.service';
 import { AdvisorReader } from './advisor-reader';
 import { AdvisorScheduler } from './advisor.scheduler';
@@ -36,6 +37,7 @@ import { AdvisorSettingsService } from './advisor-settings.service';
   controllers: [AdvisorController],
   providers: [
     AdvisorSettingsService,
+    AdvisorAlertsService,
     AdvisorReader,
     AdvisorEngineService,
     AdvisorScheduler,

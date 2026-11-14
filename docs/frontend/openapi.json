@@ -23507,6 +23507,268 @@
         ]
       }
     },
+    "/ai/advisor/overview": {
+      "get": {
+        "description": "`data` = `{alerts{new, open, critical, critical_open, critical_rule_keys[], critical_open_rule_keys[]}, recommendations, budget, usd_uzs_rate, generated_at}`. `critical` = jiddiy VA `new`; `critical_rule_keys` — ayni to‘plam, `MAX(last_at) DESC`. `open` — filtrsiz new+seen. `recommendations`, `budget`, `usd_uzs_rate` — BE-4/BE-1, hozircha null.",
+        "operationId": "AiAdvisorGatewayController_overview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: tab nishonlari va banner (faqat superadmin)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/advisor/alerts": {
+      "get": {
+        "description": "Holatni O‘ZGARTIRMAYDI. `data` = `{items[AiAdvisorAlertListItem], meta{page, limit, total, totalPages}, counts{by_status{new, seen, resolved, dismissed}}}`. `counts.by_status` — `status` filtrisiz, qolgan filtrlar bilan. Saralash oxirida doim `id DESC`. Noto‘g‘ri query — kodsiz 400.",
+        "operationId": "AiAdvisorGatewayController_listAlerts",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "`open` = new + seen",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "new",
+                "seen",
+                "resolved",
+                "dismissed",
+                "open"
+              ]
+            }
+          },
+          {
+            "name": "severity",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "warning",
+                "critical"
+              ]
+            }
+          },
+          {
+            "name": "rule_key",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "R1",
+                "R2",
+                "R3",
+                "R4",
+                "R5",
+                "R6",
+                "R7",
+                "R8"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "`last_at` Toshkent kuni ≥ from (YYYY-MM-DD); from–to ≤ 366 kun",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "`last_at` Toshkent kuni ≤ to (YYYY-MM-DD)",
+            "schema": {
+              "example": "2026-10-31",
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Sarlavha / obyekt nomi (ILIKE), ≤ 100",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "last_at",
+              "type": "string",
+              "enum": [
+                "last_at",
+                "first_at",
+                "occurrences",
+                "severity"
+              ]
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: ogohlantirishlar ro‘yxati (faqat superadmin)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/advisor/alerts/{id}": {
+      "get": {
+        "description": "`new` bo‘lsa atomik `new → seen` (`seen_at`, `seen_by`), javob yangi holat bilan; boshqa holatga tegmaydi; audit yo‘q. ⚠️ Prefetch/hover’da YUBORILMASIN. `?include=history` — `history[]` (≤ 50). `explanation_status=pending` bo‘lsa `explanation_poll_after_ms` oralig‘ida qayta so‘rang; 3 daqiqadan eski `pending` — `failed` + `error`. Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`, 400 (ID, kodsiz).",
+        "operationId": "AiAdvisorGatewayController_getAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ogohlantirish ID si (`^\\d{1,18}$`)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include",
+            "required": false,
+            "in": "query",
+            "description": "`history[]` (≤ 50) — faqat so‘ralganda",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "history"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: ogohlantirish tafsiloti — ochilganda «Ko‘rildi» (faqat superadmin)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      },
+      "patch": {
+        "description": "Faqat `new|seen` dan. `resolved` — `note` majburiy 3–500 (trim), `dismissed` — ixtiyoriy ≤ 500. Idempotent: ayni foydalanuvchi ayni holatni qayta yuborsa — 200, o‘zgarishsiz. Javob — yangilangan tafsilot. Xatolar: 400 `AI_ADVISOR_NOTE_INVALID {reason: required|too_short|too_long, min_length, max_length}`; 400 kodsiz (`status`); 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Audit `ai.advisor.alert.resolve|dismiss`. Pul amali yo‘q.",
+        "operationId": "AiAdvisorGatewayController_updateAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ogohlantirish ID si",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAdvisorAlertPatchDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: «Hal qilindi» / «Ahamiyatsiz» (faqat superadmin, audit)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/ai/advisor/settings": {
       "get": {
         "description": "`data` = `{version, rules{R1..R8: {enabled, severity, telegram, <chegaralar>}}, limits{rules{<R>{<maydon>{min, max, step, unit, default}}}}, telegram, budget, schedule, updated_at, updated_by{id, name}}`. `severity` — qotirilgan (R2, R6, R7 critical; qolgani warning). `telegram`/`budget`/`schedule` — BE-1, hozircha null. Qator yo‘q — `version: 1` va sukutlar.",
@@ -36486,6 +36748,27 @@
         "required": [
           "user_id",
           "enabled"
+        ]
+      },
+      "AiAdvisorAlertPatchDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "dismissed"
+            ]
+          },
+          "note": {
+            "type": "object",
+            "description": "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500.",
+            "example": "Kartadagi tushum keyingi kuni kelgan, tekshirildi.",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status"
         ]
       },
       "AiAdvisorSettingsPatchDto": {

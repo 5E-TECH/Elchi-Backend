@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 3-qism): ogohlantirishlar endpointlari
+
+Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migratsiyasiz. Hammasi FAQAT SUPERADMIN (ADMIN — 403).
+
+- 🆕 `GET /ai/advisor/overview` — `{alerts{new, open, critical, critical_open, critical_rule_keys[], critical_open_rule_keys[]}, recommendations: null, budget: null, usd_uzs_rate: null, generated_at}`. Banner (Q8) — `critical` + `critical_rule_keys` (faqat `new` jiddiylar), tartib `MAX(last_at) DESC`.
+- 🆕 `GET /ai/advisor/alerts?status&severity&rule_key&from&to&q&sort_by&sort_dir&page&limit` — `{items, meta{page, limit, total, totalPages}, counts{by_status}}`. Holatni o'zgartirmaydi. `counts.by_status` — `status` filtrisiz. Saralash oxirida doim `id DESC`. Noto'g'ri query — kodsiz 400.
+- 🆕 `GET /ai/advisor/alerts/:id[?include=history]` — tafsilot; `new` bo'lsa atomik `new → seen` (`seen_at`, `seen_by`), audit yo'q. ⚠️ prefetch/hover'da yubormang. 3 daqiqadan eski `pending` izoh — `failed` + `explanation_error: "error"`; `pending` da `explanation_poll_after_ms: 2000`. 404 `AI_ADVISOR_ALERT_NOT_FOUND`.
+- 🆕 `PATCH /ai/advisor/alerts/:id {status: resolved|dismissed, note?}` — `resolved` uchun izoh 3–500 (trim) majburiy → 400 `AI_ADVISOR_NOTE_INVALID {reason, min_length, max_length}`; `dismissed` — ixtiyoriy ≤ 500. Ayni foydalanuvchi ayni holatni qayta yuborsa — 200 (idempotent). Boshqa holat / boshqa superadmin yopgan — 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Javob — yangilangan tafsilot. Audit `ai.advisor.alert.resolve|dismiss` (`/activity-logs` da `ai` xizmati — 4-qism).
+- 🟢 `explain` (AI izohi) — 5-qism; hozircha `explanation_status` doim `none`.
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 2c): R7 chek/karta farqi, R8 tuzatishlar
 
 Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q. Endi R1–R8 hammasi tekshiriladi.

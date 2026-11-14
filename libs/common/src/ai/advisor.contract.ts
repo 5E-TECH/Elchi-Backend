@@ -46,6 +46,10 @@ export type AiAdvisorExplanationStatus =
 export const AI_ADVISOR_PATTERNS = {
   SETTINGS_GET: 'ai.advisor.settings.get',
   SETTINGS_UPDATE: 'ai.advisor.settings.update',
+  OVERVIEW: 'ai.advisor.overview',
+  ALERTS_LIST: 'ai.advisor.alerts.list',
+  ALERTS_GET: 'ai.advisor.alerts.get',
+  ALERTS_UPDATE: 'ai.advisor.alerts.update',
 } as const;
 
 /** Xato kodlari (`PUBLIC_ERROR_CODES` da ruxsat etilgan maydonlari bilan). */
@@ -218,6 +222,19 @@ export function aiAdvisorThresholds(
   return out;
 }
 
+/** Qoida nomi (UI «Turi», audit va server matnlari). */
+export const AI_ADVISOR_RULE_NAMES: Readonly<Record<AiAdvisorRuleKey, string>> =
+  Object.freeze({
+    R1: 'Smena kamomadi',
+    R2: "Kuryer qarzi o'smoqda",
+    R3: "G'ayrioddiy xarajat",
+    R4: "Market to'lovi kechikmoqda",
+    R5: "HQ'ga o'tkazma kechikmoqda",
+    R6: 'Zarar',
+    R7: 'Chek yoki karta farqi',
+    R8: "Tuzatishlar ko'paydi",
+  });
+
 /** Sukut qoidalar (TZ qiymatlari, EGA-1029/1). */
 export function aiAdvisorDefaultRules(): AiAdvisorRulesSettings {
   const rules = {} as AiAdvisorRulesSettings;
@@ -344,4 +361,137 @@ export interface AiAdvisorRuleInputsResponse {
   cursors: Partial<Record<AiAdvisorCursorRule, string | null>>;
   /** Qoida bo'yicha o'tkazib yuborish sababi (masalan R3 namuna < 5). */
   skipped?: Partial<Record<AiAdvisorRuleKey, string>>;
+}
+
+// ─── BE-5 3-qism: ogohlantirishlar REST (§5, §7.1–7.3, §7.5) ─────────────
+
+/** `pending` izoh eskirishi (§6) — `CASHBOX_RECEIPT_AI_STALE_MS` bilan bir xil. */
+export const AI_ADVISOR_EXPLANATION_STALE_MS = 3 * 60_000;
+/** `pending` da FE poll oralig'i (§5.2 `explanation_poll_after_ms`). */
+export const AI_ADVISOR_EXPLANATION_POLL_MS = 2_000;
+export const AI_ADVISOR_HISTORY_LIMIT = 50;
+
+export const AI_ADVISOR_LIST_STATUSES = [
+  ...AI_ADVISOR_ALERT_STATUSES,
+  'open',
+] as const;
+export const AI_ADVISOR_SORT_FIELDS = [
+  'last_at',
+  'first_at',
+  'occurrences',
+  'severity',
+] as const;
+export type AiAdvisorSortField = (typeof AI_ADVISOR_SORT_FIELDS)[number];
+
+export interface AiAdvisorAlertsQuery {
+  status?: AiAdvisorAlertStatus | 'open';
+  severity?: AiAdvisorSeverity;
+  rule_key?: AiAdvisorRuleKey;
+  from?: string;
+  to?: string;
+  q?: string;
+  sort_by?: AiAdvisorSortField;
+  sort_dir?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}
+
+export interface AiAdvisorAlertListItem {
+  id: string;
+  rule_key: AiAdvisorRuleKey;
+  severity: AiAdvisorSeverity;
+  status: AiAdvisorAlertStatus;
+  title: string;
+  branch: AiAdvisorRef | null;
+  subject: AiAdvisorSubjectRef;
+  headline_amount: number | null;
+  facts: Record<string, unknown>;
+  occurrences: number;
+  first_at: string;
+  last_at: string;
+  first_fact_at: string | null;
+  last_fact_at: string | null;
+  explanation_status: AiAdvisorExplanationStatus;
+  reopened_from_id: string | null;
+}
+
+export interface AiAdvisorAlertHistoryEvent {
+  at: string;
+  event:
+    'opened' | 'occurred' | 'seen' | 'explained' | 'resolved' | 'dismissed';
+  by: AiAdvisorUserRef | null;
+  note: string | null;
+}
+
+export interface AiAdvisorAlertDetail extends AiAdvisorAlertListItem {
+  rule: {
+    key: AiAdvisorRuleKey;
+    severity: AiAdvisorSeverity;
+    thresholds: Record<string, number>;
+  };
+  evidence: Record<string, unknown>;
+  links: Array<{
+    kind: string;
+    href: string;
+    entity_id: string | null;
+    primary: boolean;
+  }>;
+  explanation_md: string | null;
+  explanation_error: 'budget_exceeded' | 'ai_disabled' | 'error' | null;
+  explanation_error_scope: 'advisor' | 'global' | null;
+  explanation_retry_at: string | null;
+  explanation_requested_at: string | null;
+  explanation_poll_after_ms: number | null;
+  explained_at: string | null;
+  seen_at: string | null;
+  seen_by: AiAdvisorUserRef | null;
+  resolved_at: string | null;
+  resolved_by: AiAdvisorUserRef | null;
+  resolution_note: string | null;
+  reopened_from: {
+    id: string;
+    status: AiAdvisorAlertStatus;
+    resolved_at: string | null;
+  } | null;
+  /** Faqat `?include=history`. */
+  history?: AiAdvisorAlertHistoryEvent[];
+}
+
+export interface AiAdvisorAlertListData {
+  items: AiAdvisorAlertListItem[];
+  meta: { page: number; limit: number; total: number; totalPages: number };
+  counts: { by_status: Record<AiAdvisorAlertStatus, number> };
+}
+
+export interface AiAdvisorOverviewData {
+  alerts: {
+    new: number;
+    open: number;
+    critical: number;
+    critical_open: number;
+    critical_rule_keys: AiAdvisorRuleKey[];
+    critical_open_rule_keys: AiAdvisorRuleKey[];
+  };
+  /** x-owner BE-4. */
+  recommendations: { new: number } | null;
+  /** x-owner BE-1. */
+  budget: Record<string, unknown> | null;
+  /** x-owner BE-1. */
+  usd_uzs_rate: number | null;
+  generated_at: string;
+}
+
+export interface AiAdvisorAlertGetRequest {
+  requester: AiAdvisorRequester;
+  id: string;
+  /** Sukut true — `new → seen`. Chat/hisobot `false` bilan o'qiydi. */
+  mark_seen?: boolean;
+  include?: string[];
+}
+
+export interface AiAdvisorAlertUpdateRequest {
+  requester: AiAdvisorRequester;
+  id: string;
+  status: 'resolved' | 'dismissed';
+  note?: unknown;
 }
