@@ -152,8 +152,9 @@ export class AiOrderDraftItem {
 
   /**
    * J3hEDtFN #4 — operator tuzatishlari: `{ [maydon]: {ai, final} }` (faqat
-   * o'zgarganlar; telefon maskalangan). Eval to'plami manbai. Ism/manzil bor
-   * → `AI_DRAFT_TEXT_RETENTION_DAYS` tugagach NULL.
+   * o'zgarganlar; telefon maskalangan). Eval to'plami manbai. Shaxsiy
+   * kalitlar (`AI_CORRECTION_FIELD_RETENTION` = 'pii') 30 kunda olib
+   * tashlanadi, qolgani (geo/summa/mahsulot) 365 kunda NULL.
    */
   @Column({ type: 'jsonb', nullable: true })
   field_corrections!: Record<string, unknown> | null;
