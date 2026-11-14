@@ -22,6 +22,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 2a): qoidalar dvigateli — R1, R3, R6
+
+Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_rule_state`). Yangi endpoint YO'Q — ogohlantirishlar `ai_advisor_alerts` ga yoziladi; ro'yxat/tafsilot endpointlari keyingi PR'da.
+
+- 🟢 Qoidalar har 30 daqiqada (R1 smena kamomadi, R3 g'ayrioddiy xarajat) va har kuni 02:30 Toshkent (R6 zarar — kecha; dushanba — o'tgan hafta ham) tekshiriladi. `AI_ADVISOR_RULES=off` — o'chiq.
+- 🟢 Birinchi ishga tushish: 7 kunlik orqa oyna; 24 soatdan eski faktlardan ochilganlar bildirishnomasiz (`notify_skipped='backfill'`, §4.3).
+- 🟢 R3: namuna < 5 — qoida jim; filial+kategoriya namunasi < 5 bo'lsa butun tizim (`facts.scope`); minimal MAD = mediana × 5% (BQ9).
+- 🟢 Hozircha `explanation_status: none` (avtomatik izoh — 5-qism), bildirishnoma — 4-qism. R2/R4/R5 va R7/R8 — keyingi PR'lar.
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 1-qism): qoidalar sozlamasi `GET/PATCH /ai/advisor/settings`
 
 API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7.7, §8. Deploy: api-gateway + ai-service, migratsiya **224** (`ai_schema.ai_advisor_alerts`, `ai_advisor_alert_occurrences`, `ai_advisor_settings` — yangi jadvallar). Ogohlantirishlar endpointlari (`overview`, `alerts*`) — keyingi PR'larda.
