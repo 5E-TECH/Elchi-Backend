@@ -884,6 +884,47 @@ export class LogisticsServiceController {
     );
   }
 
+  /** D1: «Hududlar» qamrov ogohlantirishi (superadmin/admin). */
+  @MessagePattern({ cmd: 'logistics.district.coverage_review' })
+  districtCoverageReview(
+    @Payload() payload: { requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = payload?.requester
+      ? {
+          id: String(payload.requester.id ?? ''),
+          roles: payload.requester.roles ?? [],
+        }
+      : undefined;
+    return this.executeAndAck(context, () =>
+      this.logisticsService.districtCoverageReview(requester),
+    );
+  }
+
+  /** D1: avtomatik biriktirishni tasdiqlash (idempotent, audit). */
+  @MessagePattern({ cmd: 'logistics.district.confirm_assignment' })
+  confirmDistrictAssignment(
+    @Payload()
+    payload: {
+      district_id?: unknown;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = payload?.requester
+      ? {
+          id: String(payload.requester.id ?? ''),
+          roles: payload.requester.roles ?? [],
+        }
+      : undefined;
+    return this.executeAndAck(context, () =>
+      this.logisticsService.confirmDistrictAssignment(
+        payload?.district_id,
+        requester,
+      ),
+    );
+  }
+
   /** Tuman ↔ filial qamrovi — filialga biriktirilgan tumanlar. */
   @MessagePattern({ cmd: 'logistics.district.find_by_branch' })
   findDistrictsByServingBranch(

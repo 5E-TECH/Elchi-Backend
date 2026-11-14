@@ -46,6 +46,28 @@ export class District extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   serving_branch_id!: string | null;
 
+  /**
+   * D1: filial AVTOMATIK biriktirilgan, ops hali tasdiqlamagan — «Hududlar»
+   * sahifasida superadmin/admin ogohlantirish ko'radi. Tasdiq
+   * (`confirm_assignment`) yoki qayta biriktirish (`set_serving_branch`)
+   * tushiradi. Migratsiya 1716000000227.
+   */
+  @Column({ type: 'boolean', default: false })
+  assignment_review_required!: boolean;
+
+  /** `auto_assigned_D1` | `no_branch_found` — belgi tushgach ham saqlanadi. */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  assignment_review_reason!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  assignment_flagged_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  assignment_confirmed_by!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  assignment_confirmed_at!: Date | null;
+
   @ManyToOne(() => Region, (region) => region.districts, {
     onDelete: 'CASCADE',
   })

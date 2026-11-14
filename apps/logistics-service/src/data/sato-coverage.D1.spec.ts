@@ -6,39 +6,14 @@ import { satoRegions } from './sato-codes';
  * ning HAR birligini qamrashi kerak yoki u shu ro'yxatda ATAYLAB
  * chiqarilgan bo'lishi kerak.
  *
- * ⚠️ Seed servis har ishga tushganda yetishmagan tumanni filial
- * biriktirishisiz qo'shadi (`onModuleInit`). Shuning uchun yangi qator
- * seed'ga faqat ops tasdig'idan keyin kiradi (docs/ai/DISTRICT_GAP_D1.md):
- * qaror qilingan birlik shu ro'yxatdan olib tashlanadi va seed'ga qo'shiladi
- * (yoki qayta nomlanadi) — test buni majburlaydi.
+ * Seed servis har ishga tushganda yetishmagan tumanni qo'shadi
+ * (`onModuleInit`): MAVJUD viloyatga qo'shilgan qator filialga avtomatik
+ * biriktiriladi va `assignment_review_required` belgisini oladi (D1, ega
+ * qarori 2026-11-14 — docs/ai/DISTRICT_GAP_D1.md). 25 birlikning hammasi
+ * seed'da; yangi rasmiy birlik paydo bo'lsa — seed'ga qo'shing yoki shu
+ * ro'yxatga sababi bilan yozing.
  */
-const PENDING_OPS_DECISION: Readonly<Record<string, string>> = {
-  '1708212': 'Sharof Rashidov tumani',
-  '1708218': 'Zomin tumani',
-  '1710245': 'Shahrisabz tumani',
-  '1712412': "G'ozg'on shahri",
-  '1712244': 'Tomdi tumani',
-  '1712248': 'Uchquduq tumani',
-  '1714401': 'Namangan shahri',
-  '1714229': 'Uychi tumani',
-  '1722401': 'Termiz shahri',
-  '1724401': 'Guliston shahri',
-  '1727413': 'Bekobod shahri',
-  '1727415': 'Ohangaron shahri',
-  '1727424': "Yangiyo'l shahri",
-  '1727253': "O'rtachirchiq tumani",
-  '1730401': "Farg'ona shahri",
-  '1730408': 'Quvasoy shahri',
-  '1730206': "Qo'shtepa tumani",
-  '1730230': "O'zbekiston tumani",
-  '1733401': 'Urganch shahri',
-  '1733406': 'Xiva shahri',
-  '1733221': "Tuproqqal'a tumani",
-  '1733223': 'Xonqa tumani',
-  '1735401': 'Nukus shahri',
-  '1735209': "Bo'zatov tumani",
-  '1735228': 'Taxiatosh tumani',
-};
+const PENDING_OPS_DECISION: Readonly<Record<string, string>> = {};
 
 const seedCodes = new Set(
   regions.flatMap((r) => r.districts.map((d) => d.sato_code)),

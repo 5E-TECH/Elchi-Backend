@@ -31,7 +31,7 @@ import type {
 
 /**
  * AnKM7xmy — tuman rezolyutsiyasi. ⚠️ DB, DataSource, RMQ va Claude YO'Q:
- * snapshot seed faylidan (`regions-districts.data.ts`, 14 viloyat / 181
+ * snapshot seed faylidan (`regions-districts.data.ts`, 14 viloyat / 206
  * tuman) sintetik id bilan quriladi — nomlar XOM ("Toshkent ", "Andijon ").
  */
 
@@ -374,12 +374,12 @@ describe('resolveDistrictText (AnKM7xmy)', () => {
       expect(res.region_id).toBe(regionIdBySato(snap, '1726'));
     });
 
-    it('seed ma`lumotida 181/181 tuman SOATO prefiksiga mos', () => {
+    it('seed ma`lumotida 206/206 tuman SOATO prefiksiga mos', () => {
       const bad = SNAP.districts.filter((d) => {
         const region = SNAP.regions.find((r) => r.id === d.region_id);
         return !String(d.sato_code).startsWith(String(region?.sato_code));
       });
-      expect(SNAP.districts).toHaveLength(181);
+      expect(SNAP.districts).toHaveLength(206);
       expect(bad).toEqual([]);
     });
   });

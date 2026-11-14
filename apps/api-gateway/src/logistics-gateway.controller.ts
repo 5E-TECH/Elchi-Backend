@@ -1941,6 +1941,50 @@ export class LogisticsGatewayController {
     );
   }
 
+  // D1 — statik yo'llar `region/:id` dan OLDIN.
+  @Get('region/district-coverage')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Tuman qamrovi ogohlantirishi (D1)',
+    description:
+      "«Hududlar» sahifasi ogohlantirishi. Javob `data`: `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, sato_code, kind: 'city'|'tuman'|null, serving_branch: { id, name } | null, reason: 'auto_assigned_D1'|'no_branch_found', flagged_at }], checked_at }`. " +
+      '`missing_official` — rasmiy SOATO ro‘yxatida bor, bazada (o‘chirilmagan) qatori yo‘q birliklar. `review_required` — filial AVTOMATIK biriktirilgan va ops hali tasdiqlamagan tumanlar; `POST /region/district/:id/confirm-assignment` yoki `PUT /branches/:id/districts` belgini tushiradi. `serving_branch.name` filial xizmati javob bermasa `null`. Faqat SUPERADMIN/ADMIN.',
+  })
+  @ApiOkResponse({ description: 'Coverage review' })
+  getDistrictCoverageReview(@Req() req: { user: JwtUser }) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.district.coverage_review' },
+      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Post('region/district/:id/confirm-assignment')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Avtomatik filial biriktirishini tasdiqlash (D1)',
+    description:
+      'Tumanning `assignment_review_required` belgisini tushiradi (audit yoziladi). IDEMPOTENT: belgi yo‘q bo‘lsa ham 200. Javob `data`: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }` (hech qachon tasdiqlanmagan va belgisiz tuman — `confirmed_by`/`confirmed_at` `null`). Tuman yo‘q — 404. Faqat SUPERADMIN/ADMIN.',
+  })
+  @ApiParam({ name: 'id', description: 'District ID (bigint string)' })
+  @ApiOkResponse({ description: 'Assignment confirmed' })
+  confirmDistrictAssignment(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.district.confirm_assignment' },
+      {
+        district_id: id,
+        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+      },
+    );
+  }
+
   @Get('region/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   // (OfRSoRUX / N11, MO-7) MARKET_OPERATOR — buyurtmani qo'lda yaratishda viloyat tumanlari (faqat o'qish; MARKET

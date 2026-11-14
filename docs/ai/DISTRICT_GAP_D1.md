@@ -1,6 +1,19 @@
 # D1 — yetishmagan tumanlar va shahar/tuman juftlari (ops qarori uchun)
 
-**Holat:** qaror kutilmoqda (Dilshod / ops). Kod o'zgarishi qarordan KEYIN.
+**Holat:** QAROR QILINDI (ega, 2026-11-14) va amalga oshirildi (migratsiya
+227, `feat/district-coverage-review`): 25 birlikning HAMMASI seed'ga
+qo'shildi (rasmiy nomlari bilan — «Farg'ona shahri», «Zomin tumani»);
+mavjud qatorlar qayta nomlanmaydi va kodi o'zgarmaydi (variant (a), faqat
+yangi qator). Servis ishga tushganda (`onModuleInit`) har biri filialga
+AVTOMATIK biriktiriladi: shahar/tuman juftidagi qatorning filiali, bo'lmasa
+viloyatda eng ko'p tumanga xizmat qiladigan filial (teng — kichik id),
+topilmasa `NULL` + `no_branch_found`. Har qator «tekshirilmagan»
+(`assignment_review_required`) — «Hududlar» sahifasida superadmin/admin
+ogohlantirish ko'radi (`GET /region/district-coverage`) va tasdiqlaydi
+(`POST /region/district/:id/confirm-assignment`) yoki qayta biriktiradi
+(`PUT /branches/:id/districts` — belgi o'sha tranzaksiyada tushadi).
+
+Quyidagi bo'limlar — qarordan oldingi tahlil (tarix uchun).
 
 ## Muammo
 

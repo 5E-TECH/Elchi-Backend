@@ -39,6 +39,7 @@ import {
   type OpenCustodyRow,
 } from './coverage/district-coverage-exemption';
 import { regions } from './data/regions-districts.data';
+import { satoRegions } from './data/sato-codes';
 import { CreateDistrictDto } from './dto/create-district.dto';
 import { UpdateDistrictDto } from './dto/update-district.dto';
 import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
@@ -57,6 +58,7 @@ import {
 } from './utils/scan-assign-eligibility';
 import { LogisticsNotificationService } from './notification/logistics-notification.service';
 import {
+  normGeo,
   ActivityAction,
   ActivityLogService,
   ActivityLogQuery,
@@ -138,6 +140,9 @@ interface BranchAssignmentRow {
  * Tuman qamrovi tekshiruvi uchun filial qatori (`isOrderServedByBranch`):
  * id, tur (katta harf), viloyat va holat (kichik harf).
  */
+/** D1: avtomatik biriktirish sababi (`districts.assignment_review_reason`). */
+type DistrictReviewReason = 'auto_assigned_D1' | 'no_branch_found';
+
 interface BranchCoverageRow {
   id: string;
   type: string | null;
@@ -2662,6 +2667,10 @@ export class LogisticsServiceService implements OnModuleInit {
       let regionEntity = await this.regionRepo.findOne({
         where: { name: regionName },
       });
+      // D1: MAVJUD viloyatga seed qo'shgan tuman filialsiz «yashirin» qolmasin
+      // — avtomatik biriktiriladi va «tekshirilmagan» belgisini oladi. Yangi
+      // (bo'sh) bazada viloyat shu yerda yaratiladi — belgi qo'yilmaydi.
+      const regionExisted = Boolean(regionEntity);
 
       if (!regionEntity) {
         regionEntity = await this.regionRepo.save(
@@ -2695,11 +2704,22 @@ export class LogisticsServiceService implements OnModuleInit {
           }
         }
 
+        const review = regionExisted
+          ? await this.seedAutoAssignment(regionEntity.id, districtName)
+          : null;
         const district = this.districtRepo.create({
           name: districtName,
           sato_code: districtData.sato_code,
           region_id: regionEntity.id,
           assigned_region: regionEntity.id,
+          ...(review
+            ? {
+                serving_branch_id: review.branch_id,
+                assignment_review_required: true,
+                assignment_review_reason: review.reason,
+                assignment_flagged_at: new Date(),
+              }
+            : {}),
         });
         let savedDistrict: typeof district;
         try {
@@ -2714,7 +2734,234 @@ export class LogisticsServiceService implements OnModuleInit {
           throw error;
         }
         void this.syncDistrictToSearch(savedDistrict);
+        if (review) {
+          this.logger.warn(
+            `D1: seed tuman qo'shdi — ${districtName} (${districtData.sato_code ?? 'kodsiz'}), filial ${review.branch_id ?? 'YO‘Q'} (${review.reason}); ops tasdig'i kutilmoqda`,
+          );
+          await this.activityLog
+            .logChange({
+              entity_type: 'District',
+              entity_id: String(savedDistrict.id),
+              action: review.branch_id
+                ? ActivityAction.ASSIGN
+                : ActivityAction.CREATED,
+              old_value: null,
+              new_value: {
+                serving_branch_id: review.branch_id,
+                assignment_review_required: true,
+                assignment_review_reason: review.reason,
+              },
+              metadata: { source: 'seed_auto_assign_D1' },
+              user_id: null,
+              user_role: 'system',
+            })
+            .catch(() => undefined);
+        }
       }
+    }
+  }
+
+  /**
+   * D1 avtomatik biriktirish qoidasi (ega qarori, 2026-11-14):
+   * 1) shahar/tuman jufti — shu viloyatdagi bir xil asosli boshqa qatorning
+   *    filiali ("Farg'ona shahri" → "Farg'ona" tumani filiali);
+   * 2) bo'lmasa — viloyatda eng ko'p tumanga xizmat qiladigan filial (teng
+   *    bo'lsa kichik id). `set_serving_branch` nofaol/HQ filialni rad
+   *    etadi, nofaol filial tumanlari `clear_serving_branch` bilan
+   *    bo'shatiladi — shuning uchun RMQ'siz (servis ishga tushayotganda)
+   *    shu ustunning o'zi yetarli;
+   * 3) topilmasa — `null` + `no_branch_found`.
+   */
+  private async seedAutoAssignment(
+    regionId: string,
+    districtName: string,
+  ): Promise<{
+    branch_id: string | null;
+    reason: DistrictReviewReason;
+  }> {
+    const siblings = await this.districtRepo.find({
+      where: { region_id: regionId, isDeleted: false },
+    });
+    const base = normGeo(districtName);
+    const pair = siblings.find(
+      (d) => d.serving_branch_id && normGeo(d.name) === base,
+    );
+    if (pair?.serving_branch_id) {
+      return {
+        branch_id: String(pair.serving_branch_id),
+        reason: 'auto_assigned_D1',
+      };
+    }
+    const counts = new Map<string, number>();
+    for (const d of siblings) {
+      if (!d.serving_branch_id) continue;
+      const id = String(d.serving_branch_id);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    const best = [...counts.entries()].sort(
+      (a, b) => b[1] - a[1] || (BigInt(a[0]) < BigInt(b[0]) ? -1 : 1),
+    )[0];
+    return best
+      ? { branch_id: best[0], reason: 'auto_assigned_D1' }
+      : { branch_id: null, reason: 'no_branch_found' };
+  }
+
+  /**
+   * D1: «Hududlar» ogohlantirishi — rasmiy SOATO'da bor, bazada yo'q
+   * birliklar va avtomatik biriktirilib hali tasdiqlanmagan tumanlar.
+   */
+  async districtCoverageReview(requester?: RequesterContext) {
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(
+        "Qamrov ogohlantirishini faqat admin yoki superadmin ko'radi",
+      );
+    }
+    const [allRegions, liveDistricts] = await Promise.all([
+      this.regionRepo.find(),
+      this.districtRepo.find({ where: { isDeleted: false } }),
+    ]);
+    const regionBySato = new Map(
+      allRegions
+        .filter((r) => r.sato_code)
+        .map((r) => [String(r.sato_code), r]),
+    );
+    const regionById = new Map(allRegions.map((r) => [String(r.id), r]));
+    const regionRef = (r: Region | undefined, sato: string | null) => ({
+      id: r ? String(r.id) : null,
+      name: r?.name?.trim() ?? null,
+      sato_code: r?.sato_code ?? sato,
+    });
+
+    const haveCodes = new Set(
+      liveDistricts.map((d) => d.sato_code).filter(Boolean),
+    );
+    const missing_official = satoRegions.flatMap((r) =>
+      r.districts
+        .filter((d) => !haveCodes.has(d.sato_code))
+        .map((d) => ({
+          sato_code: d.sato_code,
+          name: d.name,
+          region: regionRef(regionBySato.get(r.sato_code), r.sato_code),
+        })),
+    );
+
+    const flagged = liveDistricts.filter((d) => d.assignment_review_required);
+    const branchNames = new Map<string, string | null>();
+    for (const id of new Set(
+      flagged
+        .map((d) => (d.serving_branch_id ? String(d.serving_branch_id) : null))
+        .filter((id): id is string => id !== null),
+    )) {
+      branchNames.set(id, await this.findBranchName(id));
+    }
+    const review_required = flagged
+      .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
+      .map((d) => {
+        const branchId = d.serving_branch_id
+          ? String(d.serving_branch_id)
+          : null;
+        const sato = d.sato_code ?? null;
+        return {
+          district_id: String(d.id),
+          name: d.name,
+          region: regionRef(regionById.get(String(d.region_id)), null),
+          sato_code: sato,
+          kind:
+            sato && sato[4] === '4'
+              ? 'city'
+              : sato && sato[4] === '2'
+                ? 'tuman'
+                : null,
+          serving_branch: branchId
+            ? { id: branchId, name: branchNames.get(branchId) ?? null }
+            : null,
+          reason: d.assignment_review_reason,
+          flagged_at: d.assignment_flagged_at,
+        };
+      });
+    return successRes({
+      missing_official,
+      review_required,
+      checked_at: new Date().toISOString(),
+    });
+  }
+
+  /** D1: ops avtomatik biriktirishni tasdiqlaydi (idempotent). */
+  async confirmDistrictAssignment(
+    districtIdInput: unknown,
+    requester?: RequesterContext,
+  ) {
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(
+        'Biriktirishni faqat admin yoki superadmin tasdiqlay oladi',
+      );
+    }
+    const districtId = canonicalBigintId(districtIdInput);
+    if (!districtId) {
+      this.badRequest("district_id noto'g'ri");
+    }
+    const district = await this.districtRepo.findOne({
+      where: { id: districtId, isDeleted: false },
+    });
+    if (!district) {
+      this.notFound('Tuman topilmadi');
+    }
+    if (district.assignment_review_required) {
+      const confirmedAt = new Date();
+      const confirmedBy = canonicalBigintId(requester?.id) ?? null;
+      await this.districtRepo.update(
+        { id: districtId, assignment_review_required: true },
+        {
+          assignment_review_required: false,
+          assignment_confirmed_by: confirmedBy,
+          assignment_confirmed_at: confirmedAt,
+        },
+      );
+      await this.activityLog.logChange({
+        entity_type: 'District',
+        entity_id: districtId,
+        action: ActivityAction.UPDATED,
+        old_value: { assignment_review_required: true },
+        new_value: {
+          assignment_review_required: false,
+          serving_branch_id: district.serving_branch_id
+            ? String(district.serving_branch_id)
+            : null,
+        },
+        metadata: {
+          source: 'confirm_assignment',
+          reason: district.assignment_review_reason,
+        },
+        ...this.auditActor(requester),
+      });
+      district.assignment_confirmed_by = confirmedBy;
+      district.assignment_confirmed_at = confirmedAt;
+    }
+    return successRes({
+      district_id: districtId,
+      assignment_review_required: false,
+      confirmed_by: district.assignment_confirmed_by
+        ? String(district.assignment_confirmed_by)
+        : null,
+      confirmed_at: district.assignment_confirmed_at,
+    });
+  }
+
+  /** Filial nomi (best-effort; topilmasa / xizmat javob bermasa — null). */
+  private async findBranchName(branchId: string): Promise<string | null> {
+    try {
+      const response = (await lastValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.find_by_id' },
+            { id: branchId, requester: SENDER_BRANCH_SYSTEM_REQUESTER },
+          )
+          .pipe(timeout(SENDER_BRANCH_TIMEOUT_MS)),
+      )) as { data?: { name?: unknown } } | null;
+      const name = response?.data?.name;
+      return typeof name === 'string' && name.trim() ? name.trim() : null;
+    } catch {
+      return null;
     }
   }
 
@@ -9852,7 +10099,7 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    const { changes, coverageCreated, coverageMoves } =
+    const { changes, coverageCreated, coverageMoves, reviewCleared } =
       await this.districtRepo.manager.transaction(async (manager) => {
         const repo = manager.getRepository(District);
         const touched = await repo.find({ where: touchedWhere });
@@ -9875,6 +10122,29 @@ export class LogisticsServiceService implements OnModuleInit {
             { id: In(districtIds) },
             { serving_branch_id: branchId },
           );
+        }
+        // D1: ops biriktirishni o'zi belgiladi (tanlangan yoki filialdan
+        // olingan tumanlar) — «tekshirilmagan» belgisi SHU tranzaksiyada
+        // tushadi; sabab (`assignment_review_reason`) tarix uchun qoladi.
+        const touchedIds = touched.map((district) => String(district.id));
+        const reviewIds = [...new Set([...districtIds, ...touchedIds])];
+        let reviewCleared: string[] = [];
+        if (reviewIds.length) {
+          const flagged = await repo.find({
+            where: { id: In(reviewIds), assignment_review_required: true },
+          });
+          reviewCleared = flagged.map((district) => String(district.id));
+          if (reviewCleared.length) {
+            await repo.update(
+              { id: In(reviewCleared) },
+              {
+                assignment_review_required: false,
+                assignment_confirmed_by:
+                  canonicalBigintId(requester?.id) ?? null,
+                assignment_confirmed_at: new Date(),
+              },
+            );
+          }
         }
 
         const txChanges = Array.from(before.entries())
@@ -9914,6 +10184,7 @@ export class LogisticsServiceService implements OnModuleInit {
           changes: txChanges,
           coverageCreated: created,
           coverageMoves: moves,
+          reviewCleared,
         };
       });
 
@@ -9950,6 +10221,18 @@ export class LogisticsServiceService implements OnModuleInit {
             : {}),
         },
         metadata: { source: 'set_serving_branch', branch_id: branchId },
+        ...this.auditActor(requester),
+      });
+    }
+
+    for (const districtId of reviewCleared) {
+      await this.activityLog.logChange({
+        entity_type: 'District',
+        entity_id: districtId,
+        action: ActivityAction.UPDATED,
+        old_value: { assignment_review_required: true },
+        new_value: { assignment_review_required: false },
+        metadata: { source: 'cleared_by_reassign', branch_id: branchId },
         ...this.auditActor(requester),
       });
     }
