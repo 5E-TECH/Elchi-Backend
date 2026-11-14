@@ -107,6 +107,8 @@ export function cacheMinTokensFor(model: string): number | null {
 
 /** Kesh yozish = kirish × 1.25 (Anthropic prompt caching, 5 daqiqa TTL). */
 export const CACHE_WRITE_MULTIPLIER = 1.25;
+/** C1: 1 soatlik TTL bilan kesh yozish = kirish × 2. */
+export const CACHE_WRITE_1H_MULTIPLIER = 2;
 /** Kesh o'qish (sukut) = kirish × 0.1 — ya'ni tejash kirish narxining 90%. */
 export const CACHE_READ_MULTIPLIER = 0.1;
 
@@ -188,6 +190,8 @@ export interface AiTokenUsage {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
+  /** C1: `cacheCreationTokens` dan 1 soatlik TTL bilan yozilgani. */
+  cacheCreation1hTokens?: number;
 }
 
 /** Manfiy/NaN/kasr qiymatni butun nomanfiy songa keltiradi. */
@@ -195,6 +199,19 @@ export function safeTokenCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.round(value)
     : 0;
+}
+
+/**
+ * Kesh yozish tokenlari narx og'irligi bilan: 5 daqiqalik × 1.25, 1 soatlik
+ * × 2 (1h qismi jami yozishdan oshmaydi).
+ */
+function cacheWriteTokensWeighted(u: AiTokenUsage): number {
+  const total = safeTokenCount(u.cacheCreationTokens);
+  const oneHour = Math.min(safeTokenCount(u.cacheCreation1hTokens), total);
+  return (
+    (total - oneHour) * CACHE_WRITE_MULTIPLIER +
+    oneHour * CACHE_WRITE_1H_MULTIPLIER
+  );
 }
 
 /** So'rov hajmini hisobga olgan narx (uzun so'rov tarifi bo'lsa — o'sha). */
@@ -226,7 +243,7 @@ export function computeCostUsd(u: AiTokenUsage): number {
   return (
     (safeTokenCount(u.inputTokens) * p.in +
       safeTokenCount(u.outputTokens) * p.out +
-      safeTokenCount(u.cacheCreationTokens) * p.in * CACHE_WRITE_MULTIPLIER +
+      cacheWriteTokensWeighted(u) * p.in +
       safeTokenCount(u.cacheReadTokens) *
         p.in *
         cacheReadMultiplierFor(u.model)) /

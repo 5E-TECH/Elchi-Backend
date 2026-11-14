@@ -126,6 +126,9 @@ export class DistrictPickService {
       maxTokens: DISTRICT_PICK_MAX_TOKENS,
       deadlineAt,
       ...effortParam(model, 'low'),
+      // C1: tuman katalogi (~2k token) system'da, chaqiruvlar siyrak (faqat
+      // fallback) — 5 daqiqalik kesh deyarli hech qachon o'qilmasdi.
+      cacheTtl: '1h',
       meta: {
         feature: 'order_district',
         requestArea: 'order',

@@ -38,6 +38,7 @@ import type {
   ClaudeImageInput,
   ClaudeOutcome,
   ClaudeResult,
+  ClaudeCacheTtl,
   ClaudeUsage,
   ClaudeUsageMeta,
   ClaudeUsageRecord,
@@ -70,6 +71,11 @@ interface AnthropicUsageLike {
   output_tokens?: number | null;
   cache_creation_input_tokens?: number | null;
   cache_read_input_tokens?: number | null;
+  /** C1: TTL bo'yicha bo'linish (SDK `usage.cache_creation`). */
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number | null;
+    ephemeral_1h_input_tokens?: number | null;
+  } | null;
 }
 
 interface AnthropicResponseLike {
@@ -257,12 +263,19 @@ export class ClaudeService implements OnApplicationBootstrap {
    * qo'shilsa kesh jimgina o'ladi (xarajat ~4x) — o'zgaruvchi qism doim
    * user message'ga.
    */
-  private cachedSystem(system: string): Anthropic.TextBlockParam[] {
+  private cachedSystem(
+    system: string,
+    ttl: ClaudeCacheTtl = '5m',
+  ): Anthropic.TextBlockParam[] {
     return [
       {
         type: 'text',
         text: system,
-        cache_control: { type: 'ephemeral' },
+        // C1: '5m' — sukut (tana avvalgidek, `ttl` kaliti yo'q).
+        cache_control:
+          ttl === '1h'
+            ? { type: 'ephemeral', ttl: '1h' }
+            : { type: 'ephemeral' },
       },
     ];
   }
@@ -279,16 +292,14 @@ export class ClaudeService implements OnApplicationBootstrap {
     const text = `<user_message>\n${userText}\n</user_message>`;
     if (images.length === 0) return text;
     return [
-      ...images.map(
-        (img): Anthropic.ImageBlockParam => ({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: img.mediaType,
-            data: img.dataBase64,
-          },
-        }),
-      ),
+      ...images.map((img): Anthropic.ImageBlockParam => ({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: img.mediaType,
+          data: img.dataBase64,
+        },
+      })),
       { type: 'text', text },
     ];
   }
@@ -355,7 +366,7 @@ export class ClaudeService implements OnApplicationBootstrap {
         const body: Anthropic.MessageCreateParamsNonStreaming = {
           model,
           max_tokens: maxTokens,
-          system: this.cachedSystem(opts.system),
+          system: this.cachedSystem(opts.system, opts.cacheTtl),
           messages: [{ role: 'user', content }],
           output_config: {
             format: { type: 'json_schema', schema: opts.schema },
@@ -417,6 +428,7 @@ export class ClaudeService implements OnApplicationBootstrap {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           cacheCreationTokens: usage.cache_creation_input_tokens,
+          cacheCreation1hTokens: usage.cache_creation_1h_input_tokens,
           cacheReadTokens: usage.cache_read_input_tokens,
           steps: attempt,
           stopReason,
@@ -517,6 +529,7 @@ export class ClaudeService implements OnApplicationBootstrap {
       output_tokens: 0,
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 0,
+      cache_creation_1h_input_tokens: 0,
     };
     const history = [...(opts.messages as Anthropic.MessageParam[])];
     const added: Anthropic.MessageParam[] = [];
@@ -579,7 +592,7 @@ export class ClaudeService implements OnApplicationBootstrap {
         const body: Anthropic.MessageStreamParams = {
           model,
           max_tokens: opts.maxTokens,
-          system: this.cachedSystem(opts.system),
+          system: this.cachedSystem(opts.system, opts.cacheTtl),
           messages: history,
           tools,
           cache_control: { type: 'ephemeral' },
@@ -620,6 +633,8 @@ export class ClaudeService implements OnApplicationBootstrap {
         total.input_tokens += usage.input_tokens;
         total.output_tokens += usage.output_tokens;
         total.cache_creation_input_tokens += usage.cache_creation_input_tokens;
+        total.cache_creation_1h_input_tokens +=
+          usage.cache_creation_1h_input_tokens;
         total.cache_read_input_tokens += usage.cache_read_input_tokens;
         const stopReason =
           typeof response.stop_reason === 'string'
@@ -660,6 +675,7 @@ export class ClaudeService implements OnApplicationBootstrap {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           cacheCreationTokens: usage.cache_creation_input_tokens,
+          cacheCreation1hTokens: usage.cache_creation_1h_input_tokens,
           cacheReadTokens: usage.cache_read_input_tokens,
           steps: step,
           stopReason,
@@ -793,6 +809,10 @@ export class ClaudeService implements OnApplicationBootstrap {
       output_tokens: tokenCount(u?.output_tokens),
       cache_creation_input_tokens: tokenCount(u?.cache_creation_input_tokens),
       cache_read_input_tokens: tokenCount(u?.cache_read_input_tokens),
+      cache_creation_1h_input_tokens: Math.min(
+        tokenCount(u?.cache_creation?.ephemeral_1h_input_tokens),
+        tokenCount(u?.cache_creation_input_tokens),
+      ),
     };
   }
 

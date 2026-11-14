@@ -322,6 +322,8 @@ export class AssistantService {
         maxSteps: this.maxSteps,
         maxTokens: this.maxTokens,
         ...effortParam(this.model, this.effort),
+        // C1: system bloki katta va o'zgarmas, xabarlar orasida daqiqalar.
+        cacheTtl: '1h',
         meta: {
           feature: 'assistant',
           requestArea: 'internal',

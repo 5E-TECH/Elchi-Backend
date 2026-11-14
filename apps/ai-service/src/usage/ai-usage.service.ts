@@ -456,6 +456,10 @@ export class AiUsageService implements ClaudeUsageSink {
       input_tokens: safeTokenCount(r.inputTokens),
       output_tokens: safeTokenCount(r.outputTokens),
       cache_creation_tokens: safeTokenCount(r.cacheCreationTokens),
+      cache_creation_1h_tokens: Math.min(
+        safeTokenCount(r.cacheCreation1hTokens),
+        safeTokenCount(r.cacheCreationTokens),
+      ),
       cache_read_tokens: safeTokenCount(r.cacheReadTokens),
       steps: Math.max(1, safeTokenCount(r.steps)),
       stop_reason:
