@@ -292,14 +292,16 @@ export class ClaudeService implements OnApplicationBootstrap {
     const text = `<user_message>\n${userText}\n</user_message>`;
     if (images.length === 0) return text;
     return [
-      ...images.map((img): Anthropic.ImageBlockParam => ({
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: img.mediaType,
-          data: img.dataBase64,
-        },
-      })),
+      ...images.map(
+        (img): Anthropic.ImageBlockParam => ({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: img.mediaType,
+            data: img.dataBase64,
+          },
+        }),
+      ),
       { type: 'text', text },
     ];
   }
