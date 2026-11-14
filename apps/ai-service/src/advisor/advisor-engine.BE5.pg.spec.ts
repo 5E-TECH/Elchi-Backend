@@ -144,7 +144,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     };
     const res = await engine.run('frequent', NOW);
     expect(res).toMatchObject({
-      rules: ['R1', 'R3'],
+      rules: ['R1', 'R2', 'R3', 'R4', 'R5'],
       candidates: 2,
       opened: 2,
     });
@@ -265,7 +265,9 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
   it('qoida o‘chirilgan → so‘ralmaydi; R2 critical sozlamadan, R6 kunlik guruhda kechagi kun', async () => {
     await settings.update(SA, {
       version: 1,
-      rules: { R1: { enabled: false }, R3: { enabled: false } },
+      rules: Object.fromEntries(
+        ['R1', 'R2', 'R3', 'R4', 'R5'].map((k) => [k, { enabled: false }]),
+      ),
     });
     const res = await engine.run('frequent', NOW);
     expect(res).toMatchObject({ rules: [], candidates: 0 });
@@ -350,10 +352,88 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     >(
       `SELECT rule_key, last_status, last_error FROM ai_schema.ai_advisor_rule_state ORDER BY rule_key`,
     );
-    expect(state).toEqual([
-      { rule_key: 'R1', last_status: 'error', last_error: 'timeout' },
-      { rule_key: 'R3', last_status: 'error', last_error: 'timeout' },
+    expect(state.map((r) => r.rule_key)).toEqual([
+      'R1',
+      'R2',
+      'R3',
+      'R4',
+      'R5',
     ]);
+    expect(
+      state.every(
+        (r) => r.last_status === 'error' && r.last_error === 'timeout',
+      ),
+    ).toBe(true);
+  });
+
+  it('R2 epizod: ayni epizod — ochiq bo‘lsa yangilanadi, yopilgandan keyin jim (Q23); yangi epizod — yangi qator', async () => {
+    await warmUp();
+    const r2 = (
+      fact: string,
+      balance: number,
+      days: number,
+    ): AiAdvisorCandidate => ({
+      rule_key: 'R2',
+      dedup_key: 'R2:courier:55',
+      fact_keys: [{ fact_key: fact, fact_at: '2026-10-18T19:00:00.000Z' }],
+      branch: { id: '1', name: 'Toshkent HQ' },
+      subject: { kind: 'courier', id: '55', name: 'Jasur Tursunov' },
+      headline_amount: balance,
+      facts: {
+        trigger: 'no_handover',
+        courier: { id: '55', name: 'Jasur Tursunov' },
+        balance,
+        days_without_handover: days,
+      },
+      evidence: {
+        kind: 'courier_days',
+        rows: [],
+        total_rows: 0,
+        truncated: false,
+      },
+    });
+    reply = { candidates: [r2('ep:h:900', 2840000, 4)], cursors: {} };
+    await engine.run('frequent', NOW);
+    let [row] = await alerts();
+    expect(row).toMatchObject({
+      severity: 'critical',
+      occurrences: 1,
+      title: "Jasur Tursunov: 2 840 000 so'm, 4 kundan beri topshirilmagan",
+    });
+
+    // Ayni epizod, keyingi kun: occurrences o'zgarmaydi, faktlar yangilanadi.
+    reply = { candidates: [r2('ep:h:900', 3100000, 5)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-23T09:00:00Z')),
+    ).toMatchObject({ refreshed: 1, occurred: 0 });
+    [row] = await alerts();
+    expect(row).toMatchObject({
+      occurrences: 1,
+      title: "Jasur Tursunov: 3 100 000 so'm, 5 kundan beri topshirilmagan",
+    });
+    expect(new Date(row.last_fact_at as string).toISOString()).toBe(
+      '2026-10-23T09:00:00.000Z',
+    );
+
+    // «Ahamiyatsiz» — davom etayotgan holat qayta ochilmaydi.
+    await ds.query(
+      `UPDATE ai_schema.ai_advisor_alerts SET status = 'dismissed'`,
+    );
+    expect(
+      await engine.run('frequent', new Date('2026-10-24T09:00:00Z')),
+    ).toMatchObject({ opened: 0, refreshed: 0 });
+    expect(await alerts()).toHaveLength(1);
+
+    // Topshirishdan keyin yana shart rost — yangi epizod, yangi ogohlantirish.
+    reply = { candidates: [r2('ep:h:950', 2500000, 4)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-30T09:00:00Z')),
+    ).toMatchObject({ opened: 1 });
+    const rows = await alerts();
+    expect(rows[1]).toMatchObject({
+      status: 'new',
+      reopened_from_id: rows[0].id,
+    });
   });
 
   it('scheduler: qulf boshqa ulanishda — tick o‘tkaziladi; bo‘sh — ishlaydi va qulfni ochadi', async () => {

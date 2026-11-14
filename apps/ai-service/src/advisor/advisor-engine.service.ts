@@ -34,7 +34,13 @@ import { advisorLinks, advisorTitle, withEvidenceHrefs } from './advisor-text';
 export type AdvisorRunGroup = 'frequent' | 'daily';
 
 /** 30 daqiqalik tick: kursorli va holat qoidalari (§4.0). */
-export const ADVISOR_FREQUENT_RULES: readonly AiAdvisorRuleKey[] = ['R1', 'R3'];
+export const ADVISOR_FREQUENT_RULES: readonly AiAdvisorRuleKey[] = [
+  'R1',
+  'R2',
+  'R3',
+  'R4',
+  'R5',
+];
 /** 02:30 Toshkent: R6 (kecha; dushanba — o'tgan hafta ham). */
 export const ADVISOR_DAILY_RULES: readonly AiAdvisorRuleKey[] = ['R6'];
 /** Holat qoidalari: ayni epizod qayta ko'rilsa ochiq qatorni yangilaydi. */

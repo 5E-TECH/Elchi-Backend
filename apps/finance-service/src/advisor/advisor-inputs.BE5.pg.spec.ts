@@ -36,8 +36,16 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       })),
     }),
   );
-  const branchSend = jest.fn((_p: unknown, data: { id: string }) =>
-    of({ data: { id: data.id, name: `Filial ${data.id}` } }),
+  const branchSend = jest.fn(
+    (p: { cmd: string }, data: { id?: string; user_ids?: string[] }) =>
+      p.cmd === 'branch.user.find_by_user_ids'
+        ? of({
+            data: (data.user_ids ?? []).map((u) => ({
+              user_id: u,
+              branch: { id: '1', name: 'Toshkent HQ' },
+            })),
+          })
+        : of({ data: { id: data.id, name: `Filial ${data.id}` } }),
   );
 
   beforeAll(async () => {
@@ -85,7 +93,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
 
   beforeEach(async () => {
     await db.query(
-      'TRUNCATE "finance_schema"."shifts", "finance_schema"."cashbox_history", "finance_schema"."cashboxes", "finance_schema"."cashbox_expense_categories", "finance_schema"."financial_balance_history" RESTART IDENTITY CASCADE',
+      'TRUNCATE "finance_schema"."shifts", "finance_schema"."cashbox_history", "finance_schema"."cashboxes", "finance_schema"."cashbox_expense_categories", "finance_schema"."financial_balance_history", "finance_schema"."finance_cashbox_daily" RESTART IDENTITY CASCADE',
     );
   });
 
@@ -319,6 +327,238 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       expect(out.candidates[0].facts).toMatchObject({
         mad: 0,
         threshold: 460000,
+      });
+    });
+  });
+
+  describe('R2/R4/R5 (epizod)', () => {
+    async function cashbox(
+      type: string,
+      owner: number,
+      balance: number,
+    ): Promise<string> {
+      const [row] = await db.query<Array<{ id: string }>>(
+        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id", "balance")
+         VALUES ($1, $2, $3) RETURNING "id"::text AS id`,
+        [type, owner, balance],
+      );
+      return row.id;
+    }
+    async function hist(
+      cb: string,
+      op: 'income' | 'expense',
+      source: string,
+      amount: number,
+      balanceAfter: number,
+      at: string,
+      reverses: string | null = null,
+    ): Promise<string> {
+      const [row] = await db.query<Array<{ id: string }>>(
+        `INSERT INTO "finance_schema"."cashbox_history"
+           ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "createdAt", "reverses_history_id")
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING "id"::text AS id`,
+        [op, cb, source, amount, balanceAfter, at, reverses],
+      );
+      return row.id;
+    }
+    async function daily(
+      cb: string,
+      owner: number,
+      day: string,
+      closing: number,
+    ) {
+      await db.query(
+        `INSERT INTO "finance_schema"."finance_cashbox_daily"
+           ("snapshot_date", "cashbox_id", "cashbox_type", "user_id", "opening_balance", "closing_balance", "income")
+         VALUES ($1, $2, 'couriers', $3, 0, $4, 0)`,
+        [day, cb, owner, closing],
+      );
+    }
+    const run = (rules: Array<'R2' | 'R4' | 'R5'>, now = NOW.toISOString()) =>
+      svc.ruleInputs({
+        rules,
+        now,
+        thresholds: {
+          R2: { balance_uzs: 2000000, growth_days: 3, no_handover_days: 3 },
+          R4: { days_without_payout: 7 },
+          R5: { balance_uzs: 5000000, days_without_transfer: 3 },
+        },
+        since: {},
+      });
+
+    it('R2 (b): > 3 kun topshirilmagan; epizod = oxirgi topshirish; T6 qaytarilgan topshirish sanalmaydi', async () => {
+      const cb = await cashbox('couriers', 55, 2840000);
+      const h1 = await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -500000,
+        0,
+        '2026-10-17T10:00:00Z',
+      );
+      // 18.10 dagi topshirish T6 bilan qaytarilgan — oxirgi topshirish h1 bo'lib qoladi.
+      const h2 = await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -100000,
+        0,
+        '2026-10-18T10:00:00Z',
+      );
+      await hist(
+        cb,
+        'income',
+        'payment_reversal',
+        100000,
+        100000,
+        '2026-10-18T11:00:00Z',
+        h2,
+      );
+      await hist(
+        cb,
+        'income',
+        'courier_payment',
+        100000,
+        100000,
+        '2026-10-20T10:00:00Z',
+      ); // qabul tomoni emas
+      const out = await run(['R2']);
+      expect(out.candidates).toHaveLength(1);
+      expect(out.candidates[0]).toMatchObject({
+        dedup_key: 'R2:courier:55',
+        fact_keys: [
+          { fact_key: `ep:h:${h1}`, fact_at: '2026-10-16T19:00:00.000Z' },
+        ],
+        branch: { id: '1', name: 'Toshkent HQ' },
+        subject: { kind: 'courier', id: '55', name: 'User 55' },
+        headline_amount: 2840000,
+        facts: {
+          trigger: 'no_handover',
+          balance: 2840000,
+          days_without_handover: 5,
+          growth_days: 0,
+        },
+        evidence: {
+          kind: 'courier_days',
+          last_handover: { history_id: h1, amount: 500000 },
+        },
+      });
+    });
+
+    it('R2: aynan 3 kun — yo‘q (qat’iy katta); (a) o‘sish 3 yopilgan kun VA > 2 mln → growth', async () => {
+      const cb = await cashbox('couriers', 56, 2500000);
+      await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -1,
+        0,
+        '2026-10-19T10:00:00Z',
+      ); // 3 kun oldin
+      expect((await run(['R2'])).candidates).toEqual([]);
+      for (const [d, v] of [
+        ['2026-10-18', 100],
+        ['2026-10-19', 200],
+        ['2026-10-20', 300],
+        ['2026-10-21', 400],
+      ] as const) {
+        await daily(cb, 56, d, v);
+      }
+      const out = await run(['R2']);
+      expect(out.candidates[0].facts).toMatchObject({
+        trigger: 'growth',
+        growth_days: 3,
+      });
+      expect((out.candidates[0].evidence.rows as unknown[]).length).toBe(4);
+    });
+
+    it('R2 (a): oynada kun yetishmasa (snapshot yo‘q) — o‘sish tekshirilmaydi', async () => {
+      const cb = await cashbox('couriers', 57, 2500000);
+      await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -1,
+        0,
+        '2026-10-21T10:00:00Z',
+      );
+      for (const [d, v] of [
+        ['2026-10-18', 100],
+        ['2026-10-19', 200],
+        ['2026-10-21', 400],
+      ] as const) {
+        await daily(cb, 57, d, v);
+      }
+      expect((await run(['R2'])).candidates).toEqual([]);
+    });
+
+    it('R4: qarz > 0 VA > 7 kun to‘lov yo‘q; to‘lov hech bo‘lmasa — qarz boshlangan kun', async () => {
+      const m1 = await cashbox('markets', 70, 3120000);
+      await hist(
+        m1,
+        'expense',
+        'market_payment',
+        -800000,
+        0,
+        '2026-10-13T10:00:00Z',
+      );
+      const m2 = await cashbox('markets', 71, 50000);
+      await hist(m2, 'income', 'sell', 50000, 50000, '2026-10-10T10:00:00Z');
+      const m3 = await cashbox('markets', 72, 0); // qarz yo'q
+      await hist(m3, 'income', 'sell', 50000, 50000, '2026-10-01T10:00:00Z');
+      const out = await run(['R4']);
+      expect(
+        out.candidates.map((c) => [
+          c.dedup_key,
+          c.fact_keys[0].fact_key,
+          c.facts.days_without_payout,
+        ]),
+      ).toEqual([
+        ['R4:market:70', expect.stringMatching(/^ep:h:\d+$/), 9],
+        ['R4:market:71', 'ep:d:2026-10-10', 12],
+      ]);
+      expect(out.candidates[0].facts).toMatchObject({
+        debt: 3120000,
+        last_payout_amount: 800000,
+        market: { id: '70', name: 'User 70' },
+      });
+    });
+
+    it('R5: > 5 mln VA > 3 kun HQ’ga o‘tkazma yo‘q (VA); dalil — o‘tkazmalar', async () => {
+      const b = await cashbox('branch', 12, 6400000);
+      const t1 = await hist(
+        b,
+        'expense',
+        'branch_to_main',
+        -2000000,
+        100,
+        '2026-10-18T10:00:00Z',
+      );
+      const low = await cashbox('branch', 13, 4000000);
+      await hist(
+        low,
+        'expense',
+        'branch_to_main',
+        -1,
+        0,
+        '2026-10-01T10:00:00Z',
+      );
+      const out = await run(['R5']);
+      expect(out.candidates).toHaveLength(1);
+      expect(out.candidates[0]).toMatchObject({
+        dedup_key: 'R5:branch:12',
+        fact_keys: [{ fact_key: `ep:h:${t1}` }],
+        branch: { id: '12', name: 'Filial 12' },
+        subject: { kind: 'branch', id: '12', name: 'Filial 12' },
+        facts: {
+          balance: 6400000,
+          days_without_transfer: 4,
+          last_transfer_amount: 2000000,
+        },
+        evidence: {
+          kind: 'branch_transfers',
+          transfers: [{ history_id: t1, amount: 2000000 }],
+        },
       });
     });
   });

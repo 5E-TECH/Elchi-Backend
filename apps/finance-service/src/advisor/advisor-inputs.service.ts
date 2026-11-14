@@ -15,6 +15,7 @@ import { FinanceDailyService } from '../aggregates/finance-daily.service';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
+import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { Shift } from '../entities/shift.entity';
 
 /**
@@ -81,6 +82,39 @@ interface ShiftRow {
   is_negative: boolean;
 }
 
+interface EpisodeRow {
+  cashbox_id: string;
+  owner: string;
+  balance: string;
+  last_id: string | null;
+  last_at: Date | null;
+  last_amount: string | null;
+  last_day: string | null;
+  first_at: Date | null;
+  first_day: string | null;
+}
+
+interface Episode {
+  /** `ep:h:<oxirgi chiqish history_id>` yoki `ep:d:<boshlangan kun>`. */
+  key: string;
+  /** Epizod boshlangan Toshkent kuni 00:00 (ISO). */
+  at: string;
+  /** «N kundan beri» = bugun − hodisa kuni (to'liq kalendar kunlari). */
+  days: number;
+}
+
+/** Epizod: oxirgi chiqishdan (bo'lmasa qoldiq paydo bo'lgan kundan) beri. */
+function episodeOf(r: EpisodeRow, today: string): Episode | null {
+  const day = r.last_id ? r.last_day : r.first_day;
+  if (!day) return null;
+  const key = r.last_id ? `ep:h:${r.last_id}` : `ep:d:${day}`;
+  const days = Math.round(
+    (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) /
+      86_400_000,
+  );
+  return { key, at: new Date(`${day}T00:00:00.000+05:00`).toISOString(), days };
+}
+
 interface R3Row {
   id: string;
   amount: string;
@@ -122,6 +156,7 @@ export class AdvisorInputsService {
       history: path(CashboxHistory),
       cashboxes: path(Cashbox),
       categories: path(CashboxExpenseCategory),
+      daily: path(FinanceCashboxDaily),
     };
   }
 
@@ -147,6 +182,22 @@ export class AdvisorInputsService {
       const r = await this.r3(since, now, t, names);
       out.candidates.push(...r.candidates);
       out.cursors.R3 = r.cursor;
+    }
+    const today = tashkentDateKey(now);
+    if (rules.has('R2')) {
+      out.candidates.push(
+        ...(await this.r2(input.thresholds?.R2 ?? {}, today, names)),
+      );
+    }
+    if (rules.has('R4')) {
+      out.candidates.push(
+        ...(await this.r4(input.thresholds?.R4 ?? {}, today, names)),
+      );
+    }
+    if (rules.has('R5')) {
+      out.candidates.push(
+        ...(await this.r5(input.thresholds?.R5 ?? {}, today, names)),
+      );
     }
     if (rules.has('R6')) {
       out.candidates.push(...(await this.r6(input.periods ?? {}, now)));
@@ -538,6 +589,371 @@ export class AdvisorInputsService {
     return candidates;
   }
 
+  // ─── R2/R4/R5 holat qoidalari: epizod (§4.1, §4.2, BE-rev B5) ─────────
+
+  /**
+   * Kassa turi bo'yicha joriy holat: qoldiq, oxirgi «chiqish» (topshirish /
+   * to'lov / o'tkazma — `createdAt` bo'yicha, T6 bilan qaytarilgani
+   * hisobga olinmaydi) va bunday chiqish bo'lmasa epizod boshlangan lahza
+   * (qoldiq birinchi marta `episodeFloor` dan oshgan qator).
+   */
+  private async episodes(
+    type: 'couriers' | 'markets' | 'branch',
+    source: 'courier_payment' | 'market_payment' | 'branch_to_main',
+    minBalance: number,
+    episodeFloor: number,
+  ): Promise<EpisodeRow[]> {
+    const t = this.tables();
+    return this.ds.query<EpisodeRow[]>(
+      `SELECT c."id"::text AS cashbox_id, c."user_id"::text AS owner, c."balance",
+              lh.id AS last_id, lh."createdAt" AS last_at, lh.amount AS last_amount,
+              to_char(lh."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS last_day,
+              fp.first_at,
+              to_char(fp.first_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS first_day
+         FROM ${t.cashboxes} c
+         LEFT JOIN LATERAL (
+           SELECT h."id"::text AS id, h."createdAt", ABS(h."amount") AS amount
+             FROM ${t.history} h
+            WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
+              AND h."source_type" = $2 AND h."is_deleted" = false
+              AND NOT EXISTS (
+                SELECT 1 FROM ${t.history} r
+                 WHERE r."source_type" = 'payment_reversal'
+                   AND r."reverses_history_id" = h."id" AND r."is_deleted" = false)
+            ORDER BY h."createdAt" DESC, h."id" DESC
+            LIMIT 1
+         ) lh ON true
+         LEFT JOIN LATERAL (
+           SELECT MIN(h."createdAt") AS first_at
+             FROM ${t.history} h
+            WHERE lh.id IS NULL AND h."cashbox_id" = c."id"
+              AND h."is_deleted" = false AND h."balance_after" > $4::numeric
+         ) fp ON true
+        WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
+          AND c."balance" > $3::numeric
+        ORDER BY c."id"`,
+      [type, source, minBalance, episodeFloor],
+    );
+  }
+
+  /** Kassa kunlik yopilishlari (`finance_cashbox_daily`) — oxirgi kunlar. */
+  private async dailyClosings(
+    cashboxIds: string[],
+    fromDay: string,
+    toDay: string,
+  ): Promise<
+    Map<
+      string,
+      Array<{ date: string; opening: number; income: number; closing: number }>
+    >
+  > {
+    const out = new Map<
+      string,
+      Array<{ date: string; opening: number; income: number; closing: number }>
+    >();
+    if (!cashboxIds.length) return out;
+    const rows = await this.ds.query<
+      Array<{
+        cashbox_id: string;
+        date: string;
+        opening_balance: string;
+        income: string;
+        closing_balance: string;
+      }>
+    >(
+      `SELECT "cashbox_id"::text AS cashbox_id, to_char("snapshot_date", 'YYYY-MM-DD') AS date,
+              "opening_balance", "income", "closing_balance"
+         FROM ${this.tables().daily}
+        WHERE "cashbox_id"::text = ANY($1::text[]) AND "snapshot_date" BETWEEN $2::date AND $3::date
+          AND "is_deleted" = false
+        ORDER BY "cashbox_id", "snapshot_date"`,
+      [cashboxIds, fromDay, toDay],
+    );
+    for (const r of rows) {
+      const list = out.get(r.cashbox_id) ?? [];
+      list.push({
+        date: r.date,
+        opening: money(r.opening_balance),
+        income: money(r.income),
+        closing: money(r.closing_balance),
+      });
+      out.set(r.cashbox_id, list);
+    }
+    return out;
+  }
+
+  /** Kun bo'yicha «chiqish» yig'indisi (T6 qaytarilganlarsiz). */
+  private async dailyOutflows(
+    cashboxIds: string[],
+    source: string,
+    fromDay: string,
+  ): Promise<Map<string, Map<string, number>>> {
+    const out = new Map<string, Map<string, number>>();
+    if (!cashboxIds.length) return out;
+    const t = this.tables();
+    const rows = await this.ds.query<
+      Array<{ cashbox_id: string; day: string; total: string }>
+    >(
+      `SELECT h."cashbox_id"::text AS cashbox_id,
+              to_char(h."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day,
+              SUM(ABS(h."amount")) AS total
+         FROM ${t.history} h
+        WHERE h."cashbox_id"::text = ANY($1::text[]) AND h."operation_type" = 'expense'
+          AND h."source_type" = $2 AND h."is_deleted" = false
+          AND h."createdAt" >= ($3::date::timestamp AT TIME ZONE 'Asia/Tashkent')
+          AND NOT EXISTS (
+            SELECT 1 FROM ${t.history} r
+             WHERE r."source_type" = 'payment_reversal'
+               AND r."reverses_history_id" = h."id" AND r."is_deleted" = false)
+        GROUP BY 1, 2`,
+      [cashboxIds, source, fromDay],
+    );
+    for (const r of rows) {
+      const m = out.get(r.cashbox_id) ?? new Map<string, number>();
+      m.set(r.day, money(r.total));
+      out.set(r.cashbox_id, m);
+    }
+    return out;
+  }
+
+  /** R2 Kuryer qarzi o'smoqda: (o'sish VA > balance_uzs) YOKI (> N kun topshirilmagan). */
+  private async r2(
+    t: Record<string, number>,
+    today: string,
+    names: NameCache,
+  ): Promise<AiAdvisorCandidate[]> {
+    const balanceUzs = positive(t.balance_uzs, 2_000_000);
+    const growthDays = Math.floor(positive(t.growth_days, 3));
+    const noHandover = Math.floor(positive(t.no_handover_days, 3));
+    const rows = await this.episodes('couriers', 'courier_payment', 0, 0);
+    if (!rows.length) return [];
+    const ids = rows.map((r) => r.cashbox_id);
+    const window = Math.max(growthDays + 1, ADVISOR_EVIDENCE_LIMIT);
+    const closings = await this.dailyClosings(
+      ids,
+      addDaysKey(today, -window),
+      addDaysKey(today, -1),
+    );
+    const outflows = await this.dailyOutflows(
+      ids,
+      'courier_payment',
+      addDaysKey(today, -window),
+    );
+    const candidates: AiAdvisorCandidate[] = [];
+    for (const r of rows) {
+      const ep = episodeOf(r, today);
+      if (!ep) continue;
+      const balance = money(r.balance);
+      const days = (closings.get(r.cashbox_id) ?? []).filter(
+        (d) => d.date < today,
+      );
+      // (a) o'sish: oxirgi growthDays+1 ta YOPILGAN kun (kechagacha) — har kuni
+      // oldingisidan qat'iy katta. Kun yetishmasa (snapshot hali yo'q) — o'tkaziladi.
+      const tail = days.slice(-(growthDays + 1));
+      const expected = Array.from({ length: growthDays + 1 }, (_, i) =>
+        addDaysKey(today, i - growthDays - 1),
+      );
+      const growth =
+        tail.length === growthDays + 1 &&
+        tail.every((d, i) => d.date === expected[i]) &&
+        tail.every((d, i) => i === 0 || d.closing > tail[i - 1].closing) &&
+        balance > balanceUzs;
+      const stale = balance > 0 && ep.days > noHandover;
+      if (!growth && !stale) continue;
+      const trigger =
+        growth && stale ? 'both' : growth ? 'growth' : 'no_handover';
+      names.wantUser(r.owner);
+      names.wantUserBranch(r.owner);
+      const out = outflows.get(r.cashbox_id) ?? new Map<string, number>();
+      const ev = days.slice(-ADVISOR_EVIDENCE_LIMIT);
+      candidates.push({
+        rule_key: 'R2',
+        dedup_key: `R2:courier:${r.owner}`,
+        fact_keys: [{ fact_key: ep.key, fact_at: ep.at }],
+        branch: null,
+        subject: { kind: 'courier', id: r.owner, name: null },
+        headline_amount: balance,
+        facts: {
+          trigger,
+          courier: { id: r.owner, name: null },
+          branch: null,
+          balance,
+          growth_days: growth ? growthDays : 0,
+          days_without_handover: ep.days,
+          last_handover_at: r.last_at ? iso(r.last_at) : null,
+        },
+        evidence: {
+          kind: 'courier_days',
+          total_rows: days.length,
+          truncated: days.length > ev.length,
+          rows: ev.map((d) => ({
+            date: d.date,
+            opening_balance: d.opening,
+            income: d.income,
+            handed_over: out.get(d.date) ?? 0,
+            closing_balance: d.closing,
+          })),
+          last_handover: r.last_id
+            ? {
+                at: iso(r.last_at),
+                amount: money(r.last_amount),
+                history_id: r.last_id,
+              }
+            : null,
+        },
+      });
+    }
+    return candidates;
+  }
+
+  /** R4 Market to'lovi kechikmoqda: qarz > 0 VA > N kun to'lov yo'q. */
+  private async r4(
+    t: Record<string, number>,
+    today: string,
+    names: NameCache,
+  ): Promise<AiAdvisorCandidate[]> {
+    const limitDays = Math.floor(positive(t.days_without_payout, 7));
+    const rows = await this.episodes('markets', 'market_payment', 0, 0);
+    const hits = rows
+      .map((r) => ({ r, ep: episodeOf(r, today) }))
+      .filter(
+        (x): x is { r: EpisodeRow; ep: Episode } =>
+          !!x.ep && x.ep.days > limitDays,
+      );
+    if (!hits.length) return [];
+    const ids = hits.map((x) => x.r.cashbox_id);
+    const from = addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT);
+    const closings = await this.dailyClosings(ids, from, addDaysKey(today, -1));
+    const paid = await this.dailyOutflows(ids, 'market_payment', from);
+    return hits.map(({ r, ep }) => {
+      names.wantUser(r.owner);
+      const debt = money(r.balance);
+      const days = closings.get(r.cashbox_id) ?? [];
+      const p = paid.get(r.cashbox_id) ?? new Map<string, number>();
+      return {
+        rule_key: 'R4',
+        dedup_key: `R4:market:${r.owner}`,
+        fact_keys: [{ fact_key: ep.key, fact_at: ep.at }],
+        branch: null,
+        subject: { kind: 'market', id: r.owner, name: null },
+        headline_amount: debt,
+        facts: {
+          market: { id: r.owner, name: null },
+          debt,
+          days_without_payout: ep.days,
+          last_payout_at: r.last_at ? iso(r.last_at) : null,
+          last_payout_amount: r.last_id ? money(r.last_amount) : null,
+        },
+        evidence: {
+          kind: 'market_debt_days',
+          total_rows: days.length,
+          truncated: false,
+          rows: days.map((d) => ({
+            date: d.date,
+            debt: d.closing,
+            paid: p.get(d.date) ?? 0,
+          })),
+          last_payout: r.last_id
+            ? {
+                at: iso(r.last_at),
+                amount: money(r.last_amount),
+                history_id: r.last_id,
+              }
+            : null,
+        },
+      } satisfies AiAdvisorCandidate;
+    });
+  }
+
+  /** R5 HQ'ga o'tkazma kechikmoqda: qoldiq > balance_uzs VA > N kun o'tkazma yo'q (Q17). */
+  private async r5(
+    t: Record<string, number>,
+    today: string,
+    names: NameCache,
+  ): Promise<AiAdvisorCandidate[]> {
+    const balanceUzs = positive(t.balance_uzs, 5_000_000);
+    const limitDays = Math.floor(positive(t.days_without_transfer, 3));
+    const rows = await this.episodes(
+      'branch',
+      'branch_to_main',
+      balanceUzs,
+      balanceUzs,
+    );
+    const hits = rows
+      .map((r) => ({ r, ep: episodeOf(r, today) }))
+      .filter(
+        (x): x is { r: EpisodeRow; ep: Episode } =>
+          !!x.ep && x.ep.days > limitDays,
+      );
+    if (!hits.length) return [];
+    const ids = hits.map((x) => x.r.cashbox_id);
+    const closings = await this.dailyClosings(
+      ids,
+      addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT),
+      addDaysKey(today, -1),
+    );
+    const t2 = this.tables();
+    const transfers = await this.ds.query<
+      Array<{
+        cashbox_id: string;
+        id: string;
+        createdAt: Date;
+        amount: string;
+        rn: string;
+      }>
+    >(
+      `SELECT * FROM (
+         SELECT h."cashbox_id"::text AS cashbox_id, h."id"::text AS id, h."createdAt", ABS(h."amount") AS amount,
+                ROW_NUMBER() OVER (PARTITION BY h."cashbox_id" ORDER BY h."createdAt" DESC, h."id" DESC) AS rn
+           FROM ${t2.history} h
+          WHERE h."cashbox_id"::text = ANY($1::text[]) AND h."operation_type" = 'expense'
+            AND h."source_type" = 'branch_to_main' AND h."is_deleted" = false
+            AND NOT EXISTS (
+              SELECT 1 FROM ${t2.history} r
+               WHERE r."source_type" = 'payment_reversal'
+                 AND r."reverses_history_id" = h."id" AND r."is_deleted" = false)
+       ) x WHERE x.rn <= ${ADVISOR_EVIDENCE_LIMIT}`,
+      [ids],
+    );
+    return hits.map(({ r, ep }) => {
+      const branch: AiAdvisorRef = { id: r.owner, name: null };
+      names.wantBranch(r.owner);
+      const balance = money(r.balance);
+      return {
+        rule_key: 'R5',
+        dedup_key: `R5:branch:${r.owner}`,
+        fact_keys: [{ fact_key: ep.key, fact_at: ep.at }],
+        branch,
+        subject: { kind: 'branch', id: r.owner, name: null },
+        headline_amount: balance,
+        facts: {
+          branch,
+          balance,
+          days_without_transfer: ep.days,
+          last_transfer_at: r.last_at ? iso(r.last_at) : null,
+          last_transfer_amount: r.last_id ? money(r.last_amount) : null,
+        },
+        evidence: {
+          kind: 'branch_transfers',
+          total_rows: (closings.get(r.cashbox_id) ?? []).length,
+          truncated: false,
+          days: (closings.get(r.cashbox_id) ?? []).map((d) => ({
+            date: d.date,
+            closing_balance: d.closing,
+          })),
+          transfers: transfers
+            .filter((x) => x.cashbox_id === r.cashbox_id)
+            .map((x) => ({
+              at: iso(x.createdAt),
+              amount: money(x.amount),
+              history_id: x.id,
+              href: null,
+            })),
+        },
+      } satisfies AiAdvisorCandidate;
+    });
+  }
+
   // ─── Yordamchilar ─────────────────────────────────────────────────────
 
   private async cashboxTypes(owners: string[]): Promise<Map<string, string>> {
@@ -585,6 +1001,46 @@ export class AdvisorInputsService {
     return out;
   }
 
+  /** Foydalanuvchi → filial (`branch.user.find_by_user_ids`) — fail-open. */
+  async userBranches(ids: string[]): Promise<Map<string, AiAdvisorRef>> {
+    const out = new Map<string, AiAdvisorRef>();
+    const unique = [...new Set(ids.filter(isId))];
+    if (!this.branchClient || !unique.length) return out;
+    try {
+      const response = await rmqSend<{
+        data?: Array<{
+          user_id?: unknown;
+          branch?: { id?: unknown; name?: unknown } | null;
+        }>;
+      }>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user_ids' },
+        { user_ids: unique, requester: SYSTEM_BRANCH_REQUESTER },
+        { timeoutMs: NAME_TIMEOUT_MS, retries: 0 },
+      );
+      for (const row of Array.isArray(response?.data) ? response.data : []) {
+        const userId =
+          typeof row?.user_id === 'string' || typeof row?.user_id === 'number'
+            ? String(row.user_id)
+            : '';
+        const branchId =
+          typeof row?.branch?.id === 'string' ||
+          typeof row?.branch?.id === 'number'
+            ? String(row.branch.id)
+            : '';
+        if (!userId || !branchId) continue;
+        const name =
+          typeof row?.branch?.name === 'string' && row.branch.name.trim()
+            ? row.branch.name.trim().slice(0, 120)
+            : null;
+        out.set(userId, { id: branchId, name });
+      }
+    } catch (error) {
+      this.logger.warn(`advisor: kuryer filiallari olinmadi — ${short(error)}`);
+    }
+    return out;
+  }
+
   /** Filial nomlari (`branch.find_by_id`, kam sonli) — fail-open. */
   async branchNames(ids: string[]): Promise<Map<string, string>> {
     const out = new Map<string, string>();
@@ -617,6 +1073,7 @@ export class AdvisorInputsService {
 class NameCache {
   private readonly users = new Set<string>();
   private readonly branches = new Set<string>();
+  private readonly userBranches = new Set<string>();
 
   constructor(private readonly svc: AdvisorInputsService) {}
 
@@ -628,10 +1085,16 @@ class NameCache {
     this.branches.add(id);
   }
 
+  /** Kuryerning filiali (R2 `branch`) — `branch.user.find_by_user_ids`. */
+  wantUserBranch(id: string): void {
+    this.userBranches.add(id);
+  }
+
   async fill(candidates: AiAdvisorCandidate[]): Promise<void> {
-    const [users, branches] = await Promise.all([
+    const [users, branches, userBranch] = await Promise.all([
       this.svc.userNames([...this.users]),
       this.svc.branchNames([...this.branches]),
+      this.svc.userBranches([...this.userBranches]),
     ]);
     const branchRef = (ref: unknown) => {
       const r = ref as AiAdvisorRef | null;
@@ -651,15 +1114,31 @@ class NameCache {
       } else cb.name = users.get(cb.owner_id) ?? null;
     };
     for (const c of candidates) {
+      if (c.rule_key === 'R2' && c.subject.id) {
+        const b = userBranch.get(c.subject.id) ?? null;
+        c.branch = b;
+        c.facts.branch = b;
+      }
       branchRef(c.branch);
       const f = c.facts;
       if (f.branch && f.branch !== c.branch) branchRef(f.branch);
       cashboxName(f.cashbox as AiAdvisorCashboxRef | undefined);
       for (const u of (f.closed_by as unknown[] | undefined) ?? []) userRef(u);
       userRef(f.created_by);
-      if (c.subject.kind === 'cashbox' && c.subject.name === null) {
-        c.subject.name =
-          (f.cashbox as AiAdvisorCashboxRef | undefined)?.name ?? null;
+      userRef(f.courier);
+      userRef(f.market);
+      if (c.subject.name === null && c.subject.id) {
+        if (c.subject.kind === 'cashbox') {
+          c.subject.name =
+            (f.cashbox as AiAdvisorCashboxRef | undefined)?.name ?? null;
+        } else if (
+          c.subject.kind === 'courier' ||
+          c.subject.kind === 'market'
+        ) {
+          c.subject.name = users.get(c.subject.id) ?? null;
+        } else if (c.subject.kind === 'branch') {
+          c.subject.name = branches.get(c.subject.id) ?? null;
+        }
       }
       for (const row of (c.evidence.rows as
         Array<Record<string, unknown>> | undefined) ?? []) {

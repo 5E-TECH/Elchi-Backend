@@ -138,6 +138,75 @@ describe('advisor-text (BE-5)', () => {
     ]);
   });
 
+  it('R2/R4/R5: sarlavha (§9.3) va kassa havolasi; R5 o‘tkazma href', () => {
+    const r2 = base({
+      rule_key: 'R2',
+      subject: { kind: 'courier', id: '55', name: 'Jasur Tursunov' },
+      facts: {
+        trigger: 'both',
+        courier: { id: '55', name: 'Jasur Tursunov' },
+        balance: 2840000,
+        days_without_handover: 4,
+      },
+    });
+    expect(advisorTitle(r2)).toBe(
+      "Jasur Tursunov: 2 840 000 so'm, 4 kundan beri topshirilmagan",
+    );
+    expect(
+      advisorTitle(
+        base({
+          ...r2,
+          facts: { ...r2.facts, trigger: 'growth', growth_days: 3 },
+        }),
+      ),
+    ).toBe("Jasur Tursunov: 2 840 000 so'm — qarz 3 kun ketma-ket o'sgan");
+    expect(advisorLinks(r2)).toEqual([
+      {
+        kind: 'courier_cashbox',
+        href: '/payments/cash-detail/55?type=courier',
+        entity_id: '55',
+        primary: true,
+      },
+    ]);
+    const r4 = base({
+      rule_key: 'R4',
+      subject: { kind: 'market', id: '70', name: 'Nur Elektronika' },
+      facts: {
+        market: { id: '70', name: 'Nur Elektronika' },
+        debt: 3120000,
+        days_without_payout: 9,
+      },
+    });
+    expect(advisorTitle(r4)).toBe(
+      "Nur Elektronika: 9 kundan beri to'lov yo'q, qarz 3 120 000 so'm",
+    );
+    expect(advisorLinks(r4)[0].href).toBe(
+      '/payments/cash-detail/70?type=market',
+    );
+    const r5 = base({
+      rule_key: 'R5',
+      subject: { kind: 'branch', id: '12', name: 'Urgut filiali' },
+      facts: {
+        branch: { id: '12', name: 'Urgut filiali' },
+        balance: 6400000,
+        days_without_transfer: 4,
+      },
+      evidence: {
+        kind: 'branch_transfers',
+        transfers: [{ history_id: '77', amount: 1 }],
+      },
+    });
+    expect(advisorTitle(r5)).toBe(
+      "Urgut filiali kassasida 6 400 000 so'm — HQ'ga 4 kundan beri o'tkazma yo'q",
+    );
+    expect(advisorLinks(r5)[0].href).toBe(
+      '/payments/cash-detail/12?type=branch',
+    );
+    expect(
+      (withEvidenceHrefs(r5).transfers as Array<{ href: string }>)[0].href,
+    ).toBe('/payments/cash-detail/12?type=branch&history=77');
+  });
+
   it('sarlavha ≤ 200 belgi', () => {
     const long = base({
       facts: { cashbox: { name: 'x'.repeat(300) }, last_difference: -1 },

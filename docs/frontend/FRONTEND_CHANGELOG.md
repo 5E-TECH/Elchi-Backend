@@ -22,6 +22,13 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 2b): R2, R4, R5 — epizod qoidalari
+
+Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q.
+
+- 🟢 R2 kuryer qarzi (o'sish VA > 2 mln) YOKI (> 3 kun topshirilmagan) — `facts.trigger: growth|no_handover|both`; `branch` — kuryer filiali. R4 market to'lovi (> 0 VA > 7 kun), R5 filial → HQ o'tkazma (> 5 mln VA > 3 kun). Har 30 daqiqada.
+- 🟢 Takror = **epizod** (oxirgi topshirish/to'lov/o'tkazma): epizod ichida ochiq ogohlantirish faqat yangilanadi (`occurrences` o'zgarmaydi); yopilgan bo'lsa davom etayotgan holat qayta ochilmaydi (Q23); yangi epizod — yangi ogohlantirish (`reopened_from_id`). T6 bilan qaytarilgan topshirish sanalmaydi.
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 2a): qoidalar dvigateli — R1, R3, R6
 
 Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_rule_state`). Yangi endpoint YO'Q — ogohlantirishlar `ai_advisor_alerts` ga yoziladi; ro'yxat/tafsilot endpointlari keyingi PR'da.
