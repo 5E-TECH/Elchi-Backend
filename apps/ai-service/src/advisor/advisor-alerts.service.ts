@@ -32,6 +32,7 @@ import {
   type AiAdvisorUserRef,
 } from '@app/common';
 import { advisorError } from './advisor-errors';
+import { returnedRows } from './advisor-sql';
 import { AdvisorRealtime } from './advisor-realtime';
 
 const ALERTS = 'ai_schema.ai_advisor_alerts';
@@ -343,14 +344,15 @@ export class AdvisorAlertsService {
     let seen = false;
     if (options.mark_seen !== false) {
       // Atomik: faqat `new` bo'lsa; boshqa holatga tegmaydi; audit yo'q (EGA-1029/2).
-      const changed = await this.ds.query<unknown[]>(
+      const changed = await this.ds.query<unknown>(
         `UPDATE ${ALERTS}
             SET "status" = 'seen', "seen_at" = $2, "seen_by" = $3, "seen_by_name" = $4, "updatedAt" = now()
           WHERE "id" = $1 AND "status" = 'new' AND "is_deleted" = false
           RETURNING "id"`,
         [alertId, now, requester.id, nameOf(requester)],
       );
-      seen = changed.length > 0;
+      // UPDATE … RETURNING → TypeORM `[rows, count]` (advisor-sql.ts).
+      seen = returnedRows(changed).length > 0;
     }
     const row = await this.findRow(alertId);
     const detail = await this.toDetail(
