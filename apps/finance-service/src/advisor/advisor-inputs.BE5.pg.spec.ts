@@ -686,6 +686,13 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           expected: 1000000,
           last4: '9999',
         });
+        // Ega qarori: kassir xatosi (kiritilgan ≠ AI), lekin AI = tizim — 'amount' emas.
+        await check({
+          entered: 1100000,
+          read: 1000000,
+          expected: 1000000,
+          last4: '9999',
+        });
         const out = await runR7('2026-10-22T08:00:00Z');
         expect(
           out.candidates.map((c) => [
@@ -696,7 +703,8 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           ]),
         ).toEqual([
           [['amount'], -50000, 0, -50000],
-          [['card'], 0, 0, 0],
+          [['card'], null, 0, 0],
+          [['card'], null, -100000, 0],
         ]);
       });
     });
