@@ -4986,7 +4986,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: '(T3-4) Kassa cheklari tekshiruvi xulosasi',
     description:
-      "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart (BE-C, 2026-11-10: qo'lda chiqimdan faqat karta — `click`; naqd chiqim `none` ga kirmaydi). Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
+      "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|; so'mda bo'lmagan cheklar — farqi null — kirmaydi), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha, farqi null cheklarsiz — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart (BE-C, 2026-11-10: qo'lda chiqimdan faqat karta — `click`; naqd chiqim `none` ga kirmaydi). Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
   })
   async receiptChecksSummary(
     @Req() req: { user: JwtUser },
@@ -5062,7 +5062,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: '(T3) Kassa cheki tafsiloti (rasm havolasi + AI natijasi)',
     description:
-      "Superadmin/admin — har chek; menejer — faqat o'z filiali (`branch_id`), boshqasi 403. `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url, photo_url_expires_in: 300, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale (pending > 3 daqiqa), can_reanalyze (faqat SA/admin), ai: { amount, difference, currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence, flags[], checked_at, attempts, max_attempts: 5, error_reason } | null }`. Biriktirilgan chek va rasmi saqlanadi — havola har so'rovda yangidan beriladi.",
+      "Superadmin/admin — har chek; menejer — faqat o'z filiali (`branch_id`), boshqasi 403. `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url, photo_url_expires_in: 300, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale (pending > 3 daqiqa), can_reanalyze (faqat SA/admin), ai: { amount, difference (chek valyutasi UZS bo'lmasa null, error_reason 'currency_not_uzs'), currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence, flags[], checked_at, attempts, max_attempts: 5, error_reason } | null }`. Biriktirilgan chek va rasmi saqlanadi — havola har so'rovda yangidan beriladi.",
   })
   async getReceipt(
     @Param('id') id: string,
