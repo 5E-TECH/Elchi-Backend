@@ -20,6 +20,10 @@ import { AI_MODEL_PRICES, normalizeModelId } from '../usage/ai-pricing';
  * suffiksisiz) — narx jadvali bilan bir xil.
  */
 export const AI_STRONG_EXTRACTION_MODELS: ReadonlySet<string> = new Set([
+  // 5.5 avlodi — narx jadvali tanisin (aks holda `unknown` va eng qimmat
+  // tarif). ⚠️ Prod modelini almashtirish faqat eval natijasi bilan (ega).
+  'sonnet-5-5',
+  'opus-5-5',
   'sonnet-5',
   'opus-5',
   'fable-5',

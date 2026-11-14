@@ -26,7 +26,7 @@ import {
   ORDER_EXTRACT_SYSTEM,
 } from '../prompts/order-extract.prompt';
 import { ORDER_EXTRACT_SCHEMA } from '../prompts/order-extract.schema';
-import { supportsEffort } from '../usage/ai-pricing';
+import { effortParam } from '../usage/ai-pricing';
 import { mergeExtractedOrders } from './merge-orders';
 import { sanitizeExtraction } from './sanitize-extraction';
 
@@ -229,7 +229,7 @@ export class OrderExtractService {
         schema: ORDER_EXTRACT_SCHEMA,
         model,
         maxTokens: orderExtractMaxTokens(expected),
-        ...(supportsEffort(model) ? { effort: ORDER_EXTRACT_EFFORT } : {}),
+        ...effortParam(model, ORDER_EXTRACT_EFFORT),
         images: chunkImagesList,
         deadlineAt,
         meta: {

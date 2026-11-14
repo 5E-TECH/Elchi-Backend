@@ -22,7 +22,7 @@ import { DISTRICT_PICK_SCHEMA } from '../prompts/district-pick.schema';
 import {
   AI_LOW_EFFORT_MODELS,
   cacheMinTokensFor,
-  supportsEffort,
+  effortParam,
 } from '../usage/ai-pricing';
 
 /**
@@ -125,7 +125,7 @@ export class DistrictPickService {
       model,
       maxTokens: DISTRICT_PICK_MAX_TOKENS,
       deadlineAt,
-      ...(supportsEffort(model) ? { effort: 'low' as const } : {}),
+      ...effortParam(model, 'low'),
       meta: {
         feature: 'order_district',
         requestArea: 'order',
