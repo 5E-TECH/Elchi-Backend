@@ -9,6 +9,10 @@ import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { FinanceDailySnapshot } from '../entities/finance-daily-snapshot.entity';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { Shift } from '../entities/shift.entity';
+import { ShiftAccountCheck } from '../entities/shift-account-check.entity';
+import { CashboxReceipt } from '../entities/cashbox-receipt.entity';
+import { CashboxCard } from '../entities/cashbox-card.entity';
+import { PaymentCorrection } from '../entities/payment-correction.entity';
 import { AdvisorInputsService } from './advisor-inputs.service';
 
 /**
@@ -69,6 +73,10 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         FinancialBalanceHistory,
         FinanceCashboxDaily,
         FinanceDailySnapshot,
+        ShiftAccountCheck,
+        CashboxReceipt,
+        CashboxCard,
+        PaymentCorrection,
       ],
       synchronize: false,
     });
@@ -93,7 +101,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
 
   beforeEach(async () => {
     await db.query(
-      'TRUNCATE "finance_schema"."shifts", "finance_schema"."cashbox_history", "finance_schema"."cashboxes", "finance_schema"."cashbox_expense_categories", "finance_schema"."financial_balance_history", "finance_schema"."finance_cashbox_daily" RESTART IDENTITY CASCADE',
+      'TRUNCATE "finance_schema"."shifts", "finance_schema"."cashbox_history", "finance_schema"."cashboxes", "finance_schema"."cashbox_expense_categories", "finance_schema"."financial_balance_history", "finance_schema"."finance_cashbox_daily", "finance_schema"."shift_account_checks", "finance_schema"."cashbox_receipts", "finance_schema"."cashbox_cards", "finance_schema"."payment_corrections" RESTART IDENTITY CASCADE',
     );
   });
 
@@ -560,6 +568,237 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           transfers: [{ history_id: t1, amount: 2000000 }],
         },
       });
+    });
+  });
+
+  describe('R7/R8', () => {
+    it('R7 karta: faqat tasdiqlangan mismatch; farq = o‘qilgan − kiritilgan; kursor ai_checked_at', async () => {
+      await db.query(
+        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0)`,
+      );
+      const [{ id: card }] = await db.query<Array<{ id: string }>>(
+        `INSERT INTO "finance_schema"."cashbox_cards" ("cashbox_id", "name") VALUES (1, 'Humo virtual') RETURNING "id"::text AS id`,
+      );
+      const newShift = async () => {
+        const [row] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."shifts" ("cashbox_user_id", "opened_at", "closed_at", "status")
+           VALUES (NULL, '2026-10-21T03:00:00Z', '2026-10-21T15:00:00Z', 'closed') RETURNING "id"::text AS id`,
+        );
+        return row.id;
+      };
+      let shiftId = '';
+      const check = async (status: string, confirmed: boolean, at: string) => {
+        shiftId = await newShift();
+        const [row] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."shift_account_checks"
+             ("shift_id", "cashbox_card_id", "entered_balance", "ai_read_balance", "ai_status", "ai_checked_at", "confirmed_at", "ai_confidence")
+           VALUES ($1, $2, 1540000, 1522000, $3, $4, $5, 0.9) RETURNING "id"::text AS id`,
+          [shiftId, card, status, at, confirmed ? at : null],
+        );
+        return row.id;
+      };
+      const ok = await check('mismatch', true, '2026-10-22T08:30:00Z');
+      const okShift = shiftId;
+      await check('mismatch', false, '2026-10-22T08:31:00Z'); // qoralama
+      await check('match', true, '2026-10-22T08:32:00Z');
+      await check('mismatch', true, '2026-10-20T08:30:00Z'); // kursordan oldin
+      const out = await svc.ruleInputs({
+        rules: ['R7'],
+        now: NOW.toISOString(),
+        thresholds: {},
+        since: { R7: '2026-10-22T08:00:00Z' },
+      });
+      expect(out.candidates).toHaveLength(1);
+      expect(out.candidates[0]).toMatchObject({
+        dedup_key: `R7:card_check:${ok}`,
+        fact_keys: [
+          {
+            fact_key: `R7:card_check:${ok}`,
+            fact_at: '2026-10-21T15:00:00.000Z',
+          },
+        ],
+        headline_amount: -18000,
+        facts: {
+          source: 'card_balance',
+          mismatch: ['amount'],
+          entered_amount: 1540000,
+          read_amount: 1522000,
+          difference: -18000,
+          shift: { id: okShift, date: '2026-10-21' },
+          card: { id: card, name: 'Humo virtual' },
+          cashbox: { type: 'main', name: 'Asosiy kassa' },
+        },
+        evidence: { kind: 'card_balance_check', ai_confidence: 0.9 },
+      });
+      expect(out.cursors.R7).toBe('2026-10-22T08:30:00.000Z');
+    });
+
+    it('R7 chek: bog‘langan mismatch yoki card_mismatch; qoralama va o‘chirilgan — yo‘q; date_at', async () => {
+      const [{ id: cb }] = await db.query<Array<{ id: string }>>(
+        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('branch', 9) RETURNING "id"::text AS id`,
+      );
+      const [{ id: hist }] = await db.query<Array<{ id: string }>>(
+        `INSERT INTO "finance_schema"."cashbox_history"
+           ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "expense_category_name", "created_by", "createdAt")
+         VALUES ('expense', $1, 'manual_expense', 350000, 0, 'Yoqilg‘i', 301, '2026-10-22T06:05:00Z') RETURNING "id"::text AS id`,
+        [cb],
+      );
+      const receipt = async (
+        state: string,
+        status: string,
+        flags: string[] | null,
+        deleted = false,
+        h: string | null = hist,
+      ) => {
+        const [row] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashbox_receipts"
+             ("kind", "state", "history_id", "file_key", "file_sha256", "mime", "size_bytes", "uploaded_by",
+              "ai_status", "ai_flags", "entered_amount", "ai_amount", "ai_difference", "ai_date",
+              "ai_recipient", "ai_recipient_last4", "ai_payer_last4", "ai_checked_at", "is_deleted")
+           VALUES ('manual_expense', $1, $2, 'k', repeat('a', 64), 'image/jpeg', 1, 301, $3, $4::jsonb,
+                   350000, 332000, -18000, '22.10.2026 11:05', 'ALIYEV A.', '8840', '3307', '2026-10-22T08:40:00Z', $5)
+           RETURNING "id"::text AS id`,
+          [state, h, status, flags ? JSON.stringify(flags) : null, deleted],
+        );
+        return row.id;
+      };
+      const a = await receipt('linked', 'mismatch', ['card_mismatch']);
+      await receipt('draft', 'mismatch', null, false, null);
+      await receipt('linked', 'mismatch', null, true, null);
+      await receipt('linked', 'match', null, false, null);
+      const b = await receipt(
+        'linked',
+        'match',
+        ['card_mismatch'],
+        false,
+        null,
+      );
+      const out = await svc.ruleInputs({
+        rules: ['R7'],
+        now: NOW.toISOString(),
+        thresholds: {},
+        since: { R7: '2026-10-22T08:00:00Z' },
+      });
+      expect(out.candidates.map((c) => c.dedup_key)).toEqual([
+        `R7:receipt:${a}`,
+        `R7:receipt:${b}`,
+      ]);
+      expect(out.candidates[0]).toMatchObject({
+        branch: { id: '9', name: 'Filial 9' },
+        fact_keys: [{ fact_at: '2026-10-22T06:05:00.000Z' }],
+        facts: {
+          source: 'receipt',
+          mismatch: ['amount', 'card'],
+          difference: -18000,
+          operation: {
+            history_id: hist,
+            kind: 'manual_expense',
+            category_name: 'Yoqilg‘i',
+          },
+          created_by: { id: '301', name: 'User 301' },
+        },
+        evidence: {
+          kind: 'receipt_check',
+          receipt: {
+            date: '22.10.2026 11:05',
+            date_at: '2026-10-22T06:05:00.000Z',
+            recipient_last4: '8840',
+            payer_last4: '3307',
+          },
+          week_summary: { from: '2026-10-19', to: '2026-10-25' },
+        },
+      });
+      expect(out.candidates[1].facts).toMatchObject({
+        mismatch: ['card'],
+        operation: null,
+      });
+    });
+
+    it('R8: qo‘lda + T6 sanaladi, buyurtma qaytarilishi va payment_reversal yo‘q; ≥ 2× bazaviy', async () => {
+      await db.query(
+        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0), ('couriers', 5)`,
+      );
+      // Buyurtma qaytarilishi: bitta buyurtma — bir nechta kassada oyoq.
+      const corr = (
+        at: string,
+        sourceId: number | null,
+        source = 'correction',
+        cashbox = 1,
+      ) =>
+        db.query(
+          `INSERT INTO "finance_schema"."cashbox_history" ("operation_type", "cashbox_id", "source_type", "source_id", "amount", "balance_after", "createdAt")
+           VALUES ('income', $4, $1, $2, 1, 0, $3)`,
+          [source, sourceId, at, cashbox],
+        );
+      const t6 = (action: string, at: string) =>
+        db.query(
+          `INSERT INTO "finance_schema"."payment_corrections"
+             ("action", "payment_kind", "original_transfer_id", "root_transfer_id", "reversal_transfer_id",
+              "original_amount", "payment_method", "counterparty_user_id", "receiver_cashbox_id", "reason",
+              "created_by", "idempotency_key", "root_created_at", "createdAt")
+           VALUES ($1, 'courier_payment', gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, 'cash', 1, 1, 'x', 1,
+                   gen_random_uuid()::text, now(), $2)`,
+          [action, at],
+        );
+      // Baza (30 kun): 2 ta qo'lda tuzatish → haftalik o'rtacha 0,47.
+      await corr('2026-09-20T05:00:00Z', null);
+      await corr('2026-10-01T05:00:00Z', null);
+      // Hafta 12–18.10: 2 qo'lda + 1 reverse + 1 edit = 4; buyurtma (2 oyoq, 1 buyurtma) va reversal sanalmaydi.
+      await corr('2026-10-13T05:00:00Z', null);
+      await corr('2026-10-14T05:00:00Z', null);
+      await corr('2026-10-14T06:00:00Z', 500);
+      await corr('2026-10-14T06:00:01Z', 500, 'correction', 2);
+      await corr('2026-10-15T06:00:00Z', null, 'payment_reversal');
+      await t6('reverse', '2026-10-15T05:00:00Z');
+      await t6('edit', '2026-10-16T05:00:00Z');
+      const out = await svc.ruleInputs({
+        rules: ['R8'],
+        now: NOW.toISOString(),
+        thresholds: { R8: { ratio: 2 } },
+        since: {},
+        periods: { weeks: ['2026-10-12'] },
+      });
+      expect(out.candidates).toHaveLength(1);
+      expect(out.candidates[0]).toMatchObject({
+        dedup_key: 'R8:week:2026-10-12',
+        facts: {
+          from: '2026-10-12',
+          to: '2026-10-18',
+          count: 4,
+          baseline_weekly_avg: 0.47,
+          ratio: 8.5,
+        },
+        evidence: {
+          kind: 'corrections',
+          by_kind: {
+            manual_correction: 2,
+            order_rollback: 1,
+            payment_reverse: 1,
+            payment_edit: 1,
+          },
+          counted_kinds: [
+            'manual_correction',
+            'payment_reverse',
+            'payment_edit',
+          ],
+          baseline: { window_days: 30, total: 2 },
+        },
+      });
+      expect(
+        (out.candidates[0].evidence.days as Array<{ count: number }>).map(
+          (d) => d.count,
+        ),
+      ).toEqual([0, 1, 1, 1, 1, 0, 0]);
+
+      // Yuqori chegara (10×) — jim; tugamagan hafta — tekshirilmaydi.
+      const quiet = await svc.ruleInputs({
+        rules: ['R8'],
+        now: NOW.toISOString(),
+        thresholds: { R8: { ratio: 10 } },
+        since: {},
+        periods: { weeks: ['2026-10-12', '2026-10-19'] },
+      });
+      expect(quiet.candidates).toEqual([]);
     });
   });
 

@@ -54,6 +54,7 @@ const clip = (s: string) =>
 /** Ogohlantirish sarlavhasi (§5.1 `title`). */
 export function advisorTitle(c: AiAdvisorCandidate): string {
   const f = c.facts;
+  const ruleKey: string = c.rule_key;
   switch (c.rule_key) {
     case 'R1': {
       const cashbox = nameOf(f.cashbox, 'Kassa');
@@ -87,6 +88,41 @@ export function advisorTitle(c: AiAdvisorCandidate): string {
       return clip(
         `${nameOf(f.branch, 'Filial')} kassasida ${formatSom(Number(f.balance))} so'm — HQ'ga ${Number(f.days_without_transfer)} kundan beri o'tkazma yo'q`,
       );
+    case 'R7': {
+      const diff =
+        f.difference === null || f.difference === undefined
+          ? ''
+          : ` (${formatSom(Number(f.difference))} so'm)`;
+      if (f.source === 'card_balance') {
+        return clip(
+          `${nameOf(f.cashbox, 'Kassa')} · ${nameOf(f.card, 'karta')}: kiritilgan ${formatSom(Number(f.entered_amount))} so'm, AI o'qigan ${formatSom(Number(f.read_amount))} so'm${diff}`,
+        );
+      }
+      const where = nameOf(f.branch ?? f.cashbox, 'Kassa');
+      const op = f.operation as { category_name?: unknown } | null | undefined;
+      const category =
+        typeof op?.category_name === 'string' && op.category_name
+          ? op.category_name
+          : 'chek';
+      const mismatch = Array.isArray(f.mismatch)
+        ? (f.mismatch as unknown[])
+        : [];
+      const amount = mismatch.includes('amount')
+        ? `: kiritilgan ${formatSom(Number(f.entered_amount))} so'm, chekda ${formatSom(Number(f.read_amount))} so'm${diff}`
+        : '';
+      const card = mismatch.includes('card')
+        ? `${amount ? '.' : ':'} To'lov filial kartasidan emas`
+        : '';
+      return clip(`${where} · ${category}${amount}${card}`);
+    }
+    case 'R8':
+      return clip(
+        `${formatDay(f.from)}–${formatDay(f.to)}: ${Number(f.count)} ta tuzatish${
+          f.ratio
+            ? ` — 30 kunlik o'rtachadan ${formatRatio(f.ratio)} barobar`
+            : ''
+        }`,
+      );
     case 'R6':
       return clip(
         f.period === 'week'
@@ -94,7 +130,7 @@ export function advisorTitle(c: AiAdvisorCandidate): string {
           : `${formatDay(f.from)} kuni sof foyda ${formatSom(Number(f.net))} so'm`,
       );
     default:
-      return clip(`Ogohlantirish ${c.rule_key}`);
+      return clip(`Ogohlantirish ${ruleKey}`);
   }
 }
 
@@ -179,6 +215,47 @@ export function advisorLinks(c: AiAdvisorCandidate): AdvisorLink[] {
           ]
         : [];
     }
+    case 'R7': {
+      if (f.source === 'card_balance') {
+        const shift = f.shift as { id?: unknown } | null | undefined;
+        const id = typeof shift?.id === 'string' ? shift.id : '';
+        return id
+          ? [
+              {
+                kind: 'shift_report',
+                href: `/payments/shifts/${id}`,
+                entity_id: id,
+                primary: true,
+              },
+            ]
+          : [];
+      }
+      const op = f.operation as { history_id?: unknown } | null | undefined;
+      const id = typeof op?.history_id === 'string' ? op.history_id : '';
+      return id
+        ? [
+            {
+              kind: 'operation',
+              href: operationHref(
+                f.cashbox as AiAdvisorCashboxRef | undefined,
+                id,
+              ),
+              entity_id: id,
+              primary: true,
+            },
+          ]
+        : [];
+    }
+    case 'R8':
+      // Q12: sukut — asosiy kassa sahifasi.
+      return [
+        {
+          kind: 'corrections',
+          href: '/payments/main-cashbox',
+          entity_id: null,
+          primary: true,
+        },
+      ];
     case 'R6': {
       const from = typeof f.from === 'string' ? f.from : '';
       const to = typeof f.to === 'string' ? f.to : '';

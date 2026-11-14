@@ -144,7 +144,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     };
     const res = await engine.run('frequent', NOW);
     expect(res).toMatchObject({
-      rules: ['R1', 'R2', 'R3', 'R4', 'R5'],
+      rules: ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'],
       candidates: 2,
       opened: 2,
     });
@@ -266,7 +266,10 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     await settings.update(SA, {
       version: 1,
       rules: Object.fromEntries(
-        ['R1', 'R2', 'R3', 'R4', 'R5'].map((k) => [k, { enabled: false }]),
+        ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'].map((k) => [
+          k,
+          { enabled: false },
+        ]),
       ),
     });
     const res = await engine.run('frequent', NOW);
@@ -325,8 +328,8 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       candidates: [
         {
           ...r1([['1', NOW.toISOString()]]),
-          rule_key: 'R7',
-          dedup_key: 'R7:receipt:1',
+          rule_key: 'R8',
+          dedup_key: 'R8:week:2026-10-12',
         },
       ],
       cursors: {},
@@ -358,6 +361,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       'R3',
       'R4',
       'R5',
+      'R7',
     ]);
     expect(
       state.every(

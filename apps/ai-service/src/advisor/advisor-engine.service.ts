@@ -40,9 +40,10 @@ export const ADVISOR_FREQUENT_RULES: readonly AiAdvisorRuleKey[] = [
   'R3',
   'R4',
   'R5',
+  'R7',
 ];
-/** 02:30 Toshkent: R6 (kecha; dushanba — o'tgan hafta ham). */
-export const ADVISOR_DAILY_RULES: readonly AiAdvisorRuleKey[] = ['R6'];
+/** 02:30 Toshkent: R6 (kecha; dushanba — o'tgan hafta ham), R8 (dushanba — o'tgan hafta). */
+export const ADVISOR_DAILY_RULES: readonly AiAdvisorRuleKey[] = ['R6', 'R8'];
 /** Holat qoidalari: ayni epizod qayta ko'rilsa ochiq qatorni yangilaydi. */
 export const ADVISOR_STATE_RULES = new Set<AiAdvisorRuleKey>([
   'R2',
@@ -141,7 +142,7 @@ export class AdvisorEngineService {
           : new Date(now.getTime() - ADVISOR_BACKFILL_WINDOW_MS)
       ).toISOString();
     }
-    if (keys.includes('R6')) {
+    if (keys.includes('R6') || keys.includes('R8')) {
       const today = tashkentDay(now);
       request.periods = { days: [addDays(today, -1)] };
       if (tashkentIsoWeekday(now) === 1)

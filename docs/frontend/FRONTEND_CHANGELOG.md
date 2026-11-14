@@ -22,6 +22,13 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 2c): R7 chek/karta farqi, R8 tuzatishlar
+
+Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q. Endi R1–R8 hammasi tekshiriladi.
+
+- 🟢 R7 (har 30 daqiqada, kursor `ai_checked_at`): `facts.source = card_balance` — faqat tasdiqlangan (smena yopilgan) karta tekshiruvi `mismatch`, `difference = AI o'qigan − kiritilgan`; `receipt` — bog'langan chek AI `mismatch` yoki `card_mismatch` bayrog'i, `facts.mismatch ⊂ {amount, card}`. `evidence.receipt.date` — xom OCR matni, `date_at` — tahlil qilingan ISO (aks holda null); `week_summary` — joriy hafta (du–ya). Sukut darajasi `critical`, Telegram'ga yuborilmaydi (Q2 c).
+- 🟢 R8 (dushanba 02:30, o'tgan hafta): sanaladi — qo'lda tuzatish + T6 qaytarish/tahrir; buyurtma qaytarilishi (`order_rollback`) faqat `by_kind` da ko'rinadi (Q4). [TAKLIF] haftada kamida 3 ta tuzatish bo'lmasa ogohlantirilmaydi (baza 0 bo'lgan haftada 1–2 ta tuzatish shovqin bo'lmasin). Havola — `/payments/main-cashbox` (Q12).
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 2b): R2, R4, R5 — epizod qoidalari
 
 Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q.

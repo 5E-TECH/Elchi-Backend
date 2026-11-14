@@ -17,6 +17,12 @@ import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.ent
 import { CashboxHistory } from '../entities/cashbox-history.entity';
 import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { Shift } from '../entities/shift.entity';
+import { ShiftAccountCheck } from '../entities/shift-account-check.entity';
+import { CashboxReceipt } from '../entities/cashbox-receipt.entity';
+import { CashboxCard } from '../entities/cashbox-card.entity';
+import { PaymentCorrection } from '../entities/payment-correction.entity';
+import { CashboxReceiptService } from '../cashbox-receipt/cashbox-receipt.service';
+import { loadReceiptChecksSummary } from '../cashbox-receipt/cashbox-receipt.summary';
 
 /**
  * BE-5 (LhTIno57) — `finance.advisor.rule_inputs`: AI maslahatchi
@@ -38,6 +44,11 @@ export const R3_WINDOW_DAYS = 30;
 export const R3_MIN_SAMPLE = 5;
 /** BQ9 (ega): minimal MAD = mediana × 5%. */
 export const R3_MIN_MAD_RATIO = 0.05;
+/** R7: bitta tekshiruvda ko'riladigan qatorlar chegarasi (har manba). */
+const R7_MAX_ROWS = 2_000;
+/** R8: baza oynasi (kun) va minimal haftalik son ([TAKLIF]). */
+export const R8_BASELINE_DAYS = 30;
+export const R8_MIN_COUNT = 3;
 
 const NAME_TIMEOUT_MS = 5_000;
 const SYSTEM_BRANCH_REQUESTER = { id: 'system', roles: ['superadmin'] };
@@ -115,6 +126,86 @@ function episodeOf(r: EpisodeRow, today: string): Episode | null {
   return { key, at: new Date(`${day}T00:00:00.000+05:00`).toISOString(), days };
 }
 
+interface CardCheckRow {
+  id: string;
+  shift_id: string;
+  card_id: string;
+  entered_balance: string;
+  ai_read_balance: string;
+  ai_confidence: string | null;
+  ai_checked_at: Date;
+  closed_at: Date | null;
+  opened_at: Date | null;
+  owner: string;
+  card_name: string | null;
+}
+
+interface ReceiptRow {
+  id: string;
+  ai_status: string;
+  ai_flags: unknown;
+  entered_amount: string | null;
+  ai_amount: string | null;
+  ai_difference: string | null;
+  ai_date: string | null;
+  ai_recipient: string | null;
+  ai_recipient_last4: string | null;
+  ai_payer: string | null;
+  ai_payer_last4: string | null;
+  ai_bank: string | null;
+  ai_reference: string | null;
+  ai_confidence: string | null;
+  ai_checked_at: Date;
+  history_id: string | null;
+  op_at: Date | null;
+  source_type: string | null;
+  category_name: string | null;
+  created_by: string | null;
+  cashbox_type: string | null;
+  owner: string | null;
+}
+
+interface CorrectionCounts {
+  manual_correction: number;
+  order_rollback: number;
+  payment_reverse: number;
+  payment_edit: number;
+}
+
+/**
+ * Chek sanasi (XOM OCR matni, mintaqasiz) → ISO (+05:00 deb olinadi):
+ * `DD.MM.YYYY[ HH:MM[:SS]]` yoki `YYYY-MM-DD[ HH:MM[:SS]]`; aks holda null.
+ */
+export function parseReceiptDate(
+  raw: string | null | undefined,
+): string | null {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  let m =
+    /^(\d{2})[./](\d{2})[./](\d{4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(
+      s,
+    );
+  let y: string,
+    mo: string,
+    d: string,
+    hh = '00',
+    mi = '00',
+    ss = '00';
+  if (m) {
+    [, d, mo, y] = m;
+    if (m[4]) [hh, mi, ss] = [m[4].padStart(2, '0'), m[5], m[6] ?? '00'];
+  } else {
+    m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(
+      s,
+    );
+    if (!m) return null;
+    [, y, mo, d] = m;
+    if (m[4]) [hh, mi, ss] = [m[4].padStart(2, '0'), m[5], m[6] ?? '00'];
+  }
+  const date = new Date(`${y}-${mo}-${d}T${hh}:${mi}:${ss}.000+05:00`);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 interface R3Row {
   id: string;
   amount: string;
@@ -141,6 +232,7 @@ export class AdvisorInputsService {
     private readonly daily: FinanceDailyService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Optional() @Inject('BRANCH') private readonly branchClient?: ClientProxy,
+    @Optional() private readonly receiptService?: CashboxReceiptService,
   ) {}
 
   /** Jadval yo'llari entity metadata'sidan (sxema bilan). */
@@ -157,6 +249,10 @@ export class AdvisorInputsService {
       cashboxes: path(Cashbox),
       categories: path(CashboxExpenseCategory),
       daily: path(FinanceCashboxDaily),
+      checks: path(ShiftAccountCheck),
+      receipts: path(CashboxReceipt),
+      cards: path(CashboxCard),
+      corrections: path(PaymentCorrection),
     };
   }
 
@@ -197,6 +293,21 @@ export class AdvisorInputsService {
     if (rules.has('R5')) {
       out.candidates.push(
         ...(await this.r5(input.thresholds?.R5 ?? {}, today, names)),
+      );
+    }
+    if (rules.has('R7')) {
+      const since = parseSince(input.since?.R7, now);
+      const r = await this.r7(since, now, names);
+      out.candidates.push(...r.candidates);
+      out.cursors.R7 = r.cursor;
+    }
+    if (rules.has('R8')) {
+      out.candidates.push(
+        ...(await this.r8(
+          input.thresholds?.R8 ?? {},
+          input.periods?.weeks ?? [],
+          now,
+        )),
       );
     }
     if (rules.has('R6')) {
@@ -951,6 +1062,380 @@ export class AdvisorInputsService {
             })),
         },
       } satisfies AiAdvisorCandidate;
+    });
+  }
+
+  // ─── R7 Chek yoki karta farqi (§4.2, BE-rev B4) ───────────────────────
+
+  private async r7(
+    since: Date,
+    now: Date,
+    names: NameCache,
+  ): Promise<{ candidates: AiAdvisorCandidate[]; cursor: string | null }> {
+    const t = this.tables();
+    // (a) karta qoldig'i: faqat TASDIQLANGAN (smena yopilgan) tekshiruvlar —
+    // qoralama qayta yuklashda `pending` ga qaytadi; kursor `ai_checked_at`.
+    const cards = await this.ds.query<CardCheckRow[]>(
+      `SELECT k."id"::text AS id, k."shift_id"::text AS shift_id, k."cashbox_card_id"::text AS card_id,
+              k."entered_balance", k."ai_read_balance", k."ai_confidence", k."ai_checked_at",
+              s."closed_at", s."opened_at", COALESCE(s."cashbox_user_id", 0)::text AS owner,
+              cc."name" AS card_name
+         FROM ${t.checks} k
+         JOIN ${t.shifts} s ON s."id" = k."shift_id"
+         LEFT JOIN ${t.cards} cc ON cc."id" = k."cashbox_card_id"
+        WHERE k."ai_status" = 'mismatch' AND k."confirmed_at" IS NOT NULL
+          AND k."entered_balance" IS NOT NULL AND k."ai_read_balance" IS NOT NULL
+          AND k."is_deleted" = false
+          AND k."ai_checked_at" >= $1 AND k."ai_checked_at" <= $2
+        ORDER BY k."ai_checked_at" ASC, k."id" ASC
+        LIMIT ${R7_MAX_ROWS}`,
+      [since, now],
+    );
+    // (b) T3 cheki: bog'langan, AI `mismatch` yoki `card_mismatch` bayrog'i.
+    const receipts = await this.ds.query<ReceiptRow[]>(
+      `SELECT r."id"::text AS id, r."ai_status"::text AS ai_status, r."ai_flags",
+              r."entered_amount", r."ai_amount", r."ai_difference", r."ai_date",
+              r."ai_recipient", r."ai_recipient_last4", r."ai_payer", r."ai_payer_last4",
+              r."ai_bank", r."ai_reference", r."ai_confidence", r."ai_checked_at",
+              r."history_id"::text AS history_id,
+              h."createdAt" AS op_at, h."source_type"::text AS source_type,
+              h."expense_category_name" AS category_name, h."created_by"::text AS created_by,
+              c."cashbox_type"::text AS cashbox_type, c."user_id"::text AS owner
+         FROM ${t.receipts} r
+         LEFT JOIN ${t.history} h ON h."id" = r."history_id"
+         LEFT JOIN ${t.cashboxes} c ON c."id" = h."cashbox_id"
+        WHERE r."state" = 'linked' AND r."is_deleted" = false
+          AND (r."ai_status" = 'mismatch' OR COALESCE(r."ai_flags", '[]'::jsonb) @> '["card_mismatch"]'::jsonb)
+          AND r."ai_checked_at" >= $1 AND r."ai_checked_at" <= $2
+        ORDER BY r."ai_checked_at" ASC, r."id" ASC
+        LIMIT ${R7_MAX_ROWS}`,
+      [since, now],
+    );
+    const seen = [
+      ...cards.map((r) => r.ai_checked_at),
+      ...receipts.map((r) => r.ai_checked_at),
+    ]
+      .map((d) => new Date(d).getTime())
+      .filter((n) => Number.isFinite(n));
+    const cursor = seen.length
+      ? new Date(Math.max(...seen)).toISOString()
+      : null;
+    if (!cards.length && !receipts.length) return { candidates: [], cursor };
+
+    const receiptAi = await this.receiptAiEnabled();
+    const owners = [...new Set([...cards.map((r) => r.owner)])];
+    const types = await this.cashboxTypes(owners);
+    const candidates: AiAdvisorCandidate[] = [];
+
+    for (const r of cards) {
+      const cashbox = cashboxRef(r.owner, types.get(r.owner));
+      const branch: AiAdvisorRef | null =
+        cashbox.type === 'branch' ? { id: r.owner, name: null } : null;
+      if (branch) names.wantBranch(branch.id);
+      const entered = money(r.entered_balance);
+      const read = money(r.ai_read_balance);
+      const difference = money(read - entered);
+      const at = r.closed_at ?? r.ai_checked_at;
+      const shiftDate = tashkentDateKey(new Date(r.opened_at ?? at));
+      candidates.push({
+        rule_key: 'R7',
+        dedup_key: `R7:card_check:${r.id}`,
+        fact_keys: [{ fact_key: `R7:card_check:${r.id}`, fact_at: iso(at) }],
+        branch,
+        subject: { kind: 'cashbox', id: r.owner, name: null },
+        headline_amount: difference,
+        facts: {
+          source: 'card_balance',
+          receipt_ai_enabled: receiptAi,
+          mismatch: ['amount'],
+          cashbox,
+          branch,
+          entered_amount: entered,
+          read_amount: read,
+          difference,
+          operation: null,
+          shift: { id: r.shift_id, date: shiftDate },
+          card: { id: r.card_id, name: r.card_name ?? null },
+          created_by: null,
+          created_at: iso(at),
+        },
+        evidence: {
+          kind: 'card_balance_check',
+          total_rows: 1,
+          truncated: false,
+          shift: {
+            id: r.shift_id,
+            date: shiftDate,
+            closed_at: r.closed_at ? iso(r.closed_at) : null,
+          },
+          card: { id: r.card_id, name: r.card_name ?? null },
+          entered_balance: entered,
+          ai_read_balance: read,
+          difference,
+          ai_confidence:
+            r.ai_confidence === null ? null : Number(r.ai_confidence),
+        },
+      });
+    }
+
+    const week = receipts.length ? await this.receiptWeekSummary(now) : null;
+    for (const r of receipts) {
+      const owner = r.owner ?? '0';
+      const cashbox = cashboxRef(owner, r.cashbox_type ?? 'main');
+      const branch: AiAdvisorRef | null =
+        cashbox.type === 'branch' ? { id: owner, name: null } : null;
+      if (branch) names.wantBranch(branch.id);
+      if (isId(r.created_by)) names.wantUser(r.created_by);
+      const flags = Array.isArray(r.ai_flags)
+        ? r.ai_flags.filter((f) => typeof f === 'string')
+        : [];
+      const mismatch = [
+        ...(r.ai_status === 'mismatch' ? ['amount'] : []),
+        ...(flags.includes('card_mismatch') ? ['card'] : []),
+      ];
+      const difference = moneyOrNull(r.ai_difference);
+      const at = r.op_at ?? r.ai_checked_at;
+      candidates.push({
+        rule_key: 'R7',
+        dedup_key: `R7:receipt:${r.id}`,
+        fact_keys: [{ fact_key: `R7:receipt:${r.id}`, fact_at: iso(at) }],
+        branch,
+        subject: { kind: 'cashbox', id: owner, name: null },
+        headline_amount: difference,
+        facts: {
+          source: 'receipt',
+          receipt_ai_enabled: receiptAi,
+          mismatch,
+          cashbox,
+          branch,
+          entered_amount: moneyOrNull(r.entered_amount),
+          read_amount: moneyOrNull(r.ai_amount),
+          difference,
+          operation: r.history_id
+            ? {
+                history_id: r.history_id,
+                kind: r.source_type ?? null,
+                category_name: r.category_name ?? null,
+              }
+            : null,
+          shift: null,
+          card: null,
+          created_by: isId(r.created_by)
+            ? { id: r.created_by, name: null }
+            : null,
+          created_at: iso(at),
+        },
+        evidence: {
+          kind: 'receipt_check',
+          total_rows: 1,
+          truncated: false,
+          receipt: {
+            id: r.id,
+            ai_status: r.ai_status,
+            flags,
+            date: r.ai_date ?? null,
+            date_at: parseReceiptDate(r.ai_date),
+            // PII: ism faqat superadmin REST tafsilotida (§3.5); LLM/Telegram'ga kirmaydi.
+            recipient: r.ai_recipient ?? null,
+            recipient_last4: r.ai_recipient_last4 ?? null,
+            payer: r.ai_payer ?? null,
+            payer_last4: r.ai_payer_last4 ?? null,
+            bank: r.ai_bank ?? null,
+            reference: r.ai_reference ?? null,
+            confidence:
+              r.ai_confidence === null ? null : Number(r.ai_confidence),
+          },
+          week_summary: week,
+        },
+      });
+    }
+    return { candidates, cursor };
+  }
+
+  /** Chek AI yoqiqmi (manual_expense YOKI hq_transfer). O'qilmasa — null. */
+  private async receiptAiEnabled(): Promise<boolean | null> {
+    if (!this.receiptService) return null;
+    try {
+      const s = await this.receiptService.loadSettings();
+      return Boolean(s.manual_expense.ai_enabled || s.hq_transfer.ai_enabled);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Joriy Toshkent haftasi chek tekshiruvi sanoqlari (`checked = match + mismatch + unreadable`). */
+  private async receiptWeekSummary(
+    now: Date,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const today = tashkentDateKey(now);
+      const weekday = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = dushanba
+      const from = addDaysKey(today, -weekday);
+      const to = addDaysKey(from, 6);
+      const summary = await loadReceiptChecksSummary(
+        this.ds.manager,
+        {
+          receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
+          history: this.ds.getMetadata(CashboxHistory).tablePath,
+          cashbox: this.ds.getMetadata(Cashbox).tablePath,
+        },
+        {
+          start: new Date(`${from}T00:00:00.000+05:00`),
+          end: new Date(
+            new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
+          ),
+        },
+      );
+      const c = summary.counts as Record<string, number>;
+      const match = Number(c.match ?? 0);
+      const mismatch = Number(c.mismatch ?? 0);
+      const unreadable = Number(c.unreadable ?? 0);
+      return {
+        from,
+        to,
+        checked: match + mismatch + unreadable,
+        match,
+        mismatch,
+        unreadable,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `advisor: chek haftalik xulosasi olinmadi — ${short(error)}`,
+      );
+      return null;
+    }
+  }
+
+  // ─── R8 Tuzatishlar ko'paydi (§4.2, BE-rev B2, Q4) ────────────────────
+
+  private async r8(
+    t: Record<string, number>,
+    weeks: string[],
+    now: Date,
+  ): Promise<AiAdvisorCandidate[]> {
+    const ratio = positive(t.ratio, 2);
+    const today = tashkentDateKey(now);
+    const out: AiAdvisorCandidate[] = [];
+    for (const monday of weeks.filter(
+      (w) => isDay(w) && addDaysKey(w, 6) < today,
+    )) {
+      const from = monday;
+      const to = addDaysKey(monday, 6);
+      const start = new Date(`${from}T00:00:00.000+05:00`);
+      const end = new Date(start.getTime() + 7 * 86_400_000);
+      const baseStart = new Date(
+        start.getTime() - R8_BASELINE_DAYS * 86_400_000,
+      );
+      const week = await this.correctionCounts(start, end);
+      const base = await this.correctionCounts(baseStart, start);
+      const counted = (k: CorrectionCounts) =>
+        k.manual_correction + k.payment_reverse + k.payment_edit;
+      const count = counted(week);
+      const baselineTotal = counted(base);
+      const weeklyAvg =
+        Math.round((baselineTotal / R8_BASELINE_DAYS) * 7 * 100) / 100;
+      // [TAKLIF] minimal son: bazasi 0 bo'lgan haftada 1–2 ta tuzatish ogohlantirmasin.
+      if (count < R8_MIN_COUNT || count < ratio * weeklyAvg) continue;
+      const days = await this.correctionDays(start, end);
+      const key = `R8:week:${monday}`;
+      out.push({
+        rule_key: 'R8',
+        dedup_key: key,
+        fact_keys: [
+          { fact_key: key, fact_at: new Date(end.getTime() - 1).toISOString() },
+        ],
+        branch: null,
+        subject: { kind: 'system', id: null, name: null },
+        headline_amount: null,
+        facts: {
+          from,
+          to,
+          count,
+          baseline_weekly_avg: weeklyAvg,
+          ratio:
+            weeklyAvg > 0 ? Math.round((count / weeklyAvg) * 10) / 10 : null,
+        },
+        evidence: {
+          kind: 'corrections',
+          total_rows: days.length,
+          truncated: false,
+          by_kind: week,
+          counted_kinds: [
+            'manual_correction',
+            'payment_reverse',
+            'payment_edit',
+          ],
+          days,
+          baseline: {
+            window_days: R8_BASELINE_DAYS,
+            total: baselineTotal,
+            weekly_avg: weeklyAvg,
+          },
+        },
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Tuzatish turlari: qo'lda (`correction`, `source_id IS NULL`), buyurtma
+   * qaytarilishi (`correction`, buyurtma bo'yicha DISTINCT), T6 qaytarish /
+   * tahrir (`payment_corrections.action`). `payment_reversal` — hech qachon.
+   */
+  private async correctionCounts(
+    start: Date,
+    end: Date,
+  ): Promise<CorrectionCounts> {
+    const t = this.tables();
+    const [h] = await this.ds.query<Array<{ manual: string; orders: string }>>(
+      `SELECT COUNT(*) FILTER (WHERE "source_id" IS NULL) AS manual,
+              COUNT(DISTINCT "source_id") FILTER (WHERE "source_id" IS NOT NULL) AS orders
+         FROM ${t.history}
+        WHERE "source_type" = 'correction' AND "is_deleted" = false
+          AND "createdAt" >= $1 AND "createdAt" < $2`,
+      [start, end],
+    );
+    const pc = await this.ds.query<Array<{ action: string; n: string }>>(
+      `SELECT "action", COUNT(*) AS n FROM ${t.corrections}
+        WHERE "is_deleted" = false AND "createdAt" >= $1 AND "createdAt" < $2
+        GROUP BY "action"`,
+      [start, end],
+    );
+    const by = new Map(pc.map((r) => [r.action, Number(r.n)]));
+    return {
+      manual_correction: Number(h?.manual ?? 0),
+      order_rollback: Number(h?.orders ?? 0),
+      payment_reverse: by.get('reverse') ?? 0,
+      payment_edit: by.get('edit') ?? 0,
+    };
+  }
+
+  /** Hafta kunlari bo'yicha sanalgan tuzatishlar (counted_kinds). */
+  private async correctionDays(
+    start: Date,
+    end: Date,
+  ): Promise<Array<{ date: string; count: number }>> {
+    const t = this.tables();
+    const rows = await this.ds.query<Array<{ day: string; n: string }>>(
+      `SELECT day, SUM(n) AS n FROM (
+         SELECT to_char("createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day, COUNT(*) AS n
+           FROM ${t.history}
+          WHERE "source_type" = 'correction' AND "source_id" IS NULL AND "is_deleted" = false
+            AND "createdAt" >= $1 AND "createdAt" < $2
+          GROUP BY 1
+         UNION ALL
+         SELECT to_char("createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day, COUNT(*) AS n
+           FROM ${t.corrections}
+          WHERE "is_deleted" = false AND "createdAt" >= $1 AND "createdAt" < $2
+          GROUP BY 1
+       ) x GROUP BY day`,
+      [start, end],
+    );
+    const byDay = new Map(rows.map((r) => [r.day, Number(r.n)]));
+    const first = tashkentDateKey(start);
+    return Array.from({ length: 7 }, (_, i) => {
+      const date = addDaysKey(first, i);
+      return { date, count: byDay.get(date) ?? 0 };
     });
   }
 
