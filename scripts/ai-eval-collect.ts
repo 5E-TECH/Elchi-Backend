@@ -24,12 +24,13 @@
  * Ishga tushirish (SERVERDA, faqat o'qish):
  *   POSTGRES_URI=... npx ts-node -r tsconfig-paths/register \
  *     scripts/ai-eval-collect.ts --out=/root/ai-eval-candidates [--days=30] [--limit=200]
- *   Tahrirlanmagan tasdiqlardan 5% namuna (alohida katalogga):
- *     ... scripts/ai-eval-collect.ts --out=/root/ai-eval-unedited --sample-unedited=0.05
+ *   Tahrirlanmagan tasdiqlardan 5% namuna (alohida katalogga; seed majburiy —
+ *   bir xil seed bir xil to'plam beradi):
+ *     ... scripts/ai-eval-collect.ts --out=/root/ai-eval-unedited --sample-unedited=0.05 --seed=2026-11
  */
 import 'reflect-metadata';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import * as dotenv from 'dotenv';
 import { DataSource } from 'typeorm';
 
@@ -116,13 +117,20 @@ export const UNEDITED_SAMPLE_SQL = `
     AND EXISTS (
       SELECT 1 FROM ai_schema.ai_order_draft_item i WHERE i.draft_id = d.id
     )
+    -- "Tahrirlanmagan" = HAR bog'langan buyurtma preview bilan solishtirilgan
+    -- (edited_fields NULL emas, item_index bor) va bo'sh. NULL —
+    -- "solishtirib bo'lmadi", tahrirlanmagan EMAS.
     AND NOT EXISTS (
       SELECT 1 FROM ai_schema.ai_order_draft_item i
       WHERE i.draft_id = d.id
-        AND jsonb_array_length(COALESCE(i.edited_fields, '[]'::jsonb)) > 0
+        AND (i.edited_fields IS NULL
+             OR i.item_index IS NULL
+             OR jsonb_array_length(i.edited_fields) > 0)
     )
-    AND random() < $3::float8
-  ORDER BY d.created_at DESC
+    -- Deterministik namuna ($4 = seed): bir xil seed — bir xil to'plam.
+    AND ('x' || substr(md5($4::text || d.id::text), 1, 8))::bit(32)::bigint
+        < floor($3::float8 * 4294967296)
+  ORDER BY md5($4::text || d.id::text)
   LIMIT $2::int
 `;
 
@@ -132,10 +140,17 @@ export function maskCandidateText(
   names: readonly string[] = [],
 ): string {
   let out = text;
-  for (const name of names) {
-    const n = name.trim();
-    if (n.length < 2) continue;
-    out = out.split(n).join('[ISM]');
+  // Eng uzunidan boshlab, butun so'z, katta-kichik harfsiz ("Ali" →
+  // "Alisher" ichida TEGILMAYDI; "Ali Valiyev" "Ali" dan oldin).
+  const sorted = [...new Set(names.map((n) => n.trim()))]
+    .filter((n) => n.length >= 2)
+    .sort((a, b) => b.length - a.length);
+  for (const n of sorted) {
+    const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(
+      new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'giu'),
+      '[ISM]',
+    );
   }
   return (
     out
@@ -152,13 +167,25 @@ export function maskCandidateText(
   );
 }
 
-function namesOf(value: unknown): string[] {
+/**
+ * Ismlar: `customer_name` satr bo'lsa ham, tuzatishdagi `{ai, final}`
+ * obyekti bo'lsa ham (operator yozgan `final` ism ham) yig'iladi.
+ */
+export function namesOf(value: unknown): string[] {
   const out: string[] = [];
+  const take = (x: unknown): void => {
+    if (typeof x === 'string') out.push(x);
+    else if (x && typeof x === 'object' && !Array.isArray(x)) {
+      const o = x as Record<string, unknown>;
+      take(o.ai);
+      take(o.final);
+    }
+  };
   const visit = (v: unknown): void => {
     if (Array.isArray(v)) v.forEach(visit);
     else if (v && typeof v === 'object') {
       for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-        if (k === 'customer_name' && typeof x === 'string') out.push(x);
+        if (k === 'customer_name') take(x);
         else visit(x);
       }
     }
@@ -167,19 +194,127 @@ function namesOf(value: unknown): string[] {
   return [...new Set(out)];
 }
 
+/**
+ * Tuzatishlardan erkin matnli PII maydonlarini tashlaydi (izoh, operator,
+ * telefon maskasi) — eval uchun keraksiz.
+ */
+const DROP_CORRECTION_KEYS = new Set([
+  'comment',
+  'operator',
+  'phone_number',
+  'extra_number',
+]);
+export function scrubCorrections(items: unknown): unknown {
+  if (!Array.isArray(items)) return [];
+  return items.map((it) => {
+    if (!it || typeof it !== 'object') return it;
+    const row = { ...(it as Record<string, unknown>) };
+    const fc = row.field_corrections;
+    if (fc && typeof fc === 'object' && !Array.isArray(fc)) {
+      row.field_corrections = Object.fromEntries(
+        Object.entries(fc as Record<string, unknown>).filter(
+          ([k]) => !DROP_CORRECTION_KEYS.has(k),
+        ),
+      );
+    }
+    return row;
+  });
+}
+
+/** Tasdiqlangan preview'dan faqat ruxsat etilgan kalitlar (hash/telefon/izoh yo'q). */
+const PREVIEW_KEYS = [
+  'index',
+  'customer_name',
+  'region_id',
+  'district_id',
+  'address',
+  'total_price',
+  'where_deliver',
+  'is_replacement',
+  'items',
+] as const;
+export function confirmedPreview(
+  resolvedPreview: unknown,
+  items: unknown,
+): unknown[] {
+  if (!Array.isArray(resolvedPreview)) return [];
+  const indexes = new Set(
+    (Array.isArray(items) ? items : [])
+      .map((i) => (i as { item_index?: unknown })?.item_index)
+      .filter((x): x is number => typeof x === 'number'),
+  );
+  return resolvedPreview
+    .filter(
+      (p) =>
+        !!p &&
+        typeof p === 'object' &&
+        indexes.has((p as { index?: unknown }).index as number),
+    )
+    .map((p) =>
+      Object.fromEntries(
+        PREVIEW_KEYS.filter((k) => k in (p as object)).map((k) => [
+          k,
+          (p as Record<string, unknown>)[k],
+        ]),
+      ),
+    );
+}
+
+/** Har satr qiymatini maskalaydi (JSON tuzilmasi buzilmaydi). */
+export function maskDeep(value: unknown, names: readonly string[]): unknown {
+  if (typeof value === 'string') return maskCandidateText(value, names);
+  if (Array.isArray(value)) return value.map((v) => maskDeep(v, names));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        maskDeep(v, names),
+      ]),
+    );
+  }
+  return value;
+}
+
+const KNOWN_FLAGS = new Set([
+  'out',
+  'days',
+  'limit',
+  'sample-unedited',
+  'seed',
+  'env',
+]);
+
 function arg(name: string): string | null {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
   return a ? a.slice(name.length + 3) : null;
 }
 
 async function main(): Promise<number> {
+  for (const a of process.argv.slice(2)) {
+    const m = /^--([a-z-]+)(=|$)/.exec(a);
+    if (!m || !KNOWN_FLAGS.has(m[1]) || m[2] !== '=') {
+      console.error(`Noma'lum yoki noto'g'ri bayroq: ${a}`);
+      return 2;
+    }
+  }
   const out = arg('out');
   if (!out) {
     console.error('--out=<katalog> majburiy (repo TASHQARISIDA).');
     return 2;
   }
   const outDir = resolve(out);
-  if (outDir === REPO_ROOT || outDir.startsWith(REPO_ROOT + '/')) {
+  const repoReal = realpathSync(REPO_ROOT);
+  const outParent = (() => {
+    let d = outDir;
+    while (!existsSync(d)) d = dirname(d);
+    return realpathSync(d);
+  })();
+  if (
+    outDir === REPO_ROOT ||
+    outDir.startsWith(REPO_ROOT + '/') ||
+    outParent === repoReal ||
+    outParent.startsWith(repoReal + '/')
+  ) {
     console.error(
       'Repo ichiga yozish taqiqlangan (PII xavfi). Boshqa katalog bering.',
     );
@@ -192,6 +327,13 @@ async function main(): Promise<number> {
   if (sample !== null && !(sample > 0 && sample <= 1)) {
     console.error(
       "--sample-unedited 0 < x <= 1 bo'lishi kerak (masalan 0.05).",
+    );
+    return 2;
+  }
+  const seed = arg('seed');
+  if (sample !== null && !(seed && /^[A-Za-z0-9_-]{1,64}$/.test(seed))) {
+    console.error(
+      '--sample-unedited bilan --seed=<matn> majburiy (namuna takrorlansin).',
     );
     return 2;
   }
@@ -210,16 +352,26 @@ async function main(): Promise<number> {
   try {
     // Faqat o'qish: tranzaksiya READ ONLY.
     const rows: Record<string, unknown>[] = await ds.transaction(async (m) => {
-      await m.query('SET TRANSACTION READ ONLY');
+      await m.query(
+        'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY',
+      );
+      // Prod: uzoq so'rov yoki qulf kutish servisni sekinlashtirmasin.
+      await m.query("SET LOCAL statement_timeout = '120s'");
+      await m.query("SET LOCAL lock_timeout = '2s'");
+      await m.query("SET LOCAL application_name = 'ai-eval-collect'");
       return sample === null
         ? m.query<Record<string, unknown>[]>(COLLECT_SQL, [days, limit])
         : m.query<Record<string, unknown>[]>(UNEDITED_SAMPLE_SQL, [
             days,
             limit,
             sample,
+            seed,
           ]);
     });
-    mkdirSync(outDir, { recursive: true });
+    mkdirSync(outDir, { recursive: true, mode: 0o700 });
+    if (sample !== null) {
+      console.log(`namuna: ulush=${sample} seed=${seed}`);
+    }
     let n = 0;
     for (const r of rows) {
       const names = namesOf([r.raw_extraction, r.resolved_preview, r.items]);
@@ -242,25 +394,24 @@ async function main(): Promise<number> {
         evidence: {
           outcome: r.outcome,
           calls: r.calls,
-          corrections: JSON.parse(
-            maskCandidateText(JSON.stringify(r.items ?? []), names),
-          ) as unknown,
-          // Tahrirlanmagan namunada: operator o'zgartirmay tasdiqlagan AI taklifi.
+          corrections: maskDeep(scrubCorrections(r.items), names),
+          // Tahrirlanmagan namunada: operator o'zgartirmay tasdiqlagan AI
+          // taklifi — FAQAT tasdiqlangan index'lar, ruxsat etilgan kalitlar.
           ...(sample === null
             ? {}
             : {
-                confirmed_preview: JSON.parse(
-                  maskCandidateText(
-                    JSON.stringify(r.resolved_preview ?? null),
-                    names,
-                  ),
-                ) as unknown,
+                confirmed_preview: maskDeep(
+                  confirmedPreview(r.resolved_preview, r.items),
+                  names,
+                ),
+                sample: { fraction: sample, seed },
               }),
         },
       };
       writeFileSync(
         join(outDir, `${candidate.id}.json`),
         JSON.stringify(candidate, null, 2) + '\n',
+        { mode: 0o600 },
       );
       n += 1;
     }

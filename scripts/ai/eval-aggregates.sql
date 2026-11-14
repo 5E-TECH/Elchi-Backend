@@ -3,11 +3,13 @@
 -- Yo'riqnoma: docs/ai/PROD_EVAL_EXPORT.md. Natijada shaxsiy ma'lumot YO'Q:
 -- faqat sanoqlar, ulushlar, model/prompt nomlari va tuman NOMLARI/ID'lari.
 --
---   psql "$POSTGRES_URI" -v days=30 -X -q -P pager=off \
---     -f scripts/ai/eval-aggregates.sql -o /root/ai-eval/aggregates.txt
+-- Ishga tushirish buyrug'i: docs/ai/PROD_EVAL_EXPORT.md (1-qadam).
 --
--- Faqat sessiyaga xos TEMP VIEW yaratiladi (doimiy jadvalga tegmaydi), so'ng
--- hamma SELECT bitta READ ONLY tranzaksiyada — tasodifan yozish imkonsiz.
+-- Hech narsa yozilmaydi: TEMP obyekt ham yaratilmaydi (replica / read-only
+-- rolda ham ishlaydi). Hamma SELECT bitta REPEATABLE READ READ ONLY
+-- tranzaksiyada (bir xil snapshot), statement_timeout 60s, lock_timeout 2s.
+-- Doc'dagi buyruq qo'shimcha ravishda PGOPTIONS bilan
+-- default_transaction_read_only=on beradi.
 
 \set ON_ERROR_STOP on
 \if :{?days}
@@ -15,23 +17,16 @@
   \set days 30
 \endif
 
--- Oyna: oxirgi :days kun ichida TASDIQLANGAN (draft_item yaratilgan) buyurtmalar.
-CREATE TEMP VIEW ai_eval_items AS
-SELECT i.id,
-       i.draft_id,
-       i.order_id,
-       i.created_at,
-       COALESCE(i.edited_fields, '[]'::jsonb) AS edited,
-       i.field_corrections AS fc,
-       d.model,
-       d.prompt_version,
-       d.source_kind,
-       d.created_at AS draft_created_at
-FROM ai_schema.ai_order_draft_item i
-JOIN ai_schema.ai_order_draft d ON d.id = i.draft_id
-WHERE i.created_at >= now() - (:days::int * interval '1 day');
+-- Oyna: oxirgi :days kun ichida TASDIQLANGAN (draft_item yaratilgan)
+-- buyurtmalar. edited_fields NULL ("solishtirib bo'lmadi" — preview yo'q)
+-- qatorlar CHIQARILADI: ular "tahrirlanmagan" emas.
+\set eval_items '(SELECT i.id, i.draft_id, i.order_id, i.created_at, i.edited_fields AS edited, i.field_corrections AS fc, d.model, d.prompt_version, d.source_kind, d.created_at AS draft_created_at FROM ai_schema.ai_order_draft_item i JOIN ai_schema.ai_order_draft d ON d.id = i.draft_id WHERE i.created_at >= now() - (current_setting(''ai_eval.days'')::int * interval ''1 day'') AND i.edited_fields IS NOT NULL)'
 
-BEGIN TRANSACTION READ ONLY;
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL statement_timeout = '60s';
+SET LOCAL lock_timeout = '2s';
+SET LOCAL application_name = 'ai-eval-aggregates';
+SELECT set_config('ai_eval.days', :'days', true) \g /dev/null
 
 \echo '=== 1. Maydon bo''yicha tuzatilgan / AI bo''sh qoldirgan ulushi (model × prompt_version) ==='
 \echo '    edited_pct — operator o''zgartirgan; ai_null_pct — AI qiymat bermagan, operator to''ldirgan'
@@ -51,7 +46,7 @@ SELECT e.model,
            AND e.fc ? f.field
            AND jsonb_typeof(e.fc -> f.field -> 'ai') IN ('null')
        ) / COUNT(*), 2) AS ai_null_pct
-FROM ai_eval_items e
+FROM :eval_items e
 CROSS JOIN unnest(ARRAY[
   'customer_name', 'phone_number', 'extra_number', 'region_id', 'district_id',
   'address', 'total_price', 'where_deliver', 'comment', 'operator', 'items'
@@ -61,12 +56,12 @@ ORDER BY 1, 2, edited_pct DESC;
 
 \echo '=== 2. Tuman chalkashlik juftlari (AI → operator), same_region bilan ==='
 SELECT e.fc -> 'district_id' ->> 'ai' AS ai_district_id,
-       da.name AS ai_district,
+       COALESCE(da.name, 'unknown_district') AS ai_district,
        e.fc -> 'district_id' ->> 'final' AS final_district_id,
-       df.name AS final_district,
+       COALESCE(df.name, 'unknown_district') AS final_district,
        (da.region_id IS NOT NULL AND da.region_id = df.region_id) AS same_region,
        COUNT(*) AS n
-FROM ai_eval_items e
+FROM :eval_items e
 LEFT JOIN logistics_schema.districts da
   ON da.id::text = e.fc -> 'district_id' ->> 'ai'
 LEFT JOIN logistics_schema.districts df
@@ -83,7 +78,7 @@ SELECT CASE
          ELSE 'other_region'
        END AS kind,
        COUNT(*) AS n
-FROM ai_eval_items e
+FROM :eval_items e
 LEFT JOIN logistics_schema.districts da
   ON da.id::text = e.fc -> 'district_id' ->> 'ai'
 LEFT JOIN logistics_schema.districts df
@@ -99,7 +94,7 @@ WITH p AS (
               THEN (e.fc -> 'total_price' ->> 'ai')::numeric END AS ai,
          CASE WHEN jsonb_typeof(e.fc -> 'total_price' -> 'final') = 'number'
               THEN (e.fc -> 'total_price' ->> 'final')::numeric END AS fin
-  FROM ai_eval_items e
+  FROM :eval_items e
   WHERE e.fc ? 'total_price'
 )
 SELECT model,
@@ -136,6 +131,7 @@ SELECT d.model,
 FROM ai_schema.ai_order_draft d
 WHERE d.created_at >= now() - (:days::int * interval '1 day')
   AND d.created_at < now() - interval '1 day'
+  AND d.preview_count > 0
 GROUP BY 1, 2, 3
 ORDER BY drafts DESC;
 
@@ -143,7 +139,7 @@ ORDER BY drafts DESC;
 \echo '    (tasdiqlangan = field_corrections.final; tahrirlanmagan maydon tekshirilmaydi)'
 SELECT COUNT(*) FILTER (WHERE e.fc ? 'district_id') AS district_checked,
        COUNT(*) FILTER (
-         WHERE e.fc ? 'district_id'
+         WHERE e.fc ? 'district_id' AND o.id IS NOT NULL AND NOT o.is_deleted
            AND o.district_id::text IS DISTINCT FROM (e.fc -> 'district_id' ->> 'final')
        ) AS district_drift,
        COUNT(*) FILTER (
@@ -151,11 +147,12 @@ SELECT COUNT(*) FILTER (WHERE e.fc ? 'district_id') AS district_checked,
        ) AS price_checked,
        COUNT(*) FILTER (
          WHERE jsonb_typeof(e.fc -> 'total_price' -> 'final') = 'number'
+           AND o.id IS NOT NULL AND NOT o.is_deleted
            AND o.total_price::numeric <> (e.fc -> 'total_price' ->> 'final')::numeric
        ) AS price_drift,
        COUNT(*) FILTER (WHERE o.id IS NULL) AS order_missing,
        COUNT(*) FILTER (WHERE o.is_deleted) AS order_deleted
-FROM ai_eval_items e
+FROM :eval_items e
 LEFT JOIN order_schema.orders o ON o.id = e.order_id;
 
 \echo '=== 6. Kunlik model va outcome aralashmasi (draftlar) ==='
