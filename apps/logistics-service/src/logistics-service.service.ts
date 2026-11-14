@@ -505,6 +505,67 @@ export const NEW_POSTS_ACCESS_UNAVAILABLE_MESSAGE =
   "«Yangi pochtalar» ruxsatini tekshirib bo'lmadi (filial xizmati javob bermadi) — birozdan so'ng qayta urinib ko'ring";
 
 /**
+ * POCHTA → HQ KURYERI (ega qarori 2026-11-15): «Pochta jo'natishda ham agar
+ * HQ ning shu viloyatda o'z kurieri bo'lsa u ham ro'yxatda chiqib kelishi
+ * kerak». `logistics.post.courier_destinations` (ro'yxat) va
+ * `logistics.post.dispatch_to_courier` (yozuv) — ikkalasi bitta
+ * `resolveHqCouriersForRegion` dan foydalanadi (ro'yxat va yozuv
+ * ajralmaydi). 6-band qarorining (HQ kuryeri faqat HQ viloyati) ISTISNOSI —
+ * FAQAT shu Pochta yo'lida: `/dispatch`, `assignOrdersToCourier` va skan
+ * qoidalari o'zgarmaydi.
+ */
+export const POST_COURIER_MESSAGES = {
+  POST_NOT_FOUND: 'Pochta topilmadi',
+  ORDER_IDS_REQUIRED: 'order_ids majburiy — kamida bitta buyurtma tanlang',
+  ORDER_IDS_TOO_MANY: 'order_ids 1000 tadan oshmasin — pochtani qismlab bering',
+  COURIER_ID_INVALID: "courier_id noto'g'ri — ro'yxatdan kuryerni tanlang",
+  POST_REGION_MISSING:
+    "Pochtaning viloyati yo'q — HQ kuryerlarini aniqlab bo'lmaydi",
+  COURIER_INACTIVE:
+    "Kuryer topilmadi yoki faol emas — unga pochta berib bo'lmaydi",
+  COURIER_REGION_NOT_SERVED:
+    'Kuryer bu viloyatga xizmat qilmaydi — «Xizmat viloyatlari»da belgilanmagan',
+  NO_DISPATCHABLE_ORDERS: "Pochtada kuryerga berishga mos buyurtma yo'q",
+  BRANCH_UNAVAILABLE:
+    "HQ kuryerlarini tekshirib bo'lmadi (filial xizmati javob bermadi) — birozdan so'ng qayta urinib ko'ring",
+  IDENTITY_UNAVAILABLE:
+    "Kuryer ma'lumotini tekshirib bo'lmadi (foydalanuvchilar xizmati javob bermadi) — birozdan so'ng qayta urinib ko'ring",
+  HQ_NOT_FOUND: "HQ filiali topilmadi — HQ kuryerlarini aniqlab bo'lmaydi",
+} as const;
+
+export const postNotSendableToCourierMessage = (postId: string): string =>
+  `Pochta #${postId} kuryerga berilmaydi: faqat yangi ('new'), kuryersiz HQ pochtasi beriladi`;
+export const courierNotHqMessage = (courierId: string): string =>
+  `Kuryer #${courierId} HQ kuryeri emas — pochtani faqat HQ kuryeriga berish mumkin`;
+
+/** Pochta → HQ kuryeri: bir so'rovdagi buyurtmalar chegarasi (gateway bilan bir xil). */
+export const POST_DISPATCH_TO_COURIER_MAX_ORDERS = 1000;
+/** identity `courier.find_all` sahifa chegarasi (identity 100 dan oshirmaydi). */
+const HQ_COURIER_PAGE_LIMIT = 100;
+/** HQ kuryerlari ro'yxati — ko'pi bilan shuncha sahifa (1000 kuryer). */
+const HQ_COURIER_MAX_PAGES = 10;
+/** `branch.user.find_by_branch` — branch-service har a'zoni identity'dan to'ldiradi. */
+const HQ_BRANCH_USERS_TIMEOUT_MS = 8000;
+const HQ_COURIER_IDENTITY_TIMEOUT_MS = 5000;
+
+/**
+ * HQ kuryeri pochta viloyatiga QANDAY xizmat qiladi:
+ *  - `hq_region` — pochta viloyati = HQ viloyati (har bir HQ kuryeri);
+ *  - `home` — kuryerning o'z viloyati (`admins.region_id`) = pochta viloyati;
+ *  - `listed` — super-kuryer «Xizmat viloyatlari»da (`courier_regions`) bor;
+ *  - `all_regions` — super-kuryer `serves_all_regions`.
+ */
+export type HqCourierRegionMatch =
+  'hq_region' | 'home' | 'listed' | 'all_regions';
+
+export type HqCourierDestination = {
+  courier_user_id: string;
+  name: string | null;
+  phone: string | null;
+  region_match: HqCourierRegionMatch;
+};
+
+/**
  * CODE-10 — Qaytarish tasdiqlash/rad etishda bir vaqtda yuboriladigan
  * order.update soni. Har bir chaqiruv alohida buyurtma (order-service da
  * alohida tranzaksiya), shuning uchun parallel xavfsiz; chegara order-service
@@ -796,6 +857,24 @@ function branchCoverageRowOf(value: unknown): BranchCoverageRow | null {
 
 /** Qamrov rad javobidagi xabarda ko'rsatiladigan buyurtma id'lari soni. */
 const COVERAGE_MESSAGE_ORDER_IDS = 10;
+
+/** Kanonik bigint id'larni son bo'yicha solishtiradi (barqaror tartib). */
+function compareBigintIds(a: string, b: string): number {
+  const left = BigInt(a);
+  const right = BigInt(b);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Quyi servis xatosining `statusCode` i (RpcException yoki oddiy obyekt). */
+function downstreamStatusCode(error: unknown): number | null {
+  const downstream: unknown =
+    error instanceof RpcException ? error.getError() : error;
+  const code =
+    downstream && typeof downstream === 'object'
+      ? Number((downstream as { statusCode?: unknown }).statusCode)
+      : NaN;
+  return Number.isFinite(code) ? code : null;
+}
 
 /** Rad xabaridagi id ro'yxati: `#12, #13` (+ «va yana N ta»). */
 function coverageOrderIdList(orderIds: readonly string[]): string {
@@ -7884,6 +7963,76 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest("Kuryer faol emas — unga buyurtma biriktirib bo'lmaydi");
     }
 
+    const { targetPost, createdNewPost } =
+      await this.moveOrdersToCourierDailyPost({
+        orders,
+        courierId,
+        requester,
+        requesterId,
+        newPostRegionId: orders[0]?.region_id
+          ? String(orders[0].region_id)
+          : null,
+        notes: {
+          received: 'Bulk assign oldidan NEW -> RECEIVED',
+          assigned: 'Manager tomonidan ommaviy courier biriktirish',
+          rollback: 'Bulk assign rollback',
+        },
+      });
+
+    await this.activityLog.log({
+      // The post is the single mutated aggregate here; the assigned orders live
+      // in metadata. entity_id is a Post id, so entity_type must be 'Post'.
+      entity_type: 'Post',
+      entity_id: String(targetPost.id),
+      action: ActivityAction.ASSIGN,
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: courierId,
+        order_count: orderIds.length,
+        order_ids: orderIds.slice(0, 10),
+        branch_id: scopeBranchId,
+        post_id: String(targetPost.id),
+        post_created: createdNewPost,
+      },
+    });
+
+    return successRes(
+      {
+        order_ids: orderIds,
+        courier_id: courierId,
+        post_id: targetPost.id,
+        post_created: createdNewPost,
+        assigned_count: orderIds.length,
+      },
+      200,
+      'Orderlar courierga biriktirildi',
+    );
+  }
+
+  /**
+   * Kuryerga berishning YOZUV qismi — `assignOrdersToCourier` va Pochta → HQ
+   * kuryeri (`dispatchPostToCourier`) uchun BITTA kod (ikki yo'l ajralib
+   * ketmasin). Chaqiruvchi barcha tekshiruvlarni OLDIN bajaradi.
+   *
+   *  - Har kun — kuryerning alohida pochtasi (Toshkent kuni): bugungi ochiq
+   *    (SENT) pochta qayta ishlatiladi, yo'q bo'lsa `newPostRegionId` bilan
+   *    yangisi yaratiladi;
+   *  - har buyurtma: NEW → RECEIVED (faqat NEW bo'lsa), keyin kuryer,
+   *    `assigned_at`, ON_THE_ROAD va kuryer pochtasi;
+   *  - pochta hisoblagichlari;
+   *  - xatoda — yozilgan buyurtmalar avvalgi holatiga qaytariladi (best
+   *    effort) va shu chaqiruvda yaratilgan pochta o'chiriladi; xato yuqoriga.
+   */
+  private async moveOrdersToCourierDailyPost(input: {
+    orders: readonly OrderRow[];
+    courierId: string;
+    requester: RequesterContext;
+    requesterId: string;
+    newPostRegionId: string | null;
+    notes: { received: string; assigned: string; rollback: string };
+  }): Promise<{ targetPost: Post; createdNewPost: boolean }> {
+    const { orders, courierId, requester, requesterId, notes } = input;
+
     // Har kun — kuryerning alohida pochtasi (Toshkent kuni): kechagi ochiq
     // pochtaga (yetkazilmay qolganlari bilan) bugungi buyurtma qo'shilmaydi.
     let targetPost = await this.postRepo.findOne({
@@ -7900,7 +8049,7 @@ export class LogisticsServiceService implements OnModuleInit {
       targetPost = await this.postRepo.save(
         this.postRepo.create({
           courier_id: courierId,
-          region_id: orders[0]?.region_id ? String(orders[0].region_id) : null,
+          region_id: input.newPostRegionId,
           order_quantity: 0,
           post_total_price: 0,
           qr_code_token: this.generateToken(),
@@ -7940,7 +8089,7 @@ export class LogisticsServiceService implements OnModuleInit {
             {
               id: requesterId,
               roles: requester.roles ?? [Roles.BRANCH],
-              note: 'Bulk assign oldidan NEW -> RECEIVED',
+              note: notes.received,
             },
           );
         }
@@ -7956,7 +8105,7 @@ export class LogisticsServiceService implements OnModuleInit {
           {
             id: requesterId,
             roles: requester.roles ?? [Roles.BRANCH],
-            note: 'Manager tomonidan ommaviy courier biriktirish',
+            note: notes.assigned,
           },
         );
 
@@ -7985,7 +8134,7 @@ export class LogisticsServiceService implements OnModuleInit {
             {
               id: requesterId,
               roles: requester.roles ?? [Roles.BRANCH],
-              note: 'Bulk assign rollback',
+              note: notes.rollback,
             },
           );
         } catch {
@@ -8004,34 +8153,633 @@ export class LogisticsServiceService implements OnModuleInit {
       throw error;
     }
 
+    return { targetPost, createdNewPost };
+  }
+
+  /**
+   * HQ filiali id — Pochta → HQ kuryeri yo'li uchun QAT'IY variant:
+   * `findHqBranchId` javob bermaganda 403 beradi, bu yerda esa 503 (qayta
+   * urinish), HQ yo'q (404) — 404.
+   */
+  private async findHqBranchIdForCourierPost(): Promise<string> {
+    let response: { data?: { id?: unknown } | null } | null;
+    try {
+      response = (await lastValueFrom(
+        this.branchClient
+          .send({ cmd: 'branch.find_hq' }, {})
+          .pipe(timeout(SENDER_BRANCH_TIMEOUT_MS)),
+      )) as { data?: { id?: unknown } | null } | null;
+    } catch (error: unknown) {
+      if (downstreamStatusCode(error) === 404) {
+        this.notFound(POST_COURIER_MESSAGES.HQ_NOT_FOUND);
+      }
+      this.logger.warn(
+        `post→HQ kuryer: branch.find_hq javob bermadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      throw new RpcException(
+        errorRes(POST_COURIER_MESSAGES.BRANCH_UNAVAILABLE, 503),
+      );
+    }
+    const hqBranchId = canonicalBigintId(response?.data?.id);
+    if (!hqBranchId) {
+      this.notFound(POST_COURIER_MESSAGES.HQ_NOT_FOUND);
+    }
+    return hqBranchId;
+  }
+
+  /**
+   * HQ `branch_users` dagi COURIER a'zolar (kanonik id). QAT'IY:
+   * `findBranchUsersByBranchId` xatoni `[]` qiladi — bu yerda esa 503 (HQ
+   * kuryeri «HQ kuryeri emas» deb rad etilmasin).
+   */
+  private async findHqCourierIdsStrict(
+    hqBranchId: string,
+  ): Promise<Set<string>> {
+    let response: { data?: unknown } | null;
+    try {
+      response = (await lastValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            {
+              branch_id: hqBranchId,
+              requester: SENDER_BRANCH_SYSTEM_REQUESTER,
+            },
+          )
+          .pipe(timeout(HQ_BRANCH_USERS_TIMEOUT_MS)),
+      )) as { data?: unknown } | null;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `post→HQ kuryer: HQ #${hqBranchId} a'zolarini o'qib bo'lmadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      throw new RpcException(
+        errorRes(POST_COURIER_MESSAGES.BRANCH_UNAVAILABLE, 503),
+      );
+    }
+    if (!Array.isArray(response?.data)) {
+      throw new RpcException(
+        errorRes(POST_COURIER_MESSAGES.BRANCH_UNAVAILABLE, 503),
+      );
+    }
+    const ids = new Set<string>();
+    for (const row of response.data as unknown[]) {
+      if (!row || typeof row !== 'object') continue;
+      const { user_id: userId, role } = row as {
+        user_id?: unknown;
+        role?: unknown;
+      };
+      const id = canonicalBigintId(userId);
+      if (
+        id &&
+        typeof role === 'string' &&
+        role.trim().toUpperCase() === 'COURIER'
+      ) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * identity `courier.find_all` — faqat FAOL kuryerlar (`status: active`),
+   * sahifalab (100 tadan, ko'pi bilan 10 sahifa). Xato / noto'g'ri javob —
+   * 503 (fail closed).
+   */
+  private async findActiveCouriersStrict(filter: {
+    user_ids: string[];
+    region_id?: string;
+  }): Promise<Array<Record<string, unknown>>> {
+    const items: Array<Record<string, unknown>> = [];
+    for (let page = 1; page <= HQ_COURIER_MAX_PAGES; page += 1) {
+      let response: {
+        data?: { items?: unknown; meta?: { totalPages?: unknown } };
+      } | null;
+      try {
+        response = (await lastValueFrom(
+          this.identityClient
+            .send(
+              { cmd: 'identity.courier.find_all' },
+              {
+                query: {
+                  ...filter,
+                  status: Status.ACTIVE,
+                  page,
+                  limit: HQ_COURIER_PAGE_LIMIT,
+                },
+              },
+            )
+            .pipe(timeout(HQ_COURIER_IDENTITY_TIMEOUT_MS)),
+        )) as typeof response;
+      } catch (error: unknown) {
+        this.logger.warn(
+          `post→HQ kuryer: identity.courier.find_all javob bermadi: ${(error as Error)?.message ?? String(error)}`,
+        );
+        throw new RpcException(
+          errorRes(POST_COURIER_MESSAGES.IDENTITY_UNAVAILABLE, 503),
+        );
+      }
+      const pageItems = response?.data?.items;
+      if (!Array.isArray(pageItems)) {
+        throw new RpcException(
+          errorRes(POST_COURIER_MESSAGES.IDENTITY_UNAVAILABLE, 503),
+        );
+      }
+      for (const item of pageItems as unknown[]) {
+        if (item && typeof item === 'object') {
+          items.push(item as Record<string, unknown>);
+        }
+      }
+      const totalPages = Number(response?.data?.meta?.totalPages);
+      if (
+        pageItems.length < HQ_COURIER_PAGE_LIMIT ||
+        !Number.isFinite(totalPages) ||
+        page >= totalPages
+      ) {
+        break;
+      }
+      if (page === HQ_COURIER_MAX_PAGES) {
+        this.logger.warn(
+          `post→HQ kuryer: HQ kuryerlari ${HQ_COURIER_MAX_PAGES * HQ_COURIER_PAGE_LIMIT} tadan ko'p — ro'yxat kesildi`,
+        );
+      }
+    }
+    return items;
+  }
+
+  /**
+   * B2 — pochta viloyati `regionId` ga xizmat qiladigan FAOL HQ kuryerlari
+   * (ega qarori 2026-11-15). HQ kuryeri — HQ `branch_users` dagi COURIER.
+   * «Xizmat qiladi»:
+   *  (a) viloyat = HQ viloyati — har bir HQ kuryeri (`hq_region`; mavjud
+   *      qoida);
+   *  (b) aks holda identity `courier.find_all {region_id}`: kuryerning o'z
+   *      viloyati (`home`), super-kuryer «Xizmat viloyatlari»
+   *      (`courier_regions`, `listed`) yoki `serves_all_regions`
+   *      (`all_regions`).
+   * Ro'yxat (`listPostCourierDestinations`) va yozuv (`dispatchPostToCourier`)
+   * shu BITTA funksiyadan o'tadi. branch-service / identity javob bermasa —
+   * 503. `courierIds` — faqat shu kuryerlar (yozuv yo'li).
+   *
+   * Faqat Pochta yo'li: `assignOrdersToCourier` / skan qoidasi (6-band, HQ
+   * kuryeri faqat HQ viloyati) bu funksiyani ishlatmaydi va o'zgarmaydi.
+   */
+  private async resolveHqCouriersForRegion(
+    regionId: string,
+    courierIds?: readonly string[],
+  ): Promise<{
+    hqBranchId: string;
+    hqRow: BranchCoverageRow;
+    isHqRegion: boolean;
+    hqCourierIds: ReadonlySet<string>;
+    couriers: HqCourierDestination[];
+  }> {
+    const hqBranchId = await this.findHqBranchIdForCourierPost();
+    const hqRow = await this.findBranchCoverageRow(hqBranchId);
+    if (!hqRow) {
+      this.notFound(POST_COURIER_MESSAGES.HQ_NOT_FOUND);
+    }
+    const hqCourierIds = await this.findHqCourierIdsStrict(hqBranchId);
+    const isHqRegion = !!hqRow.region_id && hqRow.region_id === regionId;
+    const targetIds = Array.from(
+      new Set(
+        (courierIds ?? Array.from(hqCourierIds)).filter((id) =>
+          hqCourierIds.has(id),
+        ),
+      ),
+    );
+    const rows = targetIds.length
+      ? await this.findActiveCouriersStrict(
+          isHqRegion
+            ? { user_ids: targetIds }
+            : { user_ids: targetIds, region_id: regionId },
+        )
+      : [];
+
+    const allowed = new Set(targetIds);
+    const byId = new Map<string, HqCourierDestination>();
+    for (const row of rows) {
+      const id = canonicalBigintId(row.id);
+      if (!id || !allowed.has(id) || byId.has(id)) continue;
+      const status =
+        typeof row.status === 'string' ? row.status.trim().toLowerCase() : '';
+      if (status !== String(Status.ACTIVE)) {
+        continue;
+      }
+      const name =
+        typeof row.name === 'string' && row.name.trim()
+          ? row.name.trim()
+          : null;
+      const phone =
+        typeof row.phone_number === 'string' && row.phone_number.trim()
+          ? row.phone_number.trim()
+          : null;
+      const regionMatch: HqCourierRegionMatch = isHqRegion
+        ? 'hq_region'
+        : canonicalBigintId(row.region_id) === regionId
+          ? 'home'
+          : row.serves_all_regions === true
+            ? 'all_regions'
+            : 'listed';
+      byId.set(id, {
+        courier_user_id: id,
+        name,
+        phone,
+        region_match: regionMatch,
+      });
+    }
+    const couriers = Array.from(byId.values()).sort((a, b) => {
+      if (a.name !== b.name) {
+        if (a.name === null) return 1;
+        if (b.name === null) return -1;
+        const byName = a.name.localeCompare(b.name);
+        if (byName !== 0) return byName;
+      }
+      return compareBigintIds(a.courier_user_id, b.courier_user_id);
+    });
+    return { hqBranchId, hqRow, isHqRegion, hqCourierIds, couriers };
+  }
+
+  /**
+   * Pochta HQ kuryeriga berilishi mumkinmi: mavjud, NEW va kuryersiz
+   * (bo'sh yoki '0' — branch-service `hasCourierRef` bilan bir xil), viloyati
+   * bor. Aks holda 404 / 400 `post_not_sendable` / 400 `branch_region_missing`.
+   */
+  private async loadPostSendableToCourier(
+    rawPostId: unknown,
+  ): Promise<{ post: Post; postId: string; regionId: string }> {
+    const postId = canonicalBigintId(rawPostId);
+    if (!postId) {
+      this.notFound(POST_COURIER_MESSAGES.POST_NOT_FOUND);
+    }
+    const post = await this.postRepo.findOne({ where: { id: postId } });
+    if (!post) {
+      this.notFound(POST_COURIER_MESSAGES.POST_NOT_FOUND);
+    }
+    const courierRef = String(post.courier_id ?? '').trim();
+    const hasCourier = courierRef !== '' && !/^0+$/.test(courierRef);
+    if (post.status !== Post_status.NEW || hasCourier) {
+      this.badRequest(
+        postNotSendableToCourierMessage(postId),
+        rejectionData('post_not_sendable', {
+          post_id: postId,
+          post_status: post.status ? String(post.status) : null,
+          post_courier_id: courierRef || null,
+        }),
+      );
+    }
+    const regionId = canonicalBigintId(post.region_id);
+    if (!regionId) {
+      this.badRequest(
+        POST_COURIER_MESSAGES.POST_REGION_MISSING,
+        rejectionData('branch_region_missing', {
+          post_id: postId,
+          missing: 'post',
+        }),
+      );
+    }
+    return { post, postId, regionId };
+  }
+
+  /**
+   * 1.1 `GET /branches/posts/:postId/courier-destinations` — HQ pochtasi
+   * viloyatiga xizmat qiladigan faol HQ kuryerlari (ega qarori 2026-11-15).
+   * Ruxsat — «Yangi pochtalar» bilan bir xil (SA/ADMIN yoki HQ xodimi).
+   * Tashqi yetkazuvchi belgisini (`carrier_*`) gateway qo'shadi.
+   */
+  async listPostCourierDestinations(
+    requester: RequesterContext | undefined,
+    rawPostId: unknown,
+  ) {
+    await this.assertNewPostsRequester(requester);
+    const { postId, regionId } =
+      await this.loadPostSendableToCourier(rawPostId);
+    const resolved = await this.resolveHqCouriersForRegion(regionId);
+    return successRes(
+      {
+        post_id: postId,
+        region_id: regionId,
+        is_hq_region: resolved.isHqRegion,
+        couriers: resolved.couriers,
+      },
+      200,
+      'HQ couriers for post region',
+    );
+  }
+
+  /**
+   * 1.2 `POST /branches/posts/:postId/dispatch-to-courier` — HQ hudud
+   * pochtasidagi tanlangan buyurtmalarni to'g'ridan-to'g'ri HQ kuryeriga
+   * berish (filialga emas). Ega qarori 2026-11-15: «Pochta jo'natishda ham
+   * agar HQ ning shu viloyatda o'z kurieri bo'lsa u ham ro'yxatda chiqib
+   * kelishi kerak».
+   *
+   * Tekshiruvlar tartibi (HAMMASI yozuvdan OLDIN — biror shart buzilsa hech
+   * narsa yozilmaydi):
+   *  a) so'rovchi — «Yangi pochtalar» ruxsati (`new_posts_hq_only`);
+   *  b) pochta — mavjud, NEW, kuryersiz, viloyatli;
+   *  c) kuryer — HQ `branch_users` COURIER (`courier_not_hq`), faol
+   *     (`courier_inactive`) va pochta viloyatiga xizmat qiladi
+   *     (`courier_region_not_served`) — ro'yxat bilan BITTA funksiya;
+   *  d) tanlangan id shu pochtada yo'q — 409 `order_not_in_post`;
+   *  e) bekor / yopilgan / o'chirilgan — jimgina o'tkazib yuboriladi
+   *     (filial jo'natmasi bilan bir xil); qolmasa — 400;
+   *  f) faqat HQ qabul qilgan (RECEIVED), kuryersiz, HQ qo'lidagi buyurtma —
+   *     aks holda 400 `order_not_dispatchable`;
+   *  g) viloyat: pochta viloyati = HQ viloyati — mavjud HQ qoidasi
+   *     (`assertOrdersServedByBranch`); aks holda chiquvchi partiya — 409,
+   *     buyurtma xizmat viloyati ≠ pochta viloyati — 409
+   *     `order_region_mismatch`.
+   * Yozuv — `assignOrdersToCourier` bilan BITTA kod
+   * (`moveOrdersToCourierDailyPost`), keyin NEW pochta hisoblagichlari
+   * bo'shatiladi va pochta bo'shasa o'chiriladi (xatosi so'rovni buzmaydi).
+   */
+  async dispatchPostToCourier(
+    requester: RequesterContext | undefined,
+    dto: { post_id?: unknown; courier_id?: unknown; order_ids?: unknown },
+  ) {
+    // a) So'rovchi.
+    await this.assertNewPostsRequester(requester);
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requester || !requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const courierId = canonicalBigintId(dto?.courier_id);
+    if (!courierId) {
+      this.badRequest(POST_COURIER_MESSAGES.COURIER_ID_INVALID);
+    }
+    const rawOrderIds: unknown[] = Array.isArray(dto?.order_ids)
+      ? (dto.order_ids as unknown[])
+      : [];
+    if (rawOrderIds.length > POST_DISPATCH_TO_COURIER_MAX_ORDERS) {
+      this.badRequest(POST_COURIER_MESSAGES.ORDER_IDS_TOO_MANY);
+    }
+    const canonicalOrderIds = rawOrderIds.map((id) => canonicalBigintId(id));
+    if (
+      !canonicalOrderIds.length ||
+      canonicalOrderIds.some((id) => id === null)
+    ) {
+      this.badRequest(POST_COURIER_MESSAGES.ORDER_IDS_REQUIRED);
+    }
+    const selectedIds = Array.from(new Set(canonicalOrderIds as string[]));
+
+    // b) Pochta.
+    const { postId, regionId } = await this.loadPostSendableToCourier(
+      dto?.post_id,
+    );
+
+    // c) Kuryer — ro'yxat bilan BITTA tekshiruv.
+    const resolved = await this.resolveHqCouriersForRegion(regionId, [
+      courierId,
+    ]);
+    if (!resolved.hqCourierIds.has(courierId)) {
+      this.badRequest(
+        courierNotHqMessage(courierId),
+        rejectionData('courier_not_hq', { courier_id: courierId }),
+      );
+    }
+    if (
+      !resolved.couriers.some(
+        (courier) => courier.courier_user_id === courierId,
+      )
+    ) {
+      const status = await this.findCourierStatusStrict(courierId);
+      if (!status.found || status.status !== String(Status.ACTIVE)) {
+        this.badRequest(
+          POST_COURIER_MESSAGES.COURIER_INACTIVE,
+          rejectionData('courier_inactive', { courier_id: courierId }),
+        );
+      }
+      this.forbidden(
+        POST_COURIER_MESSAGES.COURIER_REGION_NOT_SERVED,
+        rejectionData('courier_region_not_served', {
+          courier_id: courierId,
+          post_region_id: regionId,
+        }),
+      );
+    }
+    const { hqBranchId } = resolved;
+
+    // d) Pochta buyurtmalari — tanlangan har bir id shu pochtada bo'lishi shart.
+    const postOrders = await this.findOrders({
+      post_id: postId,
+      fetch_all: true,
+    });
+    const postOrderById = new Map<string, OrderRow>();
+    for (const order of postOrders) {
+      const id = canonicalBigintId(order?.id);
+      if (id) postOrderById.set(id, order);
+    }
+    const missingIds = selectedIds.filter((id) => !postOrderById.has(id));
+    if (missingIds.length) {
+      this.conflict(
+        `Tanlangan ${missingIds.length} ta buyurtma bu pochtada yo'q: ${coverageOrderIdList(missingIds)}. Sahifani yangilab, qayta tanlang. Hech narsa berilmadi`,
+        rejectionData('order_not_in_post', { order_ids: missingIds }),
+      );
+    }
+
+    // e) Bekor / yopilgan / o'chirilgan — jimgina o'tkazib yuboriladi.
+    const skippedIds: string[] = [];
+    const orders: OrderRow[] = [];
+    for (const id of selectedIds) {
+      const order = postOrderById.get(id) as OrderRow;
+      const flags = order as { isDeleted?: unknown; is_deleted?: unknown };
+      const status = String(order.status ?? '')
+        .trim()
+        .toLowerCase();
+      if (
+        flags.isDeleted === true ||
+        flags.is_deleted === true ||
+        status === String(Order_status.CANCELLED) ||
+        status === String(Order_status.CLOSED)
+      ) {
+        skippedIds.push(id);
+      } else {
+        orders.push(order);
+      }
+    }
+    if (!orders.length) {
+      this.badRequest(POST_COURIER_MESSAGES.NO_DISPATCHABLE_ORDERS, {
+        reason: 'no_dispatchable_orders',
+      });
+    }
+
+    // f) Faqat HQ qabul qilgan, kuryersiz, HQ qo'lidagi buyurtma.
+    const hasRef = (value: unknown) => {
+      const ref =
+        typeof value === 'string' || typeof value === 'number'
+          ? String(value).trim()
+          : '';
+      return ref !== '' && !/^0+$/.test(ref);
+    };
+    const notDispatchableIds = orders
+      .filter((order) => {
+        const holderType = String(order.holder_type ?? '')
+          .trim()
+          .toUpperCase();
+        return (
+          order.status !== Order_status.RECEIVED ||
+          hasRef(order.courier_id) ||
+          hasRef(order.holder_courier_id) ||
+          (holderType !== '' &&
+            holderType !== 'HQ' &&
+            holderType !== 'BRANCH') ||
+          canonicalBigintId(this.getOrderBranchScope(order)) !== hqBranchId
+        );
+      })
+      .map((order) => String(order.id));
+    if (notDispatchableIds.length) {
+      this.badRequest(
+        `${notDispatchableIds.length} ta buyurtmani kuryerga berib bo'lmaydi: ${coverageOrderIdList(notDispatchableIds)}. Faqat HQ qabul qilgan ('received'), kuryerga biriktirilmagan buyurtma beriladi. Hech narsa berilmadi`,
+        rejectionData('order_not_dispatchable', {
+          order_ids: notDispatchableIds,
+        }),
+      );
+    }
+
+    // g) Viloyat.
+    if (resolved.isHqRegion) {
+      // Mavjud HQ qoidasi: chiquvchi partiya 409, HQ viloyati, qamrov imtiyozi.
+      await this.assertOrdersServedByBranch(orders, resolved.hqRow);
+    } else {
+      const inBatchIds = orders
+        .filter((order) => String(order.current_batch_id ?? '').trim())
+        .map((order) => String(order.id));
+      if (inBatchIds.length) {
+        this.conflict(
+          `${ORDER_IN_OUTGOING_BATCH_MESSAGE}: ${coverageOrderIdList(inBatchIds)}`,
+          rejectionData('order_in_outgoing_batch', { order_ids: inBatchIds }),
+        );
+      }
+      const districtOf = await this.loadOrderDistricts(orders);
+      const mismatchIds = orders
+        .filter(
+          (order) =>
+            effectiveOrderRegionId({
+              district: districtOf(order),
+              orderRegionId: order.region_id,
+            }) !== regionId,
+        )
+        .map((order) => String(order.id));
+      if (mismatchIds.length) {
+        this.conflict(
+          `${mismatchIds.length} ta buyurtma boshqa viloyatniki: ${coverageOrderIdList(mismatchIds)}. Hech narsa berilmadi`,
+          rejectionData('order_region_mismatch', { order_ids: mismatchIds }),
+        );
+      }
+    }
+
+    // h) Yozuv — `assignOrdersToCourier` bilan BITTA kod.
+    const { targetPost, createdNewPost } =
+      await this.moveOrdersToCourierDailyPost({
+        orders,
+        courierId,
+        requester,
+        requesterId,
+        newPostRegionId: regionId,
+        notes: {
+          received: `Pochta #${postId} HQ kuryeriga berish oldidan NEW -> RECEIVED`,
+          assigned: `Pochta #${postId} HQ kuryeriga berildi`,
+          rollback: `Pochta #${postId} HQ kuryeriga berish bekor qilindi (rollback)`,
+        },
+      });
+    const movedIds = orders.map((order) => String(order.id));
+
+    // i) NEW pochta hisoblagichlari va bo'sh pochta (LC-02 kabi: xatosi
+    // so'rovni buzmaydi — buyurtmalar allaqachon kuryerda).
+    let postDeleted = false;
+    try {
+      for (const order of orders) {
+        await this.releaseOrderFromNewRegionPost(order);
+      }
+      const remaining = await this.findOrders({
+        post_id: postId,
+        page: 1,
+        limit: 10,
+      });
+      if (!remaining.length) {
+        await this.deletePost(postId);
+        postDeleted = true;
+      }
+    } catch (error: unknown) {
+      this.logger.warn(
+        `post→HQ kuryer: pochta #${postId} tozalanmadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+    }
+
     await this.activityLog.log({
-      // The post is the single mutated aggregate here; the assigned orders live
-      // in metadata. entity_id is a Post id, so entity_type must be 'Post'.
       entity_type: 'Post',
       entity_id: String(targetPost.id),
       action: ActivityAction.ASSIGN,
       ...this.auditActor(requester),
       metadata: {
         courier_id: courierId,
-        order_count: orderIds.length,
-        order_ids: orderIds.slice(0, 10),
-        branch_id: scopeBranchId,
+        order_count: movedIds.length,
+        order_ids: movedIds.slice(0, 10),
+        branch_id: hqBranchId,
         post_id: String(targetPost.id),
         post_created: createdNewPost,
+        source_post_id: postId,
+        source_region_id: regionId,
+        source_post_deleted: postDeleted,
       },
     });
 
     return successRes(
       {
-        order_ids: orderIds,
+        post_id: postId,
         courier_id: courierId,
-        post_id: targetPost.id,
-        post_created: createdNewPost,
-        assigned_count: orderIds.length,
+        courier_post_id: String(targetPost.id),
+        courier_post_created: createdNewPost,
+        moved_order_ids: movedIds,
+        moved_orders_count: movedIds.length,
+        skipped_order_ids: skippedIds,
+        post_deleted: postDeleted,
       },
       200,
-      'Orderlar courierga biriktirildi',
+      'Pochta buyurtmalari kuryerga berildi',
     );
+  }
+
+  /**
+   * identity `courier.find_by_ids` — QAT'IY (`findCourierStatus` xatoni
+   * `null` qiladi): javob bermasa 503.
+   */
+  private async findCourierStatusStrict(
+    courierId: string,
+  ): Promise<{ found: false } | { found: true; status: string }> {
+    let response: { data?: unknown } | null;
+    try {
+      response = (await lastValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.courier.find_by_ids' }, { ids: [courierId] })
+          .pipe(timeout(HQ_COURIER_IDENTITY_TIMEOUT_MS)),
+      )) as { data?: unknown } | null;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `post→HQ kuryer: identity.courier.find_by_ids(${courierId}) javob bermadi: ${(error as Error)?.message ?? String(error)}`,
+      );
+      throw new RpcException(
+        errorRes(POST_COURIER_MESSAGES.IDENTITY_UNAVAILABLE, 503),
+      );
+    }
+    const rows: unknown[] = Array.isArray(response?.data)
+      ? (response.data as unknown[])
+      : [];
+    const row = rows.find(
+      (item) =>
+        !!item &&
+        typeof item === 'object' &&
+        canonicalBigintId((item as { id?: unknown }).id) === courierId,
+    ) as { status?: unknown } | undefined;
+    if (!row) {
+      return { found: false };
+    }
+    return {
+      found: true,
+      status:
+        typeof row.status === 'string' ? row.status.trim().toLowerCase() : '',
+    };
   }
 
   async createCanceledPost(requester: RequesterContext, dto: ReceivePostDto) {
