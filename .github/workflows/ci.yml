@@ -294,6 +294,7 @@ jobs:
           apps/finance-service/src/shift-account-check/shift-late-photo.BE-B.pg.spec.ts
           apps/finance-service/src/shift-auto-close/shift-auto-close-report.y8Tqm9Ap.pg.spec.ts
           apps/finance-service/src/cashbox-card-branch.Zv3MLn0a.pg.spec.ts
+          apps/finance-service/src/history-branch-source.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
           apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
         env:
