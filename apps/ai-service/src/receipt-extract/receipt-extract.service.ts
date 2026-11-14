@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { effortParam } from '../usage/ai-pricing';
 import {
   AI_MODEL_DEFAULTS,
   CARD_MASK,
@@ -152,12 +153,15 @@ export class ReceiptExtractService {
     ) {
       return { ok: false, reason: 'invalid_json' };
     }
+    const model = this.model();
     const r = await this.claude.extractJson<Record<string, unknown>>({
       system: RECEIPT_EXTRACT_SYSTEM,
       userText: "Chekdagi to'lov ma'lumotlarini o'qing.",
       schema: RECEIPT_EXTRACT_SCHEMA,
-      model: this.model(),
+      model,
       maxTokens: RECEIPT_EXTRACT_MAX_TOKENS,
+      // M2: 5.5 avlodida effort sukuti baland — aniq 'low' (kesilmasin).
+      ...effortParam(model, 'low'),
       deadlineAt,
       images: [
         {

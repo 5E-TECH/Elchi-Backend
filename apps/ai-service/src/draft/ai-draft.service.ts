@@ -61,10 +61,64 @@ const SHA_RE = /^[0-9a-f]{64}$/;
 const AUDITED = new Set<string>(AI_AUDITED_FIELDS);
 
 /**
- * J3hEDtFN #4: operator tuzatishlarida (field_corrections) ism/manzil qiymati
- * bor — draft matni bilan BIR XIL retention (30 kun) tugagach NULL.
+ * Har audit maydoni uchun saqlash klassi — `pii`: draft matni bilan BIR XIL
+ * retention (30 kun) tugagach jsonb'dan olib tashlanadi; `keep`: 365 kun.
+ * ⚠️ `Record<AiAuditedField, …>` — `AI_AUDITED_FIELDS` ga yangi maydon
+ * qo'shilsa klassifikatsiyasiz KOMPILYATSIYA QILINMAYDI (ochiq holatda
+ * yiqilmasin: yangi maydon jimgina 365 kun saqlanmasin).
+ * Telefon allaqachon maskalangan, lekin oxirgi raqamlari bor — `pii`.
+ * `items[].name` — mijoz matnidan olingan erkin matn, lekin mahsulot nomi
+ * (past PII xavfi, ega qabul qilgan) — `keep`.
+ */
+export const AI_CORRECTION_FIELD_RETENTION: Readonly<
+  Record<AiAuditedField, 'pii' | 'keep'>
+> = Object.freeze({
+  customer_name: 'pii',
+  phone_number: 'pii',
+  extra_number: 'pii',
+  region_id: 'keep',
+  district_id: 'keep',
+  address: 'pii',
+  total_price: 'keep',
+  where_deliver: 'keep',
+  comment: 'pii',
+  operator: 'pii',
+  items: 'keep',
+});
+
+/** 30 kunda olib tashlanadigan kalitlar (`AI_CORRECTION_FIELD_RETENTION`dan). */
+export const AI_CORRECTION_PII_FIELDS: readonly AiAuditedField[] =
+  Object.freeze(
+    AI_AUDITED_FIELDS.filter((f) => AI_CORRECTION_FIELD_RETENTION[f] === 'pii'),
+  );
+
+/**
+ * Tuzatishlarning shaxsiy bo'lmagan qismi (tuman/viloyat/summa/mahsulot/
+ * miqdor/where_deliver) eval va aniqlik tahlili uchun shuncha kun saqlanadi
+ * (ega qarori 2026-11-14: PII o'chadi, geo/summa/mahsulot tuzatishlari
+ * qoladi, muddat 365 kun). Env kaliti ataylab yo'q (yuqoridagi izoh).
+ * Eslatma: DB backup'lari 30 kun saqlanadi.
+ */
+export const AI_CORRECTIONS_RETENTION_DAYS = 365;
+
+/**
+ * 1-bosqich ($1 = AI_DRAFT_TEXT_RETENTION_DAYS, $2 = PII kalitlari): faqat
+ * PII kalitlari olib tashlanadi; qolgani bo'sh bo'lsa NULL. `?|` sharti
+ * UPDATE'ni idempotent qiladi — tozalangan qator qayta yozilmaydi.
+ * `jsonb_typeof = 'object'`: obyekt bo'lmagan qator (skalyar/massiv)
+ * operatorlarni buzmasin — u 365 kunlik bosqichda NULL bo'ladi.
  */
 export const AI_DRAFT_ITEM_PURGE_SQL = `
+  UPDATE ai_schema.ai_order_draft_item
+  SET field_corrections = NULLIF(field_corrections - $2::text[], '{}'::jsonb)
+  WHERE field_corrections IS NOT NULL
+    AND jsonb_typeof(field_corrections) = 'object'
+    AND field_corrections ?| $2::text[]
+    AND created_at < now() - ($1::int * interval '1 day')
+`;
+
+/** 2-bosqich ($1 = AI_CORRECTIONS_RETENTION_DAYS): qolgan tuzatishlar ham NULL. */
+export const AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL = `
   UPDATE ai_schema.ai_order_draft_item
   SET field_corrections = NULL
   WHERE field_corrections IS NOT NULL
@@ -551,23 +605,47 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** Retention — xato taymerni/servisni buzmaydi (faqat WARN). */
+  /**
+   * Retention — xato taymerni/servisni buzmaydi (faqat WARN). Har UPDATE
+   * alohida: biri yiqilsa qolganlari baribir ishlaydi; eng uzoq muddatli
+   * (365 kun) bosqich birinchi.
+   */
   async purgeExpiredText(): Promise<number> {
-    try {
-      const result: unknown = await this.drafts.query(AI_DRAFT_PURGE_SQL, [
-        AI_DRAFT_TEXT_RETENTION_DAYS,
-      ]);
-      const n = affectedOf(result);
-      // J3hEDtFN #4: tuzatishlardagi ism/manzil ham shu muddatda o'chadi.
-      await this.items.query(AI_DRAFT_ITEM_PURGE_SQL, [
-        AI_DRAFT_TEXT_RETENTION_DAYS,
-      ]);
-      if (n > 0) this.logger.log(`ai_draft_text_purged count=${n}`);
-      return n;
-    } catch (err) {
-      this.logger.warn(`ai_draft_purge_failed: ${describeError(err)}`);
-      return 0;
-    }
+    const step = async (
+      label: string,
+      sql: string,
+      params: unknown[],
+      repo: { query(sql: string, params?: unknown[]): Promise<unknown> },
+    ): Promise<number> => {
+      try {
+        const n = affectedOf(await repo.query(sql, params));
+        if (n > 0) this.logger.log(`${label} count=${n}`);
+        return n;
+      } catch (err) {
+        this.logger.warn(`${label}_failed: ${describeError(err)}`);
+        return 0;
+      }
+    };
+    await step(
+      'ai_draft_corrections_expired',
+      AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL,
+      [AI_CORRECTIONS_RETENTION_DAYS],
+      this.items,
+    );
+    // Tuzatishlardagi PII (ism/manzil/telefon/izoh/operator) 30 kunda
+    // o'chadi; geo/summa/mahsulot tuzatishlari eval uchun qoladi.
+    await step(
+      'ai_draft_corrections_pii_stripped',
+      AI_DRAFT_ITEM_PURGE_SQL,
+      [AI_DRAFT_TEXT_RETENTION_DAYS, [...AI_CORRECTION_PII_FIELDS]],
+      this.items,
+    );
+    return step(
+      'ai_draft_text_purged',
+      AI_DRAFT_PURGE_SQL,
+      [AI_DRAFT_TEXT_RETENTION_DAYS],
+      this.drafts,
+    );
   }
 
   private async costByDraft(

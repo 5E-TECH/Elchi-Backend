@@ -92,6 +92,16 @@ describe('ProductDisambiguateService (luv25zlI)', () => {
     expect(opts.images).toBeUndefined();
   });
 
+  it('M2: Haiku 4.5 (effort’ni rad etadi) — so‘rovda effort kaliti YO‘Q; 5.5 avlodida low', async () => {
+    configValues = { AI_CLASSIFY_MODEL: 'claude-haiku-4-5' };
+    await service.pick(req());
+    expect('effort' in sentOptions()).toBe(false);
+    extractJson.mockClear();
+    configValues = { AI_CLASSIFY_MODEL: 'claude-haiku-5-5' };
+    await service.pick(req());
+    expect(sentOptions().effort).toBe('low');
+  });
+
   it('env bo‘sh bo‘lsa sukut classify modeli (haiku)', async () => {
     configValues = {};
     await service.pick(req());

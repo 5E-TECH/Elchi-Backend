@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { effortParam } from '../usage/ai-pricing';
 import {
   AI_MODEL_DEFAULTS,
   ClaudeService,
@@ -106,12 +107,15 @@ export class BalanceScreenshotService {
     ) {
       return { ok: false, reason: 'invalid_json' };
     }
+    const model = this.model();
     const r = await this.claude.extractJson<Record<string, unknown>>({
       system: BALANCE_SCREENSHOT_SYSTEM,
       userText: "Skrinshotdagi karta qoldig'ini o'qing.",
       schema: BALANCE_SCREENSHOT_SCHEMA,
-      model: this.model(),
+      model,
       maxTokens: BALANCE_SCREENSHOT_MAX_TOKENS,
+      // M2: 5.5 avlodida effort sukuti baland — aniq 'low' (kesilmasin).
+      ...effortParam(model, 'low'),
       deadlineAt,
       images: [
         {
