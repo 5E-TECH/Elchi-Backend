@@ -136,6 +136,8 @@ export interface RecordedUsage {
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
+  /** C1: eski yozuvlarda yo'q — 0 deb olinadi. */
+  cache_creation_1h_input_tokens?: number;
 }
 
 export interface EvalRecording {
@@ -506,7 +508,13 @@ export function summarize(
             cacheWriteTokens:
               acc.cacheWriteTokens + u.cache_creation_input_tokens,
             cacheReadTokens: acc.cacheReadTokens + u.cache_read_input_tokens,
-            costUsd: acc.costUsd + costOfClaudeUsage(model, u),
+            costUsd:
+              acc.costUsd +
+              costOfClaudeUsage(model, {
+                ...u,
+                cache_creation_1h_input_tokens:
+                  u.cache_creation_1h_input_tokens ?? 0,
+              }),
           }),
           {
             calls: 0,
