@@ -11,6 +11,7 @@ import {
   ORDER_RECEIVE_CLOSED,
 } from '../order/order-intake';
 import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
+import { AI_ADVISOR_PUBLIC_ERROR_FIELDS } from '../ai/advisor.contract';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -166,6 +167,13 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),
   ),
+  // (BE-5 LhTIno57) AI maslahatchi — ogohlantirishlar va sozlamalar:
+  // 404 ALERT_NOT_FOUND, 409 ALERT_CLOSED `alert_status`, 400 NOTE_INVALID
+  // `reason/min_length/max_length`, 400 INVALID_RULE `field/min/max`,
+  // 400 INVALID_SETTING `field`, 409 SETTINGS_CONFLICT `version`,
+  // 429 BUDGET_EXCEEDED `scope/period/reset_at/retry_after_seconds`,
+  // 503 AI_DISABLED `reason`.
+  ...AI_ADVISOR_PUBLIC_ERROR_FIELDS,
 };
 
 export type PublicErrorValue = string | number | boolean | null;
