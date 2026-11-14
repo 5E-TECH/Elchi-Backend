@@ -24,6 +24,8 @@
  * Ishga tushirish (SERVERDA, faqat o'qish):
  *   POSTGRES_URI=... npx ts-node -r tsconfig-paths/register \
  *     scripts/ai-eval-collect.ts --out=/root/ai-eval-candidates [--days=30] [--limit=200]
+ *   Tahrirlanmagan tasdiqlardan 5% namuna (alohida katalogga):
+ *     ... scripts/ai-eval-collect.ts --out=/root/ai-eval-unedited --sample-unedited=0.05
  */
 import 'reflect-metadata';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -77,6 +79,49 @@ export const COLLECT_SQL = `
           AND jsonb_array_length(COALESCE(i.edited_fields, '[]'::jsonb)) > 0
       )
     )
+  ORDER BY d.created_at DESC
+  LIMIT $2::int
+`;
+
+/**
+ * `--sample-unedited=0.05`: operator HECH NARSA o'zgartirmay tasdiqlagan
+ * draftlardan tasodifiy ulush ($3) — "jim xato" (AI xato, operator ko'rmadi)
+ * ulushini qo'lda baholash uchun. Kutilgan natija = AI taklifi (tasdiqlangan),
+ * belgilovchi uni matn bilan solishtiradi.
+ */
+export const UNEDITED_SAMPLE_SQL = `
+  SELECT d.id::text AS draft_id,
+         d.created_at,
+         d.source_kind,
+         d.source_text,
+         d.image_count,
+         d.model,
+         d.prompt_version,
+         d.outcome,
+         d.raw_extraction,
+         d.resolved_preview,
+         (
+           SELECT json_agg(json_build_object(
+                    'item_index', i.item_index,
+                    'edited_fields', i.edited_fields,
+                    'field_corrections', i.field_corrections))
+           FROM ai_schema.ai_order_draft_item i
+           WHERE i.draft_id = d.id
+         ) AS items,
+         '[]'::json AS calls
+  FROM ai_schema.ai_order_draft d
+  WHERE d.created_at >= now() - ($1::int * interval '1 day')
+    AND d.source_text IS NOT NULL
+    AND d.outcome = 'ok'
+    AND EXISTS (
+      SELECT 1 FROM ai_schema.ai_order_draft_item i WHERE i.draft_id = d.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM ai_schema.ai_order_draft_item i
+      WHERE i.draft_id = d.id
+        AND jsonb_array_length(COALESCE(i.edited_fields, '[]'::jsonb)) > 0
+    )
+    AND random() < $3::float8
   ORDER BY d.created_at DESC
   LIMIT $2::int
 `;
@@ -142,6 +187,14 @@ async function main(): Promise<number> {
   }
   const days = Math.max(1, Math.min(90, Number(arg('days') ?? 30) || 30));
   const limit = Math.max(1, Math.min(2000, Number(arg('limit') ?? 200) || 200));
+  const sampleArg = arg('sample-unedited');
+  const sample = sampleArg === null ? null : Number(sampleArg);
+  if (sample !== null && !(sample > 0 && sample <= 1)) {
+    console.error(
+      "--sample-unedited 0 < x <= 1 bo'lishi kerak (masalan 0.05).",
+    );
+    return 2;
+  }
   const uri = process.env.POSTGRES_URI;
   if (!uri) {
     console.error('POSTGRES_URI is required.');
@@ -158,7 +211,13 @@ async function main(): Promise<number> {
     // Faqat o'qish: tranzaksiya READ ONLY.
     const rows: Record<string, unknown>[] = await ds.transaction(async (m) => {
       await m.query('SET TRANSACTION READ ONLY');
-      return m.query<Record<string, unknown>[]>(COLLECT_SQL, [days, limit]);
+      return sample === null
+        ? m.query<Record<string, unknown>[]>(COLLECT_SQL, [days, limit])
+        : m.query<Record<string, unknown>[]>(UNEDITED_SAMPLE_SQL, [
+            days,
+            limit,
+            sample,
+          ]);
     });
     mkdirSync(outDir, { recursive: true });
     let n = 0;
@@ -166,7 +225,7 @@ async function main(): Promise<number> {
       const names = namesOf([r.raw_extraction, r.resolved_preview, r.items]);
       const candidate = {
         id: `prod-${String(r.draft_id).slice(0, 8)}`,
-        category: ['prod_candidate'],
+        category: [sample === null ? 'prod_candidate' : 'prod_unedited_sample'],
         source: 'prod-masked',
         note:
           `outcome=${String(r.outcome)} prompt=${String(r.prompt_version)} ` +
@@ -186,6 +245,17 @@ async function main(): Promise<number> {
           corrections: JSON.parse(
             maskCandidateText(JSON.stringify(r.items ?? []), names),
           ) as unknown,
+          // Tahrirlanmagan namunada: operator o'zgartirmay tasdiqlagan AI taklifi.
+          ...(sample === null
+            ? {}
+            : {
+                confirmed_preview: JSON.parse(
+                  maskCandidateText(
+                    JSON.stringify(r.resolved_preview ?? null),
+                    names,
+                  ),
+                ) as unknown,
+              }),
         },
       };
       writeFileSync(
