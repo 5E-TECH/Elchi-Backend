@@ -33,6 +33,7 @@ import { AssistantReader } from './assistant/assistant-reader';
 import { AssistantService } from './assistant/assistant.service';
 import { AssistantStore } from './assistant/assistant-store.service';
 import { AiUsageService } from './usage/ai-usage.service';
+import { AdvisorModule } from './advisor/advisor.module';
 
 /**
  * ai-service — Anthropic'ni chaqiradigan YAGONA jarayon (ANTHROPIC_API_KEY
@@ -73,6 +74,8 @@ import { AiUsageService } from './usage/ai-usage.service';
       usageSink: AiUsageService,
       budgetGuard: AiBudgetService,
     }),
+    // BE-5 (LhTIno57) — AI maslahatchi: ogohlantirishlar R1–R8.
+    AdvisorModule,
   ],
   controllers: [AiServiceController],
   providers: [

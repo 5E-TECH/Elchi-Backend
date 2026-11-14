@@ -295,6 +295,7 @@ jobs:
           apps/finance-service/src/shift-auto-close/shift-auto-close-report.y8Tqm9Ap.pg.spec.ts
           apps/finance-service/src/cashbox-card-branch.Zv3MLn0a.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
+          apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
@@ -314,6 +315,9 @@ jobs:
           # y8Tqm9Ap / BE-B (avto-yopilgan smenaga rasmni keyin yuklash) —
           # elchi_e_test ichida o'z sxemasi.
           FINANCE_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # BE-5 (LhTIno57) AI maslahatchi sozlamalari/jadvallari (migratsiya 224):
+          # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
+          AI_ADVISOR_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file
