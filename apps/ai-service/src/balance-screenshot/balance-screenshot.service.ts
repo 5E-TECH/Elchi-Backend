@@ -39,7 +39,8 @@ export const BALANCE_SCREENSHOT_SCHEMA: Record<string, unknown> = Object.freeze(
   },
 );
 
-export const BALANCE_SCREENSHOT_MAX_TOKENS = 256;
+/** F2: 256 da kesilardi (thinking + JSON birga); effort 'low' bilan 1024. */
+export const BALANCE_SCREENSHOT_MAX_TOKENS = 1024;
 /** base64 ≤ ~5 MB rasm (gateway chegarasi) + zaxira. */
 export const BALANCE_SCREENSHOT_MAX_BASE64 = 7 * 1024 * 1024;
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);

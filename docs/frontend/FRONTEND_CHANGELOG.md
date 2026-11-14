@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
+
+Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.
+
+- ✏️ Kassa cheki (`ai` obyekti, chek tekshiruvi): chek valyutasi UZS bo'lmasa (USD, RUB, …) — `ai_status: "mismatch"` (avvalgidek), lekin **`ai.difference: null`** va **`ai.error_reason: "currency_not_uzs"`** (yangi qiymat). Ilgari chet valyuta summasidan so'm ayirib katta «farq» chiqarardi.
+- 🟢 Chek tekshiruvi xulosasi (`mismatch_sum`, top-15): bunday cheklar summaga va top'ga kirmaydi; `mismatch` sanog'ida qoladi.
+- 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
+
+**Frontend action items:**
+- 🔧 `ai_status === "mismatch"` va `ai.difference === null` bo'lishi mumkin — farq ustunida «—», `error_reason === "currency_not_uzs"` uchun matn tavsiya: «Chek so'mda emas ({currency}) — summani qo'lda tekshiring».
+
 ### 2026-11-14 — Carrier akkaunt: «Rollback» toggle (sukut o'chiq, kompaniyadan yashirin)
 
 Egasi (2026-11-14): rollback'ni admin akkaunt bo'yicha bitta toggle bilan yoqib/o'chira olsin, sukut — o'chiq (kompaniya bilan endi ishlay boshladik, ishonch paydo bo'lguncha); Swagger va hujjatdan yashirilsin — kompaniyaga hozircha aytilmaydi.

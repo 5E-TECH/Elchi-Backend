@@ -32,10 +32,30 @@ describe('deriveReceiptOutcome', () => {
     );
   });
 
-  it('boshqa valyuta — summa teng bo`lsa ham mismatch', () => {
+  it('F1: boshqa valyuta — mismatch, farq HISOBLANMAYDI (null), sabab currency_not_uzs', () => {
+    expect(deriveReceiptOutcome(ok({ currency: 'USD' }), 150_000)).toEqual({
+      status: 'mismatch',
+      difference: null,
+      error_reason: 'currency_not_uzs',
+    });
+    // 100 USD chek, kiritilgan 1 250 000 so'm — ilgari -1 249 900 "farq" edi.
     expect(
-      deriveReceiptOutcome(ok({ currency: 'USD' }), 150_000),
-    ).toMatchObject({ status: 'mismatch', difference: 0 });
+      deriveReceiptOutcome(ok({ amount: 100, currency: 'usd' }), 1_250_000)
+        .difference,
+    ).toBeNull();
+    expect(
+      deriveReceiptOutcome(ok({ currency: 'RUB' }), 150_000).error_reason,
+    ).toBe('currency_not_uzs');
+  });
+
+  it('F1: UZS yoki bo‘sh valyuta — oddiy farq', () => {
+    expect(
+      deriveReceiptOutcome(ok({ amount: 160_000, currency: 'uzs' }), 150_000),
+    ).toEqual({ status: 'mismatch', difference: 10_000, error_reason: null });
+    expect(
+      deriveReceiptOutcome(ok({ amount: 160_000, currency: '  ' }), 150_000)
+        .difference,
+    ).toBe(10_000);
   });
 
   it.each([
