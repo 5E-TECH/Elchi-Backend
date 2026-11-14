@@ -1163,6 +1163,27 @@ describe('P1-7: district_match, region_inferred, checks', () => {
     expect(p.checks.filter((c) => c.code === 'qty_check')).toEqual([]);
   });
 
+  it.each([
+    [
+      'default_operator_phone',
+      { default_operator_phone: '90 123 45 67' },
+      true,
+    ],
+    ['problem_phone', { problem_phone: '+998901234567' }, true],
+    ['extra_number', { extra_number: '998901234567' }, true],
+    ['boshqa raqam (negativ)', { phone_number: '+998911112233' }, false],
+  ])('phone_is_market manbasi: %s', async (_n, marketData, want) => {
+    const { svc } = setup({ marketData });
+    const p = await one(svc, raw());
+    expect(p.checks.some((c) => c.code === 'phone_is_market')).toBe(want);
+  });
+
+  it('phone_is_market: mijoz raqami yaroqsiz bo‘lsa tekshirilmaydi', async () => {
+    const { svc } = setup({ marketData: { phone_number: '12345' } });
+    const p = await one(svc, raw({ phone_number: '12345' }));
+    expect(p.checks.some((c) => c.code === 'phone_is_market')).toBe(false);
+  });
+
   it('phone_is_market va same_phone_multi', async () => {
     const { svc } = setup({
       marketData: { phone_number: '+998 90 123 45 67' },

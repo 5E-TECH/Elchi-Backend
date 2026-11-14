@@ -24,22 +24,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-11-14 — AI preview: tuman qanday aniqlangani, viloyat taxmini, yumshoq tekshiruvlar (`checks[]`)
 
-Deploy: ai-service + order-service + logistics-service + api-gateway. Migratsiya YO'Q. Hammasi QO'SHIMCHA — mavjud maydonlar, `ready` va `issues` o'zgarmaydi (Telegram bot buzilmaydi).
+Deploy: ai-service + order-service + logistics-service + api-gateway. Migratsiya YO'Q. Yangi maydonlar QO'SHIMCHA; `ready`/`issues` qoidasi o'zgarmadi. ⚠️ Lekin `region_inferred` yo'li ilgari tumansiz (`district_missing`) qoladigan ayrim buyurtmalarni endi tuman bilan qaytaradi (`ready=true`) — bunday buyurtmada `district_low_confidence` bor. Telegram bot `checks[]` ni hali o'qimaydi: bot uchun alohida reja (ogohlantirish + qayta tasdiq) kelishiladi. Prompt versiyasi `2026-11-14.1` (dostavka qoidasi).
 
 - ✏️ `POST /orders/ai-parse` → `data.orders[]` ga:
-  - `district_match: { method, ai_text, score } | null` — tuman avto-tanlanganda: `method` = `exact` | `alias` | `partial` | `address` | `fuzzy` | `llm`; `ai_text` — AI o'qigan tuman matni (≤ 80 belgi, `exact` da ham); `score` 0..1 faqat `fuzzy`/`address`, aks holda `null`. Tuman tanlanmagan bo'lsa `null`.
-  - `region_inferred: boolean` — viloyat matnda aytilmagan, AI uni tumandan chiqargan. Faqat shunda logistics qulflangan viloyatdan tashqaridagi ANIQ moslikka o'ta oladi (boshqa holatda «Toshkent shahri Xonobod» — avvalgidek tuman yo'q).
+  - `district_match: { method, ai_text, score } | null` — tuman avto-tanlanganda: `method` = `exact` | `alias` | `address` | `fuzzy` | `llm` (`partial` turida ham bor, lekin hozir chiqmaydi — unga tayanmang); `ai_text` — AI o'qigan tuman matni (≤ 80 belgi, `exact` da ham); `score` 0..1 faqat `fuzzy`/`address`, aks holda `null`. Tuman tanlanmagan bo'lsa `null`.
+  - `region_inferred: boolean` — viloyat matnda aytilmagan, AI uni tumandan chiqargan (qisqartmalar — «Sam. vil.», «QR», «Qashqa» — aytilgan hisoblanadi). Faqat shunda logistics qulflangan viloyatdan tashqaridagi ANIQ moslikka o'ta oladi (boshqa holatda «Toshkent shahri Xonobod» — avvalgidek tuman yo'q); boshqa viloyatlarda o'xshash nom bo'lsa («Mirobod»/«Mirzaobod») — avto-tanlov YO'Q, nomzodlar. Viloyat almashtirilganda `region_given: false`.
   - `checks: AiCheck[]` — YUMSHOQ tekshiruvlar (tasdiqni bloklamaydi):
-    - `{ code: 'district_low_confidence' }` — tuman `partial`/`address`/`fuzzy`/`llm` bilan yoki viloyat almashtirilib tanlangan;
-    - `{ code: 'price_check', kind: 'mismatch' | 'too_high', mentions: number[] }` — matndagi summa eslatmalari (so'm) `total_price` bilan mos emas (faqat bitta buyurtmali matn) yoki summa > 100 mln;
-    - `{ code: 'qty_check', item_index }` — miqdor > 10 yoki matndagi narx raqamiga teng;
+    - `{ code: 'district_low_confidence' }` — tuman `address`/`fuzzy`/`llm` bilan yoki `region_inferred` sababli viloyat almashtirilib tanlangan (Toshkent shahri ↔ viloyati umumiy hovuzidagi tanlov bu belgini BERMAYDI);
+    - `{ code: 'price_check', kind: 'mismatch' | 'too_high', mentions: number[] }` — matndagi summa eslatmalari (so'm, takrorsiz) `total_price` bilan mos emas (faqat bitta buyurtmali matn) yoki summa > 100 mln va matndan kelib chiqmaydi. Qoida: summa = mahsulot + dostavka, oldindan to'lov/zaklad ayirilmaydi; «donasi X» faqat miqdorga ko'paytirilgan holda, «jami X» faqat o'zi; ko'p mahsulotda har biri o'z miqdori bilan. Narx noaniq bo'lsa (oraliq, «yoki», chegirma, eski/yangi narx) `mismatch` chiqmaydi;
+    - `{ code: 'qty_check', item_index }` — miqdor > 10 yoki narxning ming/mln qismiga teng («150 ming» → miqdor 150);
     - `{ code: 'duplicate_items', item_indexes }` — bir xil mahsulot qatorlari (birlashtirilmaydi);
-    - `{ code: 'phone_is_market' }` — mijoz telefoni market / operator / «muammo» raqami bilan bir xil;
+    - `{ code: 'phone_is_market' }` — mijoz telefoni market akkauntining raqamlari (asosiy, qo'shimcha, `default_operator_phone`, «muammo» raqami) bilan bir xil; market operatorlarining shaxsiy raqamlari tekshirilmaydi;
     - `{ code: 'same_phone_multi', other_index }` — shu parse'da shu telefon boshqa buyurtmada ham.
 - ⚠️ **Noma'lum `code` e'tiborsiz qoldirilsin** — ro'yxat kengayadi.
 
 **Frontend action items:**
 - 🔧 Tuman maydoni yonida «AI o'qigan: {ai_text}»; `district_low_confidence` — sariq belgi.
+- 🔧 «Viloyat matnda yo'q — AI taxmin qildi» ishorasi: `region_inferred || !region_given` (faqat `!region_given` emas).
 - 🔧 `price_check` — summa yonida sariq ogohlantirish (`mentions` bilan: «Matnda: 150 000»); `too_high` — «Summa juda katta».
 - 🔧 Qolgan kodlar — tegishli maydon yonida ogohlantirish matni.
 
