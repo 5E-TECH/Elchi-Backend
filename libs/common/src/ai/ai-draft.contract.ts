@@ -153,3 +153,35 @@ export interface AiDraftTrace {
     order_cost_uzs: number;
   };
 }
+
+/**
+ * AI tekshiruvini TASDIQLASH (ack, ega qarori 2026-11-14): faqat shu
+ * kodlar BLOKLAYDI — preview'da bo'lsa ai-confirm `orders[].ack_checks`
+ * da ularni kutadi, aks holda 409 `checks_not_acknowledged`. Qolgan
+ * kodlar (qty_check, duplicate_items, phone_is_market, same_phone_multi)
+ * — yumshoq ogohlantirish, ack so'ralmaydi.
+ * ⚠️ Kodlar SERVERDA saqlangan snapshot'dan (`check_codes`) olinadi —
+ * mijoz yuborgan `checks` ga ishonilmaydi.
+ */
+export const AI_BLOCKING_CHECK_CODES = [
+  'district_low_confidence',
+  'price_check',
+] as const;
+
+export type AiBlockingCheckCode = (typeof AI_BLOCKING_CHECK_CODES)[number];
+
+/**
+ * Operator tekshiruv tegishli maydonni O'ZI tuzatgan bo'lsa (server
+ * hisoblagan `edited_fields` da bor), ack shart emas: tuman almashtirildi →
+ * `district_low_confidence` endi taalluqli emas; summa o'zgartirildi →
+ * `price_check` ham.
+ */
+export const AI_CHECK_EXEMPT_BY_EDIT: Readonly<
+  Record<AiBlockingCheckCode, AiAuditedField>
+> = {
+  district_low_confidence: 'district_id',
+  price_check: 'total_price',
+};
+
+/** ai-confirm 409 xato kodi (tanada `missing` va `orders`). */
+export const AI_CHECKS_NOT_ACKNOWLEDGED = 'checks_not_acknowledged';

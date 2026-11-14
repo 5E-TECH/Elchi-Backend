@@ -276,6 +276,37 @@ export class AiConfirmOrderDto {
   })
   ai_item_index?: number;
 
+  /**
+   * AI ack (ega qarori 2026-11-14): operator ko'rib, «baribir yaratish»ni
+   * tasdiqlagan BLOKLOVCHI tekshiruv kodlari. Qaysi kod kerakligini server
+   * o'zi saqlangan snapshot'dan biladi — bu ro'yxat faqat tasdiq.
+   */
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['district_low_confidence', 'price_check'],
+    maxItems: 10,
+    description:
+      'Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). ' +
+      'Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). ' +
+      'Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `checks_not_acknowledged` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. ' +
+      'Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. ' +
+      'Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.',
+  })
+  @IsOptional()
+  @IsArray({ message: "ack_checks massiv bo'lishi kerak" })
+  @ArrayMaxSize(10, {
+    message: "ack_checks 10 tadan ortiq bo'lmasligi kerak",
+  })
+  @IsString({
+    each: true,
+    message: "ack_checks elementlari matn bo'lishi kerak",
+  })
+  @Matches(/^[a-z][a-z_]{0,31}$/, {
+    each: true,
+    message: "ack_checks elementi tekshiruv kodi bo'lishi kerak",
+  })
+  ack_checks?: string[];
+
   @ApiProperty({
     type: () => [AiConfirmItemDto],
     maxItems: AI_MAX_ITEMS_PER_ORDER,

@@ -106,7 +106,10 @@ export class AiOrderHandler implements BotMessageHandler {
   }
 }
 
-/** Preview tugmalari: ✅ Yaratish / ✏️ Tuzatish / ❌ Bekor / 🔁 Qayta urinish. */
+/**
+ * Preview tugmalari: ✅ Yaratish / ✏️ Tuzatish / ❌ Bekor / 🔁 Qayta urinish;
+ * AI ack: «Baribir yaratamanmi?» — ✅ Ha, yaratish / ↩️ Yo‘q, orqaga.
+ */
 @Injectable()
 export class AiOrderActions {
   readonly handlers: BotActionHandler[];
@@ -127,6 +130,16 @@ export class AiOrderActions {
         action: AI_ORDER_ACTIONS.confirm,
         expiredText: AI_EXPIRED_TEXT,
         handle: privateOnly((ctx, id) => this.ai.confirm(ctx, id)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.ack,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: privateOnly((ctx, id) => this.ai.confirmAcked(ctx, id)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.back,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: privateOnly((ctx, id) => this.ai.backFromAck(ctx, id)),
       },
       {
         action: AI_ORDER_ACTIONS.fix,

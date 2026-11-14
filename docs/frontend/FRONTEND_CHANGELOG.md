@@ -22,6 +22,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI buyurtma: `district_low_confidence` va `price_check` endi tasdiq talab qiladi (`ack_checks`, 409 `checks_not_acknowledged`)
+
+Ega qarori (2026-11-14): AI ogohlantirishlaridan FAQAT ikkitasi bloklovchi — tuman aniq emas (`district_low_confidence`) va summa matndagidan farq qiladi / juda katta (`price_check`). Qolganlari (`qty_check`, `duplicate_items`, `phone_is_market`, `same_phone_multi`) — avvalgidek yumshoq ogohlantirish, tasdiq so'ralmaydi.
+Deploy: api-gateway + notification-service (bot). Migratsiya YO'Q. `openapi.json` yangilandi.
+
+- ✏️ `POST /orders/ai-confirm` → `orders[]` ga ixtiyoriy `ack_checks: string[]` (≤10 ta, kod satrlari): operator ko'rib «baribir yaratish»ni tasdiqlagan bloklovchi kodlar. Ortiqcha / yumshoq kodlar e'tiborsiz.
+- ⚠️ Qaysi kod kerakligini server O'ZI biladi — ai-parse paytida saqlangan preview snapshot'idan (`check_codes`); FE yuborgan `checks` ga ishonilmaydi. Snapshot'da bloklovchi kod bo'lsa va u `ack_checks` da yo'q bo'lsa — **butun so'rov 409**, HECH QAYSI buyurtma yaratilmaydi:
+  ```json
+  { "statusCode": 409, "code": "checks_not_acknowledged",
+    "message": "AI ogohlantirishlari tasdiqlanmagan — …",
+    "missing": ["district_low_confidence", "price_check"],
+    "orders": [{ "index": 0, "missing": ["district_low_confidence"] },
+               { "index": 2, "missing": ["price_check"] }] }
+  ```
+  `missing` — barcha tasdiqlanmagan kodlar (takrorsiz); `orders[].index` — so'rovdagi `orders[]` o'rni (preview `index` emas).
+- 🟢 Tahrir istisnosi: operator tegishli maydonni O'ZI o'zgartirgan bo'lsa (server hisoblagan `edited_fields`), tasdiq shart emas — tuman (`district_id`) almashtirilsa `district_low_confidence`, summa (`total_price`) o'zgartirilsa `price_check` talab qilinmaydi. Viloyat / manzil tahriri tuman tekshiruvini olib tashlamaydi.
+- 🟢 Orqaga moslik: `draft_id` / `ai_item_index` yo'q, snapshot topilmadi (eski draft, `check_codes` yo'q, retention o'tgan, ai-service javob bermadi) — tasdiq so'ralmaydi, avvalgidek yaratiladi.
+- 🟢 Telegram bot: preview'da tekshiruvlar oddiy tilda «⚠️» qatorlari («Tuman aniq emas: AI «…» deb o'qidi — tekshiring», «Summa matndagidan farq qiladi: matnda 150 000, AI 15 000»). Bloklovchi bo'lsa «✅ Yaratish» avval «Baribir yaratamanmi?» deb so'raydi («✅ Ha, yaratish» / «↩️ Yo'q, orqaga»), keyin `ack_checks` bilan yuboradi.
+
+**Frontend action items:**
+- 🔧 Kartada `district_low_confidence` yoki `price_check` bo'lsa (va operator tuman / summani o'zgartirmagan bo'lsa) «Yaratish»dan oldin tasdiq oynasi (yoki kartadagi «Tekshirdim» belgisi) ko'rsating va shu buyurtmaning `ack_checks` ga AYNAN o'sha kodlarni yuboring.
+- 🔧 409 `checks_not_acknowledged` ni ishlang: `orders[].index` bo'yicha kartalarni belgilang, `missing` kodlari uchun tasdiq so'rang va so'rovni (`ack_checks` bilan) qayta yuboring — so'rovdagi boshqa buyurtmalar ham yaratilmagan.
+
 ### 2026-11-14 — AI preview: tuman qanday aniqlangani, viloyat taxmini, yumshoq tekshiruvlar (`checks[]`)
 
 Deploy: ai-service + order-service + logistics-service + api-gateway. Migratsiya YO'Q. Yangi maydonlar QO'SHIMCHA; `ready`/`issues` qoidasi o'zgarmadi. ⚠️ Lekin `region_inferred` yo'li ilgari tumansiz (`district_missing`) qoladigan ayrim buyurtmalarni endi tuman bilan qaytaradi (`ready=true`) — bunday buyurtmada `district_low_confidence` bor. Telegram bot `checks[]` ni hali o'qimaydi: bot uchun alohida reja (ogohlantirish + qayta tasdiq) kelishiladi. Prompt versiyasi `2026-11-14.1` (dostavka qoidasi).

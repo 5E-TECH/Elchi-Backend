@@ -26,14 +26,20 @@ import { BotTransportService } from '../bot-transport.service';
 import type { BotContext } from '../handlers/bot-context';
 import type { InlineKeyboardButton } from '../telegram.types';
 import {
+  AI_ACK_CONFIRM_TEXT,
   AiPreviewOrder,
   aiPreviewText,
   isCreatable,
+  needsAckConfirm,
   toConfirmOrder,
 } from './ai-preview';
 
 export const AI_ORDER_ACTIONS = {
   confirm: 'ai.ok',
+  /** AI ack: «Baribir yaratamanmi?» → «✅ Ha, yaratish». */
+  ack: 'ai.ack',
+  /** AI ack: «↩️ Yo‘q, orqaga» — preview'ga qaytadi, hech narsa yaratilmaydi. */
+  back: 'ai.back',
   fix: 'ai.fix',
   cancel: 'ai.no',
   retry: 'ai.retry',
@@ -497,8 +503,89 @@ export class AiOrderService implements OnModuleDestroy {
   /**
    * `✅ Yaratish`: preview → creating (faqat bitta bosish o'tadi), "⏳" va
    * ai-confirm FONDA.
+   * AI ack (ega qarori 2026-11-14): tayyor buyurtmada bloklovchi tekshiruv
+   * (tuman aniq emas / summa farq qiladi) bo'lsa, avval «Baribir
+   * yaratamanmi?» — qoralama `preview` da qoladi, yaratish faqat
+   * `✅ Ha, yaratish` (`ack`) dan keyin.
    */
   async confirm(ctx: BotContext, draftId: string): Promise<void> {
+    if (await this.askAckConfirm(ctx, draftId)) return;
+    await this.startCreating(ctx, draftId);
+  }
+
+  /**
+   * AI ack: «✅ Ha, yaratish» — operator ogohlantirishlarni ko'rdi.
+   * ai-confirm `ack_checks` bilan (`toConfirmOrder`) yuboriladi.
+   */
+  async confirmAcked(ctx: BotContext, draftId: string): Promise<void> {
+    await this.startCreating(ctx, draftId);
+  }
+
+  /** AI ack: «↩️ Yo‘q, orqaga» — preview tugmalari bilan qaytadi. */
+  async backFromAck(ctx: BotContext, draftId: string): Promise<void> {
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const previews = (draft.orders ?? []) as AiPreviewOrder[];
+    await this.show(
+      ctx,
+      draft,
+      aiPreviewText(previews),
+      await this.previewRows(ctx, draft),
+      'HTML',
+    );
+  }
+
+  /** Bloklovchi tekshiruv bo'lsa qayta so'raydi (`true` — so'raldi). */
+  private async askAckConfirm(
+    ctx: BotContext,
+    draftId: string,
+  ): Promise<boolean> {
+    const draft = await this.previewDraft(draftId);
+    const previews = (draft?.orders ?? []) as AiPreviewOrder[];
+    if (!draft || !needsAckConfirm(previews)) return false;
+    await this.show(
+      ctx,
+      draft,
+      `${aiPreviewText(previews)}\n\n${AI_ACK_CONFIRM_TEXT}`,
+      [
+        [
+          await this.button(
+            ctx,
+            draft,
+            '✅ Ha, yaratish',
+            AI_ORDER_ACTIONS.ack,
+          ),
+          await this.button(
+            ctx,
+            draft,
+            '↩️ Yo‘q, orqaga',
+            AI_ORDER_ACTIONS.back,
+          ),
+        ],
+      ],
+      'HTML',
+    );
+    return true;
+  }
+
+  /** Muddati o'tmagan `preview` holatidagi qoralama (aks holda null). */
+  private async previewDraft(draftId: string): Promise<TelegramAiDraft | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(draftId)) return null;
+    const draft = await this.drafts.findOne({ where: { id: draftId } });
+    if (
+      !draft ||
+      draft.status !== 'preview' ||
+      new Date(draft.expires_at).getTime() <= Date.now()
+    ) {
+      return null;
+    }
+    return draft;
+  }
+
+  private async startCreating(ctx: BotContext, draftId: string) {
     const draft = await this.claim(draftId, ['preview'], 'creating');
     if (!draft) {
       await this.explainState(ctx, draftId);
@@ -611,13 +698,7 @@ export class AiOrderService implements OnModuleDestroy {
     text: string,
   ) {
     if (!(await this.finish(draft, { status: 'preview' }))) return;
-    const rows: InlineKeyboardButton[][] = [
-      [await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm)],
-      [
-        await this.button(ctx, draft, '✏️ Tuzatish', AI_ORDER_ACTIONS.fix),
-        await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel),
-      ],
-    ];
+    const rows = await this.previewRows(ctx, draft);
     const previews = (draft.orders ?? []) as AiPreviewOrder[];
     await this.show(
       ctx,
@@ -626,6 +707,20 @@ export class AiOrderService implements OnModuleDestroy {
       rows,
       'HTML',
     );
+  }
+
+  /** Preview tugmalari: ✅ Yaratish / ✏️ Tuzatish / ❌ Bekor. */
+  private async previewRows(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+  ): Promise<InlineKeyboardButton[][]> {
+    return [
+      [await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm)],
+      [
+        await this.button(ctx, draft, '✏️ Tuzatish', AI_ORDER_ACTIONS.fix),
+        await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel),
+      ],
+    ];
   }
 
   private async fail(

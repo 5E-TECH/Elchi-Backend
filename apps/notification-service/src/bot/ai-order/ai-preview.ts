@@ -1,4 +1,5 @@
 import {
+  AI_BLOCKING_CHECK_CODES,
   escapeTelegramHtml,
   formatOrderNumber,
   TASHKENT_OFFSET_MINUTES,
@@ -53,6 +54,39 @@ export interface AiPreviewOrder {
   /** Barcha mos eski buyurtmalar soni (kartada "yana N ta"). */
   replacement_candidates_total?: number | null;
   operator?: string | null;
+  /** P1-7: tuman qanday aniqlangani — bot faqat `ai_text` ni ko'rsatadi. */
+  district_match?: { method?: string | null; ai_text?: string | null } | null;
+  /**
+   * P1-7: AI tekshiruvlari. `district_low_confidence` va `price_check` —
+   * BLOKLOVCHI (yaratishdan oldin qayta tasdiq + `ack_checks`), qolganlari
+   * yumshoq ogohlantirish. Noma'lum kod e'tiborsiz qoldiriladi.
+   */
+  checks?: AiPreviewCheck[];
+}
+
+/** order-service `AiCheck` — bot o'qiydigan maydonlar. */
+export interface AiPreviewCheck {
+  code?: string | null;
+  kind?: string | null;
+  mentions?: number[] | null;
+  item_index?: number | null;
+  item_indexes?: number[] | null;
+  other_index?: number | null;
+}
+
+const BLOCKING_CODES: ReadonlySet<string> = new Set(AI_BLOCKING_CHECK_CODES);
+
+/**
+ * Preview'dagi bloklovchi tekshiruv kodlari (takrorsiz, qat'iy tartibda) —
+ * ai-confirm `ack_checks` ga AYNAN shular yuboriladi.
+ */
+export function blockingCheckCodes(order: AiPreviewOrder): string[] {
+  const codes = new Set(
+    (Array.isArray(order.checks) ? order.checks : [])
+      .map((check) => (typeof check?.code === 'string' ? check.code : ''))
+      .filter((code) => BLOCKING_CODES.has(code)),
+  );
+  return AI_BLOCKING_CHECK_CODES.filter((code) => codes.has(code));
 }
 
 /** Bot "✅ Yaratish" tugmasida operator hal qiladigan kamchiliklar. */
@@ -185,6 +219,11 @@ export function toConfirmOrder(
         ? {}
         : { total_price: Number(order.total_price) }),
     ...(replacedOrderId ? { replaced_order_id: replacedOrderId } : {}),
+    // AI ack: operator «Baribir yaratamanmi?» ni tasdiqlagan — bloklovchi
+    // kodlar (faqat shu preview'dagi). Yo'q bo'lsa maydon yuborilmaydi.
+    ...(blockingCheckCodes(order).length
+      ? { ack_checks: blockingCheckCodes(order) }
+      : {}),
     where_deliver: order.where_deliver,
     ...(address ? { address } : {}),
     ...(clip(order.comment, 1000)
@@ -258,6 +297,80 @@ function replacementLine(order: AiPreviewOrder): string | null {
   );
 }
 
+/** Summa: «150 000» (so'msiz — qatorda ikki summa yonma-yon). */
+const plainSum = (value: unknown): string =>
+  formatSum(value).replace(/ so'm$/, '');
+
+/**
+ * AI tekshiruvlari → qisqa «⚠️» qatorlar (oddiy tilda). Bloklovchilari
+ * avval. Noma'lum kod — qatorsiz.
+ */
+export function aiCheckLines(order: AiPreviewOrder): string[] {
+  const checks = Array.isArray(order.checks) ? order.checks : [];
+  const has = (code: string) => checks.find((c) => c?.code === code);
+  const lines: string[] = [];
+  if (has('district_low_confidence')) {
+    const aiText = clip(order.district_match?.ai_text, 60);
+    lines.push(
+      aiText
+        ? `⚠️ Tuman aniq emas: AI «${escapeTelegramHtml(aiText)}» deb o‘qidi — tekshiring`
+        : '⚠️ Tuman aniq emas — tekshiring',
+    );
+  }
+  const price = has('price_check');
+  if (price) {
+    const mentions = (Array.isArray(price.mentions) ? price.mentions : [])
+      .filter((m) => typeof m === 'number' && Number.isFinite(m))
+      .slice(0, 3)
+      .map(plainSum);
+    const total =
+      typeof order.total_price === 'number' ? plainSum(order.total_price) : '—';
+    lines.push(
+      price.kind === 'too_high'
+        ? `⚠️ Summa juda katta: ${escapeTelegramHtml(total)} — matnni tekshiring`
+        : mentions.length
+          ? `⚠️ Summa matndagidan farq qiladi: matnda ${escapeTelegramHtml(mentions.join(', '))}, AI ${escapeTelegramHtml(total)}`
+          : `⚠️ Summa matndagidan farq qiladi: AI ${escapeTelegramHtml(total)} — tekshiring`,
+    );
+  }
+  const qty = has('qty_check');
+  if (qty) {
+    const item = (order.items ?? [])[Number(qty.item_index)];
+    lines.push(
+      item
+        ? `⚠️ Soni shubhali: ${html(item.resolved_name || item.name, 60)} ×${Math.max(1, Math.trunc(Number(item.quantity ?? 1)))}`
+        : '⚠️ Mahsulot soni shubhali — tekshiring',
+    );
+  }
+  if (has('duplicate_items')) {
+    lines.push('⚠️ Bir xil mahsulot ikki marta yozilgan');
+  }
+  if (has('phone_is_market')) {
+    lines.push('⚠️ Mijoz telefoni — marketning o‘z raqami');
+  }
+  const same = has('same_phone_multi');
+  if (same) {
+    const other = Number(same.other_index);
+    lines.push(
+      Number.isInteger(other) && other >= 0
+        ? `⚠️ Shu telefon ${other + 1}-buyurtmada ham bor`
+        : '⚠️ Shu telefon boshqa buyurtmada ham bor',
+    );
+  }
+  return lines;
+}
+
+/** Yaratiladigan (🟢) buyurtmalardan birortasida bloklovchi tekshiruv bormi. */
+export function needsAckConfirm(orders: AiPreviewOrder[]): boolean {
+  return orders.some(
+    (order) => isCreatable(order) && blockingCheckCodes(order).length > 0,
+  );
+}
+
+/** «✅ Yaratish» → qayta so'rash matni (preview ostida). */
+export const AI_ACK_CONFIRM_TEXT =
+  '⚠️ <b>Baribir yaratamanmi?</b> AI tuman yoki summada ikkilandi (yuqorida ⚠️). Tekshirdingizmi?';
+
 /** Preview kartasi (shaxsiy chat — operatorning o'z buyurtmalari, PII bor). */
 export function aiPreviewText(orders: AiPreviewOrder[]): string {
   const creatable = orders.filter(isCreatable).length;
@@ -296,6 +409,7 @@ export function aiPreviewText(orders: AiPreviewOrder[]): string {
       `💰 ${price} · ${order.where_deliver === 'center' ? '🏢 markazga' : '🏠 manzilga'}`,
       ...(replacement ? [replacement] : []),
       ...(issues ? [`⚠️ ${escapeTelegramHtml(issues)}`] : []),
+      ...aiCheckLines(order),
     );
   }
   if (orders.length > PREVIEW_MAX_ORDERS) {

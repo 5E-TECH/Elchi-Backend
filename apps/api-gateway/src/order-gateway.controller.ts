@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   ForbiddenException,
@@ -97,6 +98,7 @@ import {
   computeEditedFields,
   computeFieldCorrections,
 } from './ai-order/ai-edited-fields';
+import { missingAckChecks, requiredAckChecks } from './ai-order/ai-ack-checks';
 import {
   AiConfirmOrderDto,
   AiConfirmRequestDto,
@@ -149,6 +151,7 @@ import {
   parseUzPhoneSearch,
   recordReceiveByScanOutcome,
   requestContext,
+  AI_CHECKS_NOT_ACKNOWLEDGED,
   type AiAuditedField,
   type AiFieldCorrections,
   type AiImageMediaType,
@@ -416,6 +419,12 @@ type EligibleAiOrder = {
   editedFields: AiAuditedField[] | null;
   /** J3hEDtFN #4: o'zgargan maydonlarning AI / yakuniy qiymati. */
   fieldCorrections?: AiFieldCorrections | null;
+  /**
+   * AI ack: SAQLANGAN snapshot bo'yicha tasdiq talab qiladigan bloklovchi
+   * kodlar (tahrir istisnosidan keyin; `requiredAckChecks`). Snapshot
+   * topilmasa — bo'sh.
+   */
+  requiredAcks?: string[];
 };
 
 /**
@@ -2368,6 +2377,9 @@ export class OrderGatewayController {
       item.editedFields = preview
         ? computeEditedFields(preview, confirmedForAudit)
         : null;
+      // AI ack: talab — faqat saqlangan snapshot'dagi kodlardan (mijozga
+      // ishonilmaydi), operator tuzatgan maydon tekshiruvi tushib qoladi.
+      item.requiredAcks = requiredAckChecks(preview, item.editedFields);
       // J3hEDtFN #4: eval manbai — faqat ai_order_draft_item'ga (activity_log
       // metadata'siga EMAS: u yerda ism/manzil qiymati kerak emas).
       item.fieldCorrections =
@@ -2399,6 +2411,34 @@ export class OrderGatewayController {
         edited_fields: item.editedFields,
       };
     }
+  }
+
+  /**
+   * AI ack: har eligible buyurtmaning `requiredAcks` i (`attachAiAudit`)
+   * `ack_checks` da bo'lishi shart. Bo'lmasa — 409
+   * `checks_not_acknowledged`: `missing` — barcha tasdiqlanmagan kodlar
+   * (takrorsiz), `orders` — `[{ index, missing }]` (`index` — so'rovdagi
+   * `orders[]` o'rni).
+   */
+  private assertAiChecksAcknowledged(eligible: EligibleAiOrder[]): void {
+    const unacked = eligible
+      .map((item) => ({
+        index: item.index,
+        missing: missingAckChecks(
+          item.requiredAcks ?? [],
+          item.order.ack_checks,
+        ),
+      }))
+      .filter((entry) => entry.missing.length > 0);
+    if (unacked.length === 0) return;
+    throw new ConflictException({
+      statusCode: 409,
+      code: AI_CHECKS_NOT_ACKNOWLEDGED,
+      message:
+        "AI ogohlantirishlari tasdiqlanmagan — tuman yoki summani tekshirib, 'baribir yaratish'ni tasdiqlang",
+      missing: [...new Set(unacked.flatMap((entry) => entry.missing))],
+      orders: unacked,
+    });
   }
 
   /**
@@ -3174,8 +3214,9 @@ export class OrderGatewayController {
     description:
       "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: " +
       "`district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), " +
-      "`region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), " +
+      '`region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), ' +
       "`checks: [{ code, … }]` — YUMSHOQ tekshiruvlar, `ready`/`issues` ga ta'sir qilmaydi: `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }`, `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. " +
+      "`district_low_confidence` va `price_check` — ai-confirm'da tasdiq (`orders[].ack_checks`) talab qiladi, aks holda 409 `checks_not_acknowledged`. " +
       "⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
   })
   @ApiConsumes('multipart/form-data')
@@ -3602,6 +3643,17 @@ export class OrderGatewayController {
       'AI: tasdiqlangan buyurtmalarni yaratish (har buyurtmaga alohida natija)',
   })
   @ApiBody({ type: AiConfirmRequestDto })
+  @ApiOkResponse({
+    description:
+      '{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija',
+  })
+  @ApiConflictResponse({
+    description:
+      "checks_not_acknowledged — saqlangan AI preview'da bloklovchi tekshiruv (district_low_confidence, price_check) bor, " +
+      'lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi. Tana: ' +
+      "`{ statusCode: 409, message, code: 'checks_not_acknowledged', missing: string[], orders: [{ index, missing: string[] }] }` " +
+      '(`index` — so‘rovdagi `orders[]` o‘rni).',
+  })
   async aiConfirm(
     @Body() dto: AiConfirmRequestDto,
     @Req() req: { user: JwtUser },
@@ -3714,6 +3766,12 @@ export class OrderGatewayController {
     // hisoblagan edited_fields). ai-service ishlamasa ham yaratish TO'XTAMAYDI
     // — metadata faqat draft_id/ai_item_index bilan qoladi.
     await this.attachAiAudit(eligible, marketId);
+
+    // AI ack (ega qarori 2026-11-14): bloklovchi tekshiruv (tuman noaniq,
+    // summa matndagidan farq qiladi) operator tomonidan tasdiqlanmagan
+    // bo'lsa — BUTUN so'rov 409, hech narsa yaratilmaydi (FE oynani
+    // ko'rsatib `ack_checks` bilan qayta yuboradi).
+    this.assertAiChecksAcknowledged(eligible);
 
     // 4) Yaratish — cheklangan parallellik, telefon bo'yicha yo'laklar.
     // VRyloH62: registrator/market operatori ismi — partiyaga BIR MARTA
