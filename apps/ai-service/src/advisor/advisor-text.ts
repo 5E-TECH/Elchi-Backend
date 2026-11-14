@@ -134,13 +134,16 @@ export function r7Sentence(f: Record<string, unknown>): string {
       f.system_difference === null || f.system_difference === undefined
         ? null
         : Number(f.system_difference);
-    if (mismatch.includes('amount') && Math.abs(diff) > 1) {
+    if (mismatch.includes('amount') && sys !== null) {
+      // Haqiqiy farq (ega qarori): AI o'qigan vs tizimdagi; kassir boshqa
+      // raqam kiritgan bo'lsa — qo'shimcha.
+      parts.push(
+        `AI o'qigan ${som(f.read_amount)}, tizimda ${som(f.expected_balance)} (${som(sys)})` +
+          (Math.abs(diff) > 1 ? `, kiritilgan ${som(f.entered_amount)}` : ''),
+      );
+    } else if (mismatch.includes('amount')) {
       parts.push(
         `kiritilgan ${som(f.entered_amount)}, AI o'qigan ${som(f.read_amount)} (${som(diff)})`,
-      );
-    } else if (mismatch.includes('amount') && sys !== null) {
-      parts.push(
-        `AI o'qigan ${som(f.read_amount)}, tizimda ${som(f.expected_balance)} (${som(sys)})`,
       );
     }
     if (mismatch.includes('card')) parts.push('rasm boshqa kartaniki');

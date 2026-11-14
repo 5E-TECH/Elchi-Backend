@@ -1229,12 +1229,12 @@ export class AdvisorInputsService {
       const systemDifference =
         expected === null ? null : money(read - expected);
       const mismatch: string[] = [];
-      if (
-        Math.abs(difference) > R7_TOLERANCE ||
-        (systemDifference !== null && Math.abs(systemDifference) > R7_TOLERANCE)
-      ) {
-        mismatch.push('amount');
-      }
+      // Ega qarori 2026-11-14: R7 karta faqat HAQIQIY farqda — AI o'qigan ≠
+      // tizimdagi (yoki boshqa karta). Kassir faqat noto'g'ri raqam kiritgan
+      // (AI = tizim) — R7 emas, smena hisobotida ko'rinadi. Tizim qoldig'i
+      // noma'lum (eski qator) — AI o'qigan vs kiritilgan.
+      const amountGap = systemDifference ?? difference;
+      if (Math.abs(amountGap) > R7_TOLERANCE) mismatch.push('amount');
       const last4 = (r.card_last4 ?? '').trim();
       const detected = (r.ai_last4_detected ?? '').trim();
       if (
@@ -1251,7 +1251,7 @@ export class AdvisorInputsService {
         fact_keys: [{ fact_key: `R7:card_check:${r.id}`, fact_at: iso(at) }],
         branch,
         subject: { kind: 'cashbox', id: r.owner, name: null },
-        headline_amount: difference !== 0 ? difference : systemDifference,
+        headline_amount: mismatch.includes('amount') ? amountGap : null,
         facts: {
           source: 'card_balance',
           receipt_ai_enabled: receiptAi,
