@@ -8,6 +8,7 @@ import type {
 import {
   AI_DRAFT_ATTACH_RETRY_DELAYS_MS,
   AI_DRAFT_COST_SQL,
+  AI_CORRECTION_FIELD_RETENTION,
   AI_CORRECTION_PII_FIELDS,
   AI_CORRECTIONS_RETENTION_DAYS,
   AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL,
@@ -20,6 +21,7 @@ import {
   sanitizeFieldCorrections,
   sanitizeSnapshot,
 } from './ai-draft.service';
+import { AI_AUDITED_FIELDS } from '@app/common';
 
 /** vncdmXOy — AI buyurtma audit izi (unit; real PG — ai-draft.pg.spec.ts). */
 const DRAFT = '0b9f7c3e-1d2a-4b5c-8d6e-7f8091a2b3c4';
@@ -425,6 +427,38 @@ describe('AiDraftService (vncdmXOy)', () => {
     expect(AI_CORRECTIONS_RETENTION_DAYS).toBeGreaterThan(
       AI_DRAFT_TEXT_RETENTION_DAYS,
     );
+  });
+
+  it('har audit maydoni klassifikatsiyalangan: pii ∪ keep = AI_AUDITED_FIELDS', () => {
+    expect(Object.keys(AI_CORRECTION_FIELD_RETENTION).sort()).toEqual(
+      [...AI_AUDITED_FIELDS].sort(),
+    );
+    const keep = AI_AUDITED_FIELDS.filter(
+      (f) => AI_CORRECTION_FIELD_RETENTION[f] === 'keep',
+    );
+    expect([...AI_CORRECTION_PII_FIELDS, ...keep].sort()).toEqual(
+      [...AI_AUDITED_FIELDS].sort(),
+    );
+    expect(AI_DRAFT_ITEM_PURGE_SQL).toContain(
+      "jsonb_typeof(field_corrections) = 'object'",
+    );
+  });
+
+  it('retention: bir UPDATE yiqilsa qolganlari baribir ishlaydi; 365 kunlik bosqich birinchi', async () => {
+    itemsRepo.query.mockReset();
+    draftsRepo.query.mockReset();
+    itemsRepo.query
+      .mockRejectedValueOnce(new Error('expire failed'))
+      .mockResolvedValueOnce([[], 2]);
+    draftsRepo.query.mockResolvedValue([[], 5]);
+    await expect(service.purgeExpiredText()).resolves.toBe(5);
+    expect(itemsRepo.query.mock.calls[0][0]).toBe(
+      AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL,
+    );
+    expect(itemsRepo.query.mock.calls[1][0]).toBe(AI_DRAFT_ITEM_PURGE_SQL);
+    expect(draftsRepo.query).toHaveBeenCalledWith(AI_DRAFT_PURGE_SQL, [
+      AI_DRAFT_TEXT_RETENTION_DAYS,
+    ]);
   });
 
   it('PII ro‘yxati: ism/telefon/manzil/izoh/operator; geo/summa/mahsulot EMAS', () => {
