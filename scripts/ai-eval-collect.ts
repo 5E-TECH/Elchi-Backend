@@ -12,7 +12,7 @@
  *    `source_text` va tuzatishlardagi PII yo'q — matn↔kutilgan natija
  *    juftlari (golden set) faqat 30 kun ichida yig'iladi; 30–365 kun
  *    oralig'idagi tuzatishlar faqat agregat statistika uchun
- *    (`scripts/ai/eval-aggregates.sql`);
+ *    (`scripts/ai/eval-aggregates.sql`, #641 bilan keladi);
  *  - `ai_schema.ai_usage_log` — draft bo'yicha chaqiruvlar/outcome/stop_reason.
  * Gateway darajasidagi xatolar (timeout, no_market, disabled) ai_usage_log /
  * draft'ga tushmaydi — ular uchun gateway logi kerak (bu skript qamramaydi).
