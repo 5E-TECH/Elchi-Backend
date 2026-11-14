@@ -11,3 +11,4 @@ export * from './district-pick.contract';
 export * from './balance-screenshot.contract';
 export * from './receipt-extract.contract';
 export * from './assistant.contract';
+export * from './advisor.contract';

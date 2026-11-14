@@ -371,6 +371,25 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'arrow-up',
     'amber',
   ),
+  // (BE-5 LhTIno57) AI maslahatchi — ogohlantirish holatlari va sozlamalar.
+  'ai.advisor.alert.resolve': entry(
+    'AI ogohlantirish hal qilindi',
+    'finance',
+    'check',
+    'green',
+  ),
+  'ai.advisor.alert.dismiss': entry(
+    'AI ogohlantirish ahamiyatsiz deb belgilandi',
+    'finance',
+    'x',
+    'slate',
+  ),
+  'ai.advisor.settings.update': entry(
+    "AI maslahatchi sozlamalari o'zgartirildi",
+    'finance',
+    'settings',
+    'violet',
+  ),
 
   // ---- kirish ----
   'auth.otp_requested': entry("SMS kod so'raldi", 'auth', 'message', 'slate'),

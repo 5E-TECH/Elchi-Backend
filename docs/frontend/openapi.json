@@ -23507,6 +23507,62 @@
         ]
       }
     },
+    "/ai/advisor/settings": {
+      "get": {
+        "description": "`data` = `{version, rules{R1..R8: {enabled, severity, telegram, <chegaralar>}}, limits{rules{<R>{<maydon>{min, max, step, unit, default}}}}, telegram, budget, schedule, updated_at, updated_by{id, name}}`. `severity` — qotirilgan (R2, R6, R7 critical; qolgani warning). `telegram`/`budget`/`schedule` — BE-1, hozircha null. Qator yo‘q — `version: 1` va sukutlar.",
+        "operationId": "AiAdvisorGatewayController_getSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: sozlamalar — qoidalar R1–R8 (faqat superadmin)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      },
+      "patch": {
+        "description": "Qisman (deep merge), hammasi yoki hech narsa; `version` MAJBURIY. Xatolar: 400 `AI_ADVISOR_INVALID_RULE {field, min, max}`; 400 `AI_ADVISOR_INVALID_SETTING {field}` (noma’lum kalit, `version` yo‘q, `severity`, `telegram`/`budget`/`schedule`); 409 `AI_ADVISOR_SETTINGS_CONFLICT {version}`. O‘zgarish keyingi tekshiruvdan qo‘llanadi. Javob — to‘liq sozlamalar. Audit `ai.advisor.settings.update` (eski → yangi). O‘zgarishsiz PATCH — `version` oshmaydi.",
+        "operationId": "AiAdvisorGatewayController_updateSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAdvisorSettingsPatchDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: sozlamalarni o‘zgartirish (faqat superadmin, audit)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/market-operators/selectable": {
       "get": {
         "description": "BeePost `GET user/operators/selectable` kabi. Faqat faol, o'chirilmagan market operatorlari — `{ id, name }`, ism bo`yicha (katta-kichik harf farqsiz). Market — o`zi (boshqa `market_id` → 400); market operatori — biriktirilgan marketi (boshqa `market_id` → 400, biriktirilmagan → 400); superadmin, admin, registrator, menejer, filial — `market_id` MAJBURIY. Tanlangan id `POST /orders` `operator_id` ga yuboriladi.",
@@ -36430,6 +36486,50 @@
         "required": [
           "user_id",
           "enabled"
+        ]
+      },
+      "AiAdvisorSettingsPatchDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "description": "MAJBURIY (GET dagi `version`). Eskirgan — 409 AI_ADVISOR_SETTINGS_CONFLICT {version}; yo'q — 400 AI_ADVISOR_INVALID_SETTING {field: \"version\"}.",
+            "example": 4
+          },
+          "rules": {
+            "type": "object",
+            "description": "Qisman: `{R1: {shortage_uzs: 30000}, R8: {enabled: false}}`. Maydonlar: `enabled`, `telegram`, qoida chegaralari (`limits.rules`). `severity` o'zgarmaydi (400 AI_ADVISOR_INVALID_SETTING).",
+            "example": {
+              "R1": {
+                "shortage_uzs": 30000
+              },
+              "R8": {
+                "enabled": false
+              }
+            },
+            "additionalProperties": true
+          },
+          "telegram": {
+            "type": "object",
+            "description": "x-owner BE-1 — hozircha qabul qilinmaydi (400 AI_ADVISOR_INVALID_SETTING).",
+            "additionalProperties": true,
+            "nullable": true
+          },
+          "budget": {
+            "type": "object",
+            "description": "x-owner BE-1 — hozircha qabul qilinmaydi (400 AI_ADVISOR_INVALID_SETTING).",
+            "additionalProperties": true,
+            "nullable": true
+          },
+          "schedule": {
+            "type": "object",
+            "description": "x-owner BE-1/BE-4 — hozircha qabul qilinmaydi (400 AI_ADVISOR_INVALID_SETTING).",
+            "additionalProperties": true,
+            "nullable": true
+          }
+        },
+        "required": [
+          "version"
         ]
       },
       "CreateMarketOperatorRequestDto": {

@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 1-qism): qoidalar sozlamasi `GET/PATCH /ai/advisor/settings`
+
+API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7.7, §8. Deploy: api-gateway + ai-service, migratsiya **224** (`ai_schema.ai_advisor_alerts`, `ai_advisor_alert_occurrences`, `ai_advisor_settings` — yangi jadvallar). Ogohlantirishlar endpointlari (`overview`, `alerts*`) — keyingi PR'larda.
+
+- 🆕 `GET /ai/advisor/settings` (FAQAT SUPERADMIN; ADMIN — 403): `{version, rules{R1..R8}, limits{rules{<R>{<maydon>{min,max,step,unit,default}}}}, telegram, budget, schedule, updated_at, updated_by}`. Saqlangan qator bo'lmasa — `version: 1`, sukutlar, `updated_at/by: null`.
+- 🆕 `PATCH /ai/advisor/settings` — qisman, hammasi yoki hech narsa, `version` MAJBURIY. Javob — to'liq sozlamalar. O'zgarishsiz PATCH `version` ni oshirmaydi. Audit `ai.advisor.settings.update` (eski → yangi).
+- 🟢 Ega javoblari (Q1/Q2): `severity` qotirilgan — R2, R6, **R7** `critical`, qolgani `warning`; `rules.R7.telegram` sukuti **`false`** (openapi misolidagi R7 `warning`/`telegram:true` eskirgan). `rules.<R>.telegram` o'zgartiriladi.
+- 🟢 `telegram`, `budget`, `schedule` — hozircha `null` (BE-1); PATCH'da yuborilsa 400 `AI_ADVISOR_INVALID_SETTING {field}`.
+- 🟢 Kodli xatolar (`code` javobga chiqadi): 400 `AI_ADVISOR_INVALID_RULE {field, min, max}` (chegara/qadam/tur), 400 `AI_ADVISOR_INVALID_SETTING {field}` (noma'lum kalit, `version` yo'q, `rules.<R>.severity`), 409 `AI_ADVISOR_SETTINGS_CONFLICT {version}` (joriy versiya). Qolgan `AI_ADVISOR_*` kodlari ham `PUBLIC_ERROR_CODES` ga qo'shildi.
+
+**Frontend action items:**
+- 🔧 Qoidalar oynasi: forma chegaralari `limits.rules` dan; 400 `field` bo'yicha xato maydon ostida; 409 → sozlamalarni qayta o'qish. `severity` PATCH'da yuborilmasin.
+
 ### 2026-11-14 — Carrier akkaunt: «Rollback» toggle (sukut o'chiq, kompaniyadan yashirin)
 
 Egasi (2026-11-14): rollback'ni admin akkaunt bo'yicha bitta toggle bilan yoqib/o'chira olsin, sukut — o'chiq (kompaniya bilan endi ishlay boshladik, ishonch paydo bo'lguncha); Swagger va hujjatdan yashirilsin — kompaniyaga hozircha aytilmaydi.

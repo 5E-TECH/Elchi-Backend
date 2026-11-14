@@ -1,0 +1,274 @@
+/**
+ * BE-5 (LhTIno57) — AI maslahatchi: ogohlantirishlar R1–R8.
+ *
+ * gateway ↔ ai-service RMQ shartnomasi (`ai.advisor.*`), xato kodlari va
+ * qoidalar sozlamasining YAGONA manbai: sukutlar, chegaralar (`limits`) —
+ * FE forma validatsiyasi (`GET settings.limits`) va ai-service tekshiruvi
+ * shu jadvaldan. API shartnomasi v0.3 (§7.6–7.7, §8).
+ *
+ * ⚠️ Faqat superadmin (ega qarori 1). Gateway `RolesGuard` + ai-service
+ * `requester.roles` ni qayta tekshiradi (ikki qavat).
+ */
+
+export const AI_ADVISOR_RULE_KEYS = [
+  'R1',
+  'R2',
+  'R3',
+  'R4',
+  'R5',
+  'R6',
+  'R7',
+  'R8',
+] as const;
+export type AiAdvisorRuleKey = (typeof AI_ADVISOR_RULE_KEYS)[number];
+
+export const AI_ADVISOR_SEVERITIES = ['warning', 'critical'] as const;
+export type AiAdvisorSeverity = (typeof AI_ADVISOR_SEVERITIES)[number];
+
+export const AI_ADVISOR_ALERT_STATUSES = [
+  'new',
+  'seen',
+  'resolved',
+  'dismissed',
+] as const;
+export type AiAdvisorAlertStatus = (typeof AI_ADVISOR_ALERT_STATUSES)[number];
+
+export const AI_ADVISOR_EXPLANATION_STATUSES = [
+  'none',
+  'pending',
+  'ready',
+  'failed',
+] as const;
+export type AiAdvisorExplanationStatus =
+  (typeof AI_ADVISOR_EXPLANATION_STATUSES)[number];
+
+/** RMQ buyruqlari (gateway → ai-service). */
+export const AI_ADVISOR_PATTERNS = {
+  SETTINGS_GET: 'ai.advisor.settings.get',
+  SETTINGS_UPDATE: 'ai.advisor.settings.update',
+} as const;
+
+/** Xato kodlari (`PUBLIC_ERROR_CODES` da ruxsat etilgan maydonlari bilan). */
+export const AI_ADVISOR_ERROR_CODES = {
+  /** 404 */
+  ALERT_NOT_FOUND: 'AI_ADVISOR_ALERT_NOT_FOUND',
+  /** 409 `{alert_status}` */
+  ALERT_CLOSED: 'AI_ADVISOR_ALERT_CLOSED',
+  /** 400 `{reason: required|too_short|too_long, min_length, max_length}` */
+  NOTE_INVALID: 'AI_ADVISOR_NOTE_INVALID',
+  /** 400 `{field, min, max}` — chegara `limits` dan tashqarida. */
+  INVALID_RULE: 'AI_ADVISOR_INVALID_RULE',
+  /** 400 `{field}` — noma'lum kalit, `version` yo'q, o'zgarmaydigan maydon. */
+  INVALID_SETTING: 'AI_ADVISOR_INVALID_SETTING',
+  /** 409 `{version}` — eskirgan `version` (optimistik qulf). */
+  SETTINGS_CONFLICT: 'AI_ADVISOR_SETTINGS_CONFLICT',
+  /** 429 `{scope, period, reset_at, retry_after_seconds}` */
+  BUDGET_EXCEEDED: 'AI_ADVISOR_BUDGET_EXCEEDED',
+  /** 503 `{reason}` */
+  AI_DISABLED: 'AI_ADVISOR_AI_DISABLED',
+} as const;
+export type AiAdvisorErrorCode =
+  (typeof AI_ADVISOR_ERROR_CODES)[keyof typeof AI_ADVISOR_ERROR_CODES];
+
+/** `PUBLIC_ERROR_CODES` uchun: kod → javobga chiqadigan maydonlar. */
+export const AI_ADVISOR_PUBLIC_ERROR_FIELDS: Readonly<
+  Record<AiAdvisorErrorCode, readonly string[]>
+> = Object.freeze({
+  AI_ADVISOR_ALERT_NOT_FOUND: [],
+  AI_ADVISOR_ALERT_CLOSED: ['alert_status'],
+  AI_ADVISOR_NOTE_INVALID: ['reason', 'min_length', 'max_length'],
+  AI_ADVISOR_INVALID_RULE: ['field', 'min', 'max'],
+  AI_ADVISOR_INVALID_SETTING: ['field'],
+  AI_ADVISOR_SETTINGS_CONFLICT: ['version'],
+  AI_ADVISOR_BUDGET_EXCEEDED: [
+    'scope',
+    'period',
+    'reset_at',
+    'retry_after_seconds',
+  ],
+  AI_ADVISOR_AI_DISABLED: ['reason'],
+});
+
+/** «Hal qilindi» izohi: trim'dan keyin 3–500 belgi (§7.5). */
+export const AI_ADVISOR_NOTE_MIN = 3;
+export const AI_ADVISOR_NOTE_MAX = 500;
+
+export type AiAdvisorLimitUnit = 'uzs' | 'days' | 'count' | 'multiplier';
+
+export interface AiAdvisorFieldLimit {
+  min: number;
+  max: number;
+  /** 1 — butun son; 0.1 — bir kasr xona. */
+  step: number;
+  unit: AiAdvisorLimitUnit;
+  default: number;
+}
+
+const uzs = (def: number): AiAdvisorFieldLimit => ({
+  min: 1,
+  max: 1_000_000_000,
+  step: 1,
+  unit: 'uzs',
+  default: def,
+});
+const days = (def: number): AiAdvisorFieldLimit => ({
+  min: 1,
+  max: 60,
+  step: 1,
+  unit: 'days',
+  default: def,
+});
+
+/**
+ * `limits.rules.<R>.<maydon>` (§7.6, BQ4). Kalitlar `rule.thresholds` bilan
+ * AYNAN bir xil. R6/R7 — chegarasiz (`{}`).
+ */
+export const AI_ADVISOR_RULE_LIMITS: Readonly<
+  Record<AiAdvisorRuleKey, Readonly<Record<string, AiAdvisorFieldLimit>>>
+> = Object.freeze({
+  R1: {
+    shortage_uzs: uzs(50_000),
+    consecutive_negative: {
+      min: 2,
+      max: 30,
+      step: 1,
+      unit: 'count',
+      default: 3,
+    },
+  },
+  R2: {
+    balance_uzs: uzs(2_000_000),
+    growth_days: days(3),
+    no_handover_days: days(3),
+  },
+  R3: {
+    mad_multiplier: {
+      min: 1,
+      max: 10,
+      step: 0.1,
+      unit: 'multiplier',
+      default: 3,
+    },
+  },
+  R4: { days_without_payout: days(7) },
+  R5: { balance_uzs: uzs(5_000_000), days_without_transfer: days(3) },
+  R6: {},
+  R7: {},
+  R8: {
+    ratio: { min: 1.1, max: 10, step: 0.1, unit: 'multiplier', default: 2 },
+  },
+});
+
+/**
+ * Qoida darajasi — ega qarori 2026-11-14 (Q1): superadmin TANLAMAYDI.
+ * R2, R6, R7 — `critical`; qolgani — `warning`. PATCH'da `severity` → 400.
+ */
+export const AI_ADVISOR_RULE_SEVERITY: Readonly<
+  Record<AiAdvisorRuleKey, AiAdvisorSeverity>
+> = Object.freeze({
+  R1: 'warning',
+  R2: 'critical',
+  R3: 'warning',
+  R4: 'warning',
+  R5: 'warning',
+  R6: 'critical',
+  R7: 'critical',
+  R8: 'warning',
+});
+
+/**
+ * `rules.<R>.telegram` sukuti — Q2 (c): R7 `critical`, lekin Telegram'ga
+ * YO'Q (faqat ilova ichi + kunlik hisobot). Superadmin o'zgartira oladi.
+ */
+export const AI_ADVISOR_RULE_TELEGRAM_DEFAULT: Readonly<
+  Record<AiAdvisorRuleKey, boolean>
+> = Object.freeze({
+  R1: true,
+  R2: true,
+  R3: true,
+  R4: true,
+  R5: true,
+  R6: true,
+  R7: false,
+  R8: true,
+});
+
+/** Bitta qoida sozlamasi: umumiy kalitlar + qoida chegaralari. */
+export interface AiAdvisorRuleSettings {
+  enabled: boolean;
+  severity: AiAdvisorSeverity;
+  telegram: boolean;
+  [threshold: string]: boolean | number | string;
+}
+
+export type AiAdvisorRulesSettings = Record<
+  AiAdvisorRuleKey,
+  AiAdvisorRuleSettings
+>;
+
+/** Qoida chegaralari (`rule.thresholds`) — faqat `limits` dagi kalitlar. */
+export function aiAdvisorThresholds(
+  key: AiAdvisorRuleKey,
+  rule: AiAdvisorRuleSettings,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const field of Object.keys(AI_ADVISOR_RULE_LIMITS[key])) {
+    out[field] = Number(rule[field]);
+  }
+  return out;
+}
+
+/** Sukut qoidalar (TZ qiymatlari, EGA-1029/1). */
+export function aiAdvisorDefaultRules(): AiAdvisorRulesSettings {
+  const rules = {} as AiAdvisorRulesSettings;
+  for (const key of AI_ADVISOR_RULE_KEYS) {
+    const rule: AiAdvisorRuleSettings = {
+      enabled: true,
+      severity: AI_ADVISOR_RULE_SEVERITY[key],
+      telegram: AI_ADVISOR_RULE_TELEGRAM_DEFAULT[key],
+    };
+    for (const [field, limit] of Object.entries(AI_ADVISOR_RULE_LIMITS[key])) {
+      rule[field] = limit.default;
+    }
+    rules[key] = rule;
+  }
+  return rules;
+}
+
+/** gateway → ai-service: so'rovchi (ism — `requestContext.userName`). */
+export interface AiAdvisorRequester {
+  id: string;
+  roles: string[];
+  name?: string | null;
+}
+
+export interface AiAdvisorUserRef {
+  id: string;
+  name: string | null;
+}
+
+/** `GET /ai/advisor/settings` → `data` (§7.6). */
+export interface AiAdvisorSettingsView {
+  version: number;
+  rules: AiAdvisorRulesSettings;
+  limits: {
+    rules: Record<AiAdvisorRuleKey, Record<string, AiAdvisorFieldLimit>>;
+  };
+  /** x-owner BE-1 — hozircha null. */
+  telegram: {
+    enabled: boolean;
+    recipients?: Array<{ user: AiAdvisorUserRef; telegram_connected: boolean }>;
+  } | null;
+  /** x-owner BE-1 — hozircha null. */
+  budget: Record<string, unknown> | null;
+  /** x-owner BE-1/BE-4 — hozircha null. */
+  schedule: Record<string, unknown> | null;
+  updated_at: string | null;
+  updated_by: AiAdvisorUserRef | null;
+}
+
+export interface AiAdvisorSettingsUpdateRequest {
+  requester: AiAdvisorRequester;
+  /** Gateway DTO'dan o'tgan tana — ichki tekshiruv ai-service'da. */
+  patch: Record<string, unknown>;
+}
