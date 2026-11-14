@@ -852,7 +852,8 @@ const MARKET_CREATOR = { id: MARKET_ID, roles: ['market'] };
         expect(await pendingCatalog()).toEqual([]);
         const tracking: Row[] = await orderDb.query(
           `SELECT from_status::text, to_status::text, note
-             FROM "${ORDER}".order_tracking WHERE order_id = $1 ORDER BY id`,
+             FROM "${ORDER}".order_tracking WHERE order_id = $1
+            ORDER BY created_at`,
           [created.id],
         );
         expect(tracking.map((row) => row.note)).toEqual([
