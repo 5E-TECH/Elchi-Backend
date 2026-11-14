@@ -15,7 +15,7 @@ import {
   type AiAdvisorRulesSettings,
 } from '@app/common';
 import { AdvisorSettingsService } from './advisor-settings.service';
-import { formatDay, formatRatio, formatSom } from './advisor-text';
+import { formatDay, formatRatio, formatSom, r7Sentence } from './advisor-text';
 
 /**
  * BE-5 (LhTIno57) — `ai.advisor_alert` bildirishnomasi (§9.1–9.3).
@@ -124,33 +124,10 @@ export function advisorNotifyBody(
           ? `${formatDay(f.from)}–${formatDay(f.to)} haftasida sof foyda ${som(f.net)}.`
           : `${formatDay(f.from)} kuni sof foyda ${som(f.net)}.`;
       break;
-    case 'R7': {
-      const diff =
-        f.difference === null || f.difference === undefined
-          ? ''
-          : ` (${som(f.difference)})`;
-      if (f.source === 'card_balance') {
-        body = `${nameOf(f.cashbox, 'Kassa')} · ${nameOf(f.card, 'karta')}: kiritilgan ${som(f.entered_amount)}, AI o'qigan ${som(f.read_amount)}${diff}.`;
-      } else {
-        const op = f.operation as
-          { category_name?: unknown } | null | undefined;
-        const category =
-          typeof op?.category_name === 'string' && op.category_name
-            ? op.category_name
-            : 'chek';
-        const mismatch = Array.isArray(f.mismatch)
-          ? (f.mismatch as unknown[])
-          : [];
-        const head = `${nameOf(f.branch ?? f.cashbox, 'Kassa')} · ${category}`;
-        body = mismatch.includes('amount')
-          ? `${head}: kiritilgan ${som(f.entered_amount)}, chekda ${som(f.read_amount)}${diff}.`
-          : `${head}.`;
-        // Faqat `mismatch` da `card` bo'lsa (FE-rev S15a).
-        if (mismatch.includes('card'))
-          body += " To'lov filial kartasidan emas.";
-      }
+    case 'R7':
+      // Sarlavha bilan bitta manba (valyuta, karta, o'tkazma — #653 review).
+      body = `${r7Sentence(f)}.`;
       break;
-    }
     case 'R8': {
       const ratio = formatRatio(f.ratio);
       body = `${formatDay(f.from)}–${formatDay(f.to)}: ${Number(f.count)} ta tuzatish${
