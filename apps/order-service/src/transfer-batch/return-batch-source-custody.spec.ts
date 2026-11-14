@@ -103,7 +103,24 @@ function makeHarness(
   };
   const orderRepo = { find: jest.fn().mockResolvedValue(orders) };
   const transferBatchRepo = { find: jest.fn().mockResolvedValue([]) };
-  const transferBatchItemRepo = { find: jest.fn().mockResolvedValue([]) };
+  // Paket viloyatlari (`region_ids`) — ichidagi buyurtmalardan.
+  const regionQb: Record<string, jest.Mock> = {
+    getRawMany: jest.fn().mockResolvedValue([]),
+  };
+  for (const step of [
+    'select',
+    'addSelect',
+    'distinct',
+    'innerJoin',
+    'where',
+    'andWhere',
+  ]) {
+    regionQb[step] = jest.fn(() => regionQb);
+  }
+  const transferBatchItemRepo = {
+    find: jest.fn().mockResolvedValue([]),
+    createQueryBuilder: jest.fn(() => regionQb),
+  };
   const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
   const custody = { auditActor: jest.fn(() => ({})) };
 

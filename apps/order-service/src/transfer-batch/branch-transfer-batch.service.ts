@@ -180,6 +180,56 @@ export class BranchTransferBatchService {
     });
   }
 
+  /**
+   * Paket viloyatlari — ichidagi buyurtmalardan: umumiy filial paketi
+   * (2026-11-14 dan) bitta viloyatga bog'lanmaydi (`target_region_id = NULL`).
+   * `batch_id → region_id[]` (son bo'yicha o'sish tartibida).
+   */
+  private async regionIdsByBatch(
+    batchIds: string[],
+  ): Promise<Map<string, string[]>> {
+    const byBatch = new Map<string, string[]>();
+    if (!batchIds.length) {
+      return byBatch;
+    }
+    const rows = await this.transferBatchItemRepo
+      .createQueryBuilder('item')
+      .innerJoin(Order, 'regionOrder', 'regionOrder.id = item.order_id')
+      .select('item.batch_id', 'batch_id')
+      .addSelect('regionOrder.region_id', 'region_id')
+      .distinct(true)
+      .where('item.batch_id IN (:...batchIds)', { batchIds })
+      .andWhere('item.isDeleted = false')
+      .andWhere('regionOrder.region_id IS NOT NULL')
+      .getRawMany<{ batch_id: string; region_id: string }>();
+    for (const row of rows) {
+      const key = String(row.batch_id);
+      const list = byBatch.get(key) ?? [];
+      list.push(String(row.region_id));
+      byBatch.set(key, list);
+    }
+    for (const list of byBatch.values()) {
+      list.sort((a, b) => Number(a) - Number(b));
+    }
+    return byBatch;
+  }
+
+  /**
+   * `region_ids` — paketdagi buyurtmalar viloyatlari; bo'sh paketda eski
+   * `target_region_id` (bo'lsa).
+   */
+  private regionIdsOf(
+    batch: { id: string; target_region_id?: string | null },
+    byBatch: Map<string, string[]>,
+  ): string[] {
+    const fromItems = byBatch.get(String(batch.id)) ?? [];
+    if (fromItems.length) {
+      return fromItems;
+    }
+    const own = String(batch.target_region_id ?? '').trim();
+    return own ? [own] : [];
+  }
+
   private async listBatchesWithItems(batchIds: string[]) {
     if (!batchIds.length) {
       return [];
@@ -201,8 +251,10 @@ export class BranchTransferBatchService {
       itemsByBatch.set(String(item.batch_id), list);
     }
 
+    const regionIds = await this.regionIdsByBatch(batchIds);
     return batches.map((batch) => ({
       ...batch,
+      region_ids: this.regionIdsOf(batch, regionIds),
       items: (itemsByBatch.get(String(batch.id)) ?? []).map((item) => ({
         id: item.id,
         order_id: item.order_id,
@@ -227,7 +279,6 @@ export class BranchTransferBatchService {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const direction = this.normalizeTransferDirection(input?.direction);
     const requestKey = this.normalizeTransferRequestKey(input?.request_key);
-    const maxRegionalPendingBatches = 13;
 
     if (!sourceBranchId || !destinationBranchId) {
       this.badRequest('source_branch_id va destination_branch_id majburiy');
@@ -306,14 +357,6 @@ export class BranchTransferBatchService {
       this.badRequest('Paketga biriktirilmagan buyurtmalar topilmadi');
     }
 
-    const grouped = new Map<string, Order[]>();
-    for (const order of candidateOrders) {
-      const regionId = String(order.region_id);
-      const list = grouped.get(regionId) ?? [];
-      list.push(order);
-      grouped.set(regionId, list);
-    }
-
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -327,7 +370,18 @@ export class BranchTransferBatchService {
       );
       const orderRepo = queryRunner.manager.getRepository(Order);
 
-      const pendingBatches = await batchRepo.find({
+      /**
+       * Bitta yo'nalishga (manba → manzil) BITTA umumiy PENDING paket — barcha
+       * viloyatlar birga (Dilshod 2026-11-14: «paketlar hamma viloyatniki
+       * umumiy 1 ta bo'lishi kerak, alohida-alohida emas»). Ilgari har
+       * viloyatga alohida paket ochilardi (ko'pi bilan 13 ta). Paket viloyatga
+       * bog'lanmaydi: `target_region_id = NULL`, ro'yxatdagi viloyatlar —
+       * `region_ids` (paketdagi buyurtmalardan). Mavjud PENDING paket bo'lsa —
+       * eng eskisiga qo'shiladi; bazada bitta yo'nalishga bitta PENDING FORWARD
+       * paket — `UQ_BRANCH_TRANSFER_BATCHES_PENDING_FORWARD_ROUTE` (parallel
+       * so'rov 23505 → 409).
+       */
+      const pendingBatch = await batchRepo.findOne({
         where: {
           source_branch_id: sourceBranchId,
           destination_branch_id: destinationBranchId,
@@ -335,44 +389,22 @@ export class BranchTransferBatchService {
           status: BranchTransferBatchStatus.PENDING,
           isDeleted: false,
         },
-        order: { createdAt: 'ASC' },
+        order: { createdAt: 'ASC', id: 'ASC' },
       });
 
-      const batchByRegion = new Map<string, BranchTransferBatch>();
-      for (const batch of pendingBatches) {
-        const regionId = String(batch.target_region_id ?? '').trim();
-        if (regionId && !batchByRegion.has(regionId)) {
-          batchByRegion.set(regionId, batch);
-        }
-      }
-
-      const missingRegionIds = Array.from(grouped.keys()).filter(
-        (regionId) => !batchByRegion.has(regionId),
-      );
-      const currentPendingRegionsCount = batchByRegion.size;
-      if (
-        currentPendingRegionsCount + missingRegionIds.length >
-        maxRegionalPendingBatches
-      ) {
-        this.badRequest(
-          `Maximum ${maxRegionalPendingBatches} ta pending transfer batch bo‘lishi mumkin`,
-        );
-      }
-
-      const newBatchEntities: BranchTransferBatch[] = [];
-      for (const regionId of missingRegionIds) {
-        const qrToken = await this.generateTransferQrToken(
-          batchRepo,
-          direction,
-        );
-        newBatchEntities.push(
+      const batch =
+        pendingBatch ??
+        (await batchRepo.save(
           batchRepo.create({
-            qr_code_token: qrToken,
+            qr_code_token: await this.generateTransferQrToken(
+              batchRepo,
+              direction,
+            ),
             request_key: requestKey,
             source_branch_id: sourceBranchId,
             destination_branch_id: destinationBranchId,
             direction,
-            target_region_id: regionId,
+            target_region_id: null,
             status: BranchTransferBatchStatus.PENDING,
             order_count: 0,
             total_price: 0,
@@ -383,92 +415,65 @@ export class BranchTransferBatchService {
             received_at: null,
             cancelled_at: null,
           }),
-        );
+        ));
+
+      const orderIds = candidateOrders.map((order) => String(order.id));
+      const updateResult = await orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({ current_batch_id: String(batch.id) })
+        .where('id IN (:...orderIds)', { orderIds })
+        .andWhere('"current_batch_id" IS NULL')
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      if (Number(updateResult.affected ?? 0) !== orderIds.length) {
+        throw new RpcException({
+          statusCode: 409,
+          message:
+            'Buyurtmalarning bir qismi allaqachon boshqa paketga biriktirilgan',
+        });
       }
 
-      const savedNewBatches = newBatchEntities.length
-        ? await batchRepo.save(newBatchEntities)
-        : [];
-      for (const batch of savedNewBatches) {
-        batchByRegion.set(String(batch.target_region_id), batch);
-      }
+      const addedTotalPrice = candidateOrders.reduce(
+        (sum, order) => sum + Number(order.total_price ?? 0),
+        0,
+      );
+      batch.order_count =
+        Number(batch.order_count ?? 0) + candidateOrders.length;
+      batch.total_price = Number(batch.total_price ?? 0) + addedTotalPrice;
+      // Eski (viloyatli) PENDING paketga boshqa viloyat qo'shilishi mumkin —
+      // paket endi umumiy.
+      batch.target_region_id = null;
+      await batchRepo.save(batch);
 
-      const itemEntities: BranchTransferBatchItem[] = [];
-      const historyEntities: BranchTransferBatchHistory[] = [];
-      const touchedBatchIds = new Set<string>();
-
-      for (const [regionId, orders] of grouped.entries()) {
-        const batch = batchByRegion.get(regionId);
-        if (!batch) {
-          throw new RpcException({
-            statusCode: 500,
-            message: "Paket yaratib bo'lmadi",
-          });
-        }
-        touchedBatchIds.add(String(batch.id));
-
-        const orderIds = orders.map((order) => String(order.id));
-        const updateResult = await orderRepo
-          .createQueryBuilder()
-          .update(Order)
-          .set({ current_batch_id: String(batch.id) })
-          .where('id IN (:...orderIds)', { orderIds })
-          .andWhere('"current_batch_id" IS NULL')
-          .andWhere('"is_deleted" = false')
-          .execute();
-
-        if (Number(updateResult.affected ?? 0) !== orderIds.length) {
-          throw new RpcException({
-            statusCode: 409,
-            message:
-              'Buyurtmalarning bir qismi allaqachon boshqa paketga biriktirilgan',
-          });
-        }
-
-        const regionTotalPrice = orders.reduce(
-          (sum, order) => sum + Number(order.total_price ?? 0),
-          0,
-        );
-        batch.order_count = Number(batch.order_count ?? 0) + orders.length;
-        batch.total_price = Number(batch.total_price ?? 0) + regionTotalPrice;
-        await batchRepo.save(batch);
-
-        for (const order of orders) {
-          itemEntities.push(
-            batchItemRepo.create({
-              batch_id: String(batch.id),
-              order_id: String(order.id),
-              snapshot_price: Number(order.total_price ?? 0),
-              snapshot_market_id: String(order.market_id),
-            }),
-          );
-        }
-
-        historyEntities.push(
-          batchHistoryRepo.create({
+      await batchItemRepo.save(
+        candidateOrders.map((order) =>
+          batchItemRepo.create({
             batch_id: String(batch.id),
-            user_id: requesterId,
-            action: BranchTransferBatchAction.CREATED,
-            notes: missingRegionIds.includes(regionId)
-              ? '[STEP] BATCH_CREATED'
-              : '[STEP] BATCH_REUSED',
+            order_id: String(order.id),
+            snapshot_price: Number(order.total_price ?? 0),
+            snapshot_market_id: String(order.market_id),
           }),
-        );
-        historyEntities.push(
-          batchHistoryRepo.create({
-            batch_id: String(batch.id),
-            user_id: requesterId,
-            action: BranchTransferBatchAction.CREATED,
-            notes: '[STEP] ORDERS_ASSIGNED',
-          }),
-        );
-      }
-
-      await batchItemRepo.save(itemEntities);
-      await batchHistoryRepo.save(historyEntities);
+        ),
+      );
+      await batchHistoryRepo.save([
+        batchHistoryRepo.create({
+          batch_id: String(batch.id),
+          user_id: requesterId,
+          action: BranchTransferBatchAction.CREATED,
+          notes: pendingBatch ? '[STEP] BATCH_REUSED' : '[STEP] BATCH_CREATED',
+        }),
+        batchHistoryRepo.create({
+          batch_id: String(batch.id),
+          user_id: requesterId,
+          action: BranchTransferBatchAction.CREATED,
+          notes: '[STEP] ORDERS_ASSIGNED',
+        }),
+      ]);
       await queryRunner.commitTransaction();
 
-      const touchedBatchIdList = Array.from(touchedBatchIds);
+      const touchedBatchIdList = [String(batch.id)];
       await this.activityLog.log({
         entity_type: 'BranchTransferBatch',
         entity_id: touchedBatchIdList[0] ?? sourceBranchId,
@@ -1317,10 +1322,12 @@ export class BranchTransferBatchService {
       where: { batch_id: String(batch.id), isDeleted: false },
       order: { createdAt: 'ASC' },
     });
+    const regionIds = await this.regionIdsByBatch([String(batch.id)]);
 
     return successRes(
       {
         ...batch,
+        region_ids: this.regionIdsOf(batch, regionIds),
         items: items.map((item) => ({
           id: item.id,
           order_id: item.order_id,
@@ -1389,14 +1396,33 @@ export class BranchTransferBatchService {
       });
     }
 
+    /**
+     * Paket viloyati: eski paket — `target_region_id`, umumiy filial paketi
+     * (`NULL`, 2026-11-14 dan) — ichidagi buyurtmalar viloyati.
+     */
+    const regionMatchSql = (param: string) => {
+      const inItems = this.transferBatchItemRepo
+        .createQueryBuilder('regionItem')
+        .select('1')
+        .innerJoin(
+          Order,
+          'regionItemOrder',
+          'regionItemOrder.id = regionItem.order_id',
+        )
+        .where('regionItem.batch_id = batch.id')
+        .andWhere('regionItem.isDeleted = false')
+        .andWhere(`regionItemOrder.region_id IN (:...${param})`);
+      return `(batch.target_region_id IN (:...${param}) OR EXISTS (${inItems.getQuery()}))`;
+    };
+
     // Z3pUOxou (N17): maqsad viloyat filtri; buzuq id — 400 (bazaga yetmaydi).
     const targetRegionId = String(input?.target_region_id ?? '').trim();
     if (targetRegionId) {
       if (!/^[0-9]{1,19}$/.test(targetRegionId)) {
         this.badRequest("target_region_id noto'g'ri");
       }
-      qb.andWhere('batch.target_region_id = :targetRegionId', {
-        targetRegionId,
+      qb.andWhere(regionMatchSql('targetRegionIds'), {
+        targetRegionIds: [targetRegionId],
       });
     }
     // Z3pUOxou: logist doirasi — maqsad viloyat to'plami.
@@ -1409,7 +1435,7 @@ export class BranchTransferBatchService {
         ),
       );
       if (scopedRegionIds.length) {
-        qb.andWhere('batch.target_region_id IN (:...scopedTargetRegionIds)', {
+        qb.andWhere(regionMatchSql('scopedTargetRegionIds'), {
           scopedTargetRegionIds: scopedRegionIds,
         });
       } else {
@@ -1497,7 +1523,8 @@ export class BranchTransferBatchService {
     /**
      * (15N7AHkp) PENDING yig'ish SQL'da. Bir xil yo'nalishdagi (manba, manzil,
      * yo'nalish, hudud) bir nechta PENDING partiyadan faqat ENG YANGISI
-     * (`createdAt`, teng bo'lsa `id`) qoladi. Ilgari bu sahifa ichida
+     * (`createdAt`, teng bo'lsa `id`) qoladi (umumiy filial paketi — hudud
+     * `NULL`, bazada bitta yo'nalishga bittadan ortiq bo'lmaydi). Ilgari bu sahifa ichida
      * (xotirada) qilinardi va `meta.total` = sahifadagi qatorlar soni edi:
      * /returns sahifalashi 1-sahifada to'xtardi, /batches tab sonlari ko'pi
      * bilan 1 bo'lardi, keyingi sahifada esa "yig'ilgan" dublikat qayta
@@ -1514,7 +1541,9 @@ export class BranchTransferBatchService {
         .andWhere('newer.source_branch_id = batch.source_branch_id')
         .andWhere('newer.destination_branch_id = batch.destination_branch_id')
         .andWhere('newer.direction = batch.direction')
-        .andWhere('newer.target_region_id = batch.target_region_id')
+        .andWhere(
+          'newer.target_region_id IS NOT DISTINCT FROM batch.target_region_id',
+        )
         .andWhere(
           '(newer.createdAt > batch."createdAt" OR (newer.createdAt = batch."createdAt" AND newer.id > batch.id))',
         );
@@ -1550,7 +1579,9 @@ export class BranchTransferBatchService {
       itemsByBatch.set(key, list);
     }
 
+    const regionIdsByBatch = await this.regionIdsByBatch(batchIds);
     const mappedRows = rows.map((batch) => {
+      const region_ids = this.regionIdsOf(batch, regionIdsByBatch);
       const mappedItems = (itemsByBatch.get(String(batch.id)) ?? []).map(
         (item) => ({
           id: item.id,
@@ -1566,6 +1597,7 @@ export class BranchTransferBatchService {
       if (batch.status !== BranchTransferBatchStatus.PENDING) {
         return {
           ...batch,
+          region_ids,
           items: mappedItems,
         };
       }
@@ -1579,6 +1611,7 @@ export class BranchTransferBatchService {
 
       return {
         ...batch,
+        region_ids,
         order_count: remainingCount,
         total_price: remainingTotalPrice,
         items: remainingItems,
@@ -1693,9 +1726,11 @@ export class BranchTransferBatchService {
     });
 
     const remainingItems = items.filter((item) => !item.sent_at);
+    const regionIds = await this.regionIdsByBatch([id]);
     return successRes(
       {
         ...batch,
+        region_ids: this.regionIdsOf(batch, regionIds),
         items: remainingItems.map((item) => ({
           id: item.id,
           order_id: item.order_id,
@@ -1728,10 +1763,12 @@ export class BranchTransferBatchService {
       where: { batch_id: String(batch.id), isDeleted: false },
       order: { createdAt: 'ASC' },
     });
+    const regionIds = await this.regionIdsByBatch([String(batch.id)]);
 
     return successRes(
       {
         ...batch,
+        region_ids: this.regionIdsOf(batch, regionIds),
         items: items.map((item) => ({
           id: item.id,
           order_id: item.order_id,
@@ -2102,17 +2139,18 @@ export class BranchTransferBatchService {
           .andWhere('"is_deleted" = false')
           .execute();
 
+        // Umumiy filial paketi (`target_region_id = NULL`, 2026-11-14 dan) —
+        // tranzit yo'q, hammasi shu filialda qabul qilinadi. Eski viloyatli
+        // paket — avvalgidek: boshqa viloyatniki tranzit (NEW).
+        const batchRegionId = String(batch.target_region_id ?? '').trim();
+        const isTransitOrder = (order: Order) =>
+          Boolean(batchRegionId) &&
+          String(order.region_id ?? '').trim() !== batchRegionId;
         const localOrderIds = orders
-          .filter(
-            (order) =>
-              String(order.region_id ?? '') === String(batch.target_region_id),
-          )
+          .filter((order) => !isTransitOrder(order))
           .map((order) => String(order.id));
         const transitOrderIds = orders
-          .filter(
-            (order) =>
-              String(order.region_id ?? '') !== String(batch.target_region_id),
-          )
+          .filter((order) => isTransitOrder(order))
           .map((order) => String(order.id));
 
         if (localOrderIds.length) {

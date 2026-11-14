@@ -34,10 +34,24 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
         alias === 'newer' ? sub : qb,
       ),
     };
+    // Umumiy filial paketi (2026-11-14): viloyat — ichidagi buyurtmalardan.
+    const itemSub = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      distinct: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getQuery: jest.fn().mockReturnValue('SELECT 1 FROM items_sql'),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
     const service = new BranchTransferBatchService(
       {} as never,
       transferBatchRepo as never,
-      { find: jest.fn().mockResolvedValue([]) } as never,
+      {
+        find: jest.fn().mockResolvedValue([]),
+        createQueryBuilder: jest.fn(() => itemSub),
+      } as never,
       {} as never,
       {} as never,
       {} as never,
@@ -82,8 +96,9 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
           { collapseStatus: 'PENDING' },
         ],
       ]);
+      // Umumiy paket hududi NULL — tenglik emas, IS NOT DISTINCT FROM.
       expect(sub.andWhere).toHaveBeenCalledWith(
-        'newer.target_region_id = batch.target_region_id',
+        'newer.target_region_id IS NOT DISTINCT FROM batch.target_region_id',
       );
       // Xotirada qayta yig'ilmaydi — SQL nima bersa, shu.
       expect(res.data.items.map((item) => item.id)).toEqual(['9', '8']);
@@ -128,7 +143,7 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
     expect(qb.addOrderBy).toHaveBeenCalledWith('batch.id', 'DESC');
   });
   // Z3pUOxou — logist doirasi va N17 maqsad viloyat filtri.
-  it('target_region_ids: faqat shu maqsad viloyatlari (buzuq qiymat tashlanadi)', async () => {
+  it('target_region_ids: faqat shu viloyatlar — eski paket hududi YOKI ichidagi buyurtma (buzuq qiymat tashlanadi)', async () => {
     const { service, qb } = setup([], 0);
 
     await service.findBranchTransferBatches({
@@ -136,7 +151,7 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
     });
 
     expect(qb.andWhere).toHaveBeenCalledWith(
-      'batch.target_region_id IN (:...scopedTargetRegionIds)',
+      '(batch.target_region_id IN (:...scopedTargetRegionIds) OR EXISTS (SELECT 1 FROM items_sql))',
       { scopedTargetRegionIds: ['5', '9'] },
     );
     expect(qb.andWhere).not.toHaveBeenCalledWith('1 = 0');
@@ -154,8 +169,8 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
     const { service, qb } = setup([], 0);
     await service.findBranchTransferBatches({ target_region_id: ' 5 ' });
     expect(qb.andWhere).toHaveBeenCalledWith(
-      'batch.target_region_id = :targetRegionId',
-      { targetRegionId: '5' },
+      '(batch.target_region_id IN (:...targetRegionIds) OR EXISTS (SELECT 1 FROM items_sql))',
+      { targetRegionIds: ['5'] },
     );
 
     await expect(
@@ -167,9 +182,10 @@ describe('15N7AHkp — transfer-batches meta.total haqiqiy', () => {
     const sqls = (plain.qb.andWhere.mock.calls as unknown[][]).map(
       ([sql]) => sql,
     );
-    expect(sqls).not.toContain('batch.target_region_id = :targetRegionId');
-    expect(sqls).not.toContain(
-      'batch.target_region_id IN (:...scopedTargetRegionIds)',
-    );
+    expect(
+      sqls.filter(
+        (sql) => typeof sql === 'string' && sql.includes('target_region_id IN'),
+      ),
+    ).toEqual([]);
   });
 });

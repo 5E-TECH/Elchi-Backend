@@ -426,7 +426,9 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
            destination_branch_id, direction, target_region_id, status,
            order_count, total_price)
          VALUES (5, 'BTB-batch05', 1, 'k5', 2, 'FORWARD', 5, 'PENDING', 1, 100000),
-                (6, 'BTB-batch06', 1, 'k6', 2, 'FORWARD', 5, 'PENDING', 2, 300000)`,
+                -- Boshqa yo'nalish: bitta yo'nalishga bitta PENDING filial
+                -- paketi (UQ_..._PENDING_FORWARD_ROUTE, 2026-11-14).
+                (6, 'BTB-batch06', 1, 'k6', 3, 'FORWARD', 5, 'PENDING', 2, 300000)`,
       );
       await seed([
         { id: 700, price: 100_000, batch: 5 },

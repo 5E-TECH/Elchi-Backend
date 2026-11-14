@@ -132,6 +132,28 @@ export function isRowInLogistRegions(
   return Boolean(regionId) && regionIds.includes(regionId);
 }
 
+/**
+ * Paket logist to'plamidami: umumiy filial paketi (2026-11-14 dan, barcha
+ * viloyatlar bitta paketda) — `region_ids` dan biri; eski viloyatli paket —
+ * `target_region_id`.
+ */
+export function isTransferBatchInLogistRegions(
+  batch: unknown,
+  regionIds: readonly string[],
+): boolean {
+  if (!batch || typeof batch !== 'object') {
+    return false;
+  }
+  const record = batch as { region_ids?: unknown };
+  const batchRegionIds = Array.isArray(record.region_ids)
+    ? record.region_ids.map((id) => canonicalRegionId(id)).filter(Boolean)
+    : [];
+  if (batchRegionIds.length) {
+    return batchRegionIds.some((id) => regionIds.includes(id));
+  }
+  return isRowInLogistRegions(batch, regionIds, 'target_region_id');
+}
+
 @Injectable()
 export class LogistRegionScopeService {
   private readonly logger = new Logger(LogistRegionScopeService.name);

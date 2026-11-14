@@ -41,7 +41,7 @@ import {
   LOGIST_REGIONS_UNAVAILABLE_MESSAGE,
   LogistRegionScopeService,
   isLogistRequester,
-  isRowInLogistRegions,
+  isTransferBatchInLogistRegions,
   projectLogistPayload,
   resolveLogistRegionFilter,
 } from './auth/logist-scope';
@@ -666,9 +666,11 @@ export class BranchGatewayController {
       "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING " +
       "partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami " +
       '(ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC. ' +
-      "Z3pUOxou — LOGIST: faqat o'z viloyatlariga boruvchi paketlar (`target_region_id IN` o'z viloyatlari; " +
-      "`target_region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `total_price` va " +
-      "`items[].snapshot_price` yo'q.",
+      "Filial paketi (FORWARD, 2026-11-14 dan) — bitta yo'nalishga bitta umumiy paket, barcha viloyatlar birga: " +
+      '`target_region_id: null`, viloyatlari — `region_ids` / `regions` (`region` faqat bitta viloyatli paketda). ' +
+      "Z3pUOxou — LOGIST: faqat o'z viloyatlari buyurtmasi bor paketlar (`region_ids` yoki eski `target_region_id` " +
+      "o'z viloyatlarida; `target_region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), " +
+      "`total_price` va `items[].snapshot_price` yo'q.",
   })
   @ApiQuery({ name: 'source_branch_id', required: false, type: String })
   @ApiQuery({ name: 'destination_branch_id', required: false, type: String })
@@ -767,7 +769,7 @@ export class BranchGatewayController {
             data: {
               ...data,
               items: (data.items as unknown[]).filter((batch) =>
-                isRowInLogistRegions(batch, regionIds, 'target_region_id'),
+                isTransferBatchInLogistRegions(batch, regionIds),
               ),
             },
           }
@@ -789,7 +791,7 @@ export class BranchGatewayController {
     summary: 'Get transfer batch by id',
     description:
       "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). " +
-      "Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q. " +
+      "Z3pUOxou — LOGIST: paketda o'z viloyati buyurtmasi bo'lsa (`region_ids` / eski `target_region_id`), aks holda 403; umumiy paketda `items` — faqat o'z viloyatlariniki; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q. " +
       "T7 (CqBD8V4p): `items[].order.problem_contacts: [{name, phone, source: 'logist'|'support'}]` — chop etish uchun.",
   })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })

@@ -18626,7 +18626,7 @@
     },
     "/transfer-batches": {
       "get": {
-        "description": "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami (ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC. Z3pUOxou — LOGIST: faqat o'z viloyatlariga boruvchi paketlar (`target_region_id IN` o'z viloyatlari; `target_region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `total_price` va `items[].snapshot_price` yo'q.",
+        "description": "(15N7AHkp) Statussiz yoki `status=PENDING` da bir yo'nalishdagi (manba, manzil, yo'nalish, hudud) PENDING partiyalardan faqat eng yangisi qaytadi — yig'ish SQL'da, shuning uchun `meta.total`/`totalPages` HAQIQIY jami (ilgari sahifadagi qatorlar soni edi). Tartib: createdAt DESC, id DESC. Filial paketi (FORWARD, 2026-11-14 dan) — bitta yo'nalishga bitta umumiy paket, barcha viloyatlar birga: `target_region_id: null`, viloyatlari — `region_ids` / `regions` (`region` faqat bitta viloyatli paketda). Z3pUOxou — LOGIST: faqat o'z viloyatlari buyurtmasi bor paketlar (`region_ids` yoki eski `target_region_id` o'z viloyatlarida; `target_region_id` filtri — faqat o'z viloyati, boshqasi 400; biriktirilmagan — bo'sh), `total_price` va `items[].snapshot_price` yo'q.",
         "operationId": "BranchGatewayController_findTransferBatches",
         "parameters": [
           {
@@ -18745,7 +18745,7 @@
     },
     "/transfer-batches/{id}": {
       "get": {
-        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). Z3pUOxou — LOGIST: paket o'z viloyatiga (`target_region_id`) boruvchi bo'lsa, aks holda 403; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q. T7 (CqBD8V4p): `items[].order.problem_contacts: [{name, phone, source: 'logist'|'support'}]` — chop etish uchun.",
+        "description": "3HKvAyhm: javobda `source_branch` / `destination_branch` `{ id, name }` — menejer ham filial nomini ko'radi (`GET branches/:id` faqat SA/admin). Z3pUOxou — LOGIST: paketda o'z viloyati buyurtmasi bo'lsa (`region_ids` / eski `target_region_id`), aks holda 403; umumiy paketda `items` — faqat o'z viloyatlariniki; `total_price`, `items[].snapshot_price` va `items[].order` dagi pul maydonlari yo'q. T7 (CqBD8V4p): `items[].order.problem_contacts: [{name, phone, source: 'logist'|'support'}]` — chop etish uchun.",
         "operationId": "BranchGatewayController_findTransferBatchById",
         "parameters": [
           {
@@ -34565,8 +34565,20 @@
           },
           "target_region_id": {
             "type": "string",
-            "example": "5",
-            "description": "Manzil viloyati"
+            "example": null,
+            "nullable": true,
+            "description": "Eski viloyatli paket — viloyat. Filial paketi (FORWARD, 2026-11-14 dan) umumiy — `null`, viloyatlari `region_ids`"
+          },
+          "region_ids": {
+            "example": [
+              "5",
+              "9"
+            ],
+            "description": "Paketdagi buyurtmalar viloyatlari (son bo'yicha o'sish); bo'sh paketda eski `target_region_id`",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "order_count": {
             "type": "number",
@@ -34634,7 +34646,16 @@
           "region": {
             "type": "object",
             "additionalProperties": true,
-            "nullable": true
+            "nullable": true,
+            "description": "Bitta viloyatli paketda — o'sha viloyat; umumiy (bir necha viloyatli) paketda `null`"
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "description": "Paketning barcha viloyatlari (`region_ids` tartibida)"
           },
           "items": {
             "type": "array",
@@ -34652,6 +34673,7 @@
           "direction",
           "status",
           "target_region_id",
+          "region_ids",
           "order_count",
           "driver_name",
           "driver_phone",

@@ -432,8 +432,22 @@ export class TransferBatchDetailDto {
   })
   status!: string;
 
-  @ApiProperty({ example: '5', description: 'Manzil viloyati' })
-  target_region_id!: string;
+  @ApiProperty({
+    example: null,
+    nullable: true,
+    type: String,
+    description:
+      'Eski viloyatli paket — viloyat. Filial paketi (FORWARD, 2026-11-14 dan) umumiy — `null`, viloyatlari `region_ids`',
+  })
+  target_region_id!: string | null;
+
+  @ApiProperty({
+    example: ['5', '9'],
+    type: [String],
+    description:
+      "Paketdagi buyurtmalar viloyatlari (son bo'yicha o'sish); bo'sh paketda eski `target_region_id`",
+  })
+  region_ids!: string[];
 
   @ApiProperty({ example: 12, description: 'Paketdagi buyurtmalar soni' })
   order_count!: number;
@@ -505,8 +519,17 @@ export class TransferBatchDetailDto {
     type: 'object',
     additionalProperties: true,
     nullable: true,
+    description:
+      "Bitta viloyatli paketda — o'sha viloyat; umumiy (bir necha viloyatli) paketda `null`",
   })
   region?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({
+    type: 'array',
+    items: { type: 'object', additionalProperties: true },
+    description: 'Paketning barcha viloyatlari (`region_ids` tartibida)',
+  })
+  regions?: Record<string, unknown>[];
 
   @ApiProperty({
     type: 'array',

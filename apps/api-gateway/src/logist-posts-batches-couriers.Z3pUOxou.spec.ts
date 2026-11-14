@@ -74,8 +74,7 @@ function logistRoutes(controller: { prototype: object }) {
     .map((name) => ({
       name,
       method: Reflect.getMetadata(METHOD_METADATA, proto[name] as object) as
-        | RequestMethod
-        | undefined,
+        RequestMethod | undefined,
     }));
 }
 
@@ -254,6 +253,28 @@ describe('Z3pUOxou — GET /transfer-batches (gateway)', () => {
     );
     expect(res.data.items.map((b: any) => b.id)).toEqual(['601']);
     expect(JSON.stringify(res)).not.toMatch(MONEY_RE);
+  });
+
+  it('logist: umumiy filial paketi (target_region_id null) — region_ids da o‘z viloyati bo‘lsa qoladi', async () => {
+    const branch = makeClient({
+      'branch.transfer_batches.find_all': {
+        statusCode: 200,
+        data: {
+          items: [
+            { id: '701', target_region_id: null, region_ids: ['7', '5'] },
+            { id: '702', target_region_id: null, region_ids: ['7', '8'] },
+            { id: '703', target_region_id: null, region_ids: [] },
+          ],
+          meta: { page: 1, limit: 20, total: 3, totalPages: 1 },
+        },
+      },
+    });
+    const controller = new BranchGatewayController(
+      branch as never,
+      scopeWith(),
+    );
+    const res: any = await call(controller, LOGIST);
+    expect(res.data.items.map((b: any) => b.id)).toEqual(['701']);
   });
 
   it('⛔ logist: boshqa viloyat filtri — 400, branch-service chaqirilmaydi', async () => {

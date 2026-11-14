@@ -17,12 +17,12 @@ import { BranchTransferBatchItem } from './branch-transfer-batch-item.entity';
 @Index('IDX_BRANCH_TRANSFER_BATCHES_DIRECTION', ['direction'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_REQUEST_KEY', ['request_key'])
 /**
- * Bitta so'rov (`request_key`) bir nechta paket yaratadi: filial paketi — har
- * VILOYATga bittadan, qaytarish paketi — har MANZIL filialiga bittadan. Ular
- * hammasi so'rovning kalitini oladi (idempotent qayta so'rov shu kalit bilan
- * hammasini topadi). Shuning uchun yagonalik — so'rov + manzil + viloyat
- * (migratsiya 1716000000221). Eski `(source_branch_id, request_key)` ikkinchi
- * yangi paketda 23505 berardi → 502 (staging 2026-11-14, 5 viloyatli qabul).
+ * Bitta so'rov (`request_key`) bir nechta paket yaratishi mumkin: qaytarish
+ * paketi — har MANZIL filialiga bittadan (eski filial paketlari — har
+ * VILOYATga). Ular hammasi so'rovning kalitini oladi (idempotent qayta so'rov
+ * shu kalit bilan hammasini topadi). Shuning uchun yagonalik — so'rov + manzil
+ * + viloyat (migratsiya 1716000000221). Eski `(source_branch_id, request_key)`
+ * ikkinchi yangi paketda 23505 berardi → 502 (staging 2026-11-14).
  */
 @Index(
   'UQ_BRANCH_TRANSFER_BATCHES_REQUEST_TARGET',
@@ -34,6 +34,20 @@ import { BranchTransferBatchItem } from './branch-transfer-batch-item.entity';
   ],
   {
     unique: true,
+  },
+)
+/**
+ * Filial paketi (FORWARD) — bitta yo'nalishga (manba → manzil) bitta umumiy
+ * PENDING paket, barcha viloyatlar birga (Dilshod 2026-11-14; migratsiya
+ * 1716000000222 eski viloyatli PENDING paketlarni birlashtiradi). Parallel
+ * so'rov ikkinchi PENDING paket ocholmaydi — 23505 → 409.
+ */
+@Index(
+  'UQ_BRANCH_TRANSFER_BATCHES_PENDING_FORWARD_ROUTE',
+  ['source_branch_id', 'destination_branch_id'],
+  {
+    unique: true,
+    where: `"status" = 'PENDING' AND "direction" = 'FORWARD' AND "is_deleted" = false`,
   },
 )
 @Index('UQ_BRANCH_TRANSFER_BATCHES_QR_CODE_TOKEN', ['qr_code_token'], {
@@ -70,8 +84,13 @@ export class BranchTransferBatch extends BaseEntity {
   })
   direction!: BranchTransferDirection;
 
-  @Column({ type: 'bigint' })
-  target_region_id!: string;
+  /**
+   * Eski filial paketi va qaytarish paketi — viloyat. Filial paketi (FORWARD,
+   * 2026-11-14 dan) umumiy — `NULL`; viloyatlari `region_ids` (javobda,
+   * paketdagi buyurtmalardan).
+   */
+  @Column({ type: 'bigint', nullable: true })
+  target_region_id!: string | null;
 
   @Column({
     type: 'enum',

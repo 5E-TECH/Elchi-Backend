@@ -566,6 +566,43 @@ export class BranchServiceService implements OnModuleInit {
       : '';
   }
 
+  /**
+   * Paket viloyatlari. Umumiy filial paketi (2026-11-14 dan, barcha viloyatlar
+   * bitta paketda) — order-service `region_ids` (ichidagi buyurtmalardan);
+   * eski viloyatli paket — `target_region_id`.
+   */
+  private transferBatchRegionIds(batch: unknown): string[] {
+    const record = (batch ?? {}) as {
+      region_ids?: unknown;
+      target_region_id?: unknown;
+    };
+    const fromItems = Array.isArray(record.region_ids)
+      ? record.region_ids.map((id) => this.idText(id)).filter(Boolean)
+      : [];
+    if (fromItems.length) {
+      return Array.from(new Set(fromItems));
+    }
+    const own = this.idText(record.target_region_id);
+    return own ? [own] : [];
+  }
+
+  /**
+   * `regions` — paketning barcha viloyatlari; `region` — bitta viloyatli
+   * paketda o'sha viloyat, umumiy (bir necha viloyatli) paketda `null`.
+   */
+  private transferBatchRegionFields<T>(
+    regionIds: string[],
+    pick: (regionId: string) => T | null,
+  ): { region: T | null; regions: T[] } {
+    const regions = regionIds
+      .map((regionId) => pick(regionId))
+      .filter((region): region is T => region !== null);
+    return {
+      region: regionIds.length === 1 ? (regions[0] ?? null) : null,
+      regions,
+    };
+  }
+
   /** Z3pUOxou — gateway uzatgan logist viloyatlari (kanonik); yo'q — []. */
   private logistRegionIds(requester?: RequesterContext): string[] {
     const raw = Array.isArray(requester?.region_ids)
@@ -1393,9 +1430,10 @@ export class BranchServiceService implements OnModuleInit {
     try {
       const response = await lastValueFrom(
         this.orderClient
-          .send<
-            { data?: BranchDashboardStats } | BranchDashboardStats
-          >({ cmd: 'order.analytics.branch_dashboard' }, payload)
+          .send<{ data?: BranchDashboardStats } | BranchDashboardStats>(
+            { cmd: 'order.analytics.branch_dashboard' },
+            payload,
+          )
           .pipe(timeout(BRANCH_DASHBOARD_STATS_TIMEOUT_MS)),
       );
       const data =
@@ -3081,10 +3119,8 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const batchRecord = batchData;
-    const regionId = String(
-      (batchRecord?.target_region_id ?? '') as string,
-    ).trim();
-    const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
+    const regionIds = this.transferBatchRegionIds(batchRecord);
+    const regionMap = await this.getRegionsByIds(regionIds);
     const rawItems = Array.isArray(batchRecord?.items)
       ? (batchRecord.items as Array<Record<string, unknown>>)
       : [];
@@ -3119,7 +3155,10 @@ export class BranchServiceService implements OnModuleInit {
     return {
       ...batchRecord,
       items: enrichedItems,
-      region: regionId ? (regionMap.get(regionId) ?? null) : null,
+      ...this.transferBatchRegionFields(
+        regionIds,
+        (regionId) => regionMap.get(regionId) ?? null,
+      ),
     };
   }
 
@@ -3286,7 +3325,9 @@ export class BranchServiceService implements OnModuleInit {
       ? response.data.items
       : [];
     const scoped = items.filter((batch) =>
-      regionIds.includes(this.idText(batch?.target_region_id)),
+      this.transferBatchRegionIds(batch).some((regionId) =>
+        regionIds.includes(regionId),
+      ),
     );
     const safeResponse =
       scoped.length === items.length
@@ -3397,22 +3438,20 @@ export class BranchServiceService implements OnModuleInit {
 
     const regionIds: string[] = Array.from(
       new Set(
-        items
-          .map((batch: Record<string, unknown>) =>
-            String((batch?.target_region_id ?? '') as string).trim(),
-          )
-          .filter(Boolean),
+        items.flatMap((batch: Record<string, unknown>) =>
+          this.transferBatchRegionIds(batch),
+        ),
       ),
     );
 
     const regionMap = await this.getRegionsByIds(regionIds);
-    const enrichedItems = items.map((batch: Record<string, unknown>) => {
-      const regionId = String((batch?.target_region_id ?? '') as string).trim();
-      return {
-        ...batch,
-        region: regionId ? (regionMap.get(regionId) ?? null) : null,
-      };
-    });
+    const enrichedItems = items.map((batch: Record<string, unknown>) => ({
+      ...batch,
+      ...this.transferBatchRegionFields(
+        this.transferBatchRegionIds(batch),
+        (regionId) => regionMap.get(regionId) ?? null,
+      ),
+    }));
 
     return {
       ...response,
@@ -3448,17 +3487,14 @@ export class BranchServiceService implements OnModuleInit {
       response?.data?.destination_branch_id ?? '',
     ).trim();
 
-    // Z3pUOxou: logist — paket o'z viloyatiga boruvchi bo'lsa (filial
-    // ruxsati emas, `target_region_id` bo'yicha); aks holda 403.
+    // Z3pUOxou: logist — paketda o'z viloyatining buyurtmasi bo'lsa (filial
+    // ruxsati emas, paket viloyatlari bo'yicha); aks holda 403.
     if (this.isLogistRequester(requester)) {
-      const targetRegionId = this.idText(
-        (response?.data as { target_region_id?: unknown } | undefined)
-          ?.target_region_id,
+      const logistRegionIds = this.logistRegionIds(requester);
+      const inScope = this.transferBatchRegionIds(response?.data).some(
+        (regionId) => logistRegionIds.includes(regionId),
       );
-      if (
-        !targetRegionId ||
-        !this.logistRegionIds(requester).includes(targetRegionId)
-      ) {
+      if (!inScope) {
         this.forbidden(LOGIST_BATCH_FORBIDDEN_MESSAGE);
       }
       return { batchId, response, sourceBranchId, destinationBranchId };
@@ -3529,10 +3565,8 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const batchRecord = batchData;
-    const regionId = String(
-      (batchRecord?.target_region_id ?? '') as string,
-    ).trim();
-    const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
+    const regionIds = this.transferBatchRegionIds(batchRecord);
+    const regionMap = await this.getRegionsByIds(regionIds);
     const rawItems = Array.isArray(batchRecord?.items)
       ? (batchRecord.items as Array<Record<string, unknown>>)
       : [];
@@ -3569,10 +3603,32 @@ export class BranchServiceService implements OnModuleInit {
       destinationBranchId,
     ]);
 
+    // Umumiy paketda logist faqat o'z viloyatlari buyurtmalarini ko'radi
+    // (boshqa viloyat mijozi — uning doirasi emas; buyurtma o'qilmasa — yo'q).
+    // Paketning hamma viloyati logistniki bo'lsa — to'liq.
+    const logistRegionIds = this.isLogistRequester(requester)
+      ? this.logistRegionIds(requester)
+      : null;
+    const scopeItems =
+      logistRegionIds !== null &&
+      regionIds.some((regionId) => !logistRegionIds.includes(regionId));
+    const visibleItems = scopeItems
+      ? enrichedItems.filter((item) =>
+          (logistRegionIds ?? []).includes(
+            this.idText(
+              (item.order as { region_id?: unknown } | null)?.region_id,
+            ),
+          ),
+        )
+      : enrichedItems;
+
     return {
       ...batchRecord,
-      items: enrichedItems,
-      region: regionId ? (regionMap.get(regionId) ?? null) : null,
+      items: visibleItems,
+      ...this.transferBatchRegionFields(
+        regionIds,
+        (regionId) => regionMap.get(regionId) ?? null,
+      ),
       // (3HKvAyhm) barcha ruxsat etilgan rollar (menejer ham) nomni ko'radi.
       source_branch: sourceBranchId
         ? (branchRefs.get(sourceBranchId) ?? null)
@@ -4850,10 +4906,10 @@ export class BranchServiceService implements OnModuleInit {
     try {
       const response = await lastValueFrom(
         this.orderClient
-          .send<Record<
-            string,
-            unknown
-          > | null>({ cmd: 'order.find_all' }, { query: { post_id: postId, page: 1, limit: 1 } })
+          .send<Record<string, unknown> | null>(
+            { cmd: 'order.find_all' },
+            { query: { post_id: postId, page: 1, limit: 1 } },
+          )
           .pipe(timeout(DISPATCH_POST_RECHECK_TIMEOUT_MS)),
       );
       // order.find_all: { data: Order[], total, ... } (ba'zan successRes ichida).
@@ -4976,8 +5032,7 @@ export class BranchServiceService implements OnModuleInit {
       const branchRegionId = String(branch.region_id ?? '').trim() || null;
       const region = branchRegionId
         ? ((regionsById.get(branchRegionId) as
-            | Record<string, unknown>
-            | undefined) ?? null)
+            Record<string, unknown> | undefined) ?? null)
         : null;
       const candidateIds = managerIdsByBranchId.get(String(branch.id)) ?? [];
       // CODE-07: has_manager — identity'da FAOL menejer (o'chirilgan yoki
@@ -5114,7 +5169,7 @@ export class BranchServiceService implements OnModuleInit {
     sourceBranchId: string,
     destinationBranchId: string,
   ) {
-    const regionId = String((batch.target_region_id ?? '') as string).trim();
+    const regionIds = this.transferBatchRegionIds(batch);
     const rawItems = Array.isArray(batch.items)
       ? (batch.items as Array<Record<string, unknown>>)
       : [];
@@ -5122,7 +5177,7 @@ export class BranchServiceService implements OnModuleInit {
       String((item?.order_id ?? '') as string).trim();
 
     const [regionMap, branchRefs, summaries] = await Promise.all([
-      this.getRegionsByIds(regionId ? [regionId] : []),
+      this.getRegionsByIds(regionIds),
       this.transferBatchBranchRefs([sourceBranchId, destinationBranchId]).catch(
         (error: unknown) => {
           this.logger.warn(
@@ -5143,22 +5198,22 @@ export class BranchServiceService implements OnModuleInit {
       ),
     ]);
 
-    const region = regionId
-      ? (regionMap.get(regionId) as Record<string, unknown> | undefined)
-      : undefined;
-
     return {
       ...batch,
       items: rawItems.map((item) => ({
         ...item,
         order: summaries.get(orderIdOf(item)) ?? null,
       })),
-      region: region
-        ? {
-            id: String((region.id ?? regionId) as string),
-            name: typeof region.name === 'string' ? region.name : null,
-          }
-        : null,
+      ...this.transferBatchRegionFields(regionIds, (regionId) => {
+        const region = regionMap.get(regionId) as
+          Record<string, unknown> | undefined;
+        return region
+          ? {
+              id: this.idText(region.id) || regionId,
+              name: typeof region.name === 'string' ? region.name : null,
+            }
+          : null;
+      }),
       source_branch: sourceBranchId
         ? (branchRefs.get(sourceBranchId) ?? null)
         : null,
@@ -6003,9 +6058,10 @@ export class BranchServiceService implements OnModuleInit {
         type BranchCountRow = { branch_id: string; count: number };
         const response = await lastValueFrom(
           this.orderClient
-            .send<
-              BranchCountRow[] | { data?: BranchCountRow[] }
-            >({ cmd: 'order.analytics.count_by_branch' }, { branch_ids: branchIds, status: Order_status.NEW })
+            .send<BranchCountRow[] | { data?: BranchCountRow[] }>(
+              { cmd: 'order.analytics.count_by_branch' },
+              { branch_ids: branchIds, status: Order_status.NEW },
+            )
             .pipe(timeout(10000)),
         );
         // (RghzFldr) order-service XOM massiv qaytaradi (`successRes` siz) —

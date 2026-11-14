@@ -6,8 +6,25 @@ describe('BranchTransferBatchService transfer batch scan', () => {
     const transferBatchRepo = {
       findOne: jest.fn(),
     };
+    // Paket viloyatlari (`region_ids`) — ichidagi buyurtmalardan.
+    const regionQb: Record<string, jest.Mock> = {
+      getRawMany: jest
+        .fn()
+        .mockResolvedValue([{ batch_id: '700', region_id: '5' }]),
+    };
+    for (const step of [
+      'select',
+      'addSelect',
+      'distinct',
+      'innerJoin',
+      'where',
+      'andWhere',
+    ]) {
+      regionQb[step] = jest.fn(() => regionQb);
+    }
     const transferBatchItemRepo = {
       find: jest.fn(),
+      createQueryBuilder: jest.fn(() => regionQb),
     };
 
     // BranchTransferBatchService(dataSource, transferBatchRepo,
@@ -58,6 +75,7 @@ describe('BranchTransferBatchService transfer batch scan', () => {
     expect(res.statusCode).toBe(200);
     expect(res.data.id).toBe('700');
     expect(res.data.items).toHaveLength(1);
+    expect(res.data.region_ids).toEqual(['5']);
   });
 
   it('findBranchTransferBatchByQrToken throws 404 when token not found', async () => {

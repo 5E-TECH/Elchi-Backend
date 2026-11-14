@@ -181,3 +181,102 @@ describe('Z3pUOxou — GET /transfer-batches/:id (logist)', () => {
     ).toBe(403);
   });
 });
+
+/**
+ * Filial paketi (FORWARD, 2026-11-14 dan) — umumiy: barcha viloyatlar bitta
+ * paketda, `target_region_id: null`, viloyatlari `region_ids` (order-service).
+ * Logist o'z viloyati buyurtmasi bor paketni ko'radi, tafsilotda — faqat o'z
+ * viloyatlari buyurtmalari.
+ */
+describe('umumiy filial paketi (barcha viloyatlar) — logist va viloyat maydonlari', () => {
+  const mixed = (id: string, regionIds: string[]) => ({
+    ...batch(id, null),
+    region_ids: regionIds,
+    items: [
+      { id: `${id}-1`, order_id: '100', snapshot_price: 250000 },
+      { id: `${id}-2`, order_id: '101', snapshot_price: 250000 },
+    ],
+  });
+
+  function makeMixed(detail: ReturnType<typeof mixed>) {
+    const svc = make([mixed('701', ['5', '7']), mixed('702', ['7', '8'])]);
+    svc.sendOrderCommand.mockImplementation(
+      (cmd: string, payload: { id?: string }) => {
+        if (cmd === 'order.transfer_batch.find_all') {
+          return Promise.resolve({
+            statusCode: 200,
+            data: {
+              items: [mixed('701', ['5', '7']), mixed('702', ['7', '8'])],
+              meta: { page: 1, limit: 20, total: 2, totalPages: 1 },
+            },
+          });
+        }
+        if (cmd === 'order.transfer_batch.find_by_id') {
+          return Promise.resolve({ statusCode: 200, data: detail });
+        }
+        if (cmd === 'order.find_by_id_enriched') {
+          return Promise.resolve({
+            data: {
+              id: payload?.id,
+              region_id: payload?.id === '100' ? '5' : '7',
+            },
+          });
+        }
+        return Promise.resolve({});
+      },
+    );
+    svc.getRegionsByIds = jest.fn(() =>
+      Promise.resolve(
+        new Map<string, unknown>([
+          ['5', { id: '5', name: 'Samarqand' }],
+          ['7', { id: '7', name: 'Jizzax' }],
+          ['8', { id: '8', name: 'Navoiy' }],
+        ]),
+      ),
+    );
+    return svc;
+  }
+
+  it('ro‘yxat: o‘z viloyati buyurtmasi bor umumiy paket qoladi; region — null, regions — hammasi', async () => {
+    const svc = makeMixed(mixed('701', ['5', '7']));
+    const res = (await svc.findTransferBatches({}, LOGIST)) as {
+      data: {
+        items: Array<{ id: string; region: unknown; regions: unknown[] }>;
+      };
+    };
+    expect(res.data.items.map((b) => b.id)).toEqual(['701']);
+    expect(res.data.items[0].region).toBeNull();
+    expect(res.data.items[0].regions).toEqual([
+      { id: '5', name: 'Samarqand' },
+      { id: '7', name: 'Jizzax' },
+    ]);
+  });
+
+  it('tafsilot: o‘z viloyati bor — 200, faqat o‘z viloyati buyurtmalari; boshqa viloyatlar paketi — 403', async () => {
+    const svc = makeMixed(mixed('701', ['5', '7']));
+    const res = (await svc.findTransferBatchById('701', LOGIST)) as {
+      items: Array<{ order_id: string }>;
+      region: unknown;
+      regions: unknown[];
+    };
+    expect(res.items.map((item) => item.order_id)).toEqual(['100']);
+    expect(res.region).toBeNull();
+    expect(res.regions).toHaveLength(2);
+
+    const foreign = makeMixed(mixed('702', ['7', '8']));
+    expect(await statusOf(foreign.findTransferBatchById('702', LOGIST))).toBe(
+      403,
+    );
+  });
+
+  it('bitta viloyatli paket — region o‘sha viloyat', async () => {
+    const svc = makeMixed(mixed('703', ['5']));
+    const res = (await svc.findTransferBatchById('703', LOGIST)) as {
+      items: unknown[];
+      region: unknown;
+    };
+    expect(res.region).toEqual({ id: '5', name: 'Samarqand' });
+    // Paketning hamma viloyati logistniki — qatorlar to'liq.
+    expect(res.items).toHaveLength(2);
+  });
+});

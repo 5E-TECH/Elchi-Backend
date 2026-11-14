@@ -96,6 +96,13 @@ const P = BranchTransferBatchStatus;
       }
       schemasCreated = true;
       await db.synchronize();
+      // Yig'ish SQL'i tekshiriladi: bir yo'nalishda bir necha PENDING paket —
+      // qaytarish paketi va eski (2026-11-14 gacha) ma'lumot. Yangi FORWARD
+      // dublikatiga baza yo'l qo'ymaydi (`UQ_..._PENDING_FORWARD_ROUTE`,
+      // transfer-batch-multi-target.pg.spec.ts) — bu yerda olib tashlanadi.
+      await db.query(
+        'DROP INDEX order_schema."UQ_BRANCH_TRANSFER_BATCHES_PENDING_FORWARD_ROUTE"',
+      );
       service = new BranchTransferBatchService(
         db,
         db.getRepository(BranchTransferBatch),
