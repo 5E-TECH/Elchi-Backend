@@ -171,7 +171,7 @@ describe('ORDER_EXTRACT_SYSTEM (yxwpN5h5 / 32fNx0Ci / HD5zOyBp)', () => {
     const prose = ORDER_EXTRACT_SYSTEM.replace(/"[^"]*"/g, '""');
     expect(prose).not.toMatch(/[\u0400-\u04FF]/);
     expect(ORDER_EXTRACT_SYSTEM).toMatch(/[\u0400-\u04FF]/);
-    expect(ORDER_EXTRACT_PROMPT_VERSION).toBe('2026-10-26.1');
+    expect(ORDER_EXTRACT_PROMPT_VERSION).toBe('2026-11-14.1');
   });
 
   it("bo'limlar belgilangan tartibda: rol -> QOIDALAR -> XAVFSIZLIK -> TEL -> KO'P BUYURTMA -> RASM -> MISOLLAR", () => {

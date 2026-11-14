@@ -114,7 +114,11 @@ export interface RawOrderExtraction {
    * P1-7 / A1(a) (ai-service qo'yadi): matndagi so'm eslatmalari — FAQAT
    * bitta buyurtmali rasmsiz matnda (ko'p buyurtmada bog'lab bo'lmaydi).
    */
-  money_mentions?: { value: number; kind: 'unit' | 'total' | null }[];
+  money_mentions?: {
+    value: number;
+    kind: 'unit' | 'total' | 'delivery' | 'prepaid' | null;
+    ambiguous?: true;
+  }[];
 }
 
 /** Model (sxema) chiqaradigan maydonlar — ai-service qo'yadigan belgilarsiz. */
