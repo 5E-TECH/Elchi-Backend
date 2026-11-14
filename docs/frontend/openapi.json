@@ -25439,6 +25439,65 @@
           "superadmin",
           "admin"
         ]
+      },
+      "delete": {
+        "description": "2026-11-13: qator ombor ro'yxatidan ketadi; qolgan dona jurnalga ADJUST (−qoldiq, izoh «Ombordan o'chirildi») bo'lib yoziladi. Faol buyurtmada band dona bo'lsa — 409 `{ code: \"WAREHOUSE_STOCK_RESERVED\" }`. Qator yo'q — 404. Keyingi kirim yoki qaytish qatorni 0 dan qayta yaratadi.",
+        "operationId": "WarehouseGatewayController_removeProduct",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Warehouse ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "description": "Product ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarehouseRemoveProductRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseRemoveProductResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mahsulotni ombordan o'chirish (qoldiq 0 bo'lishi shart emas)",
+        "tags": [
+          "Warehouses"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
       }
     },
     "/warehouses/{id}/export": {
@@ -40021,6 +40080,53 @@
           "on_hand",
           "reserved",
           "available"
+        ]
+      },
+      "WarehouseRemoveProductRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "Market mahsulotni olib ketdi",
+            "maxLength": 1000
+          }
+        }
+      },
+      "WarehouseRemoveProductResponseDto": {
+        "type": "object",
+        "properties": {
+          "warehouse_id": {
+            "type": "string"
+          },
+          "product_id": {
+            "type": "string"
+          },
+          "product_name": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean",
+            "example": true
+          },
+          "written_off": {
+            "type": "number",
+            "description": "O'chirilgan paytdagi qoldiq (dona) — jurnalga ADJUST bo'lib yozildi"
+          },
+          "movement_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "warehouse_id",
+          "product_id",
+          "product_name",
+          "removed",
+          "written_off"
         ]
       },
       "ClientErrorReportDto": {
