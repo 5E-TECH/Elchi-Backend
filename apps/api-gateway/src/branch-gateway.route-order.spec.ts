@@ -119,8 +119,7 @@ describe('BranchGatewayController — statik yo`llar `:id` dan OLDIN (RghzFldr T
         name,
         path: Reflect.getMetadata('path', proto[name]) as string | undefined,
         method: Reflect.getMetadata('method', proto[name]) as
-          | number
-          | undefined,
+          number | undefined,
       }))
       // RequestMethod.GET === 0
       .filter((r) => r.method === 0 && typeof r.path === 'string');
@@ -154,5 +153,89 @@ describe('BranchGatewayController — dispatch-destinations rollari', () => {
 
   it('GET /branches/:id hamon faqat superadmin/admin (registratorga ochilmagan)', () => {
     expect(rolesOf('findBranchById')).toEqual(['superadmin', 'admin']);
+  });
+});
+
+/**
+ * Pochta → HQ kuryeri (2026-11-15): yangi `branches/posts/:postId/*`
+ * marshrutlari mavjud `branches/:id/...` va `branches/posts/:postId/dispatch`
+ * ga TUSHMAYDI — so'rov logistics'ga ketadi, branch-service'ga emas.
+ */
+describe('BranchGatewayController — Pochta → HQ kuryeri marshrutlari', () => {
+  let app: INestApplication;
+  const branchSend = jest.fn();
+  const logisticsSend = jest.fn();
+  const integrationSend = jest.fn();
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      controllers: [BranchGatewayController],
+      providers: [
+        { provide: 'BRANCH', useValue: { send: branchSend } },
+        { provide: 'LOGISTICS', useValue: { send: logisticsSend } },
+        { provide: 'INTEGRATION', useValue: { send: integrationSend } },
+      ],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(RolesGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
+
+    app = moduleRef.createNestApplication();
+    await app.init();
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  const http = () => app.getHttpServer() as Parameters<typeof request>[0];
+
+  beforeEach(() => {
+    for (const send of [branchSend, logisticsSend, integrationSend]) {
+      send.mockReset();
+      send.mockReturnValue(of({ statusCode: 200, data: { couriers: [] } }));
+    }
+  });
+
+  it("GET /branches/posts/5/courier-destinations -> 'logistics.post.courier_destinations'", async () => {
+    const res = await request(http()).get(
+      '/branches/posts/5/courier-destinations',
+    );
+
+    expect(res.status).toBe(200);
+    expect(logisticsSend.mock.calls.at(-1)?.[0]).toEqual({
+      cmd: 'logistics.post.courier_destinations',
+    });
+    expect(branchSend).not.toHaveBeenCalled();
+  });
+
+  it("POST /branches/posts/5/dispatch-to-courier -> 'logistics.post.dispatch_to_courier' (branch.post.dispatch EMAS)", async () => {
+    const res = await request(http())
+      .post('/branches/posts/5/dispatch-to-courier')
+      .send({ courier_id: '77', order_ids: ['101'] });
+
+    expect(res.status).toBe(201);
+    expect(logisticsSend.mock.calls.at(-1)?.[0]).toEqual({
+      cmd: 'logistics.post.dispatch_to_courier',
+    });
+    expect(branchSend).not.toHaveBeenCalled();
+  });
+
+  it('POST /branches/posts/5/dispatch hamon filial jo‘natmasi (branch-service) — logistics’ga bormaydi (regressiya emas)', async () => {
+    await request(http())
+      .post('/branches/posts/5/dispatch')
+      .send({ destination_branch_id: '12', order_ids: ['101'] });
+
+    // Manba filial `branch.user.find_by_user` dan aniqlanadi (so'rovchi
+    // filialga biriktirilmagan — shu yerda to'xtaydi): hammasi branch-service.
+    expect(branchSend).toHaveBeenCalled();
+    expect(
+      branchSend.mock.calls.every(([pattern]) =>
+        String((pattern as { cmd: string }).cmd).startsWith('branch.'),
+      ),
+    ).toBe(true);
+    expect(logisticsSend).not.toHaveBeenCalled();
   });
 });

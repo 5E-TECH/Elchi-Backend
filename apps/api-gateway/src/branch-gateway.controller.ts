@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -18,7 +19,17 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
-import { firstValueFrom, map, switchMap, timeout } from 'rxjs';
+import {
+  Observable,
+  catchError,
+  defer,
+  firstValueFrom,
+  map,
+  of,
+  switchMap,
+  throwError,
+  timeout,
+} from 'rxjs';
 import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
   ProblemContactsService,
@@ -115,6 +126,60 @@ const DISTRICT_COVERAGE_WRITE_RPC_TIMEOUT_MS = 30_000;
 const LOGISTICS_UNAVAILABLE_MESSAGE =
   "Logistika xizmati mavjud emas — birozdan so'ng qayta urinib ko'ring";
 
+// Pochta → HQ kuryeri (ega qarori 2026-11-15). Ro'yxat: logistics
+// (ruxsat + branch + identity) — 15 s; carrier belgisi integration'dan —
+// 3 s, yiqilsa ro'yxat baribir qaytadi (`carrier_lookup_failed: true`).
+const POST_COURIER_DESTINATIONS_RPC_TIMEOUT_MS = 15_000;
+const CARRIER_LINK_LOOKUP_TIMEOUT_MS = 3_000;
+/** integration `find_by_courier_ids` bir so'rovda shuncha id qabul qiladi. */
+const CARRIER_LINK_LOOKUP_CHUNK = 500;
+/** Pochta → HQ kuryeri: bir so'rovdagi buyurtmalar chegarasi (logistics bilan bir xil). */
+const POST_DISPATCH_TO_COURIER_MAX_ORDERS = 1000;
+const ORDER_IDS_REQUIRED_MESSAGE =
+  'order_ids majburiy — kamida bitta buyurtma tanlang';
+const POST_COURIER_ID_INVALID_MESSAGE =
+  "courier_id noto'g'ri — ro'yxatdan kuryerni tanlang";
+const CARRIER_LINK_UNAVAILABLE_MESSAGE =
+  "Kuryerning tashqi yetkazuvchiga bog'lanishini tekshirib bo'lmadi (integratsiya xizmati javob bermadi) — birozdan so'ng qayta urinib ko'ring";
+const HQ_LOOKUP_UNAVAILABLE_MESSAGE =
+  "HQ filialini aniqlab bo'lmadi (filial xizmati javob bermadi) — birozdan so'ng qayta urinib ko'ring";
+const courierCarrierLinkedMessage = (carrierName: string): string =>
+  `Kuryer «${carrierName}» tashqi yetkazuvchisiga bog'langan — u faqat HQ'da bo'ladi`;
+
+/** Postgres BIGINT chegarasi. */
+const BIGINT_MAX = 9223372036854775807n;
+
+/** Satr ko'rinishidagi musbat bigint id → kanonik satr; boshqasi — `null`. */
+const bigintIdText = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^\d{1,19}$/.test(trimmed)) return null;
+  const parsed = BigInt(trimmed);
+  return parsed > 0n && parsed <= BIGINT_MAX ? parsed.toString() : null;
+};
+
+type CarrierLink = { name: string; is_active: boolean };
+
+/** integration `find_by_courier_ids` javobi → `courier_user_id` → link. */
+const carrierLinksOf = (response: unknown): Map<string, CarrierLink> => {
+  const record = asRecord(response);
+  const rows: unknown[] = Array.isArray(record?.data)
+    ? (record.data as unknown[])
+    : Array.isArray(response)
+      ? (response as unknown[])
+      : [];
+  const links = new Map<string, CarrierLink>();
+  for (const row of rows) {
+    const item = asRecord(row);
+    const courierId = text(item?.courier_user_id);
+    const name = text(item?.name);
+    if (courierId && name) {
+      links.set(courierId, { name, is_active: item?.is_active === true });
+    }
+  }
+  return links;
+};
+
 const SYSTEM_PRIVILEGED_ROLES: readonly string[] = [
   RoleEnum.SUPERADMIN,
   RoleEnum.ADMIN,
@@ -145,7 +210,117 @@ export class BranchGatewayController {
     @Optional()
     @Inject('LOGISTICS')
     private readonly logisticsClient?: ClientProxy,
+    // Pochta → HQ kuryeri ro'yxatidagi «Tashqi: …» belgisi va carrier
+    // kuryerini HQ'dan chiqarish to'sig'i (2026-11-15). Oxirida va @Optional —
+    // eski pozitsion konstruktor chaqiruvlari buzilmasin.
+    @Optional()
+    @Inject('INTEGRATION')
+    private readonly integrationClient?: ClientProxy,
   ) {}
+
+  /**
+   * Kuryer id'lari → bog'langan carrier (`integration.carrier.find_by_courier_ids`).
+   * Yumshoq: mijoz yo'q / xato / timeout — `failed: true` (ro'yxat baribir
+   * qaytadi, belgisiz).
+   */
+  private async lookupCarrierLinks(
+    courierIds: string[],
+  ): Promise<{ links: Map<string, CarrierLink>; failed: boolean }> {
+    const links = new Map<string, CarrierLink>();
+    if (!courierIds.length) {
+      return { links, failed: false };
+    }
+    if (!this.integrationClient) {
+      return { links, failed: true };
+    }
+    try {
+      for (
+        let start = 0;
+        start < courierIds.length;
+        start += CARRIER_LINK_LOOKUP_CHUNK
+      ) {
+        const response: unknown = await firstValueFrom(
+          this.integrationClient
+            .send(
+              { cmd: 'integration.carrier.find_by_courier_ids' },
+              {
+                courier_ids: courierIds.slice(
+                  start,
+                  start + CARRIER_LINK_LOOKUP_CHUNK,
+                ),
+              },
+            )
+            .pipe(timeout(CARRIER_LINK_LOOKUP_TIMEOUT_MS)),
+        );
+        for (const [id, link] of carrierLinksOf(response)) {
+          links.set(id, link);
+        }
+      }
+      return { links, failed: false };
+    } catch {
+      return { links: new Map(), failed: true };
+    }
+  }
+
+  /**
+   * B6 (ega qarori 2026-11-15): tashqi yetkazuvchiga bog'langan kuryer FAQAT
+   * HQ'da bo'ladi — uni boshqa filialga o'tkazish 409
+   * `courier_carrier_linked`. integration yoki `branch.find_hq` javob
+   * bermasa — 503 (yopiq). Bog'lanmagan kuryer — to'siq yo'q.
+   */
+  private assertCarrierCourierStaysInHq(
+    courierId: string,
+    targetBranchId: unknown,
+  ): Observable<void> {
+    const unavailable = (message: string) => () =>
+      throwError(() => new ServiceUnavailableException(message));
+    return defer(() => {
+      if (!this.integrationClient) {
+        return throwError(
+          () =>
+            new ServiceUnavailableException(CARRIER_LINK_UNAVAILABLE_MESSAGE),
+        );
+      }
+      return this.integrationClient
+        .send(
+          { cmd: 'integration.carrier.find_by_courier_ids' },
+          { courier_ids: [courierId] },
+        )
+        .pipe(
+          timeout(CARRIER_LINK_LOOKUP_TIMEOUT_MS),
+          catchError(unavailable(CARRIER_LINK_UNAVAILABLE_MESSAGE)),
+        );
+    }).pipe(
+      switchMap((response: unknown) => {
+        const link = carrierLinksOf(response).get(courierId);
+        if (!link) {
+          return of(undefined);
+        }
+        return this.branchClient.send({ cmd: 'branch.find_hq' }, {}).pipe(
+          timeout(8000),
+          catchError(unavailable(HQ_LOOKUP_UNAVAILABLE_MESSAGE)),
+          map((hqResponse: unknown) => {
+            const hqId = bigintIdText(text(unwrapData(hqResponse)?.id));
+            if (!hqId) {
+              throw new ServiceUnavailableException(
+                HQ_LOOKUP_UNAVAILABLE_MESSAGE,
+              );
+            }
+            if (bigintIdText(text(targetBranchId)) !== hqId) {
+              throw new ConflictException({
+                message: courierCarrierLinkedMessage(link.name),
+                data: {
+                  reason: 'courier_carrier_linked',
+                  details: { courier_id: courierId },
+                },
+              });
+            }
+            return undefined;
+          }),
+        );
+      }),
+    );
+  }
 
   /** Tuman qamrovi: logistics'ga RPC (mijoz yo'q — 503). */
   private async sendDistrictCoverage(
@@ -1050,6 +1225,148 @@ export class BranchGatewayController {
       .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * 1.1 — Pochta → HQ kuryeri (ega qarori 2026-11-15): HQ pochtasi
+   * viloyatiga xizmat qiladigan FAOL HQ kuryerlari. Ruxsat — «Yangi
+   * pochtalar» bilan bir xil (SA/ADMIN yoki HQ registratori; logistics
+   * tekshiradi). Har kuryerga tashqi yetkazuvchi belgisi (`carrier_name`,
+   * `carrier_active`) integration'dan qo'shiladi — u javob bermasa ro'yxat
+   * baribir qaytadi, `carrier_lookup_failed: true`.
+   */
+  @Get('branches/posts/:postId/courier-destinations')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({
+    summary: 'HQ couriers for post region (Pochta → HQ kuryeri)',
+    description:
+      "Faqat faol HQ kuryerlari (HQ `branch_users`, rol COURIER), nom bo'yicha. Pochta viloyati = HQ viloyati — HAR BIR HQ kuryeri (`region_match: hq_region`); aks holda faqat o'z viloyati (`home`), «Xizmat viloyatlari»da (`courier_regions`, `listed`) yoki `serves_all_regions` (`all_regions`) bo'lgan HQ kuryeri. " +
+      "Javob `data: { post_id, region_id, is_hq_region, couriers: [{ courier_user_id, name, phone, region_match, carrier_name, carrier_active }], carrier_lookup_failed }` — `carrier_*` bog'lanmagan kuryerda yoki tekshirib bo'lmaganda `null`. " +
+      "403 `new_posts_hq_only`; 404 «Pochta topilmadi»; 400 `post_not_sendable` (`details: { post_id, post_status, post_courier_id }`) — faqat yangi ('new'), kuryersiz pochta; 400 `branch_region_missing` (`details: { post_id, missing: 'post' }`); 503 — filial yoki foydalanuvchilar xizmati javob bermadi.",
+  })
+  @ApiParam({ name: 'postId', description: 'Logistics post ID (NEW HQ post)' })
+  async findPostCourierDestinations(
+    @Param('postId', ParseBigintIdPipe) postId: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    if (!this.logisticsClient) {
+      throw new ServiceUnavailableException(LOGISTICS_UNAVAILABLE_MESSAGE);
+    }
+    const response: unknown = await firstValueFrom(
+      this.logisticsClient
+        .send(
+          { cmd: 'logistics.post.courier_destinations' },
+          { post_id: postId, requester: this.toRequester(req) },
+        )
+        .pipe(timeout(POST_COURIER_DESTINATIONS_RPC_TIMEOUT_MS)),
+    );
+    const envelope = asRecord(response);
+    const data = asRecord(envelope?.data);
+    const couriers = Array.isArray(data?.couriers)
+      ? (data.couriers as unknown[])
+      : null;
+    if (!envelope || !data || !couriers) {
+      return response;
+    }
+    const courierIds = Array.from(
+      new Set(
+        couriers
+          .map((courier) => text(asRecord(courier)?.courier_user_id))
+          .filter(Boolean),
+      ),
+    );
+    const { links, failed } = await this.lookupCarrierLinks(courierIds);
+    return {
+      ...envelope,
+      data: {
+        ...data,
+        couriers: couriers.map((courier) => {
+          const row = asRecord(courier) ?? {};
+          const link = links.get(text(row.courier_user_id));
+          return {
+            ...row,
+            carrier_name: link ? link.name : null,
+            carrier_active: link ? link.is_active : null,
+          };
+        }),
+        carrier_lookup_failed: failed,
+      },
+    };
+  }
+
+  /**
+   * 1.2 — Pochta → HQ kuryeri: tanlangan buyurtmalar filialga emas,
+   * to'g'ridan-to'g'ri HQ kuryeriga (uning bugungi pochtasiga, «Yo'lda»).
+   * Barcha tekshiruvlar logistics'da, yozuvdan OLDIN — biror shart buzilsa
+   * hech narsa berilmaydi.
+   */
+  @Post('branches/posts/:postId/dispatch-to-courier')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({
+    summary: 'Give HQ post orders directly to an HQ courier',
+    description:
+      "Ega qarori 2026-11-15. Kuryer — `GET /branches/posts/:postId/courier-destinations` ro'yxatidagi HQ kuryeri. Javob `data: { post_id, courier_id, courier_post_id, courier_post_created, moved_order_ids, moved_orders_count, skipped_order_ids, post_deleted }` (bekor / yopilgan buyurtmalar jimgina `skipped_order_ids` ga). " +
+      'Xatolar (tekshiruv tartibida, hammasi `data.reason`): 403 `new_posts_hq_only`; 404 «Pochta topilmadi»; 400 `post_not_sendable` (`details: { post_id, post_status, post_courier_id }`); 400 `branch_region_missing` (`details: { post_id, missing }`); ' +
+      '400 `courier_not_hq` (`details.courier_id`); 400 `courier_inactive` (`details.courier_id`); 403 `courier_region_not_served` (`details: { courier_id, post_region_id }`) — «Xizmat viloyatlari»da belgilanmagan; ' +
+      '409 `order_not_in_post` (`details.order_ids`) — sahifani yangilab qayta tanlang; 400 `no_dispatchable_orders`; 400 `order_not_dispatchable` (`details.order_ids`) — faqat HQ qabul qilgan (received), kuryersiz buyurtma; ' +
+      "409 `order_in_outgoing_batch` (`details.order_ids`); 409 `order_region_mismatch` (`details.order_ids`); 403 `hq_courier_region_only` (`details.order_ids`) — faqat pochta viloyati = HQ viloyati bo'lganda; 503 — xizmat javob bermadi.",
+  })
+  @ApiParam({ name: 'postId', description: 'Logistics post ID (NEW HQ post)' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['courier_id', 'order_ids'],
+      properties: {
+        courier_id: {
+          type: 'string',
+          example: '77',
+          description: 'HQ kuryeri user ID (bigint satr)',
+        },
+        order_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: POST_DISPATCH_TO_COURIER_MAX_ORDERS,
+          example: ['101', '102'],
+          description:
+            "Majburiy (1–1000): pochtadan beriladigan buyurtmalar. Birortasi shu pochtada bo'lmasa — 409 `order_not_in_post`, hech narsa berilmaydi",
+        },
+      },
+    },
+  })
+  dispatchPostToCourier(
+    @Param('postId', ParseBigintIdPipe) postId: string,
+    @Body('courier_id') courierId: unknown,
+    @Body('order_ids') orderIds: unknown,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    const normalizedCourierId = bigintIdText(courierId);
+    if (!normalizedCourierId) {
+      throw new BadRequestException(POST_COURIER_ID_INVALID_MESSAGE);
+    }
+    const rawOrderIds: unknown[] = Array.isArray(orderIds) ? orderIds : [];
+    const normalizedOrderIds = rawOrderIds.map((id) => bigintIdText(id));
+    if (
+      !normalizedOrderIds.length ||
+      normalizedOrderIds.length > POST_DISPATCH_TO_COURIER_MAX_ORDERS ||
+      normalizedOrderIds.some((id) => id === null)
+    ) {
+      throw new BadRequestException(ORDER_IDS_REQUIRED_MESSAGE);
+    }
+    if (!this.logisticsClient) {
+      throw new ServiceUnavailableException(LOGISTICS_UNAVAILABLE_MESSAGE);
+    }
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.dispatch_to_courier' },
+        {
+          post_id: postId,
+          courier_id: normalizedCourierId,
+          order_ids: normalizedOrderIds as string[],
+          requester: this.toRequester(req),
+        },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+  }
+
   @Post('branches/posts/:postId/reassign')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
@@ -1185,6 +1502,8 @@ export class BranchGatewayController {
   @ApiOperation({
     summary:
       'Move courier to another branch (only when the courier holds no money and no orders)',
+    description:
+      "Tashqi yetkazuvchiga (carrier) bog'langan kuryer faqat HQ'da bo'ladi: boshqa filialga o'tkazish — 409 `data.reason = courier_carrier_linked` (`details.courier_id`); bog'lanishni tekshirib bo'lmasa (integratsiya / filial xizmati javob bermadi) — 503.",
   })
   @ApiParam({ name: 'id', description: 'Courier user ID (bigint string)' })
   @ApiBody({ type: TransferCourierBranchRequestDto })
@@ -1194,16 +1513,21 @@ export class BranchGatewayController {
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     const courierId = this.parseCourierIdParam(id);
-    return this.branchClient
-      .send(
-        { cmd: 'branch.user.transfer_courier' },
-        {
-          user_id: courierId,
-          branch_id: dto.branch_id,
-          requester: this.toRequester(req),
-        },
-      )
-      .pipe(timeout(COURIER_TRANSFER_RPC_TIMEOUT_MS));
+    // B6: tashqi yetkazuvchi kuryeri HQ'dan chiqmaydi (o'tkazishdan OLDIN).
+    return this.assertCarrierCourierStaysInHq(courierId, dto.branch_id).pipe(
+      switchMap(() =>
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.transfer_courier' },
+            {
+              user_id: courierId,
+              branch_id: dto.branch_id,
+              requester: this.toRequester(req),
+            },
+          )
+          .pipe(timeout(COURIER_TRANSFER_RPC_TIMEOUT_MS)),
+      ),
+    );
   }
 
   @Get('branches/:id/users')
