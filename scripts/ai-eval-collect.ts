@@ -206,7 +206,7 @@ const DROP_CORRECTION_KEYS = new Set([
 ]);
 export function scrubCorrections(items: unknown): unknown {
   if (!Array.isArray(items)) return [];
-  return items.map((it) => {
+  return (items as unknown[]).map((it: unknown): unknown => {
     if (!it || typeof it !== 'object') return it;
     const row = { ...(it as Record<string, unknown>) };
     const fc = row.field_corrections;
