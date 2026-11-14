@@ -10,8 +10,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Postgres 11+ da `DEFAULT 0` faqat katalog o'zgarishi — backfill yo'q.
  * `IF NOT EXISTS` — qayta yurgizish xatosiz.
  */
-export class AiUsageCache1h1716000000224 implements MigrationInterface {
-  name = 'AiUsageCache1h1716000000224';
+export class AiUsageCache1h1716000000225 implements MigrationInterface {
+  name = 'AiUsageCache1h1716000000225';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
