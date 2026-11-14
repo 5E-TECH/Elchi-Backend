@@ -14,8 +14,10 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateBy,
   ValidateIf,
   ValidateNested,
+  type ValidationArguments,
 } from 'class-validator';
 import { plainToInstance, Transform, Type } from 'class-transformer';
 import {
@@ -132,6 +134,24 @@ export class UpdateCarrierAccountRequestDto {
   @IsString({ each: true })
   @MaxLength(64, { each: true })
   ip_allowlist?: string[];
+
+  /**
+   * ⚠️ ICHKI (faqat SUPERADMIN/ADMIN). Kompaniyaga berilgan hujjat va
+   * `/carrier-docs` da rollback YASHIRIN — yoqishdan oldin
+   * `docs/ops/carrier-rollback.md` ro'yxatini bajaring. Yaratishda
+   * (`CreateCarrierAccountRequestDto`) maydon YO'Q — yangi akkaunt doim
+   * `false` (berilsa 400 «bunday maydon qabul qilinmaydi»).
+   */
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Kompaniya `status: rollback` (yuborilgan sold/cancelled ni waiting ga qaytarish) yubora oladimi. ' +
+      'Sukut false (yangi va mavjud akkauntlar). O‘chiq bo‘lsa rollback noma’lum status kabi 400 bilan rad etiladi. ' +
+      'Keyingi so‘rovdan kuchga kiradi. Kompaniyaga berilgan hujjatda rollback ko‘rsatilmaydi.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  rollback_enabled?: boolean;
 }
 
 export class SetCarrierActiveRequestDto {
@@ -158,8 +178,63 @@ export enum CarrierOrderStatus {
   SOLD = 'sold',
   PARTLY_SOLD = 'partly_sold',
   CANCELLED = 'cancelled',
+  /**
+   * YASHIRIN (egasi, 2026-11-14): faqat `carrier_accounts.rollback_enabled`
+   * yoqiq akkauntga ruxsat (`CarrierOrderStatusWithRollbackRequestDto`).
+   * Swagger enum'i, misollar, xato xabarlari va `docs/public/*` da YO'Q —
+   * `carrier-public-docs.no-rollback.spec.ts` qo'riqlaydi. Ichki qo'llanma:
+   * `docs/ops/carrier-rollback.md`.
+   */
   ROLLBACK = 'rollback',
 }
+
+/**
+ * Kompaniyaga ko'rinadigan statuslar — Swagger enum'i va HAR QANDAY status
+ * xato xabari faqat shularni sanaydi (rollback yoqiq akkauntda ham).
+ */
+export const CARRIER_PUBLIC_ORDER_STATUSES: readonly CarrierOrderStatus[] = [
+  CarrierOrderStatus.SOLD,
+  CarrierOrderStatus.PARTLY_SOLD,
+  CarrierOrderStatus.CANCELLED,
+];
+
+/**
+ * `status` xato xabari — class-validator `IsEnum`/`IsIn` bilan AYNI shakl
+ * (`translateValidationMessage` → "status: quyidagilardan biri bo'lishi
+ * kerak: sold, partly_sold, cancelled"). Rollback o'chiq akkaunt `rollback`
+ * yuborsa ham, istalgan noto'g'ri qiymat (`sould`) ham — aynan shu matn.
+ */
+export const carrierStatusValidationMessage = (property = 'status'): string =>
+  `${property} must be one of the following values: ${CARRIER_PUBLIC_ORDER_STATUSES.join(', ')}`;
+
+/**
+ * Ruxsat etilgan statuslar DTO KLASSIGA bog'liq: `CarrierOrderStatusRequestDto`
+ * — faqat ochiq uchtasi, `CarrierOrderStatusWithRollbackRequestDto` (statik
+ * `rollbackAllowed = true`) — rollback ham. Klassni `CarrierStatusBodyPipe`
+ * akkauntning `rollback_enabled` iga qarab tanlaydi — shu bois o'chiq
+ * akkauntning `rollback` i noma'lum qiymat bilan AYNAN bir xil tekshiriladi
+ * (boshqa maydon xatolari bilan birga ham).
+ */
+const IsCarrierOrderStatus = (): PropertyDecorator =>
+  ValidateBy({
+    name: 'isCarrierOrderStatus',
+    validator: {
+      validate: (value: unknown, args?: ValidationArguments): boolean => {
+        const ctor = (args?.object as { constructor?: unknown } | undefined)
+          ?.constructor as { rollbackAllowed?: unknown } | undefined;
+        // Rollback FAQAT akkaunt ruxsati bilan — kelajakda hujjatga qaytarilib
+        // `CARRIER_PUBLIC_ORDER_STATUSES` ga qo'shilsa ham toggle chetlanmaydi.
+        if (value === CarrierOrderStatus.ROLLBACK) {
+          return ctor?.rollbackAllowed === true;
+        }
+        return (CARRIER_PUBLIC_ORDER_STATUSES as readonly unknown[]).includes(
+          value,
+        );
+      },
+      defaultMessage: (args?: ValidationArguments): string =>
+        carrierStatusValidationMessage(args?.property),
+    },
+  });
 
 export class CarrierPartlySoldItemDto {
   @ApiPropertyOptional({
@@ -195,16 +270,22 @@ export class CarrierPartlySoldItemDto {
   quantity!: number;
 }
 
+/**
+ * `POST /carrier/orders/{id}/status` tanasi — kompaniyaga ko'rinadigan
+ * (Swagger) shakl: `status` faqat sold / partly_sold / cancelled.
+ */
 export class CarrierOrderStatusRequestDto {
+  /** Rollback ruxsati — faqat `CarrierOrderStatusWithRollbackRequestDto` da. */
+  static readonly rollbackAllowed: boolean = false;
+
   @ApiProperty({
-    enum: CarrierOrderStatus,
+    enum: CARRIER_PUBLIC_ORDER_STATUSES,
     example: CarrierOrderStatus.SOLD,
     description:
       '`sold` — to‘liq sotildi; `partly_sold` — qisman (items + total_price majburiy); ' +
-      '`cancelled` — bekor (reason majburiy); `rollback` — xato belgilangan sotuv/bekorni ' +
-      'qaytarish (shu buyurtma hisob-kitobi hali yopilmagan bo‘lsa).',
+      '`cancelled` — bekor (reason majburiy).',
   })
-  @IsEnum(CarrierOrderStatus)
+  @IsCarrierOrderStatus()
   status!: CarrierOrderStatus;
 
   @ApiPropertyOptional({ example: 'Mijoz qabul qildi', maxLength: 1000 })
@@ -315,6 +396,15 @@ export class CarrierOrderStatusRequestDto {
 }
 
 /**
+ * Rollback YOQIQ akkaunt (`carrier_accounts.rollback_enabled = true`) uchun
+ * — maydonlar AYNI, faqat `status: rollback` ham qabul qilinadi. Swagger'ga
+ * kirmaydi (hech qayerda `@ApiBody`/`getSchemaPath` da ishlatilmaydi).
+ */
+export class CarrierOrderStatusWithRollbackRequestDto extends CarrierOrderStatusRequestDto {
+  static override readonly rollbackAllowed: boolean = true;
+}
+
+/**
  * `POST /carrier/orders/{id}/status` — Swagger'dagi tayyor so'rov misollari
  * (`application/json` → `examples`, "Try it out" da ro'yxat bo'lib chiqadi).
  * Tartib va kalitlar — hujjatdagi ro'yxat tartibi.
@@ -364,10 +454,6 @@ export const CARRIER_STATUS_REQUEST_EXAMPLES = {
       reason: CancelReason.OTHER,
       comment: 'Mijoz boshqa shaharga ko‘chib ketgan',
     },
-  },
-  rollback: {
-    summary: 'Xato natijani bekor qilish (rollback)',
-    value: { status: CarrierOrderStatus.ROLLBACK },
   },
 } as const satisfies Record<
   string,
@@ -746,7 +832,7 @@ export class CarrierCashboxEntryDto {
   @ApiProperty({
     example: 'sell',
     description:
-      'Manba: sell — sotuv, cancel — bekor, correction — tuzatish (rollback), ' +
+      'Manba: sell — sotuv, cancel — bekor, correction — tuzatish (Elchi operatori), ' +
       'courier_payment — Elchi’ga topshirilgan naqd, extra_cost, payment_reversal — to‘lov ' +
       'tuzatishi. Ro‘yxat OCHIQ — yangi qiymat paydo bo‘lishi mumkin.',
   })

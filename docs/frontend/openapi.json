@@ -22219,7 +22219,7 @@
     },
     "/carrier/orders/{id}/status": {
       "post": {
-        "description": "Kuryeringiz posilkani topshirganda yoki topshira olmaganda shu so‘rovni yuboring — bizda buyurtma holati darhol o‘zgaradi. `sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). `partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). `rollback` — faqat `sold` yoki `cancelled` holatidagi buyurtmani `waiting` ga qaytaradi (shu buyurtma hisob-kitobi yopilmagan bo‘lsa; `paid`/`partly_paid` — Elchi operatori). Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma (`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).",
+        "description": "Kuryeringiz posilkani topshirganda yoki topshira olmaganda shu so‘rovni yuboring — bizda buyurtma holati darhol o‘zgaradi. `sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). `partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). Xato yuborilgan natijani Elchi operatori tuzatadi. Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma (`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).",
         "operationId": "CarrierGatewayController_updateStatus",
         "parameters": [
           {
@@ -22311,12 +22311,6 @@
                     "reason": "OTHER",
                     "comment": "Mijoz boshqa shaharga ko‘chib ketgan"
                   }
-                },
-                "rollback": {
-                  "summary": "Xato natijani bekor qilish (rollback)",
-                  "value": {
-                    "status": "rollback"
-                  }
                 }
               }
             },
@@ -22386,12 +22380,6 @@
                     "status": "cancelled",
                     "reason": "OTHER",
                     "comment": "Mijoz boshqa shaharga ko‘chib ketgan"
-                  }
-                },
-                "rollback": {
-                  "summary": "Xato natijani bekor qilish (rollback)",
-                  "value": {
-                    "status": "rollback"
                   }
                 }
               }
@@ -22515,7 +22503,7 @@
             "carrier-api-key": []
           }
         ],
-        "summary": "Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled), rollback",
+        "summary": "Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled)",
         "tags": [
           "Carrier"
         ],
@@ -22944,6 +22932,7 @@
     },
     "/admin/carriers/{id}": {
       "patch": {
+        "description": "`rollback_enabled` (ixtiyoriy, alohida yoki name/ip_allowlist bilan birga) — kompaniya `status: rollback` yubora oladimi; sukut false, keyingi so‘rovdan kuchga kiradi, activity-log’ga eski → yangi qiymat yoziladi. Kompaniyaga berilgan hujjatda rollback YASHIRIN — yoqishdan oldin docs/ops/carrier-rollback.md.",
         "operationId": "CarrierAdminGatewayController_update",
         "parameters": [
           {
@@ -22975,7 +22964,7 @@
             "bearer": []
           }
         ],
-        "summary": "Nom va IP ro‘yxatini yangilash. Kurier va kalit bu yerda o‘zgarmaydi.",
+        "summary": "Nom, IP ro‘yxati va rollback ruxsatini yangilash. Kurier va kalit bu yerda o‘zgarmaydi.",
         "tags": [
           "Carriers (admin)"
         ],
@@ -35608,11 +35597,10 @@
             "enum": [
               "sold",
               "partly_sold",
-              "cancelled",
-              "rollback"
+              "cancelled"
             ],
             "example": "sold",
-            "description": "`sold` — to‘liq sotildi; `partly_sold` — qisman (items + total_price majburiy); `cancelled` — bekor (reason majburiy); `rollback` — xato belgilangan sotuv/bekorni qaytarish (shu buyurtma hisob-kitobi hali yopilmagan bo‘lsa)."
+            "description": "`sold` — to‘liq sotildi; `partly_sold` — qisman (items + total_price majburiy); `cancelled` — bekor (reason majburiy)."
           },
           "comment": {
             "type": "string",
@@ -36202,7 +36190,7 @@
           "source_type": {
             "type": "string",
             "example": "sell",
-            "description": "Manba: sell — sotuv, cancel — bekor, correction — tuzatish (rollback), courier_payment — Elchi’ga topshirilgan naqd, extra_cost, payment_reversal — to‘lov tuzatishi. Ro‘yxat OCHIQ — yangi qiymat paydo bo‘lishi mumkin."
+            "description": "Manba: sell — sotuv, cancel — bekor, correction — tuzatish (Elchi operatori), courier_payment — Elchi’ga topshirilgan naqd, extra_cost, payment_reversal — to‘lov tuzatishi. Ro‘yxat OCHIQ — yangi qiymat paydo bo‘lishi mumkin."
           },
           "amount": {
             "type": "number",
@@ -36359,6 +36347,11 @@
             "items": {
               "type": "string"
             }
+          },
+          "rollback_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Kompaniya `status: rollback` (yuborilgan sold/cancelled ni waiting ga qaytarish) yubora oladimi. Sukut false (yangi va mavjud akkauntlar). O‘chiq bo‘lsa rollback noma’lum status kabi 400 bilan rad etiladi. Keyingi so‘rovdan kuchga kiradi. Kompaniyaga berilgan hujjatda rollback ko‘rsatilmaydi."
           }
         }
       },

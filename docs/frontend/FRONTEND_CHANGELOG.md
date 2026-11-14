@@ -22,6 +22,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — Carrier akkaunt: «Rollback» toggle (sukut o'chiq, kompaniyadan yashirin)
+
+Egasi (2026-11-14): rollback'ni admin akkaunt bo'yicha bitta toggle bilan yoqib/o'chira olsin, sukut — o'chiq (kompaniya bilan endi ishlay boshladik, ishonch paydo bo'lguncha); Swagger va hujjatdan yashirilsin — kompaniyaga hozircha aytilmaydi.
+Deploy: api-gateway + integration-service, migratsiya **223** (`integration_schema.carrier_accounts.rollback_enabled`, sukut `false` — mavjud akkauntlar ham).
+
+- ✏️ `PATCH /admin/carriers/:id` (SUPERADMIN, ADMIN): yangi ixtiyoriy maydon `rollback_enabled` (boolean) — yolg'iz yoki `name` / `ip_allowlist` bilan birga. Boolean bo'lmasa — 400. Javob — yangilangan akkaunt (`rollback_enabled` bilan).
+- ✏️ Javoblarga `rollback_enabled: boolean` qo'shildi: `GET /admin/carriers` (har element), `POST /admin/carriers` (doim `false`), `PATCH /admin/carriers/:id`, `POST /admin/carriers/:id/rotate-key` (`{ id, api_key, rollback_enabled }`), `POST /admin/carriers/:id/status` (`{ id, is_active, rollback_enabled }`).
+- ⚠️ `POST /admin/carriers` `rollback_enabled` ni QABUL QILMAYDI — yuborilsa 400 «rollback_enabled: bunday maydon qabul qilinmaydi». Yangi akkaunt doim o'chiq; yoqish — faqat PATCH.
+- 🟢 O'chiq akkaunt `POST /carrier/orders/:id/status {status:"rollback"}` yuborsa — noma'lum status kabi 400 (kompaniyaga rollback borligi aytilmaydi). Yoqiq — avvalgidek ishlaydi. O'zgarish keyingi so'rovdan kuchga kiradi. Har o'zgarish activity-log'da (`CarrierAccount`, eski → yangi qiymat).
+- 🟢 Kompaniyaga ko'rinadigan Swagger (`/carrier-docs`) va hujjatlarda rollback endi YO'Q. Ichki qo'llanma: `docs/ops/carrier-rollback.md`.
+
+**Frontend action items:**
+- 🔧 Carrier akkauntlar (admin/superadmin): har akkaunt qatori/tafsilotida «Rollback» toggle → `PATCH /admin/carriers/:id { rollback_enabled }`; holat `GET /admin/carriers` dagi `rollback_enabled` dan. Yaratish formasiga maydon QO'SHILMASIN.
+- 🔧 Yoqishdan oldin tasdiq oynasi tavsiya etiladi: «Kompaniya o'zi yuborgan sotildi/bekor natijasini qaytara oladi».
+
 ### 2026-11-12 — Market «Qo'shimcha raqam»: yoqilsa chekdagi «Muammo bo'lsa» joyida shu raqam
 
 Dilshod: «marketlarning detailida toggle bo'lishi kerak "qo'shimcha raqam" degan; o'chiq bo'lsa default hozirgi telefon raqam ketsin, yoqilsa input chiqib telefon raqam to'ldirilsin va shu raqam chekda "Muammo bo'lsa" degan joyda ketsin».

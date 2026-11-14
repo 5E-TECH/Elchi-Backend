@@ -19,6 +19,7 @@ const ROW = () => ({
   api_key_hash: sha256('old'),
   ip_allowlist: null as string[] | null,
   is_active: true,
+  rollback_enabled: false,
   createdAt: new Date('2026-11-10T00:00:00Z'),
   updatedAt: new Date('2026-11-10T00:00:00Z'),
 });
@@ -96,10 +97,39 @@ describe('CarrierAccountService.validateKey', () => {
       ip_allowlist: ['1.2.3.4'],
       courier_user_id: '55',
       courier_active: true,
+      // Ustun yo'q / null — yopiq.
+      rollback_enabled: false,
     });
     expect(repo.findOne).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { api_key_hash: sha256('elc_secret'), isDeleted: false },
+      }),
+    );
+  });
+
+  it('⭐ rollback_enabled — har so‘rovda qatordan (kesh yo‘q), faqat aniq true', async () => {
+    let flag: unknown = true;
+    const repo = makeRepo({
+      findOne: jest.fn(() =>
+        Promise.resolve(keyRow({ rollback_enabled: flag })),
+      ),
+    });
+    const { svc } = makeService(repo);
+    await expect(svc.validateKey('k')).resolves.toMatchObject({
+      rollback_enabled: true,
+    });
+    flag = false;
+    await expect(svc.validateKey('k')).resolves.toMatchObject({
+      rollback_enabled: false,
+    });
+    flag = 'true';
+    await expect(svc.validateKey('k')).resolves.toMatchObject({
+      rollback_enabled: false,
+    });
+    expect(repo.findOne).toHaveBeenCalledTimes(3);
+    expect(repo.findOne).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ rollback_enabled: true }) as unknown,
       }),
     );
   });
@@ -187,13 +217,35 @@ describe('CarrierAccountService.create', () => {
       // IPv6 kanonik shaklga keltiriladi.
       ip_allowlist: ['1.2.3.4', '2001:db8::1', '10.0.0.0/8'],
       is_active: true,
+      rollback_enabled: false,
     });
     expect(saved).not.toHaveProperty('api_key');
     expect(res.data).toMatchObject({
       courier_user_id: '55',
       courier_name: 'BTS kuryer',
+      rollback_enabled: false,
     });
     expect(JSON.stringify(activityLog.log.mock.calls)).not.toContain(apiKey);
+  });
+
+  it('⭐ yangi akkaunt — rollback DOIM o‘chiq (payload’da true kelsa ham)', async () => {
+    const repo = makeRepo();
+    const { svc, activityLog } = makeService(repo);
+    const res = (await svc.create({
+      name: 'BTS',
+      courier_id: '55',
+      rollback_enabled: true,
+    } as never)) as { data: Record<string, unknown> };
+    const [createdRow] = repo.create.mock.calls[0] as unknown[];
+    expect(createdRow).toMatchObject({ rollback_enabled: false });
+    expect(res.data.rollback_enabled).toBe(false);
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        new_value: expect.objectContaining({
+          rollback_enabled: false,
+        }) as unknown,
+      }),
+    );
   });
 
   it('⭐ tushunilmagan IP yozuvi -> 400 (jimgina saqlanmaydi)', async () => {
@@ -272,6 +324,118 @@ describe('CarrierAccountService.create', () => {
       );
     }
     expect(await rpcStatus(svc.rotateKey('99999999999999999999'))).toBe(400);
+  });
+});
+
+describe('CarrierAccountService — rollback toggle (admin)', () => {
+  it('⭐ update { rollback_enabled: true } yolg‘iz: faqat shu ustun, audit eski → yangi, javobda bor', async () => {
+    let row = ROW();
+    const repo = makeRepo({
+      findOne: jest.fn(() => Promise.resolve({ ...row })),
+      update: jest.fn((_where: unknown, changes: Record<string, unknown>) => {
+        row = { ...row, ...changes };
+        return Promise.resolve({ affected: 1 });
+      }),
+    });
+    const { svc, activityLog } = makeService(repo);
+
+    const res = (await svc.update(
+      '11',
+      { rollback_enabled: true },
+      { id: '1', roles: ['superadmin'] },
+    )) as { statusCode: number; data: Record<string, unknown> };
+
+    expect(repo.update).toHaveBeenCalledWith(
+      { id: '11', isDeleted: false },
+      { rollback_enabled: true },
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({ id: '11', rollback_enabled: true });
+    expect(activityLog.log).toHaveBeenCalledWith({
+      entity_type: 'CarrierAccount',
+      entity_id: '11',
+      action: 'updated',
+      old_value: { rollback_enabled: false },
+      new_value: { rollback_enabled: true },
+      user_id: '1',
+      user_role: 'superadmin',
+    });
+
+    // Qaytarib o'chirish — round-trip.
+    activityLog.log.mockClear();
+    const off = (await svc.update(
+      '11',
+      { rollback_enabled: false },
+      { id: '2', roles: ['admin'] },
+    )) as { data: Record<string, unknown> };
+    expect(off.data.rollback_enabled).toBe(false);
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        old_value: { rollback_enabled: true },
+        new_value: { rollback_enabled: false },
+        user_id: '2',
+      }),
+    );
+  });
+
+  it('update: rollback_enabled + name birga; eski qiymatlar audit’da', async () => {
+    const repo = makeRepo({ findOne: jest.fn(() => Promise.resolve(ROW())) });
+    const { svc, activityLog } = makeService(repo);
+    await svc.update('11', { name: ' Yangi ', rollback_enabled: true });
+    expect(repo.update).toHaveBeenCalledWith(
+      { id: '11', isDeleted: false },
+      { name: 'Yangi', rollback_enabled: true },
+    );
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        old_value: { name: 'BTS', rollback_enabled: false },
+        new_value: { name: 'Yangi', rollback_enabled: true },
+      }),
+    );
+  });
+
+  it('update: rollback_enabled boolean bo‘lmasa -> 400, bazaga yozilmaydi', async () => {
+    for (const bad of ['true', 1, null]) {
+      const repo = makeRepo({ findOne: jest.fn(() => Promise.resolve(ROW())) });
+      const { svc } = makeService(repo);
+      expect(
+        await rpcStatus(svc.update('11', { rollback_enabled: bad as never })),
+      ).toBe(400);
+      expect(repo.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('list / rotate-key / status javoblarida rollback_enabled bor', async () => {
+    let enabled = { ...ROW(), rollback_enabled: true };
+    const repo = makeRepo({
+      find: jest.fn(() => Promise.resolve([enabled, { ...ROW(), id: '12' }])),
+      findOne: jest.fn(() => Promise.resolve({ ...enabled })),
+      update: jest.fn((_where: unknown, changes: Record<string, unknown>) => {
+        enabled = { ...enabled, ...changes };
+        return Promise.resolve({ affected: 1 });
+      }),
+    });
+    const { svc } = makeService(repo);
+
+    const list = (await svc.list()) as {
+      data: Array<Record<string, unknown>>;
+    };
+    expect(list.data.map((r) => r.rollback_enabled)).toEqual([true, false]);
+    expect(JSON.stringify(list.data)).not.toContain('api_key_hash');
+
+    const rotated = (await svc.rotateKey('11')) as {
+      data: Record<string, unknown>;
+    };
+    expect(rotated.data).toMatchObject({ id: '11', rollback_enabled: true });
+
+    const status = (await svc.setActive('11', false)) as {
+      data: Record<string, unknown>;
+    };
+    expect(status.data).toEqual({
+      id: '11',
+      is_active: false,
+      rollback_enabled: true,
+    });
   });
 });
 

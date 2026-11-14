@@ -1,6 +1,6 @@
 # Elchi Pochta — Carrier API (tashqi yetkazuvchi)
 
-**Dasturchilar uchun qo'llanma** · Versiya 1 · Oxirgi yangilanish: 2026-11-11
+**Dasturchilar uchun qo'llanma** · Versiya 1 · Oxirgi yangilanish: 2026-11-14
 
 > Qisqa variant: [`CARRIER_API_QUICKSTART.md`](./CARRIER_API_QUICKSTART.md).
 > Interaktiv hujjat (Swagger, faqat Carrier API): test —
@@ -37,7 +37,7 @@ marta, ulanishda qilinadi. Keyingi oqim:
      (waiting) holatiga o'tadi.
 
 3. Yetkazish natijasini yuborasiz                     POST /carrier/orders/:id/status
-   sold | partly_sold | cancelled | rollback
+   sold | partly_sold | cancelled
 
 4. Bekor qilingan posilkalarni qaytarasiz             POST /carrier/returns
 
@@ -53,7 +53,7 @@ marta, ulanishda qilinadi. Keyingi oqim:
 - Sotilgan buyurtma summasi sizning **kurier kassangizga** yoziladi.
   Naqdni Elchi'ga topshirganingizda kassadan ayiriladi (§7).
 - Statuslar **bizning nomlarimizda** yuboriladi (§5.2). Sizdagi ichki
-  statuslarni shu to'rttasiga o'zingiz moslaysiz.
+  statuslarni shu uchtasiga o'zingiz moslaysiz.
 - Viloyat va tuman **nomi emas, SOATO kodi** bilan keladi (§4).
 
 ### Baza manzili
@@ -237,7 +237,7 @@ Javob:
 
 | Maydon | Tur | Majburiy | Izoh |
 |---|---|---|---|
-| `status` | string | ✅ | `sold` · `partly_sold` · `cancelled` · `rollback` |
+| `status` | string | ✅ | `sold` · `partly_sold` · `cancelled` |
 | `comment` | string | — | Izoh (≤1000 belgi). `reason: OTHER` bo'lsa majburiy |
 | `reason` | string | `cancelled` da ✅ | `CUSTOMER_NO_ANSWER` · `CUSTOMER_REFUSED` · `WRONG_ADDRESS` · `DEFECTIVE_PRODUCT` · `PRICE_DISPUTE` · `OTHER` |
 | `total_price` | number | `partly_sold` da ✅ | Mijoz **olgan** tovarlarning to'liq qiymati, so'm — oldindan onlayn to'langan qism (`paid_online_amount`) ham shu ichida. Buyurtma summasidan oshmaydi. Siz yig'adigan naqd = `max(total_price − paid_online_amount, 0)` |
@@ -259,7 +259,9 @@ Javob:
 | `sold` | Buyurtma to'liq sotildi. Summa kassangizga yoziladi (§7). Javobdagi holat `sold`, ba'zan darhol `paid`/`partly_paid` | Holat `waiting` |
 | `partly_sold` | Qisman sotildi. Sotilmagan qism alohida `cancelled` buyurtma bo'lib ajraladi (`parent_order_id` bilan) va sizda qoladi — uni §5.5 bilan qaytarasiz | Holat `waiting`. `items` da buyurtmaning **har bir** qatori bo'lishi, kamida bitta qator kamaytirilgan va kamida bitta dona sotilgan bo'lishi kerak |
 | `cancelled` | Mijoz olmadi. Pul harakati yo'q. Posilka sizda qoladi — uni §5.5 bilan Elchi filialiga qaytarasiz | Holat `waiting` |
-| `rollback` | Xato yuborilgan `sold` yoki `cancelled` ni bekor qiladi: buyurtma `waiting` ga qaytadi, kassa yozuvi teskari yoziladi | Holat **aynan** `sold` yoki `cancelled` (bekor qilingan posilka hali sizda bo'lishi kerak) va shu buyurtmaning hisob-kitobi **yopilmagan** bo'lishi kerak. Topshirilgan naqd eng eski sotuvlardan boshlab yopadi. `paid` / `partly_paid` va yopilgan sotuv — `400`, tuzatishni Elchi operatori qiladi |
+
+Natija xato yuborilgan bo'lsa (masalan, sotilmagan posilka `sold` bo'lib
+ketgan) — Elchi operatoriga murojaat qiling: tuzatishni operator qiladi.
 
 Qo'shimcha xarajat (`extraCost`) va sotuvchiga to'g'ridan-to'g'ri to'lov
 (`paidAmount`) **bu versiyada yo'q**. Bunday maydon yuborilsa 400 qaytadi.
@@ -306,9 +308,10 @@ qator alohida `items` qismi (JSON-obyekt satri), `total_price` — raqam satri,
 - **Har yangi urinish (niyat) uchun yangi kalit** — masalan UUID.
 - Ayni kalitni **faqat shu so'rovni qayta yuborishda** ishlating (javob
   kelmadi, `409`, `429`, `5xx`, `504`). Amal ikkinchi marta bajarilmaydi.
-- `rollback` dan keyin qayta `sold`/`cancelled` — **yangi** kalit. Eski
-  kalit bilan yuborilsa amal bajarilmaydi va `409`
-  `CARRIER_IDEMPOTENCY_KEY_STALE` qaytadi.
+- Buyurtma holati o'shandan beri o'zgargan bo'lsa (masalan, natijani Elchi
+  operatori tuzatgan), keyingi yuborish — **yangi** kalit bilan. Eski kalit
+  bilan yuborilsa amal bajarilmaydi va `409` `CARRIER_IDEMPOTENCY_KEY_STALE`
+  qaytadi.
 - Ayni kalit boshqa tana bilan yuborilsa **422** qaytadi.
 
 ```http
@@ -368,7 +371,7 @@ va Elchi'ga topshirgan naqdingiz. Pul qoidalari §7 da.
 |---|---|---|
 | `id` | string | Harakat id |
 | `type` | string | Yo'nalish: `income` — kirim, `expense` — chiqim |
-| `source_type` | string | Manba, masalan `sell` — sotuv, `cancel` — bekor, `correction` — tuzatish (rollback), `courier_payment` — topshirilgan naqd, `extra_cost`, `payment_reversal` — to'lov tuzatishi. Ro'yxat **ochiq**: yangi qiymat paydo bo'lishi mumkin |
+| `source_type` | string | Manba, masalan `sell` — sotuv, `cancel` — bekor, `correction` — tuzatish (Elchi operatori), `courier_payment` — topshirilgan naqd, `extra_cost`, `payment_reversal` — to'lov tuzatishi. Ro'yxat **ochiq**: yangi qiymat paydo bo'lishi mumkin |
 | `amount` | number | Summa, so'm — **doim musbat**; yo'nalish `type` da. `sell` qatori ham `expense` bo'lishi mumkin (oldindan to'langan buyurtma, §7) |
 | `balance_after` | number | Shu harakatdan keyingi balans |
 | `order_id` | string \| null | Buyurtma bilan bog'liq qatorda — buyurtma id |
@@ -435,9 +438,9 @@ emas, "boshqa" deb qabul qilsin.
 - **Naqdni topshirganingizda** Elchi xodimi uni qabul qiladi. Kassangizdan
   **chiqim** yoziladi (`courier_payment`) va tarixda ko'rinadi (§5.4).
   Topshirilgan pul eng eski sotuvlardan boshlab yopiladi.
-- `rollback` sotuvni teskari yozadi (`correction` qatori). Topshirilgan naqd
-  bilan **yopilgan** sotuvda u ishlamaydi (`400`): tuzatishni Elchi operatori
-  qiladi. Qisman topshirilgan summa yo'qolmaydi — keyingi hisob-kitobga o'tadi.
+- Xato yuborilgan natijani Elchi operatori tuzatadi: sotuv teskari yoziladi
+  (`correction` qatori). Qisman topshirilgan summa yo'qolmaydi — keyingi
+  hisob-kitobga o'tadi.
 
 ---
 
@@ -462,7 +465,7 @@ emas, "boshqa" deb qabul qilsin.
 1. `GET /carrier/ping` — kalit ishlayotganini tekshiring.
 2. Sinov buyurtmasi akkauntingizga biriktirilgach: `scan` → `status: sold`
    → `GET /carrier/cashbox` da kirimni ko'ring.
-3. Sizdagi statuslarni §5.2 dagi to'rtta qiymatga moslang.
+3. Sizdagi statuslarni §5.2 dagi uchta qiymatga moslang.
 4. Har bir holat yuborishda **yangi** `Idempotency-Key` (UUID) yarating;
    qayta urinishda ayni kalitni ishlating.
 5. Bekor qilingan posilkalarni `POST /carrier/returns` bilan qaytaring.

@@ -68,6 +68,7 @@ export class CarrierAccountController {
       id?: string;
       name?: string;
       ip_allowlist?: string[] | null;
+      rollback_enabled?: boolean;
       requester?: Requester;
     },
     @Ctx() context: RmqContext,
@@ -75,7 +76,11 @@ export class CarrierAccountController {
     return this.executeAndAck(context, () =>
       this.carrierService.update(
         String(data?.id ?? ''),
-        { name: data?.name, ip_allowlist: data?.ip_allowlist },
+        {
+          name: data?.name,
+          ip_allowlist: data?.ip_allowlist,
+          rollback_enabled: data?.rollback_enabled,
+        },
         data?.requester,
       ),
     );

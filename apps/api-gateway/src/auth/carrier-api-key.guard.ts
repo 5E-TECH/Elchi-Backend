@@ -33,10 +33,19 @@ export interface CarrierPrincipal {
   name: string;
   /** Bog'langan kurier user id — barcha amallar shu kurier nomidan bajariladi. */
   courier_user_id: string;
+  /**
+   * `status: rollback` ruxsati (admin toggle'i, sukut `false`). YASHIRIN —
+   * javoblarga chiqmaydi; o'chiq bo'lsa `rollback` noma'lum status kabi 400
+   * (`carrier-status-body.ts`). Kesh yo'q: har so'rovda integration-service
+   * bazadan o'qiydi — toggle keyingi so'rovdan kuchga kiradi.
+   */
+  rollback_enabled: boolean;
 }
 
-interface CarrierValidation extends CarrierPrincipal {
+interface CarrierValidation extends Omit<CarrierPrincipal, 'rollback_enabled'> {
   is_active: boolean;
+  /** Eski integration-service javobida yo'q — yopiq (`false`). */
+  rollback_enabled?: boolean;
   ip_allowlist?: string[] | null;
   /** Bog'langan kurier hozir faolmi (integration-service tekshiradi, 30 s kesh). */
   courier_active?: boolean;
@@ -130,6 +139,8 @@ export class CarrierApiKeyGuard implements CanActivate {
       id: String(carrier.id),
       name: carrier.name,
       courier_user_id: String(carrier.courier_user_id),
+      // Faqat aniq `true` (rolling deploy: eski javobda maydon yo'q — o'chiq).
+      rollback_enabled: carrier.rollback_enabled === true,
     };
     return true;
   }
