@@ -31,8 +31,10 @@ import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift, ShiftStatus } from './entities/shift.entity';
 import {
   applyCashboxCardSelection,
+  DEFAULT_CARD_NAME,
   sumNamedCardBalances,
 } from './cashbox-card/cashbox-card.service';
+import { CashboxCard } from './entities/cashbox-card.entity';
 import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
 import {
   aggregateExpenseReport,
@@ -151,6 +153,22 @@ import {
  * (audit M9). Pul maydonlari numeric ustunlar — matn bo'lib ham kelishi
  * mumkin, shu bois `Number(...)` bilan o'qiladi.
  */
+/**
+ * (2026-11-14) Tarix tafsilotidagi karta — faqat ko'rsatish uchun maydonlar
+ * (balans va smena sozlamalari yo'q). `id: null` — Asosiy karta yozuvi hali
+ * yaratilmagan kassa (nom — `DEFAULT_CARD_NAME`).
+ */
+export interface HistoryDetailCard {
+  id: string | null;
+  name: string;
+  is_default: boolean;
+  kind: string | null;
+  bank_name: string | null;
+  card_network: string | null;
+  last4: string | null;
+  holder_name: string | null;
+}
+
 interface MarketPayableOrder {
   id: string;
   status?: Order_status | string | null;
@@ -2744,7 +2762,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       // (mUhkJHmi) `correctableBlock` faqat xom `history` ni o'qiydi va xatoni
       // o'zi `null` ga aylantiradi — enrichment bilan PARALLEL: nom
       // so'rovlari (≤ 1500 ms) zanjir oxiriga qo'shilmaydi.
-      const [[enrichedHistory], correctable] = await Promise.all([
+      const [[enrichedHistory], correctable, parties] = await Promise.all([
         this.enrichHistoryWithUsers([history]).then((rows) =>
           this.withCorrections(
             rows,
@@ -2754,11 +2772,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         options.include_correctable
           ? this.correctableBlock(history)
           : Promise.resolve(undefined),
+        this.historyDetailParties(history),
       ]);
 
       return this.successRes(
         {
           ...enrichedHistory,
+          ...parties,
           order,
           ...(options.include_correctable ? { correctable } : {}),
         },
@@ -2767,6 +2787,109 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       );
     } catch (error) {
       this.toRpcError(error);
+    }
+  }
+
+  /**
+   * (2026-11-14, Dilshod) Tarix tafsilotidagi «Qayerdan» va karta:
+   *  - `source_branch` `{ id, name }` — `branch_to_main` qatorida pulni
+   *    topshirgan filial (`source_user_id` — filial id si). Ilgari tafsilot
+   *    uni bermasdi va oyna yozuvni kiritgan xodimni «Qayerdan» deb ko'rsatardi;
+   *  - `transfer_source_user` — o'tkazma manbasi (3PE0B03q, faqat karta
+   *    to'lovida yoziladi), `PublicUserSummary`;
+   *  - `card` — CLICK pul shu kassaning qaysi kartasiga tushdi / qaysi
+   *    kartasidan chiqdi: `card_id` bo'lsa — o'sha nomli karta, `null` bo'lsa
+   *    — kassaning Asosiy kartasi (faqat MAIN / BRANCH kassada, kartalar faqat
+   *    ularda). Naqd, «Marketga o'tkazma» va kuryer/market kassasida — `null`.
+   * Hammasi fail-open: xato / topilmadi — `null`, tafsilot baribir chiqadi.
+   */
+  private async historyDetailParties(history: HistoryWithCashbox): Promise<{
+    source_branch: { id: string; name: string | null } | null;
+    transfer_source_user: PublicUserSummary | null;
+    card: HistoryDetailCard | null;
+  }> {
+    const branchId =
+      history.source_type === Source_type.BRANCH_TO_MAIN &&
+      history.source_user_id != null
+        ? String(history.source_user_id)
+        : null;
+    const transferUserId =
+      history.transfer_source_user_id != null
+        ? String(history.transfer_source_user_id)
+        : null;
+    const [branchName, users, card] = await Promise.all([
+      branchId ? this.transferBranchName(branchId) : Promise.resolve(null),
+      transferUserId
+        ? this.loadUsersByIds([transferUserId]).catch(() => null)
+        : Promise.resolve(null),
+      this.historyDetailCard(history),
+    ]);
+    return {
+      source_branch: branchId ? { id: branchId, name: branchName } : null,
+      transfer_source_user:
+        transferUserId && users
+          ? (users.get(transferUserId) ?? {
+              id: transferUserId,
+              name: null,
+              role: null,
+              phone_number: null,
+            })
+          : null,
+      card,
+    };
+  }
+
+  private async historyDetailCard(
+    history: HistoryWithCashbox,
+  ): Promise<HistoryDetailCard | null> {
+    try {
+      if (history.payment_method !== PaymentMethod.CLICK) return null;
+      const cashboxType = history.cashbox?.cashbox_type;
+      if (
+        cashboxType !== Cashbox_type.MAIN &&
+        cashboxType !== Cashbox_type.BRANCH
+      ) {
+        return null;
+      }
+      const card = await this.dataSource.manager.findOne(CashboxCard, {
+        where:
+          history.card_id != null
+            ? { id: String(history.card_id) }
+            : {
+                cashbox_id: String(history.cashbox_id),
+                is_default: true,
+                isDeleted: false,
+              },
+      });
+      if (!card) {
+        return history.card_id != null
+          ? null
+          : {
+              id: null,
+              name: DEFAULT_CARD_NAME,
+              is_default: true,
+              kind: null,
+              bank_name: null,
+              card_network: null,
+              last4: null,
+              holder_name: null,
+            };
+      }
+      return {
+        id: String(card.id),
+        name: card.name,
+        is_default: card.is_default,
+        kind: card.kind ?? null,
+        bank_name: card.bank_name ?? null,
+        card_network: card.card_network ?? null,
+        last4: card.last4 ?? null,
+        holder_name: card.holder_name ?? null,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `tarix kartasi olinmadi (history=${String(history.id)}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
     }
   }
 
