@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Inject,
+  Optional,
   Param,
   Query,
   UseGuards,
@@ -90,6 +91,9 @@ export class AuditGatewayController {
     @Inject('INVESTOR') investor: ClientProxy,
     @Inject('NOTIFICATION') notification: ClientProxy,
     private readonly enrichment: AuditEnrichmentService,
+    // (BE-5 LhTIno57 §11) ai-service oyog'i — `ai.cap.raise`, `ai.advisor.*`.
+    // Oxirgi va ixtiyoriy: mavjud spec'lar pozitsion konstruktor bilan quradi.
+    @Optional() @Inject('AI') ai?: ClientProxy,
   ) {
     this.services = [
       { name: 'identity', client: identity },
@@ -101,6 +105,7 @@ export class AuditGatewayController {
       { name: 'catalog', client: catalog },
       { name: 'investor', client: investor },
       { name: 'notification', client: notification },
+      ...(ai ? [{ name: 'ai', client: ai }] : []),
     ];
   }
 
@@ -417,7 +422,7 @@ export class AuditGatewayController {
     @Param('user_id') userId: string,
     @Query() q: ActivityLogQueryDto,
   ) {
-    return this.list({ ...q, user_id: userId } as ActivityLogQueryDto);
+    return this.list({ ...q, user_id: userId });
   }
 
   // ---- helpers ---------------------------------------------------------

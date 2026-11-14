@@ -79,6 +79,8 @@ describe('PIJN1lGp — cabinetLinks', () => {
       '/payments',
       '/payments/shifts/:id',
       '/courier-bulk',
+      // BE-5: AI maslahatchi sahifasi (FE route-map `newViews`, shartnoma §9.3).
+      '/ai-assistant',
     ];
     for (const route of Object.values(WEB_ROUTES)) {
       expect(ROUTE_MAP).toContain(route);

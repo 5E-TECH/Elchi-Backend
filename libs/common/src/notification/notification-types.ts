@@ -18,7 +18,8 @@ import {
  * ⚠️ `category` esa Postgres ENUM (migrations/1716000000008:17-21: order,
  * finance, branch, logistics, account, system, marketing). Yangi kategoriya =
  * migratsiya, shuning uchun har yangi tur MAVJUD 7 kategoriyaga sig'dirilsin.
- * Masalan `integration.sync_failed` va `ai.*` — `category: system`.
+ * Masalan `integration.sync_failed` va `ai.*` — `category: system`
+ * (istisno: `ai.advisor_alert` — `finance`, maslahatchi moliyaviy ogohlantirishi).
  *
  * ⚠️ IKKI YO'L: reyestr faqat `notification.dispatch` (inbox) yo'lini
  * qamraydi. `notification.send` (to'g'ridan-to'g'ri Telegram guruh relay'i,
@@ -541,6 +542,21 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       label_uz: 'AI kunlik byudjeti tugadi',
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
+    }),
+    // (BE-5 LhTIno57) AI maslahatchi — JIDDIY ogohlantirish, bir marta.
+    // `category: finance` (hisobot/ogohlantirish — «Moliya»), boshqa `ai.*` —
+    // `system`. Telegram SUKUTDA EMAS: dispatcher doim aniq `channels`
+    // yuboradi (`settings.telegram.enabled` VA `rules.<R>.telegram`).
+    def({
+      key: 'ai.advisor_alert',
+      category: NotificationCategory.FINANCE,
+      priority: NotificationPriority.CRITICAL,
+      group_key_pattern: 'ai.advisor_alert:{{alert_id}}',
+      label_uz: 'AI maslahatchi: jiddiy ogohlantirish',
+      default_audience: [Roles.SUPERADMIN],
+      user_can_mute: false,
+      default_channels: IN_APP_REALTIME,
+      allowed_channels: [NotificationChannel.TELEGRAM],
     }),
     // (8auPBa1O #7) SMS provayder balansi chegaradan tushdi — notification-service
     // SmsBalanceMonitor, Toshkent kuniga bir marta. Katalogda bo'lmasa dispatch

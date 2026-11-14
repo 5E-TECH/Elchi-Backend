@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 4-qism): bildirishnoma, faoliyat jurnali, realtime
+
+Shartnoma v0.3 §9, §11, §12. Deploy: api-gateway + ai-service (+ notification-service — faqat reyestr), migratsiyasiz.
+
+- 🆕 Bildirishnoma turi `ai.advisor_alert` (`category: finance`, `priority: critical`, «Muhim»): FAQAT `critical` ogohlantirish OCHILGANDA bir marta; aniq `recipient_ids` (faol superadminlar) — ochiq ilovaga `notification:new` to'liq qator bilan keladi (`id, title, body, link, data`). `link` = `/ai-assistant?tab=alerts&alert=:id`; `data = {alert_id, rule_key, severity, variant (R7: receipt|card_balance, aks holda null), subject_name, telegram_buttons}`. Sarlavha «Jiddiy ogohlantirish · {qisqa nom}», matnda AI matni va PII yo'q.
+- 🟢 Kanallar: `in_app` + `realtime` doim; `telegram` faqat `settings.telegram.enabled` (BE-1 bo'lguncha yoqiq) VA `rules.<R>.telegram` — **R7 sukuti false** (ilova ichi + kunlik hisobot, Telegram'ga yo'q). Telegram tugmasi «Ogohlantirishni ochish».
+- 🆕 Realtime `ai.advisor.alert_changed` (superadminlarga, summasiz): `{alert_id, rule_key, severity, status, change: opened|occurred|status|explanation, explanation_status, at}` — ochilish/takror (tick), «Ko'rildi» va PATCH'dan keyin. FE `overview`, ro'yxat va ochiq tafsilotni qayta o'qiydi.
+- 🆕 `/activity-logs`: `ai` xizmati oyog'i qo'shildi (`_service: "ai"`) — `ai.advisor.alert.resolve|dismiss`, `ai.advisor.settings.update`, `ai.cap.raise` endi ko'rinadi.
+
+**Frontend action items:**
+- 🔧 `ACTIVITY_SERVICES` ga `"ai"` + filtr yorlig'i (uz/ru/en).
+- 🔧 `notification:new` `type === "ai.advisor_alert"` — doimiy toast (`duration: 0`) + `overview`/ro'yxat bekor qilish; `ai.advisor.alert_changed` — invalidatsiya.
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 3-qism): ogohlantirishlar endpointlari
 
 Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migratsiyasiz. Hammasi FAQAT SUPERADMIN (ADMIN — 403).

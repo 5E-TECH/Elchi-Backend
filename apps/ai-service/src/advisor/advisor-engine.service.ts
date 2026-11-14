@@ -60,6 +60,10 @@ const ALERTS = 'ai_schema.ai_advisor_alerts';
 const OCC = 'ai_schema.ai_advisor_alert_occurrences';
 
 export type AdvisorApplyOutcome = 'opened' | 'occurred' | 'refreshed' | 'noop';
+export interface AdvisorApplyResult {
+  outcome: AdvisorApplyOutcome;
+  alertId: string | null;
+}
 
 export interface AdvisorRunResult {
   group: AdvisorRunGroup;
@@ -69,6 +73,8 @@ export interface AdvisorRunResult {
   occurred: number;
   refreshed: number;
   failed: number;
+  /** Realtime uchun: ochilgan / takrorlangan ogohlantirishlar. */
+  changes: Array<{ alert_id: string; change: 'opened' | 'occurred' }>;
 }
 
 interface RuleStateRow {
@@ -121,6 +127,7 @@ export class AdvisorEngineService {
       occurred: 0,
       refreshed: 0,
       failed: 0,
+      changes: [],
     };
     if (!keys.length) return result;
 
@@ -159,8 +166,16 @@ export class AdvisorEngineService {
         const firstRun = !states.get(c.rule_key)?.first_run_at;
         // Bitta buzuq nomzod butun tick'ni (va kursorni) to'xtatmasin.
         try {
-          const outcome = await this.apply(c, rules, now, firstRun);
+          const { outcome, alertId } = await this.apply(
+            c,
+            rules,
+            now,
+            firstRun,
+          );
           if (outcome !== 'noop') result[outcome] += 1;
+          if (alertId && (outcome === 'opened' || outcome === 'occurred')) {
+            result.changes.push({ alert_id: alertId, change: outcome });
+          }
         } catch (error) {
           result.failed += 1;
           this.logger.error(
@@ -194,9 +209,9 @@ export class AdvisorEngineService {
     rules: AiAdvisorRulesSettings,
     now: Date,
     firstRun: boolean,
-  ): Promise<AdvisorApplyOutcome> {
+  ): Promise<AdvisorApplyResult> {
     const facts = dedupeFacts(c.fact_keys);
-    if (!facts.length) return 'noop';
+    if (!facts.length) return { outcome: 'noop', alertId: null };
     return this.ds.transaction(async (m) => {
       const open = await m.query<OpenAlertRow[]>(
         `SELECT "id"::text AS id FROM ${ALERTS}
@@ -235,7 +250,7 @@ export class AdvisorEngineService {
               WHERE "id" = $1`,
             [alertId, inserted, now, maxFactAt(fresh), ...present],
           );
-          return inserted > 0 ? 'occurred' : 'noop';
+          return { outcome: inserted > 0 ? 'occurred' : 'noop', alertId };
         }
         if (ADVISOR_STATE_RULES.has(c.rule_key)) {
           await m.query(
@@ -247,13 +262,13 @@ export class AdvisorEngineService {
               WHERE "id" = $1`,
             [alertId, now, now, ...present],
           );
-          return 'refreshed';
+          return { outcome: 'refreshed', alertId };
         }
-        return 'noop';
+        return { outcome: 'noop', alertId };
       }
 
       // Ochiq yo'q: faqat YANGI fakt yangi ogohlantirish ochadi.
-      if (!fresh.length) return 'noop';
+      if (!fresh.length) return { outcome: 'noop', alertId: null };
       const rule = rules[c.rule_key];
       const previous = await m.query<Array<{ id: string }>>(
         `SELECT "id"::text AS id FROM ${ALERTS}
@@ -292,9 +307,9 @@ export class AdvisorEngineService {
           backfill ? 'backfill' : null,
         ],
       );
-      if (!created) return 'noop';
+      if (!created) return { outcome: 'noop', alertId: null };
       await this.insertOccurrences(m, created.id, c.dedup_key, fresh, now);
-      return 'opened';
+      return { outcome: 'opened', alertId: created.id };
     });
   }
 
