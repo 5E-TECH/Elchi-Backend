@@ -26,7 +26,8 @@ import {
  *     qo'llanma (`CARRIER_SWAGGER_GUIDE`), xato tavsiflari, sxema nomlari.
  *  2. `docs/public/` dagi HAR BIR fayl (yangi qo'shilgani ham avtomatik) —
  *     statik `carrier-openapi.json` (CI drift gate'i uni to'liq gateway'dan
- *     qayta yasaydi), `CARRIER_API.md`, `CARRIER_API_QUICKSTART.md` va h.k.
+ *     qayta yasaydi), `CARRIER_API.md`, `CARRIER_API_QUICKSTART.md`,
+ *     `carrier-guide.html` va undan chiqarilgan `Carrier-API-qollanma.pdf`.
  *
  * Ichki fayllar (`INTERNAL_ONLY`) ATAYLAB tekshirilmaydi — u yerda toggle
  * hujjatlangan; ular `docs/public/` ga ko'chirilmasligi tekshiriladi.
@@ -51,18 +52,14 @@ const INTERNAL_ONLY: readonly string[] = [
   'docs/frontend/openapi.json',
 ];
 
-/**
- * Keyingi bosqichda yangilanadigan ommaviy fayllar (HTML qo'llanma va undan
- * chiqarilgan PDF). Ro'yxat VAQTINCHALIK: fayl tozalangach shu yerdan olib
- * tashlang — shunda u ham to'liq tekshiruvga tushadi (pastdagi test eskirgan
- * yozuvni o'zi aytadi).
- */
-const PENDING_REGENERATION: Readonly<Record<string, string>> = {
-  'docs/public/carrier-guide.html':
-    'HTML qo‘llanma alohida bosqichda qayta yoziladi',
-  'docs/public/Carrier-API-qollanma.pdf':
-    'PDF carrier-guide.html dan qayta chiqariladi',
-};
+/** Asosiy ommaviy carrier fayllari — mavjudligi va tekshiruvda ekani shart. */
+const CARRIER_PUBLIC_FILES: readonly string[] = [
+  'docs/public/CARRIER_API.md',
+  'docs/public/CARRIER_API_QUICKSTART.md',
+  'docs/public/carrier-openapi.json',
+  'docs/public/carrier-guide.html',
+  'docs/public/Carrier-API-qollanma.pdf',
+];
 
 /** `docs/public/` dagi barcha fayllar (ichki papkalar ham), repo-nisbiy yo'l. */
 function publicFiles(dir = PUBLIC_DIR): string[] {
@@ -74,12 +71,30 @@ function publicFiles(dir = PUBLIC_DIR): string[] {
   });
 }
 
-/** Matnli fayl — utf8; ikkilik (PDF) — latin1 (xom baytlardagi ochiq matn). */
-const readPublic = (file: string): string =>
-  readFileSync(
-    join(REPO_ROOT, file),
-    /\.(pdf|png|jpe?g|webp|gif)$/i.test(file) ? 'latin1' : 'utf8',
+/**
+ * PDF'dagi UTF-16BE hex satrlar (`<FEFF…>`): Chromium ASCII bo'lmagan
+ * outline sarlavhalarini (masalan `6.4 POST /carrier/…` — NBSP bilan) va
+ * metadata'ni shunday yozadi; latin1 o'qishda ular ko'rinmaydi.
+ */
+const pdfHexStrings = (raw: string): string[] =>
+  [...raw.matchAll(/<FEFF((?:[0-9A-Fa-f]{4})+)>/g)].map(([, hex]) =>
+    Buffer.from(hex, 'hex').swap16().toString('utf16le'),
   );
+
+/**
+ * Matnli fayl — utf8; ikkilik — latin1 (xom baytlardagi ochiq matn). PDF'da
+ * qo'shimcha UTF-16 satrlar ochiladi: outline (sarlavhalar) va metadata
+ * to'liq tekshiriladi. Sahifa matni siqilgan va shrift kodlarida — uni bu
+ * yerda o'qib bo'lmaydi; manbasi `carrier-guide.html` (u ham shu yerda
+ * tekshiriladi), PDF chiqarilganda matn pypdf bilan alohida tekshiriladi.
+ */
+const readPublic = (file: string): string => {
+  const binary = /\.(pdf|png|jpe?g|webp|gif)$/i.test(file);
+  const text = readFileSync(join(REPO_ROOT, file), binary ? 'latin1' : 'utf8');
+  return /\.pdf$/i.test(file)
+    ? [text, ...pdfHexStrings(text)].join('\n')
+    : text;
+};
 
 /** Topilgan joylar — xabarda qaysi fayl va qaysi qator ekani ko'rinsin. */
 const hits = (text: string): string[] =>
@@ -175,34 +190,26 @@ describe('Carrier API ommaviy hujjatlari — "rollback" yo‘q (yashirin toggle)
   describe('docs/public/* fayllari', () => {
     const files = publicFiles();
 
-    it('papka topildi; asosiy carrier fayllari tekshiruvda', () => {
-      for (const file of [
-        'docs/public/CARRIER_API.md',
-        'docs/public/CARRIER_API_QUICKSTART.md',
-        'docs/public/carrier-openapi.json',
-      ]) {
+    it('papka topildi; asosiy carrier fayllari (HTML qo‘llanma va PDF ham) tekshiruvda', () => {
+      for (const file of CARRIER_PUBLIC_FILES) {
         expect(files).toContain(file);
-        expect(Object.keys(PENDING_REGENERATION)).not.toContain(file);
       }
     });
 
-    it('⭐ har bir ommaviy faylda "rollback" yo‘q (kutilayotganlardan tashqari)', () => {
+    it('⭐ har bir ommaviy faylda "rollback" yo‘q — istisnosiz', () => {
       const leaks = Object.fromEntries(
         files
-          .filter((file) => !(file in PENDING_REGENERATION))
           .map((file) => [file, hits(readPublic(file))] as const)
           .filter(([, found]) => found.length > 0),
       );
       expect(leaks).toEqual({});
     });
 
-    it('kutilayotgan (keyingi bosqich) ro‘yxati eskirmagan — tozalangan fayl ro‘yxatdan olib tashlansin', () => {
-      const stale = Object.keys(PENDING_REGENERATION).filter(
-        (file) =>
-          !existsSync(join(REPO_ROOT, file)) ||
-          !FORBIDDEN.test(readPublic(file)),
-      );
-      expect(stale).toEqual([]);
+    it('PDF: outline sarlavhalari o‘qiladi (UTF-16 ham) — tekshiruv bo‘sh emas', () => {
+      const pdf = readPublic('docs/public/Carrier-API-qollanma.pdf');
+      // ASCII sarlavha — ochiq satr; NBSP li endpoint sarlavhasi — UTF-16 hex.
+      expect(pdf).toContain('(7. Holatlar: sold, partly_sold, cancelled)');
+      expect(pdf).toContain('6.4 POST\u00a0/carrier/orders/{id}/status');
     });
 
     it('ichki fayllar mavjud, docs/public/ da EMAS; toggle ichki qo‘llanmada hujjatlangan', () => {
