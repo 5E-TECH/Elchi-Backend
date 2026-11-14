@@ -156,6 +156,10 @@ export const AI_ADVISOR_RULE_LIMITS: Readonly<
   R7: {},
   R8: {
     ratio: { min: 1.1, max: 10, step: 0.1, unit: 'multiplier', default: 2 },
+    // Ega qarori 2026-11-14 (#653 review): haftada kamida N ta tuzatish
+    // bo'lmasa — jim (baza 0 bo'lgan haftada 1–2 ta shovqin bo'lmasin).
+    // UI'da `ratio` kabi ko'rsatilmaydi (Q12).
+    min_count: { min: 1, max: 50, step: 1, unit: 'count', default: 3 },
   },
 });
 

@@ -440,6 +440,57 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     });
   });
 
+  it('R7: ochiq ogohlantirishda ayni fakt — faktlar yangilanadi (occurrences va last_fact_at o‘zgarmaydi); R6/R8 haftasi har kuni so‘raladi', async () => {
+    await warmUp();
+    const r7 = (title: number): AiAdvisorCandidate => ({
+      rule_key: 'R7',
+      dedup_key: 'R7:receipt:77',
+      fact_keys: [
+        { fact_key: 'R7:receipt:77', fact_at: '2026-10-22T06:05:00.000Z' },
+      ],
+      branch: null,
+      subject: { kind: 'cashbox', id: '0', name: 'Asosiy kassa' },
+      headline_amount: title,
+      facts: {
+        source: 'receipt',
+        mismatch: ['amount'],
+        branch: { name: 'Asosiy kassa' },
+        entered_amount: 1,
+        read_amount: 2,
+        difference: title,
+      },
+      evidence: { kind: 'receipt_check' },
+    });
+    reply = { candidates: [r7(-18000)], cursors: {} };
+    await engine.run('frequent', NOW);
+    reply = { candidates: [r7(-9000)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-22T10:00:00Z')),
+    ).toMatchObject({ refreshed: 1, occurred: 0 });
+    const [row] = await ds.query<
+      Array<{
+        occurrences: number;
+        last_fact_at: Date;
+        headline_amount: string;
+      }>
+    >(
+      `SELECT occurrences, last_fact_at, headline_amount FROM ai_schema.ai_advisor_alerts`,
+    );
+    expect(row.occurrences).toBe(1);
+    expect(new Date(row.last_fact_at).toISOString()).toBe(
+      '2026-10-22T06:05:00.000Z',
+    );
+    expect(Number(row.headline_amount)).toBe(-9000);
+
+    // Chorshanba 02:30 — o'tgan (yopilgan) hafta baribir so'raladi.
+    reply = { candidates: [], cursors: {} };
+    await engine.run('daily', new Date('2026-10-27T21:30:00Z'));
+    expect(requests[requests.length - 1].periods).toEqual({
+      days: ['2026-10-27'],
+      weeks: ['2026-10-19'],
+    });
+  });
+
   it('scheduler: qulf boshqa ulanishda — tick o‘tkaziladi; bo‘sh — ishlaydi va qulfni ochadi', async () => {
     const scheduler = new AdvisorScheduler(ds, engine);
     const holder = ds.createQueryRunner();
