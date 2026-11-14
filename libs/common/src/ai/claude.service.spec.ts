@@ -817,6 +817,27 @@ describe('ClaudeService', () => {
       expect(usage.record.mock.calls[0][0].cacheCreation1hTokens).toBe(4000);
     });
 
+    it('C1: 1 soatlik yozish jamidan katta bo‘lsa — jamiga qisiladi (#648 M4)', async () => {
+      const usage = makeSink();
+      const { service, create } = setup({ sink: usage.sink });
+      create.mockResolvedValue({
+        ...okResponse(),
+        usage: {
+          ...USAGE,
+          cache_creation_input_tokens: 100,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 5000,
+          },
+        },
+      });
+
+      const res = await service.extractJson(baseOpts());
+
+      expect(res.ok && res.usage.cache_creation_1h_input_tokens).toBe(100);
+      expect(usage.record.mock.calls[0][0].cacheCreation1hTokens).toBe(100);
+    });
+
     it('C1: cacheTtl 1h → system cache_control ttl 1h; sukut — avvalgidek kalitsiz', async () => {
       const { service, create } = setup();
       await service.extractJson(baseOpts({ cacheTtl: '1h' }));

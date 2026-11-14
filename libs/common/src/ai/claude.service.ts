@@ -257,7 +257,8 @@ export class ClaudeService implements OnApplicationBootstrap {
    * (ekstraksiya ~4200 token) takroriy chaqiruvlarda ~90% arzon o'qiladi
    * (cache_read = input*0.1). Anthropic minimal kesh chegarasidan kichik
    * promptlarni JIMGINA kesh qilmaydi — xato bermaydi, shunchaki oddiy narxda
-   * ketadi. Kesh 5 daqiqa (ephemeral) — hajmli oqimda deyarli doim issiq.
+   * ketadi. TTL sukut 5 daqiqa (ephemeral, yozish × 1.25); C1: `ttl='1h'` —
+   * yozish × 2, siyrak chaqiruvlar uchun (soatiga ≥2 o'qishda foyda).
    *
    * ⚠️ System matniga sana/market nomi/tuman ro'yxati kabi DINAMIK qiymat
    * qo'shilsa kesh jimgina o'ladi (xarajat ~4x) — o'zgaruvchi qism doim
@@ -448,6 +449,7 @@ export class ClaudeService implements OnApplicationBootstrap {
             `input_tokens=${usage.input_tokens} ` +
             `output_tokens=${usage.output_tokens} ` +
             `cache_creation_input_tokens=${usage.cache_creation_input_tokens} ` +
+            `cache_creation_1h_input_tokens=${usage.cache_creation_1h_input_tokens} ` +
             `cache_read_input_tokens=${usage.cache_read_input_tokens} ` +
             `latency_ms=${latencyMs}`,
         );
@@ -693,6 +695,7 @@ export class ClaudeService implements OnApplicationBootstrap {
             `stop_reason=${stopReason ?? 'null'} tool_calls=${toolUses.length} ` +
             `input_tokens=${usage.input_tokens} output_tokens=${usage.output_tokens} ` +
             `cache_creation_input_tokens=${usage.cache_creation_input_tokens} ` +
+            `cache_creation_1h_input_tokens=${usage.cache_creation_1h_input_tokens} ` +
             `cache_read_input_tokens=${usage.cache_read_input_tokens}`,
         );
         opts.onStep?.({

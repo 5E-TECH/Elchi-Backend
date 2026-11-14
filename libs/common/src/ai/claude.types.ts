@@ -143,8 +143,8 @@ export interface ClaudeUsageRecord extends ClaudeUsageMeta {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  /** C1: `cacheCreationTokens` dan 1 soatlik TTL bilan yozilgani. */
-  cacheCreation1hTokens?: number;
+  /** C1: `cacheCreationTokens` dan 1 soatlik TTL bilan yozilgani (yo'q — 0). */
+  cacheCreation1hTokens: number;
   /** Urinish raqami (1 yoki 2). */
   steps: number;
   stopReason: string | null;

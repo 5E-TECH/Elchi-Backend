@@ -61,7 +61,7 @@ import {
 } from '@app/common';
 import { OrderExtractService } from '../../src/order-extract/order-extract.service';
 import { ORDER_EXTRACT_PROMPT_VERSION } from '../../src/prompts/order-extract.prompt';
-import { computeCostUsd } from '../../src/usage/ai-pricing';
+import { costOfClaudeUsage } from '../../src/usage/ai-pricing';
 
 export const EVAL_DIR = resolve(__dirname, '../fixtures/order-extract');
 export const RECORDED_DIR = join(EVAL_DIR, 'recorded');
@@ -506,15 +506,7 @@ export function summarize(
             cacheWriteTokens:
               acc.cacheWriteTokens + u.cache_creation_input_tokens,
             cacheReadTokens: acc.cacheReadTokens + u.cache_read_input_tokens,
-            costUsd:
-              acc.costUsd +
-              computeCostUsd({
-                model,
-                inputTokens: u.input_tokens,
-                outputTokens: u.output_tokens,
-                cacheCreationTokens: u.cache_creation_input_tokens,
-                cacheReadTokens: u.cache_read_input_tokens,
-              }),
+            costUsd: acc.costUsd + costOfClaudeUsage(model, u),
           }),
           {
             calls: 0,

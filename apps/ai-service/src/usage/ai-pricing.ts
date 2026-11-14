@@ -210,8 +210,12 @@ export interface AiTokenUsage {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  /** C1: `cacheCreationTokens` dan 1 soatlik TTL bilan yozilgani. */
-  cacheCreation1hTokens?: number;
+  /**
+   * C1: `cacheCreationTokens` dan 1 soatlik TTL bilan yozilgani. ⚠️ MAJBURIY
+   * — ixtiyoriy bo'lsa chaqiruvchi uni unutib 1h yozishni × 1.25 da
+   * hisoblaydi (#648 review B1). 1h bo'lmasa 0 bering.
+   */
+  cacheCreation1hTokens: number;
 }
 
 /** Manfiy/NaN/kasr qiymatni butun nomanfiy songa keltiradi. */
@@ -255,7 +259,7 @@ function effectivePriceFor(u: AiTokenUsage): AiModelPrice {
 
 /**
  * Bitta javobning USD xarajati (yaxlitlanmagan):
- * in×input + out×output + in×1.25×cache_write + in×R×cache_read
+ * in×input + out×output + in×(1.25×write_5m + 2×write_1h) + in×R×cache_read
  * (R — model bo'yicha, `cacheReadMultiplierFor`).
  */
 export function computeCostUsd(u: AiTokenUsage): number {
@@ -269,6 +273,30 @@ export function computeCostUsd(u: AiTokenUsage): number {
         cacheReadMultiplierFor(u.model)) /
     TOKENS_PER_UNIT
   );
+}
+
+/**
+ * `ClaudeUsage` (API javobi / tool-loop yig'indisi) → USD. Assistant va
+ * eval shu yordamchidan foydalanadi — 1h qismi unutilmaydi.
+ */
+export function costOfClaudeUsage(
+  model: string,
+  u: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_1h_input_tokens: number;
+  },
+): number {
+  return computeCostUsd({
+    model,
+    inputTokens: u.input_tokens,
+    outputTokens: u.output_tokens,
+    cacheCreationTokens: u.cache_creation_input_tokens,
+    cacheReadTokens: u.cache_read_input_tokens,
+    cacheCreation1hTokens: u.cache_creation_1h_input_tokens,
+  });
 }
 
 /**

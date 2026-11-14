@@ -127,8 +127,10 @@ export class DistrictPickService {
       deadlineAt,
       ...effortParam(model, 'low'),
       // C1: tuman katalogi (~2k token) system'da, chaqiruvlar siyrak (faqat
-      // fallback) — 5 daqiqalik kesh deyarli hech qachon o'qilmasdi.
-      cacheTtl: '1h',
+      // fallback) — 5 daqiqalik kesh deyarli hech qachon o'qilmasdi. Eski
+      // DISTRICT_PICK_SYSTEM (~480 token) kesh minimumidan kichik — 1h
+      // marker ma'nosiz, 5m qoladi.
+      cacheTtl: plan ? '1h' : '5m',
       meta: {
         feature: 'order_district',
         requestArea: 'order',
