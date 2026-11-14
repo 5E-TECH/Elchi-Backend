@@ -5,9 +5,10 @@
  *
  * HQ xodimi ombordan yaratgan buyurtma `new` bo'lib HQ'da turadi (yaratish —
  * `lifecycle/hq-warehouse-order.VkKDSNNn.spec.ts`). Bu yerda:
- *   - qabul (`receiveNewOrders`): viloyat ombori buyurtmasi pochtaga
- *     TUSHMAYDI — ombor filialiga o'tadi va `received` bo'ladi (yaratishda
- *     avval shunday edi); Markaziy ombor buyurtmasi — oddiy HQ qabuli;
+ *   - qabul (`receiveNewOrders`): Markaziy VA viloyat ombori buyurtmasi —
+ *     oddiy HQ qabuli, hudud pochtasiga tushadi. Ega 2026-11-14: «1 ta pochta
+ *     bor edi Toshkentga 2 ta buyurtmasi bor 5 ta yaratdim … 7 ta
+ *     bo'lmadiku» (13-noyabrdagi «viloyat ombori — pochtasiz» yo'li xato edi);
  *   - `new` ombor buyurtmasida summa va mahsulot qulf (band shu tarkibga).
  */
 jest.mock('@app/common', () => {
@@ -19,10 +20,7 @@ import { RpcException } from '@nestjs/microservices';
 import { Order_status, rmqSend as rmqSendFn } from '@app/common';
 import { OrderLifecycleService } from '../lifecycle/order-lifecycle.service';
 import { OrderHolderType, Order_source } from '../entities/order.entity';
-import {
-  isHqStaffWarehouseCreator,
-  isRegionalWarehouseAwaitingReceive,
-} from './order-warehouse.service';
+import { isHqStaffWarehouseCreator } from './order-warehouse.service';
 
 const rmqSend = rmqSendFn as unknown as jest.Mock;
 
@@ -219,123 +217,92 @@ describe('2026-11-13 — isHqStaffWarehouseCreator', () => {
   });
 });
 
-describe('2026-11-13 — isRegionalWarehouseAwaitingReceive', () => {
-  const check = (row: Row, hqId: string | null = HQ_ID) =>
-    isRegionalWarehouseAwaitingReceive(row as never, hqId);
-
-  it('⭐ HQ`da turgan, pochtasiz/partiyasiz NEW viloyat ombori buyurtmasi — true', () => {
-    expect(check(REGIONAL_WH)).toBe(true);
-  });
-
-  it('Markaziy ombor (uyi HQ), HQ buyurtma, HQ id noma`lum — false', () => {
-    expect(check(HQ_WH)).toBe(false);
-    expect(check(HQ_PLAIN)).toBe(false);
-    expect(check(REGIONAL_WH, null)).toBe(false);
-    expect(check({ ...REGIONAL_WH, home_branch_id: null })).toBe(false);
-  });
-
-  it('filialda turgan (tranzit), pochtada, partiyada yoki NEW emas — false (avvalgi qabul qoidalari)', () => {
-    expect(
-      check({
-        ...REGIONAL_WH,
-        holder_type: OrderHolderType.BRANCH,
-        holder_branch_id: WAREHOUSE_BRANCH,
-      }),
-    ).toBe(false);
-    expect(check({ ...REGIONAL_WH, post_id: '55' })).toBe(false);
-    expect(check({ ...REGIONAL_WH, current_batch_id: '7' })).toBe(false);
-    expect(check({ ...REGIONAL_WH, status: Order_status.RECEIVED })).toBe(
-      false,
-    );
-  });
-});
-
 describe('2026-11-13 — receiveNewOrders: HQ xodimi ombordan yaratgan buyurtma', () => {
-  it('⭐ superadmin: viloyat ombori buyurtmasi → RECEIVED, ombor filialida (BRANCH/11), pochtasiz; logistikaga pochta so`rovi ketmaydi', async () => {
+  it('⭐ superadmin: viloyat ombori buyurtmasi → RECEIVED, hudud pochtasiga (oddiy buyurtmadek), egalik HQ, uyi — ombor filiali', async () => {
     const h = makeSvc([REGIONAL_WH]);
 
     await expect(h.receive(SUPERADMIN)).resolves.toMatchObject({
       statusCode: 200,
     });
 
-    expect(h.sentCmds()).not.toContain('logistics.post.receive_orders');
+    expect(h.postPayload()?.orders).toEqual([
+      {
+        order_id: '483',
+        assigned_region: '5',
+        assigned_branch: HQ_ID,
+        total_price: 100000,
+      },
+    ]);
     expect(h.setFor('483')).toMatchObject({
       status: Order_status.RECEIVED,
-      post_id: null,
-      branch_id: WAREHOUSE_BRANCH,
-      holder_type: OrderHolderType.BRANCH,
-      holder_branch_id: WAREHOUSE_BRANCH,
+      post_id: '9001',
+      holder_type: OrderHolderType.HQ,
+      holder_branch_id: null,
       holder_courier_id: null,
       // YfWZXu9g: bo'sh hudud tumandan to'ldiriladi (bugungidek).
       region_id: '5',
     });
+    // Filial va uy (ombor filiali) o'zgarmaydi — ombor hisobi uyga tayanadi.
+    expect(h.setFor('483')).not.toHaveProperty('branch_id');
+    expect(h.setFor('483')).not.toHaveProperty('home_branch_id');
     expect(h.custody.createTrackingEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         order_id: '483',
         from_status: Order_status.NEW,
         to_status: Order_status.RECEIVED,
-        note: 'Ombor buyurtmasi qabul qilindi — ombor filialida (#11), pochtasiz',
+        note: 'Order assigned to post',
       }),
       expect.anything(),
     );
-    expect(h.custody.createCustodyEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        order_id: '483',
-        from_holder_type: OrderHolderType.HQ,
-        to_holder_type: OrderHolderType.BRANCH,
-        to_branch_id: WAREHOUSE_BRANCH,
-        note: 'Qabul qilindi — ombor filialiga',
-      }),
-      expect.anything(),
-    );
+    // HQ'da turgan edi, HQ'da qoladi — egalik hodisasi yo'q.
+    expect(h.custody.createCustodyEvent).not.toHaveBeenCalled();
     expect(h.activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: '483',
-        new_value: {
-          status: Order_status.RECEIVED,
-          post_id: null,
-          branch_id: WAREHOUSE_BRANCH,
-        },
+        new_value: { status: Order_status.RECEIVED, post_id: '9001' },
       }),
     );
     expect(h.queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('⭐ HQ registratori (doira — HQ) ham qabul qiladi: ombor filialiga, pochtasiz', async () => {
+  it('⭐ HQ registratori (doira — HQ) ham qabul qiladi: hudud pochtasiga', async () => {
     const h = makeSvc([REGIONAL_WH], { scope: HQ_ID });
 
     await expect(h.receive(REGISTRATOR)).resolves.toMatchObject({
       statusCode: 200,
     });
-    expect(h.sentCmds()).not.toContain('logistics.post.receive_orders');
+    expect(h.sentCmds()).toContain('logistics.post.receive_orders');
     expect(h.setFor('483')).toMatchObject({
       status: Order_status.RECEIVED,
-      branch_id: WAREHOUSE_BRANCH,
-      holder_type: OrderHolderType.BRANCH,
-      holder_branch_id: WAREHOUSE_BRANCH,
+      post_id: '9001',
     });
+    expect(h.setFor('483')).not.toHaveProperty('branch_id');
   });
 
-  it('⭐ aralash qabul (oddiy HQ + viloyat ombori): pochtaga faqat oddiy buyurtma; ikkalasi ham RECEIVED', async () => {
-    const h = makeSvc([HQ_PLAIN, REGIONAL_WH]);
+  it('⭐ oddiy buyurtma + 5 ta viloyat ombori buyurtmasi bir qabulda → hammasi o`sha hudud pochtasiga (test #489–#493)', async () => {
+    const warehouseRows = ['489', '490', '491', '492', '493'].map((id) =>
+      order({ ...REGIONAL_WH, id }),
+    );
+    const h = makeSvc([HQ_PLAIN, ...warehouseRows]);
 
     await h.receive(SUPERADMIN);
 
-    expect(h.postPayload()?.orders).toEqual([
-      expect.objectContaining({ order_id: '66', assigned_branch: HQ_ID }),
+    expect((h.postPayload()?.orders ?? []).map((row) => row.order_id)).toEqual([
+      '66',
+      '489',
+      '490',
+      '491',
+      '492',
+      '493',
     ]);
-    expect(h.setFor('66')).toMatchObject({
-      status: Order_status.RECEIVED,
-      post_id: '9001',
-      holder_type: OrderHolderType.HQ,
-    });
-    expect(h.setFor('66')).not.toHaveProperty('branch_id');
-    expect(h.setFor('483')).toMatchObject({
-      status: Order_status.RECEIVED,
-      post_id: null,
-      branch_id: WAREHOUSE_BRANCH,
-      holder_type: OrderHolderType.BRANCH,
-    });
+    for (const id of ['66', '489', '490', '491', '492', '493']) {
+      expect(h.setFor(id)).toMatchObject({
+        status: Order_status.RECEIVED,
+        post_id: '9001',
+        holder_type: OrderHolderType.HQ,
+      });
+      expect(h.setFor(id)).not.toHaveProperty('branch_id');
+    }
   });
 
   it('⭐ Markaziy ombor buyurtmasi — oddiy HQ qabuli: hudud pochtasiga (HQ filiali), egalik HQ, filial o`zgarmaydi', async () => {
@@ -363,23 +330,14 @@ describe('2026-11-13 — receiveNewOrders: HQ xodimi ombordan yaratgan buyurtma'
     );
   });
 
-  it('⭐ ombor buyurtmasi bor, HQ id aniqlanmadi — 503, hech narsa yozilmaydi (turini bilib bo`lmaydi)', async () => {
-    const h = makeSvc([REGIONAL_WH], { hqId: null });
+  it('HQ id aniqlanmasa ham ombor buyurtmasi oddiy qabul qilinadi (HQ id so`ralmaydi)', async () => {
+    const h = makeSvc([REGIONAL_WH, HQ_PLAIN], { hqId: null });
 
-    const error = await rpcError(h.receive(SUPERADMIN));
-
-    expect(error.statusCode).toBe(503);
-    expect(h.sentCmds()).toEqual([]);
-    expect(h.queryRunner.startTransaction).not.toHaveBeenCalled();
-  });
-
-  it('ombor buyurtmasi yo`q — HQ id so`ralmaydi, oddiy qabul bugungidek', async () => {
-    const h = makeSvc([HQ_PLAIN]);
-
-    await h.receive(SUPERADMIN);
-
+    await expect(h.receive(SUPERADMIN)).resolves.toMatchObject({
+      statusCode: 200,
+    });
     expect(h.s.lookup.getHqBranchId).not.toHaveBeenCalled();
-    expect(h.sentCmds()).toContain('logistics.post.receive_orders');
+    expect(h.setFor('483')).toMatchObject({ post_id: '9001' });
   });
 
   it('filialda turgan NEW ombor buyurtmasi (masalan tranzit) — avvalgi qoida: HQ qabuli 400', async () => {

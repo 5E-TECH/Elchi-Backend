@@ -172,7 +172,6 @@ import {
 } from './post-order-bulk-delete';
 import {
   isHqStaffWarehouseCreator,
-  isRegionalWarehouseAwaitingReceive,
   isWarehouseReserveFallback,
   OrderWarehouseService,
   type WarehouseCreatePlan,
@@ -8842,7 +8841,8 @@ export class OrderLifecycleService {
         // VkKDSNNn: Markaziy ombor buyurtmasida DOIM HQ id (dto e'tiborsiz) —
         // `home_branch_id = HQ id` uni Markaziy ombornikiga aylantiradi.
         // 2026-11-13: qabulni kutayotgan ombor buyurtmasi HQ'da turadi, uyi
-        // esa DOIM ombor filiali (dto e'tiborsiz) — qabul uni shu yerga qo'yadi.
+        // esa DOIM ombor filiali (dto e'tiborsiz) — ombor hisobi (`out` /
+        // `return`) shunga tayanadi. Qabulda (2026-11-14) — hudud pochtasiga.
         home_branch_id: hqWarehousePlan
           ? hqWarehousePlan.branch_id
           : warehousePlan && warehouseAwaitsReceive
@@ -9676,34 +9676,14 @@ export class OrderLifecycleService {
     }
 
     /**
-     * Ega 2026-11-13: HQ xodimi ombordan yaratgan `new` buyurtma. Markaziy
-     * ombor buyurtmasi — oddiy HQ qabuli (hudud pochtasiga). VILOYAT ombori
-     * buyurtmasi esa (`isRegionalWarehouseAwaitingReceive`) pochtaga
-     * TUSHMAYDI: u ombor filialiga (`home_branch_id`) o'tadi va `received`
-     * bo'ladi — yaratishda avval shunday edi (HQ qabuli va pochtasiz,
-     * kuryerga biriktirishga tayyor). Ombor buyurtmasi bor, HQ id
-     * aniqlanmasa — 503 (turini bilib bo'lmaydi, fail-closed).
+     * Ega 2026-11-14: HQ xodimi ombordan yaratgan `new` buyurtma (Markaziy
+     * yoki VILOYAT ombori) — oddiy buyurtma kabi: qabulda hudud pochtasiga
+     * tushadi («1 ta pochta bor edi Toshkentga 2 ta buyurtmasi bor 5 ta
+     * yaratdim … 7 ta bo'lmadiku»). 2026-11-13 dagi «viloyat ombori —
+     * pochtasiz, ombor filialiga» yo'li olib tashlandi. `home_branch_id`
+     * (ombor filiali) o'zgarmaydi — ombor hisobi (kuryerga berilganda
+     * `out`, bekor bo'lib ombor filialiga qaytsa `return`) shunga tayanadi.
      */
-    const regionalWarehouseHomeById = new Map<string, string>();
-    if (orders.some((order) => order.fulfillment_source === 'WAREHOUSE')) {
-      const warehouseHqId = String(
-        (await this.lookup.getHqBranchId()) ?? '',
-      ).trim();
-      if (!warehouseHqId) {
-        throw new RpcException({
-          statusCode: 503,
-          message: "Markaziy filial aniqlanmadi — qayta urinib ko'ring",
-        });
-      }
-      for (const order of orders) {
-        if (isRegionalWarehouseAwaitingReceive(order, warehouseHqId)) {
-          regionalWarehouseHomeById.set(
-            String(order.id),
-            String(order.home_branch_id).trim(),
-          );
-        }
-      }
-    }
 
     /**
      * ⚠️ fix3b (LC-03 alomati) — HQ QABULI FILIALDA TURGAN BUYURTMANI OLMAYDI.
@@ -9857,8 +9837,6 @@ export class OrderLifecycleService {
         );
       }
       regionByOrderId.set(String(order.id), assignedRegion);
-      // 2026-11-13: viloyat ombori buyurtmasi pochtasiz (ombor filialiga).
-      if (regionalWarehouseHomeById.has(String(order.id))) continue;
       logisticsPayload.push({
         order_id: order.id,
         assigned_region: assignedRegion,
@@ -9868,16 +9846,14 @@ export class OrderLifecycleService {
     }
 
     // 7. Delegate post creation/update to logistics-service via RMQ
-    const postAssignments = logisticsPayload.length
-      ? await rmqSend<{
-          data: Array<{ order_id: string; post_id: string }>;
-        }>(
-          this.logisticsClient,
-          { cmd: 'logistics.post.receive_orders' },
-          { orders: logisticsPayload },
-          { timeoutMs: RMQ_SERVICE_TIMEOUT },
-        )
-      : { data: [] };
+    const postAssignments = await rmqSend<{
+      data: Array<{ order_id: string; post_id: string }>;
+    }>(
+      this.logisticsClient,
+      { cmd: 'logistics.post.receive_orders' },
+      { orders: logisticsPayload },
+      { timeoutMs: RMQ_SERVICE_TIMEOUT },
+    );
 
     const assignmentMap = new Map(
       (postAssignments?.data ?? []).map((a) => [a.order_id, a.post_id]),
@@ -9902,14 +9878,6 @@ export class OrderLifecycleService {
           holder_branch_id: null,
           holder_courier_id: null,
         };
-    // 2026-11-13: viloyat ombori buyurtmasining yangi ushlovchisi — ombor filiali.
-    const warehouseHolderById = new Map<string, typeof receiverHolder>();
-    for (const [orderId, homeBranchId] of regionalWarehouseHomeById) {
-      warehouseHolderById.set(
-        orderId,
-        await this.resolveHolderFromState(homeBranchId, null),
-      );
-    }
     const actorId = requester?.id ? String(requester.id) : 'system';
     const actorRole = requester?.id
       ? this.custody.toTrackingRole(requester.roles)
@@ -9924,10 +9892,6 @@ export class OrderLifecycleService {
       const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
       for (const order of orders) {
         const postId = assignmentMap.get(order.id);
-        const warehouseHomeBranchId =
-          regionalWarehouseHomeById.get(String(order.id)) ?? null;
-        const nextHolder =
-          warehouseHolderById.get(String(order.id)) ?? receiverHolder;
         const previousStatus = order.status;
         const nextStatus = Order_status.RECEIVED;
         const previousHolder = {
@@ -9956,13 +9920,9 @@ export class OrderLifecycleService {
             status: nextStatus,
             post_id: postId ?? null,
             ...(regionFill ? { region_id: regionFill } : {}),
-            // 2026-11-13: viloyat ombori buyurtmasi — ombor filialiga.
-            ...(warehouseHomeBranchId
-              ? { branch_id: warehouseHomeBranchId }
-              : {}),
-            holder_type: nextHolder.holder_type,
-            holder_branch_id: nextHolder.holder_branch_id,
-            holder_courier_id: nextHolder.holder_courier_id,
+            holder_type: receiverHolder.holder_type,
+            holder_branch_id: receiverHolder.holder_branch_id,
+            holder_courier_id: receiverHolder.holder_courier_id,
             last_handover_at: receivedAt,
             last_handover_by: receivedBy,
           })
@@ -9977,36 +9937,32 @@ export class OrderLifecycleService {
               to_status: nextStatus,
               changed_by: actorId,
               changed_by_role: actorRole,
-              note: warehouseHomeBranchId
-                ? `Ombor buyurtmasi qabul qilindi — ombor filialida (#${warehouseHomeBranchId}), pochtasiz`
-                : internal?.scanVerified
-                  ? 'Posilka skanerlab qabul qilindi va pochtaga ajratildi'
-                  : 'Order assigned to post',
+              note: internal?.scanVerified
+                ? 'Posilka skanerlab qabul qilindi va pochtaga ajratildi'
+                : 'Order assigned to post',
             },
             trackingRepo,
           );
         }
         const holderChanged =
-          previousHolder.type !== nextHolder.holder_type ||
+          previousHolder.type !== receiverHolder.holder_type ||
           String(previousHolder.branchId ?? '') !==
-            String(nextHolder.holder_branch_id ?? '') ||
+            String(receiverHolder.holder_branch_id ?? '') ||
           String(previousHolder.courierId ?? '') !==
-            String(nextHolder.holder_courier_id ?? '');
+            String(receiverHolder.holder_courier_id ?? '');
         if (holderChanged) {
           await this.custody.createCustodyEvent(
             {
               order_id: String(order.id),
               from_holder_type: previousHolder.type,
-              to_holder_type: nextHolder.holder_type,
+              to_holder_type: receiverHolder.holder_type,
               from_branch_id: previousHolder.branchId,
-              to_branch_id: nextHolder.holder_branch_id,
+              to_branch_id: receiverHolder.holder_branch_id,
               from_courier_id: previousHolder.courierId,
-              to_courier_id: nextHolder.holder_courier_id,
+              to_courier_id: receiverHolder.holder_courier_id,
               changed_by: actorId,
               changed_by_role: actorRole,
-              note: warehouseHomeBranchId
-                ? 'Qabul qilindi — ombor filialiga'
-                : 'Qabul qilindi',
+              note: 'Qabul qilindi',
             },
             custodyRepo,
           );
@@ -10016,12 +9972,9 @@ export class OrderLifecycleService {
         if (regionFill) {
           order.region_id = regionFill;
         }
-        if (warehouseHomeBranchId) {
-          order.branch_id = warehouseHomeBranchId;
-        }
-        order.holder_type = nextHolder.holder_type;
-        order.holder_branch_id = nextHolder.holder_branch_id;
-        order.holder_courier_id = nextHolder.holder_courier_id;
+        order.holder_type = receiverHolder.holder_type;
+        order.holder_branch_id = receiverHolder.holder_branch_id;
+        order.holder_courier_id = receiverHolder.holder_courier_id;
         order.last_handover_at = receivedAt;
         order.last_handover_by = receivedBy;
         await this.syncOrderToSearch(order, queryRunner.manager);
@@ -10057,10 +10010,6 @@ export class OrderLifecycleService {
         new_value: {
           status: Order_status.RECEIVED,
           post_id: order.post_id,
-          // 2026-11-13: viloyat ombori buyurtmasi — ombor filialiga o'tdi.
-          ...(regionalWarehouseHomeById.has(String(order.id))
-            ? { branch_id: order.branch_id }
-            : {}),
         },
         description: ActivityDescribeUz.orderStatusChanged(
           order.id,

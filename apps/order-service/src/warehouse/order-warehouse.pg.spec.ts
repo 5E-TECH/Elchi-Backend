@@ -116,8 +116,8 @@ const MARKET_CREATOR = { id: MARKET_ID, roles: ['market'] };
     let productId: string;
     /** Soxta CATALOG: RESERVE dan oldin/keyin aralashish (poyga, timeout). */
     let reserveHook:
-      | ((payload: Row, run: () => Promise<unknown>) => Promise<unknown>)
-      | null = null;
+      ((payload: Row, run: () => Promise<unknown>) => Promise<unknown>) | null =
+      null;
     const catalogCalls: string[] = [];
     /**
      * VkKDSNNn: HQ filiali ('1') katalog ma'lumotnomasida — faqat markaziy
@@ -781,9 +781,9 @@ const MARKET_CREATOR = { id: MARKET_ID, roles: ['market'] };
 
     /**
      * Ega 2026-11-13: HQ xodimi ombordan yaratgani — oddiy buyurtma kabi
-     * `new`, HQ'da; band yaratishda. «Qabul qilish» uni ombor filialiga,
-     * pochtasiz o'tkazadi (yaratishda avval shunday edi); keyingi zanjir
-     * (kuryer → chiqim) o'zgarmaydi. O'chirilsa — band bo'shaydi.
+     * `new`, HQ'da; band yaratishda. «Qabul qilish» — oddiy buyurtma kabi
+     * hudud pochtasiga (2026-11-14; uyi — ombor filiali, o'zgarmaydi);
+     * keyingi zanjir (kuryer → chiqim) o'zgarmaydi. O'chirilsa — band bo'shaydi.
      */
     describe('2026-11-13 — HQ xodimi ombordan yaratsa: `new` → qabul', () => {
       const logisticsCmds: string[] = [];
@@ -794,19 +794,33 @@ const MARKET_CREATOR = { id: MARKET_ID, roles: ['market'] };
             send: jest.fn(() => of({ data: [{ id: '801' }] })),
           },
           logisticsClient: {
-            send: jest.fn((pattern: { cmd: string }) => {
-              logisticsCmds.push(pattern.cmd);
-              return pattern.cmd === 'logistics.district.find_by_ids'
-                ? of({
+            send: jest.fn(
+              (
+                pattern: { cmd: string },
+                payload: { orders?: Array<{ order_id: string }> },
+              ) => {
+                logisticsCmds.push(pattern.cmd);
+                if (pattern.cmd === 'logistics.district.find_by_ids') {
+                  return of({
                     data: [{ id: DISTRICT_SAM, assigned_region: REGION_SAM }],
-                  })
-                : of({ data: [] });
-            }),
+                  });
+                }
+                if (pattern.cmd === 'logistics.post.receive_orders') {
+                  return of({
+                    data: (payload?.orders ?? []).map((row) => ({
+                      order_id: String(row.order_id),
+                      post_id: '9001',
+                    })),
+                  });
+                }
+                return of({ data: [] });
+              },
+            ),
           },
         });
       });
 
-      it('⭐ registrator: NEW, HQ`da, band → SA qabul qiladi → RECEIVED ombor filialida (pochtasiz) → kuryer → chiqim', async () => {
+      it('⭐ registrator: NEW, HQ`da, band → SA qabul qiladi → RECEIVED, hudud pochtasida → kuryer → chiqim', async () => {
         const created = await createOrder(2, {}, REGISTRATOR);
         expect(await orderRow(created.id)).toMatchObject({
           status: Order_status.NEW,
@@ -826,13 +840,13 @@ const MARKET_CREATOR = { id: MARKET_ID, roles: ['market'] };
         expect(await orderRow(created.id)).toMatchObject({
           status: Order_status.RECEIVED,
           fulfillment_source: 'WAREHOUSE',
-          branch_id: BRANCH_SAM,
+          branch_id: HQ_BRANCH,
           home_branch_id: BRANCH_SAM,
-          holder_type: OrderHolderType.BRANCH,
-          holder_branch_id: BRANCH_SAM,
-          post_id: null,
+          holder_type: OrderHolderType.HQ,
+          holder_branch_id: null,
+          post_id: '9001',
         });
-        expect(logisticsCmds).not.toContain('logistics.post.receive_orders');
+        expect(logisticsCmds).toContain('logistics.post.receive_orders');
         // Qabul qoldiqqa tegmaydi; omborga hodisa yo'q.
         expect(await stockRow()).toEqual({ on_hand: 5, reserved: 2 });
         expect(await pendingCatalog()).toEqual([]);
@@ -843,7 +857,7 @@ const MARKET_CREATOR = { id: MARKET_ID, roles: ['market'] };
         );
         expect(tracking.map((row) => row.note)).toEqual([
           `Order created — ombordan (#${warehouseId}), qabulni kutmoqda`,
-          `Ombor buyurtmasi qabul qilindi — ombor filialida (#${BRANCH_SAM}), pochtasiz`,
+          'Order assigned to post',
         ]);
 
         await assign(created.id);
