@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import {
   AI_AUDITED_FIELDS,
   maskPhoneForLog,
+  maskPhonesForLog,
   normalizePersonName,
   normalizeUzPhone,
   type AiAuditedField,
@@ -94,8 +95,15 @@ function snapshotP17(
           const score = Number(r.score);
           return {
             method: text(r.method).slice(0, 16),
-            ai_text: textOrNull(r.ai_text)?.slice(0, 80) ?? null,
-            score: r.score !== null && Number.isFinite(score) ? score : null,
+            // #649 review: AI [TEL_n] tokenini nusxalasa ham raqam saqlanmaydi.
+            ai_text: (() => {
+              const t = textOrNull(r.ai_text);
+              return t ? maskPhonesForLog(t).slice(0, 80) : null;
+            })(),
+            score:
+              r.score !== null && Number.isFinite(score)
+                ? Math.min(1, Math.max(0, score))
+                : null,
           };
         })()
       : null;

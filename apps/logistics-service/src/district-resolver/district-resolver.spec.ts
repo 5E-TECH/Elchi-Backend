@@ -1052,6 +1052,19 @@ describe('P1-7: match (D6) va region_inferred', () => {
       score: null,
       region_switched: true,
     });
+    // Qaytgan viloyat berilgani emas.
+    expect(res.region_given).toBe(false);
+  });
+
+  it('#649 review: almashtirilgan tanlov ham R2 (cross_region_confusable) dan o‘tadi', () => {
+    const res = resolve({
+      region_name: 'Andijon',
+      district_name: 'Mirobod',
+      region_inferred: true,
+    });
+    expect(res.district_id).toBeNull();
+    expect(res.reason).toBe('cross_region_confusable');
+    expect(res.candidates.length).toBeGreaterThanOrEqual(2);
   });
 
   it('region_inferred=true, lekin faqat imlo varianti — o‘tilmaydi', () => {

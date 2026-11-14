@@ -437,4 +437,17 @@ describe('sanitizeSnapshot — P1-7', () => {
     expect(s?.region_inferred).toBe(true);
     expect(s?.check_codes).toEqual(['price_check', 'qty_check']);
   });
+
+  it('#649 review: ai_text dagi telefon log-maskasi bilan saqlanadi', () => {
+    const s = sanitizeSnapshot({
+      index: 0,
+      items: [],
+      district_match: {
+        method: 'llm',
+        ai_text: 'Asaka +998901234567',
+        score: null,
+      },
+    });
+    expect(s?.district_match?.ai_text).toBe('Asaka +99890*****67');
+  });
 });

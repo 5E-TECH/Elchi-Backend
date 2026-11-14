@@ -261,6 +261,19 @@ describe('regionMentionedInText (P1-7)', () => {
     ['Chilonzor 5-kvartal', 'Toshkent shahri', false],
     ['Qibray', 'Toshkent viloyati', false],
     ['xech narsa', null, true],
+    // #649 review: qisqartmalar — "aytilgan" (viloyat almashtirilmaydi).
+    ['Ali Sam. vil. Xonobod', 'Samarqand', true],
+    ['Sam vil Xonobod', 'Samarqand viloyati', true],
+    ['Farg. vil. Quva', "Farg'ona", true],
+    ['Tosh. vil. Qibray', 'Toshkent viloyati', true],
+    ['Qashqa, Kitob', 'Qashqadaryo', true],
+    ['Surxon Denov', 'Surxondaryo', true],
+    ['Andj Asaka', 'Andijon', true],
+    ['QR Nukus', "Qoraqalpog'iston", true],
+    ['Сырдарьинская обл, Гулистан', 'Sirdaryo', true],
+    // Tasodifiy so'zlar qisqartma emas.
+    ['Ali atir 2 ta, Xonobod', 'Samarqand', false],
+    ["Qibray, Navoiy ko'chasi", 'Toshkent viloyati', false],
   ])('%s / %s → %s', (text, region, want) => {
     expect(regionMentionedInText(text, region)).toBe(want);
   });

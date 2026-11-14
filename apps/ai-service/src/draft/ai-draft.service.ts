@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { Repository } from 'typeorm';
 import {
   AI_AUDITED_FIELDS,
+  maskPhonesForLog,
   type AiAuditedField,
   type AiDraftConfirmContext,
   type AiDraftLinkItem,
@@ -177,7 +178,6 @@ export function aiSourceHash(text: string, imagesBase64: string[]): string {
   return h.digest('hex');
 }
 
-/** Gateway snapshot'ini runtime'da tekshiradi — oq ro'yxat bo'yicha qayta yig'iladi. */
 /** P1-7 ixtiyoriy maydonlari — faqat berilganda (eski snapshot o'zgarmaydi). */
 function p17Of(
   v: Row,
@@ -196,7 +196,10 @@ function p17Of(
       const score = Number(r.score);
       out.district_match = {
         method: str(r.method, 16) ?? '',
-        ai_text: str(r.ai_text, 80),
+        ai_text: (() => {
+          const t = str(r.ai_text, 80);
+          return t ? maskPhonesForLog(t).slice(0, 80) : null;
+        })(),
         score:
           r.score !== null && Number.isFinite(score)
             ? Math.min(1, Math.max(0, score))
@@ -216,6 +219,7 @@ function p17Of(
   return out;
 }
 
+/** Gateway snapshot'ini runtime'da tekshiradi — oq ro'yxat bo'yicha qayta yig'iladi. */
 export function sanitizeSnapshot(
   value: unknown,
 ): AiDraftPreviewSnapshot | null {

@@ -991,8 +991,13 @@ export function resolveDistrictText(
       !lockedRegion &&
       AMBIGUOUS_REGION_WORDS.has(normGeo(q.region_name)) &&
       isTashkentSato(region?.sato);
+    // #649 review: AI taxmin qilgan viloyatdan almashtirilgan tanlov ham R2
+    // tekshiruvidan o'tadi — aks holda region_inferred=true matn viloyatsiz
+    // matndan EHTIYOTSIZROQ natija olardi (Andijon + Mirobod → Mirzaobod).
     const confusables =
-      lockedRegion || tashkentHint ? [] : crossRegionNeighbours(d, idx);
+      (lockedRegion && !regionSwitched) || tashkentHint
+        ? []
+        : crossRegionNeighbours(d, idx);
     // R2 (qulf bor, faqat 3-usul fuzzy): so'rov qulfdan TASHQARIDAGI
     // tumanga kamida shunchalik yaqin ("Qashqadaryo" + "Kogon" → Koson
     // 0.80, lekin Kogon (Buxoro) 1.0) — viloyat yoki tuman xato yozilgan.
@@ -1073,7 +1078,9 @@ export function resolveDistrictText(
       district_id: d.id,
       district_label: region?.label ? `${region.label}, ${d.name}` : d.name,
       district_name: d.name,
-      region_given: regionGiven,
+      // Almashtirilganda qaytgan viloyat berilgani EMAS — FE "AI taxmin
+      // qildi" ishorasini ko'rsatadi.
+      region_given: regionGiven && !regionSwitched,
       candidates: [],
       match,
     };

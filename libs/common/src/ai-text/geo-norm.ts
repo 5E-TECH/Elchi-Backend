@@ -335,10 +335,79 @@ export function regionMentionedInText(
     seq.length > 0 &&
     textTokens.some((_, i) => seq.every((w, k) => textTokens[i + k] === w));
   if (baseSets.some(hasSeq)) return true;
-  return baseSets.some(
-    (seq) =>
-      seq.length === 1 &&
-      seq[0].length >= 5 &&
-      textTokens.some((t) => simRatio(t, seq[0]) >= 0.8),
-  );
+  if (
+    baseSets.some(
+      (seq) =>
+        seq.length === 1 &&
+        seq[0].length >= 5 &&
+        textTokens.some((t) => simRatio(t, seq[0]) >= 0.8),
+    )
+  ) {
+    return true;
+  }
+  return regionAbbreviationInText(text, baseSets, sato);
+}
+
+/** Viloyat qisqartmasidan keyin keladigan so'zlar ("Sam. vil.", "Сырд. обл"). */
+const REGION_WORD_AFTER = new Set([
+  'vil',
+  'viloyat',
+  'viloyati',
+  'viloyatidan',
+  'obl',
+  'oblast',
+  'oblasti',
+]);
+/** Butun so'z qisqartmalari → SOATO. */
+const REGION_ABBREVIATIONS: Readonly<Record<string, string>> = {
+  qr: '1735',
+  qqr: '1735',
+};
+
+function commonPrefixLength(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+function isSubsequence(short: string, long: string): boolean {
+  let i = 0;
+  for (const ch of long) if (ch === short[i]) i++;
+  return i === short.length;
+}
+
+/**
+ * #649 review: qisqartma shakllar ("Sam. vil.", "Farg. vil.", "Qashqa",
+ * "Surxon", "Andj", "QR", "Сырдарьинская обл") ham "aytilgan" hisoblanadi.
+ * Ortiqcha "aytilgan" — xavfsiz tomon: viloyat almashtirilmaydi (checklist
+ * #1), operator yozgan viloyat saqlanadi.
+ */
+function regionAbbreviationInText(
+  text: string | null | undefined,
+  baseSets: string[][],
+  sato: string | null,
+): boolean {
+  const raw = lightNorm(text)
+    .replace(RU_ADJ_SUFFIX_RE, '$1')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(' ')
+    .filter(Boolean);
+  if (!raw.length) return false;
+  if (sato && raw.some((t) => REGION_ABBREVIATIONS[t] === sato)) return true;
+  const bases = baseSets
+    .filter((seq) => seq.length === 1 && seq[0].length >= 5)
+    .map((seq) => seq[0]);
+  return raw.some((t, i) => {
+    if (t.length < 3 || !/^\p{L}+$/u.test(t)) return false;
+    const regionWordNext = REGION_WORD_AFTER.has(raw[i + 1] ?? '');
+    return bases.some((b) => {
+      if (t.slice(0, 2) !== b.slice(0, 2)) return false;
+      // Rus sifat o'zagi ("сырдарьинская" → sirdarin) asosdan uzun bo'lishi
+      // mumkin — "vil/obl" yonida umumiy prefiks ≥ 5 yetarli.
+      if (regionWordNext && commonPrefixLength(t, b) >= 5) return true;
+      if (t.length >= b.length) return false;
+      if (regionWordNext) return isSubsequence(t, b);
+      return t.length >= 4 && (b.startsWith(t) || isSubsequence(t, b));
+    });
+  });
 }

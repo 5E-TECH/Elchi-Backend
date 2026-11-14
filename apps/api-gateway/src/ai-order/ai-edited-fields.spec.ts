@@ -230,4 +230,23 @@ describe('buildPreviewSnapshots — P1-7', () => {
     expect(s.region_inferred).toBe(true);
     expect(s.check_codes).toEqual(['district_low_confidence', 'qty_check']);
   });
+
+  it('#649 review: score [0,1] ga qisiladi, ai_text telefoni maskalanadi', () => {
+    const [s] = buildPreviewSnapshots([
+      {
+        index: 0,
+        district_match: {
+          method: 'fuzzy',
+          ai_text: 'Asaka 90 123 45 67',
+          score: 7,
+        },
+        items: [],
+      },
+    ]);
+    expect(s.district_match).toEqual({
+      method: 'fuzzy',
+      ai_text: 'Asaka +99890*****67',
+      score: 1,
+    });
+  });
 });
