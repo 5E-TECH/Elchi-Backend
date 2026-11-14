@@ -17,6 +17,7 @@ import {
 import { successRes } from '../../../../libs/common/helpers/response';
 import { advisorCall, assertSuperadmin } from './advisor-errors';
 import { AdvisorAlertsService } from './advisor-alerts.service';
+import { AdvisorExplainService } from './advisor-explain.service';
 import { AdvisorSettingsService } from './advisor-settings.service';
 
 /**
@@ -30,6 +31,7 @@ export class AdvisorController {
     private readonly rmqService: RmqService,
     private readonly settings: AdvisorSettingsService,
     private readonly alerts: AdvisorAlertsService,
+    private readonly explain: AdvisorExplainService,
   ) {}
 
   @MessagePattern({ cmd: AI_ADVISOR_PATTERNS.OVERVIEW })
@@ -104,6 +106,24 @@ export class AdvisorController {
           ),
           200,
           'AI advisor alert updated',
+        );
+      }),
+    );
+  }
+
+  /** §7.4 — doim 202 (`pending`/`ready`); 429 budjet, 503 AI o'chiq. */
+  @MessagePattern({ cmd: AI_ADVISOR_PATTERNS.ALERTS_EXPLAIN })
+  explainAlert(
+    @Payload() data: { requester?: AiAdvisorRequester; id?: string },
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      advisorCall(AI_ADVISOR_PATTERNS.ALERTS_EXPLAIN, async () => {
+        const requester = assertSuperadmin(data?.requester);
+        return successRes(
+          await this.explain.request(requester, String(data?.id ?? '')),
+          202,
+          'AI advisor explanation',
         );
       }),
     );

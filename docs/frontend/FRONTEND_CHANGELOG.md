@@ -22,6 +22,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 5-qism): AI izohi
+
+Shartnoma v0.3 §6, §7.4. Deploy: api-gateway + ai-service, migratsiyasiz. Env: `AI_ADVISOR_EXPLAIN` (sukut on), `AI_ADVISOR_MODEL` (bo'sh — joriy sukut model).
+
+- 🆕 `POST /ai/advisor/alerts/:id/explain` (FAQAT superadmin, tana yo'q) — doim **202**: `data = {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}`. `ready` — keshdan (`cached: true`, `poll_after_ms: null`); `pending` — `GET /ai/advisor/alerts/:id` ni `poll_after_ms` (2000) da poll qiling yoki realtime `ai.advisor.alert_changed {change: "explanation"}` ni kuting. 3 daqiqadan yangi `pending` — qayta navbat yo'q.
+- 🟢 Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`; 429 `AI_ADVISOR_BUDGET_EXCEEDED {scope: "global", period: "day", reset_at, retry_after_seconds}` (maslahatchi budjeti — BE-1); 503 `AI_ADVISOR_AI_DISABLED {reason: ai_disabled|feature_disabled|budget_unreadable}`. 429/503 `explanation_status` ni o'zgartirmaydi.
+- 🟢 Fonda xato bo'lsa tafsilotda `explanation_status: "failed"` + `explanation_error: budget_exceeded|ai_disabled|error` (budjetda `explanation_error_scope`, `explanation_retry_at`) — «Qayta urinish» = yana `POST explain`.
+- 🟢 `critical` ogohlantirishlarga izoh avtomatik (har tick'dan keyin ≤ 5 ta, backfill'siz); `warning` — faqat so'rov bilan. Matn — o'zbekcha cheklangan markdown (≤ 2000, HTML yo'q), pul amali taklif qilinmaydi; promptda chek oluvchi/to'lovchi ismi va tranzaksiya raqami yo'q.
+
+**Frontend action items:**
+- 🔧 «AI izohi» tugmasi → `POST explain`; 202 `pending` — skeleton + poll/realtime; 429 — `reset_at` gacha tugma o'chiq; 503 — «AI vaqtincha o'chiq».
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 4-qism): bildirishnoma, faoliyat jurnali, realtime
 
 Shartnoma v0.3 §9, §11, §12. Deploy: api-gateway + ai-service (+ notification-service — faqat reyestr), migratsiyasiz.

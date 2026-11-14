@@ -299,6 +299,7 @@ jobs:
           apps/ai-service/src/advisor/advisor-engine.BE5.pg.spec.ts
           apps/ai-service/src/advisor/advisor-alerts.BE5.pg.spec.ts
           apps/ai-service/src/advisor/advisor-notify.BE5.pg.spec.ts
+          apps/ai-service/src/advisor/advisor-explain.BE5.pg.spec.ts
           apps/finance-service/src/advisor/advisor-inputs.BE5.pg.spec.ts
         env:
           NODE_ENV: test

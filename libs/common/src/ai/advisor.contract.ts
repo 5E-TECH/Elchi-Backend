@@ -50,6 +50,7 @@ export const AI_ADVISOR_PATTERNS = {
   ALERTS_LIST: 'ai.advisor.alerts.list',
   ALERTS_GET: 'ai.advisor.alerts.get',
   ALERTS_UPDATE: 'ai.advisor.alerts.update',
+  ALERTS_EXPLAIN: 'ai.advisor.alerts.explain',
 } as const;
 
 /** Xato kodlari (`PUBLIC_ERROR_CODES` da ruxsat etilgan maydonlari bilan). */
@@ -499,3 +500,20 @@ export interface AiAdvisorAlertUpdateRequest {
   status: 'resolved' | 'dismissed';
   note?: unknown;
 }
+
+// ─── BE-5 5-qism: AI izohi (§7.4) ─────────────────────────────────────────
+
+/** `POST alerts/:id/explain` → 202 `data`. */
+export interface AiAdvisorExplainResult {
+  alert_id: string;
+  explanation_status: 'pending' | 'ready';
+  explanation_md: string | null;
+  explained_at: string | null;
+  cached: boolean;
+  poll_after_ms: number | null;
+}
+
+/** Bitta tick'dagi avtomatik izohlar chegarasi (§4.0, BQ5). */
+export const AI_ADVISOR_AUTO_EXPLAIN_PER_TICK = 5;
+/** Izoh matni chegarasi (§5.2 `explanation_md` ≤ 2000). */
+export const AI_ADVISOR_EXPLANATION_MAX = 2000;

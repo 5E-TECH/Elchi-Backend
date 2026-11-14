@@ -23769,6 +23769,40 @@
         ]
       }
     },
+    "/ai/advisor/alerts/{id}/explain": {
+      "post": {
+        "description": "Tana yo‘q. LLM sinxron kutilmaydi: `202 data = {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}`. `ready` — keshdan (`cached: true`, narx 0). `pending` (3 daqiqadan yangi) — qayta navbat yo‘q. Natija: `GET /ai/advisor/alerts/:id` poll (`poll_after_ms`) yoki realtime `ai.advisor.alert_changed {change: explanation}`. Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`; 429 `AI_ADVISOR_BUDGET_EXCEEDED {scope: global, period: day, reset_at, retry_after_seconds}`; 503 `AI_ADVISOR_AI_DISABLED {reason: ai_disabled|feature_disabled|budget_unreadable}`. 429/503 `explanation_status` ni o‘zgartirmaydi. Jiddiy ogohlantirishlarga izoh avtomatik (tick’dan keyin, ≤ 5 ta). Pul amali yo‘q.",
+        "operationId": "AiAdvisorGatewayController_explainAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ogohlantirish ID si",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: AI izohini so‘rash (faqat superadmin, doim 202)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/ai/advisor/settings": {
       "get": {
         "description": "`data` = `{version, rules{R1..R8: {enabled, severity, telegram, <chegaralar>}}, limits{rules{<R>{<maydon>{min, max, step, unit, default}}}}, telegram, budget, schedule, updated_at, updated_by{id, name}}`. `severity` — qotirilgan (R2, R6, R7 critical; qolgani warning). `telegram`/`budget`/`schedule` — BE-1, hozircha null. Qator yo‘q — `version: 1` va sukutlar.",
