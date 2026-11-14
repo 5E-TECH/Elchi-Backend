@@ -63,8 +63,15 @@ export function normGeo(s: string | null | undefined): string {
     translit(s)
       // Transliteratsiya: "kh" = "x" (Khiva=Xiva, Khorazm=Xorazm).
       .replace(/kh/g, 'x')
+      // D5: rus sifat shakli — "Чиланзарский район" → "chilanzar",
+      // "Ташкентская область" → "tashkent". Faqat so'z OXIRIDA va o'zak
+      // kamida 3 harf.
       .replace(
-        /\s*(\b(?:tumani|tuman|shahri|shahar|shaharcha|viloyati|viloyat|respublikasi)\b|\b(?:sh|t)\.)\s*/g,
+        /\b([a-z']{3,}?)(?:skiy|skij|skaya|skaja|skoy|skoye|skoe)\b/g,
+        '$1',
+      )
+      .replace(
+        /\s*(\b(?:tumani|tuman|shahri|shaxri|shahar|shaharchasi|shaharcha|viloyati|viloyat|respublikasi|rayon|rayoni|raion|gorod|oblast|oblasti)\b|\br-n\b\.?|\b(?:sh|t|g|v|vil|obl)\.)\s*/g,
         ' ',
       )
       .replace(/\s+/g, ' ')
@@ -184,11 +191,11 @@ export const REGION_ALIASES: ReadonlyArray<RegionAliasRow> = Object.freeze(
  * topiladi. Alohida so'z bo'lishi shart — "Shahrixon" marker emas.
  */
 const CITY_MARKER_RE =
-  /(?<![\p{L}\p{N}])(?:shahri|shahar|sh|city|gorod)(?![\p{L}\p{N}])/u;
+  /(?<![\p{L}\p{N}])(?:shahri|shaxri|shahar|sh|city|gorod|g(?=\.))(?![\p{L}\p{N}])/u;
 
 /** Viloyat markeri: viloyati | viloyat | vil | vil. | oblast | obl | obl. */
 const REGION_MARKER_RE =
-  /(?<![\p{L}\p{N}])(?:viloyati|viloyat|vil|oblast|obl)(?![\p{L}\p{N}])/u;
+  /(?<![\p{L}\p{N}])(?:viloyati|viloyat|vil|oblast|oblasti|obl|v(?=\.))(?![\p{L}\p{N}])/u;
 
 /**
  * `normGeo` bilmaydigan marker qisqartmalari (vil., obl., oblast, city,
