@@ -288,3 +288,48 @@ describe('UZ_PHONE_RE', () => {
     expect(UZ_PHONE_RE.test('900 000 000')).toBe(false);
   });
 });
+
+describe('A3: qo‘shimcha guruhlashlar va summa himoyasi', () => {
+  const phonesOf = (text: string) => [...maskPhones(text).tokens.values()];
+
+  it.each([
+    ['raqam +998 901 23 45 67 Nurota', '+998901234567'],
+    ['998 901 23 45 67', '+998901234567'],
+    ['+998 901 234 567', '+998901234567'],
+    ['tel 901 23 45 67', '+998901234567'],
+    ['901-23-45-67 Chust', '+998901234567'],
+    ['tel: 901 234 567', '+998901234567'],
+    ['номер 901 234 567', '+998901234567'],
+  ])('%s → maskalanadi', (text, phone) => {
+    expect(phonesOf(text)).toEqual([phone]);
+    expect(maskPhones(text).masked).not.toMatch(/\d{2}/);
+  });
+
+  it.each([
+    ['muzlatgich 915 500 000', '915 500 000'],
+    ['avto 901 234 567 so‘m', '901 234 567 so‘m'],
+    ['narxi 901234567 so‘m', '901234567 so‘m'],
+    ['narxi 901234567 сум', '901234567 сум'],
+    ['narx 90 123 45 67 ming', '90 123 45 67 ming'],
+    ['kvartira 900 000 000', '900 000 000'],
+    ['atir 150 000 so‘m', '150 000 so‘m'],
+    ['3 ta, donasi 250 ming, jami 750 000', '750 000'],
+    ['sumka 950 000 000$', '950 000 000$'],
+  ])('%s — narx SAQLANADI', (text, keep) => {
+    const { masked, tokens } = maskPhones(text);
+    expect(tokens.size).toBe(0);
+    expect(masked).toContain(keep);
+  });
+
+  it('bir matnda telefon va narx', () => {
+    const { masked, tokens } = maskPhones(
+      'Ali +998 901 23 45 67, televizor 1 500 000 so‘m',
+    );
+    expect([...tokens.values()]).toEqual(['+998901234567']);
+    expect(masked).toBe('Ali [TEL_1], televizor 1 500 000 so‘m');
+  });
+
+  it('maskPhonesForLog ham yangi guruhlashni yashiradi', () => {
+    expect(maskPhonesForLog('tel +998 901 23 45 67')).toBe('tel +99890*****67');
+  });
+});

@@ -34,6 +34,17 @@
 /** UZ milliy kodlari (milliy raqamning birinchi 2 raqami). */
 const UZ_NATIONAL_CODE = '(?:20|33|5[05]|6[1-9]|7\\d|88|9[013-57-9])';
 
+/**
+ * Raqamdan keyin summa so'zi kelmasin: `901234567 so'm`, `90 123 45 67 ming`
+ * — narx, telefon EMAS (narxni yo'qotish eng qimmat xato).
+ */
+const NOT_MONEY_AFTER =
+  "(?![ ]?(?:so['ʻ‘’`]?m|sum|сум|сўм|ming|минг|тыс|ming|mln|млн|million|\\$|usd|dollar|k(?![a-zа-я])))";
+
+/** Prefikssiz 3-3-3 uchun: oldida telefon so'zi (≤ 3 belgi oraliq). */
+const PHONE_WORD_BEFORE =
+  '(?:\\b(?:tel|telefon|raqam|raqami|nomer|phone)|(?<![а-яё])(?:тел|телефон|номер|рақам))[ .:\\-]{0,3}';
+
 /** Guruhlar orasidagi bitta ixtiyoriy ajratgich (qavslar alohida). */
 const GROUP_SEP = '[ .\\-]?';
 
@@ -57,8 +68,25 @@ const UZ_NATIONAL = `(?:\\(${UZ_NATIONAL_CODE}\\)|${UZ_NATIONAL_CODE})${GROUP_SE
  * ishlatiladi.
  */
 export const UZ_PHONE_RE = new RegExp(
-  `(?<!\\d)${UZ_PHONE_PREFIX}${UZ_NATIONAL}(?!\\d)`,
+  `(?<!\\d)${UZ_PHONE_PREFIX}${UZ_NATIONAL}(?!\\d)${NOT_MONEY_AFTER}`,
 );
+
+/**
+ * A3: qo'shimcha guruhlashlar (asosiy `UZ_PHONE_RE` topmagan joyda):
+ * - +998 / 998 prefiksi bilan 3-2-2-2 (`+998 901 23 45 67`) va 3-3-3
+ *   (`+998 901 234 567`) — narx hech qachon 998 bilan boshlanmaydi;
+ * - prefikssiz 3-2-2-2 (`901 23 45 67`) — narxlar 3 talab guruhlanadi;
+ * - prefikssiz 3-3-3 (`901 234 567`) FAQAT telefon so'zidan keyin
+ *   ("tel", "raqam", "номер", ...) — aks holda `915 500 000` narx bo'lishi
+ *   mumkin.
+ * Hammasida summa so'zi (so'm, ming, млн, $, ...) kelsa — telefon EMAS.
+ */
+const UZ_ALT_PHONE_SOURCES: readonly string[] = [
+  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}\\d${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{2}(?!\\d)${NOT_MONEY_AFTER}`,
+  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}\\d${GROUP_SEP}\\d{3}${GROUP_SEP}\\d{3}(?!\\d)${NOT_MONEY_AFTER}`,
+  `(?<![\\d+])${UZ_NATIONAL_CODE}\\d[ .\\-]\\d{2}[ .\\-]\\d{2}[ .\\-]\\d{2}(?!\\d)${NOT_MONEY_AFTER}`,
+  `(?<=${PHONE_WORD_BEFORE})${UZ_NATIONAL_CODE}\\d[ .\\-]\\d{3}[ .\\-]\\d{3}(?!\\d)${NOT_MONEY_AFTER}`,
+];
 
 /**
  * Tokenga o'xshash qism (`[TEL_1]`, `TEL_1`, `[TEL_12`) — C4:
@@ -99,12 +127,15 @@ function replacePhoneCandidates(
   text: string,
   replacer: (e164: string, match: string) => string,
 ): string {
-  const re = new RegExp(UZ_PHONE_RE.source, 'g');
-  return text.replace(re, (match: string) => {
-    const e164 = toUzE164(match);
-    if (!e164 || /^0{7}$/.test(e164.slice(-7))) return match;
-    return replacer(e164, match);
-  });
+  const replace = (input: string, source: string, flags: string) =>
+    input.replace(new RegExp(source, flags), (match: string) => {
+      const e164 = toUzE164(match);
+      if (!e164 || /^0{7}$/.test(e164.slice(-7))) return match;
+      return replacer(e164, match);
+    });
+  let out = replace(text, UZ_PHONE_RE.source, 'g');
+  for (const source of UZ_ALT_PHONE_SOURCES) out = replace(out, source, 'giu');
+  return out;
 }
 
 /**
