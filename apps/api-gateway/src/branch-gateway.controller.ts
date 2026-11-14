@@ -292,6 +292,14 @@ export class BranchGatewayController {
         );
     }).pipe(
       switchMap((response: unknown) => {
+        // Noto'g'ri javob (`data` massiv emas) — «bog'lanmagan» deb
+        // hisoblanmaydi: yopiq, 503.
+        if (!Array.isArray(asRecord(response)?.data)) {
+          return throwError(
+            () =>
+              new ServiceUnavailableException(CARRIER_LINK_UNAVAILABLE_MESSAGE),
+          );
+        }
         const link = carrierLinksOf(response).get(courierId);
         if (!link) {
           return of(undefined);

@@ -508,6 +508,18 @@ describe('BranchGatewayController — Pochta → HQ kuryeri (HTTP)', () => {
       expect(branchSend).not.toHaveBeenCalled();
     });
 
+    it('integration noto‘g‘ri javob qaytardi (data massiv emas) — «bog‘lanmagan» EMAS, 503', async () => {
+      integrationSend.mockReturnValue(of({ statusCode: 200, data: null }));
+      branchRoutes();
+
+      const res = await request(http())
+        .patch('/couriers/5/branch')
+        .send({ branch_id: '15' });
+
+      expect(res.status).toBe(503);
+      expect(branchSend).not.toHaveBeenCalled();
+    });
+
     it('bog‘langan kuryer, branch.find_hq javob bermadi — 503', async () => {
       integrationSend.mockReturnValue(
         of({
