@@ -178,6 +178,44 @@ export function aiSourceHash(text: string, imagesBase64: string[]): string {
 }
 
 /** Gateway snapshot'ini runtime'da tekshiradi — oq ro'yxat bo'yicha qayta yig'iladi. */
+/** P1-7 ixtiyoriy maydonlari — faqat berilganda (eski snapshot o'zgarmaydi). */
+function p17Of(
+  v: Row,
+): Pick<
+  AiDraftPreviewSnapshot,
+  'district_match' | 'region_inferred' | 'check_codes'
+> {
+  const out: Pick<
+    AiDraftPreviewSnapshot,
+    'district_match' | 'region_inferred' | 'check_codes'
+  > = {};
+  if ('district_match' in v) {
+    const m = v.district_match;
+    if (m && typeof m === 'object' && !Array.isArray(m)) {
+      const r = m as Row;
+      const score = Number(r.score);
+      out.district_match = {
+        method: str(r.method, 16) ?? '',
+        ai_text: str(r.ai_text, 80),
+        score:
+          r.score !== null && Number.isFinite(score)
+            ? Math.min(1, Math.max(0, score))
+            : null,
+      };
+    } else {
+      out.district_match = null;
+    }
+  }
+  if ('region_inferred' in v) out.region_inferred = v.region_inferred === true;
+  if (Array.isArray(v.check_codes)) {
+    out.check_codes = v.check_codes
+      .filter((c): c is string => typeof c === 'string')
+      .map((c) => c.slice(0, 32))
+      .slice(0, 10);
+  }
+  return out;
+}
+
 export function sanitizeSnapshot(
   value: unknown,
 ): AiDraftPreviewSnapshot | null {
@@ -206,6 +244,7 @@ export function sanitizeSnapshot(
     comment: str(v.comment, 1000),
     operator: str(v.operator, 100),
     is_replacement: v.is_replacement === true,
+    ...p17Of(v),
     items: items
       .filter((it): it is Row => !!it && typeof it === 'object')
       .map((it) => ({

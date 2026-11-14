@@ -293,3 +293,48 @@ export function regionAlias(name: string | null | undefined): string | null {
   }
   return null;
 }
+
+/** Tokenlar (faqat harf/raqam) — `normGeo` dan keyin. */
+function geoTokens(s: string | null | undefined): string[] {
+  return normGeo(s)
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(' ')
+    .filter(Boolean);
+}
+
+/**
+ * P1-7: AI qaytargan viloyat nomi manba MATNIDA aytilganmi (asos so'zlari
+ * — o'zbek/rus/ingliz shakllari, butun so'z; bitta so'zli asosda imlo
+ * xatosi ham, simRatio ≥ 0.8). `false` — viloyat matnda yo'q, AI uni
+ * tumandan chiqargan (`region_inferred`). Viloyat bo'sh — `true` (taxmin yo'q).
+ */
+export function regionMentionedInText(
+  text: string | null | undefined,
+  regionName: string | null | undefined,
+): boolean {
+  const regionBaseTokens = geoTokens(regionName);
+  if (!regionBaseTokens.length) return true;
+  const textTokens = geoTokens(text);
+  if (!textTokens.length) return false;
+  const sato = regionAlias(regionName);
+  const baseSets: string[][] = [];
+  const rows = sato
+    ? REGION_ALIASES.filter((r) => r.sato === sato)
+    : REGION_ALIASES.filter((r) =>
+        r.bases.some((b) => regionBase(b) === regionBase(regionName)),
+      );
+  for (const row of rows) {
+    for (const b of row.bases) baseSets.push(geoTokens(regionBase(b)));
+  }
+  baseSets.push(regionBaseTokens);
+  const hasSeq = (seq: string[]) =>
+    seq.length > 0 &&
+    textTokens.some((_, i) => seq.every((w, k) => textTokens[i + k] === w));
+  if (baseSets.some(hasSeq)) return true;
+  return baseSets.some(
+    (seq) =>
+      seq.length === 1 &&
+      seq[0].length >= 5 &&
+      textTokens.some((t) => simRatio(t, seq[0]) >= 0.8),
+  );
+}

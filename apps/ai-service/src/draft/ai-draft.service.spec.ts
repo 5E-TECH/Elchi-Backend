@@ -418,3 +418,23 @@ describe('AiDraftService (vncdmXOy)', () => {
     await expect(service.purgeExpiredText()).resolves.toBe(0);
   });
 });
+
+describe('sanitizeSnapshot — P1-7', () => {
+  it('ixtiyoriy maydonlar: berilsa tozalanadi, berilmasa kalit yo‘q', () => {
+    const base = { index: 0, items: [] };
+    expect(sanitizeSnapshot(base)).not.toHaveProperty('district_match');
+    const s = sanitizeSnapshot({
+      ...base,
+      district_match: { method: 'alias', ai_text: 'x'.repeat(200), score: 7 },
+      region_inferred: true,
+      check_codes: ['price_check', 5, 'qty_check'],
+    });
+    expect(s?.district_match).toEqual({
+      method: 'alias',
+      ai_text: 'x'.repeat(80),
+      score: 1,
+    });
+    expect(s?.region_inferred).toBe(true);
+    expect(s?.check_codes).toEqual(['price_check', 'qty_check']);
+  });
+});

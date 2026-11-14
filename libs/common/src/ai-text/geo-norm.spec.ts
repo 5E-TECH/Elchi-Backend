@@ -7,6 +7,7 @@ import {
   lightNorm,
   normGeo,
   regionAlias,
+  regionMentionedInText,
 } from './';
 
 /**
@@ -246,5 +247,21 @@ describe('geo konstantalari', () => {
     expect(GEO_FUZZY_NEAR_DELTA).toBe(0.08);
     expect(GEO_REGION_FUZZY_MARGIN).toBe(0.1);
     expect(GEO_SUBSTRING_MIN).toBe(0.82);
+  });
+});
+
+describe('regionMentionedInText (P1-7)', () => {
+  it.each([
+    ['Ali Andijon Asaka atir', 'Andijon', true],
+    ['Ali Андижон вилояти Асака', 'Andijon viloyati', true],
+    ['Ali Andijan, Asaka', 'Andijon', true],
+    ['Ali Andijn Asaka', 'Andijon', true],
+    ['Ali Asaka tumani, atir', 'Andijon', false],
+    ['Toshkent sh. Chilonzor', 'Toshkent shahri', true],
+    ['Chilonzor 5-kvartal', 'Toshkent shahri', false],
+    ['Qibray', 'Toshkent viloyati', false],
+    ['xech narsa', null, true],
+  ])('%s / %s → %s', (text, region, want) => {
+    expect(regionMentionedInText(text, region)).toBe(want);
   });
 });

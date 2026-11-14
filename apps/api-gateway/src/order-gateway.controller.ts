@@ -3171,6 +3171,12 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'AI: matn/rasmdan buyurtma preview (hech narsa yaratmaydi)',
+    description:
+      "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: " +
+      "`district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), " +
+      "`region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), " +
+      "`checks: [{ code, … }]` — YUMSHOQ tekshiruvlar, `ready`/`issues` ga ta'sir qilmaydi: `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }`, `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. " +
+      "⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({

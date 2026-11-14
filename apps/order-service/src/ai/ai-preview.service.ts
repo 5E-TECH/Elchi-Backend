@@ -13,6 +13,9 @@ import {
   IdempotencyService,
   isJunkRawOrder,
   normalizeUzPhone,
+  normalizeProduct,
+  priceMismatchesMentions,
+  type MoneyMention,
   sanitizeExtractWarnings,
   rmqSend,
   type AiRequester,
@@ -22,7 +25,9 @@ import { DistrictLlmFallbackService } from './district-llm-fallback';
 import { ProductResolverService } from './product-resolver.service';
 import type { ResolvedAiItem } from './product-resolver.service';
 import type {
+  AiCheck,
   AiDistrictCandidate,
+  AiDistrictMatch,
   AiIssue,
   AiOrderPreview,
   AiPreviewItem,
@@ -80,8 +85,30 @@ const REPLACEMENT_MARK = '[ALMASHTIRISH]';
 
 type WhereDeliver = 'center' | 'address';
 
+/**
+ * P1-7: `price_check` (kind 'too_high') — bundan katta buyurtma summasi
+ * (so'm) gallyutsinatsiya bo'lishi mumkin (1.5e11 ham "Tayyor" edi).
+ */
+export const AI_PRICE_HIGH_LIMIT = 100_000_000;
+/** P1-7: `qty_check` — bundan katta miqdor shubhali. */
+export const AI_QTY_CHECK_LIMIT = 10;
+/** Past ishonchli tuman usullari (`district_low_confidence`). */
+const LOW_CONFIDENCE_METHODS = new Set(['partial', 'address', 'fuzzy', 'llm']);
+
 interface IdentityUserReply {
-  data?: { default_tariff?: unknown } | null;
+  data?: {
+    default_tariff?: unknown;
+    phone_number?: unknown;
+    extra_number?: unknown;
+    default_operator_phone?: unknown;
+    problem_phone?: unknown;
+  } | null;
+}
+
+interface MarketInfo {
+  tariff: WhereDeliver | null;
+  /** Market va uning operator/muammo raqamlari (normallashgan). */
+  phones: ReadonlySet<string>;
 }
 
 interface DistrictResolveReply {
@@ -109,6 +136,22 @@ const phoneText = (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value)
     ? String(value)
     : text(value);
+
+/** ai-service qo'ygan `money_mentions` — RMQ chegarasi, qayta tekshiriladi. */
+function moneyMentionsOf(value: unknown): MoneyMention[] {
+  if (!Array.isArray(value)) return [];
+  const out: MoneyMention[] = [];
+  for (const m of value.slice(0, 20)) {
+    const v = Number((m as { value?: unknown })?.value);
+    const k = (m as { kind?: unknown })?.kind;
+    if (!Number.isFinite(v) || v <= 0) continue;
+    out.push({
+      value: Math.round(v),
+      kind: k === 'unit' || k === 'total' ? k : null,
+    });
+  }
+  return out;
+}
 
 @Injectable()
 export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
@@ -184,11 +227,12 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
     const marketId = normalizeId(req.market_id);
 
     // ⚠️ Hamma o'qish PARALLEL va partiyaga BIR MARTADAN.
-    const [catalog, districts, defaultTariff] = await Promise.all([
+    const [catalog, districts, market] = await Promise.all([
       this.productResolver.loadCatalog(marketId),
       this.resolveDistricts(orders),
-      this.loadDefaultTariff(marketId),
+      this.loadMarket(marketId),
     ]);
+    const defaultTariff = market.tariff;
 
     const aiCtx = {
       requester: this.requesterOf(req.requester),
@@ -216,8 +260,25 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
         resolvedDistricts[index] ?? null,
         items[index] ?? [],
         defaultTariff,
+        market.phones,
       ),
     );
+    // P1-7: bir parse'da bir telefon bir nechta buyurtmada.
+    const byPhone = new Map<string, number[]>();
+    previews.forEach((p, i) => {
+      const n = normalizeUzPhone(p.phone_number);
+      if (n) byPhone.set(n, [...(byPhone.get(n) ?? []), i]);
+    });
+    for (const idxs of byPhone.values()) {
+      if (idxs.length < 2) continue;
+      for (const i of idxs) {
+        const other = idxs.find((j) => j !== i)!;
+        previews[i].checks.push({
+          code: 'same_phone_multi',
+          other_index: previews[other].index,
+        });
+      }
+    }
     return { previews };
   }
 
@@ -272,14 +333,16 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
       district_name: optText(o.district_name),
       address: optText(o.address),
       full_address: optText(o.full_address),
+      ...(o.region_inferred === true ? { region_inferred: true } : {}),
     };
   }
 
-  /** Marketning `default_tariff` i; xato/yo'q bo'lsa null (where_deliver 'center'). */
-  private async loadDefaultTariff(
-    marketId: string,
-  ): Promise<WhereDeliver | null> {
-    if (!marketId) return null;
+  /**
+   * Marketning `default_tariff` i (xato/yo'q bo'lsa null — where_deliver
+   * 'center') va raqamlari (P1-7 `phone_is_market`).
+   */
+  private async loadMarket(marketId: string): Promise<MarketInfo> {
+    if (!marketId) return { tariff: null, phones: new Set() };
     const reply = await rmqSend<IdentityUserReply>(
       this.identityClient,
       { cmd: 'identity.user.find_by_id' },
@@ -290,8 +353,19 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
         attachRequestId: false,
       },
     ).catch(() => null);
-    const tariff = reply?.data?.default_tariff;
-    return isWhereDeliver(tariff) ? tariff : null;
+    const data = reply?.data;
+    const tariff = data?.default_tariff;
+    const phones = new Set<string>();
+    for (const v of [
+      data?.phone_number,
+      data?.extra_number,
+      data?.default_operator_phone,
+      data?.problem_phone,
+    ]) {
+      const n = normalizeUzPhone(phoneText(v));
+      if (n) phones.add(n);
+    }
+    return { tariff: isWhereDeliver(tariff) ? tariff : null, phones };
   }
 
   private requesterOf(value: unknown): AiRequester {
@@ -316,6 +390,7 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
     district: DistrictTextResolution | null,
     resolvedItems: readonly ResolvedAiItem[],
     defaultTariff: WhereDeliver | null,
+    marketPhones: ReadonlySet<string> = new Set(),
   ): AiOrderPreview {
     // ─── Telefon ───
     // Normallashmasa — xom matn (trim) + phone_invalid: operator nima
@@ -398,6 +473,69 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
       unresolved: it.unresolved,
     }));
 
+    // ─── P1-7: tuman usuli, yumshoq tekshiruvlar ───
+    const aiDistrictText = textOrNull(raw.district_name)?.slice(0, 80) ?? null;
+    let districtMatch: AiDistrictMatch | null = null;
+    if (districtId) {
+      if (district?.llm_picked === true) {
+        districtMatch = { method: 'llm', ai_text: aiDistrictText, score: null };
+      } else if (district?.match) {
+        const score = Number(district.match.score);
+        districtMatch = {
+          method: district.match.method,
+          ai_text: aiDistrictText,
+          score:
+            district.match.score !== null && Number.isFinite(score)
+              ? Math.min(1, Math.max(0, score))
+              : null,
+        };
+      }
+    }
+    const checks: AiCheck[] = [];
+    if (
+      districtMatch &&
+      (LOW_CONFIDENCE_METHODS.has(districtMatch.method) ||
+        district?.match?.region_switched === true)
+    ) {
+      checks.push({ code: 'district_low_confidence' });
+    }
+    const mentions = moneyMentionsOf(raw.money_mentions);
+    const totalQty = items.reduce((a, it) => a + (it.quantity || 0), 0);
+    if (totalPrice !== null && totalPrice > AI_PRICE_HIGH_LIMIT) {
+      checks.push({
+        code: 'price_check',
+        kind: 'too_high',
+        mentions: mentions.map((m) => m.value),
+      });
+    } else if (priceMismatchesMentions(totalPrice, mentions, totalQty)) {
+      checks.push({
+        code: 'price_check',
+        kind: 'mismatch',
+        mentions: mentions.map((m) => m.value),
+      });
+    }
+    const mentionValues = new Set(mentions.map((m) => m.value));
+    items.forEach((it, i) => {
+      if (it.quantity > AI_QTY_CHECK_LIMIT || mentionValues.has(it.quantity)) {
+        checks.push({ code: 'qty_check', item_index: i });
+      }
+    });
+    const itemKeys = new Map<string, number[]>();
+    items.forEach((it, i) => {
+      const key = it.product_id
+        ? `p:${it.product_id}`
+        : `n:${normalizeProduct(it.name)}`;
+      itemKeys.set(key, [...(itemKeys.get(key) ?? []), i]);
+    });
+    for (const idxs of itemKeys.values()) {
+      if (idxs.length > 1) {
+        checks.push({ code: 'duplicate_items', item_indexes: idxs });
+      }
+    }
+    if (phoneValid && marketPhones.has(phone)) {
+      checks.push({ code: 'phone_is_market' });
+    }
+
     const customerName = text(raw.customer_name);
     const issues = this.computeIssues({
       customerName,
@@ -435,6 +573,9 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
         : {}),
       // J3hEDtFN: AI noaniq deb belgilagan maydonlar — faqat enum (oq ro'yxat).
       warnings: sanitizeExtractWarnings(raw.warnings),
+      district_match: districtMatch,
+      region_inferred: raw.region_inferred === true,
+      checks,
     };
   }
 

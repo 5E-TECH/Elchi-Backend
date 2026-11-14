@@ -22,6 +22,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI preview: tuman qanday aniqlangani, viloyat taxmini, yumshoq tekshiruvlar (`checks[]`)
+
+Deploy: ai-service + order-service + logistics-service + api-gateway. Migratsiya YO'Q. Hammasi QO'SHIMCHA — mavjud maydonlar, `ready` va `issues` o'zgarmaydi (Telegram bot buzilmaydi).
+
+- ✏️ `POST /orders/ai-parse` → `data.orders[]` ga:
+  - `district_match: { method, ai_text, score } | null` — tuman avto-tanlanganda: `method` = `exact` | `alias` | `partial` | `address` | `fuzzy` | `llm`; `ai_text` — AI o'qigan tuman matni (≤ 80 belgi, `exact` da ham); `score` 0..1 faqat `fuzzy`/`address`, aks holda `null`. Tuman tanlanmagan bo'lsa `null`.
+  - `region_inferred: boolean` — viloyat matnda aytilmagan, AI uni tumandan chiqargan. Faqat shunda logistics qulflangan viloyatdan tashqaridagi ANIQ moslikka o'ta oladi (boshqa holatda «Toshkent shahri Xonobod» — avvalgidek tuman yo'q).
+  - `checks: AiCheck[]` — YUMSHOQ tekshiruvlar (tasdiqni bloklamaydi):
+    - `{ code: 'district_low_confidence' }` — tuman `partial`/`address`/`fuzzy`/`llm` bilan yoki viloyat almashtirilib tanlangan;
+    - `{ code: 'price_check', kind: 'mismatch' | 'too_high', mentions: number[] }` — matndagi summa eslatmalari (so'm) `total_price` bilan mos emas (faqat bitta buyurtmali matn) yoki summa > 100 mln;
+    - `{ code: 'qty_check', item_index }` — miqdor > 10 yoki matndagi narx raqamiga teng;
+    - `{ code: 'duplicate_items', item_indexes }` — bir xil mahsulot qatorlari (birlashtirilmaydi);
+    - `{ code: 'phone_is_market' }` — mijoz telefoni market / operator / «muammo» raqami bilan bir xil;
+    - `{ code: 'same_phone_multi', other_index }` — shu parse'da shu telefon boshqa buyurtmada ham.
+- ⚠️ **Noma'lum `code` e'tiborsiz qoldirilsin** — ro'yxat kengayadi.
+
+**Frontend action items:**
+- 🔧 Tuman maydoni yonida «AI o'qigan: {ai_text}»; `district_low_confidence` — sariq belgi.
+- 🔧 `price_check` — summa yonida sariq ogohlantirish (`mentions` bilan: «Matnda: 150 000»); `too_high` — «Summa juda katta».
+- 🔧 Qolgan kodlar — tegishli maydon yonida ogohlantirish matni.
+
 ### 2026-11-14 — Carrier akkaunt: «Rollback» toggle (sukut o'chiq, kompaniyadan yashirin)
 
 Egasi (2026-11-14): rollback'ni admin akkaunt bo'yicha bitta toggle bilan yoqib/o'chira olsin, sukut — o'chiq (kompaniya bilan endi ishlay boshladik, ishonch paydo bo'lguncha); Swagger va hujjatdan yashirilsin — kompaniyaga hozircha aytilmaydi.

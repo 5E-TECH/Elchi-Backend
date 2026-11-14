@@ -124,6 +124,7 @@ interface SetupOptions {
   tariff?: unknown;
   pick?: ProductDisambiguator['pick'];
   catalog?: Array<Record<string, unknown>>;
+  marketData?: Record<string, unknown>;
 }
 
 function setup(opts: SetupOptions = {}) {
@@ -151,6 +152,7 @@ function setup(opts: SetupOptions = {}) {
             data: {
               id: MARKET,
               default_tariff: 'tariff' in opts ? opts.tariff : 'center',
+              ...opts.marketData,
             },
           }),
     ),
@@ -204,10 +206,12 @@ const one = async (
 
 const PREVIEW_KEYS = [
   'address',
+  'checks',
   'comment',
   'customer_name',
   'district_candidates',
   'district_id',
+  'district_match',
   'district_name',
   'extra_number',
   'index',
@@ -220,6 +224,7 @@ const PREVIEW_KEYS = [
   'ready',
   'region_given',
   'region_id',
+  'region_inferred',
   'region_name',
   'total_price',
   'warnings',
@@ -274,6 +279,9 @@ describe('AiPreviewService.resolve (fPre2MRr)', () => {
       is_replacement: false,
       operator: null,
       warnings: [],
+      district_match: null,
+      region_inferred: false,
+      checks: [],
     });
     expect(Object.keys(p).sort()).toEqual(PREVIEW_KEYS);
   });
@@ -873,6 +881,152 @@ describe('AiPreviewService.resolve (fPre2MRr)', () => {
         await svc.resolve(request([], { deadline_at: Date.now() + 25_000 }));
         expect(idempotency.prunePattern).toHaveBeenCalledTimes(2);
       });
+    });
+  });
+});
+
+describe('P1-7: district_match, region_inferred, checks', () => {
+  const withMatch =
+    (
+      match: DistrictTextResolution['match'],
+    ): ((q: DistrictTextQuery) => DistrictTextResolution) =>
+    () => ({
+      ...RESOLVED_ASAKA,
+      match,
+    });
+
+  it("district_match: usul, AI matni (exact'da ham), ball; past ishonch — check", async () => {
+    let { svc } = setup({
+      resolve: withMatch({ method: 'exact', score: null }),
+    });
+    let p = await one(svc, raw());
+    expect(p.district_match).toEqual({
+      method: 'exact',
+      ai_text: 'Asaka',
+      score: null,
+    });
+    expect(p.checks).toEqual([]);
+
+    ({ svc } = setup({ resolve: withMatch({ method: 'fuzzy', score: 0.83 }) }));
+    p = await one(svc, raw({ district_name: 'Asakka' }));
+    expect(p.district_match).toEqual({
+      method: 'fuzzy',
+      ai_text: 'Asakka',
+      score: 0.83,
+    });
+    expect(p.checks).toContainEqual({ code: 'district_low_confidence' });
+    expect(p.ready).toBe(true); // checks ready'ga ta'sir qilmaydi
+  });
+
+  it('region_switched (AI taxmin qilgan viloyat almashtirildi) — past ishonch', async () => {
+    const { svc, logisticsClient } = setup({
+      resolve: withMatch({
+        method: 'exact',
+        score: null,
+        region_switched: true,
+      }),
+    });
+    const p = await one(svc, raw({ region_inferred: true }));
+    expect(p.region_inferred).toBe(true);
+    expect(p.checks).toContainEqual({ code: 'district_low_confidence' });
+    const sent = (logisticsClient.send.mock.calls[0] as unknown[])[1] as {
+      items: DistrictTextQuery[];
+    };
+    expect(sent.items[0].region_inferred).toBe(true);
+  });
+
+  it('tuman tanlanmagan — district_match null', async () => {
+    const { svc } = setup({ resolve: () => UNRESOLVED });
+    expect((await one(svc, raw())).district_match).toBeNull();
+  });
+
+  it('price_check mismatch: matnda 150 000, model 15 000', async () => {
+    const { svc } = setup();
+    const p = await one(
+      svc,
+      raw({
+        total_price: 15000,
+        items: [{ name: 'atir sepgich', quantity: 1 }],
+        money_mentions: [{ value: 150000, kind: null }],
+      }),
+    );
+    expect(p.checks).toContainEqual({
+      code: 'price_check',
+      kind: 'mismatch',
+      mentions: [150000],
+    });
+  });
+
+  it('price_check: mahsulot + dostavka yig‘indisi va dona × miqdor — mos', async () => {
+    const { svc } = setup();
+    let p = await one(
+      svc,
+      raw({
+        total_price: 170000,
+        items: [{ name: 'atir sepgich', quantity: 1 }],
+        money_mentions: [
+          { value: 150000, kind: null },
+          { value: 20000, kind: null },
+        ],
+      }),
+    );
+    expect(p.checks.filter((c) => c.code === 'price_check')).toEqual([]);
+    p = await one(
+      svc,
+      raw({
+        total_price: 750000,
+        money_mentions: [{ value: 250000, kind: 'unit' }],
+      }),
+    );
+    expect(p.checks.filter((c) => c.code === 'price_check')).toEqual([]);
+  });
+
+  it('price_check too_high: 1.5e11', async () => {
+    const { svc } = setup();
+    const p = await one(svc, raw({ total_price: 150_000_000_000 }));
+    expect(p.checks).toContainEqual({
+      code: 'price_check',
+      kind: 'too_high',
+      mentions: [],
+    });
+  });
+
+  it('qty_check (>10 yoki narx raqami) va duplicate_items', async () => {
+    const { svc } = setup();
+    const p = await one(
+      svc,
+      raw({
+        total_price: 150000,
+        money_mentions: [{ value: 150000, kind: null }],
+        items: [
+          { name: 'atir sepgich', quantity: 12 },
+          { name: 'blender', quantity: 1 },
+          { name: 'Atir sepgich', quantity: 1 },
+        ],
+      }),
+    );
+    expect(p.checks).toContainEqual({ code: 'qty_check', item_index: 0 });
+    expect(p.checks).toContainEqual({
+      code: 'duplicate_items',
+      item_indexes: [0, 2],
+    });
+  });
+
+  it('phone_is_market va same_phone_multi', async () => {
+    const { svc } = setup({
+      marketData: { phone_number: '+998 90 123 45 67' },
+    });
+    const { previews } = await svc.resolve(
+      request([raw(), raw({ customer_name: 'Boshqa' })]),
+    );
+    expect(previews[0].checks).toContainEqual({ code: 'phone_is_market' });
+    expect(previews[0].checks).toContainEqual({
+      code: 'same_phone_multi',
+      other_index: 1,
+    });
+    expect(previews[1].checks).toContainEqual({
+      code: 'same_phone_multi',
+      other_index: 0,
     });
   });
 });

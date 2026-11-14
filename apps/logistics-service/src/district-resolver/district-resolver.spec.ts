@@ -990,3 +990,76 @@ describe('D2–D5 (AI aniqligi, 2026-11-14)', () => {
     expect(candidateSatos(SNAP, res).sort()).toEqual(['1710224', '1710401']);
   });
 });
+
+describe('P1-7: match (D6) va region_inferred', () => {
+  it.each([
+    [{ region_name: 'Andijon', district_name: 'Asaka' }, 'exact', null],
+    [
+      { region_name: 'Toshkent shahri', district_name: "M.Ulug'bek" },
+      'alias',
+      null,
+    ],
+    [
+      { region_name: 'Toshkent shahri', district_name: 'Мирабад' },
+      'fuzzy',
+      'number',
+    ],
+    [{ region_name: 'Andijon', district_name: 'xojaobd' }, 'fuzzy', 'number'],
+    [
+      { region_name: 'Andijon', address: "Asaka tumani, Navoiy ko'chasi 1" },
+      'address',
+      null,
+    ],
+  ] as const)('%j → %s', (q, method, scoreType) => {
+    const res = resolve(q);
+    expect(res.district_id).not.toBeNull();
+    expect(res.match?.method).toBe(method);
+    if (scoreType === 'number') {
+      expect(res.match?.score).toBeGreaterThan(0);
+      expect(res.match?.score).toBeLessThanOrEqual(1);
+    } else {
+      expect(res.match?.score).toBeNull();
+    }
+    expect(res.match?.region_switched).toBeUndefined();
+  });
+
+  it('nomzodlar bo‘lsa match yo‘q', () => {
+    const res = resolve({ region_name: 'Andijon', district_name: 'Andijon' });
+    expect(res.district_id).toBeNull();
+    expect(res.match).toBeUndefined();
+  });
+
+  it('checklist #1 saqlanadi: viloyat matnda berilgan — boshqa viloyatga o‘tilmaydi', () => {
+    const res = resolve({
+      region_name: 'Toshkent shahri',
+      district_name: 'Xonobod',
+    });
+    expect(res.district_id).toBeNull();
+    expect(res.candidates).toEqual([]);
+  });
+
+  it('region_inferred=true: AI taxmin qilgan viloyatda yo‘q — boshqa viloyatdan aniq moslik, region_switched', () => {
+    const res = resolve({
+      region_name: 'Toshkent shahri',
+      district_name: 'Xonobod',
+      region_inferred: true,
+    });
+    const xonobod = districtByName(SNAP, 'Xonobod');
+    expect(res.district_id).toBe(xonobod.id);
+    expect(res.region_id).toBe(xonobod.region_id);
+    expect(res.match).toEqual({
+      method: 'exact',
+      score: null,
+      region_switched: true,
+    });
+  });
+
+  it('region_inferred=true, lekin faqat imlo varianti — o‘tilmaydi', () => {
+    const res = resolve({
+      region_name: 'Toshkent shahri',
+      district_name: 'Xanabad',
+      region_inferred: true,
+    });
+    expect(res.match?.region_switched).toBeUndefined();
+  });
+});

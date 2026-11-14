@@ -44,6 +44,18 @@ export interface AiDraftPreviewSnapshot {
   operator: string | null;
   is_replacement: boolean;
   items: { name: string; product_id: string | null; quantity: number }[];
+  /**
+   * P1-7 (D6) — ixtiyoriy (eski snapshot'larda yo'q): tuman usuli, AI
+   * o'qigan tuman matni va ball; viloyat AI taxminimi; yumshoq tekshiruv
+   * kodlari. Eval va aniqlik tahlili uchun.
+   */
+  district_match?: {
+    method: string;
+    ai_text: string | null;
+    score: number | null;
+  } | null;
+  region_inferred?: boolean;
+  check_codes?: string[];
 }
 
 /**

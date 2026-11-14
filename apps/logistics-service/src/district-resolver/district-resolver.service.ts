@@ -24,6 +24,7 @@ import {
 } from './district-aliases';
 import type {
   DistrictCandidate,
+  DistrictMatchInfo,
   DistrictResolutionReason,
   DistrictSnapshot,
   DistrictTextQuery,
@@ -163,6 +164,11 @@ function addressTokens(text: string): string[] {
 
 type DistrictKind = 'city' | 'tuman';
 
+/** 0..1 ball — 3 xonagacha (null saqlanadi). */
+function round3(x: number | null): number | null {
+  return x === null ? null : Math.round(x * 1000) / 1000;
+}
+
 /** Toshkent shahri (1726) yoki viloyati (1727). */
 function isTashkentSato(sato: string | null | undefined): boolean {
   return sato === '1726' || sato === '1727';
@@ -240,6 +246,7 @@ interface CleanQuery {
   district_name: string;
   address: string;
   full_address: string;
+  region_inferred: boolean;
 }
 
 const PREPARED = new WeakMap<DistrictSnapshot, PreparedSnapshot>();
@@ -261,6 +268,7 @@ export function sanitizeDistrictTextQuery(raw: unknown): CleanQuery {
     district_name: cleanText(src.district_name),
     address: cleanText(src.address),
     full_address: cleanText(src.full_address),
+    region_inferred: src.region_inferred === true,
   };
 }
 
@@ -559,6 +567,10 @@ export function resolveDistrictText(
   let viaFuzzy = false;
   // Topilma faqat NOMZOD (avto-tanlov emas) — sabab `district_ambiguous`.
   let candidateOnly = false;
+  // P1-7 (D6): qaysi bosqich topdi — avto-tanlovda `match` uchun.
+  let stage: 'exact' | 'word' | 'fuzzy' | 'address' | 'substring' = 'exact';
+  let stageScore: number | null = null;
+  let regionSwitched = false;
   const dqSkel = geoSkeleton(dq);
   const dqTokens = dq
     .replace(/[^a-z0-9]+/g, ' ')
@@ -643,7 +655,10 @@ export function resolveDistrictText(
     const found = pool.filter(
       (d) => d.geo.length >= 4 && padded.includes(` ${d.geo} `),
     );
-    if (found.length) matches = longestNonRegion(found);
+    if (found.length) {
+      matches = longestNonRegion(found);
+      stage = 'word';
+    }
   }
 
   // 3-usul (BeePost :1625-1643): imlo xatosi — simRatio >= GEO_FUZZY_MIN
@@ -668,6 +683,8 @@ export function resolveDistrictText(
         .slice(0, AI_MAX_CANDIDATES)
         .map((x) => x.d);
       viaFuzzy = true;
+      stage = 'fuzzy';
+      stageScore = fuzzyTop;
     }
   }
 
@@ -688,6 +705,21 @@ export function resolveDistrictText(
         isTashkentSato(idx.regionById.get(d.region_id)?.sato),
     );
     matches = exactIn(outside).found.slice(0, AI_MAX_CANDIDATES);
+  }
+
+  // P1-7: viloyat matnda AYTILMAGAN (AI tumandan chiqargan) va qulflangan
+  // viloyatda yo'q — boshqa viloyatdan ANIQ nom/skelet/alias (variant emas)
+  // moslik. Avto-tanlov, lekin `match.region_switched` (preview
+  // `district_low_confidence`). Viloyat matnda berilgan bo'lsa — qulf.
+  if (!matches.length && lockedRegion && dq && q.region_inferred) {
+    const outside = idx.districts.filter(
+      (d) => d.region_id !== lockedRegion.id,
+    );
+    const cross = exactIn(outside);
+    if (cross.found.length && !cross.variant) {
+      matches = cross.found.slice(0, AI_MAX_CANDIDATES);
+      regionSwitched = true;
+    }
   }
 
   // 2b-usul: MANZIL korpusidan butun so'z bilan. D2: nomdan keyin
@@ -727,6 +759,7 @@ export function resolveDistrictText(
       if (best === 'strong') strong.push(d);
       else if (best === 'weak') weak.push(d);
     }
+    if (strong.length || weak.length) stage = 'address';
     if (strong.length) {
       matches = longestNonRegion(strong);
     } else if (weak.length) {
@@ -766,6 +799,8 @@ export function resolveDistrictText(
       }
       if (bestScore >= GEO_SUBSTRING_MIN) {
         matches = bestDs.slice(0, AI_MAX_CANDIDATES);
+        stage = 'substring';
+        stageScore = Math.round(bestScore * 1000) / 1000;
         if (!hasPlaceSignal) forceCandidate = true;
         // D3: operator yozgan tuman nomi so'zma-so'z topilmadi — korpus
         // ichidagi qism ("Quvasoy" ichida "Quva") faqat nomzod.
@@ -880,6 +915,22 @@ export function resolveDistrictText(
     if (explicitKind && d.kind && d.kind !== explicitKind) {
       return unresolved([d], 'district_ambiguous');
     }
+    const match: DistrictMatchInfo = (() => {
+      if (stage === 'fuzzy') {
+        return { method: 'fuzzy', score: round3(stageScore) };
+      }
+      if (stage === 'address') return { method: 'address', score: null };
+      if (stage === 'substring') {
+        return { method: 'address', score: round3(stageScore) };
+      }
+      if (stage === 'word' || d.geo === dq || d.skel === dqSkel) {
+        return { method: 'exact', score: null };
+      }
+      if (d.aliases.has(dqSkel)) return { method: 'alias', score: null };
+      // Qoidaviy variant (а→о, к→q) — imlo moslashuvi.
+      return { method: 'fuzzy', score: round3(simRatio(d.skel, dqSkel)) };
+    })();
+    if (regionSwitched) match.region_switched = true;
     // region_id HAR DOIM tumanning o'zidan (assigned_region EMAS).
     return {
       ...regionFields(region),
@@ -889,6 +940,7 @@ export function resolveDistrictText(
       district_name: d.name,
       region_given: regionGiven,
       candidates: [],
+      match,
     };
   }
 

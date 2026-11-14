@@ -79,6 +79,41 @@ function itemsKey(
     .join('|');
 }
 
+/** P1-7: district_match / region_inferred / checks kodlari (oq ro'yxat). */
+function snapshotP17(
+  p: Row,
+): Pick<
+  AiDraftPreviewSnapshot,
+  'district_match' | 'region_inferred' | 'check_codes'
+> {
+  const m = p.district_match;
+  const match =
+    m && typeof m === 'object' && !Array.isArray(m)
+      ? (() => {
+          const r = m as Row;
+          const score = Number(r.score);
+          return {
+            method: text(r.method).slice(0, 16),
+            ai_text: textOrNull(r.ai_text)?.slice(0, 80) ?? null,
+            score: r.score !== null && Number.isFinite(score) ? score : null,
+          };
+        })()
+      : null;
+  const checks = Array.isArray(p.checks) ? (p.checks as Row[]) : [];
+  return {
+    district_match: match,
+    region_inferred: p.region_inferred === true,
+    check_codes: [
+      ...new Set(
+        checks
+          .map((c) => (c && typeof c === 'object' ? text(c.code) : ''))
+          .filter(Boolean)
+          .map((c) => c.slice(0, 32)),
+      ),
+    ].slice(0, 10),
+  };
+}
+
 /**
  * order-service preview'idan (`AiOrderPreview`) kompakt snapshot. Kalitlar
  * RO'YXAT bo'yicha — xom obyekt yoyilmaydi.
@@ -106,6 +141,7 @@ export function buildPreviewSnapshots(
         comment: textOrNull(p.comment),
         operator: textOrNull(p.operator),
         is_replacement: p.is_replacement === true,
+        ...snapshotP17(p),
         items: items
           .filter((it) => !!it && typeof it === 'object')
           .map((it) => ({
