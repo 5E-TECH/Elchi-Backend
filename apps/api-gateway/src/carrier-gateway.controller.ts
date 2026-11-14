@@ -89,6 +89,10 @@ import {
 } from './carrier-order-view';
 import { toCarrierCashboxView } from './carrier-cashbox-view';
 import { CARRIER_API_KEY_SCHEME } from './carrier-swagger';
+import {
+  CarrierStatusBody,
+  carrierStatusRejected,
+} from './carrier-status-body';
 import { resolveOrderCreateRequestId } from './order-create/order-create-idempotency';
 import {
   PROOF_OPERATION_TIMEOUT_MS,
@@ -715,17 +719,22 @@ export class CarrierGatewayController {
       'Ayni kalit boshqa amal/buyurtma/tana bilan → 422; eski urinish kaliti → 409 CARRIER_IDEMPOTENCY_KEY_STALE.' +
       ' Swagger’da har sinov uchun YANGI UUID kiriting (masalan terminalda `uuidgen`) — maydon ataylab bo‘sh: bir kalitni takrorlasangiz 422/409 olasiz.',
   })
+  /**
+   * ⚠️ `rollback` (sold/cancelled → waiting) Swagger'da ATAYLAB YO'Q: faqat
+   * admin yoqqan akkauntga ruxsat (`carrier_accounts.rollback_enabled`,
+   * sukut false), o'chiq akkauntga — noma'lum status kabi 400
+   * (`carrier-status-body.ts`). Ichki: `docs/ops/carrier-rollback.md`.
+   */
   @ApiOperation({
     summary:
-      'Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled), rollback',
+      'Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled)',
     description:
       'Kuryeringiz posilkani topshirganda yoki topshira olmaganda shu so‘rovni yuboring — ' +
       'bizda buyurtma holati darhol o‘zgaradi. ' +
       '`sold`, `partly_sold`, `cancelled` — faqat `waiting` holatida (avval `/carrier/scan`). ' +
       '`partly_sold` da `items` buyurtmaning HAR BIR qatorini va undan sotilgan donani o‘z ichiga ' +
       'oladi; `total_price` — mijoz olgan tovarlar qiymati (onlayn to‘langan qism ham ichida). ' +
-      '`rollback` — faqat `sold` yoki `cancelled` holatidagi buyurtmani `waiting` ga qaytaradi ' +
-      '(shu buyurtma hisob-kitobi yopilmagan bo‘lsa; `paid`/`partly_paid` — Elchi operatori). ' +
+      'Xato yuborilgan natijani Elchi operatori tuzatadi. ' +
       'Sotuvchi isbot talab qilsa — `multipart/form-data` bilan `proof` fayli: rasm jpeg/png/webp ' +
       'yoki pdf ≤10 MB, video mp4/mov/webm ≤50 MB. Javobda yangilangan buyurtma ' +
       '(`refreshed: false` — holat qabul qilingan, buyurtmani keyinroq o‘qing).',
@@ -788,10 +797,22 @@ export class CarrierGatewayController {
   )
   async updateStatus(
     @Param('id') rawId: string,
-    @Body() dto: CarrierOrderStatusRequestDto,
+    // `@Body()` EMAS: tana akkauntning rollback ruxsatiga qarab tekshiriladi.
+    @CarrierStatusBody() dto: CarrierOrderStatusRequestDto,
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: CarrierRequest,
   ) {
+    /**
+     * Himoya (pipe chetlab o'tilsa ham): rollback o'chiq akkaunt — noma'lum
+     * status bilan AYNI 400, HAR QANDAY amaldan oldin (buyurtma o'qilmaydi,
+     * Idempotency-Key tekshirilmaydi/ishlatilmaydi, RMQ amali yo'q).
+     */
+    if (
+      dto.status === CarrierOrderStatus.ROLLBACK &&
+      req.carrier.rollback_enabled !== true
+    ) {
+      throw carrierStatusRejected();
+    }
     const id = this.parseOrderId(rawId);
     const idempotencyKey = this.requireIdempotencyKey(req.headers);
     const requester = this.courierRequester(req.carrier);
@@ -865,7 +886,8 @@ export class CarrierGatewayController {
         ms = CARRIER_RPC_TIMEOUT_MS;
         break;
       default:
-        throw new BadRequestException("status noto'g'ri");
+        // Faqat ochiq qiymatlar sanaladi (rollback hech qachon oshkor qilinmaydi).
+        throw carrierStatusRejected();
     }
 
     // `undefined` maydonlar RMQ'ga ketmaydi — order-service DTO'si toza qolsin.
@@ -890,7 +912,8 @@ export class CarrierGatewayController {
     /**
      * ESKI KALIT (ultracode review, HIGH). order-service courier-op kaliti
      * `amal:buyurtma:tana` ga bog'lanadi va muddatsiz saqlanadi: sold →
-     * rollback → sold ayni kalit bilan ikkinchi sotuvni BAJARMAY birinchi
+     * rollback (kompaniya — faqat ruxsati yoqiq bo'lsa — yoki Elchi
+     * operatori) → sold ayni kalit bilan ikkinchi sotuvni BAJARMAY birinchi
      * natijani qaytarardi. Buyurtma kutilgan holatga o'tmagan va amaldan
      * oldingi holatida qolgan bo'lsa — bu shunday "jim" takror: 409.
      *

@@ -1058,6 +1058,14 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   host bits, IPv6; no IPv6 CIDR), ids are BIGINT-bounded. Separate from
   `partners` on purpose: a carrier key can't reach `/partner/*` and vice
   versa. See §5.5.
+  **Hidden rollback toggle (2026-11-14):** `rollback_enabled` (migration
+  223, `NOT NULL DEFAULT false` — new AND existing accounts off). Only
+  `update` (`PATCH /admin/carriers/:id`) changes it (create always false;
+  the gateway create DTO rejects the field); audit logs `old_value` →
+  `new_value`. `validate_key` returns it read fresh from the row on every
+  request (no cache) → effective from the next `/carrier/*` call. Shown in
+  list/create/update/rotate-key/status responses. Runbook + un-hide
+  checklist: `docs/ops/carrier-rollback.md`.
 
 ### investor-service (`investor_schema`)
 - **Entities:** `investor`, `investment`, `profit_share`.
@@ -1811,7 +1819,17 @@ settlement FIFO and tracking are unchanged (no `markByProvider`, no
   as not-found — unlike internal couriers, who may QR-look-up any parcel);
   `on the road` → `logistics.post.receive_order` (→ `waiting`).
 - `POST /carrier/orders/:id/status` — `sold|partly_sold|cancelled|rollback` →
-  `order.sell|partly_sell|cancel|rollback_waiting` (`target_status: waiting`);
+  `order.sell|partly_sell|cancel|rollback_waiting` (`target_status: waiting`).
+  `rollback` is HIDDEN and per-account (`req.carrier.rollback_enabled`, set
+  by `CarrierApiKeyGuard`, default off): the body is validated by
+  `@CarrierStatusBody()` (`carrier-status-body.ts`, NOT the global pipe) with
+  `CarrierOrderStatusRequestDto` (off) or
+  `CarrierOrderStatusWithRollbackRequestDto` (on), so with the toggle off
+  `rollback` gets exactly the unknown-value 400 (message lists only
+  `sold, partly_sold, cancelled` — in every case) before any read/RPC; a
+  controller guard repeats the check. Absent from `/carrier-docs`, the static
+  spec and `docs/public/*` (guard: `carrier-public-docs.no-rollback.spec.ts`);
+  internal runbook `docs/ops/carrier-rollback.md`.
   `Idempotency-Key` REQUIRED (400 `CARRIER_IDEMPOTENCY_KEY_REQUIRED`) →
   `resolveOrderCreateRequestId(courier_user_id, key)`. order-service
   courier-op keys never expire, so after the op a RAW re-read

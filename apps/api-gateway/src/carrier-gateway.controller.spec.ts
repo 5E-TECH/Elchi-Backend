@@ -9,12 +9,21 @@ import { validate } from 'class-validator';
 import { Observable, of, throwError } from 'rxjs';
 import { CARRIER_ERROR_CODES } from '@app/common';
 import { CarrierGatewayController } from './carrier-gateway.controller';
+import { carrierStatusRejected } from './carrier-status-body';
 import {
   CarrierOrderStatus,
   CarrierOrderStatusRequestDto,
+  CarrierOrderStatusWithRollbackRequestDto,
 } from './dto/carrier.swagger.dto';
 
-const CARRIER = { id: '3', name: 'BTS', courier_user_id: '55' };
+/** Sukut: rollback O'CHIQ (yangi akkaunt) — yoqiqni `ROLLBACK_ON` beradi. */
+const CARRIER = {
+  id: '3',
+  name: 'BTS',
+  courier_user_id: '55',
+  rollback_enabled: false,
+};
+const ROLLBACK_ON = { ...CARRIER, rollback_enabled: true };
 const COURIER_REQUESTER = { id: '55', roles: ['courier'], branch_id: null };
 const KEY = { 'idempotency-key': '6f1c2a8e-4b7d-4c1e-9a3f-2d5b8e7c1a90' };
 
@@ -543,7 +552,7 @@ describe('CarrierGatewayController.updateStatus', () => {
     });
   });
 
-  it('rollback -> order.rollback_waiting (target waiting)', async () => {
+  it('rollback (akkauntda yoqiq) -> order.rollback_waiting (target waiting)', async () => {
     const { controller, orderClient } = setup(
       { status: 'sold' },
       { status: 'waiting' },
@@ -552,13 +561,44 @@ describe('CarrierGatewayController.updateStatus', () => {
       '900',
       { status: CarrierOrderStatus.ROLLBACK },
       undefined,
-      req(KEY),
+      { carrier: { ...ROLLBACK_ON }, headers: KEY },
     );
     expect(sentTo(orderClient, 'order.rollback_waiting')).toMatchObject({
       id: '900',
       requester: COURIER_REQUESTER,
       dto: { target_status: 'waiting' },
     });
+  });
+
+  it('⭐ rollback (akkauntda o‘chiq) -> noma’lum status bilan AYNI 400, hech qanday chaqiruv yo‘q', async () => {
+    // Pipe chetlab o'tilgandagi himoya: buyurtma o'qilmaydi, kalit/RMQ amali yo'q.
+    for (const headers of [KEY, {}]) {
+      const { controller, orderClient, logisticsClient, financeClient } = setup(
+        { status: 'sold' },
+        { status: 'waiting' },
+      );
+      const err = await errorOf(
+        controller.updateStatus(
+          'not-an-id',
+          { status: CarrierOrderStatus.ROLLBACK },
+          { mimetype: 'image/png', size: 1 } as never,
+          req(headers),
+        ),
+      );
+      expect(err?.type).toBe(BadRequestException.name);
+      expect(err?.body).toEqual(carrierStatusRejected().getResponse());
+      expect(err?.body).toEqual({
+        message: [
+          "status: quyidagilardan biri bo'lishi kerak: sold, partly_sold, cancelled",
+        ],
+        error: 'Bad Request',
+        statusCode: 400,
+      });
+      expect(JSON.stringify(err?.body)).not.toMatch(/rollback/i);
+      expect(orderClient.send).not.toHaveBeenCalled();
+      expect(logisticsClient.send).not.toHaveBeenCalled();
+      expect(financeClient.send).not.toHaveBeenCalled();
+    }
   });
 
   it('⭐ eski kalit bilan jim takror (holat o‘zgarmadi) -> 409 IDEMPOTENCY_KEY_STALE', async () => {
@@ -1090,14 +1130,55 @@ describe('CarrierGatewayController.listOrders / cashbox', () => {
 });
 
 describe('CarrierOrderStatusRequestDto validatsiyasi', () => {
-  const check = async (body: Record<string, unknown>) => {
-    const dto = plainToInstance(CarrierOrderStatusRequestDto, body);
-    const errors = await validate(dto, {
+  const errorsOf = async (
+    body: Record<string, unknown>,
+    dtoClass:
+      | typeof CarrierOrderStatusRequestDto
+      | typeof CarrierOrderStatusWithRollbackRequestDto = CarrierOrderStatusRequestDto,
+  ) => {
+    const dto = plainToInstance(dtoClass, body);
+    return validate(dto, {
       whitelist: true,
       forbidNonWhitelisted: true,
     });
-    return errors.map((e) => e.property);
   };
+  const check = async (body: Record<string, unknown>) =>
+    (await errorsOf(body)).map((e) => e.property);
+
+  it('⭐ rollback: ochiq DTO’da noma’lum qiymat, rollback DTO’sida qabul; xabar faqat ochiq qiymatlar', async () => {
+    const PUBLIC_ONLY =
+      'status must be one of the following values: sold, partly_sold, cancelled';
+    const statusMessages = async (
+      body: Record<string, unknown>,
+      dtoClass?: typeof CarrierOrderStatusRequestDto,
+    ) =>
+      (await errorsOf(body, dtoClass))
+        .filter((e) => e.property === 'status')
+        .flatMap((e) => Object.values(e.constraints ?? {}));
+
+    // O'chiq (ochiq DTO): rollback = sould = 5 — AYNI xabar.
+    for (const status of ['rollback', 'sould', 5, undefined]) {
+      expect(await statusMessages({ status })).toEqual([PUBLIC_ONLY]);
+    }
+    // Yoqiq: rollback o'tadi, xato qiymat xabarida rollback baribir YO'Q.
+    expect(
+      await errorsOf(
+        { status: 'rollback' },
+        CarrierOrderStatusWithRollbackRequestDto,
+      ),
+    ).toEqual([]);
+    expect(
+      await statusMessages(
+        { status: 'sould' },
+        CarrierOrderStatusWithRollbackRequestDto,
+      ),
+    ).toEqual([PUBLIC_ONLY]);
+    for (const status of ['sold', 'partly_sold', 'cancelled']) {
+      expect(await statusMessages({ status })).toEqual([]);
+    }
+    expect(CarrierOrderStatusRequestDto.rollbackAllowed).toBe(false);
+    expect(CarrierOrderStatusWithRollbackRequestDto.rollbackAllowed).toBe(true);
+  });
 
   it('extraCost / paidAmount qabul qilinmaydi (v1)', async () => {
     expect(await check({ status: 'sold', extraCost: 5000 })).toContain(

@@ -45,7 +45,8 @@ const CARRIER_IDENTITY_TIMEOUT_MS = 20000;
  * Bu `/carrier/*` EMAS: bu yerga Elchi adminlari JWT bilan kiradi. Logika
  * integration-service'da (`CarrierAccountService`): kalit hash, kurier
  * tekshiruvi (role = courier, faol), har amal activity-log.
- * Kontrakt va onboarding: docs/public/CARRIER_API.md.
+ * Kontrakt va onboarding: docs/public/CARRIER_API.md. Yashirin rollback
+ * toggle'i (`rollback_enabled`, faqat shu yerda): docs/ops/carrier-rollback.md.
  */
 @ApiTags('Carriers (admin)')
 @ApiBearerAuth()
@@ -96,7 +97,12 @@ export class CarrierAdminGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
     summary:
-      'Nom va IP ro‘yxatini yangilash. Kurier va kalit bu yerda o‘zgarmaydi.',
+      'Nom, IP ro‘yxati va rollback ruxsatini yangilash. Kurier va kalit bu yerda o‘zgarmaydi.',
+    description:
+      '`rollback_enabled` (ixtiyoriy, alohida yoki name/ip_allowlist bilan birga) — kompaniya ' +
+      '`status: rollback` yubora oladimi; sukut false, keyingi so‘rovdan kuchga kiradi, ' +
+      'activity-log’ga eski → yangi qiymat yoziladi. Kompaniyaga berilgan hujjatda rollback ' +
+      'YASHIRIN — yoqishdan oldin docs/ops/carrier-rollback.md.',
   })
   @ApiParam({ name: 'id' })
   @ApiBody({ type: UpdateCarrierAccountRequestDto })

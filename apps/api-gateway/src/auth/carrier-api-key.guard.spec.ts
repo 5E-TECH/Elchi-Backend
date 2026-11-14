@@ -59,7 +59,38 @@ describe('CarrierApiKeyGuard', () => {
       id: '3',
       name: 'BTS',
       courier_user_id: '55',
+      // Javobda maydon yo'q (eski integration-service) — yopiq.
+      rollback_enabled: false,
     });
+  });
+
+  it('⭐ rollback_enabled: faqat aniq `true` o‘tadi; har so‘rovda qayta so‘raladi (kesh yo‘q)', async () => {
+    const cases: Array<[unknown, boolean]> = [
+      [true, true],
+      [false, false],
+      ['true', false],
+      [1, false],
+      [null, false],
+    ];
+    for (const [flag, expected] of cases) {
+      const send = jest.fn(() => of({ ...valid, rollback_enabled: flag }));
+      const { context, request } = makeContext({ 'x-api-key': 'elc_abc' });
+      await makeGuard(send).canActivate(context);
+      expect(request.carrier).toMatchObject({ rollback_enabled: expected });
+    }
+
+    // Admin toggle'i keyingi so'rovdan kuchga kiradi: guard natijani keshlamaydi.
+    let flag = false;
+    const send = jest.fn(() => of({ ...valid, rollback_enabled: flag }));
+    const guard = makeGuard(send);
+    const first = makeContext({ 'x-api-key': 'elc_abc' });
+    await guard.canActivate(first.context);
+    flag = true;
+    const second = makeContext({ 'x-api-key': 'elc_abc' });
+    await guard.canActivate(second.context);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(first.request.carrier).toMatchObject({ rollback_enabled: false });
+    expect(second.request.carrier).toMatchObject({ rollback_enabled: true });
   });
 
   it('partner buyrug‘ini CHAQIRMAYDI (kalitlar aralashmaydi)', async () => {

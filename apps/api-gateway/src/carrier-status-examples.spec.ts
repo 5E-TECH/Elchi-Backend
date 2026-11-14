@@ -56,7 +56,7 @@ const GLOBAL_PIPE_OPTIONS = {
 } as const;
 
 const EXPECTED_SUMMARY =
-  'Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled), rollback';
+  'Buyurtma holatini yuborish: sotildi (sold), qisman (partly_sold), bekor (cancelled)';
 
 const EXPECTED_EXAMPLES: ReadonlyArray<[key: string, summary: string]> = [
   ['sold', 'Sotildi'],
@@ -64,10 +64,18 @@ const EXPECTED_EXAMPLES: ReadonlyArray<[key: string, summary: string]> = [
   ['partly_sold', 'Qisman sotildi (har bir qator + sotilgan dona)'],
   ['cancelled', 'Bekor qilindi (mijoz rad etdi)'],
   ['cancelled_other', 'Bekor qilindi (boshqa sabab — izoh majburiy)'],
-  ['rollback', 'Xato natijani bekor qilish (rollback)'],
 ];
 
-const CARRIER = { id: '3', name: 'BTS', courier_user_id: '55' };
+/**
+ * Rollback YASHIRIN va sukut bo'yicha o'chiq (`rollback_enabled: false`):
+ * Swagger'da misoli yo'q, yuborilsa noma'lum status kabi 400.
+ */
+const CARRIER = {
+  id: '3',
+  name: 'BTS',
+  courier_user_id: '55',
+  rollback_enabled: false,
+};
 const ORDER_ID = '1201';
 
 /**
@@ -421,6 +429,10 @@ describe('Carrier status Swagger misollari = endpoint tekshiruvi', () => {
         'HTTP 400: ["extraCost:',
       ],
       'noma’lum status': [{ status: 'delivered' }, 'HTTP 400: ["status:'],
+      'rollback (akkauntda o‘chiq — noma’lum status kabi)': [
+        { status: 'rollback' },
+        `HTTP 400: ["status: quyidagilardan biri bo'lishi kerak: sold, partly_sold, cancelled"]`,
+      ],
       'cancelled + reason yo‘q': [
         { status: 'cancelled', comment: 'x' },
         'HTTP 400: ["reason:',

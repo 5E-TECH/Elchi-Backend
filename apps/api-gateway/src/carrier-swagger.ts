@@ -40,7 +40,7 @@ export const CARRIER_SWAGGER_GUIDE = `Elchi Pochta posilkalarini yetkazadigan ta
 ## Ish tartibi (qisqa)
 
 1. \`POST /carrier/scan\` — posilka sizga o'tadi (\`waiting\`).
-2. \`POST /carrier/orders/{id}/status\` — natija: \`sold\` / \`partly_sold\` / \`cancelled\` (xato bo'lsa — \`rollback\`).
+2. \`POST /carrier/orders/{id}/status\` — natija: \`sold\` / \`partly_sold\` / \`cancelled\`.
 3. \`POST /carrier/returns\` — bekor qilinganlarni qaytarish.
 4. \`GET /carrier/cashbox\` — kassa va naqd topshirish.
 
@@ -88,7 +88,6 @@ curl -X POST "$BASE_URL/carrier/orders/900/status" \\
 | \`sold\` | To'liq sotildi | — |
 | \`partly_sold\` | Qisman sotildi | \`total_price\` (mijoz olgan tovarlar qiymati, onlayn to'langan qism ham ichida), \`items: [{order_item_id, quantity}]\` — buyurtmaning har bir qatori |
 | \`cancelled\` | Mijoz olmadi | \`reason\`: \`CUSTOMER_NO_ANSWER\`, \`CUSTOMER_REFUSED\`, \`WRONG_ADDRESS\`, \`DEFECTIVE_PRODUCT\`, \`PRICE_DISPUTE\`, \`OTHER\` (+ \`comment\`) |
-| \`rollback\` | Xato yuborilgan sold/cancelled ni qaytarish | — (holat aynan sold yoki cancelled va hisob-kitob yopilmagan bo'lsa) |
 
 **3) Bekor qilinganlarni qaytarish** — \`cancelled\` posilkalar (qisman sotuvning sotilmagan qismi ham) sizda qoladi: \`POST /carrier/returns\` \`{"order_ids":["901"]}\` → qaytarish pochtasi (\`post_id\`); posilkalarni Elchi filialiga topshirasiz. Qaytarilgan posilka \`/carrier/orders\` ro'yxatidan chiqadi.
 
@@ -97,11 +96,12 @@ curl -X POST "$BASE_URL/carrier/orders/900/status" \\
 ## 3. Muhim qoidalar
 
 - Faqat **sizga biriktirilgan** buyurtmalar ko'rinadi; boshqasiga \`404\`.
-- \`Idempotency-Key\`: har **yangi** urinish — yangi kalit; javob kelmasa — **ayni kalit** bilan qayta yuboring (amal ikki marta bajarilmaydi). Rollback'dan keyingi qayta sotuv — yangi kalit (eskisi bilan \`409 CARRIER_IDEMPOTENCY_KEY_STALE\`).
+- \`Idempotency-Key\`: har **yangi** urinish — yangi kalit; javob kelmasa — **ayni kalit** bilan qayta yuboring (amal ikki marta bajarilmaydi). Buyurtma holati o'shandan beri o'zgargan bo'lsa, eski kalit bilan yuborilgan so'rov bajarilmaydi (\`409 CARRIER_IDEMPOTENCY_KEY_STALE\`) — yangi kalit bilan yuboring.
 - Limit: akkaunt uchun daqiqada 120 so'rov, barcha endpoint birgalikda, va har endpoint uchun bitta IP'dan 120 (\`429\`). Ro'yxatni bittalab emas, sahifalab oling.
 - Xato javobi: \`{ statusCode, message, code?, trace_id }\`. Qarorni matnga emas, \`statusCode\`/\`code\` ga qarab qiling. \`trace_id\` ni saqlang — muammo bo'lsa Elchi'ga yuboring.
 - \`409\`, \`429\`, \`5xx\`, \`503\`, \`504\` — biroz kutib, **ayni** \`Idempotency-Key\` bilan qayta urining (\`CARRIER_IDEMPOTENCY_KEY_STALE\` — yangi kalit; 10 daqiqadan uzoq takrorlansa — Elchi'ga). Boshqa \`4xx\` — so'rovni tuzating.
 - \`refreshed: false\` — holat qabul qilindi, buyurtmani keyinroq o'qing (qayta yubormang).
+- Natija xato yuborilgan bo'lsa — Elchi operatoriga murojaat qiling: tuzatishni operator qiladi.
 
 ## 4. Pul
 

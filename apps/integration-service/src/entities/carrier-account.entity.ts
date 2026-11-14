@@ -16,7 +16,8 @@ import { BaseEntity } from '@app/common';
  * carrier kaliti `/partner/*` ga ham o'tib ketish xavfi bo'lardi.
  *
  * Kalitning o'zi saqlanmaydi — faqat SHA-256 hash (parol kabi), yaratish va
- * rotatsiya javobida BIR MARTA ko'rsatiladi. Kontrakt: docs/public/CARRIER_API.md.
+ * rotatsiya javobida BIR MARTA ko'rsatiladi. Kontrakt: docs/public/CARRIER_API.md
+ * (yashirin `rollback_enabled` — faqat ichki `docs/ops/carrier-rollback.md`).
  */
 @Entity({ name: 'carrier_accounts' })
 @Index('IDX_CARRIER_API_KEY_HASH', ['api_key_hash'], { unique: true })
@@ -47,4 +48,18 @@ export class CarrierAccount extends BaseEntity {
 
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;
+
+  /**
+   * `POST /carrier/orders/:id/status` da `status: rollback` (yuborilgan
+   * sold/cancelled ni `waiting` ga qaytarish) shu kompaniyaga ruxsatmi.
+   *
+   * SUKUT `false` (migratsiya 223, mavjud qatorlar ham): yangi kompaniyaga
+   * ishonch paydo bo'lguncha rollback o'chiq — `rollback` NOMA'LUM status kabi
+   * 400 bilan, hech qanday amalsiz rad etiladi. Admin `PATCH
+   * /admin/carriers/:id { rollback_enabled }` bilan yoqadi. ⚠️ Kompaniyaga
+   * berilgan hujjat va Swagger'da rollback YASHIRIN — yoqishdan oldin
+   * `docs/ops/carrier-rollback.md` dagi ro'yxatni bajaring.
+   */
+  @Column({ type: 'boolean', default: false })
+  rollback_enabled!: boolean;
 }

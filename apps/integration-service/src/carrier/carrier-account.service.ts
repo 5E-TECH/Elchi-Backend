@@ -30,6 +30,12 @@ export type CarrierKeyValidation = {
    * uchun tekshiriladi (o'chiq akkaunt baribir 403).
    */
   courier_active: boolean;
+  /**
+   * `status: rollback` shu kompaniyaga ruxsatmi (sukut `false`). Akkaunt
+   * qatori har so'rovda bazadan o'qiladi (kesh YO'Q) — admin toggle'i
+   * keyingi so'rovdan kuchga kiradi.
+   */
+  rollback_enabled: boolean;
 };
 
 /** Ro'yxat va javoblardagi xavfsiz ko'rinish (hash hech qachon chiqmaydi). */
@@ -39,9 +45,17 @@ type CarrierAccountView = {
   courier_user_id: string;
   ip_allowlist: string[] | null;
   is_active: boolean;
+  /** Yashirin rollback ruxsati — faqat admin ko'radi (`/admin/carriers`). */
+  rollback_enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
 };
+
+/** `update` da o'zgartirish mumkin bo'lgan ustunlar (kurier va kalit — yo'q). */
+type CarrierAccountEditable = Pick<
+  CarrierAccount,
+  'name' | 'ip_allowlist' | 'rollback_enabled'
+>;
 
 type IdentityUser = {
   id: string;
@@ -169,6 +183,7 @@ export class CarrierAccountService {
       courier_user_id: String(row.courier_user_id),
       ip_allowlist: row.ip_allowlist ?? null,
       is_active: row.is_active,
+      rollback_enabled: row.rollback_enabled === true,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -205,7 +220,11 @@ export class CarrierAccountService {
     changes: Partial<
       Pick<
         CarrierAccount,
-        'name' | 'ip_allowlist' | 'is_active' | 'api_key_hash'
+        | 'name'
+        | 'ip_allowlist'
+        | 'is_active'
+        | 'api_key_hash'
+        | 'rollback_enabled'
       >
     >,
   ): Promise<CarrierAccount> {
@@ -336,6 +355,7 @@ export class CarrierAccountService {
         is_active: true,
         ip_allowlist: true as never,
         courier_user_id: true,
+        rollback_enabled: true,
       },
     });
     if (!row) {
@@ -351,6 +371,8 @@ export class CarrierAccountService {
       courier_active: row.is_active
         ? await this.isCourierActiveNow(courierId)
         : false,
+      // Faqat aniq `true` — eski/yo'q ustun yopiq (rollback o'chiq).
+      rollback_enabled: row.rollback_enabled === true,
     };
   }
 
@@ -400,6 +422,9 @@ export class CarrierAccountService {
           api_key_hash: this.hashApiKey(apiKey),
           ip_allowlist: ipAllowlist,
           is_active: true,
+          // Yangi kompaniya — rollback DOIM o'chiq (yaratishda berilmaydi:
+          // gateway DTO'sida maydon yo'q → 400; RMQ'da kelsa ham e'tiborsiz).
+          rollback_enabled: false,
         }),
       );
     } catch (error) {
@@ -422,6 +447,7 @@ export class CarrierAccountService {
         name: saved.name,
         courier_user_id: String(saved.courier_user_id),
         is_active: saved.is_active,
+        rollback_enabled: saved.rollback_enabled === true,
       },
       ...this.auditActor(dto.requester),
     });
@@ -451,17 +477,26 @@ export class CarrierAccountService {
   }
 
   /**
-   * Nom va IP ro'yxatini yangilaydi. Kurier bog'lanishi va kalit bu yerda
-   * O'ZGARMAYDI: kurier almashsa — yangi akkaunt (eski buyurtmalar va kassa
-   * eski kurierda qoladi); kalit uchun `rotateKey`.
+   * Nom, IP ro'yxati va rollback ruxsatini yangilaydi (har biri ixtiyoriy,
+   * birga yoki alohida). Kurier bog'lanishi va kalit bu yerda O'ZGARMAYDI:
+   * kurier almashsa — yangi akkaunt (eski buyurtmalar va kassa eski kurierda
+   * qoladi); kalit uchun `rotateKey`.
+   *
+   * `rollback_enabled` — `status: rollback` ruxsati (yashirin, sukut false).
+   * Kuchga kirishi: keyingi `/carrier/*` so'rovidan (akkaunt qatori
+   * keshlanmaydi). Audit: o'zgargan maydonlarning eski → yangi qiymati.
    */
   async update(
     id: string,
-    dto: { name?: string; ip_allowlist?: string[] | null },
+    dto: {
+      name?: string;
+      ip_allowlist?: string[] | null;
+      rollback_enabled?: boolean;
+    },
     requester?: Requester,
   ) {
     const cleanId = this.parseId(id);
-    const changed: Partial<Pick<CarrierAccount, 'name' | 'ip_allowlist'>> = {};
+    const changed: Partial<CarrierAccountEditable> = {};
 
     if (dto?.name !== undefined) {
       const name = String(dto.name ?? '').trim();
@@ -476,8 +511,27 @@ export class CarrierAccountService {
     if (dto?.ip_allowlist !== undefined) {
       changed.ip_allowlist = this.normalizeIpAllowlist(dto.ip_allowlist);
     }
+    if (dto?.rollback_enabled !== undefined) {
+      if (typeof dto.rollback_enabled !== 'boolean') {
+        this.badRequest("rollback_enabled boolean bo'lishi kerak");
+      }
+      changed.rollback_enabled = dto.rollback_enabled;
+    }
     if (!Object.keys(changed).length) {
       this.badRequest("O'zgartirish uchun hech qanday maydon berilmadi");
+    }
+
+    // Audit uchun eski qiymatlar (faqat o'zgartirilayotgan maydonlar).
+    const before = await this.findOrFail(cleanId);
+    const oldValue: Partial<CarrierAccountEditable> = {};
+    if (changed.name !== undefined) {
+      oldValue.name = before.name;
+    }
+    if (changed.ip_allowlist !== undefined) {
+      oldValue.ip_allowlist = before.ip_allowlist ?? null;
+    }
+    if (changed.rollback_enabled !== undefined) {
+      oldValue.rollback_enabled = before.rollback_enabled === true;
     }
 
     const saved = await this.patch(cleanId, changed);
@@ -485,9 +539,20 @@ export class CarrierAccountService {
       entity_type: 'CarrierAccount',
       entity_id: cleanId,
       action: ActivityAction.UPDATED,
+      old_value: oldValue,
       new_value: changed,
       ...this.auditActor(requester),
     });
+    if (
+      changed.rollback_enabled !== undefined &&
+      changed.rollback_enabled !== (before.rollback_enabled === true)
+    ) {
+      this.logger.log(
+        `carrier ${cleanId}: rollback ${
+          changed.rollback_enabled ? 'YOQILDI' : "O'CHIRILDI"
+        } (requester ${requester?.id ?? '-'})`,
+      );
+    }
     return successRes(this.toView(saved), 200, 'carrier account updated');
   }
 
@@ -509,7 +574,11 @@ export class CarrierAccountService {
       ...this.auditActor(requester),
     });
     return successRes(
-      { id: String(row.id), api_key: apiKey },
+      {
+        id: String(row.id),
+        api_key: apiKey,
+        rollback_enabled: row.rollback_enabled === true,
+      },
       200,
       'carrier key rotated',
     );
@@ -537,7 +606,11 @@ export class CarrierAccountService {
       ...this.auditActor(requester),
     });
     return successRes(
-      { id: String(row.id), is_active: saved.is_active },
+      {
+        id: String(row.id),
+        is_active: saved.is_active,
+        rollback_enabled: saved.rollback_enabled === true,
+      },
       200,
       'carrier status updated',
     );
