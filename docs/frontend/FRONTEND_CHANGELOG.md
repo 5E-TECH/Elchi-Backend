@@ -31,12 +31,22 @@ Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migrat
 - 🆕 `GET /ai/advisor/alerts/:id[?include=history]` — tafsilot; `new` bo'lsa atomik `new → seen` (`seen_at`, `seen_by`), audit yo'q. ⚠️ prefetch/hover'da yubormang. 3 daqiqadan eski `pending` izoh — `failed` + `explanation_error: "error"`; `pending` da `explanation_poll_after_ms: 2000`. 404 `AI_ADVISOR_ALERT_NOT_FOUND`.
 - 🆕 `PATCH /ai/advisor/alerts/:id {status: resolved|dismissed, note?}` — `resolved` uchun izoh 3–500 (trim) majburiy → 400 `AI_ADVISOR_NOTE_INVALID {reason, min_length, max_length}`; `dismissed` — ixtiyoriy ≤ 500. Ayni foydalanuvchi ayni holatni qayta yuborsa — 200 (idempotent). Boshqa holat / boshqa superadmin yopgan — 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Javob — yangilangan tafsilot. Audit `ai.advisor.alert.resolve|dismiss` (`/activity-logs` da `ai` xizmati — 4-qism).
 - 🟢 `explain` (AI izohi) — 5-qism; hozircha `explanation_status` doim `none`.
+### 2026-11-14 — AI maslahatchi (BE-5, 2c review tuzatishlari): R7/R8 semantikasi — shartnoma v0.4 uchun
+
+#653 mustaqil review (FE sessiya) va ega qarori asosida. Deploy: ai-service + finance-service, migratsiyasiz.
+
+- ✏️ **R7 karta** (`facts.source = card_balance`): `mismatch` endi hisoblanadi — `amount` (|AI o'qigan − kiritilgan| > 1 YOKI |AI o'qigan − tizimdagi| > 1), `card` (rasmdagi karta oxirgi 4 raqami ≠ kassa kartasi). Yangi maydonlar: `facts.expected_balance`, `facts.system_difference` (= AI o'qigan − tizimdagi), `facts.entered_ok`; dalilda ham. `headline_amount` = `difference` (≠ 0 bo'lsa), aks holda `system_difference`. Kursor — `GREATEST(ai_checked_at, confirmed_at)` (smena yopilgandan keyin ham ko'rinadi).
+- ✏️ **R7 chek**: so'mda bo'lmagan chek — `mismatch` ga `currency` (⊂ {amount, card, currency}), `difference`/`headline_amount`/`read_amount` = null, yangi `facts.read_currency`, `facts.read_amount_original`; `evidence.receipt.{amount, currency, error_reason, kind}`. `facts.receipt_kind` (`manual_expense|courier_to_hq|branch_to_hq`) — o'tkazmada `card` = «Pul HQ kartasiga tushmagan»; filial — jo'natuvchi. T6 bilan qaytarilgan operatsiya cheklari — R7 yo'q. Kursor — `GREATEST(ai_checked_at, updatedAt)`.
+- ✏️ `evidence.receipt.date_at` — faqat sana+vaqt bo'lsa (aniq mintaqa hurmat qilinadi), faqat sana — `date_at: null` + yangi `date_day: 'YYYY-MM-DD'`; noto'g'ri sana (31.02) — ikkalasi null. Valyutali chekda — faqat xom `date`.
+- ⚠️ **PII**: `evidence.receipt.recipient` va `payer` endi doim `null` (faqat `*_last4`).
+- ✏️ **R8**: ega qarori — `count ≥ max(min_count, ratio × weekly_avg)`; yangi sozlama `rules.R8.min_count` (sukut 3, 1–50, UI'da ko'rsatilmaydi — Q12), `limits.rules.R8.min_count`, `rule.thresholds.min_count`, `evidence.baseline.{min_count, ratio}`. Baza 0 bo'lsa `facts.ratio: null` (nullable). Oxirgi yopilgan hafta (R6/R8) har kuni 02:30 da so'raladi (dushanba yiqilsa ham yo'qolmaydi).
+- 🟢 R7 ochiq ogohlantirishda ayni chek/tekshiruv qayta tahlil qilinsa — faktlar va sarlavha yangilanadi (`occurrences` o'zgarmaydi).
 
 ### 2026-11-14 — AI maslahatchi (BE-5, 2c): R7 chek/karta farqi, R8 tuzatishlar
 
 Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q. Endi R1–R8 hammasi tekshiriladi.
 
-- 🟢 R7 (har 30 daqiqada, kursor `ai_checked_at`): `facts.source = card_balance` — faqat tasdiqlangan (smena yopilgan) karta tekshiruvi `mismatch`, `difference = AI o'qigan − kiritilgan`; `receipt` — bog'langan chek AI `mismatch` yoki `card_mismatch` bayrog'i, `facts.mismatch ⊂ {amount, card}`. `evidence.receipt.date` — xom OCR matni, `date_at` — tahlil qilingan ISO (aks holda null); `week_summary` — joriy hafta (du–ya). Sukut darajasi `critical`, Telegram'ga yuborilmaydi (Q2 c).
+- 🟢 R7 (har 30 daqiqada; kursor — pastdagi review tuzatishiga qarang): `facts.source = card_balance` — faqat tasdiqlangan (smena yopilgan) karta tekshiruvi `mismatch`, `difference = AI o'qigan − kiritilgan`; `receipt` — bog'langan chek AI `mismatch` yoki `card_mismatch` bayrog'i, `facts.mismatch ⊂ {amount, card}`. `evidence.receipt.date` — xom OCR matni, `date_at` — tahlil qilingan ISO (aks holda null); `week_summary` — joriy hafta (du–ya). Sukut darajasi `critical`, Telegram'ga yuborilmaydi (Q2 c).
 - 🟢 R8 (dushanba 02:30, o'tgan hafta): sanaladi — qo'lda tuzatish + T6 qaytarish/tahrir; buyurtma qaytarilishi (`order_rollback`) faqat `by_kind` da ko'rinadi (Q4). [TAKLIF] haftada kamida 3 ta tuzatish bo'lmasa ogohlantirilmaydi (baza 0 bo'lgan haftada 1–2 ta tuzatish shovqin bo'lmasin). Havola — `/payments/main-cashbox` (Q12).
 
 ### 2026-11-14 — AI maslahatchi (BE-5, 2b): R2, R4, R5 — epizod qoidalari

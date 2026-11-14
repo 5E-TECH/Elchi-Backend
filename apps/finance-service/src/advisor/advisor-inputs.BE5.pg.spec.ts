@@ -572,152 +572,384 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
   });
 
   describe('R7/R8', () => {
-    it('R7 karta: faqat tasdiqlangan mismatch; farq = o‘qilgan − kiritilgan; kursor ai_checked_at', async () => {
-      await db.query(
-        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0)`,
-      );
-      const [{ id: card }] = await db.query<Array<{ id: string }>>(
-        `INSERT INTO "finance_schema"."cashbox_cards" ("cashbox_id", "name") VALUES (1, 'Humo virtual') RETURNING "id"::text AS id`,
-      );
-      const newShift = async () => {
-        const [row] = await db.query<Array<{ id: string }>>(
+    const runR7 = (since: string, now = NOW.toISOString()) =>
+      svc.ruleInputs({
+        rules: ['R7'],
+        now,
+        thresholds: {},
+        since: { R7: since },
+      });
+
+    describe('R7 karta', () => {
+      let card = '';
+      beforeEach(async () => {
+        await db.query(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0)`,
+        );
+        [{ id: card }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashbox_cards" ("cashbox_id", "name", "last4") VALUES (1, 'Humo virtual', '1234') RETURNING "id"::text AS id`,
+        );
+      });
+      const check = async (o: {
+        status?: string;
+        confirmed?: string | null;
+        checked?: string;
+        entered?: number;
+        read?: number;
+        expected?: number;
+        last4?: string | null;
+      }) => {
+        const [{ id: shiftId }] = await db.query<Array<{ id: string }>>(
           `INSERT INTO "finance_schema"."shifts" ("cashbox_user_id", "opened_at", "closed_at", "status")
            VALUES (NULL, '2026-10-21T03:00:00Z', '2026-10-21T15:00:00Z', 'closed') RETURNING "id"::text AS id`,
         );
-        return row.id;
-      };
-      let shiftId = '';
-      const check = async (status: string, confirmed: boolean, at: string) => {
-        shiftId = await newShift();
         const [row] = await db.query<Array<{ id: string }>>(
           `INSERT INTO "finance_schema"."shift_account_checks"
-             ("shift_id", "cashbox_card_id", "entered_balance", "ai_read_balance", "ai_status", "ai_checked_at", "confirmed_at", "ai_confidence")
-           VALUES ($1, $2, 1540000, 1522000, $3, $4, $5, 0.9) RETURNING "id"::text AS id`,
-          [shiftId, card, status, at, confirmed ? at : null],
+             ("shift_id", "cashbox_card_id", "entered_balance", "ai_read_balance", "expected_balance",
+              "ai_status", "ai_checked_at", "confirmed_at", "ai_confidence", "ai_last4_detected")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0.9, $9) RETURNING "id"::text AS id`,
+          [
+            shiftId,
+            card,
+            o.entered ?? 1540000,
+            o.read ?? 1522000,
+            o.expected ?? 1540000,
+            o.status ?? 'mismatch',
+            o.checked ?? '2026-10-22T08:30:00Z',
+            o.confirmed === undefined ? '2026-10-22T08:30:00Z' : o.confirmed,
+            o.last4 === undefined ? '1234' : o.last4,
+          ],
         );
-        return row.id;
+        return { id: row.id, shiftId };
       };
-      const ok = await check('mismatch', true, '2026-10-22T08:30:00Z');
-      const okShift = shiftId;
-      await check('mismatch', false, '2026-10-22T08:31:00Z'); // qoralama
-      await check('match', true, '2026-10-22T08:32:00Z');
-      await check('mismatch', true, '2026-10-20T08:30:00Z'); // kursordan oldin
-      const out = await svc.ruleInputs({
-        rules: ['R7'],
-        now: NOW.toISOString(),
-        thresholds: {},
-        since: { R7: '2026-10-22T08:00:00Z' },
-      });
-      expect(out.candidates).toHaveLength(1);
-      expect(out.candidates[0]).toMatchObject({
-        dedup_key: `R7:card_check:${ok}`,
-        fact_keys: [
-          {
-            fact_key: `R7:card_check:${ok}`,
-            fact_at: '2026-10-21T15:00:00.000Z',
+
+      it('kassir xatosi: farq = o‘qilgan − kiritilgan, tizim farqi ham; qoralama va match — yo‘q', async () => {
+        const ok = await check({});
+        await check({ confirmed: null }); // qoralama
+        await check({ status: 'match' });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates).toHaveLength(1);
+        expect(out.candidates[0]).toMatchObject({
+          dedup_key: `R7:card_check:${ok.id}`,
+          fact_keys: [{ fact_at: '2026-10-21T15:00:00.000Z' }],
+          headline_amount: -18000,
+          facts: {
+            source: 'card_balance',
+            mismatch: ['amount'],
+            entered_amount: 1540000,
+            read_amount: 1522000,
+            difference: -18000,
+            expected_balance: 1540000,
+            system_difference: -18000,
+            shift: { id: ok.shiftId, date: '2026-10-21' },
+            card: { id: card, name: 'Humo virtual' },
+            cashbox: { type: 'main', name: 'Asosiy kassa' },
           },
-        ],
-        headline_amount: -18000,
-        facts: {
-          source: 'card_balance',
-          mismatch: ['amount'],
-          entered_amount: 1540000,
-          read_amount: 1522000,
-          difference: -18000,
-          shift: { id: okShift, date: '2026-10-21' },
-          card: { id: card, name: 'Humo virtual' },
-          cashbox: { type: 'main', name: 'Asosiy kassa' },
-        },
-        evidence: { kind: 'card_balance_check', ai_confidence: 0.9 },
+          evidence: {
+            kind: 'card_balance_check',
+            expected_balance: 1540000,
+            ai_confidence: 0.9,
+          },
+        });
       });
-      expect(out.cursors.R7).toBe('2026-10-22T08:30:00.000Z');
+
+      it('⭐ B1: AI natijasi smena ochiq paytda, tasdiq tick’dan keyin — keyingi tick topadi', async () => {
+        const c = await check({
+          checked: '2026-10-22T08:00:00Z',
+          confirmed: null,
+        });
+        const first = await runR7(
+          '2026-10-22T07:55:00Z',
+          '2026-10-22T08:30:00Z',
+        );
+        expect(first.candidates).toEqual([]);
+        expect(first.cursors.R7).toBeNull(); // dvigatel `now` (08:30) saqlaydi
+        await db.query(
+          `UPDATE "finance_schema"."shift_account_checks" SET "confirmed_at" = '2026-10-22T08:40:00Z' WHERE "id" = $1`,
+          [c.id],
+        );
+        const next = await runR7(
+          '2026-10-22T08:25:00Z',
+          '2026-10-22T09:00:00Z',
+        );
+        expect(next.candidates.map((x) => x.dedup_key)).toEqual([
+          `R7:card_check:${c.id}`,
+        ]);
+        expect(next.cursors.R7).toBe('2026-10-22T08:40:00.000Z');
+      });
+
+      it('⭐ B3: halol kassir (kiritilgan = o‘qilgan), tizimda farq — headline tizim farqi; boshqa karta rasmi — card', async () => {
+        await check({ entered: 950000, read: 950000, expected: 1000000 });
+        await check({
+          entered: 1000000,
+          read: 1000000,
+          expected: 1000000,
+          last4: '9999',
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(
+          out.candidates.map((c) => [
+            c.facts.mismatch,
+            c.headline_amount,
+            c.facts.difference,
+            c.facts.system_difference,
+          ]),
+        ).toEqual([
+          [['amount'], -50000, 0, -50000],
+          [['card'], 0, 0, 0],
+        ]);
+      });
     });
 
-    it('R7 chek: bog‘langan mismatch yoki card_mismatch; qoralama va o‘chirilgan — yo‘q; date_at', async () => {
-      const [{ id: cb }] = await db.query<Array<{ id: string }>>(
-        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('branch', 9) RETURNING "id"::text AS id`,
-      );
-      const [{ id: hist }] = await db.query<Array<{ id: string }>>(
-        `INSERT INTO "finance_schema"."cashbox_history"
-           ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "expense_category_name", "created_by", "createdAt")
-         VALUES ('expense', $1, 'manual_expense', 350000, 0, 'Yoqilg‘i', 301, '2026-10-22T06:05:00Z') RETURNING "id"::text AS id`,
-        [cb],
-      );
-      const receipt = async (
-        state: string,
-        status: string,
-        flags: string[] | null,
-        deleted = false,
-        h: string | null = hist,
-      ) => {
+    describe('R7 chek', () => {
+      let cb = '';
+      let hist = '';
+      beforeEach(async () => {
+        [{ id: cb }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('branch', 9) RETURNING "id"::text AS id`,
+        );
+        hist = await histRow(
+          cb,
+          'expense',
+          'manual_expense',
+          '2026-10-22T06:05:00Z',
+        );
+      });
+      async function histRow(
+        cashbox: string,
+        op: string,
+        source: string,
+        at: string,
+        amount = 350000,
+      ): Promise<string> {
+        const [row] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashbox_history"
+             ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "expense_category_name", "created_by", "createdAt")
+           VALUES ($1, $2, $3, $4, 0, 'Yoqilg‘i', 301, $5) RETURNING "id"::text AS id`,
+          [op, cashbox, source, amount, at],
+        );
+        return row.id;
+      }
+      const receipt = async (o: {
+        state?: string;
+        status?: string;
+        flags?: string[] | null;
+        deleted?: boolean;
+        history?: string | null;
+        counter?: string | null;
+        kind?: string;
+        branchId?: string | null;
+        currency?: string | null;
+        errorReason?: string | null;
+        amount?: number;
+        difference?: number | null;
+        date?: string;
+      }) => {
         const [row] = await db.query<Array<{ id: string }>>(
           `INSERT INTO "finance_schema"."cashbox_receipts"
-             ("kind", "state", "history_id", "file_key", "file_sha256", "mime", "size_bytes", "uploaded_by",
-              "ai_status", "ai_flags", "entered_amount", "ai_amount", "ai_difference", "ai_date",
-              "ai_recipient", "ai_recipient_last4", "ai_payer_last4", "ai_checked_at", "is_deleted")
-           VALUES ('manual_expense', $1, $2, 'k', repeat('a', 64), 'image/jpeg', 1, 301, $3, $4::jsonb,
-                   350000, 332000, -18000, '22.10.2026 11:05', 'ALIYEV A.', '8840', '3307', '2026-10-22T08:40:00Z', $5)
+             ("kind", "state", "history_id", "counter_history_id", "branch_id", "file_key", "file_sha256", "mime", "size_bytes", "uploaded_by",
+              "ai_status", "ai_flags", "entered_amount", "ai_amount", "ai_difference", "ai_currency", "ai_error_reason", "ai_date",
+              "ai_recipient", "ai_recipient_last4", "ai_payer", "ai_payer_last4", "ai_checked_at", "updatedAt", "is_deleted")
+           VALUES ($1, $2, $3, $4, $5, 'k', repeat('a', 64), 'image/jpeg', 1, 301, $6, $7::jsonb,
+                   350000, $8, $9, $10, $11, $12, 'ALIYEV ALI', '8840', 'VALIYEV VALI', '3307', '2026-10-22T08:40:00Z', '2026-10-22T08:40:00Z', $13)
            RETURNING "id"::text AS id`,
-          [state, h, status, flags ? JSON.stringify(flags) : null, deleted],
+          [
+            o.kind ?? 'manual_expense',
+            o.state ?? 'linked',
+            o.history === undefined ? hist : o.history,
+            o.counter ?? null,
+            o.branchId ?? null,
+            o.status ?? 'mismatch',
+            o.flags ? JSON.stringify(o.flags) : null,
+            o.amount ?? 332000,
+            o.difference === undefined ? -18000 : o.difference,
+            o.currency ?? null,
+            o.errorReason ?? null,
+            o.date ?? '22.10.2026 11:05',
+            o.deleted ?? false,
+          ],
         );
         return row.id;
       };
-      const a = await receipt('linked', 'mismatch', ['card_mismatch']);
-      await receipt('draft', 'mismatch', null, false, null);
-      await receipt('linked', 'mismatch', null, true, null);
-      await receipt('linked', 'match', null, false, null);
-      const b = await receipt(
-        'linked',
-        'match',
-        ['card_mismatch'],
-        false,
-        null,
-      );
-      const out = await svc.ruleInputs({
-        rules: ['R7'],
-        now: NOW.toISOString(),
-        thresholds: {},
-        since: { R7: '2026-10-22T08:00:00Z' },
-      });
-      expect(out.candidates.map((c) => c.dedup_key)).toEqual([
-        `R7:receipt:${a}`,
-        `R7:receipt:${b}`,
-      ]);
-      expect(out.candidates[0]).toMatchObject({
-        branch: { id: '9', name: 'Filial 9' },
-        fact_keys: [{ fact_at: '2026-10-22T06:05:00.000Z' }],
-        facts: {
-          source: 'receipt',
-          mismatch: ['amount', 'card'],
-          difference: -18000,
-          operation: {
-            history_id: hist,
-            kind: 'manual_expense',
-            category_name: 'Yoqilg‘i',
+
+      it('bog‘langan mismatch / card_mismatch; qoralama, o‘chirilgan, match — yo‘q; PII ism saqlanmaydi', async () => {
+        const a = await receipt({ flags: ['card_mismatch'] });
+        await receipt({ state: 'draft', history: null });
+        await receipt({ deleted: true, history: null });
+        await receipt({ status: 'match', history: null });
+        const b = await receipt({
+          status: 'match',
+          flags: ['card_mismatch'],
+          history: null,
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates.map((c) => c.dedup_key)).toEqual([
+          `R7:receipt:${a}`,
+          `R7:receipt:${b}`,
+        ]);
+        expect(out.candidates[0]).toMatchObject({
+          branch: { id: '9', name: 'Filial 9' },
+          fact_keys: [{ fact_at: '2026-10-22T06:05:00.000Z' }],
+          facts: {
+            source: 'receipt',
+            receipt_kind: 'manual_expense',
+            mismatch: ['amount', 'card'],
+            difference: -18000,
+            read_currency: null,
+            operation: {
+              history_id: hist,
+              kind: 'manual_expense',
+              category_name: 'Yoqilg‘i',
+            },
+            created_by: { id: '301', name: 'User 301' },
           },
-          created_by: { id: '301', name: 'User 301' },
-        },
-        evidence: {
-          kind: 'receipt_check',
-          receipt: {
-            date: '22.10.2026 11:05',
-            date_at: '2026-10-22T06:05:00.000Z',
-            recipient_last4: '8840',
-            payer_last4: '3307',
+          evidence: {
+            kind: 'receipt_check',
+            receipt: {
+              date: '22.10.2026 11:05',
+              date_at: '2026-10-22T06:05:00.000Z',
+              date_day: '2026-10-22',
+              recipient: null,
+              payer: null,
+              recipient_last4: '8840',
+              payer_last4: '3307',
+            },
+            week_summary: { from: '2026-10-19', to: '2026-10-25' },
           },
-          week_summary: { from: '2026-10-19', to: '2026-10-25' },
-        },
+        });
+        expect(JSON.stringify(out)).not.toMatch(/ALIYEV|VALIYEV/);
+        expect(out.candidates[1].facts).toMatchObject({
+          mismatch: ['card'],
+          operation: null,
+        });
       });
-      expect(out.candidates[1].facts).toMatchObject({
-        mismatch: ['card'],
-        operation: null,
+
+      it('⭐ B2: chek so‘mda emas — summa solishtirilmaydi (#643 dan oldin va keyin)', async () => {
+        const pre = await receipt({
+          currency: 'USD',
+          amount: 100,
+          difference: -1249900,
+        });
+        const post = await receipt({
+          currency: 'USD',
+          amount: 100,
+          difference: null,
+          errorReason: 'currency_not_uzs',
+          history: null,
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        for (const [i, id] of [pre, post].entries()) {
+          expect(out.candidates[i]).toMatchObject({
+            dedup_key: `R7:receipt:${id}`,
+            headline_amount: null,
+            facts: {
+              mismatch: ['currency'],
+              difference: null,
+              read_amount: null,
+              read_amount_original: 100,
+              read_currency: 'USD',
+            },
+            evidence: {
+              receipt: { amount: 100, currency: 'USD', date_at: null },
+            },
+          });
+        }
+      });
+
+      it('S2/S3: o‘tkazma cheki — jo‘natuvchi filial; T6 bilan qaytarilgan operatsiya — yo‘q; T6 tahriri (updatedAt) ko‘rinadi', async () => {
+        const [{ id: main }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0) RETURNING "id"::text AS id`,
+        );
+        const income = await histRow(
+          main,
+          'income',
+          'branch_to_main',
+          '2026-10-22T06:00:00Z',
+        );
+        const out1 = await histRow(
+          cb,
+          'expense',
+          'branch_to_main',
+          '2026-10-22T06:00:00Z',
+        );
+        const tr = await receipt({
+          kind: 'branch_to_hq',
+          history: income,
+          counter: out1,
+          flags: ['card_mismatch'],
+          status: 'match',
+        });
+
+        const reversedOp = await histRow(
+          cb,
+          'expense',
+          'manual_expense',
+          '2026-10-22T07:00:00Z',
+          1,
+        );
+        await receipt({ history: reversedOp });
+        await db.query(
+          `INSERT INTO "finance_schema"."cashbox_history" ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "reverses_history_id", "createdAt")
+           VALUES ('income', $1, 'payment_reversal', 1, 0, $2, '2026-10-22T07:30:00Z')`,
+          [cb, reversedOp],
+        );
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates.map((c) => c.dedup_key)).toEqual([
+          `R7:receipt:${tr}`,
+        ]);
+        expect(out.candidates[0]).toMatchObject({
+          branch: { id: '9' },
+          subject: { kind: 'cashbox', id: '9' },
+          facts: {
+            receipt_kind: 'branch_to_hq',
+            mismatch: ['card'],
+            cashbox: { type: 'branch', owner_id: '9' },
+          },
+        });
+
+        // T6 tahriri: holat qayta hisoblandi, ai_checked_at eski, updatedAt yangi.
+        const edited = await receipt({ status: 'match', history: null });
+        await db.query(
+          `UPDATE "finance_schema"."cashbox_receipts" SET "ai_status" = 'mismatch', "ai_checked_at" = '2026-10-20T08:00:00Z', "updatedAt" = '2026-10-22T08:50:00Z' WHERE "id" = $1`,
+          [edited],
+        );
+        const later = await runR7('2026-10-22T08:45:00Z');
+        expect(later.candidates.map((c) => c.dedup_key)).toContain(
+          `R7:receipt:${edited}`,
+        );
+      });
+
+      it('S5: receipt_ai_enabled — chek sozlamasidan (stub)', async () => {
+        await receipt({});
+        const withSettings = new AdvisorInputsService(
+          db,
+          new FinanceDailyService(db),
+          { send: identitySend } as never,
+          { send: branchSend } as never,
+          {
+            loadSettings: () =>
+              Promise.resolve({
+                manual_expense: { ai_enabled: false },
+                hq_transfer: { ai_enabled: false },
+              }),
+          } as never,
+        );
+        const out = await withSettings.ruleInputs({
+          rules: ['R7'],
+          now: NOW.toISOString(),
+          thresholds: {},
+          since: { R7: '2026-10-22T08:00:00Z' },
+        });
+        expect(out.candidates[0].facts.receipt_ai_enabled).toBe(false);
       });
     });
 
-    it('R8: qo‘lda + T6 sanaladi, buyurtma qaytarilishi va payment_reversal yo‘q; ≥ 2× bazaviy', async () => {
-      await db.query(
-        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0), ('couriers', 5)`,
-      );
+    describe('R8', () => {
+      beforeEach(async () => {
+        await db.query(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0), ('couriers', 5)`,
+        );
+      });
       // Buyurtma qaytarilishi: bitta buyurtma — bir nechta kassada oyoq.
       const corr = (
         at: string,
@@ -740,65 +972,90 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
                    gen_random_uuid()::text, now(), $2)`,
           [action, at],
         );
-      // Baza (30 kun): 2 ta qo'lda tuzatish → haftalik o'rtacha 0,47.
-      await corr('2026-09-20T05:00:00Z', null);
-      await corr('2026-10-01T05:00:00Z', null);
-      // Hafta 12–18.10: 2 qo'lda + 1 reverse + 1 edit = 4; buyurtma (2 oyoq, 1 buyurtma) va reversal sanalmaydi.
-      await corr('2026-10-13T05:00:00Z', null);
-      await corr('2026-10-14T05:00:00Z', null);
-      await corr('2026-10-14T06:00:00Z', 500);
-      await corr('2026-10-14T06:00:01Z', 500, 'correction', 2);
-      await corr('2026-10-15T06:00:00Z', null, 'payment_reversal');
-      await t6('reverse', '2026-10-15T05:00:00Z');
-      await t6('edit', '2026-10-16T05:00:00Z');
-      const out = await svc.ruleInputs({
-        rules: ['R8'],
-        now: NOW.toISOString(),
-        thresholds: { R8: { ratio: 2 } },
-        since: {},
-        periods: { weeks: ['2026-10-12'] },
-      });
-      expect(out.candidates).toHaveLength(1);
-      expect(out.candidates[0]).toMatchObject({
-        dedup_key: 'R8:week:2026-10-12',
-        facts: {
-          from: '2026-10-12',
-          to: '2026-10-18',
-          count: 4,
-          baseline_weekly_avg: 0.47,
-          ratio: 8.5,
-        },
-        evidence: {
-          kind: 'corrections',
-          by_kind: {
-            manual_correction: 2,
-            order_rollback: 1,
-            payment_reverse: 1,
-            payment_edit: 1,
-          },
-          counted_kinds: [
-            'manual_correction',
-            'payment_reverse',
-            'payment_edit',
-          ],
-          baseline: { window_days: 30, total: 2 },
-        },
-      });
-      expect(
-        (out.candidates[0].evidence.days as Array<{ count: number }>).map(
-          (d) => d.count,
-        ),
-      ).toEqual([0, 1, 1, 1, 1, 0, 0]);
+      const run = (t: Record<string, number>, weeks = ['2026-10-12']) =>
+        svc.ruleInputs({
+          rules: ['R8'],
+          now: NOW.toISOString(),
+          thresholds: { R8: t },
+          since: {},
+          periods: { weeks },
+        });
 
-      // Yuqori chegara (10×) — jim; tugamagan hafta — tekshirilmaydi.
-      const quiet = await svc.ruleInputs({
-        rules: ['R8'],
-        now: NOW.toISOString(),
-        thresholds: { R8: { ratio: 10 } },
-        since: {},
-        periods: { weeks: ['2026-10-12', '2026-10-19'] },
+      it('qo‘lda + T6 sanaladi, buyurtma qaytarilishi va payment_reversal yo‘q; ≥ max(min_count, 2× bazaviy)', async () => {
+        await corr('2026-09-20T05:00:00Z', null);
+        await corr('2026-10-01T05:00:00Z', null);
+        await corr('2026-10-13T05:00:00Z', null);
+        await corr('2026-10-14T05:00:00Z', null);
+        await corr('2026-10-14T06:00:00Z', 500);
+        await corr('2026-10-14T06:00:01Z', 500, 'correction', 2);
+        await corr('2026-10-15T06:00:00Z', null, 'payment_reversal');
+        await t6('reverse', '2026-10-15T05:00:00Z');
+        await t6('edit', '2026-10-16T05:00:00Z');
+        const out = await run({ ratio: 2, min_count: 3 });
+        expect(out.candidates).toHaveLength(1);
+        expect(out.candidates[0]).toMatchObject({
+          dedup_key: 'R8:week:2026-10-12',
+          facts: {
+            from: '2026-10-12',
+            to: '2026-10-18',
+            count: 4,
+            baseline_weekly_avg: 0.47,
+            ratio: 8.5,
+          },
+          evidence: {
+            kind: 'corrections',
+            by_kind: {
+              manual_correction: 2,
+              order_rollback: 1,
+              payment_reverse: 1,
+              payment_edit: 1,
+            },
+            counted_kinds: [
+              'manual_correction',
+              'payment_reverse',
+              'payment_edit',
+            ],
+            baseline: { window_days: 30, total: 2, min_count: 3, ratio: 2 },
+          },
+        });
+        expect(
+          (out.candidates[0].evidence.days as Array<{ count: number }>).map(
+            (d) => d.count,
+          ),
+        ).toEqual([0, 1, 1, 1, 1, 0, 0]);
+        // min_count 5 — jim; yuqori ratio — jim; tugamagan hafta — tekshirilmaydi.
+        expect((await run({ ratio: 2, min_count: 5 })).candidates).toEqual([]);
+        expect(
+          (await run({ ratio: 10, min_count: 3 }, ['2026-10-12', '2026-10-19']))
+            .candidates,
+        ).toEqual([]);
       });
-      expect(quiet.candidates).toEqual([]);
+
+      it('baza 0: min_count yetsa ogohlantiradi, ratio null; S7 — butun sonli solishtiruv', async () => {
+        for (const d of ['13', '14', '15'])
+          await corr(`2026-10-${d}T05:00:00Z`, null);
+        const zero = await run({ ratio: 2, min_count: 3 });
+        expect(zero.candidates[0].facts).toMatchObject({
+          count: 3,
+          baseline_weekly_avg: 0,
+          ratio: null,
+        });
+
+        // Baza 4 (30 kunda) → aniq chegara 4,3 × 4 × 7 / 30 = 4,0133: 4 ta — yetmaydi.
+        await db.query(
+          `TRUNCATE "finance_schema"."cashbox_history" RESTART IDENTITY CASCADE`,
+        );
+        for (const d of ['20', '21', '22', '23'])
+          await corr(`2026-09-${d}T05:00:00Z`, null);
+        for (const d of ['13', '14', '15', '16'])
+          await corr(`2026-10-${d}T05:00:00Z`, null);
+        expect((await run({ ratio: 4.3, min_count: 1 })).candidates).toEqual(
+          [],
+        );
+        expect((await run({ ratio: 4, min_count: 1 })).candidates).toHaveLength(
+          1,
+        );
+      });
     });
   });
 
