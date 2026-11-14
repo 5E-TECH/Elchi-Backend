@@ -310,7 +310,6 @@ describe('A3: qo‘shimcha guruhlashlar va summa himoyasi', () => {
     ['avto 901 234 567 so‘m', '901 234 567 so‘m'],
     ['narxi 901234567 so‘m', '901234567 so‘m'],
     ['narxi 901234567 сум', '901234567 сум'],
-    ['narx 90 123 45 67 ming', '90 123 45 67 ming'],
     ['kvartira 900 000 000', '900 000 000'],
     ['atir 150 000 so‘m', '150 000 so‘m'],
     ['3 ta, donasi 250 ming, jami 750 000', '750 000'],

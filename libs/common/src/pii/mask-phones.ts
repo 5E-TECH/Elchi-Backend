@@ -35,18 +35,53 @@
 const UZ_NATIONAL_CODE = '(?:20|33|5[05]|6[1-9]|7\\d|88|9[013-57-9])';
 
 /**
- * Raqamdan keyin summa so'zi kelmasin: `901234567 so'm`, `90 123 45 67 ming`
- * — narx, telefon EMAS (narxni yo'qotish eng qimmat xato).
+ * #647 review: summa so'zi (raqamdan KEYIN, 0–2 bo'shliq/NBSP). Butun so'z
+ * SHART — `sumka`, `summa`, `сумма`, `Mingbuloq`, `somsa` summa EMAS; `k`
+ * faqat raqamga yopishgan (`150k`).
  */
-const NOT_MONEY_AFTER =
-  "(?![ ]?(?:so['ʻ‘’`]?m|sum|сум|сўм|ming|минг|тыс|ming|mln|млн|million|\\$|usd|dollar|k(?![a-zа-я])))";
+const MONEY_AFTER_RE =
+  /^(?:k(?![\p{L}\d])|[ \u00a0\u202f]{0,2}(?:\$|(?:so['ʻʼ‘’`]?m(?:ga|dan|lik|ni)?|sum|сум(?:ов)?|сўм|uzs|usd|y\.e\.|у\.е\.|ming(?:ta)?|минг|тыс\p{L}*|mln|млн|mlrd|млрд|million|dollar\p{L}*)(?![\p{L}\d])))/iu;
 
-/** Prefikssiz 3-3-3 uchun: oldida telefon so'zi (≤ 3 belgi oraliq). */
+/**
+ * Noaniq shakldan OLDIN summa so'zi yoki id belgisi: `narxi 205000000`,
+ * `#905123456`, `Buyurtma raqami 901 234 567`, `Uy raqami 205 000 000`.
+ */
+const MONEY_OR_ID_BEFORE_RE =
+  /(?:(?:narx|jami|summa|to['ʻʼ’]?lov|qiymat|цен|сумм|итого|стоимост)\p{L}*[ :=\u00a0-]{0,3}|[#№$]\s?|(?:buyurtma|zakaz|заказ|order|chek|чек|shartnoma|договор|uy|kvartira|xonadon|дом|kv)\p{L}*\s+(?:raqam|nomer|номер|№)\p{L}*\s*[:.]?\s*)$/iu;
+
+/** O'lcham/model ro'yxati: `990 40 41 42 razmer`, `Razmerlar: 200 50 60 70`. */
+const SIZE_AFTER_RE = /^\s*[,;]?\s*(?:razmer|размер|o['ʻ‘’]?lcham)/iu;
+const SIZE_BEFORE_RE = /(?:razmer|размер|o['ʻ‘’]?lcham)\p{L}*\s*[:-]?\s*$/iu;
+
+/**
+ * Prefikssiz 3-2-2-2 oxirgi uch juftligi ketma-ket o'suvchi (`41 42 43`,
+ * `50 60 70`) — o'lchamlar, telefon emas.
+ */
+function looksLikeSizeRun(raw: string): boolean {
+  const g = raw.split(/[^\d]+/).filter(Boolean);
+  if (g.length !== 4) return false;
+  const [a, b, c] = [Number(g[1]), Number(g[2]), Number(g[3])];
+  const d = b - a;
+  return d > 0 && d <= 10 && c - b === d;
+}
+
+/**
+ * Pul qo'riqchisi FAQAT noaniq shakllarga: prefikssiz yaxlit 9 raqam yoki
+ * 3-3-3. 2 xonali guruhli yoki +998/998/0/8 prefiksli shakl — DOIM telefon
+ * (narx shunday yozilmaydi; maxfiylik ustun).
+ */
+const AMBIGUOUS_SHAPE_RE =
+  /^(?:\d{9}|\d{3}[ .\-\u00a0]\d{3}[ .\-\u00a0]\d{3})$/u;
+
+/** Prefikssiz 3-3-3 uchun: oldida telefon so'zi (≤ 4 belgi oraliq). */
 const PHONE_WORD_BEFORE =
-  '(?:\\b(?:tel|telefon|raqam|raqami|nomer|phone)|(?<![а-яё])(?:тел|телефон|номер|рақам))[ .:\\-]{0,3}';
+  "(?:\\b(?:tel|raqam|nomer|phone|aloqa|whatsapp|telegram|tg|mob)[a-z'ʻ‘’]{0,8}(?: (?:raqam\\p{L}*|uchun))?|(?<![а-яё])(?:тел|номер|рақам|моб|алоқа|мурожаат|т\\.ф)[а-яёқўғҳ.]{0,9}(?: (?:телефона|учун))?)[\\s.:\\-]{0,4}";
 
-/** Guruhlar orasidagi bitta ixtiyoriy ajratgich (qavslar alohida). */
-const GROUP_SEP = '[ .\\-]?';
+/**
+ * Guruhlar orasidagi ajratgich (qavslar alohida): ko'pi bilan 2 ta
+ * bo'shliq/NBSP va bitta `. - – /`.
+ */
+const GROUP_SEP = '[ \\u00a0\\u202f]{0,2}[.\\-–/]?[ \\u00a0\\u202f]{0,2}';
 
 /**
  * Ixtiyoriy prefiks.
@@ -68,7 +103,8 @@ const UZ_NATIONAL = `(?:\\(${UZ_NATIONAL_CODE}\\)|${UZ_NATIONAL_CODE})${GROUP_SE
  * ishlatiladi.
  */
 export const UZ_PHONE_RE = new RegExp(
-  `(?<!\\d)${UZ_PHONE_PREFIX}${UZ_NATIONAL}(?!\\d)${NOT_MONEY_AFTER}`,
+  `(?<!\\d)${UZ_PHONE_PREFIX}${UZ_NATIONAL}(?!\\d)`,
+  'u',
 );
 
 /**
@@ -79,13 +115,19 @@ export const UZ_PHONE_RE = new RegExp(
  * - prefikssiz 3-3-3 (`901 234 567`) FAQAT telefon so'zidan keyin
  *   ("tel", "raqam", "номер", ...) — aks holda `915 500 000` narx bo'lishi
  *   mumkin.
- * Hammasida summa so'zi (so'm, ming, млн, $, ...) kelsa — telefon EMAS.
+ * - +998 bilan 2-2-2-3 va 2-4-3 ham.
+ * Summa so'zi qo'riqchisi regex'da EMAS — `replacePhoneCandidates` da va
+ * faqat noaniq shakllarga (`AMBIGUOUS_SHAPE_RE`).
  */
 const UZ_ALT_PHONE_SOURCES: readonly string[] = [
-  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}\\d${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{2}(?!\\d)${NOT_MONEY_AFTER}`,
-  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}\\d${GROUP_SEP}\\d{3}${GROUP_SEP}\\d{3}(?!\\d)${NOT_MONEY_AFTER}`,
-  `(?<![\\d+])${UZ_NATIONAL_CODE}\\d[ .\\-]\\d{2}[ .\\-]\\d{2}[ .\\-]\\d{2}(?!\\d)${NOT_MONEY_AFTER}`,
-  `(?<=${PHONE_WORD_BEFORE})${UZ_NATIONAL_CODE}\\d[ .\\-]\\d{3}[ .\\-]\\d{3}(?!\\d)${NOT_MONEY_AFTER}`,
+  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}\\d${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{2}(?!\\d)`,
+  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}\\d${GROUP_SEP}\\d{3}${GROUP_SEP}\\d{3}(?!\\d)`,
+  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{2}${GROUP_SEP}\\d{3}(?!\\d)`,
+  `(?<!\\d)\\+?998${GROUP_SEP}${UZ_NATIONAL_CODE}${GROUP_SEP}\\d{4}${GROUP_SEP}\\d{3}(?!\\d)`,
+  // Prefikssiz 3-2-2-2 — nuqta bilan EMAS ("771 14.11.26" — sana).
+  `(?<![\\d+.])${UZ_NATIONAL_CODE}\\d[ \\u00a0\\-–]\\d{2}[ \\u00a0\\-–]\\d{2}[ \\u00a0\\-–]\\d{2}(?![\\d.])`,
+  // Prefikssiz 3-3-3 — faqat telefon so'zidan keyin.
+  `(?<=${PHONE_WORD_BEFORE})${UZ_NATIONAL_CODE}\\d[ .\\-\\u00a0]\\d{3}[ .\\-\\u00a0]\\d{3}(?!\\d)`,
 ];
 
 /**
@@ -126,16 +168,54 @@ function toUzE164(raw: string): string | null {
 function replacePhoneCandidates(
   text: string,
   replacer: (e164: string, match: string) => string,
+  opts: { moneyGuard: boolean } = { moneyGuard: true },
 ): string {
-  const replace = (input: string, source: string, flags: string) =>
-    input.replace(new RegExp(source, flags), (match: string) => {
-      const e164 = toUzE164(match);
-      if (!e164 || /^0{7}$/.test(e164.slice(-7))) return match;
-      return replacer(e164, match);
-    });
-  let out = replace(text, UZ_PHONE_RE.source, 'g');
-  for (const source of UZ_ALT_PHONE_SOURCES) out = replace(out, source, 'giu');
-  return out;
+  // Hamma shakl BITTA matn ustida yig'iladi va chapdan o'ngga almashtiriladi:
+  // tokenlar matndagi tartibda raqamlanadi; kesishganda boshlanishi oldin,
+  // keyin uzunrog'i yutadi.
+  const found: { start: number; end: number; e164: string; raw: string }[] = [];
+  for (const source of [UZ_PHONE_RE.source, ...UZ_ALT_PHONE_SOURCES]) {
+    for (const m of text.matchAll(new RegExp(source, 'giu'))) {
+      const raw = m[0];
+      const start = m.index ?? 0;
+      const end = start + raw.length;
+      const e164 = toUzE164(raw);
+      if (!e164 || /^0{7}$/.test(e164.slice(-7))) continue;
+      if (opts.moneyGuard) {
+        const before = text.slice(Math.max(0, start - 32), start);
+        const after = text.slice(end);
+        if (
+          AMBIGUOUS_SHAPE_RE.test(raw) &&
+          (MONEY_AFTER_RE.test(after) ||
+            MONEY_OR_ID_BEFORE_RE.test(before) ||
+            // Narxlar odatda "…000" bilan tugaydi; telefon kam hollarda.
+            /000$/.test(raw))
+        ) {
+          continue;
+        }
+        if (
+          /^\d{3}[ \u00a0\-–]\d{2}[ \u00a0\-–]\d{2}[ \u00a0\-–]\d{2}$/u.test(
+            raw,
+          ) &&
+          (looksLikeSizeRun(raw) ||
+            SIZE_AFTER_RE.test(after) ||
+            SIZE_BEFORE_RE.test(before))
+        ) {
+          continue;
+        }
+      }
+      found.push({ start, end, e164, raw });
+    }
+  }
+  found.sort((a, b) => a.start - b.start || b.end - a.end);
+  let out = '';
+  let pos = 0;
+  for (const f of found) {
+    if (f.start < pos) continue;
+    out += text.slice(pos, f.start) + replacer(f.e164, f.raw);
+    pos = f.end;
+  }
+  return out + text.slice(pos);
 }
 
 /**
@@ -255,5 +335,8 @@ export function maskPhoneForLog(
  */
 export function maskPhonesForLog(text: string): string {
   if (typeof text !== 'string' || text.length === 0) return text;
-  return replacePhoneCandidates(text, (e164) => maskPhoneForLog(e164));
+  // Log/Sentry: pul qo'riqchisi YO'Q — shubhada maskalanadi (maxfiylik ustun).
+  return replacePhoneCandidates(text, (e164) => maskPhoneForLog(e164), {
+    moneyGuard: false,
+  });
 }
