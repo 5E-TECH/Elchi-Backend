@@ -83,13 +83,33 @@ export type AiEffort = 'low' | 'medium' | 'high';
 /**
  * Chaqiruvga qo'shiladigan `effort` qismi: model effort'ni qabul qilsa
  * `{ effort }`, aks holda `{}` (Haiku 4.5 — 400). Barcha chaqiruv joylari
- * shu BITTA funksiyadan foydalanadi (ai-effort.spec qulflaydi).
+ * shu BITTA funksiyadan foydalanadi (ai-request-guard.spec qulflaydi).
  */
 export function effortParam(
   model: string,
   effort: AiEffort,
 ): { effort?: AiEffort } {
   return supportsEffort(model) ? { effort } : {};
+}
+
+/**
+ * Effort'ni RAD etadigan (400) ma'lum modellar — Haiku 4.5. Yordamchi
+ * (`AI_ASSISTANT_EFFORT`) ilgari effort'ni HAR DOIM yuborardi (Sonnet 4.6,
+ * Opus 4.6–4.8 ham qabul qiladi, sukut 'high'); o'sha xulq saqlanadi, faqat
+ * rad etadigan modelga yuborilmaydi.
+ */
+export const AI_EFFORT_REJECTING_MODELS: ReadonlySet<string> = new Set([
+  'haiku-4-5',
+]);
+
+/** Yordamchi uchun: model effort'ni rad etmasa `{ effort }`. */
+export function assistantEffortParam(
+  model: string,
+  effort: AiEffort,
+): { effort?: AiEffort } {
+  return AI_EFFORT_REJECTING_MODELS.has(normalizeModelId(model))
+    ? {}
+    : { effort };
 }
 
 /** Modelga `effort` yuborish mumkinmi (`AI_LOW_EFFORT_MODELS`). */
@@ -238,10 +258,9 @@ export function computeCostUsd(u: AiTokenUsage): number {
  * Prompt caching tejagan summa (USD) — dashboard uchun:
  * cache_read × in × 0.9 / 1M (keshsiz narx minus kesh o'qish narxi).
  */
-export function computeCacheSavedUsd(
-  u: Pick<AiTokenUsage, 'model' | 'cacheReadTokens'>,
-): number {
-  const p = priceFor(u.model);
+export function computeCacheSavedUsd(u: AiTokenUsage): number {
+  // Uzun so'rov tarifi (Haiku 5.5 100K+) — tejash ham shu narxda.
+  const p = effectivePriceFor(u);
   return (
     (safeTokenCount(u.cacheReadTokens) *
       p.in *

@@ -98,9 +98,15 @@ describe('M2: har Claude chaqiruvi effortni effortParam() orqali yuboradi', () =
 
   it('hammasida effortParam(...) bor', () => {
     const missing = calls
-      .filter((c) => !/\beffortParam\s*\(/.test(c.args))
+      .filter((c) => !/\b(effortParam|assistantEffortParam)\s*\(/.test(c.args))
       .map((c) => c.path);
     expect(missing).toEqual([]);
+  });
+  it('effortParam dan tashqari xom `effort:` kaliti yo‘q (spread’dan keyingi literal uni bosib ketardi)', () => {
+    const raw = calls
+      .filter((c) => /(^|[\s,{])effort\s*:/.test(c.args))
+      .map((c) => c.path);
+    expect(raw).toEqual([]);
   });
 });
 
