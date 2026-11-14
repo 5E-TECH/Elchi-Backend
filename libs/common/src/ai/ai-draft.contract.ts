@@ -71,7 +71,8 @@ export interface AiDraftAttachPreviewRequest {
  * TASDIQLAGAN qiymat (faqat o'zgargan maydonlar). Keyingi eval to'plami
  * uchun manba (`scripts/ai-eval-collect.ts`).
  * ⚠️ MAXFIYLIK: telefon HAR IKKALA tomonda faqat maskalangan
- * (`+99890*****67`); ism/manzil retention muddatida (30 kun) NULL bo'ladi.
+ * (`+99890*****67`); shaxsiy maydonlar (ism, manzil, telefon, izoh, operator)
+ * retention muddatida (30 kun) jsonb'dan olib tashlanadi, qolgani 365 kunda NULL.
  */
 export type AiFieldCorrections = Partial<
   Record<AiAuditedField, { ai: unknown; final: unknown }>

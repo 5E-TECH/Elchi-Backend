@@ -10,8 +10,10 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * to'plamining manbai (`scripts/ai-eval-collect.ts`).
  *
  * ⚠️ MAXFIYLIK: telefon ikkala tomonda faqat maskalangan; ism/manzil bor —
- * draft matni bilan bir xil retention (30 kun) tugagach NULL
- * (`AI_DRAFT_ITEM_PURGE_SQL`).
+ * draft matni bilan bir xil retention (30 kun) tugagach shaxsiy kalitlar
+ * jsonb'dan olib tashlanadi (`AI_DRAFT_ITEM_PURGE_SQL`), qolgani (tuman/
+ * summa/mahsulot) 365 kunda NULL (`AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL`).
+ * Faqat izoh — SQL o'zgarmagan.
  *
  * Qayta yurgizish xavfsiz (IF NOT EXISTS), mavjud ma'lumotga tegmaydi.
  */
