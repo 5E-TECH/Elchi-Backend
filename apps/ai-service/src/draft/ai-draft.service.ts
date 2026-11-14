@@ -61,10 +61,42 @@ const SHA_RE = /^[0-9a-f]{64}$/;
 const AUDITED = new Set<string>(AI_AUDITED_FIELDS);
 
 /**
- * J3hEDtFN #4: operator tuzatishlarida (field_corrections) ism/manzil qiymati
- * bor — draft matni bilan BIR XIL retention (30 kun) tugagach NULL.
+ * Operator tuzatishlaridagi (field_corrections) SHAXSIY maydonlar — draft
+ * matni bilan BIR XIL retention (30 kun) tugagach jsonb'dan olib tashlanadi.
+ * Telefon allaqachon maskalangan, lekin oxirgi raqamlari bor — u ham o'chadi.
+ */
+export const AI_CORRECTION_PII_FIELDS = [
+  'customer_name',
+  'phone_number',
+  'extra_number',
+  'address',
+  'comment',
+  'operator',
+] as const satisfies readonly AiAuditedField[];
+
+/**
+ * Tuzatishlarning shaxsiy bo'lmagan qismi (tuman/viloyat/summa/mahsulot/
+ * miqdor/where_deliver) eval va aniqlik tahlili uchun shuncha kun saqlanadi
+ * (ega qarori 2026-11-14: PII o'chadi, geo/summa/mahsulot tuzatishlari
+ * qoladi). ⚠️ 365 — TAKLIF; env kaliti ataylab yo'q (yuqoridagi izoh).
+ */
+export const AI_CORRECTIONS_RETENTION_DAYS = 365;
+
+/**
+ * 1-bosqich ($1 = AI_DRAFT_TEXT_RETENTION_DAYS, $2 = PII kalitlari): faqat
+ * PII kalitlari olib tashlanadi; qolgani bo'sh bo'lsa NULL. `?|` sharti
+ * UPDATE'ni idempotent qiladi — tozalangan qator qayta yozilmaydi.
  */
 export const AI_DRAFT_ITEM_PURGE_SQL = `
+  UPDATE ai_schema.ai_order_draft_item
+  SET field_corrections = NULLIF(field_corrections - $2::text[], '{}'::jsonb)
+  WHERE field_corrections IS NOT NULL
+    AND field_corrections ?| $2::text[]
+    AND created_at < now() - ($1::int * interval '1 day')
+`;
+
+/** 2-bosqich ($1 = AI_CORRECTIONS_RETENTION_DAYS): qolgan tuzatishlar ham NULL. */
+export const AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL = `
   UPDATE ai_schema.ai_order_draft_item
   SET field_corrections = NULL
   WHERE field_corrections IS NOT NULL
@@ -558,9 +590,14 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
         AI_DRAFT_TEXT_RETENTION_DAYS,
       ]);
       const n = affectedOf(result);
-      // J3hEDtFN #4: tuzatishlardagi ism/manzil ham shu muddatda o'chadi.
+      // Tuzatishlardagi PII (ism/manzil/telefon/izoh/operator) shu muddatda
+      // o'chadi; geo/summa/mahsulot tuzatishlari eval uchun qoladi.
       await this.items.query(AI_DRAFT_ITEM_PURGE_SQL, [
         AI_DRAFT_TEXT_RETENTION_DAYS,
+        [...AI_CORRECTION_PII_FIELDS],
+      ]);
+      await this.items.query(AI_DRAFT_ITEM_CORRECTIONS_EXPIRE_SQL, [
+        AI_CORRECTIONS_RETENTION_DAYS,
       ]);
       if (n > 0) this.logger.log(`ai_draft_text_purged count=${n}`);
       return n;

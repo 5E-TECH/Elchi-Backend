@@ -195,6 +195,90 @@ describePg('ai_order_draft — real Postgres (vncdmXOy)', () => {
     expect(trace).toMatchObject({ source_text: null, source_purged: true });
   });
 
+  it('retention: tuzatishlardan faqat PII olib tashlanadi (30 kun), geo/summa/mahsulot qoladi; 365 kunda NULL', async () => {
+    const orders = ['870000001', '870000002', '870000003'];
+    const corrections = {
+      customer_name: { ai: 'Ism A', final: 'Ism B' },
+      phone_number: { ai: '+99890*****67', final: '+99891*****11' },
+      address: { ai: 'manzil 1', final: 'manzil 2' },
+      comment: { ai: null, final: 'izoh' },
+      operator: { ai: null, final: 'op' },
+      district_id: { ai: '10', final: '11' },
+      total_price: { ai: 150000, final: 175000 },
+      items: {
+        ai: [{ name: 'atir', product_id: null, quantity: 1 }],
+        final: [],
+      },
+    };
+    await service.linkItems(
+      draftB,
+      market,
+      [
+        {
+          item_index: 0,
+          order_id: orders[0],
+          edited_fields: ['district_id'],
+          field_corrections: corrections,
+        },
+        {
+          item_index: 1,
+          order_id: orders[1],
+          edited_fields: ['address'],
+          field_corrections: { address: corrections.address },
+        },
+        {
+          item_index: 2,
+          order_id: orders[2],
+          edited_fields: ['district_id'],
+          field_corrections: corrections,
+        },
+      ],
+      '7',
+    );
+    await ds.query(
+      `UPDATE ai_schema.ai_order_draft_item SET created_at = now() - interval '31 days'
+       WHERE order_id = ANY($1::bigint[])`,
+      [orders.slice(0, 2)],
+    );
+    await service.purgeExpiredText();
+    // Ikkinchi chaqiruv idempotent (qayta yozmaydi, xato yo'q).
+    await service.purgeExpiredText();
+    const rows = async () =>
+      new Map(
+        (
+          await ds.query<
+            Array<{ order_id: string; fc: Record<string, unknown> | null }>
+          >(
+            `SELECT order_id::text, field_corrections AS fc
+             FROM ai_schema.ai_order_draft_item WHERE order_id = ANY($1::bigint[])`,
+            [orders],
+          )
+        ).map((r) => [r.order_id, r.fc]),
+      );
+    let after = await rows();
+    expect(Object.keys(after.get(orders[0])!).sort()).toEqual([
+      'district_id',
+      'items',
+      'total_price',
+    ]);
+    expect(after.get(orders[0])!.total_price).toEqual({
+      ai: 150000,
+      final: 175000,
+    });
+    expect(after.get(orders[1])).toBeNull(); // faqat PII bor edi
+    expect(after.get(orders[2])).toEqual(corrections); // yangi — tegilmaydi
+
+    await ds.query(
+      `UPDATE ai_schema.ai_order_draft_item SET created_at = now() - interval '366 days'
+       WHERE order_id = $1::bigint`,
+      [orders[0]],
+    );
+    await service.purgeExpiredText();
+    after = await rows();
+    expect(after.get(orders[0])).toBeNull();
+    expect(after.get(orders[2])).toEqual(corrections);
+  });
+
   it('⭐ Cp2v3ZJ7 / NFiXfmq6: narx BIR MARTA qayd qilinadi — takroriy va 10 ta parallel chaqiruvda ham; narx keyin o‘zgarsa eski yozuv qayta hisoblanmaydi', async () => {
     await record(draftC, 'Vali 901234569 Asaka krem');
     const priced = async () =>
