@@ -12,7 +12,10 @@
 --     < scripts/finance/fix-receipt-foreign-currency.sql
 --
 -- Avval faqat 1-qadamni (SELECT) ko'rish uchun oxiridagi COMMIT'ni ROLLBACK
--- ga almashtirib yurgizing.
+-- ga almashtirib yurgizing. Chiqishni (RETURNING — o'zgargan qatorlar)
+-- faylga saqlang: eski farqni `ai_amount − entered_amount` dan tiklash mumkin.
+-- Faqat 'mismatch' qatorlar: chet valyutali chek eski kodda ham hech qachon
+-- 'match' bo'lmagan.
 
 BEGIN;
 
@@ -24,8 +27,8 @@ SELECT upper(btrim("ai_currency")) AS currency,
 FROM "finance_schema"."cashbox_receipts"
 WHERE "ai_currency" IS NOT NULL
   AND btrim("ai_currency") <> ''
-  AND upper(btrim("ai_currency")) <> 'UZS'
-  AND "ai_status" IN ('match', 'mismatch')
+  AND upper(btrim("ai_currency")) NOT IN ('UZS', 'UZB', 'SUM', 'SOM', 'SO''M', 'СУМ', 'СЎМ')
+  AND "ai_status" = 'mismatch'
   AND ("ai_difference" IS NOT NULL OR "ai_error_reason" IS DISTINCT FROM 'currency_not_uzs')
 GROUP BY 1, 2
 ORDER BY rows DESC;
@@ -38,8 +41,10 @@ SET "ai_status" = 'mismatch',
     "updatedAt" = now()
 WHERE "ai_currency" IS NOT NULL
   AND btrim("ai_currency") <> ''
-  AND upper(btrim("ai_currency")) <> 'UZS'
-  AND "ai_status" IN ('match', 'mismatch')
-  AND ("ai_difference" IS NOT NULL OR "ai_error_reason" IS DISTINCT FROM 'currency_not_uzs');
+  AND upper(btrim("ai_currency")) NOT IN ('UZS', 'UZB', 'SUM', 'SOM', 'SO''M', 'СУМ', 'СЎМ')
+  AND "ai_status" = 'mismatch'
+  AND ("ai_difference" IS NOT NULL OR "ai_error_reason" IS DISTINCT FROM 'currency_not_uzs')
+-- Eski qiymatlar natijada qoladi (tiklash uchun saqlang).
+RETURNING "id", "ai_currency", "ai_amount", "entered_amount";
 
 COMMIT;

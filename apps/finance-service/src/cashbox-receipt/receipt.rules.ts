@@ -23,6 +23,20 @@ export const RECEIPT_AI_MIN_CONFIDENCE = 0.5;
 export const RECEIPT_MATCH_TOLERANCE = 1;
 export const RECEIPT_DATE_FAR_DAYS = 3;
 export const RECEIPT_DUPLICATE_REFERENCE_DAYS = 90;
+/**
+ * So'm deb hisoblanadigan valyuta yozuvlari (model noto'g'ri ISO kod yoki
+ * mahalliy yozuv qaytarsa ham — "UZB", "SUM", "so'm" — chek so'mda).
+ */
+const UZS_SYNONYMS: ReadonlySet<string> = new Set([
+  'UZS',
+  'UZB',
+  'SUM',
+  'SOM',
+  "SO'M",
+  'СУМ',
+  'СЎМ',
+]);
+
 /** Chek valyutasi so'm emas — farq hisoblanmaydi (status `mismatch`). */
 export const RECEIPT_FOREIGN_CURRENCY_REASON = 'currency_not_uzs';
 const UNREADABLE_REASONS = new Set([
@@ -95,7 +109,10 @@ export function deriveReceiptOutcome(
     typeof result.currency === 'string' && result.currency.trim()
       ? result.currency.trim().toUpperCase()
       : null;
-  if (currency !== null && currency !== 'UZS') {
+  if (
+    currency !== null &&
+    !UZS_SYNONYMS.has(currency.replace(/[ʻ‘’`]/g, "'"))
+  ) {
     return {
       status: 'mismatch',
       difference: null,

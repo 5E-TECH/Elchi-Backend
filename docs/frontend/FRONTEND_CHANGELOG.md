@@ -27,7 +27,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.
 
 - ✏️ Kassa cheki (`ai` obyekti, chek tekshiruvi): chek valyutasi UZS bo'lmasa (USD, RUB, …) — `ai_status: "mismatch"` (avvalgidek), lekin **`ai.difference: null`** va **`ai.error_reason: "currency_not_uzs"`** (yangi qiymat). Ilgari chet valyuta summasidan so'm ayirib katta «farq» chiqarardi.
-- 🟢 Chek tekshiruvi xulosasi (`mismatch_sum`, top-15): bunday cheklar summaga va top'ga kirmaydi; `mismatch` sanog'ida qoladi.
+- 🟢 Chek tekshiruvi xulosasi (`GET /finance/receipts/summary` → `mismatch_total`, `top`): bunday cheklar summaga va top-15 ga kirmaydi; `counts.mismatch` da qoladi. AI yordamchining `get_receipt_checks` vositasi ham xuddi shunday.
 - 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
 
 **Frontend action items:**

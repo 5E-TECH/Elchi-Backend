@@ -48,6 +48,15 @@ describe('deriveReceiptOutcome', () => {
     ).toBe('currency_not_uzs');
   });
 
+  it.each(['UZB', 'sum', "so'm", 'сум'])(
+    'F1: %s — so‘m sinonimi, farq hisoblanadi',
+    (currency) => {
+      expect(
+        deriveReceiptOutcome(ok({ amount: 160_000, currency }), 150_000),
+      ).toEqual({ status: 'mismatch', difference: 10_000, error_reason: null });
+    },
+  );
+
   it('F1: UZS yoki bo‘sh valyuta — oddiy farq', () => {
     expect(
       deriveReceiptOutcome(ok({ amount: 160_000, currency: 'uzs' }), 150_000),
