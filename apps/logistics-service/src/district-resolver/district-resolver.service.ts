@@ -10,12 +10,14 @@ import {
   bestSubstringSim,
   lightNorm,
   normGeo,
+  RU_ADJ_SUFFIX_RE,
   regionAlias,
   simRatio,
   translit,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
 import { Region } from '../entities/region.entity';
+import { satoRegions } from '../data/sato-codes';
 import { District } from '../entities/district.entity';
 import {
   DISTRICT_ALIASES,
@@ -122,6 +124,18 @@ const STREET_AFTER_WORDS: ReadonlySet<string> = new Set([
   'ulica',
   'proyezd',
   'pereulok',
+  'maxalla',
+  'maxallasi',
+  'махалла',
+  'qishlogi',
+  'qishloq',
+  'qfy',
+  'ovul',
+  'ovuli',
+  'posyolok',
+  'poselok',
+  'bozori',
+  'bekati',
 ]);
 /** Nomdan OLDIN kelsa ko'cha belgisi ("ул. Навои", "pr. Amir Temur"). */
 const STREET_BEFORE_WORDS: ReadonlySet<string> = new Set([
@@ -152,11 +166,33 @@ const PLACE_AFTER_WORDS: ReadonlySet<string> = new Set([
   'rayon',
   'rayoni',
   'raion',
+  'sh',
+  'g',
+  'gorod',
+  'shaharcha',
+  'shaharchasi',
+]);
+const CITY_AFTER_WORDS: ReadonlySet<string> = new Set([
+  'shahri',
+  'shaxri',
+  'shahar',
+  'sh',
+  'g',
+  'gorod',
+]);
+const AREA_AFTER_WORDS: ReadonlySet<string> = new Set([
+  'massivi',
+  'massiv',
+  'mavze',
+  'mavzesi',
+  'kvartal',
+  'kvartali',
 ]);
 
 /** Manzil tokenlari: `normGeo` qo'shimchalarini SAQLAB (tumani, shahri). */
 function addressTokens(text: string): string[] {
   return lightNorm(text)
+    .replace(RU_ADJ_SUFFIX_RE, '$1')
     .replace(/[^a-z0-9]+/g, ' ')
     .split(' ')
     .filter(Boolean);
@@ -293,6 +329,39 @@ function districtKind(name: string, sato: string | null): DistrictKind | null {
   if (CITY_WORD_RE.test(light)) return 'city';
   if (TUMAN_WORD_RE.test(light)) return 'tuman';
   return null;
+}
+
+/**
+ * Rasmiy SOATO ro'yxatida (sato-codes.ts) viloyat + skelet bo'yicha qaysi
+ * turlar MAVJUD. kind_mismatch faqat so'ralgan tur rasmiy ro'yxatda bor
+ * bo'lsa (shahar qatori bazaga hali qo'shilmagan): "Farg'ona shahri" →
+ * 1730401 bor, bazada faqat tuman → operator tanlaydi. Rasmiy ro'yxatda
+ * so'ralgan tur YO'Q bo'lsa ("Asaka shahri", "Chust shahri", "Urgut
+ * shahri" — alohida SOATO shahar emas) — bu so'zlashuv odati, mavjud
+ * qator avto-tanlanadi.
+ */
+const OFFICIAL_KINDS: ReadonlyMap<string, ReadonlySet<DistrictKind>> = (() => {
+  const out = new Map<string, Set<DistrictKind>>();
+  for (const r of satoRegions) {
+    for (const d of r.districts) {
+      const kind = districtKind(d.name, d.sato_code);
+      if (!kind) continue;
+      const key = `${r.sato_code}:${geoSkeleton(normGeo(d.name))}`;
+      const set = out.get(key) ?? new Set<DistrictKind>();
+      set.add(kind);
+      out.set(key, set);
+    }
+  }
+  return out;
+})();
+
+function officialHasKind(
+  sato: string | null,
+  skel: string,
+  kind: DistrictKind,
+): boolean {
+  if (!sato || sato.length < 4) return true; // noma'lum — ehtiyotkor
+  return OFFICIAL_KINDS.get(`${sato.slice(0, 4)}:${skel}`)?.has(kind) ?? false;
 }
 
 /** Satr bigrammalari (pozitsiya bo'yicha, takrorlari bilan). */
@@ -544,6 +613,9 @@ export function resolveDistrictText(
   // searchPool QULFI (BeePost :1571-1574): viloyat aniq bo'lsa qidiruv
   // FAQAT shu viloyat ichida — "Toshkent shahri Xonobod" Andijondagi
   // Xonobod'ni OLMAYDI; tuman bo'sh qoladi, viloyat SAQLANADI.
+  const allSkels = new Set(idx.districts.map((d) => d.skel));
+  const addressKind = new Map<string, DistrictKind>();
+  const streetRejected = new Set<string>();
   const pool = lockedRegion
     ? (idx.districtsByRegion.get(lockedRegion.id) ?? [])
     : idx.districts;
@@ -702,6 +774,7 @@ export function resolveDistrictText(
     const outside = idx.districts.filter(
       (d) =>
         d.region_id !== lockedRegion.id &&
+        !d.regionNamed &&
         isTashkentSato(idx.regionById.get(d.region_id)?.sato),
     );
     matches = exactIn(outside).found.slice(0, AI_MAX_CANDIDATES);
@@ -730,26 +803,79 @@ export function resolveDistrictText(
   const addressTexts = [q.address, q.full_address].filter(Boolean);
   if (!matches.length && addressTexts.length) {
     const tokenLists = addressTexts.map(addressTokens);
+    // Rus yozuvi varianti ("Юнусабадский район" → yunusabad → yunusobod):
+    // faqat KUCHLI holatda (keyin "rayon/tumani/shahri") qabul qilinadi.
+    const variantCache = new Map<string, Set<string>>();
+    const variantsOf = (t: string): Set<string> => {
+      let v = variantCache.get(t);
+      if (!v) {
+        v = t.length >= 4 ? geoSpellingVariants(t) : new Set([t]);
+        variantCache.set(t, v);
+      }
+      return v;
+    };
     const strong: PreparedDistrict[] = [];
     const weak: PreparedDistrict[] = [];
     for (const d of pool) {
       if (d.geo.length < 4 || !d.tokens.length) continue;
       let best: 'strong' | 'weak' | null = null;
       for (const tokens of tokenLists) {
-        for (let i = 0; i + d.tokens.length <= tokens.length; i++) {
-          if (!d.tokens.every((w, k) => tokens[i + k] === w)) continue;
-          const next = tokens[i + d.tokens.length] ?? '';
+        for (let i = 0; i < tokens.length; i++) {
+          let len = 0;
+          let viaVariant = false;
+          if (d.tokens.every((w, k) => tokens[i + k] === w))
+            len = d.tokens.length;
+          else {
+            for (let k = 2; k <= 3 && i + k <= tokens.length; k++) {
+              if (tokens.slice(i, i + k).join('') === d.skel) {
+                len = k;
+                break;
+              }
+            }
+          }
+          if (
+            !len &&
+            tokens[i] !== d.skel &&
+            variantsOf(tokens[i]).has(d.skel)
+          ) {
+            len = 1;
+            viaVariant = true;
+          }
+          if (!len) continue;
+          const next = tokens[i + len] ?? '';
           const prev = tokens[i - 1] ?? '';
+          if (
+            viaVariant &&
+            !(
+              PLACE_AFTER_WORDS.has(next) ||
+              (next === 'r' && tokens[i + len + 1] === 'n')
+            )
+          ) {
+            continue;
+          }
+          // part of a longer district name ("Yuqori Chirchiq")
+          if (
+            (prev && allSkels.has(prev + d.skel)) ||
+            (next && allSkels.has(d.skel + next))
+          )
+            continue;
           if (
             STREET_AFTER_WORDS.has(next) ||
             STREET_BEFORE_WORDS.has(prev) ||
             // "Andijon viloyati ..." — bu VILOYAT, tuman emas.
             REGION_AFTER_WORDS.has(next)
           ) {
+            if (!AREA_AFTER_WORDS.has(next) && !REGION_AFTER_WORDS.has(next))
+              streetRejected.add(d.id);
             continue;
           }
-          if (PLACE_AFTER_WORDS.has(next)) {
+          const isRn = next === 'r' && tokens[i + len + 1] === 'n';
+          if (PLACE_AFTER_WORDS.has(next) || isRn) {
             best = 'strong';
+            addressKind.set(
+              d.id,
+              CITY_AFTER_WORDS.has(next) ? 'city' : 'tuman',
+            );
             break;
           }
           best = 'weak';
@@ -764,6 +890,7 @@ export function resolveDistrictText(
       matches = longestNonRegion(strong);
     } else if (weak.length) {
       matches = longestNonRegion(weak);
+      if (weak.filter((d) => !d.regionNamed).length > 1) candidateOnly = true;
       if (!hasPlaceSignal) forceCandidate = true;
       // Operator tuman nomini yozgan, lekin u topilmadi — manzildagi so'z
       // bilan almashtirish TAXMIN.
@@ -805,6 +932,8 @@ export function resolveDistrictText(
         // D3: operator yozgan tuman nomi so'zma-so'z topilmadi — korpus
         // ichidagi qism ("Quvasoy" ichida "Quva") faqat nomzod.
         if (dq) candidateOnly = true;
+        if (matches.every((d) => streetRejected.has(d.id) || d.regionNamed))
+          candidateOnly = true;
       }
     }
   }
@@ -911,8 +1040,14 @@ export function resolveDistrictText(
     // operator tanlaydi (shahar qatori hali qo'shilmagan bo'lishi mumkin).
     // Tur faqat TUMAN maydonidan: full_address'dagi "Toshkent shahri"
     // (viloyat) tumanning turini bildirmaydi.
-    const explicitKind = wantedKind(translit(q.district_name));
-    if (explicitKind && d.kind && d.kind !== explicitKind) {
+    const explicitKind =
+      wantedKind(translit(q.district_name)) ?? addressKind.get(d.id) ?? null;
+    if (
+      explicitKind &&
+      d.kind &&
+      d.kind !== explicitKind &&
+      officialHasKind(d.sato, d.skel, explicitKind)
+    ) {
       return unresolved([d], 'district_ambiguous');
     }
     const match: DistrictMatchInfo = (() => {

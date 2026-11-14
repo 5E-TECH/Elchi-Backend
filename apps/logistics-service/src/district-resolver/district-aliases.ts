@@ -24,8 +24,6 @@ export const DISTRICT_ALIASES: Readonly<Record<string, readonly string[]>> =
     '1726269': ['mulugbek', 'mirzaulugbek', 'mirzoulugbek'],
     // Qarshi shahri — rus nomi "Карши"
     '1710401': ['karshi'],
-    // Guliston (Sirdaryo)
-    '1724220': ['gulistan'],
   });
 
 /** `normGeo` natijasining skeleti: faqat harf va raqam. */

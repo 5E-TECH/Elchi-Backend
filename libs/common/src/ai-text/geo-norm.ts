@@ -49,6 +49,13 @@ export function lightNorm(s: string | null | undefined): string {
 }
 
 /**
+ * D5: rus sifat shakli — "Чиланзарский район" → "chilanzar",
+ * "Ташкентская область" → "tashkent". Faqat so'z OXIRIDA, o'zak kamida 3 harf.
+ */
+export const RU_ADJ_SUFFIX_RE =
+  /\b([a-z']{3,}?)(?:skiy|skij|skaya|skaja|skoy|skoye|skoe)\b/g;
+
+/**
  * Geografik nomni BASE holatga keltiradi: tumani/tuman/shahri/shahar/
  * shaharcha/viloyati/viloyat/respublikasi, "sh." va "t." qo'shimchalarini
  * olib tashlaydi (operator odatda qo'shimcha yozmaydi, DB nomida esa bor).
@@ -66,10 +73,7 @@ export function normGeo(s: string | null | undefined): string {
       // D5: rus sifat shakli — "Чиланзарский район" → "chilanzar",
       // "Ташкентская область" → "tashkent". Faqat so'z OXIRIDA va o'zak
       // kamida 3 harf.
-      .replace(
-        /\b([a-z']{3,}?)(?:skiy|skij|skaya|skaja|skoy|skoye|skoe)\b/g,
-        '$1',
-      )
+      .replace(RU_ADJ_SUFFIX_RE, '$1')
       .replace(
         /\s*(\b(?:tumani|tuman|shahri|shaxri|shahar|shaharchasi|shaharcha|viloyati|viloyat|respublikasi|rayon|rayoni|raion|gorod|oblast|oblasti)\b|\br-n\b\.?|\b(?:sh|t|g|v|vil|obl)\.)\s*/g,
         ' ',
