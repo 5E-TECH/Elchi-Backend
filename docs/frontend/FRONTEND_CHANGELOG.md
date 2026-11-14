@@ -31,6 +31,17 @@ Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_
 - 🟢 R3: namuna < 5 — qoida jim; filial+kategoriya namunasi < 5 bo'lsa butun tizim (`facts.scope`); minimal MAD = mediana × 5% (BQ9).
 - 🟢 Hozircha `explanation_status: none` (avtomatik izoh — 5-qism), bildirishnoma — 4-qism. R2/R4/R5 va R7/R8 — keyingi PR'lar.
 
+### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
+
+Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.
+
+- ✏️ Kassa cheki (`ai` obyekti, chek tekshiruvi): chek valyutasi UZS bo'lmasa (USD, RUB, …) — `ai_status: "mismatch"` (avvalgidek), lekin **`ai.difference: null`** va **`ai.error_reason: "currency_not_uzs"`** (yangi qiymat). Ilgari chet valyuta summasidan so'm ayirib katta «farq» chiqarardi.
+- 🟢 Chek tekshiruvi xulosasi (`GET /finance/receipts/summary` → `mismatch_total`, `top`): bunday cheklar summaga va top-15 ga kirmaydi; `counts.mismatch` da qoladi. AI yordamchining `get_receipt_checks` vositasi ham xuddi shunday.
+- 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
+
+**Frontend action items:**
+- 🔧 `ai_status === "mismatch"` va `ai.difference === null` bo'lishi mumkin — farq ustunida «—», `error_reason === "currency_not_uzs"` uchun matn tavsiya: «Chek so'mda emas ({currency}) — summani qo'lda tekshiring».
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 1-qism): qoidalar sozlamasi `GET/PATCH /ai/advisor/settings`
 
 API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7.7, §8. Deploy: api-gateway + ai-service, migratsiya **224** (`ai_schema.ai_advisor_alerts`, `ai_advisor_alert_occurrences`, `ai_advisor_settings` — yangi jadvallar). Ogohlantirishlar endpointlari (`overview`, `alerts*`) — keyingi PR'larda.

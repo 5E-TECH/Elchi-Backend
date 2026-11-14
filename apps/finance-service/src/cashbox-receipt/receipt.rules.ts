@@ -11,13 +11,34 @@ import type { CashboxReceiptAiStatus } from '@app/common';
  *  - summa yo'q yoki ishonch < 0,5 → `unreadable`;
  *  - `difference = o'qilgan − kiritilgan`; |difference| ≤ 1 so'm va valyuta
  *    UZS (yoki ko'rsatilmagan — mahalliy chek) → `match`, aks holda
- *    `mismatch`.
+ *    `mismatch`;
+ *  - valyuta UZS EMAS (USD, RUB, …) → `mismatch`, `difference = null`,
+ *    `error_reason = 'currency_not_uzs'`: chet valyuta summasidan so'm
+ *    ayirish ma'nosiz (100 USD chek ~1,25 mln so'm "farq" bo'lib jami va
+ *    top-15 ni shishirardi). `difference` null qatorlar summary'da SUM va
+ *    top'ga kirmaydi.
  * BAYROQLAR holatni o'zgartirmaydi (faqat ogohlantirish).
  */
 export const RECEIPT_AI_MIN_CONFIDENCE = 0.5;
 export const RECEIPT_MATCH_TOLERANCE = 1;
 export const RECEIPT_DATE_FAR_DAYS = 3;
 export const RECEIPT_DUPLICATE_REFERENCE_DAYS = 90;
+/**
+ * So'm deb hisoblanadigan valyuta yozuvlari (model noto'g'ri ISO kod yoki
+ * mahalliy yozuv qaytarsa ham — "UZB", "SUM", "so'm" — chek so'mda).
+ */
+const UZS_SYNONYMS: ReadonlySet<string> = new Set([
+  'UZS',
+  'UZB',
+  'SUM',
+  'SOM',
+  "SO'M",
+  'СУМ',
+  'СЎМ',
+]);
+
+/** Chek valyutasi so'm emas — farq hisoblanmaydi (status `mismatch`). */
+export const RECEIPT_FOREIGN_CURRENCY_REASON = 'currency_not_uzs';
 const UNREADABLE_REASONS = new Set([
   'refused',
   'invalid_json',
@@ -84,15 +105,24 @@ export function deriveReceiptOutcome(
       error_reason: 'no_entered',
     };
   }
-  const difference = round2(amount - entered);
   const currency =
-    typeof result.currency === 'string' ? result.currency.toUpperCase() : null;
-  const sameCurrency = currency === null || currency === 'UZS';
+    typeof result.currency === 'string' && result.currency.trim()
+      ? result.currency.trim().toUpperCase()
+      : null;
+  if (
+    currency !== null &&
+    !UZS_SYNONYMS.has(currency.replace(/[ʻ‘’`]/g, "'"))
+  ) {
+    return {
+      status: 'mismatch',
+      difference: null,
+      error_reason: RECEIPT_FOREIGN_CURRENCY_REASON,
+    };
+  }
+  const difference = round2(amount - entered);
   return {
     status:
-      sameCurrency && Math.abs(difference) <= RECEIPT_MATCH_TOLERANCE
-        ? 'match'
-        : 'mismatch',
+      Math.abs(difference) <= RECEIPT_MATCH_TOLERANCE ? 'match' : 'mismatch',
     difference,
     error_reason: null,
   };
