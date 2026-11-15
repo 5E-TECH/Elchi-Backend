@@ -106,6 +106,10 @@ describe('skaner route’lari metama’lumoti (R6R8BLGA)', () => {
       'POST /orders/scan-assign',
       handlerOf(OrderGatewayController, 'scanAssignOrder'),
     ],
+    [
+      'POST /orders/markets/:marketId/cancelled/handover',
+      handlerOf(OrderGatewayController, 'handoverCancelledOrdersToMarket'),
+    ],
   ];
 
   it.each(routes)(

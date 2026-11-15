@@ -6107,8 +6107,9 @@ export class OrderGatewayController {
   @ApiOperation({
     summary: 'HQ cancelled → market handover batches («Topshirilgan» cards)',
     description:
-      "One card = one «Marketga jo'natish» press at HQ (POST /orders/markets/:marketId/cancelled/handover): " +
-      'orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers ' +
+      'One card = one market QR/PIN session at HQ (every POST /orders/markets/:marketId/cancelled/handover of ' +
+      'that session — scan = handover): orders sharing market_id + market_handover_at + market_handover_by. ' +
+      'Branch single-order handovers ' +
       '(POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ ' +
       'registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). ' +
       'Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day ' +
@@ -6574,6 +6575,9 @@ export class OrderGatewayController {
   }
 
   @Post('markets/:marketId/cancelled/handover')
+  // R6R8BLGA: SKAN = TOPSHIRISH (2026-11-15) — har skanerlangan buyurtma alohida POST, HQ bitta IP: yuqoriroq
+  // per-IP skaner limiti (aks holda tez skanerlashda 61-skan 429).
+  @Throttle(SCAN_THROTTLE)
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -6587,7 +6591,11 @@ export class OrderGatewayController {
     summary:
       'Selected CANCELLED orderlarni QR ruxsati bilan marketga topshirish',
     description:
-      'All-or-nothing. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is ' +
+      'All-or-nothing. Scan = handover (2026-11-15): one market QR/PIN authorization (`MHA-…`, 5 minutes) may be ' +
+      'used MANY times — the staff page sends `order_ids: [id]` for each scanned parcel; parallel calls queue on ' +
+      "the session row lock. Every call of one session is written with the session's FIRST handover time " +
+      '(`market_handover_at`), so all of them form ONE «Topshirilgan» batch; the real time is in ' +
+      '`last_handover_at` and tracking. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is ' +
       'never handed to the market — 409 `{ code: "WAREHOUSE_ORDER_RETURNS_TO_STOCK", data: { details: { order_ids: ' +
       '[...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection ' +
       'contains a WAREHOUSE order — 503.',
