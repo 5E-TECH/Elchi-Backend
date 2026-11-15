@@ -1163,6 +1163,52 @@ describe('P1-7: district_match, region_inferred, checks', () => {
     expect(p.checks.filter((c) => c.code === 'qty_check')).toEqual([]);
   });
 
+  it('3-davra: qty_check — dona narxi yoki matnda aytilgan miqdor (count_stated) belgilanmaydi', async () => {
+    const { svc } = setup();
+    for (const m of [
+      { value: 2_000_000, kind: 'unit' },
+      { value: 2_000_000, kind: 'total', count_stated: true },
+    ]) {
+      const p = await one(
+        svc,
+        raw({
+          total_price: 4_000_000,
+          items: [{ name: 'televizor', quantity: 2 }],
+          money_mentions: [m],
+        }),
+      );
+      expect(p.checks.filter((c) => c.code === 'qty_check')).toEqual([]);
+    }
+  });
+
+  it('3-davra: price_check — dostavka jami ichida (included) qo‘shilmaydi', async () => {
+    const { svc } = setup();
+    const mentions = [
+      { value: 170000, kind: 'total' },
+      { value: 20000, kind: 'delivery', included: true },
+    ];
+    let p = await one(
+      svc,
+      raw({
+        total_price: 170000,
+        items: [{ name: 'atir sepgich', quantity: 1 }],
+        money_mentions: mentions,
+      }),
+    );
+    expect(priceChecks(p)).toEqual([]);
+    p = await one(
+      svc,
+      raw({
+        total_price: 190000,
+        items: [{ name: 'atir sepgich', quantity: 1 }],
+        money_mentions: mentions,
+      }),
+    );
+    expect(priceChecks(p)).toEqual([
+      { code: 'price_check', kind: 'mismatch', mentions: [170000, 20000] },
+    ]);
+  });
+
   it.each([
     [
       'default_operator_phone',
