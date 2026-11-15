@@ -70,6 +70,17 @@ async function bootstrap() {
   // global pipe/filter RMQ'ga ta'sir qilmaydi.
   app.connectMicroservice(opts, { inheritAppConfig: true });
 
+  // «AI kalit va modellar» (be-brief §6.1): ikkinchi iste'molchi —
+  // `ai_config_queue` (DLX YO'Q, TTL 8 s, xabarlar saqlanmaydi, prefetch 4).
+  // Yangi navbat — mavjud navbat argumentlariga tegmaydi. NestJS barcha
+  // @MessagePattern'larni ikkala serverda ro'yxatga oladi; yozuv handler'lari
+  // `ai_config_queue` dan boshqa navbatdan kelgan xabarni rad etadi.
+  // ⚠️ Deploy tartibi: ai-service gateway'dan OLDIN.
+  await rmqService.setupDlqTopology('AI_CONFIG');
+  app.connectMicroservice(rmqService.getOptions('AI_CONFIG'), {
+    inheritAppConfig: true,
+  });
+
   // ⚠️ MAXFIYLIK (HD5zOyBp #11/#16): muddati o'tgan `ai.order.extract` xabari
   // (xom matn + base64 rasmlar) `ai_queue_dlq`ga tushadi — u TTL'siz va
   // iste'molchisiz, ya'ni rasm RabbitMQ diskida MUDDATSIZ qolardi. Drain har

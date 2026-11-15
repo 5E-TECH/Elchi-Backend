@@ -22,6 +22,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-15 — AI kalit va modellar (BE-1b): ai-service kalit saqlash va `ai.config.*` RMQ handler'lari
+
+Deploy: ai-service (gateway'dan OLDIN), migratsiya **228** (`ai_schema.ai_provider_keys`, `ai_runtime_settings`, `ai_config_attempts`; `ai_usage_log` + `key_id`, `key_source`, `key_fingerprint`, `config_version`). HTTP endpointlar hali YO'Q — BE-1d (gateway) da. `AI_CONFIG_UI_ENABLED` sukut `false`: prod'da xulq o'zgarmaydi.
+
+- 🟢 Javob shakllari fragment v0.2 bo'yicha: har yozuv (`PUT /ai/config/key`, `POST …/verify`, `…/restore-previous`, `…/deactivate`, `DELETE …/previous`) muvaffaqiyatda yangilangan `AiConfigView` qaytaradi; `GET /ai/config/history` — `{items, next_cursor}` (limit 1–50, sukut 10).
+- 🟢 `POST /ai/config/key/verify`: aniq rad (401/402/403/400) ham **200** — natija `key.active.verify.state` (yoki UI kaliti yo'q bo'lsa `key.env.verify`) da; Anthropic javob bermasa/429 — `state: "unavailable"` + `error_code`. Versiya (`version.key`) oshmaydi.
+- 🟢 Kalit nomi berilmasa view'da `label: "Anthropic kaliti"`.
+- 🟢 BE-1 da `models.slots` faqat o'qish uchun (env/sukut; `ui_model: null`, `health` nol); `permissions.models: false`. Sonnet 5 qatorida `warnings: ["price_unconfirmed"]` (narx o'zgarmagan). To'liq katalog/PATCH/taxmin — BE-2.
+- 🟢 Kutilmagan ichki xato — 500, `code` yo'q (qolgan hamma xatoda `code` bor).
+
+**Frontend action items:** yo'q (endpointlar BE-1d bilan keladi; mock'lar fragment bo'yicha).
+
 ### 2026-11-15 — AI kalit va modellar (BE-1a): umumiy asos, API o'zgarishi YO'Q
 
 Spec «AI kalit va modellar» v0.2 (`openapi-fragment.json` v0.2). Bu PR faqat `libs/common` (endpoint, migratsiya, deploy o'zgarishi yo'q); endpointlar BE-1b/BE-1d da.
