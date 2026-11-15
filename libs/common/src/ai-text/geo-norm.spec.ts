@@ -271,6 +271,22 @@ describe('regionMentionedInText (P1-7)', () => {
     ['Andj Asaka', 'Andijon', true],
     ['QR Nukus', "Qoraqalpog'iston", true],
     ['Сырдарьинская обл, Гулистан', 'Sirdaryo', true],
+    // #649 review (3-davra): nuqtali 3 harfli prefiks, РК, Т.обл, T.sh.
+    ['Sam. Xonobod', 'Samarqand', true],
+    ['Nam. Chust', 'Namangan', true],
+    ['Bux. Kogon', 'Buxoro', true],
+    ['And. Asaka', 'Andijon', true],
+    ['Сам. Ургут', 'Samarqand', true],
+    ['РК Нукус', "Qoraqalpog'iston", true],
+    ['Т.обл Чирчик', 'Toshkent viloyati', true],
+    ['T.vil Qibray', 'Toshkent viloyati', true],
+    ['T.sh Chilonzor', 'Toshkent shahri', true],
+    ['Qoraqalpoq Nukus', "Qoraqalpog'iston", true],
+    ['Qoraqalpoqqa, Beruniy', "Qoraqalpog'iston", true],
+    // Nuqtasiz 3 harf va boshqa viloyat prefiksi — aytilmagan.
+    ['Sam Xonobod', 'Samarqand', false],
+    ['Nam. Chust', 'Samarqand', false],
+    ['T.sh Chilonzor', 'Toshkent viloyati', false],
     // Tasodifiy so'zlar qisqartma emas.
     ['Ali atir 2 ta, Xonobod', 'Samarqand', false],
     ["Qibray, Navoiy ko'chasi", 'Toshkent viloyati', false],
