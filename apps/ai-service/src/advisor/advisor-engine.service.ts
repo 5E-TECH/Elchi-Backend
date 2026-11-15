@@ -355,9 +355,24 @@ export class AdvisorEngineService {
           // R2/R4/R5: epizod davom etmoqda — `last_fact_at` = endi.
           // R7: ayni chek/tekshiruv qayta tahlil / T6 tahriri — faktlar
           // yangilanadi, hodisa vaqti o'zgarmaydi (review S1).
-          const factAt = ADVISOR_STATE_RULES.has(c.rule_key)
-            ? now
-            : maxFactAt(facts);
+          if (!ADVISOR_STATE_RULES.has(c.rule_key)) {
+            // R7 (round-3 N3): kursor jim davrda oxirgi qatorni qayta
+            // o'qiydi — faktlar o'zgarmagan bo'lsa hech narsa; o'zgarsa
+            // (T6 tahriri) faktlar yangilanadi, `last_at` («oxirgi
+            // aniqlash») O'ZGARMAYDI (§6 «ayni fact_key — hech narsa»).
+            if (sameJson(open[0].facts, c.facts)) return 'noop';
+            const present = this.presentation(c);
+            await m.query(
+              `UPDATE ${ALERTS}
+                  SET "title" = $2, "facts" = $3::jsonb, "evidence" = $4::jsonb, "links" = $5::jsonb,
+                      "subject" = $6::jsonb, "branch" = $7::jsonb, "branch_id" = $8,
+                      "headline_amount" = $9, "updatedAt" = now()
+                WHERE "id" = $1`,
+              [alertId, ...present],
+            );
+            return 'refreshed';
+          }
+          const factAt = now;
           const present = this.presentation(c);
           await m.query(
             `UPDATE ${ALERTS}
@@ -536,6 +551,26 @@ export function catchingUp(
   if (!state.cursor_at || !(isCursorRule(rule) || rule === 'R6')) return false;
   const gap = now.getTime() - new Date(state.cursor_at).getTime();
   return gap > (rule === 'R6' ? 2 : 1) * ADVISOR_BACKFILL_NOTIFY_MS;
+}
+
+/** Kalit tartibidan qat'i nazar JSON tengligi (jsonb kalitlarni qayta tartiblaydi). */
+export function sameJson(a: unknown, b: unknown): boolean {
+  return canonical(a) === canonical(b);
+}
+
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v as Record<string, unknown>)
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map(
+        (k) =>
+          `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`,
+      )
+      .join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
 }
 
 /** Qoida xatosi: kursor siljimaydi, xatolar hisoblagichi saqlanadi. */
