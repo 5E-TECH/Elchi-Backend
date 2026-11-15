@@ -255,10 +255,10 @@ const AMBIGUOUS_NEAR = 40;
 const AFTER_PLUS_RE = /\+[\d \-().]*$/;
 /** Telefon so'zi ("tel 901 234 567", "raqam: ..."). */
 const PHONE_WORD_BEFORE_RE =
-  /(?:^|[^\p{L}])(?:tel|telefon|raqam\p{L}*|nomer\p{L}*|тел|телефон|номер|рақам\p{L}*)\.?\s*[:\-]?\s*$/iu;
+  /(?:^|[^\p{L}])(?:tel|telefon|raqam\p{L}*|nomer\p{L}*|тел|телефон|номер|рақам\p{L}*)\.?\s*[:-]?\s*$/iu;
 /** 3-3-3 guruhli 9 raqam, UZ operator kodi bilan boshlanadi. */
 const UZ_PHONE_333_RE =
-  /^(?:20|33|5[05]|6[1-9]|7\d|88|9[013-57-9])\d[ .\-]\d{3}[ .\-]\d{3}$/;
+  /^(?:20|33|5[05]|6[1-9]|7\d|88|9[013-57-9])\d[ .-]\d{3}[ .-]\d{3}$/;
 
 /** Eslatmadan oldingi matn — faqat shu qatorda, ≤ 30 belgi. */
 function lineBefore(text: string, start: number): string {
