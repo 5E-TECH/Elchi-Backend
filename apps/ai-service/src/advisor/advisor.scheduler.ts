@@ -97,6 +97,19 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
    * bildirishnomasi (§9.2 — `notified_at IS NULL` lar, qayta urinish ham).
    * Xatolar tick natijasini buzmaydi.
    */
+  private async notifyPending(): Promise<void> {
+    if (!this.notifier) return;
+    try {
+      const n = await this.notifier.dispatchPending();
+      if (n.sent || n.failed)
+        this.logger.log(`ai_advisor_notify sent=${n.sent} failed=${n.failed}`);
+    } catch (error) {
+      this.logger.warn(
+        `ai_advisor_notify_failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown'}`,
+      );
+    }
+  }
+
   private async afterRun(result: AdvisorRunResult): Promise<void> {
     if (this.realtime && result.changes.length) {
       try {
@@ -110,7 +123,7 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
           }>
         >(
           `SELECT "id"::text AS id, "rule_key", "severity", "status", "explanation_status"
-             FROM ai_schema.ai_advisor_alerts WHERE "id"::text = ANY($1::text[])`,
+             FROM ai_schema.ai_advisor_alerts WHERE "id" = ANY($1::bigint[])`,
           [result.changes.map((c) => c.alert_id)],
         );
         const at = new Date().toISOString();
@@ -139,19 +152,7 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
-    if (this.notifier) {
-      try {
-        const n = await this.notifier.dispatchPending();
-        if (n.sent || n.failed)
-          this.logger.log(
-            `ai_advisor_notify sent=${n.sent} failed=${n.failed}`,
-          );
-      } catch (error) {
-        this.logger.warn(
-          `ai_advisor_notify_failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown'}`,
-        );
-      }
-    }
+    await this.notifyPending();
   }
 
   /**
@@ -191,6 +192,9 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `ai_advisor_rules_failed group=${group}: ${error instanceof Error ? error.message.slice(0, 300) : 'unknown'}`,
       );
+      // Qoidalar yiqilsa ham kutayotgan bildirishnomalar qayta urinadi
+      // (finance o'chiq bo'lsa ham; round-2 S4).
+      if (locked) await this.notifyPending();
       return null;
     } finally {
       if (locked) {

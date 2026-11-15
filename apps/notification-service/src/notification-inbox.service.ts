@@ -551,7 +551,8 @@ export class NotificationInboxService {
       const targets = recipients.filter((r) => !plan.skipped.has(r.id));
       // (7Ec56EIw #5) CRITICAL: N daqiqadan keyin o'qilmagan bo'lsa SMS.
       const escalationDueAt =
-        this.escalation?.dueAt(dto.priority, channels) ?? null;
+        this.escalation?.dueAt(dto.priority, channels, undefined, dto.type) ??
+        null;
       const planned: DeliveryFor = escalationDueAt
         ? (id) => ({
             ...plan.deliveryFor(id),
@@ -750,7 +751,7 @@ export class NotificationInboxService {
         rows.length,
         realtime,
         telegramOutcome,
-        smsResult as SmsChannelResult | null,
+        smsResult,
         pushQueued,
         // VAPID yo'q — planner qatorga `no_provider` yozadi (navbatga qo'ymaydi).
         rows.some(
@@ -1151,29 +1152,32 @@ export class NotificationInboxService {
       }
       for (const { role, delivery, text, count, ids } of groups.values()) {
         // jsonb ustunlari (`data`, `delivery`) TypeORM deep-partial turiga sig'maydi.
-        await repo.update({ id: In(ids) }, {
-          ...base,
-          ...(text ?? {}),
-          // (A1HzKEby) data — oxirgi hodisaniki, count — yig'ilgan hodisalar
-          // soni (frontend: "N ta yangilanish"). Yangi qatorda count yo'q = 1.
-          data: { ...(dto.data ?? {}), count },
-          delivery,
-          recipient_role: role,
-          is_read: false,
-          read_at: null,
-          /**
-           * (OA16fdSq / QFoRULeu — inbox-group-sort) Guruh qatorining
-           * yangilanishi — YANGI hodisa: inbox saralash kaliti `createdAt`
-           * ham yangilanadi, aks holda qator (masalan "bekor qilindi")
-           * birinchi hodisa vaqti bilan ro'yxat PASTIDA qolib ketardi. Vaqt
-           * — DB soati (`CURRENT_TIMESTAMP` = tranzaksiya boshi), xuddi shu
-           * dispatch'da INSERT qilingan qatorlarning `DEFAULT now()` i bilan
-           * bir xil. `updatedAt` bo'yicha saralash EMAS: u o'qildi belgisi,
-           * `delivery` yozuvi va o'chirishda ham o'zgaradi (qator sababsiz
-           * tepaga sakrardi) va `(recipient_id, updatedAt)` indeksi yo'q.
-           */
-          createdAt: () => 'CURRENT_TIMESTAMP',
-        } as QueryDeepPartialEntity<Notification>);
+        await repo.update(
+          { id: In(ids) },
+          {
+            ...base,
+            ...(text ?? {}),
+            // (A1HzKEby) data — oxirgi hodisaniki, count — yig'ilgan hodisalar
+            // soni (frontend: "N ta yangilanish"). Yangi qatorda count yo'q = 1.
+            data: { ...(dto.data ?? {}), count },
+            delivery,
+            recipient_role: role,
+            is_read: false,
+            read_at: null,
+            /**
+             * (OA16fdSq / QFoRULeu — inbox-group-sort) Guruh qatorining
+             * yangilanishi — YANGI hodisa: inbox saralash kaliti `createdAt`
+             * ham yangilanadi, aks holda qator (masalan "bekor qilindi")
+             * birinchi hodisa vaqti bilan ro'yxat PASTIDA qolib ketardi. Vaqt
+             * — DB soati (`CURRENT_TIMESTAMP` = tranzaksiya boshi), xuddi shu
+             * dispatch'da INSERT qilingan qatorlarning `DEFAULT now()` i bilan
+             * bir xil. `updatedAt` bo'yicha saralash EMAS: u o'qildi belgisi,
+             * `delivery` yozuvi va o'chirishda ham o'zgaradi (qator sababsiz
+             * tepaga sakrardi) va `(recipient_id, updatedAt)` indeksi yo'q.
+             */
+            createdAt: () => 'CURRENT_TIMESTAMP',
+          },
+        );
       }
       toInsert = recipients.filter((r) => !rowIdByRecipient.has(r.id));
     }

@@ -1,5 +1,5 @@
 import { DataSource } from 'typeorm';
-import { of, throwError } from 'rxjs';
+import { from, of, throwError } from 'rxjs';
 import type { ActivityLogService } from '@app/common';
 import { AiAdvisorAlerts1716000000224 } from '../../../../migrations/1716000000224-AiAdvisorAlerts';
 import { AdvisorNotifier } from './advisor-notify';
@@ -162,5 +162,47 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
     await ds.query(
       `DELETE FROM ai_schema.ai_advisor_settings WHERE key = 'telegram'`,
     );
+  });
+
+  it('round-2 S1: ikki parallel dispatchPending — har ogohlantirish bir marta yuboriladi (qulf)', async () => {
+    await insert('critical');
+    await insert('critical');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    dispatch.mockImplementation(() =>
+      from(gate.then(() => ({ statusCode: 201 }))),
+    );
+    const a = notifier.dispatchPending();
+    // Birinchisi qulfni olib, dispatch'da kutib turibdi.
+    await new Promise((r) => setTimeout(r, 50));
+    const b = await notifier.dispatchPending();
+    expect(b).toEqual({ sent: 0, failed: 0 });
+    release();
+    expect(await a).toEqual({ sent: 2, failed: 0 });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('round-2 S2: xatoli qator navbat oxiriga o‘tadi — yangilari to‘silmaydi', async () => {
+    const [{ id: bad }] = await insert('critical');
+    await ds.query(
+      `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() - INTERVAL '1 hour' WHERE id = $1`,
+      [bad],
+    );
+    const [{ id: good }] = await insert('critical');
+    dispatch.mockImplementation((_p: unknown, body: unknown) =>
+      (body as { data: { alert_id: string } }).data.alert_id === bad
+        ? throwError(() => new Error('400'))
+        : of({ statusCode: 201 }),
+    );
+    expect(await notifier.dispatchPending()).toEqual({ sent: 1, failed: 1 });
+    const order = dispatch.mock.calls.map(
+      (c: unknown[]) => (c[1] as { data: { alert_id: string } }).data.alert_id,
+    );
+    expect(order).toEqual([bad, good]);
+    const [row] = await ds.query<Array<{ fresh: boolean }>>(
+      `SELECT "updatedAt" > now() - INTERVAL '1 minute' AS fresh FROM ai_schema.ai_advisor_alerts WHERE id = $1`,
+      [bad],
+    );
+    expect(row.fresh).toBe(true);
   });
 });

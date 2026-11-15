@@ -20811,7 +20811,8 @@
                 "logistics",
                 "catalog",
                 "investor",
-                "notification"
+                "notification",
+                "ai"
               ]
             }
           },
@@ -21036,7 +21037,8 @@
                 "logistics",
                 "catalog",
                 "investor",
-                "notification"
+                "notification",
+                "ai"
               ]
             }
           },

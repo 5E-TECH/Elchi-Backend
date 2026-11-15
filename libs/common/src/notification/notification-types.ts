@@ -52,6 +52,12 @@ export interface NotificationTypeDefinition {
   default_audience: readonly string[];
   /** Foydalanuvchi bu turni o'chira oladimi. `critical` uchun DOIM false. */
   user_can_mute: boolean;
+  /**
+   * `critical` tur o'qilmasa N daqiqadan keyin SMS'ga ko'tarilsinmi
+   * (pog'onali eskalatsiya). Sukut — ha; `false` — kanallar aniq
+   * belgilangan tur (masalan `ai.advisor_alert`, §9.2: R7 faqat ilova ichi).
+   */
+  escalation?: boolean;
 }
 
 /** Vaqtinchalik (reyestrga kiritilmagan) turlar uchun yagona ochiq yo'l. */
@@ -555,6 +561,9 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       label_uz: 'AI maslahatchi: jiddiy ogohlantirish',
       default_audience: [Roles.SUPERADMIN],
       user_can_mute: false,
+      // §9.2 / ega: kanallar dispatcher'da aniq (in_app + realtime, Telegram
+      // sozlamaga ko'ra; R7 — Telegram'siz). SMS eskalatsiyasi YO'Q (round-2).
+      escalation: false,
       default_channels: IN_APP_REALTIME,
       allowed_channels: [NotificationChannel.TELEGRAM],
     }),
