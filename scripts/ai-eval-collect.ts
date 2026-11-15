@@ -18,8 +18,13 @@
  * draft'ga tushmaydi — ular uchun gateway logi kerak (bu skript qamramaydi).
  *
  * ⚠️ MAXFIYLIK: `source_text` da telefonlar allaqachon `[TEL_n]`; skript
- * qo'shimcha ravishda ism (AI/operator customer_name qiymatlari), 9+
- * raqamli ketma-ketliklar, uy/xonadon raqamlarini maskalaydi. Natija
+ * qo'shimcha ravishda email, ijtimoiy tarmoq havolasi, @foydalanuvchi,
+ * ism (AI/operator customer_name va operator qiymatlari, qo'shimchalari
+ * bilan), pasport seriyasi, 9+ raqamli ketma-ketliklar (100 mln dan katta
+ * narx ham!), uy/xonadon raqamlarini maskalaydi. QOLADIGAN PII (odam
+ * ko'radi): to'liq kenglikdagi raqamlar, 7 raqamli shahar telefoni,
+ * vergul bilan ajratilgan raqamlar, koordinatalar, tug'ilgan sana, manzil
+ * (ko'cha/mahalla), ro'yxatda yo'q ism. Natija
  * FAQAT repo'dan TASHQARIDAGI katalogga (`--out`) yoziladi — odam
  * ko'rib chiqib, sintetik ko'rinishga keltirib, keyin
  * `apps/ai-service/test/fixtures/order-extract/` ga qo'shadi (source:
@@ -37,18 +42,13 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import * as dotenv from 'dotenv';
 import { DataSource } from 'typeorm';
-
-dotenv.config();
-const envFlag = process.argv.find((a) => a.startsWith('--env='));
-if (envFlag) {
-  dotenv.config({ path: envFlag.slice('--env='.length), override: true });
-}
 
 const REPO_ROOT = resolve(__dirname, '..');
 
@@ -144,55 +144,273 @@ export const UNEDITED_SAMPLE_SQL = `
   LIMIT $2::int
 `;
 
-/** Telefon tokenlaridan tashqari 9+ raqam, uy/xonadon raqamlari, ismlar. */
+/** Apostrof variantlari (ism ichida va matnda). */
+const APOS_CLASS = "['ʻʼ‘’`´]";
+const APOS_RE = /['ʻʼ‘’`´]/g;
+
+/**
+ * Ismga qo'shiladigan BITTA qo'shimcha; ketma-ket 3 tagacha
+ * ("Dilnoza|xon|ga", "Dilnoza|jon|ning", "Dilnoza|opa|ga").
+ * Lotin o'zbek, kirill o'zbek va rus kelishik qo'shimchalari.
+ */
+const NAME_SUFFIX_ONE = [
+  // lotin o'zbek
+  'gacha',
+  'larning',
+  'larga',
+  'lardan',
+  'lar',
+  'ning',
+  'niki',
+  'dagi',
+  'dan',
+  'dek',
+  'day',
+  'ga',
+  'ka',
+  'qa',
+  'ni',
+  'da',
+  'ta',
+  'ning',
+  'imiz',
+  'ingiz',
+  'im',
+  'ing',
+  'm',
+  'si',
+  'opa',
+  'aka',
+  'xon',
+  'jon',
+  'oy',
+  'bek',
+  // kirill o'zbek
+  'гача',
+  'ларнинг',
+  'ларга',
+  'лардан',
+  'лар',
+  'нинг',
+  'ники',
+  'даги',
+  'дан',
+  'дек',
+  'дай',
+  'га',
+  'ка',
+  'қа',
+  'ни',
+  'да',
+  'та',
+  'имиз',
+  'ингиз',
+  'им',
+  'инг',
+  'м',
+  'си',
+  'опа',
+  'ака',
+  'хон',
+  'жон',
+  'ой',
+  'бек',
+  // rus
+  'ою',
+  'ом',
+  'ем',
+  'ей',
+  'ым',
+  'а',
+  'я',
+  'у',
+  'ю',
+  'е',
+  'ы',
+  'и',
+]
+  .filter((x, i, arr) => arr.indexOf(x) === i)
+  .sort((x, y) => y.length - x.length)
+  .join('|');
+/** Rus kelishik oxiri — kirill ismning oxirgi harfi tushganda (Малик|е). */
+const RU_CASE_ENDING = 'ой|ою|ом|ем|ей|ий|ию|ия|ье|ья|ью|ем|а|я|у|ю|е|ы|и';
+const NAME_SUFFIX = `(?:${NAME_SUFFIX_ONE}){0,3}`;
+
+/**
+ * Ko'p so'zli ismdan alohida maskalanmaydigan so'zlar (murojaat, umumiy so'z).
+ */
+const NAME_PART_STOP = new Set([
+  'opa',
+  'aka',
+  'xon',
+  'jon',
+  'mijoz',
+  'uka',
+  'ota',
+  'ona',
+  'опа',
+  'ака',
+  'хон',
+  'жон',
+  'мижоз',
+  'клиент',
+]);
+
+/** Regex maxsus belgilarini qochiradi. */
+function escapeRe(x: string): string {
+  return x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Ism skeleti (apostrofsiz) → regex: harflar orasida apostrof ixtiyoriy
+ * ("Gulomjon" "G'ulomjon"ni ham, "O'g'iloy" "Ogiloy"ni ham topadi),
+ * bo'sh joy — har qanday bo'shliq.
+ */
+function skeletonRe(skeleton: string): string {
+  const chars = [...skeleton.replace(/\s+/g, ' ')];
+  return chars
+    .map((ch, i) => {
+      if (ch === ' ') return '\\s+';
+      const prev = chars[i - 1];
+      const apos = prev && /\p{L}/u.test(prev) && /\p{L}/u.test(ch);
+      return (apos ? `${APOS_CLASS}?` : '') + escapeRe(ch);
+    })
+    .join('');
+}
+
+/**
+ * Ism ro'yxatidan maskalanadigan shakllar: to'liq ism va (ko'p so'zli
+ * bo'lsa) har 3+ harfli so'z alohida ("Abdullayev Jasur" → "Jasur" ham).
+ * Boshidagi #/@ olib tashlanadi ("#sevinch" → "#[ISM]").
+ */
+export function nameVariants(names: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const raw of names) {
+    const n = raw
+      .trim()
+      .replace(/^[#@]+/, '')
+      .replace(APOS_RE, '');
+    if (n.length < 2) continue;
+    out.add(n);
+    const words = n.split(/[\s,;()]+/).filter(Boolean);
+    if (words.length < 2) continue;
+    for (const w of words) {
+      const letters = w.replace(/[^\p{L}]/gu, '');
+      if (letters.length >= 3 && !NAME_PART_STOP.has(w.toLowerCase())) {
+        out.add(w);
+      }
+    }
+  }
+  return [...out].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Bitta ism uchun regex alternativlari. Har birida AYNAN bitta guruh —
+ * saqlanadigan qo'shimcha ("[ISM]ga").
+ *  - to'liq ism + 0..3 qo'shimcha;
+ *  - kirill ism -а/-я/-й/-ь bilan tugasa (4+ harf): oxirgi harfsiz o'zak +
+ *    rus kelishik oxiri MAJBURIY ("Малика" → "Малике", "Маликой";
+ *    "Дмитрий" → "Дмитрию"). Faqat o'zak ("Малик") maskalanMAYDI.
+ */
+function nameAlternatives(skeleton: string): string[] {
+  const alts = [`${skeletonRe(skeleton)}(${NAME_SUFFIX})`];
+  if (
+    /^[\p{Script=Cyrillic}\s-]+$/u.test(skeleton) &&
+    /[аяйь]$/iu.test(skeleton)
+  ) {
+    const stem = skeleton.slice(0, -1);
+    if ([...stem.replace(/\s/g, '')].length >= 3) {
+      alts.push(
+        `${skeletonRe(stem)}((?:${RU_CASE_ENDING})${NAME_SUFFIX.replace('{0,3}', '{0,2}')})`,
+      );
+    }
+  }
+  return alts;
+}
+
+/** Ijtimoiy tarmoq / messenjer havolalari (profil = shaxs). */
+const LINK_RE =
+  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com)(?:\/[^\s,;)\]]*)?/giu;
+const EMAIL_RE =
+  /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
+/** Telegram/Instagram foydalanuvchi nomi (email maskalangandan keyin). */
+const USER_HANDLE_RE = /(?<![\p{L}\p{N}_.@])@[A-Za-z0-9_.]{3,32}/gu;
+
+/** Uy/xonadon kalit so'zlari (uzunidan boshlab). "д."/"d." — faqat nuqta bilan. */
+const HOUSE_KW = 'xonadon|kvartira|хонадон|квартира|dom|uy|kv|дом|уй|кв';
+/** Kalit so'zdan keyingi kelishik qo'shimchasi ("12-uyda", "kvartiraga 5"). */
+const HOUSE_KW_SUFFIX =
+  '(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
+/**
+ * "uyga 2 ta", "kvartiraga 3 dona" — miqdor/narx, uy raqami EMAS.
+ */
+const NOT_QTY =
+  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}]))";
+/** Uy raqami: 12, 12a, 12/3. */
+const HOUSE_NUM = '\\d{1,4}(?:\\/\\d{1,4}|\\p{L}(?![\\p{L}\\p{N}]))?';
+
+/**
+ * Telefon tokenlaridan tashqari PII: email, ijtimoiy tarmoq havolasi,
+ * @foydalanuvchi, ismlar, pasport, 9+ raqam, uy/xonadon raqamlari.
+ */
 export function maskCandidateText(
   text: string,
   names: readonly string[] = [],
 ): string {
-  let out = text;
-  // Eng uzunidan boshlab, butun so'z (o'zbek/rus qo'shimchalari bilan:
-  // "Alisherga", "Alisherning", "Малике"), katta-kichik harfsiz, apostrof
-  // variantlari bir xil ("G'ulomjon" = "Gʻulomjon" = "G‘ulomjon"). "Ali"
-  // → "Alisher" ichida TEGILMAYDI. Boshidagi #/@ olib tashlanadi
-  // ("#sevinch" → "#[ISM]").
-  const sorted = [...new Set(names.map((n) => n.trim().replace(/^[#@]+/, '')))]
-    .filter((n) => n.length >= 2)
-    .sort((a, b) => b.length - a.length);
-  for (const n of sorted) {
-    const escaped = n
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/['ʻʼ‘’`]/g, NAME_APOS);
+  let out = text
+    .replace(EMAIL_RE, '[EMAIL]')
+    .replace(LINK_RE, '[LINK]')
+    .replace(USER_HANDLE_RE, (m) => {
+      // Gap oxiridagi nuqta handle'ga kirmaydi.
+      const dots = /\.+$/.exec(m)?.[0] ?? '';
+      return '@[USER]' + dots;
+    });
+  // Ismlar: BITTA o'tishda (eng uzuni birinchi) — "[ISM]" qayta tegilmaydi.
+  // Butun so'z, katta-kichik harfsiz, qo'shimchalar saqlanadi
+  // ("Alisherga" → "[ISM]ga"). "Ali" → "Alisher" ichida TEGILMAYDI.
+  const alts = nameVariants(names).flatMap(nameAlternatives);
+  if (alts.length > 0) {
     out = out.replace(
       new RegExp(
-        `(?<![\\p{L}\\p{N}])${escaped}(${NAME_SUFFIX})(?![\\p{L}\\p{N}])`,
+        `(?<![\\p{L}\\p{N}])(?:${alts.join('|')})(?![\\p{L}\\p{N}])`,
         'giu',
       ),
-      '[ISM]$1',
+      (...args: unknown[]) => {
+        const groups = args.slice(1, 1 + alts.length);
+        const suffix = groups.find((g) => typeof g === 'string');
+        return `[ISM]${suffix ?? ''}`;
+      },
     );
   }
   return (
     out
-      // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta va '/'
-      // ajratgichlar ham) — narxlar ("1 500 000" = 7 raqam) SAQLANADI.
-      .replace(/(?<!\[TEL_)\d[\d\s\-()./]{7,}\d/g, (m) =>
+      // Pasport/ID: 2 harf + 7 raqam ("AA 1234567").
+      .replace(/(?<![\p{L}\p{N}])\p{L}{2}\s?\d{7}(?!\d)/gu, '[HUJJAT]')
+      // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta, slash,
+      // pastki chiziq, har xil tire ajratgichlar ham). ⚠️ 100 mln dan katta
+      // narx ("150 000 000") ham [RAQAM] bo'ladi; narxlar odatda 7–8 raqam
+      // ("1 500 000") — SAQLANADI.
+      .replace(/(?<!\[TEL_)\d[\d\s\-‐-―−()./_]{7,}\d/g, (m) =>
         m.replace(/\D/g, '').length >= 9 ? '[RAQAM]' : m,
       )
+      // "12-uy", "12a-uy", "12/3-uyda", "5-xonadonga", "12-уйда".
       .replace(
-        /(?<![\p{L}\p{N}])(\d{1,4})(\s*-?\s*)(uy|xonadon|kvartira|kv|dom|квартира|дом|кв)(?![\p{L}\p{N}])/giu,
-        '[N]$2$3',
+        new RegExp(
+          `(?<![\\p{L}\\p{N}])([№#]?)${HOUSE_NUM}(\\s*-?\\s*)((?:${HOUSE_KW})${HOUSE_KW_SUFFIX})(?![\\p{L}\\p{N}])`,
+          'giu',
+        ),
+        '$1[N]$2$3',
       )
+      // "uy 12/3", "kvartiraga 5", "kv №5", "дом №12", "д. 15", "d.15".
       .replace(
-        /(?<![\p{L}\p{N}])(uy|xonadon|kvartira|kv|dom|квартира|дом|кв)(\.?\s*-?\s*)\d{1,4}(?!\d)/giu,
-        '$1$2[N]',
+        new RegExp(
+          `(?<![\\p{L}\\p{N}])((?:(?:${HOUSE_KW})${HOUSE_KW_SUFFIX}\\.?|[дd]\\.)\\s*[-:]?\\s*(?:[№#]|N(?=\\s*\\d))?\\s*)${HOUSE_NUM}(?!\\d)${NOT_QTY}`,
+          'giu',
+        ),
+        '$1[N]',
       )
   );
 }
-
-/** Apostrof variantlari (ism ichida). */
-const NAME_APOS = "['ʻʼ‘’`]";
-/** Ismga qo'shiladigan o'zbek/rus qo'shimchalari (ixtiyoriy). */
-const NAME_SUFFIX =
-  '(?:ga|ka|qa|ning|ni|niki|da|dan|ta|lar|larga|larning|opa|aka|xon|jon|а|у|е|ой|ом|ым|ы|и)?';
 
 /**
  * Ismlar: `customer_name` satr bo'lsa ham, tuzatishdagi `{ai, final}`
@@ -325,6 +543,36 @@ const KNOWN_FLAGS = new Set([
   'env',
 ]);
 
+/**
+ * `raw_extraction.orders` da ismsiz (customer_name bo'sh) buyurtma bormi —
+ * bo'lsa, o'sha mijozning matndagi ismi ro'yxatda yo'q va maskalanmay
+ * qolishi mumkin (`names_masked: 'partial'`).
+ */
+export function hasUnnamedOrder(rawExtraction: unknown): boolean {
+  const orders = (rawExtraction as { orders?: unknown } | null)?.orders;
+  if (!Array.isArray(orders)) return false;
+  return orders.some((o) => {
+    const name = (o as { customer_name?: unknown } | null)?.customer_name;
+    return typeof name !== 'string' || name.trim() === '';
+  });
+}
+
+/**
+ * Butun son bayroq: yo'q → sukut; raqam emas yoki oraliqdan tashqari →
+ * null (skript 2-kod bilan to'xtaydi, jim sukut YO'Q).
+ */
+export function parseIntFlag(
+  raw: string | null,
+  def: number,
+  min: number,
+  max: number,
+): number | null {
+  if (raw === null) return def;
+  if (!/^\d+$/.test(raw)) return null;
+  const v = Number(raw);
+  return v >= min && v <= max ? v : null;
+}
+
 function arg(name: string): string | null {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
   return a ? a.slice(name.length + 3) : null;
@@ -339,6 +587,10 @@ async function main(): Promise<number> {
       return 2;
     }
   }
+  // .env faqat main ichida (import qilinganda — testlarda — o'qilmaydi).
+  dotenv.config({ quiet: true });
+  const envFlag = arg('env');
+  if (envFlag) dotenv.config({ path: envFlag, override: true, quiet: true });
   const includeUnmasked = process.argv.includes('--include-unmasked-names');
   const out = arg('out');
   if (!out) {
@@ -363,8 +615,21 @@ async function main(): Promise<number> {
     );
     return 2;
   }
-  const days = Math.max(1, Math.min(90, Number(arg('days') ?? 30) || 30));
-  const limit = Math.max(1, Math.min(2000, Number(arg('limit') ?? 200) || 200));
+  // Eski natija ustiga yozilmaydi / aralashmaydi: katalog bo'sh bo'lsin.
+  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+    console.error(
+      `--out katalogi bo'sh emas: ${outDir}. Yangi katalog bering yoki tozalang.`,
+    );
+    return 2;
+  }
+  const days = parseIntFlag(arg('days'), 30, 1, 90);
+  const limit = parseIntFlag(arg('limit'), 200, 1, 2000);
+  if (days === null || limit === null) {
+    console.error(
+      "--days 1..90 va --limit 1..2000 oralig'idagi butun son bo'lishi kerak.",
+    );
+    return 2;
+  }
   const sampleArg = arg('sample-unedited');
   const sample = sampleArg === null ? null : Number(sampleArg);
   if (sample !== null && !(sample > 0 && sample <= 1)) {
@@ -418,6 +683,7 @@ async function main(): Promise<number> {
     }
     let n = 0;
     let unmaskedCount = 0;
+    let partialCount = 0;
     for (const r of rows) {
       const names = namesOf([r.raw_extraction, r.resolved_preview, r.items]);
       const sourceText = typeof r.source_text === 'string' ? r.source_text : '';
@@ -425,8 +691,11 @@ async function main(): Promise<number> {
       // ism va operator MASKALANMAYDI. Sukut: matn chiqarilmaydi (null).
       const namesKnown = names.length > 0 || sourceText.trim() === '';
       if (!namesKnown) unmaskedCount += 1;
+      // Ismsiz buyurtma bor — boshqa ismlar maskalangan, uniki yo'q.
+      const partial = namesKnown && hasUnnamedOrder(r.raw_extraction);
+      if (partial) partialCount += 1;
       const candidate = {
-        id: `prod-${String(r.draft_id).slice(0, 8)}`,
+        id: `prod-${String(r.draft_id)}`,
         category: [sample === null ? 'prod_candidate' : 'prod_unedited_sample'],
         source: 'prod-masked',
         note:
@@ -437,7 +706,7 @@ async function main(): Promise<number> {
             namesKnown || includeUnmasked
               ? maskCandidateText(sourceText, names)
               : null,
-          names_masked: namesKnown,
+          names_masked: partial ? 'partial' : namesKnown,
         },
         // Kutilgan natija ODAM tomonidan to'ldiriladi: AI taklifi +
         // operator tuzatishlari (field_corrections.final) asosida.
@@ -462,17 +731,24 @@ async function main(): Promise<number> {
       writeFileSync(
         join(outDir, `${candidate.id}.json`),
         JSON.stringify(candidate, null, 2) + '\n',
-        { mode: 0o600 },
+        // 'wx': mavjud faylni hech qachon qayta yozmaydi.
+        { mode: 0o600, flag: 'wx' },
       );
       n += 1;
     }
     console.log(`${n} ta nomzod yozildi: ${outDir} (oxirgi ${days} kun).`);
     if (unmaskedCount > 0) {
       console.log(
-        `${unmaskedCount} ta faylda ism ro'yxati yo'q (outcome≠ok): ` +
+        `${unmaskedCount} ta faylda ism ro'yxati yo'q: ` +
           (includeUnmasked
             ? "matn ISMLARI OCHIQ — qo'lda maskalang."
             : 'matn chiqarilmadi (input.text = null; --include-unmasked-names bilan ochiq holda).'),
+      );
+    }
+    if (partialCount > 0) {
+      console.log(
+        `${partialCount} ta faylda ismsiz buyurtma bor (names_masked: 'partial'): ` +
+          "o'sha mijoz ismi matnda ochiq qolishi mumkin — qo'lda tekshiring.",
       );
     }
     return 0;

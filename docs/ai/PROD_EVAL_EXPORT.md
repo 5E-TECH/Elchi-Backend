@@ -74,26 +74,60 @@ docker compose -f docker-compose.prod.yml run --rm --no-deps \
   scripts/ai-eval-collect.ts --out=/out/candidates --days=30 --limit=2000
 ```
 
-Har draft — bitta JSON (katalog 0700, fayllar 0600): matnda telefonlar
-`[TEL_n]`, mijoz va operator ismlari (AI va operator yozgan, `#sevinch` ham)
-`[ISM]` — butun so'z, o'zbek/rus qo'shimchalari va apostrof variantlari
-bilan; 9+ raqam (nuqta/slash bilan ham) `[RAQAM]`, uy/xonadon/квартира
-raqami `[N]`. Tuzatishlardan izoh, operator va telefon maskasi tashlanadi.
+Har draft — bitta JSON (katalog 0700, fayllar 0600, nomi `prod-<to'liq
+draft_id>.json`). `--out` katalogi **bo'sh** bo'lishi kerak (aks holda
+2-kod; mavjud fayl hech qachon qayta yozilmaydi). `--days` (1–90) va
+`--limit` (1–2000) butun son bo'lmasa ham 2-kod — jim sukut yo'q.
 
-⚠️ **outcome≠ok draftlar** (ai_error, truncated, …): AI natijasi yo'q, ism
-ro'yxati ham yo'q — bunday faylda `input.text = null`, `names_masked:
+Matnda nima maskalanadi (shu tartibda):
+
+- telefonlar — allaqachon `[TEL_n]`;
+- email → `[EMAIL]`; `t.me`, `telegram.me`, `instagram.com`, `instagr.am`,
+  `facebook.com`, `vk.com`, `tiktok.com` havolalari → `[LINK]`;
+  `@foydalanuvchi` → `@[USER]`;
+- mijoz va operator ismlari (AI va operator yozgan, `#sevinch` → `#[ISM]`)
+  → `[ISM]`, qo'shimcha saqlanadi: butun so'z, katta-kichik harfsiz;
+  o'zbek (lotin/kirill) va rus qo'shimchalari, 3 tagacha ketma-ket
+  ("Dilnozaxonga" → `[ISM]xonga`, "Дилнозанинг", "Ферузажон");
+  -а/-я/-й/-ь bilan tugagan kirill ism rus kelishigida ("Малике",
+  "Маликой", "Дмитрию"); apostrof ikki tomonga ixtiyoriy ("G'ulomjon" =
+  "Gulomjon", "O'g'iloy" = "Ogiloy"; `'` `ʻ` `ʼ` `‘` `’` `´` va
+  teskari tirnoq); ko'p so'zli ismning har
+  3+ harfli so'zi alohida ham ("Abdullayev Jasur" → "Jasurga"; opa/aka/
+  xon/jon/mijoz bundan mustasno). Ismga o'xshab boshlanadigan boshqa so'z
+  ("Dilnozabonu") tegilmaydi;
+- pasport seriyasi (2 harf + 7 raqam) → `[HUJJAT]`;
+- 9+ raqam (bo'shliq, tire `-–—`, nuqta, slash, `_`, qavs bilan ham) →
+  `[RAQAM]`. ⚠️ 100 mln so'mdan katta narx ham `[RAQAM]` bo'ladi;
+- uy/xonadon raqami → `[N]`: "12-uy", "12a-uy", "12/3-uyda",
+  "5-xonadonga", "12-уйда", "uy 12/3", "kvartiraga 5", "kv №5",
+  "дом №12", "д. 15", "d.15" ("uyga 2 ta" — miqdor, tegilmaydi;
+  "19-kvartal" — mavze, tegilmaydi).
+
+Tuzatishlardan izoh, operator va telefon maskasi tashlanadi.
+
+⚠️ **Ism ro'yxati yo'q draftlar** (outcome≠ok: ai_error, truncated, …):
+AI natijasi yo'q — bunday faylda `input.text = null`, `names_masked:
 false` (skript oxirida sanog'i chiqadi). Matnni ochiq olish faqat
 `--include-unmasked-names` bilan — keyin ismlarni QO'LDA maskalang.
 
-⚠️ Cheklov: ism faqat AI/operator yozgan ko'rinishda topiladi — AI kirill
-ismni lotinga o'girgan bo'lsa ("Дилноза" → "Dilnoza"), matndagi kirill
-yozuv maskalanmay qolishi mumkin; belgilovchi ko'rib chiqadi.
- ⚠️ Manzil (ko'cha, mahalla) maskalanMAYDI —
-tuman xatolarini tahlil qilish uchun kerak (fayllar faqat serverda). Buni
-ega alohida tasdiqlashi kerak. Repo'ga kiradigan fixture qo'lda sintetik
-qilinadi (`apps/ai-service/test/fixtures/order-extract/`,
-`source: 'prod-masked'`). Noma'lum yoki xato yozilgan bayroqda skript
-2-kod bilan to'xtaydi.
+⚠️ **Ismsiz buyurtma** (`raw_extraction` dagi biror buyurtmada
+`customer_name` bo'sh): boshqa ismlar maskalangan, o'sha mijozniki yo'q —
+`names_masked: 'partial'` (sanog'i skript oxirida chiqadi). Bunday
+faylni qo'lda tekshiring.
+
+⚠️ Maskalanmay QOLADIGAN shaxsiy ma'lumot (belgilovchi ko'rib chiqadi):
+
+- AI/operator yozmagan ism yoki boshqa yozuvdagi ism (AI kirill ismni
+  lotinga o'girgan bo'lsa: "Дилноза" → "Dilnoza" — kirill yozuv qoladi);
+- to'liq kenglikdagi raqamlar (`９０１２３…`), 7 raqamli shahar telefoni,
+  vergul bilan ajratilgan raqamlar, koordinatalar, tug'ilgan sana;
+- manzil (ko'cha, mahalla) — tuman xatolarini tahlil qilish uchun kerak
+  (fayllar faqat serverda). Buni ega alohida tasdiqlashi kerak.
+
+Repo'ga kiradigan fixture qo'lda sintetik qilinadi
+(`apps/ai-service/test/fixtures/order-extract/`, `source: 'prod-masked'`).
+Noma'lum yoki xato yozilgan bayroqda skript 2-kod bilan to'xtaydi.
 
 ## 3. Tahrirlanmagan tasdiqlardan 5% namuna
 
@@ -131,4 +165,4 @@ rm -rf /root/ai-eval/candidates /root/ai-eval/unedited
 | Fayl | Shaxsiy ma'lumot | Qayerga |
 |---|---|---|
 | `aggregates-*.txt` | yo'q | backend/FE sessiyaga, PR/Trello'ga |
-| `candidates/*.json`, `unedited/*.json` | manzil qoldig'i; kirill ism qolishi mumkin (`--include-unmasked-names` bilan — ochiq ismlar) | **faqat serverda**; sintetik fixture'ga aylantiriladi |
+| `candidates/*.json`, `unedited/*.json` | ism, telefon, email, havola, @foydalanuvchi, pasport, uy raqami maskalangan; qoladi: manzil, ro'yxatda yo'q ism (`names_masked: 'partial'`), 7 raqamli/to'liq kenglikdagi/vergulli raqamlar, koordinata, tug'ilgan sana; `--include-unmasked-names` bilan — ochiq ismlar | **faqat serverda**; sintetik fixture'ga aylantiriladi |
