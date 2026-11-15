@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  Validate,
+  ValidatorConstraint,
+  type ValidatorConstraintInterface,
   IsIn,
   IsInt,
   IsObject,
@@ -17,6 +20,32 @@ import {
   AI_ADVISOR_SEVERITIES,
   AI_ADVISOR_SORT_FIELDS,
 } from '@app/common';
+
+/**
+ * Aniq kalendar kuni (`YYYY-MM-DD`, aylanmaydi: 2026-02-30 → 400, yil ≥ 2000)
+ * — ai-service `isDay` bilan bir xil (round-2 #654 S1).
+ */
+@ValidatorConstraint({ name: 'calendarDay', async: false })
+export class CalendarDayConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+      return false;
+    const d = new Date(`${value}T00:00:00Z`);
+    return (
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCFullYear() >= 2000 &&
+      d.toISOString().slice(0, 10) === value
+    );
+  }
+
+  defaultMessage(): string {
+    return "sana noto'g'ri (YYYY-MM-DD)";
+  }
+}
+
+/** C0 boshqaruv belgilari (\n, \t dan tashqari) va DEL yo'q. */
+// eslint-disable-next-line no-control-regex -- ataylab: boshqaruv belgilarini rad etish
+const NO_CONTROL_CHARS = /^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]*$/;
 
 /**
  * BE-5 (LhTIno57) — `/ai/advisor/*` DTO'lari.
@@ -112,6 +141,7 @@ export class AiAdvisorAlertsQueryDto {
   })
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  @Validate(CalendarDayConstraint)
   from?: string;
 
   @ApiPropertyOptional({
@@ -120,6 +150,7 @@ export class AiAdvisorAlertsQueryDto {
   })
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  @Validate(CalendarDayConstraint)
   to?: string;
 
   @ApiPropertyOptional({
@@ -129,6 +160,7 @@ export class AiAdvisorAlertsQueryDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @Matches(NO_CONTROL_CHARS)
   q?: string;
 
   @ApiPropertyOptional({
@@ -144,14 +176,25 @@ export class AiAdvisorAlertsQueryDto {
   @IsIn(['asc', 'desc'])
   sort_dir?: 'asc' | 'desc';
 
-  @ApiPropertyOptional({ minimum: 1, default: 1 })
+  @ApiPropertyOptional({
+    type: 'integer',
+    minimum: 1,
+    maximum: 1_000_000,
+    default: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(1_000_000)
   page?: number;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })
+  @ApiPropertyOptional({
+    type: 'integer',
+    minimum: 1,
+    maximum: 100,
+    default: 20,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -181,12 +224,14 @@ export class AiAdvisorAlertPatchDto {
   status!: 'resolved' | 'dismissed';
 
   @ApiPropertyOptional({
+    type: String,
     description:
-      "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500.",
+      "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500. Boshqaruv belgilari (\\n, \\t dan tashqari) — 400.",
     example: 'Kartadagi tushum keyingi kuni kelgan, tekshirildi.',
     nullable: true,
   })
   @IsOptional()
   @IsString()
+  @Matches(NO_CONTROL_CHARS)
   note?: string | null;
 }

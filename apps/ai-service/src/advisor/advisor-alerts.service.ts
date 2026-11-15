@@ -84,10 +84,28 @@ const userRef = (
   id: string | null,
   name: string | null,
 ): AiAdvisorUserRef | null => (id ? { id, name: name ?? null } : null);
-const isDay = (v: unknown): v is string =>
-  typeof v === 'string' &&
-  /^\d{4}-\d{2}-\d{2}$/.test(v) &&
-  !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
+/**
+ * Aniq kalendar kuni: `YYYY-MM-DD`, aylanib o'tmaydi (2026-02-30 → yo'q) va
+ * yil ≥ 2000 — Postgres 22008 → 500 bo'lmasin (round-2 #654 S1).
+ */
+export const isDay = (v: unknown): v is string => {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return (
+    !Number.isNaN(d.getTime()) &&
+    d.getUTCFullYear() >= 2000 &&
+    d.toISOString().slice(0, 10) === v
+  );
+};
+/** C0 boshqaruv belgilari (\n, \t dan tashqari) va DEL — Postgres U+0000 ni rad etadi. */
+// eslint-disable-next-line no-control-regex -- ataylab: boshqaruv belgilarini rad etish
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+/** Ro'yxat ustunlari — `toListItem` o'qiydiganlari (round-2 #654 S4). */
+const LIST_SELECT = `
+  "id"::text AS id, "rule_key", "severity", "status", "title", "branch", "subject",
+  "headline_amount", "facts", "occurrences", "first_at", "last_at", "first_fact_at",
+  "last_fact_at", "explanation_status", "explanation_requested_at",
+  "reopened_from_id"::text AS reopened_from_id`;
 
 /**
  * `pending` izoh 3 daqiqadan oshsa — `failed` + `error` deb ko'rsatiladi
@@ -163,6 +181,9 @@ export function normalizeNote(
   if (note !== undefined && note !== null && typeof note !== 'string') {
     throw fail('required', "Izoh matn bo'lishi kerak");
   }
+  if (typeof note === 'string' && CONTROL_CHARS.test(note)) {
+    throw new BadRequestException('Izohda ruxsat etilmagan belgi bor');
+  }
   const text = typeof note === 'string' ? note.trim() : '';
   if (text.length > AI_ADVISOR_NOTE_MAX) {
     throw fail('too_long', `Izoh ${AI_ADVISOR_NOTE_MAX} belgidan oshmasin`);
@@ -204,10 +225,11 @@ export class AdvisorAlertsService {
       }>
     >(
       `SELECT COUNT(*) FILTER (WHERE "status" = 'new') AS new,
-              COUNT(*) FILTER (WHERE "status" IN ('new','seen')) AS open,
+              COUNT(*) AS open,
               COUNT(*) FILTER (WHERE "status" = 'new' AND "severity" = 'critical') AS critical,
-              COUNT(*) FILTER (WHERE "status" IN ('new','seen') AND "severity" = 'critical') AS critical_open
-         FROM ${ALERTS} WHERE "is_deleted" = false`,
+              COUNT(*) FILTER (WHERE "severity" = 'critical') AS critical_open
+         FROM ${ALERTS}
+        WHERE "is_deleted" = false AND "status" IN ('new','seen')`,
     );
     const keys = async (statuses: string[]) =>
       (
@@ -286,17 +308,23 @@ export class AdvisorAlertsService {
       q.sort_by === 'severity'
         ? `CASE WHEN "severity" = 'critical' THEN 0 ELSE 1 END ${dir === 'DESC' ? 'ASC' : 'DESC'}, "last_at" DESC`
         : `"${q.sort_by}" ${dir}`;
-    const [{ total }] = await this.ds.query<Array<{ total: string }>>(
-      `SELECT COUNT(*) AS total FROM ${ALERTS} WHERE ${where.join(' AND ')}`,
-      params,
-    );
-    const rows = await this.ds.query<AlertRow[]>(
-      `SELECT ${SELECT} FROM ${ALERTS} WHERE ${where.join(' AND ')}
-        ORDER BY ${order}, "id" DESC
-        LIMIT ${q.limit} OFFSET ${(q.page - 1) * q.limit}`,
-      params,
-    );
-    const totalN = Number(total);
+    // Jami — segment sonlaridan (bitta skan kam, ikkalasi bir-biriga mos).
+    const totalN =
+      q.status === 'open'
+        ? byStatus.new + byStatus.seen
+        : q.status
+          ? byStatus[q.status]
+          : Object.values(byStatus).reduce((a, b) => a + b, 0);
+    const offset = (q.page - 1) * q.limit;
+    const rows =
+      offset >= totalN
+        ? []
+        : await this.ds.query<AlertRow[]>(
+            `SELECT ${LIST_SELECT} FROM ${ALERTS} WHERE ${where.join(' AND ')}
+              ORDER BY ${order}, "id" DESC
+              LIMIT ${q.limit} OFFSET ${offset}`,
+            params,
+          );
     return {
       items: rows.map((r) => toListItem(r, now)),
       meta: {
@@ -344,7 +372,7 @@ export class AdvisorAlertsService {
     if (status !== 'resolved' && status !== 'dismissed') {
       throw new BadRequestException("status noto'g'ri");
     }
-    const text = normalizeNote(status, note);
+    let text: string | null = null;
     const outcome = await this.ds.transaction(async (m) => {
       const [row] = await m.query<AlertRow[]>(
         `SELECT ${SELECT} FROM ${ALERTS} WHERE "id" = $1 AND "is_deleted" = false FOR UPDATE`,
@@ -365,6 +393,9 @@ export class AdvisorAlertsService {
           },
         );
       }
+      // Izoh — holat haqiqatan o'zgarganda tekshiriladi: idempotent takror
+      // 200, yopilgan — 409 (izoh xatosidan oldin; round-2 #654).
+      text = normalizeNote(status, note);
       await m.query(
         `UPDATE ${ALERTS}
             SET "status" = $2, "resolved_at" = $3, "resolved_by" = $4, "resolved_by_name" = $5,
@@ -620,11 +651,12 @@ function parseQuery(
       (Date.parse(`${out.to}T00:00:00Z`) -
         Date.parse(`${out.from}T00:00:00Z`)) /
       DAY_MS;
-    if (span < 0 || span > MAX_RANGE_DAYS) throw bad('from/to');
+    // ≤ 366 Toshkent kuni (ikkala chet kiradi).
+    if (span < 0 || span >= MAX_RANGE_DAYS) throw bad('from/to');
   }
   if (q.q !== undefined && q.q !== null) {
     const text = String(q.q).trim();
-    if (text.length > 100) throw bad('q');
+    if (text.length > 100 || CONTROL_CHARS.test(text)) throw bad('q');
     if (text) out.q = text;
   }
   if (q.sort_by !== undefined) {

@@ -23656,8 +23656,9 @@
             "in": "query",
             "schema": {
               "minimum": 1,
+              "maximum": 1000000,
               "default": 1,
-              "type": "number"
+              "type": "integer"
             }
           },
           {
@@ -23668,7 +23669,7 @@
               "minimum": 1,
               "maximum": 100,
               "default": 20,
-              "type": "number"
+              "type": "integer"
             }
           }
         ],
@@ -23700,9 +23701,10 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "Ogohlantirish ID si (`^\\d{1,18}$`)",
+            "description": "Ogohlantirish ID si",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
             }
           },
           {
@@ -23746,7 +23748,8 @@
             "in": "path",
             "description": "Ogohlantirish ID si",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
             }
           }
         ],
@@ -36771,8 +36774,8 @@
             ]
           },
           "note": {
-            "type": "object",
-            "description": "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500.",
+            "type": "string",
+            "description": "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500. Boshqaruv belgilari (\\n, \\t dan tashqari) — 400.",
             "example": "Kartadagi tushum keyingi kuni kelgan, tekshirildi.",
             "nullable": true
           }

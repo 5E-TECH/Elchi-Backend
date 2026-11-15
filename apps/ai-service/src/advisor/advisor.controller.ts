@@ -103,7 +103,7 @@ export class AdvisorController {
             data?.note,
           ),
           200,
-          'AI advisor alert updated',
+          'AI advisor alert',
         );
       }),
     );
