@@ -1080,7 +1080,9 @@ export function resolveDistrictText(
       district_id: null,
       district_label: null,
       district_name: null,
-      region_given: regionGiven,
+      // #649 review (3-davra): almashtirishdan keyin topilmasa ham qulflangan
+      // viloyat AI taxmini — "berilgan" emas.
+      region_given: regionGiven && !regionSwitched,
       candidates: unique.slice(0, AI_MAX_CANDIDATES).map(toCandidate),
       reason,
     };

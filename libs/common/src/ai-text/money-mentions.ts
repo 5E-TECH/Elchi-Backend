@@ -34,8 +34,10 @@
 
 const NUM_SRC =
   // 1: son — ATOMAR (lookahead + backreference): regex orqaga qaytib
-  // "150000so'm" dan "15000" ni ajratib olmasin.
-  String.raw`(?=(\d{1,3}(?:[ .,]\d{3})+|\d+(?:[.,]\d{1,2})?))\1`;
+  // "150000so'm" dan "15000" ni ajratib olmasin. Ikkala muqobil ham
+  // raqam bilan CHEGARALANGAN (`(?!\d)`): "901 234 567" ning bo'lagi
+  // "901 234", "150 0000" ning "150 000", "1 2345" ning "1 234" bo'lmaydi.
+  String.raw`(?=(\d{1,3}(?:[ .,]\d{3})+(?!\d)|\d+(?:[.,]\d{1,2})?(?!\d)))\1`;
 const CURRENCY_SRC = String.raw`so['ʻ‘’\x60]?m|сум|сўм`;
 
 const AMOUNT_RE = new RegExp(
@@ -44,8 +46,9 @@ const AMOUNT_RE = new RegExp(
     String.raw`[ \t]*` +
     // 2: ko'paytiruvchi
     String.raw`(mln|млн|million|миллион|ming|минг|тыс(?:яч)?|k|к)?` +
-    // 3: kelishik qo'shimchasi ("150 mingdan", "150 mingga", "150 minglik")
-    String.raw`(dan|дан|ga|ni|lik|га|ни|лик)?` +
+    // 3: kelishik qo'shimchasi ("150 mingdan", "150 mingga", "150 minglik",
+    // "150 minggacha" — oraliq oxiri)
+    String.raw`(dan|дан|gacha|гача|ga|ni|lik|га|ни|лик)?` +
     // Songa yopishgan harf — faqat valyuta so'zi bo'lsa ("150000so'm").
     String.raw`(?!(?!${CURRENCY_SRC}|sum(?!\p{L}))\p{L})` +
     // 4: "mln" dan keyingi qo'shimcha ("4 mln 200") — faqat undan keyin
@@ -99,13 +102,25 @@ export interface MoneyMention {
    * mismatch TEKSHIRILMAYDI (model `null` + warnings qaytaradi).
    */
   ambiguous?: true;
+  /**
+   * Faqat `delivery`: dostavka summasi OLDINGI jami ichida ("Jami 170 000
+   * (dostavka 20 000 bilan)", "shundan dostavka 20 ming", "включая
+   * доставку") — jamiga qo'shilmaydi.
+   */
+  included?: true;
+  /**
+   * Eslatmaning minglik / millionlik qismi (2–10) matnda miqdor sifatida
+   * ham aniq aytilgan ("televizor 2 ta 2 mln") — `qty_check` uni pul deb
+   * o'qilgan miqdor hisoblamaydi.
+   */
+  count_stated?: true;
 }
 
 const L = String.raw`(?:^|[^\p{L}])`;
 const SEP_END = String.raw`\s*[:\-–=]?\s*$`;
 const CUR_OPT = String.raw`^\s*(?:${CURRENCY_SRC}|sum)?\s*`;
 
-const PREPAID_WORDS = String.raw`oldindan|predoplata|предоплат\p{L}*|avans|аванс|zaklad|задаток|qolgani|остаток`;
+const PREPAID_WORDS = String.raw`oldindan|predoplata|предоплат\p{L}*|avans|аванс|zaklad|задаток|qolgani|qolgan|остаток|оплачен\p{L}*`;
 const DELIVERY_WORDS = String.raw`dostavka(?:si|ga|ni)?|dastavka(?:si|ga|ni)?|yetkazib\s+berish|yetkazish|доставк[аиуой]`;
 
 /** Eslatmadan OLDIN (shu qatorda) — oldindan to'lov. */
@@ -118,7 +133,9 @@ const PREPAID_BEFORE_RE = new RegExp(
 /** Eslatmadan KEYIN — oldindan to'lov ("50 ming to'landi", "100 ming zaklad"). */
 const PREPAID_AFTER_RE = new RegExp(
   CUR_OPT +
-    String.raw`(?:to['ʻ‘’\x60]?lan\p{L}*|tashla\p{L}*|kartaga|оплачен\p{L}*|(?:${PREPAID_WORDS})(?!\p{L}))`,
+    String.raw`(?:to['ʻ‘’\x60]?lan\p{L}*|tashla\p{L}*|kartaga|o['ʻ‘’\x60]?tkaz\p{L}*|` +
+    String.raw`(?:click|payme|uzum|клик)\s+(?:orqali|орқали|через)|переве\p{L}*|` +
+    String.raw`(?:${PREPAID_WORDS})(?!\p{L}))`,
   'iu',
 );
 /** Eslatmadan OLDIN — dostavka narxi. */
@@ -126,6 +143,46 @@ const DELIVERY_BEFORE_RE = new RegExp(
   L +
     String.raw`(?:${DELIVERY_WORDS})(?:\s+(?:narxi|puli|haqqi|стоимость))?` +
     SEP_END,
+  'iu',
+);
+/** Tarif ro'yxatidagi joy so'zlari ("Toshkent 20 000, viloyatlarga 35 000"). */
+const PLACE_WORD = String.raw`(?:toshkent\p{L}*|tashkent\p{L}*|viloyat\p{L}*|shahar\p{L}*|shahri|bo['ʻ‘’\x60]?ylab|ichida|tuman\p{L}*|по|ташкент\p{L}*|тошкент\p{L}*|област\p{L}*|регион\p{L}*|город\p{L}*|вилоят\p{L}*)`;
+const PLACE_WORDS = String.raw`${PLACE_WORD}(?:\s+${PLACE_WORD}){0,2}`;
+/**
+ * Eslatmadan OLDIN — dostavka tarifi: "Dostavka: Toshkent 20 000",
+ * "Dostavka Toshkent bo'ylab 20 ming".
+ */
+const DELIVERY_TARIFF_BEFORE_RE = new RegExp(
+  L + String.raw`(?:${DELIVERY_WORDS})\s*:?\s*${PLACE_WORDS}` + SEP_END,
+  'iu',
+);
+/**
+ * Tarif davomi: oldingi eslatma (shu qatorda) dostavka, oraliqda faqat
+ * ", viloyatlarga " / " / viloyat " — bu ham dostavka.
+ */
+const TARIFF_CONTINUATION_RE = new RegExp(
+  String.raw`^\s*(?:${CURRENCY_SRC}|sum)?\s*[,/;]\s*${PLACE_WORDS}` + SEP_END,
+  'iu',
+);
+/**
+ * Dostavka OLDINGI jami ichida: "shundan dostavka 20 ming", "shu jumladan
+ * dostavka", "включая доставку", "в т.ч. доставка", "в том числе доставка".
+ */
+const DELIVERY_INCLUDED_BEFORE_RE = new RegExp(
+  L +
+    String.raw`(?:shundan|jumladan|ichida|включая|в\s+т\.?\s*ч\.?|в\s+том\s+числе)\s*` +
+    String.raw`(?:${DELIVERY_WORDS})(?:\s+(?:narxi|puli|haqqi|стоимость))?` +
+    SEP_END,
+  'iu',
+);
+/** "(dostavka 20 000 bilan)" — summa jami ichida. */
+const DELIVERY_INCLUDED_AFTER_RE = new RegExp(
+  CUR_OPT + String.raw`(?:bilan|билан)(?!\p{L})`,
+  'iu',
+);
+/** Eslatmadan KEYIN — inkor ("180 ming emas 150 ming") — eslatma tashlanadi. */
+const NEGATED_AFTER_RE = new RegExp(
+  CUR_OPT + String.raw`(?:emas|эмас)(?!\p{L})`,
   'iu',
 );
 /**
@@ -148,10 +205,16 @@ const TOTAL_BEFORE_RE = new RegExp(
     SEP_END,
   'iu',
 );
-/** Eslatmadan KEYIN — jami ("210 000 jami", "150 ming dostavka bilan"). */
+/**
+ * Eslatmadan KEYIN — jami ("210 000 jami", "150 ming dostavka bilan").
+ * "150 ming dostavka bilan jami 170 ming" / "... dostavka bilan 170" —
+ * keyin son kelsa 150 ming jami EMAS (mahsulot narxi).
+ */
 const TOTAL_AFTER_RE = new RegExp(
   CUR_OPT +
-    String.raw`(?:(?:jami|итого|всего)(?!\p{L})|(?:dostavka|dastavka)(?:si)?\s+bilan|с\s+доставкой)`,
+    String.raw`(?:(?:jami|итого|всего)(?!\p{L})|` +
+    String.raw`(?:(?:dostavka|dastavka)(?:si)?\s+bilan|с\s+доставкой)` +
+    String.raw`(?!\s*(?:jami|итого|всего)?\s*[:\-–=]?\s*\d))`,
   'iu',
 );
 /** Eslatmadan OLDIN — dona narxi. */
@@ -178,9 +241,24 @@ const ALT_BEFORE_RE = new RegExp(
   String.raw`(?:\d|ming|минг|mln|млн|k|к|тыс|${CURRENCY_SRC})\s*(?:[-–—/]|yoki|или|ёки)\s*$`,
   'iu',
 );
-/** Matnda chegirma yoki eski/yangi narx — narx noaniq. */
-const AMBIGUOUS_TEXT_RE =
-  /(?:^|[^\p{L}])(?:skidka\p{L}*|chegirma\p{L}*|скидк\p{L}*|aksiya\p{L}*|акци\p{L}*|eski\s+narx\p{L}*|yangi\s+narx\p{L}*|стар\p{L}*\s+цен\p{L}*|нов\p{L}*\s+цен\p{L}*)/iu;
+/**
+ * Chegirma yoki eski/yangi narx so'zi — narx noaniq, LEKIN faqat so'z pul
+ * eslatmasiga yaqin (≤ `AMBIGUOUS_NEAR` belgi) bo'lsa yoki matnda kamida
+ * ikki xil mahsulot summasi bo'lsa. Shablon footer'idagi "Aksiya!" yolg'iz
+ * narxli buyurtmada mismatch tekshiruvini o'chirmaydi.
+ */
+const AMBIGUOUS_WORD_RE =
+  /(?<!\p{L})(?:skidka\p{L}*|chegirma\p{L}*|скидк\p{L}*|aksiya\p{L}*|акци\p{L}*|eski\s+narx\p{L}*|yangi\s+narx\p{L}*|стар\p{L}*\s+цен\p{L}*|нов\p{L}*\s+цен\p{L}*)/giu;
+const AMBIGUOUS_NEAR = 40;
+
+/** Telefon: "+" dan keyingi raqamlar ("+7 999 123 45 67", "+998 90 1234 567"). */
+const AFTER_PLUS_RE = /\+[\d \-().]*$/;
+/** Telefon so'zi ("tel 901 234 567", "raqam: ..."). */
+const PHONE_WORD_BEFORE_RE =
+  /(?:^|[^\p{L}])(?:tel|telefon|raqam\p{L}*|nomer\p{L}*|тел|телефон|номер|рақам\p{L}*)\.?\s*[:-]?\s*$/iu;
+/** 3-3-3 guruhli 9 raqam, UZ operator kodi bilan boshlanadi. */
+const UZ_PHONE_333_RE =
+  /^(?:20|33|5[05]|6[1-9]|7\d|88|9[013-57-9])\d[ .-]\d{3}[ .-]\d{3}$/;
 
 /** Eslatmadan oldingi matn — faqat shu qatorda, ≤ 30 belgi. */
 function lineBefore(text: string, start: number): string {
@@ -217,8 +295,10 @@ export function extractMoneyMentionsDetailed(
   text: string | null | undefined,
 ): MoneyMention[] {
   if (typeof text !== 'string' || !text) return [];
-  const ambiguousText = AMBIGUOUS_TEXT_RE.test(text);
   const out: MoneyMention[] = [];
+  /** `out` bilan parallel: matndagi [boshi, oxiri). */
+  const spans: [number, number][] = [];
+  let rangeEnd = false;
   for (const m of text.matchAll(AMOUNT_RE)) {
     const [whole, numRaw0, multRaw, caseRaw, extraRaw, suffixRaw] = m;
     const start = m.index ?? 0;
@@ -227,6 +307,15 @@ export function extractMoneyMentionsDetailed(
     if (/^(ta|dona|шт|x|х)$/.test(suffix)) continue;
     const before = lineBefore(text, start);
     if (FOREIGN_BEFORE_RE.test(before)) continue;
+    // Telefon: "+" dan keyin yoki "tel 901 234 567" (ai-service faqat
+    // 2-3-2-2 / yaxlit UZ raqamini maskalaydi).
+    if (AFTER_PLUS_RE.test(before)) continue;
+    if (
+      UZ_PHONE_333_RE.test(numRaw0.trim()) &&
+      PHONE_WORD_BEFORE_RE.test(before)
+    ) {
+      continue;
+    }
     const mult = multRaw
       ? (MULT.find(([re]) => re.test(multRaw))?.[1] ?? 1)
       : 1;
@@ -252,13 +341,90 @@ export function extractMoneyMentionsDetailed(
     if (mult === 1_000_000 && extraRaw) value += Number(extraRaw) * 1_000;
     value = Math.round(value);
     if (value < 1_000 || value > 10_000_000_000) continue;
-    const after = lineAfter(text, start + whole.length);
-    const dan = !!caseRaw && /^(dan|дан)$/i.test(caseRaw);
-    const mention: MoneyMention = { value, kind: kindOf(before, after, dan) };
-    if (ambiguousText || ALT_BEFORE_RE.test(before)) mention.ambiguous = true;
+    const end = start + whole.length;
+    const after = lineAfter(text, end);
+    // "180 ming emas 150 ming" — inkor qilingan summa tashlanadi.
+    if (NEGATED_AFTER_RE.test(after)) continue;
+    const caseWord = (caseRaw ?? '').toLowerCase();
+    const dan = caseWord === 'dan' || caseWord === 'дан';
+    // "120 mingdan 150 minggacha" — oraliq.
+    if (caseWord === 'gacha' || caseWord === 'гача') rangeEnd = true;
+    let kind = kindOf(before, after, dan);
+    if (kind === null && DELIVERY_TARIFF_BEFORE_RE.test(before)) {
+      kind = 'delivery';
+    }
+    // Tarif davomi: "Toshkent 20 000, viloyatlarga 35 000".
+    const prev = out.length - 1;
+    if (kind === null && prev >= 0 && out[prev].kind === 'delivery') {
+      const gap = text.slice(spans[prev][1], start);
+      if (!/[\r\n]/.test(gap) && TARIFF_CONTINUATION_RE.test(gap)) {
+        kind = 'delivery';
+      }
+    }
+    const mention: MoneyMention = { value, kind };
+    if (
+      kind === 'delivery' &&
+      (DELIVERY_INCLUDED_BEFORE_RE.test(before) ||
+        DELIVERY_INCLUDED_AFTER_RE.test(after))
+    ) {
+      mention.included = true;
+    }
+    if (ALT_BEFORE_RE.test(before)) mention.ambiguous = true;
     out.push(mention);
+    spans.push([start, end]);
   }
+  if (rangeEnd || ambiguousWordApplies(text, out, spans)) {
+    for (const m of out) m.ambiguous = true;
+  }
+  markStatedCounts(text, out);
   return out;
+}
+
+/**
+ * Chegirma / eski-yangi narx so'zi narxni noaniq qiladimi: so'z biror
+ * eslatmadan ≤ `AMBIGUOUS_NEAR` belgi uzoqlikda (bo'sh qator orqali emas)
+ * yoki kamida ikki xil mahsulot (dostavka / oldindan to'lov emas) summasi
+ * bor.
+ */
+function ambiguousWordApplies(
+  text: string,
+  mentions: readonly MoneyMention[],
+  spans: readonly [number, number][],
+): boolean {
+  const words = [...text.matchAll(AMBIGUOUS_WORD_RE)];
+  if (!words.length || !mentions.length) return false;
+  const goods = new Set(
+    mentions
+      .filter((m) => m.kind !== 'delivery' && m.kind !== 'prepaid')
+      .map((m) => m.value),
+  );
+  if (goods.size >= 2) return true;
+  return words.some((w) => {
+    const ws = w.index ?? 0;
+    const we = ws + w[0].length;
+    return spans.some(([s, e]) => {
+      if (ws - e > AMBIGUOUS_NEAR || s - we > AMBIGUOUS_NEAR) return false;
+      // Bo'sh qator (alohida paragraf — shablon footer'i) orqali emas.
+      const gap = text.slice(Math.min(e, we), Math.max(s, ws));
+      return !/\n[ \t]*\r?\n/.test(gap);
+    });
+  });
+}
+
+/** "televizor 2 ta 2 mln" — eslatma qismi (2–10) miqdor sifatida aytilgan. */
+function markStatedCounts(text: string, mentions: MoneyMention[]): void {
+  for (const m of mentions) {
+    for (const unit of [1_000, 1_000_000]) {
+      const q = m.value / unit;
+      if (!Number.isInteger(q) || q < 2 || q > 10) continue;
+      const re = new RegExp(
+        String.raw`(?<![\p{N}.,])${q}\s*(?:ta|dona|шт|x|х)(?![\p{L}\p{N}])|` +
+          String.raw`(?<![\p{L}\p{N}])(?:x|х)\s*${q}(?![\p{N}.,])`,
+        'iu',
+      );
+      if (re.test(text)) m.count_stated = true;
+    }
+  }
 }
 
 /** Faqat qiymatlar (so'mda), takrorlari bilan. */
@@ -370,24 +536,36 @@ function acceptedTotals(
   const firstDelivery = list.findIndex((m) => m.kind === 'delivery');
   if (firstDelivery < 0) return goodsSet;
   const deliveries = list
-    .filter((m) => m.kind === 'delivery')
+    .filter((m) => m.kind === 'delivery' && !m.included)
     .map((m) => m.value);
-  const deliverySum = deliveries.reduce((a, b) => a + b, 0);
+  // Bir nechta dostavka summasi — tarif ro'yxati ("Toshkent 20 000,
+  // viloyatlarga 35 000"): har biri ALOHIDA, yig'indisi emas.
   const withDelivery = (v: number, out: Set<number>) => {
-    out.add(v + deliverySum);
-    // Bir nechta tarif sanalgan ("Toshkentga 20 ming, viloyatga 30 ming").
-    if (deliveries.length > 1) for (const d of deliveries) out.add(v + d);
+    if (!deliveries.length) out.add(v);
+    for (const d of deliveries) out.add(v + d);
   };
   const out = new Set<number>();
   if (goods.some((m) => m.kind === 'total')) {
     list.forEach((m, i) => {
       if (m.kind !== 'total') return;
-      if (i > firstDelivery) out.add(m.value);
+      // "Jami 170 000 (dostavka 20 000 bilan)" — dostavka jami ichida.
+      const includedAfter = list
+        .slice(i + 1)
+        .some((d) => d.kind === 'delivery' && d.included);
+      if (i > firstDelivery || includedAfter) out.add(m.value);
       else withDelivery(m.value, out);
     });
     return out;
   }
-  for (const v of goodsSet) withDelivery(v, out);
+  // Jamisiz "atir 150 ming (dostavka 20 ming bilan)" — 150 ming dostavka
+  // bilanmi yoki unga qo'shiladimi, aniq emas: ikkalasi ham qabul.
+  const included = list
+    .filter((m) => m.kind === 'delivery' && m.included)
+    .map((m) => m.value);
+  for (const v of goodsSet) {
+    withDelivery(v, out);
+    for (const d of included) out.add(v).add(v + d);
+  }
   return out;
 }
 
@@ -442,6 +620,12 @@ export function priceDerivableFromMentions(
  * `qty_check`: miqdor narx eslatmasining minglik / millionlik qismiga teng
  * ("150 ming" → quantity 150, "2 mln" → quantity 2) — model narxni miqdor
  * deb o'qigan bo'lishi mumkin. Miqdor 1 bo'lsa tekshirilmaydi.
+ *
+ * E'tiborsiz: oldindan to'lov, dona narxi ("2 ta televizor 2 mln dan",
+ * "donasi 3 mln" — dona narxi miqdorga teng bo'lishi tabiiy) va miqdori
+ * matnda aniq aytilgan eslatma (`count_stated`: "televizor 2 ta 2 mln").
+ * 10 dan katta miqdor ("150 ming" → 150) preview'da limit bilan baribir
+ * belgilanadi.
  */
 export function quantityLooksLikeMoney(
   quantity: number,
@@ -451,6 +635,8 @@ export function quantityLooksLikeMoney(
   return toMentions(mentions).some(
     (m) =>
       m.kind !== 'prepaid' &&
+      m.kind !== 'unit' &&
+      !m.count_stated &&
       (m.value === quantity * 1_000 || m.value === quantity * 1_000_000),
   );
 }

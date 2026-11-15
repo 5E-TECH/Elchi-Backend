@@ -1,0 +1,27 @@
+{
+  "id": "price-total-includes-delivery",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Nodira 93 000 45 67 Xorazm Urganch, sumka 1 ta. Jami 170 000 (dostavka 20 000 bilan)"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Nodira",
+        "phone_number": "+998930004567",
+        "region_name": "Xorazm",
+        "district_name": "Urganch",
+        "items": [
+          {
+            "name": "sumka",
+            "quantity": 1
+          }
+        ],
+        "total_price": 170000
+      }
+    ]
+  }
+}

@@ -125,6 +125,17 @@ describe('PR #649 sharhi — ekstraktor', () => {
     ['soat 150 000 sumkasi bilan', [150000]],
     // Takrorlar saqlanadi (ikki mahsulot).
     ['atir 150 ming, krem 150 ming', [150000, 150000]],
+    // 3-davra S5: guruh raqam bilan chegaralangan; telefonlar.
+    ['tel 901 234 567 atir 150 000', [150000]],
+    ['raqam: 931 234 567, atir 150 000', [150000]],
+    ['+998 90 1234 567', []],
+    ["1 2345 so'm", [2345]],
+    ['150 0000', []],
+    ['+7 999 123 45 67', []],
+    ['muzlatgich 901 234 567', [901234567]],
+    // S11: inkor qilingan summa tashlanadi.
+    ['180 ming emas 150 ming', [150000]],
+    ['180 ming эмас, 150 ming', [150000]],
   ])('%s → %j', (text, want) => {
     expect(extractMoneyMentions(text)).toEqual(want);
   });
@@ -156,6 +167,11 @@ describe('PR #649 sharhi — ekstraktor', () => {
     ["150 000 so'mdan", 'unit'],
     ['har biri 90 ming', 'unit'],
     ['за штуку 90 тыс', 'unit'],
+    // 3-davra S11: to'lov so'zlari.
+    ["50 ming click orqali o'tkazdi", 'prepaid'],
+    ["50 ming kartaga o'tkazdim", 'prepaid'],
+    ['оплачено 50 000', 'prepaid'],
+    ['qolgan 100 ming', 'prepaid'],
   ])('%s → %s', (text, kind) => {
     expect(extractMoneyMentionsDetailed(text)[0]?.kind).toBe(kind);
   });
@@ -188,6 +204,31 @@ describe('PR #649 sharhi — ekstraktor', () => {
     const list = extractMoneyMentionsDetailed(text);
     expect(list.length).toBeGreaterThan(0);
     expect(list.some((m) => m.ambiguous)).toBe(true);
+  });
+
+  it.each([
+    // 3-davra S8: chegirma so'zi summaga yaqin yoki ikki xil summa.
+    ['atir 150 ming aksiya narxida'],
+    [
+      'atir 150 ming, krem 80 ming\n\n\n\n\nAksiya davom etmoqda, kanalga obuna bo‘ling!',
+    ],
+    // S11: "...dan ...gacha" — oraliq.
+    ['120 mingdan 150 minggacha'],
+  ])('%j — noaniq narx (3-davra)', (text) => {
+    expect(extractMoneyMentionsDetailed(text).some((m) => m.ambiguous)).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    [
+      'atir 150 ming\nAsaka\n\n\nAksiya! Har hafta yangi mahsulotlar, kanalga obuna',
+    ],
+    ['Skidkalar kanalimizda! ________________________________\natir 150 ming'],
+  ])('%j — uzoqdagi yolg‘iz "aksiya" noaniq emas', (text) => {
+    const list = extractMoneyMentionsDetailed(text);
+    expect(list.length).toBe(1);
+    expect(list.some((m) => m.ambiguous)).toBe(false);
   });
 
   it('oddiy narx noaniq emas', () => {
@@ -309,7 +350,111 @@ const CORPUS: [string, number[], number[], number[]][] = [
   // Sanalar, telefon tokenlari, dollar — eslatma emas.
   ['[TEL_1] Asaka 2026-yil, atir 150 ming', [1], [150000], [2026000]],
   ['soat $1 200', [1], [1200, 15000000], []],
+  // 3-davra S1: jami dostavkadan OLDIN, lekin dostavka jami ichida.
+  ['Jami 170 000 (dostavka 20 000 bilan)', [1], [170000], [190000, 150000]],
+  ['Jami 170 ming, shundan dostavka 20 ming', [1], [170000], [190000]],
+  ['Итого 170 000, включая доставку 20 000', [1], [170000], [190000]],
+  [
+    "Umumiy summa: 170 000 so'm (shu jumladan dostavka 20 000)",
+    [1],
+    [170000],
+    [190000],
+  ],
+  ['Итого 170 тыс, в т.ч. доставка 20 тыс', [1], [170000], [190000]],
+  // Jamisiz "dostavka ... bilan" — ikkala talqin ham qabul.
+  [
+    'atir 150 ming (dostavka 20 ming bilan)',
+    [1],
+    [150000, 170000],
+    [190000, 130000],
+  ],
+  // Ichida emas — avvalgidek jami + dostavka.
+  ['jami 150 ming, dostavka 20 ming', [1], [170000], [150000]],
+  // S2: dostavka tarifi footer'i — har tarif alohida, yig'indisi emas.
+  [
+    'atir 150 000\nDostavka: Toshkent 20 000, viloyatlarga 35 000',
+    [1],
+    [170000, 185000],
+    [150000, 205000],
+  ],
+  [
+    "atir 150 000\nDostavka Toshkent bo'ylab 20 000, viloyatlarga 35 000",
+    [1],
+    [170000, 185000],
+    [150000, 205000],
+  ],
+  [
+    'atir 150 000\nDostavka Toshkent 20 ming / viloyat 35 ming',
+    [1],
+    [170000, 185000],
+    [150000, 205000],
+  ],
+  // S3: "dostavka bilan" dan keyin son — oldingi summa jami emas.
+  ['atir 150 ming dostavka bilan jami 170 ming', [1], [170000], [150000]],
+  ['atir 150 ming dostavka bilan 170 ming', [1], [170000], [150000]],
+  // S5: telefon raqamlari pul emas.
+  ['tel 901 234 567 atir 150 000', [1], [150000], [901234567]],
+  ['+998 90 1234 567 atir 150 ming', [1], [150000], [90123000]],
+  ['+7 999 123 45 67, atir 150 ming', [1], [150000], [999123]],
+  // S8: shablon footer'idagi "Aksiya" — narx noaniq EMAS.
+  [
+    'atir 150 ming\nAsaka\n\n🔥 Aksiya! Har hafta yangi mahsulotlar 🔥',
+    [1],
+    [150000],
+    [15000],
+  ],
+  // S11: oraliq "...dan ...gacha", inkor "emas", to'lov so'zlari.
+  ['120 mingdan 150 minggacha', [1], [120000, 150000, 1000], []],
+  ['180 ming emas 150 ming', [1], [150000], [180000, 330000]],
+  [
+    "atir 150 ming, 50 ming click orqali o'tkazdi",
+    [1],
+    [150000],
+    [100000, 200000],
+  ],
+  ['atir 150 000, оплачено 50 000', [1], [150000], [100000, 200000]],
+  ['atir 150 ming, qolgan 100 ming', [1], [150000], [250000]],
 ];
+
+describe('3-davra — dostavka jami ichida / tarif', () => {
+  it.each([
+    ['Jami 170 000 (dostavka 20 000 bilan)', [170000, 20000]],
+    ['Jami 170 ming, shundan dostavka 20 ming', [170000, 20000]],
+    ['Итого 170 000, включая доставку 20 000', [170000, 20000]],
+  ])('%s — included', (text, values) => {
+    const list = extractMoneyMentionsDetailed(text);
+    expect(list.map((m) => m.value)).toEqual(values);
+    expect(list[0].kind).toBe('total');
+    expect(list[1]).toMatchObject({ kind: 'delivery', included: true });
+  });
+
+  it('oddiy dostavka included emas', () => {
+    expect(
+      extractMoneyMentionsDetailed('jami 150 ming, dostavka 20 ming')[1]
+        ?.included,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ['Dostavka: Toshkent 20 000, viloyatlarga 35 000'],
+    ["Dostavka Toshkent bo'ylab 20 000, viloyatlarga 35 000"],
+    ['Dostavka Toshkent 20 ming / viloyat 35 ming'],
+    ['Доставка по Ташкенту 20 000, по области 35 000'],
+  ])('%s — ikkala tarif dostavka', (text) => {
+    expect(extractMoneyMentionsDetailed(text).map((m) => m.kind)).toEqual([
+      'delivery',
+      'delivery',
+    ]);
+  });
+
+  it('dostavkadan keyingi boshqa qatordagi summa — tarif davomi emas', () => {
+    expect(
+      extractMoneyMentionsDetailed(
+        'Dostavka Toshkent 20 000\nviloyat 35 000',
+      )[1]?.kind,
+    ).toBeNull();
+  });
+});
 
 describe('PR #649 korpus — qaror', () => {
   it.each(CORPUS)('%s (miqdor %j)', (text, qtys, accept, flag) => {
@@ -363,6 +508,14 @@ describe('quantityLooksLikeMoney (qty_check)', () => {
     ['atir 150 ming', 1, false],
     ['atir 2 ta 150 ming', 2, false],
     ['oldindan 5 ming', 5, false],
+    // 3-davra S4: dona narxi yoki miqdor matnda aniq — to'g'ri miqdor.
+    ['2 ta televizor 2 mln dan', 2, false],
+    ['3 ta konditsioner, donasi 3 mln', 3, false],
+    ['5 ta ruchka 5 mingdan, dostavka 20 ming', 5, false],
+    ['televizor 2 ta, jami 2 mln', 2, false],
+    ['konditsioner x3 3 mln', 3, false],
+    // Miqdor aytilmagan — shubhali.
+    ['konditsioner 3 mln', 3, true],
   ])('%s, quantity %d', (text, qty, want) => {
     expect(
       quantityLooksLikeMoney(qty, extractMoneyMentionsDetailed(text)),

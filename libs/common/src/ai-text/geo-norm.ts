@@ -358,11 +358,36 @@ const REGION_WORD_AFTER = new Set([
   'oblast',
   'oblasti',
 ]);
-/** Butun so'z qisqartmalari → SOATO. */
+/** Butun so'z qisqartmalari → SOATO ("РК" translit'dan keyin "rk"). */
 const REGION_ABBREVIATIONS: Readonly<Record<string, string>> = {
   qr: '1735',
   qqr: '1735',
+  rk: '1735',
 };
+/**
+ * So'z boshi (o'zak) → SOATO: "Qoraqalpoq", "Qoraqalpoqqa" — asosdan
+ * (qoraqalpogiston) "q/g" bilan farq qiladi, prefiks qoidasi topmaydi.
+ */
+const REGION_STEMS: ReadonlyArray<[string, string]> = [
+  ['qoraqalpoq', '1735'],
+  ['karakalpak', '1735'],
+];
+/** "Т.обл" / "T.vil" — Toshkent viloyati; "T.sh" — Toshkent shahri. */
+const TOSHKENT_T_NEXT: Readonly<Record<string, string>> = {
+  obl: TOSHKENT_REGION_SATO,
+  oblast: TOSHKENT_REGION_SATO,
+  vil: TOSHKENT_REGION_SATO,
+  viloyat: TOSHKENT_REGION_SATO,
+  viloyati: TOSHKENT_REGION_SATO,
+  sh: TOSHKENT_CITY_SATO,
+  shahri: TOSHKENT_CITY_SATO,
+  shahar: TOSHKENT_CITY_SATO,
+};
+/**
+ * XOM matnda nuqta bilan tugagan qisqartma ("Sam.", "Nam.", "Бух.") —
+ * `lightNorm` tinish belgisini olib tashlashidan OLDIN qidiriladi.
+ */
+const DOTTED_ABBR_RE = /(?<![\p{L}\p{N}])(\p{L}{3,})\./gu;
 
 function commonPrefixLength(a: string, b: string): number {
   let i = 0;
@@ -377,10 +402,15 @@ function isSubsequence(short: string, long: string): boolean {
 }
 
 /**
- * #649 review: qisqartma shakllar ("Sam. vil.", "Farg. vil.", "Qashqa",
- * "Surxon", "Andj", "QR", "Сырдарьинская обл") ham "aytilgan" hisoblanadi.
- * Ortiqcha "aytilgan" — xavfsiz tomon: viloyat almashtirilmaydi (checklist
- * #1), operator yozgan viloyat saqlanadi.
+ * #649 review: qisqartma shakllar ("Sam. vil.", "Sam. Xonobod", "Nam.",
+ * "Farg. vil.", "Qashqa", "Surxon", "Andj", "QR", "РК", "Т.обл", "T.sh",
+ * "Qoraqalpoq", "Сырдарьинская обл") ham "aytilgan" hisoblanadi.
+ *
+ * ⚠️ Ortiqcha "aytilgan" — XAVFSIZ tomon: viloyat almashtirilmaydi
+ * (checklist #1, D4), operator yozgan viloyat saqlanadi. Shu bois
+ * "Samar opa", "Tosh. ko'cha", "Qr kod" kabi tasodifiy mosliklar qabul
+ * qilinadi; aksincha, topilmagan qisqartma D4 almashtirishini yoqib,
+ * operator viloyatini bekor qilishi mumkin (xavfli tomon).
  */
 function regionAbbreviationInText(
   text: string | null | undefined,
@@ -394,9 +424,35 @@ function regionAbbreviationInText(
     .filter(Boolean);
   if (!raw.length) return false;
   if (sato && raw.some((t) => REGION_ABBREVIATIONS[t] === sato)) return true;
+  if (
+    sato &&
+    raw.some((t) =>
+      REGION_STEMS.some(([s, v]) => v === sato && t.startsWith(s)),
+    )
+  ) {
+    return true;
+  }
+  if (
+    sato &&
+    raw.some((t, i) => t === 't' && TOSHKENT_T_NEXT[raw[i + 1] ?? ''] === sato)
+  ) {
+    return true;
+  }
   const bases = baseSets
     .filter((seq) => seq.length === 1 && seq[0].length >= 5)
     .map((seq) => seq[0]);
+  // "Sam. Xonobod": ≥ 3 harfli asos prefiksi + nuqta (xom matnda).
+  for (const m of (typeof text === 'string' ? text : '').matchAll(
+    DOTTED_ABBR_RE,
+  )) {
+    const t = lightNorm(m[1]);
+    if (
+      t.length >= 3 &&
+      bases.some((b) => b.length > t.length && b.startsWith(t))
+    ) {
+      return true;
+    }
+  }
   return raw.some((t, i) => {
     if (t.length < 3 || !/^\p{L}+$/u.test(t)) return false;
     const regionWordNext = REGION_WORD_AFTER.has(raw[i + 1] ?? '');

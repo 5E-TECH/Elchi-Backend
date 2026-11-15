@@ -163,6 +163,12 @@ function moneyMentionsOf(value: unknown): MoneyMention[] {
       ...((m as { ambiguous?: unknown })?.ambiguous === true
         ? { ambiguous: true as const }
         : {}),
+      ...((m as { included?: unknown })?.included === true
+        ? { included: true as const }
+        : {}),
+      ...((m as { count_stated?: unknown })?.count_stated === true
+        ? { count_stated: true as const }
+        : {}),
     });
   }
   return out;
@@ -538,7 +544,8 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
         mentions: mentionValues,
       });
     }
-    // Miqdor > 10 yoki narxning ming/mln qismi ("150 ming" → quantity 150).
+    // Miqdor > 10 yoki narxning ming/mln qismi ("150 ming" → quantity 150;
+    // dona narxi va matnda aniq aytilgan miqdor — e'tiborsiz).
     items.forEach((it, i) => {
       if (
         it.quantity > AI_QTY_CHECK_LIMIT ||

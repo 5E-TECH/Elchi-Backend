@@ -118,6 +118,10 @@ export interface RawOrderExtraction {
     value: number;
     kind: 'unit' | 'total' | 'delivery' | 'prepaid' | null;
     ambiguous?: true;
+    /** Dostavka oldingi jami ichida ("shundan dostavka 20 ming"). */
+    included?: true;
+    /** Ming/mln qismi (2–10) matnda miqdor sifatida aytilgan ("2 ta"). */
+    count_stated?: true;
   }[];
 }
 

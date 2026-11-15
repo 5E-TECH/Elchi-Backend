@@ -8,8 +8,10 @@
  */
 import { Logger } from '@nestjs/common';
 import {
+  extractMoneyMentionsDetailed,
   maskPhones,
   normGeo,
+  priceMismatchesMentions,
   normalizeUzPhone,
   regionAlias,
 } from '@app/common';
@@ -121,6 +123,25 @@ describe('J3hEDtFN eval to‘plami (fixtures)', () => {
       if (rec?.source !== 'seed') continue;
       expect(rec.response).toEqual(buildSeedRecording(f).response);
     }
+  });
+});
+
+describe('#649 price_check — eval korpusida soxta ogohlantirish yo‘q', () => {
+  it('bitta buyurtmali fixture: kutilgan total_price matndagi eslatmalarga mos', () => {
+    const flagged: string[] = [];
+    for (const f of fixtures) {
+      if (f.expected.orders.length !== 1) continue;
+      const o = f.expected.orders[0];
+      if (o.total_price == null) continue;
+      const mentions = extractMoneyMentionsDetailed(
+        maskPhones(f.input.text).masked,
+      );
+      const qtys = (o.items ?? []).map((it) => it.quantity ?? 1);
+      if (priceMismatchesMentions(o.total_price, mentions, qtys)) {
+        flagged.push(f.id);
+      }
+    }
+    expect(flagged).toEqual([]);
   });
 });
 
