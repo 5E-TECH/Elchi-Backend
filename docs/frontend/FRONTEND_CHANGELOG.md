@@ -34,6 +34,7 @@ Shartnoma v0.3 §9, §11, §12. Deploy: api-gateway + ai-service (+ notification
 - ✏️ (review round-2) `ai.advisor_alert` — `priority: critical` bo'lsa ham **SMS eskalatsiyasi YO'Q** (reyestr `escalation: false`): faqat `in_app` + `realtime` (+ Telegram sozlamaga ko'ra, R7 — yo'q).
 - 🟢 `/activity-logs` `ai` oyog'i 3 s timeout bilan (AI band bo'lsa — `failed_services: ["ai"]`, qolgan jurnal kutmaydi); swagger `service` enum'iga `ai` qo'shildi.
 - 🟢 Faqat **faol** superadminlarga yuboriladi; 24 soatdan eski (birinchi aniqlangan) ogohlantirish bildirishnomasiz qoladi (ro'yxatda ko'rinadi).
+- ✏️ (ega, 2026-11-15) R6 zarar ogohlantirishi tunda (02:30) ochilsa — ilova ichida (`notification:new`, realtime) darhol, **Telegram esa Toshkent 09:00 da** (o'sha kun; 09:00 dan keyin ochilgan — darhol). 09:00 gacha hal qilingan / ahamiyatsiz — Telegram ketmaydi. Migratsiya 229 (`telegram_due_at`, REST'da yo'q).
 **Frontend action items:**
 - 🔧 `ACTIVITY_SERVICES` ga `"ai"` + filtr yorlig'i (uz/ru/en).
 - 🔧 `notification:new` `type === "ai.advisor_alert"` — doimiy toast (`duration: 0`) + `overview`/ro'yxat bekor qilish; `ai.advisor.alert_changed` — invalidatsiya.

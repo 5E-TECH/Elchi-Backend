@@ -13,6 +13,7 @@ import {
   rmqSend,
   type AiAdvisorRuleKey,
   type AiAdvisorRulesSettings,
+  startOfTashkentDay,
 } from '@app/common';
 import { AdvisorSettingsService } from './advisor-settings.service';
 import { formatDay, formatRatio, formatSom, r7Sentence } from './advisor-text';
@@ -34,6 +35,8 @@ import { returnedRows } from './advisor-sql';
  * - Matnda AI matni va PII yo'q (karta — faqat `*_last4`, ism yo'q).
  */
 export const ADVISOR_NOTIFY_TYPE = 'ai.advisor_alert';
+/** R6 Telegram'i shu soatdan (Toshkent) oldin yuborilmaydi. */
+export const ADVISOR_R6_TELEGRAM_HOUR = 9;
 /** Shundan eski ogohlantirish bildirishnomasiz qoladi (soat). */
 export const ADVISOR_NOTIFY_MAX_AGE_HOURS = 24;
 /** Dispatch qulfi (qoidalar tick qulflari 716000000224/225 dan alohida). */
@@ -157,6 +160,12 @@ export function buildAdvisorDispatch(
     rules: AiAdvisorRulesSettings;
     telegramEnabled: boolean;
     cabinetUrl?: string | null;
+    /**
+     * `default` — ilova + (ruxsat bo'lsa) Telegram; `no_telegram` — Telegram
+     * kechiktirilgan (R6 tunda); `telegram_only` — kechiktirilgan Telegram
+     * yo'nalishi (alohida `client_request_id`).
+     */
+    mode?: 'default' | 'no_telegram' | 'telegram_only';
   },
 ): AdvisorDispatchPayload | null {
   const recipients = [
@@ -164,9 +173,11 @@ export function buildAdvisorDispatch(
   ];
   if (!recipients.length) return null;
   const facts = row.facts ?? {};
-  const channels = ['in_app', 'realtime'];
-  if (input.telegramEnabled && input.rules[row.rule_key]?.telegram !== false)
-    channels.push('telegram');
+  const mode = input.mode ?? 'default';
+  const telegram = advisorTelegramAllowed(row.rule_key, input);
+  const channels = mode === 'telegram_only' ? [] : ['in_app', 'realtime'];
+  if (telegram && mode !== 'no_telegram') channels.push('telegram');
+  if (!channels.length) return null;
   const link = `${WEB_ROUTES.aiAssistant}?tab=alerts&alert=${row.id}`;
   const variant =
     row.rule_key === 'R7'
@@ -185,7 +196,11 @@ export function buildAdvisorDispatch(
     body: advisorNotifyBody(row.rule_key, facts) || row.title,
     link,
     group_key: `ai.advisor_alert:${row.id}`,
-    client_request_id: deterministicUuid(`ai-advisor-alert:${row.id}`),
+    client_request_id: deterministicUuid(
+      mode === 'telegram_only'
+        ? `ai-advisor-alert:${row.id}:tg`
+        : `ai-advisor-alert:${row.id}`,
+    ),
     data: {
       alert_id: row.id,
       rule_key: row.rule_key,
@@ -203,6 +218,29 @@ export function buildAdvisorDispatch(
       ],
     },
   };
+}
+
+/** `settings.telegram.enabled` VA `rules.<R>.telegram` (§9.2). */
+export function advisorTelegramAllowed(
+  rule: AiAdvisorRuleKey,
+  input: { rules: AiAdvisorRulesSettings; telegramEnabled: boolean },
+): boolean {
+  return input.telegramEnabled && input.rules[rule]?.telegram !== false;
+}
+
+/**
+ * R6 (ega, 2026-11-15): tunda ochilgan zarar ogohlantirishi — Telegram
+ * Toshkent 09:00 da (o'sha kun). 09:00 dan keyin — darhol (`null`).
+ */
+export function r6TelegramDueAt(
+  rule: AiAdvisorRuleKey,
+  now: Date,
+): Date | null {
+  if (rule !== 'R6') return null;
+  const nine = new Date(
+    startOfTashkentDay(now).getTime() + ADVISOR_R6_TELEGRAM_HOUR * 3600_000,
+  );
+  return now < nine ? nine : null;
 }
 
 @Injectable()
@@ -259,7 +297,9 @@ export class AdvisorNotifier {
    * dispatch ikki marta yuborilmaydi — alohida advisory qulf (round-2 S1).
    * Qulf olinmasa — shu tick o'tkaziladi (boshqasi yuboryapti).
    */
-  async dispatchPending(): Promise<{ sent: number; failed: number }> {
+  async dispatchPending(
+    now: Date = new Date(),
+  ): Promise<{ sent: number; failed: number }> {
     const runner = this.ds.createQueryRunner();
     let locked = false;
     try {
@@ -270,7 +310,9 @@ export class AdvisorNotifier {
       )) as Array<{ ok: boolean }>;
       locked = row?.ok === true;
       if (!locked) return { sent: 0, failed: 0 };
-      return await this.dispatchBatch();
+      const main = await this.dispatchBatch(now);
+      const tg = await this.dispatchDeferredTelegram(now);
+      return { sent: main.sent + tg.sent, failed: main.failed + tg.failed };
     } finally {
       if (locked) {
         await runner
@@ -283,7 +325,9 @@ export class AdvisorNotifier {
     }
   }
 
-  private async dispatchBatch(): Promise<{ sent: number; failed: number }> {
+  private async dispatchBatch(
+    now: Date,
+  ): Promise<{ sent: number; failed: number }> {
     const out = { sent: 0, failed: 0 };
     // 24 soatdan eski (birinchi aniqlangan) ogohlantirish endi yuborilmaydi —
     // uzilish/superadmin yo'qligidan keyin eski xabarlar to'lqini bo'lmasin
@@ -322,11 +366,19 @@ export class AdvisorNotifier {
     const telegramEnabled = await this.settings.telegramEnabled();
     const cabinetUrl = this.config?.get<string>('ELCHI_CABINET_URL') ?? null;
     for (const row of rows) {
+      const telegram = advisorTelegramAllowed(row.rule_key, {
+        rules,
+        telegramEnabled,
+      });
+      const telegramDueAt = telegram
+        ? r6TelegramDueAt(row.rule_key, now)
+        : null;
       const payload = buildAdvisorDispatch(row, {
         recipients,
         rules,
         telegramEnabled,
         cabinetUrl,
+        mode: telegramDueAt ? 'no_telegram' : 'default',
       });
       if (!payload) {
         out.failed += 1;
@@ -343,9 +395,10 @@ export class AdvisorNotifier {
           },
         );
         await this.ds.query(
-          `UPDATE ai_schema.ai_advisor_alerts SET "notified_at" = now(), "updatedAt" = now()
+          `UPDATE ai_schema.ai_advisor_alerts
+              SET "notified_at" = now(), "telegram_due_at" = $2, "updatedAt" = now()
             WHERE "id" = $1 AND "notified_at" IS NULL`,
-          [row.id],
+          [row.id, telegramDueAt],
         );
         out.sent += 1;
       } catch (error) {
@@ -359,6 +412,83 @@ export class AdvisorNotifier {
           .catch(() => undefined);
         this.logger.warn(
           `ai_advisor_notify_failed alert=${row.id}: ${short(error)}`,
+        );
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Kechiktirilgan Telegram (R6, 09:00): bir marta, alohida
+   * `client_request_id` (`…:tg`). Ogohlantirish yopilgan / Telegram
+   * o'chirilgan / 24 soatdan eski — yuborilmaydi, belgi tozalanadi.
+   */
+  private async dispatchDeferredTelegram(
+    now: Date,
+  ): Promise<{ sent: number; failed: number }> {
+    const out = { sent: 0, failed: 0 };
+    const rows = await this.ds.query<
+      Array<
+        AdvisorNotifyRow & { status: string; is_deleted: boolean; due: Date }
+      >
+    >(
+      `SELECT a."id"::text AS id, a."rule_key", a."severity", a."title", a."facts", a."subject",
+              a."branch", a."status", a."is_deleted", a."telegram_due_at" AS due
+         FROM ai_schema.ai_advisor_alerts a
+        WHERE a."telegram_due_at" IS NOT NULL AND a."telegram_due_at" <= $1
+        ORDER BY a."telegram_due_at" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+      [now],
+    );
+    if (!rows.length) return out;
+    const clear = (id: string) =>
+      this.ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET "telegram_due_at" = NULL, "updatedAt" = now()
+          WHERE "id" = $1 AND "telegram_due_at" IS NOT NULL`,
+        [id],
+      );
+    const rules = await this.settings.getRules();
+    const telegramEnabled = await this.settings.telegramEnabled();
+    const cabinetUrl = this.config?.get<string>('ELCHI_CABINET_URL') ?? null;
+    let recipients: string[] | null = null;
+    for (const row of rows) {
+      const open =
+        !row.is_deleted && (row.status === 'new' || row.status === 'seen');
+      const fresh =
+        now.getTime() - new Date(row.due).getTime() <
+        ADVISOR_NOTIFY_MAX_AGE_HOURS * 3600_000;
+      if (
+        !open ||
+        !fresh ||
+        !advisorTelegramAllowed(row.rule_key, { rules, telegramEnabled })
+      ) {
+        await clear(row.id);
+        continue;
+      }
+      try {
+        recipients ??= await this.recipients();
+        const payload = buildAdvisorDispatch(row, {
+          recipients,
+          rules,
+          telegramEnabled,
+          cabinetUrl,
+          mode: 'telegram_only',
+        });
+        if (!payload) {
+          out.failed += 1;
+          continue;
+        }
+        await rmqSend(
+          this.notification,
+          { cmd: 'notification.dispatch' },
+          payload,
+          { timeoutMs: 8_000, retries: 0 },
+        );
+        await clear(row.id);
+        out.sent += 1;
+      } catch (error) {
+        out.failed += 1;
+        this.logger.warn(
+          `ai_advisor_notify_telegram_failed alert=${row.id}: ${short(error)}`,
         );
       }
     }
