@@ -211,7 +211,13 @@ describePg('AdvisorAlertsService — real Postgres (BE-5)', () => {
       { page: 0 },
       { status: 'x' },
       { from: '2026-01-01', to: '2027-02-02' },
+      { from: '2026-01-01', to: '2027-01-02' }, // 367 kun (ikkala chet)
       { sort_by: 'id' },
+      // round-2 #654 S1: aylanadigan sana, 0000 yili, boshqaruv belgisi — 500 emas.
+      { from: '2026-02-30' },
+      { to: '2026-04-31' },
+      { from: '0000-01-01' },
+      { q: 'a\u0000b' },
     ]) {
       await expect(svc.list(q as never, NOW)).rejects.toMatchObject({
         status: 400,
@@ -345,6 +351,16 @@ describePg('AdvisorAlertsService — real Postgres (BE-5)', () => {
     const twice = await svc.update(SA, id, 'resolved', 'boshqa izoh', NOW);
     expect(twice.resolution_note).toBe('Tekshirildi');
     expect(log).toHaveBeenCalledTimes(1);
+    // round-2 #654: idempotent takror izohsiz ham 200 (izoh tekshiruvi keyin).
+    expect(
+      (await svc.update(SA, id, 'resolved', '', NOW)).resolution_note,
+    ).toBe('Tekshirildi');
+    // Boshqa SA bo'sh izoh bilan — 409 (400 emas): yopilganlik birinchi.
+    expect(
+      errorOf(
+        await svc.update(SA2, id, 'resolved', '', NOW).catch((e: unknown) => e),
+      ),
+    ).toMatchObject({ statusCode: 409, code: 'AI_ADVISOR_ALERT_CLOSED' });
 
     expect(
       errorOf(
@@ -383,10 +399,15 @@ describePg('AdvisorAlertsService — real Postgres (BE-5)', () => {
       action: 'ai.advisor.alert.dismiss',
       description: `AI ogohlantirish #${other} ahamiyatsiz deb belgilandi — Kuryer qarzi o'smoqda, Jasur`,
     });
+    // Ayni SA ayni holat — idempotent 200 (izoh tekshirilmaydi, round-2).
+    expect(
+      (await svc.update(SA, other, 'dismissed', 'x'.repeat(501), NOW)).status,
+    ).toBe('dismissed');
+    const fresh = await alert({});
     expect(
       errorOf(
         await svc
-          .update(SA, other, 'dismissed', 'x'.repeat(501), NOW)
+          .update(SA, fresh, 'dismissed', 'x'.repeat(501), NOW)
           .catch((e: unknown) => e),
       ),
     ).toMatchObject({
@@ -407,6 +428,43 @@ describePg('AdvisorAlertsService — real Postgres (BE-5)', () => {
       status: 'resolved',
       resolved_at: NOW.toISOString(),
     });
+  });
+
+  it('round-2: izohda U+0000 — 400 (500 emas), holat o‘zgarmaydi', async () => {
+    const id = await alert({});
+    await expect(
+      svc.update(SA, id, 'resolved', 'ab\u0000c', NOW),
+    ).rejects.toMatchObject({ status: 400 });
+    expect((await svc.get(SA, id, { mark_seen: false }, NOW)).status).toBe(
+      'new',
+    );
+    // Qator ko'chirish ruxsat.
+    expect(
+      (await svc.update(SA, id, 'resolved', 'Bir\nikki', NOW)).resolution_note,
+    ).toBe('Bir\nikki');
+  });
+
+  it('round-2: ro‘yxat jami segmentlardan; sahifa jamidan tashqarida — bo‘sh, ro‘yxatda og‘ir ustunlar yo‘q', async () => {
+    await alert({});
+    await alert({ status: 'seen' });
+    await alert({
+      status: 'resolved',
+      resolved_by: '1',
+      resolved_at: '2026-10-22T08:00:00Z',
+    });
+    const open = await svc.list({ status: 'open' }, NOW);
+    expect(open.meta.total).toBe(2);
+    expect(open.counts.by_status).toMatchObject({
+      new: 1,
+      seen: 1,
+      resolved: 1,
+    });
+    expect((await svc.list({}, NOW)).meta.total).toBe(3);
+    expect((await svc.list({ status: 'resolved' }, NOW)).meta.total).toBe(1);
+    const far = await svc.list({ page: 5 }, NOW);
+    expect(far.items).toEqual([]);
+    expect(far.meta.total).toBe(3);
+    expect(open.items[0]).not.toHaveProperty('evidence');
   });
 
   it('parallel ikki PATCH (ikki SA) — aynan bittasi o‘tadi', async () => {

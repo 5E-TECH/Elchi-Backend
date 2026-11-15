@@ -33,6 +33,8 @@ import { formatDay, formatRatio, formatSom, r7Sentence } from './advisor-text';
  * - Matnda AI matni va PII yo'q (karta — faqat `*_last4`, ism yo'q).
  */
 export const ADVISOR_NOTIFY_TYPE = 'ai.advisor_alert';
+/** Dispatch qulfi (qoidalar tick qulflari 716000000224/225 dan alohida). */
+export const ADVISOR_NOTIFY_LOCK_KEY = 716_000_000_901;
 export const ADVISOR_NOTIFY_BATCH = 20;
 export const ADVISOR_RECIPIENTS_TTL_MS = 5 * 60_000;
 const BODY_MAX = 600;
@@ -247,14 +249,45 @@ export class AdvisorNotifier {
    * Bildirishnomasi ketmagan ochiq `critical` ogohlantirishlar (yangi ochilgan
    * yoki oldingi urinish yiqilgan). Har biri alohida; xato — keyingi tick.
    */
+  /**
+   * Bitta jarayon: ikki cron (30 daq va 02:30) bir vaqtda tushsa ham
+   * dispatch ikki marta yuborilmaydi — alohida advisory qulf (round-2 S1).
+   * Qulf olinmasa — shu tick o'tkaziladi (boshqasi yuboryapti).
+   */
   async dispatchPending(): Promise<{ sent: number; failed: number }> {
+    const runner = this.ds.createQueryRunner();
+    let locked = false;
+    try {
+      await runner.connect();
+      const [row] = (await runner.query(
+        'SELECT pg_try_advisory_lock($1::bigint) AS ok',
+        [ADVISOR_NOTIFY_LOCK_KEY],
+      )) as Array<{ ok: boolean }>;
+      locked = row?.ok === true;
+      if (!locked) return { sent: 0, failed: 0 };
+      return await this.dispatchBatch();
+    } finally {
+      if (locked) {
+        await runner
+          .query('SELECT pg_advisory_unlock($1::bigint)', [
+            ADVISOR_NOTIFY_LOCK_KEY,
+          ])
+          .catch(() => undefined);
+      }
+      await runner.release().catch(() => undefined);
+    }
+  }
+
+  private async dispatchBatch(): Promise<{ sent: number; failed: number }> {
     const out = { sent: 0, failed: 0 };
+    // Tartib — oxirgi urinish bo'yicha (xatoda `updatedAt` yangilanadi):
+    // doimiy xatoli qatorlar yangilarini to'sib qo'ymaydi (round-2 S2).
     const rows = await this.ds.query<AdvisorNotifyRow[]>(
-      `SELECT "id"::text AS id, "rule_key", "severity", "title", "facts", "subject", "branch"
-         FROM ai_schema.ai_advisor_alerts
-        WHERE "severity" = 'critical' AND "status" IN ('new','seen') AND "is_deleted" = false
-          AND "notified_at" IS NULL AND "notify_skipped" IS NULL
-        ORDER BY "id" LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+      `SELECT a."id"::text AS id, a."rule_key", a."severity", a."title", a."facts", a."subject", a."branch"
+         FROM ai_schema.ai_advisor_alerts a
+        WHERE a."severity" = 'critical' AND a."status" IN ('new','seen') AND a."is_deleted" = false
+          AND a."notified_at" IS NULL AND a."notify_skipped" IS NULL
+        ORDER BY a."updatedAt" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
     );
     if (!rows.length) return out;
     let recipients: string[];
@@ -298,6 +331,13 @@ export class AdvisorNotifier {
         out.sent += 1;
       } catch (error) {
         out.failed += 1;
+        // Navbat oxiriga (keyingi tick boshqalari oldin).
+        await this.ds
+          .query(
+            `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() WHERE "id" = $1`,
+            [row.id],
+          )
+          .catch(() => undefined);
         this.logger.warn(
           `ai_advisor_notify_failed alert=${row.id}: ${short(error)}`,
         );
