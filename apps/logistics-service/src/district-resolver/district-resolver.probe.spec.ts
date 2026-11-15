@@ -219,3 +219,51 @@ describe('district resolver — sweep invariants', () => {
     });
   }
 });
+
+/**
+ * #646 review (round 2): SEED'da YO'Q rasmiy birliklar — ularning o'z qatori
+ * yo'q, shuning uchun HAR QANDAY avto-tanlov noto'g'ri bo'lardi. Tur so'zi
+ * bilan yozilgan shakllar (lotin va rus) — avto emas, nomzod yoki topilmadi.
+ * Yalang'och nom ("Namangan") ataylab tashqarida: u seed'dagi bir xil nomli
+ * qatorga teng (dev bilan bir xil, D1 qatorlari qo'shilgach yo'qoladi).
+ */
+describe('district resolver — SEED: missing official units never auto-pick', () => {
+  const seedCodes = new Set(SEED.districts.map((d) => d.sato_code));
+  const RU_KIND: Record<string, string> = { city: 'г.', tuman: 'р-н' };
+  it('latin + russian forms', () => {
+    const wrong: string[] = [];
+    for (const r of satoRegions) {
+      const rname = REGION_CANON[r.sato_code];
+      if (!rname) continue;
+      for (const d of r.districts) {
+        if (seedCodes.has(d.sato_code)) continue;
+        const kind = d.sato_code[4] === '4' ? 'city' : 'tuman';
+        const base = d.name.replace(/ (shahri|tumani)$/, '');
+        const qs: Q[] = [
+          { region_name: rname, district_name: d.name },
+          {
+            region_name: rname,
+            full_address: `${rname} viloyati, ${d.name}, 5-uy`,
+          },
+          {
+            region_name: null,
+            full_address: `${d.name}, Navoiy ko'chasi 5-uy`,
+          },
+          {
+            region_name: rname,
+            full_address: `${base} ${kind === 'city' ? 'sh.' : 'tumani'}, 5`,
+          },
+          { region_name: rname, full_address: `${RU_KIND[kind]} ${base}, 5` },
+        ];
+        for (const q of qs) {
+          const res = run(SEED, q);
+          if (res.sato)
+            wrong.push(
+              `${d.name}=${d.sato_code} ${JSON.stringify(q)} -> ${res.sato}`,
+            );
+        }
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+});
