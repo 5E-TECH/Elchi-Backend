@@ -936,6 +936,11 @@ export class AdvisorInputsService {
         balance > balanceUzs;
       const stale = balance > 0 && ep.days > noHandover;
       if (!growth && !stale) continue;
+      // O'sish signali kechagacha yopilgan kunlardan; bugun topshirish bo'lsa
+      // (epizod bugun boshlangan) — o'sha holat, yangi epizod emas (§6, Q23;
+      // round-2 #652 B1). Ertaga topshirishdan keyingi yopilishlar bilan
+      // shart qayta rost bo'lsa — yangi epizod.
+      if (growth && !stale && ep.days <= 0) continue;
       const trigger =
         growth && stale ? 'both' : growth ? 'growth' : 'no_handover';
       names.wantUser(r.owner);

@@ -529,6 +529,45 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       expect((out.candidates[0].evidence.rows as unknown[]).length).toBe(4);
     });
 
+    it('round-2 #652 B1: o‘sish + BUGUN topshirish — yangi epizod ochilmaydi (ayni holat)', async () => {
+      const cb = await cashbox('couriers', 58, 3500000);
+      const h20 = await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -100000,
+        1500000,
+        '2026-10-20T10:00:00Z',
+      );
+      for (const [d, v] of [
+        ['2026-10-18', 1600000],
+        ['2026-10-19', 2100000],
+        ['2026-10-20', 2600000],
+        ['2026-10-21', 3200000],
+      ] as const) {
+        await daily(cb, 58, d, v);
+      }
+      const before = await run(['R2']);
+      expect(before.candidates[0]).toMatchObject({
+        fact_keys: [{ fact_key: `ep:h:${h20}` }],
+        facts: { trigger: 'growth' },
+      });
+      // 22.10 08:30Z: 1,2 mln topshirildi (qoldiq 2,3 mln) — bugungi epizod.
+      await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -1200000,
+        2300000,
+        '2026-10-22T08:30:00Z',
+      );
+      await db.query(
+        `UPDATE "finance_schema"."cashboxes" SET "balance" = 2300000 WHERE "id" = $1`,
+        [cb],
+      );
+      expect((await run(['R2'])).candidates).toEqual([]);
+    });
+
     it('R2 (a): oynada kun yetishmasa (snapshot yo‘q) — o‘sish tekshirilmaydi', async () => {
       const cb = await cashbox('couriers', 57, 2500000);
       await hist(
