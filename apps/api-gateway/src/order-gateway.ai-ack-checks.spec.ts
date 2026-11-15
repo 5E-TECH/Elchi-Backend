@@ -1,5 +1,9 @@
 import 'reflect-metadata';
-import { ConflictException, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { ClientProxy } from '@nestjs/microservices';
 import { plainToInstance } from 'class-transformer';
@@ -23,7 +27,7 @@ import {
 /**
  * AI ack (ega qarori 2026-11-14) — `POST /orders/ai-confirm`:
  * `district_low_confidence` / `price_check` SAQLANGAN snapshot'da bo'lsa,
- * `ack_checks` siz 409 `checks_not_acknowledged`. Barcha ma'lumot soxta.
+ * `ack_checks` siz 409 `CHECKS_NOT_ACKNOWLEDGED`. Barcha ma'lumot soxta.
  */
 type Pattern = { cmd: string };
 type Payload = Record<string, any>;
@@ -207,7 +211,7 @@ describe('requiredAckChecks / missingAckChecks', () => {
   });
 });
 
-describe('ai-confirm — ack_checks (409 checks_not_acknowledged)', () => {
+describe('ai-confirm — ack_checks (409 CHECKS_NOT_ACKNOWLEDGED)', () => {
   it('bloklovchi kod tasdiqlanmagan → 409, hech narsa yaratilmaydi', async () => {
     const fx = setup([
       snapshotFor(0, ['district_low_confidence', 'qty_check']),
@@ -228,7 +232,7 @@ describe('ai-confirm — ack_checks (409 checks_not_acknowledged)', () => {
     );
     expect(body).toMatchObject({
       statusCode: 409,
-      code: 'checks_not_acknowledged',
+      code: 'CHECKS_NOT_ACKNOWLEDGED',
       missing: ['district_low_confidence', 'price_check'],
       orders: [
         { index: 0, missing: ['district_low_confidence'] },
@@ -244,7 +248,7 @@ describe('ai-confirm — ack_checks (409 checks_not_acknowledged)', () => {
       .aiConfirm({ orders: [order(0)] }, marketReq)
       .catch((e: unknown) => e as ConflictException);
     expect(publicErrorFields(error.getResponse())).toEqual({
-      code: 'checks_not_acknowledged',
+      code: 'CHECKS_NOT_ACKNOWLEDGED',
       missing: ['price_check'],
       orders: [{ index: 0, missing: ['price_check'] }],
     });
@@ -257,7 +261,7 @@ describe('ai-confirm — ack_checks (409 checks_not_acknowledged)', () => {
     expect(response.status).toHaveBeenCalledWith(409);
     expect(json.mock.calls[0][0]).toMatchObject({
       statusCode: 409,
-      code: 'checks_not_acknowledged',
+      code: 'CHECKS_NOT_ACKNOWLEDGED',
       missing: ['price_check'],
       orders: [{ index: 0, missing: ['price_check'] }],
     });
@@ -343,22 +347,39 @@ describe('ai-confirm — ack_checks (409 checks_not_acknowledged)', () => {
     expect(body.missing).toEqual(['price_check']);
   });
 
-  it('snapshot yo‘q (preview yetib kelmagan / ai-service ishlamadi) — yaratiladi', async () => {
+  it('snapshot yo‘q (eski / saqlanmagan draft) — fail-open, checks_unverified', async () => {
     const noPreview = setup(null);
     const r1 = await noPreview.controller.aiConfirm(
       { orders: [order(0)] },
       marketReq,
     );
     expect(r1.data.results[0].ok).toBe(true);
+  });
 
+  it('ai-service ishlamadi — FAIL-CLOSED 503 AI_CHECKS_UNAVAILABLE (gateway filtri orqali ham)', async () => {
     const down = setup([snapshotFor(0, ['price_check'])], {
       contextError: true,
     });
-    const r2 = await down.controller.aiConfirm(
-      { orders: [order(0)] },
-      marketReq,
-    );
-    expect(r2.data.results[0].ok).toBe(true);
+    const err = await down.controller
+      .aiConfirm({ orders: [order(0)] }, marketReq)
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(ServiceUnavailableException);
+    const json = jest.fn();
+    const response = { status: jest.fn(() => ({ json })) };
+    new AllExceptionsFilter().catch(err, {
+      switchToHttp: () => ({ getResponse: () => response }),
+    } as never);
+    expect(response.status).toHaveBeenCalledWith(503);
+    expect(json.mock.calls[0][0]).toMatchObject({
+      statusCode: 503,
+      code: 'AI_CHECKS_UNAVAILABLE',
+      retryable: true,
+      retry_after_seconds: 5,
+    });
+    expect(down.creates()).toHaveLength(0);
   });
 
   it('DTO: ack_checks — kod satrlari massivi, ≤10', async () => {

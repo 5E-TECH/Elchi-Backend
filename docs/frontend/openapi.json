@@ -3279,7 +3279,7 @@
     },
     "/orders/ai-parse": {
       "post": {
-        "description": "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: `district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), `region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), `checks: [{ code, … }]` — YUMSHOQ tekshiruvlar, `ready`/`issues` ga ta'sir qilmaydi: `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }`, `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. `district_low_confidence` va `price_check` — ai-confirm'da tasdiq (`orders[].ack_checks`) talab qiladi, aks holda 409 `checks_not_acknowledged`. ⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
+        "description": "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: `district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), `region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), `checks: [{ code, … }]` — YUMSHOQ tekshiruvlar, `ready`/`issues` ga ta'sir qilmaydi: `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }`, `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. `district_low_confidence` va `price_check` — ai-confirm'da tasdiq (`orders[].ack_checks`) talab qiladi, aks holda 409 `CHECKS_NOT_ACKNOWLEDGED`. ⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
         "operationId": "OrderGatewayController_aiParse",
         "parameters": [],
         "requestBody": {
@@ -3471,8 +3471,14 @@
           "200": {
             "description": "{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija"
           },
+          "400": {
+            "description": "AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', orders: number[] }` (so'rovdagi o'rinlar). Boshqa 400 — DTO validatsiyasi."
+          },
           "409": {
-            "description": "checks_not_acknowledged — saqlangan AI preview'da bloklovchi tekshiruv (district_low_confidence, price_check) bor, lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi. Tana: `{ statusCode: 409, message, code: 'checks_not_acknowledged', missing: string[], orders: [{ index, missing: string[] }] }` (`index` — so‘rovdagi `orders[]` o‘rni)."
+            "description": "CHECKS_NOT_ACKNOWLEDGED — saqlangan AI preview'da bloklovchi tekshiruv (district_low_confidence, price_check) bor, lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi. Tana: `{ statusCode: 409, message, code: 'CHECKS_NOT_ACKNOWLEDGED', missing: string[], orders: [{ index, missing: string[] }] }` (`index` — so‘rovdagi `orders[]` o‘rni)."
+          },
+          "503": {
+            "description": "AI_CHECKS_UNAVAILABLE — saqlangan AI tekshiruvlarini o'qib bo'lmadi (ai-service timeout/xato). FAIL-CLOSED: hech narsa yaratilmaydi. Tana: `{ statusCode: 503, message, code: 'AI_CHECKS_UNAVAILABLE', retryable: true, retry_after_seconds }`."
           }
         },
         "security": [
@@ -28168,14 +28174,14 @@
           "draft_id": {
             "type": "string",
             "example": "3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c",
-            "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun."
+            "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`."
           },
           "ai_item_index": {
             "type": "number",
             "example": 0,
             "minimum": 0,
             "maximum": 29,
-            "description": "Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG."
+            "description": "Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`. Qayta yuborishda O‘ZGARTIRMANG."
           },
           "ack_checks": {
             "example": [
@@ -28183,7 +28189,7 @@
               "price_check"
             ],
             "maxItems": 10,
-            "description": "Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `checks_not_acknowledged` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.",
+            "description": "Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `CHECKS_NOT_ACKNOWLEDGED` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.",
             "type": "array",
             "items": {
               "type": "string"

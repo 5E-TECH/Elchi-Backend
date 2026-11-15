@@ -255,7 +255,7 @@ export class AiConfirmOrderDto {
   @ApiPropertyOptional({
     example: '3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c',
     description:
-      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun.',
+      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`.',
   })
   @IsOptional()
   @IsUUID('all', { message: "draft_id UUID bo'lishi kerak" })
@@ -266,7 +266,7 @@ export class AiConfirmOrderDto {
     minimum: 0,
     maximum: AI_MAX_ORDERS_PER_PARSE - 1,
     description:
-      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG.',
+      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`. Qayta yuborishda O‘ZGARTIRMANG.',
   })
   @IsOptional()
   @IsInt({ message: "ai_item_index butun son bo'lishi kerak" })
@@ -288,7 +288,7 @@ export class AiConfirmOrderDto {
     description:
       'Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). ' +
       'Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). ' +
-      'Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `checks_not_acknowledged` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. ' +
+      'Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `CHECKS_NOT_ACKNOWLEDGED` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. ' +
       'Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. ' +
       'Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.',
   })

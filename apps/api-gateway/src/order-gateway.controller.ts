@@ -34,7 +34,9 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiBadRequestResponse,
   ApiConflictResponse,
+  ApiServiceUnavailableResponse,
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
@@ -152,6 +154,8 @@ import {
   recordReceiveByScanOutcome,
   requestContext,
   AI_CHECKS_NOT_ACKNOWLEDGED,
+  AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_REQUIRED,
   type AiAuditedField,
   type AiFieldCorrections,
   type AiImageMediaType,
@@ -467,6 +471,8 @@ const AI_MIN_PREVIEW_BUDGET_MS = 5_000;
 const AI_CONFIRM_LOOKUP_TIMEOUT_MS = 8_000;
 /** vncdmXOy: `ai.draft.confirm_context` — audit uchun, yaratishni kechiktirmasin. */
 const AI_DRAFT_CONTEXT_TIMEOUT_MS = 3_000;
+/** AI ack: 503 `AI_CHECKS_UNAVAILABLE` dan keyin qayta urinish (s). */
+const AI_CHECKS_RETRY_AFTER_SECONDS = 5;
 /** vncdmXOy: `GET /orders/:id/ai-trace` → `ai.draft.trace_by_order`. */
 const AI_DRAFT_TRACE_TIMEOUT_MS = 8_000;
 
@@ -2312,9 +2318,12 @@ export class OrderGatewayController {
   private async loadAiDraftContexts(
     marketId: string,
     draftIds: string[],
-  ): Promise<Map<string, AiDraftConfirmContext>> {
+  ): Promise<Map<string, AiDraftConfirmContext> | null> {
     const out = new Map<string, AiDraftConfirmContext>();
-    if (!this.aiClient || draftIds.length === 0) return out;
+    if (draftIds.length === 0) return out;
+    // AI ack: ai-service bo'lmasa tekshiruvlarni o'qib bo'lmaydi — `null`
+    // (chaqiruvchi FAIL-CLOSED 503 qaytaradi).
+    if (!this.aiClient) return null;
     try {
       const response: unknown = await firstValueFrom(
         this.aiClient
@@ -2331,8 +2340,9 @@ export class OrderGatewayController {
       }
     } catch (error: unknown) {
       this.logger.warn(
-        `ai.draft.confirm_context ishlamadi (${this.errorName(error)}) — audit metadata qisqartirilgan`,
+        `ai.draft.confirm_context ishlamadi (${this.errorName(error)}) — AI tekshiruvlarini o'qib bo'lmadi`,
       );
+      return null;
     }
     return out;
   }
@@ -2351,6 +2361,18 @@ export class OrderGatewayController {
     );
     if (draftIds.length === 0) return;
     const contexts = await this.loadAiDraftContexts(marketId, draftIds);
+    if (!contexts) {
+      // AI ack (FE sessiya / ega, 2026-11-15): FAIL-CLOSED — saqlangan
+      // tekshiruvlarni o'qib bo'lmasa hech narsa yaratilmaydi.
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: AI_CHECKS_UNAVAILABLE,
+        message:
+          "AI tekshiruvlarini hozir o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        retryable: true,
+        retry_after_seconds: AI_CHECKS_RETRY_AFTER_SECONDS,
+      });
+    }
     for (const item of eligible) {
       const draftId = this.asStr(item.order.draft_id).trim();
       if (!draftId) continue;
@@ -2409,6 +2431,10 @@ export class OrderGatewayController {
                   100,
               ) / 100,
         edited_fields: item.editedFields,
+        // AI ack: tekshiruvlar tasdiqlanmadi — draft topilmadi yoki eski
+        // (feature'dan oldingi) snapshot'da `check_codes` yo'q (fail-open).
+        checks_unverified:
+          !preview || !Array.isArray(preview.check_codes) || undefined,
       };
     }
   }
@@ -2416,7 +2442,7 @@ export class OrderGatewayController {
   /**
    * AI ack: har eligible buyurtmaning `requiredAcks` i (`attachAiAudit`)
    * `ack_checks` da bo'lishi shart. Bo'lmasa — 409
-   * `checks_not_acknowledged`: `missing` — barcha tasdiqlanmagan kodlar
+   * `CHECKS_NOT_ACKNOWLEDGED`: `missing` — barcha tasdiqlanmagan kodlar
    * (takrorsiz), `orders` — `[{ index, missing }]` (`index` — so'rovdagi
    * `orders[]` o'rni).
    */
@@ -3216,7 +3242,7 @@ export class OrderGatewayController {
       "`district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), " +
       '`region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), ' +
       "`checks: [{ code, … }]` — YUMSHOQ tekshiruvlar, `ready`/`issues` ga ta'sir qilmaydi: `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }`, `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. " +
-      "`district_low_confidence` va `price_check` — ai-confirm'da tasdiq (`orders[].ack_checks`) talab qiladi, aks holda 409 `checks_not_acknowledged`. " +
+      "`district_low_confidence` va `price_check` — ai-confirm'da tasdiq (`orders[].ack_checks`) talab qiladi, aks holda 409 `CHECKS_NOT_ACKNOWLEDGED`. " +
       "⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
   })
   @ApiConsumes('multipart/form-data')
@@ -3649,10 +3675,18 @@ export class OrderGatewayController {
   })
   @ApiConflictResponse({
     description:
-      "checks_not_acknowledged — saqlangan AI preview'da bloklovchi tekshiruv (district_low_confidence, price_check) bor, " +
+      "CHECKS_NOT_ACKNOWLEDGED — saqlangan AI preview'da bloklovchi tekshiruv (district_low_confidence, price_check) bor, " +
       'lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi. Tana: ' +
-      "`{ statusCode: 409, message, code: 'checks_not_acknowledged', missing: string[], orders: [{ index, missing: string[] }] }` " +
+      "`{ statusCode: 409, message, code: 'CHECKS_NOT_ACKNOWLEDGED', missing: string[], orders: [{ index, missing: string[] }] }` " +
       '(`index` — so‘rovdagi `orders[]` o‘rni).',
+  })
+  @ApiBadRequestResponse({
+    description:
+      "AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', orders: number[] }` (so'rovdagi o'rinlar). Boshqa 400 — DTO validatsiyasi.",
+  })
+  @ApiServiceUnavailableResponse({
+    description:
+      "AI_CHECKS_UNAVAILABLE — saqlangan AI tekshiruvlarini o'qib bo'lmadi (ai-service timeout/xato). FAIL-CLOSED: hech narsa yaratilmaydi. Tana: `{ statusCode: 503, message, code: 'AI_CHECKS_UNAVAILABLE', retryable: true, retry_after_seconds }`.",
   })
   async aiConfirm(
     @Body() dto: AiConfirmRequestDto,
@@ -3662,6 +3696,27 @@ export class OrderGatewayController {
     const orders: AiConfirmOrderDto[] = Array.isArray(dto?.orders)
       ? dto.orders
       : [];
+
+    // AI ack (FE sessiya / ega, 2026-11-15): har buyurtma ai-parse
+    // draft'iga bog'langan bo'lishi SHART — `draft_id`/`ai_item_index`siz
+    // tasdiq talabini chetlab o'tish yo'li bo'lmasin.
+    const unlinked = orders
+      .map((order, index) =>
+        this.asStr(order?.draft_id).trim() &&
+        typeof order?.ai_item_index === 'number'
+          ? -1
+          : index,
+      )
+      .filter((index) => index >= 0);
+    if (unlinked.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: AI_DRAFT_REQUIRED,
+        message:
+          "AI buyurtmasi ai-parse natijasiga bog'lanmagan (draft_id va ai_item_index majburiy)",
+        orders: unlinked,
+      });
+    }
 
     // 1) Partiya darajasi — market va filial BIR MARTA.
     const market = await this.resolveAiMarket(req.user, dto?.market_id);

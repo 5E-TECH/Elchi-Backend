@@ -11,7 +11,11 @@ import {
   ORDER_RECEIVE_CLOSED,
 } from '../order/order-intake';
 import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
-import { AI_CHECKS_NOT_ACKNOWLEDGED } from '../ai/ai-draft.contract';
+import {
+  AI_CHECKS_NOT_ACKNOWLEDGED,
+  AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_REQUIRED,
+} from '../ai/ai-draft.contract';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -167,6 +171,10 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // `missing` — tasdiqlanmagan kodlar, `orders` — `[{ index, missing }]`
   // (ikkalasi ham ro'yxat — `PUBLIC_ERROR_LIST_FIELDS`).
   [AI_CHECKS_NOT_ACKNOWLEDGED]: ['missing', 'orders'],
+  // (AI ack) 503 — tekshiruvlarni o'qib bo'lmadi, qayta urinish mumkin.
+  [AI_CHECKS_UNAVAILABLE]: ['retryable', 'retry_after_seconds'],
+  // (AI ack) 400 — draft_id / ai_item_index yo'q buyurtmalar (`orders`).
+  [AI_DRAFT_REQUIRED]: ['orders'],
   // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),
@@ -183,6 +191,7 @@ export const PUBLIC_ERROR_LIST_FIELDS: Readonly<
   Record<string, readonly string[]>
 > = {
   [AI_CHECKS_NOT_ACKNOWLEDGED]: ['missing', 'orders'],
+  [AI_DRAFT_REQUIRED]: ['orders'],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

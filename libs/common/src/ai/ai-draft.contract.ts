@@ -157,7 +157,7 @@ export interface AiDraftTrace {
 /**
  * AI tekshiruvini TASDIQLASH (ack, ega qarori 2026-11-14): faqat shu
  * kodlar BLOKLAYDI — preview'da bo'lsa ai-confirm `orders[].ack_checks`
- * da ularni kutadi, aks holda 409 `checks_not_acknowledged`. Qolgan
+ * da ularni kutadi, aks holda 409 `CHECKS_NOT_ACKNOWLEDGED`. Qolgan
  * kodlar (qty_check, duplicate_items, phone_is_market, same_phone_multi)
  * — yumshoq ogohlantirish, ack so'ralmaydi.
  * ⚠️ Kodlar SERVERDA saqlangan snapshot'dan (`check_codes`) olinadi —
@@ -184,4 +184,17 @@ export const AI_CHECK_EXEMPT_BY_EDIT: Readonly<
 };
 
 /** ai-confirm 409 xato kodi (tanada `missing` va `orders`). */
-export const AI_CHECKS_NOT_ACKNOWLEDGED = 'checks_not_acknowledged';
+export const AI_CHECKS_NOT_ACKNOWLEDGED = 'CHECKS_NOT_ACKNOWLEDGED';
+
+/**
+ * ai-confirm 503 (FE sessiya / ega, 2026-11-15): tekshiruvlarni ai-service'dan
+ * o'qib bo'lmadi (timeout / xato) — FAIL-CLOSED, hech narsa yaratilmaydi;
+ * `retryable: true`, `retry_after_seconds`.
+ */
+export const AI_CHECKS_UNAVAILABLE = 'AI_CHECKS_UNAVAILABLE';
+
+/**
+ * ai-confirm 400: buyurtmada `draft_id` yoki `ai_item_index` yo'q — ack
+ * talabini chetlab o'tish yo'li bo'lmasin (`orders` — so'rovdagi o'rinlar).
+ */
+export const AI_DRAFT_REQUIRED = 'AI_DRAFT_REQUIRED';
