@@ -19,6 +19,7 @@ import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
@@ -155,7 +156,16 @@ export class AiAdvisorGatewayController {
   @Post('alerts/:id/explain')
   @HttpCode(202)
   @Roles(RoleEnum.SUPERADMIN)
-  @ApiParam({ name: 'id', description: 'Ogohlantirish ID si' })
+  @ApiParam({
+    name: 'id',
+    description: 'Ogohlantirish ID si',
+    schema: { type: 'string', pattern: '^\\d{1,18}$' },
+  })
+  @ApiResponse({
+    status: 202,
+    description:
+      '`{statusCode: 202, message: "Explanation queued", data: {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}}`',
+  })
   @ApiOperation({
     summary: 'AI maslahatchi: AI izohini so‘rash (faqat superadmin, doim 202)',
     description:

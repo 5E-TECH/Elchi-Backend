@@ -160,7 +160,10 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
     if (this.explain) {
       // §6: jiddiylarga darhol izoh (≤ 5/tick), eskirgan `pending` → failed.
       try {
-        const e = await this.explain.autoExplain();
+        const opened = result.changes
+          .filter((c) => c.change === 'opened')
+          .map((c) => c.alert_id);
+        const e = await this.explain.autoExplain(new Date(), opened);
         if (e.queued || e.stale)
           this.logger.log(
             `ai_advisor_explain queued=${e.queued} stale=${e.stale}`,
@@ -212,7 +215,11 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
       );
       // Qoidalar yiqilsa ham kutayotgan bildirishnomalar qayta urinadi
       // (finance o'chiq bo'lsa ham; round-2 S4).
-      if (locked) await this.notifyPending();
+      if (locked) {
+        await this.notifyPending();
+        // Eskirgan `pending` tozalash qoidalar yiqilsa ham (round-3 nit).
+        await this.explain?.autoExplain(new Date(), []).catch(() => undefined);
+      }
       return null;
     } finally {
       if (locked) {

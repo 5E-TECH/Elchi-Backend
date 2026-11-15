@@ -23795,13 +23795,14 @@
             "in": "path",
             "description": "Ogohlantirish ID si",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
             }
           }
         ],
         "responses": {
           "202": {
-            "description": ""
+            "description": "`{statusCode: 202, message: \"Explanation queued\", data: {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}}`"
           }
         },
         "security": [

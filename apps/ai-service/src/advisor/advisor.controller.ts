@@ -123,7 +123,7 @@ export class AdvisorController {
         return successRes(
           await this.explain.request(requester, String(data?.id ?? '')),
           202,
-          'AI advisor explanation',
+          'Explanation queued',
         );
       }),
     );

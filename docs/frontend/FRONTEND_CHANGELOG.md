@@ -35,6 +35,8 @@ Shartnoma v0.3 §6, §7.4. Deploy: api-gateway + ai-service, migratsiyasiz. Env:
 - 🟢 Fonda xato bo'lsa tafsilotda `explanation_status: "failed"` + `explanation_error: budget_exceeded|ai_disabled|error` (budjetda `explanation_error_scope`, `explanation_retry_at`) — «Qayta urinish» = yana `POST explain`.
 - 🟢 `critical` ogohlantirishlarga izoh avtomatik (har tick'dan keyin ≤ 5 ta, backfill'siz); `warning` — faqat so'rov bilan. Matn — o'zbekcha cheklangan markdown (≤ 2000, HTML yo'q), pul amali taklif qilinmaydi; promptda chek oluvchi/to'lovchi ismi va tranzaksiya raqami yo'q.
 
+- ✏️ (round-3) Avtomatik izoh faqat SHU tekshiruvda ochilgan `critical` ga (≤ 5, eng yangilari) — eski izohsiz jiddiylar `none` bo'lib qoladi, so'ralganda. Javob `message: "Explanation queued"`. So'rov paytida ogohlantirish yopilsa — 202 emas, 409; generatsiya paytida yopilsa — natija yozilmaydi.
+- 🟢 Izoh matnida havola/rasm/URL va HTML teglari yo'q (solishtirish belgilari «<», «>» saqlanadi).
 **Frontend action items:**
 - 🔧 «AI izohi» tugmasi → `POST explain`; 202 `pending` — skeleton + poll/realtime; 429 — `reset_at` gacha tugma o'chiq; 503 — «AI vaqtincha o'chiq».
 
