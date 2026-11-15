@@ -1,0 +1,27 @@
+{
+  "id": "price-prepaid-not-subtracted",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Sardor 91 000 34 56 Qashqadaryo Shahrisabz, soat 1 ta 150 ming, oldindan 50 ming to'langan"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Sardor",
+        "phone_number": "+998910003456",
+        "region_name": "Qashqadaryo",
+        "district_name": "Shahrisabz",
+        "items": [
+          {
+            "name": "soat",
+            "quantity": 1
+          }
+        ],
+        "total_price": 150000
+      }
+    ]
+  }
+}
