@@ -366,7 +366,18 @@ describe('BranchGatewayController — Pochta → HQ kuryeri (HTTP)', () => {
           courier_id: '77',
           order_ids: Array.from({ length: 1001 }, (_, i) => String(i + 1)),
         },
-        'order_ids majburiy',
+        'order_ids 1000 tadan oshmasin — pochtani qismlab bering',
+      ],
+      [
+        'order_ids 1000 tadan ko‘p, ichida yaroqsiz id — avval chegara (logistics tartibi)',
+        {
+          courier_id: '77',
+          order_ids: [
+            ...Array.from({ length: 1000 }, (_, i) => String(i + 1)),
+            'x',
+          ],
+        },
+        'order_ids 1000 tadan oshmasin',
       ],
     ])('⭐ tana: %s — 400, RPC yo‘q', async (_label, payload, message) => {
       const res = await request(http())

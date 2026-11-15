@@ -137,6 +137,11 @@ const CARRIER_LINK_LOOKUP_CHUNK = 500;
 const POST_DISPATCH_TO_COURIER_MAX_ORDERS = 1000;
 const ORDER_IDS_REQUIRED_MESSAGE =
   'order_ids majburiy — kamida bitta buyurtma tanlang';
+// logistics `POST_COURIER_MESSAGES.ORDER_IDS_TOO_MANY` bilan bir xil: frontend
+// tanlovni cheklamaydi — 1000 dan ortiq tanlangan pochtaga «kamida bitta
+// tanlang» emas, aniq sabab chiqsin.
+const ORDER_IDS_TOO_MANY_MESSAGE =
+  'order_ids 1000 tadan oshmasin — pochtani qismlab bering';
 const POST_COURIER_ID_INVALID_MESSAGE =
   "courier_id noto'g'ri — ro'yxatdan kuryerni tanlang";
 const CARRIER_LINK_UNAVAILABLE_MESSAGE =
@@ -1363,10 +1368,12 @@ export class BranchGatewayController {
       throw new BadRequestException(POST_COURIER_ID_INVALID_MESSAGE);
     }
     const rawOrderIds: unknown[] = Array.isArray(orderIds) ? orderIds : [];
+    if (rawOrderIds.length > POST_DISPATCH_TO_COURIER_MAX_ORDERS) {
+      throw new BadRequestException(ORDER_IDS_TOO_MANY_MESSAGE);
+    }
     const normalizedOrderIds = rawOrderIds.map((id) => bigintIdText(id));
     if (
       !normalizedOrderIds.length ||
-      normalizedOrderIds.length > POST_DISPATCH_TO_COURIER_MAX_ORDERS ||
       normalizedOrderIds.some((id) => id === null)
     ) {
       throw new BadRequestException(ORDER_IDS_REQUIRED_MESSAGE);
