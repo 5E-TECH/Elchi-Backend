@@ -34,6 +34,7 @@ type Resp = {
   stop_reason: string;
   content: Array<Record<string, unknown>>;
   stop_details?: { category: string } | null;
+  usage?: Record<string, unknown>;
 };
 
 function toolUse(id: string, name: string, input: unknown = {}) {
@@ -60,7 +61,7 @@ function makeClient(responses: Array<Resp | Error>) {
         for (const b of next.content) {
           if (b.type === 'text' && onText) onText(String(b.text));
         }
-        return Promise.resolve({ ...next, usage: USAGE });
+        return Promise.resolve({ ...next, usage: next.usage ?? USAGE });
       },
     };
   });
@@ -183,6 +184,44 @@ describe('ClaudeService.runToolLoop (F7PWp6cK)', () => {
     }
     expect(body.model).toBe('claude-sonnet-5');
     expect(body.max_tokens).toBe(8000);
+  });
+
+  it("C1 (#648): cacheTtl 1h → system 1h marker, top-level cache_control ttl'siz; 1h tokenlar qadam yozuvi va jamiga tushadi", async () => {
+    const u = (oneHour: number) => ({
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_creation_input_tokens: oneHour + 7,
+      cache_read_input_tokens: 0,
+      cache_creation: {
+        ephemeral_5m_input_tokens: 7,
+        ephemeral_1h_input_tokens: oneHour,
+      },
+    });
+    const { factory, bodies } = makeClient([
+      {
+        stop_reason: 'tool_use',
+        content: [toolUse('t1', 'get_cash_position')],
+        usage: u(3000),
+      },
+      { stop_reason: 'end_turn', content: [text('x')], usage: u(200) },
+    ]);
+    const sink = { record: jest.fn() };
+    const res = await makeService(factory, undefined, sink).runToolLoop(
+      opts({ cacheTtl: '1h' }),
+    );
+    for (const body of bodies) {
+      expect(body.system[0].cache_control).toEqual({
+        type: 'ephemeral',
+        ttl: '1h',
+      });
+      expect(body.cache_control).toEqual({ type: 'ephemeral' });
+    }
+    const records = sink.record.mock.calls.map(
+      (c) => c[0] as ClaudeUsageRecord,
+    );
+    expect(records.map((r) => r.cacheCreation1hTokens)).toEqual([3000, 200]);
+    expect(res.usage.cache_creation_1h_input_tokens).toBe(3200);
+    expect(res.usage.cache_creation_input_tokens).toBe(3214);
   });
 
   it('maxSteps (6): oxirgi qadamda ham tool so‘ralsa — ijro YO‘Q, is_error bilan tarix yopiladi, stop=max_steps', async () => {

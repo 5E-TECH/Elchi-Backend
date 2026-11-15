@@ -314,7 +314,10 @@ describe('ClaudeService', () => {
       expect(res.data.orders[0].quantity).toBe(3);
       expect(res.attempts).toBe(1);
       expect(res.model).toBe('claude-sonnet-5');
-      expect(res.usage).toEqual(USAGE);
+      expect(res.usage).toEqual({
+        ...USAGE,
+        cache_creation_1h_input_tokens: 0,
+      });
     });
 
     it.each([
@@ -735,6 +738,7 @@ describe('ClaudeService', () => {
         outputTokens: 567,
         cacheCreationTokens: 4072,
         cacheReadTokens: 89,
+        cacheCreation1hTokens: 0,
         steps: 1,
         stopReason: 'end_turn',
         outcome: 'ok',
@@ -788,8 +792,63 @@ describe('ClaudeService', () => {
         output_tokens: 5,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
+        cache_creation_1h_input_tokens: 0,
       });
       expect(usage.record.mock.calls[0][0].cacheReadTokens).toBe(0);
+    });
+
+    it('C1: usage.cache_creation dan 1 soatlik yozish o‘qiladi (jamidan oshmaydi)', async () => {
+      const usage = makeSink();
+      const { service, create } = setup({ sink: usage.sink });
+      create.mockResolvedValue({
+        ...okResponse(),
+        usage: {
+          ...USAGE,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 72,
+            ephemeral_1h_input_tokens: 4000,
+          },
+        },
+      });
+
+      const res = await service.extractJson(baseOpts());
+
+      expect(res.ok && res.usage.cache_creation_1h_input_tokens).toBe(4000);
+      expect(usage.record.mock.calls[0][0].cacheCreation1hTokens).toBe(4000);
+    });
+
+    it('C1: 1 soatlik yozish jamidan katta bo‘lsa — jamiga qisiladi (#648 M4)', async () => {
+      const usage = makeSink();
+      const { service, create } = setup({ sink: usage.sink });
+      create.mockResolvedValue({
+        ...okResponse(),
+        usage: {
+          ...USAGE,
+          cache_creation_input_tokens: 100,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 5000,
+          },
+        },
+      });
+
+      const res = await service.extractJson(baseOpts());
+
+      expect(res.ok && res.usage.cache_creation_1h_input_tokens).toBe(100);
+      expect(usage.record.mock.calls[0][0].cacheCreation1hTokens).toBe(100);
+    });
+
+    it('C1: cacheTtl 1h → system cache_control ttl 1h; sukut — avvalgidek kalitsiz', async () => {
+      const { service, create } = setup();
+      await service.extractJson(baseOpts({ cacheTtl: '1h' }));
+      await service.extractJson(baseOpts());
+      expect(create.mock.calls[0][0].system[0].cache_control).toEqual({
+        type: 'ephemeral',
+        ttl: '1h',
+      });
+      expect(create.mock.calls[1][0].system[0].cache_control).toEqual({
+        type: 'ephemeral',
+      });
     });
 
     it('sink sinxron throw qilsa natija buzilmaydi', async () => {

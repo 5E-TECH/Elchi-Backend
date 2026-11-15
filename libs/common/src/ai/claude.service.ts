@@ -39,6 +39,7 @@ import type {
   ClaudeImageInput,
   ClaudeOutcome,
   ClaudeResult,
+  ClaudeCacheTtl,
   ClaudeUsage,
   ClaudeUsageMeta,
   ClaudeUsageRecord,
@@ -76,6 +77,11 @@ interface AnthropicUsageLike {
   output_tokens?: number | null;
   cache_creation_input_tokens?: number | null;
   cache_read_input_tokens?: number | null;
+  /** C1: TTL bo'yicha bo'linish (SDK `usage.cache_creation`). */
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number | null;
+    ephemeral_1h_input_tokens?: number | null;
+  } | null;
 }
 
 interface AnthropicResponseLike {
@@ -257,18 +263,26 @@ export class ClaudeService implements OnApplicationBootstrap {
    * (ekstraksiya ~4200 token) takroriy chaqiruvlarda ~90% arzon o'qiladi
    * (cache_read = input*0.1). Anthropic minimal kesh chegarasidan kichik
    * promptlarni JIMGINA kesh qilmaydi — xato bermaydi, shunchaki oddiy narxda
-   * ketadi. Kesh 5 daqiqa (ephemeral) — hajmli oqimda deyarli doim issiq.
+   * ketadi. TTL sukut 5 daqiqa (ephemeral, yozish × 1.25); C1: `ttl='1h'` —
+   * yozish × 2, siyrak chaqiruvlar uchun (soatiga ≥2 o'qishda foyda).
    *
    * ⚠️ System matniga sana/market nomi/tuman ro'yxati kabi DINAMIK qiymat
    * qo'shilsa kesh jimgina o'ladi (xarajat ~4x) — o'zgaruvchi qism doim
    * user message'ga.
    */
-  private cachedSystem(system: string): Anthropic.TextBlockParam[] {
+  private cachedSystem(
+    system: string,
+    ttl: ClaudeCacheTtl = '5m',
+  ): Anthropic.TextBlockParam[] {
     return [
       {
         type: 'text',
         text: system,
-        cache_control: { type: 'ephemeral' },
+        // C1: '5m' — sukut (tana avvalgidek, `ttl` kaliti yo'q).
+        cache_control:
+          ttl === '1h'
+            ? { type: 'ephemeral', ttl: '1h' }
+            : { type: 'ephemeral' },
       },
     ];
   }
@@ -361,7 +375,7 @@ export class ClaudeService implements OnApplicationBootstrap {
         const body: Anthropic.MessageCreateParamsNonStreaming = {
           model,
           max_tokens: maxTokens,
-          system: this.cachedSystem(opts.system),
+          system: this.cachedSystem(opts.system, opts.cacheTtl),
           messages: [{ role: 'user', content }],
           output_config: {
             format: { type: 'json_schema', schema: opts.schema },
@@ -423,6 +437,7 @@ export class ClaudeService implements OnApplicationBootstrap {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           cacheCreationTokens: usage.cache_creation_input_tokens,
+          cacheCreation1hTokens: usage.cache_creation_1h_input_tokens,
           cacheReadTokens: usage.cache_read_input_tokens,
           steps: attempt,
           stopReason,
@@ -440,6 +455,7 @@ export class ClaudeService implements OnApplicationBootstrap {
             `input_tokens=${usage.input_tokens} ` +
             `output_tokens=${usage.output_tokens} ` +
             `cache_creation_input_tokens=${usage.cache_creation_input_tokens} ` +
+            `cache_creation_1h_input_tokens=${usage.cache_creation_1h_input_tokens} ` +
             `cache_read_input_tokens=${usage.cache_read_input_tokens} ` +
             `latency_ms=${latencyMs}`,
         );
@@ -523,6 +539,7 @@ export class ClaudeService implements OnApplicationBootstrap {
       output_tokens: 0,
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 0,
+      cache_creation_1h_input_tokens: 0,
     };
     const history = [...(opts.messages as Anthropic.MessageParam[])];
     const added: Anthropic.MessageParam[] = [];
@@ -585,7 +602,7 @@ export class ClaudeService implements OnApplicationBootstrap {
         const body: Anthropic.MessageStreamParams = {
           model,
           max_tokens: opts.maxTokens,
-          system: this.cachedSystem(opts.system),
+          system: this.cachedSystem(opts.system, opts.cacheTtl),
           messages: history,
           tools,
           cache_control: { type: 'ephemeral' },
@@ -626,6 +643,8 @@ export class ClaudeService implements OnApplicationBootstrap {
         total.input_tokens += usage.input_tokens;
         total.output_tokens += usage.output_tokens;
         total.cache_creation_input_tokens += usage.cache_creation_input_tokens;
+        total.cache_creation_1h_input_tokens +=
+          usage.cache_creation_1h_input_tokens;
         total.cache_read_input_tokens += usage.cache_read_input_tokens;
         const stopReason =
           typeof response.stop_reason === 'string'
@@ -666,6 +685,7 @@ export class ClaudeService implements OnApplicationBootstrap {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           cacheCreationTokens: usage.cache_creation_input_tokens,
+          cacheCreation1hTokens: usage.cache_creation_1h_input_tokens,
           cacheReadTokens: usage.cache_read_input_tokens,
           steps: step,
           stopReason,
@@ -681,6 +701,7 @@ export class ClaudeService implements OnApplicationBootstrap {
             `stop_reason=${stopReason ?? 'null'} tool_calls=${toolUses.length} ` +
             `input_tokens=${usage.input_tokens} output_tokens=${usage.output_tokens} ` +
             `cache_creation_input_tokens=${usage.cache_creation_input_tokens} ` +
+            `cache_creation_1h_input_tokens=${usage.cache_creation_1h_input_tokens} ` +
             `cache_read_input_tokens=${usage.cache_read_input_tokens}`,
         );
         opts.onStep?.({
@@ -799,6 +820,10 @@ export class ClaudeService implements OnApplicationBootstrap {
       output_tokens: tokenCount(u?.output_tokens),
       cache_creation_input_tokens: tokenCount(u?.cache_creation_input_tokens),
       cache_read_input_tokens: tokenCount(u?.cache_read_input_tokens),
+      cache_creation_1h_input_tokens: Math.min(
+        tokenCount(u?.cache_creation?.ephemeral_1h_input_tokens),
+        tokenCount(u?.cache_creation_input_tokens),
+      ),
     };
   }
 
