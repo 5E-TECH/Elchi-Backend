@@ -1533,7 +1533,9 @@ export class AdvisorInputsService {
           operation: r.history_id
             ? {
                 history_id: r.history_id,
-                kind: r.source_type ?? null,
+                // Shartnoma enum (CASHBOX_RECEIPT_KINDS) — chek turi, `source_type` emas
+                // (round-2 #654: HQ o'tkazmalari courier_to_hq / branch_to_hq).
+                kind: r.kind,
                 category_name: r.category_name ?? null,
               }
             : null,
@@ -1681,8 +1683,14 @@ export class AdvisorInputsService {
         fact_keys: [
           { fact_key: key, fact_at: new Date(end.getTime() - 1).toISOString() },
         ],
+        // §5.1: R8 — first_fact_at = davr boshi; system — «Butun tizim».
+        first_fact_at: start.toISOString(),
         branch: null,
-        subject: { kind: 'system', id: null, name: null },
+        subject: {
+          kind: 'system',
+          id: null,
+          name: AI_ADVISOR_SYSTEM_SUBJECT_NAME,
+        },
         headline_amount: null,
         facts: {
           from,

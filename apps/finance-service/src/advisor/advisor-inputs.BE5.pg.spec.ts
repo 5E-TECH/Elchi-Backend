@@ -1008,6 +1008,8 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
             receipt_kind: 'branch_to_hq',
             mismatch: ['card'],
             cashbox: { type: 'branch', owner_id: '9' },
+            // round-2 #654: shartnoma enum — chek turi, source_type emas.
+            operation: { history_id: income, kind: 'branch_to_hq' },
           },
         });
 
@@ -1099,6 +1101,8 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(out.candidates).toHaveLength(1);
         expect(out.candidates[0]).toMatchObject({
           dedup_key: 'R8:week:2026-10-12',
+          subject: { kind: 'system', id: null, name: 'Butun tizim' },
+          first_fact_at: '2026-10-11T19:00:00.000Z',
           facts: {
             from: '2026-10-12',
             to: '2026-10-18',
