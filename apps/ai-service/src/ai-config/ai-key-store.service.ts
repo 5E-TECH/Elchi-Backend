@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager } from 'typeorm';
@@ -49,8 +49,16 @@ export const AI_SETTING_ENV_CHECK = 'env_key_check';
 export type AiKeyOpResult =
   { ok: true } | { ok: false; error: AiConfigRpcError };
 
+/** COMMIT'dan keyin tinglovchilarga (runtime, inbox). Kalit qiymati yo'q. */
+export interface AiKeyChangeEvent {
+  action: string;
+  auditId: string;
+  hint: string | null;
+  actorName: string | null;
+}
+
 export interface AiKeyChangeListener {
-  (event: { action: string }): void;
+  (event: AiKeyChangeEvent): void;
 }
 
 interface KeyRowLite {
@@ -84,7 +92,7 @@ const VERIFY_FAIL_STATES: Partial<Record<AiConfigErrorCode, AiKeyVerifyState>> =
   };
 
 @Injectable()
-export class AiKeyStoreService {
+export class AiKeyStoreService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AiKeyStoreService.name);
   private readonly listeners = new Set<AiKeyChangeListener>();
 
@@ -102,10 +110,10 @@ export class AiKeyStoreService {
     return () => this.listeners.delete(listener);
   }
 
-  private emit(action: string): void {
+  private emit(event: AiKeyChangeEvent): void {
     for (const l of this.listeners) {
       try {
-        l({ action });
+        l(event);
       } catch {
         /* tinglovchi xatosi yozuvga ta'sir qilmaydi */
       }
@@ -197,7 +205,7 @@ export class AiKeyStoreService {
           source: 'ui',
         };
         const action = current ? 'ai.key.replace' : 'ai.key.add';
-        await this.audit(m, requester, action, id, {
+        const audited = await this.audit(m, requester, action, id, {
           old_value: current ? { key: refOf(current) } : null,
           new_value: { key: toRef },
           metadata: {
@@ -210,7 +218,7 @@ export class AiKeyStoreService {
             ? `AI kaliti almashtirildi (${toRef.hint})`
             : `AI kaliti qo'shildi (${toRef.hint})`,
         });
-        return action;
+        return { action: action, ...audited };
       },
     );
     return result;
@@ -296,7 +304,7 @@ export class AiKeyStoreService {
                 label: null,
                 source: 'env',
               };
-        await this.audit(
+        const audited = await this.audit(
           m,
           requester,
           'ai.key.verify',
@@ -311,7 +319,7 @@ export class AiKeyStoreService {
             description: `AI kaliti tekshirildi (${ref.hint}): ${state}`,
           },
         );
-        return 'ai.key.verify';
+        return { action: 'ai.key.verify', ...audited };
       },
       { bumpVersion: false },
     );
@@ -387,17 +395,23 @@ export class AiKeyStoreService {
           [current.id],
         );
       await this.saveCatalog(m, verified.models, null);
-      await this.audit(m, requester, 'ai.key.restore', prev.id, {
-        old_value: current ? { key: refOf(current) } : null,
-        new_value: { key: refOf(prev) },
-        metadata: {
-          version: newVersion,
-          key_from: current ? refOf(current) : null,
-          key_to: refOf(prev),
+      const audited = await this.audit(
+        m,
+        requester,
+        'ai.key.restore',
+        prev.id,
+        {
+          old_value: current ? { key: refOf(current) } : null,
+          new_value: { key: refOf(prev) },
+          metadata: {
+            version: newVersion,
+            key_from: current ? refOf(current) : null,
+            key_to: refOf(prev),
+          },
+          description: `Oldingi AI kalitiga qaytarildi (${refOf(prev).hint})`,
         },
-        description: `Oldingi AI kalitiga qaytarildi (${refOf(prev).hint})`,
-      });
-      return 'ai.key.restore';
+      );
+      return { action: 'ai.key.restore', ...audited };
     });
   }
 
@@ -430,18 +444,24 @@ export class AiKeyStoreService {
         `UPDATE ${KEYS} SET "status" = 'previous', "updatedAt" = now() WHERE "id" = $1`,
         [current.id],
       );
-      await this.audit(m, requester, 'ai.key.deactivate', current.id, {
-        old_value: { key: refOf(current) },
-        new_value: null,
-        metadata: {
-          version: newVersion,
-          key_from: refOf(current),
-          retired: previous ? refOf(previous) : null,
-          reason,
+      const audited = await this.audit(
+        m,
+        requester,
+        'ai.key.deactivate',
+        current.id,
+        {
+          old_value: { key: refOf(current) },
+          new_value: null,
+          metadata: {
+            version: newVersion,
+            key_from: refOf(current),
+            retired: previous ? refOf(previous) : null,
+            reason,
+          },
+          description: `AI kaliti o'chirildi (${refOf(current).hint})`,
         },
-        description: `AI kaliti o'chirildi (${refOf(current).hint})`,
-      });
-      return 'ai.key.deactivate';
+      );
+      return { action: 'ai.key.deactivate', ...audited };
     });
   }
 
@@ -458,13 +478,74 @@ export class AiKeyStoreService {
       const previous = await this.rowByStatus(m, 'previous');
       if (!previous) throw new AiConfigAbort(C.KEY_NO_PREVIOUS);
       await this.retire(m, previous.id, requester.id);
-      await this.audit(m, requester, 'ai.key.forget', previous.id, {
-        old_value: { key: refOf(previous) },
-        new_value: null,
-        metadata: { version: newVersion, key_from: refOf(previous) },
-        description: `Oldingi AI kaliti o'chirib tashlandi (${refOf(previous).hint})`,
-      });
-      return 'ai.key.forget';
+      const audited = await this.audit(
+        m,
+        requester,
+        'ai.key.forget',
+        previous.id,
+        {
+          old_value: { key: refOf(previous) },
+          new_value: null,
+          metadata: { version: newVersion, key_from: refOf(previous) },
+          description: `Oldingi AI kaliti o'chirib tashlandi (${refOf(previous).hint})`,
+        },
+      );
+      return { action: 'ai.key.forget', ...audited };
+    });
+  }
+
+  // ---------------------------------------------------------------- reencrypt
+
+  /**
+   * Master sir rotatsiyasi (be-brief AC16): `_PREVIOUS_FILE` berilgan bo'lsa
+   * boot'da oldingi sir bilan shifrlangan kalitlar joriy sir bilan qayta
+   * shifrlanadi — bitta tranzaksiya, audit `ai.key.reencrypt` (tizim). Xato
+   * boot'ni to'xtatmaydi (WARN); `rotation_pending` UI'da qoladi.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    if (!this.env.cipher.rotating || !this.env.cipher.configured) return;
+    try {
+      const n = await this.reencryptAll();
+      this.logger.log(`AI kalitlari qayta shifrlandi: ${n}`);
+    } catch (err) {
+      this.logger.warn(
+        `AI kalitlarini qayta shifrlab bo'lmadi: ${(err as Error)?.name ?? 'Error'}`,
+      );
+    }
+  }
+
+  async reencryptAll(): Promise<number> {
+    const cipher = this.env.cipher;
+    return this.ds.transaction(async (m) => {
+      const rows = await m.query<{ id: string; secret_enc: string }[]>(
+        `SELECT "id", "secret_enc" FROM ${KEYS}
+          WHERE "secret_enc" IS NOT NULL AND "status" IN ('active','previous')
+          FOR UPDATE`,
+      );
+      let count = 0;
+      for (const r of rows) {
+        const aad = aiProviderKeyAad(this.env.appEnv, r.id);
+        if (!cipher.needsReencrypt(r.secret_enc, aad)) continue;
+        const fresh = cipher.encrypt(cipher.decrypt(r.secret_enc, aad), aad);
+        await m.query(
+          `UPDATE ${KEYS} SET "secret_enc" = $2, "updatedAt" = now() WHERE "id" = $1`,
+          [r.id, fresh],
+        );
+        count++;
+      }
+      if (count > 0) {
+        await this.activityLog.logWithin(m, {
+          entity_type: 'AiProviderKey',
+          entity_id: 'master',
+          action: 'ai.key.reencrypt',
+          user_id: null,
+          user_name: 'Tizim',
+          user_role: 'system',
+          metadata: { reencrypted: count },
+          description: `AI kalitlari yangi master sir bilan qayta shifrlandi (${count} ta)`,
+        });
+      }
+      return count;
     });
   }
 
@@ -558,8 +639,12 @@ export class AiKeyStoreService {
       metadata: Record<string, unknown>;
       description: string;
     },
-  ): Promise<void> {
-    await this.activityLog.logWithin(m, {
+  ): Promise<Omit<AiKeyChangeEvent, 'action'>> {
+    const meta = input.metadata as {
+      key_to?: AiKeyRef | null;
+      key_from?: AiKeyRef | null;
+    };
+    const row = await this.activityLog.logWithin(m, {
       entity_type: 'AiProviderKey',
       entity_id: entityId,
       action,
@@ -571,6 +656,11 @@ export class AiKeyStoreService {
       metadata: input.metadata,
       description: input.description,
     });
+    return {
+      auditId: String(row.id),
+      hint: meta.key_to?.hint ?? meta.key_from?.hint ?? null,
+      actorName: requester.name ?? null,
+    };
   }
 
   /** Rad etilgan urinish — faqat iz va kod (o'zgarishdan tashqarida, best effort). */
@@ -599,13 +689,13 @@ export class AiKeyStoreService {
   private async mutate(
     deadline: AiConfigDeadline,
     expectedVersion: number | null,
-    fn: (m: EntityManager, newVersion: number) => Promise<string>,
+    fn: (m: EntityManager, newVersion: number) => Promise<AiKeyChangeEvent>,
     opts: { bumpVersion?: boolean } = {},
   ): Promise<AiKeyOpResult> {
     const bump = opts.bumpVersion !== false;
-    let action: string;
+    let event: AiKeyChangeEvent;
     try {
-      action = await this.ds.transaction(async (m) => {
+      event = await this.ds.transaction(async (m) => {
         await m.query(
           `INSERT INTO ${SETTINGS} ("key", "value", "version") VALUES ($1, '{}'::jsonb, 1)
            ON CONFLICT ("key") DO NOTHING`,
@@ -637,7 +727,7 @@ export class AiKeyStoreService {
       );
       throw err;
     }
-    this.emit(action);
+    this.emit(event);
     return { ok: true };
   }
 }

@@ -95,6 +95,36 @@ describe.each(JOBS)('%s: env preflight', (job, envFile) => {
     expect(reached()).toBe(true);
   });
 
+  it('«AI kalit va modellar»: master sir / ANTHROPIC_BASE_URL — to`xtaydi; ANTHROPIC_API_KEY — WARN, qiymat logda yo`q', () => {
+    const base = `POSTGRES_PASSWORD=${PG_OK}\nSUPERADMIN_PASSWORD=${SA_OK}\n`;
+    const master = 'MasterSecretValueNeverLogged0123456789';
+    for (const line of [
+      `AI_KEY_ENCRYPTION_SECRET=${master}`,
+      `export AI_KEY_ENCRYPTION_SECRET_PREVIOUS=${master}`,
+      'ANTHROPIC_BASE_URL=https://proxy.example',
+    ]) {
+      rmSync(join(dir, 'reached'), { force: true });
+      const r = run(`${base}${line}\n`);
+      expect(r.status).not.toBe(0);
+      expect(reached()).toBe(false);
+      expect(r.stderr).toContain('docs/ops/ai-config.md');
+      expect(r.stdout + r.stderr).not.toContain(master);
+    }
+    const key = 'sk-ant-api03-' + 'k'.repeat(40);
+    rmSync(join(dir, 'reached'), { force: true });
+    const w = run(
+      `${base}ANTHROPIC_API_KEY=${key}\nAI_KEY_ENCRYPTION_SECRET_FILE=/run/secrets/ai/ai_key_master\n`,
+    );
+    expect(w.status).toBe(0);
+    expect(reached()).toBe(true);
+    expect(w.stderr).toContain('WARN: ANTHROPIC_API_KEY');
+    expect(w.stdout + w.stderr).not.toContain(key);
+    rmSync(join(dir, 'reached'), { force: true });
+    const empty = run(`${base}ANTHROPIC_API_KEY=\n`);
+    expect(empty.status).toBe(0);
+    expect(empty.stderr).not.toContain('WARN: ANTHROPIC_API_KEY');
+  });
+
   it('chegaralar: POSTGRES 24, SUPERADMIN 12', () => {
     const r = run(
       `POSTGRES_PASSWORD=${'p'.repeat(24)}\nSUPERADMIN_PASSWORD=${'s'.repeat(12)}\n`,

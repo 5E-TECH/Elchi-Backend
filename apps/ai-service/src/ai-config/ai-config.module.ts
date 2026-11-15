@@ -4,6 +4,7 @@ import { RmqModule } from '@app/common';
 import { AiUsageModule } from '../usage/ai-usage.module';
 import { AiConfigController } from './ai-config.controller';
 import { AiConfigEnv } from './ai-config-env';
+import { AiConfigNotifier } from './ai-config.notifier';
 import { AiConfigHistoryService } from './ai-config-history.service';
 import { AiConfigViewService } from './ai-config-view.service';
 import {
@@ -22,6 +23,8 @@ import { AiKeyVerifierService } from './ai-key-verifier.service';
 @Module({
   imports: [
     RmqModule,
+    // Inbox xabari (notification.dispatch).
+    RmqModule.register({ name: 'NOTIFICATION' }),
     TypeOrmModule.forFeature([
       AiProviderKey,
       AiRuntimeSetting,
@@ -38,7 +41,13 @@ import { AiKeyVerifierService } from './ai-key-verifier.service';
     AiKeyStoreService,
     AiConfigViewService,
     AiConfigHistoryService,
+    AiConfigNotifier,
   ],
-  exports: [AiConfigEnv, AiKeyStoreService, AiConfigViewService],
+  exports: [
+    AiConfigEnv,
+    AiKeyStoreService,
+    AiConfigViewService,
+    AiConfigNotifier,
+  ],
 })
 export class AiConfigModule {}

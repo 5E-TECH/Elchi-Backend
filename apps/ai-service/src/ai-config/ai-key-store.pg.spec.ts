@@ -454,6 +454,18 @@ describePg('AiKeyStoreService — real Postgres', () => {
     const v = (await view.build('7')) as any;
     expect(v.master_key).toEqual({ configured: true, rotation_pending: 1 });
     expect(v.key.active.readable).toBe(true);
+    // Boot: qayta shifrlash → rotation_pending 0, audit ai.key.reencrypt.
+    await store.onApplicationBootstrap();
+    const after = (await view.build('7')) as any;
+    expect(after.master_key.rotation_pending).toBe(0);
+    expect((await auditRows()).map((a) => a.action)).toContain(
+      'ai.key.reencrypt',
+    );
+    // Endi faqat yangi master bilan ham ochiladi.
+    (env as any).cipher = new SecretCipher({ primary: MASTER });
+    expect(
+      (await readAnthropicKey(ds.manager, env.cipher, 'staging'))?.key,
+    ).toBe(FAKE_KEY);
     (env as any).cipher = original;
   });
 

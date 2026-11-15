@@ -427,6 +427,14 @@ BEGIN
   END IF;
 END $$;
 SELECT pg_temp.wipe('ai_schema', 'ai_spend_counter');
+-- «AI kalit va modellar» (be-brief §4): prod'ning shifrlangan Anthropic kalitlari,
+-- urinishlar va runtime sozlamalari staging'ga O'TMAYDI (staging master siri boshqa —
+-- ochilmasdi ham, lekin shifrmatn umuman qolmasin). Staging kaliti ega tomonidan UI
+-- orqali qayta qo'shiladi.
+SELECT pg_temp.wipe('ai_schema', 'ai_provider_keys');
+SELECT pg_temp.wipe('ai_schema', 'ai_config_attempts');
+SELECT pg_temp.wipe('ai_schema', 'ai_runtime_settings',
+  $c$key IN ('keys','models','model_catalog','env_key_check')$c$);
 
 -- ---------------------------------------------------------------------------
 -- 8. Har sxemadagi umumiy jadvallar: audit jurnallari, webhook loglari,

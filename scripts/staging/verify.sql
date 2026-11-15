@@ -165,6 +165,8 @@ SELECT pg_temp.chk('provider_webhook_logs rows', 'integration_schema', 'provider
 
 -- 9. AI matnlari, audit jurnallari, qidiruv indeksi.
 SELECT pg_temp.chkcol('ai_order_draft: source_text left', 'ai_schema', 'ai_order_draft', 'source_text', 'coalesce(source_text, '''') <> ''''');
+SELECT pg_temp.chk('ai_provider_keys rows (encrypted Anthropic keys)', 'ai_schema', 'ai_provider_keys', 'SELECT count(*) FROM ai_schema.ai_provider_keys');
+SELECT pg_temp.chk('ai_runtime_settings key/model rows', 'ai_schema', 'ai_runtime_settings', $q$SELECT count(*) FROM ai_schema.ai_runtime_settings WHERE key IN ('keys','models','model_catalog','env_key_check')$q$);
 DO $$
 DECLARE s text; n bigint; total bigint := 0;
 BEGIN

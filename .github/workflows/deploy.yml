@@ -222,6 +222,18 @@ jobs:
               echo "!!! .env.production: missing or too short: $ENV_PREFLIGHT_BAD— deploy refused, nothing was touched. Fix the value on the server, then re-run. docs/ops/secret-rotation.md §5" >&2
               exit 1
             fi
+            # «AI kalit va modellar» (be-brief §9). The AI master key lives ONLY in a
+            # file mounted into ai-service (AI_KEY_ENCRYPTION_SECRET_FILE) — never in the
+            # env file every service reads. ANTHROPIC_BASE_URL makes ai-service refuse to
+            # boot (Joi). ANTHROPIC_API_KEY belongs in the ai-secrets file read only by
+            # ai-service: WARN for now, FAIL from the next release. grep -q prints nothing.
+            if grep -qE '^[[:space:]]*(export[[:space:]]+)?(AI_KEY_ENCRYPTION_SECRET|AI_KEY_ENCRYPTION_SECRET_PREVIOUS|ANTHROPIC_BASE_URL)=' .env.production; then
+              echo "!!! .env.production: AI_KEY_ENCRYPTION_SECRET* / ANTHROPIC_BASE_URL must not be set here — deploy refused, nothing was touched. docs/ops/ai-config.md" >&2
+              exit 1
+            fi
+            if grep -qE '^[[:space:]]*(export[[:space:]]+)?ANTHROPIC_API_KEY=[^[:space:]#]' .env.production; then
+              echo "WARN: ANTHROPIC_API_KEY is still in .env.production — move it to the ai-secrets file (docs/ops/ai-config.md); this becomes a deploy failure in the next release." >&2
+            fi
             # --- end env preflight ----------------------------------------------
             git config --global --add safe.directory "$DEPLOY_APP_PATH" || true
             # AFiXurLH: the safety copy of .env.production is PRIVATE (umask 077 +
@@ -772,6 +784,18 @@ jobs:
             if [ -n "$ENV_PREFLIGHT_BAD" ]; then
               echo "!!! .env.staging: missing or too short: $ENV_PREFLIGHT_BAD— deploy refused, nothing was touched. Fix the value on the server, then re-run. docs/ops/secret-rotation.md §5" >&2
               exit 1
+            fi
+            # «AI kalit va modellar» (be-brief §9). The AI master key lives ONLY in a
+            # file mounted into ai-service (AI_KEY_ENCRYPTION_SECRET_FILE) — never in the
+            # env file every service reads. ANTHROPIC_BASE_URL makes ai-service refuse to
+            # boot (Joi). ANTHROPIC_API_KEY belongs in the ai-secrets file read only by
+            # ai-service: WARN for now, FAIL from the next release. grep -q prints nothing.
+            if grep -qE '^[[:space:]]*(export[[:space:]]+)?(AI_KEY_ENCRYPTION_SECRET|AI_KEY_ENCRYPTION_SECRET_PREVIOUS|ANTHROPIC_BASE_URL)=' .env.staging; then
+              echo "!!! .env.staging: AI_KEY_ENCRYPTION_SECRET* / ANTHROPIC_BASE_URL must not be set here — deploy refused, nothing was touched. docs/ops/ai-config.md" >&2
+              exit 1
+            fi
+            if grep -qE '^[[:space:]]*(export[[:space:]]+)?ANTHROPIC_API_KEY=[^[:space:]#]' .env.staging; then
+              echo "WARN: ANTHROPIC_API_KEY is still in .env.staging — move it to the ai-secrets file (docs/ops/ai-config.md); this becomes a deploy failure in the next release." >&2
             fi
             # --- end env preflight ----------------------------------------------
             git config --global --add safe.directory "$DEPLOY_APP_PATH" || true

@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-15 — AI kalit va modellar (BE-1e): inbox xabarlari, ops alert, deploy
+
+Deploy: ai-service. Migratsiya yo'q. Ops: `scripts/ai-config-alert.sh` (host cron), `docs/ops/ai-config.md`.
+
+- 🆕 Bildirishnoma turlari (superadmin + admin, `category: system`, o'chirib bo'lmaydi): `ai.key_alert` (kalit qo'shildi / almashtirildi / qaytarildi / o'chirildi / ishlamay qoldi / ochilmadi — runtime nosozligi `critical`, qolgani `high`) va `ai.model_alert` (BE-2/BE-4 dan). `data`: `{action, audit_id, hint}` — kalit qiymati yo'q. Matn (title/body) o'zbekcha, ai-service'dan.
+- 🟢 Kalitni tekshirish (`verify`) va rad etilgan urinish inbox'ga KETMAYDI (rad etilgan urinishlar faqat ops chatga, soatiga yig'ma).
+
+**Frontend action items:**
+- 🔧 Inbox: `ai.key_alert` / `ai.model_alert` qatoridan «Ops → AI kalit va modellar» sahifasiga havola (`data.audit_id` — tarixdagi qator id'si).
+
 ### 2026-11-15 — AI kalit va modellar (BE-1d): `/ai/config*` endpointlari (gateway)
 
 Deploy: **ai-service OLDIN** (BE-1b), keyin api-gateway. Yangi navbat `ai_config_queue` (env `RABBITMQ_AI_CONFIG_QUEUE`, sukut). Shakllar — openapi-fragment v0.2 (`openapi.json` yangilandi). Hammasi **faqat SUPERADMIN** (ADMIN — 403 kodsiz).
