@@ -3472,7 +3472,7 @@
             "description": "{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija"
           },
           "400": {
-            "description": "AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', orders: number[] }` (so'rovdagi o'rinlar). Boshqa 400 — DTO validatsiyasi."
+            "description": "AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', orders: number[] }` (so'rovdagi o'rinlar). AI_DRAFT_NOT_FOUND — `draft_id` shu market uchun ai-service'da topilmadi (AI'ni qayta yurgizing yoki qo'lda yarating), tana xuddi shunday `orders: number[]`. Boshqa 400 — DTO validatsiyasi."
           },
           "409": {
             "description": "CHECKS_NOT_ACKNOWLEDGED — saqlangan AI preview'da bloklovchi tekshiruv (district_low_confidence, price_check) bor, lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi. Tana: `{ statusCode: 409, message, code: 'CHECKS_NOT_ACKNOWLEDGED', missing: string[], orders: [{ index, missing: string[] }] }` (`index` — so‘rovdagi `orders[]` o‘rni)."

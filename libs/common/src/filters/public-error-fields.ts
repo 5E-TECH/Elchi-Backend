@@ -14,6 +14,7 @@ import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-cod
 import {
   AI_CHECKS_NOT_ACKNOWLEDGED,
   AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_NOT_FOUND,
   AI_DRAFT_REQUIRED,
 } from '../ai/ai-draft.contract';
 
@@ -175,6 +176,8 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [AI_CHECKS_UNAVAILABLE]: ['retryable', 'retry_after_seconds'],
   // (AI ack) 400 — draft_id / ai_item_index yo'q buyurtmalar (`orders`).
   [AI_DRAFT_REQUIRED]: ['orders'],
+  // (AI ack) 400 — draft shu market uchun topilmadi (`orders`).
+  [AI_DRAFT_NOT_FOUND]: ['orders'],
   // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),
@@ -192,6 +195,7 @@ export const PUBLIC_ERROR_LIST_FIELDS: Readonly<
 > = {
   [AI_CHECKS_NOT_ACKNOWLEDGED]: ['missing', 'orders'],
   [AI_DRAFT_REQUIRED]: ['orders'],
+  [AI_DRAFT_NOT_FOUND]: ['orders'],
 };
 
 export type PublicErrorValue = string | number | boolean | null;

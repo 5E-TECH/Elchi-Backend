@@ -198,3 +198,11 @@ export const AI_CHECKS_UNAVAILABLE = 'AI_CHECKS_UNAVAILABLE';
  * talabini chetlab o'tish yo'li bo'lmasin (`orders` — so'rovdagi o'rinlar).
  */
 export const AI_DRAFT_REQUIRED = 'AI_DRAFT_REQUIRED';
+
+/**
+ * ai-confirm 400 (FE sessiya / ega, 2026-11-15): ai-service ishlab turibdi,
+ * lekin `draft_id` shu market uchun topilmadi (soxta yoki saqlanmagan) —
+ * hech narsa yaratilmaydi; operator AI'ni qayta yurgizadi yoki qo'lda
+ * yaratadi (`orders` — so'rovdagi o'rinlar).
+ */
+export const AI_DRAFT_NOT_FOUND = 'AI_DRAFT_NOT_FOUND';

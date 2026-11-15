@@ -63,6 +63,7 @@ type SendPayload = {
   draft_id?: string;
   order_ids?: string[];
   market_id?: string;
+  draft_ids?: string[];
 };
 
 type Fake = { send: jest.Mock<Observable<unknown>, [Pattern, SendPayload]> };
@@ -71,6 +72,10 @@ const fakeClient = (): Fake => ({
   send: jest.fn<Observable<unknown>, [Pattern, SendPayload]>(),
 });
 const asClient = (fake: Fake) => fake as unknown as ClientProxy;
+
+/** `ai.draft.confirm_context` javobi: so'ralgan draftlar (snapshot'siz). */
+const knownDrafts = (payload: SendPayload) =>
+  (payload.draft_ids ?? []).map((draft_id) => ({ draft_id }));
 
 const MARKET_ID = '77';
 
@@ -160,7 +165,13 @@ const makeController = () => {
   });
   let nextOrderId = 1000;
   order.send.mockImplementation(() => of({ id: String(nextOrderId++) }));
-  ai.send.mockImplementation(() => of({ updated: 1 }));
+  // AI ack: ai-confirm draft'ni ai-service'dan oladi — so'ralgan har draft
+  // "eski" (snapshot'siz) sifatida qaytadi (tasdiq so'ralmaydi).
+  ai.send.mockImplementation((pattern, payload) =>
+    pattern.cmd === 'ai.draft.confirm_context'
+      ? of({ drafts: knownDrafts(payload) })
+      : of({ updated: 1 }),
+  );
 
   const controller = new OrderGatewayController(
     asClient(order),
@@ -816,10 +827,10 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
 
   it('link_orders xatosi natijaga ta’sir qilmaydi', async () => {
     const fx = makeController();
-    fx.ai.send.mockImplementation((pattern) =>
+    fx.ai.send.mockImplementation((pattern, payload) =>
       pattern.cmd === 'ai.usage.link_orders'
         ? throwError(() => new Error('ai down'))
-        : of({ drafts: [] }),
+        : of({ drafts: knownDrafts(payload) }),
     );
     const res = await fx.controller.aiConfirm(
       {

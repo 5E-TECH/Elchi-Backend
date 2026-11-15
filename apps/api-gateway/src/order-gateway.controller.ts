@@ -155,6 +155,7 @@ import {
   requestContext,
   AI_CHECKS_NOT_ACKNOWLEDGED,
   AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_NOT_FOUND,
   AI_DRAFT_REQUIRED,
   type AiAuditedField,
   type AiFieldCorrections,
@@ -2373,6 +2374,25 @@ export class OrderGatewayController {
         retry_after_seconds: AI_CHECKS_RETRY_AFTER_SECONDS,
       });
     }
+    // AI ack (FE sessiya / ega, 2026-11-15): ai-service javob berdi, lekin
+    // draft shu market uchun yo'q (soxta UUID yoki saqlanmagan) — tasdiqni
+    // tekshirib bo'lmaydi, 400. Fail-open faqat haqiqiy eski draft uchun
+    // (draft bor, snapshot'da `check_codes` yo'q) — `checks_unverified`.
+    const unknownDraft = eligible
+      .filter((item) => {
+        const draftId = this.asStr(item.order.draft_id).trim();
+        return draftId !== '' && !contexts.has(draftId);
+      })
+      .map((item) => item.index);
+    if (unknownDraft.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: AI_DRAFT_NOT_FOUND,
+        message:
+          "AI natijasi topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating",
+        orders: unknownDraft,
+      });
+    }
     for (const item of eligible) {
       const draftId = this.asStr(item.order.draft_id).trim();
       if (!draftId) continue;
@@ -2431,8 +2451,8 @@ export class OrderGatewayController {
                   100,
               ) / 100,
         edited_fields: item.editedFields,
-        // AI ack: tekshiruvlar tasdiqlanmadi — draft topilmadi yoki eski
-        // (feature'dan oldingi) snapshot'da `check_codes` yo'q (fail-open).
+        // AI ack: tekshiruvlar tasdiqlanmadi — eski (feature'dan oldingi)
+        // draft: snapshot yoki undagi `check_codes` yo'q (fail-open).
         checks_unverified:
           !preview || !Array.isArray(preview.check_codes) || undefined,
       };
@@ -3682,7 +3702,7 @@ export class OrderGatewayController {
   })
   @ApiBadRequestResponse({
     description:
-      "AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', orders: number[] }` (so'rovdagi o'rinlar). Boshqa 400 — DTO validatsiyasi.",
+      "AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', orders: number[] }` (so'rovdagi o'rinlar). AI_DRAFT_NOT_FOUND — `draft_id` shu market uchun ai-service'da topilmadi (AI'ni qayta yurgizing yoki qo'lda yarating), tana xuddi shunday `orders: number[]`. Boshqa 400 — DTO validatsiyasi.",
   })
   @ApiServiceUnavailableResponse({
     description:

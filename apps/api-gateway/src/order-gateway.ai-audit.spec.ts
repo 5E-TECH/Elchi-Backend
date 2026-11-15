@@ -285,8 +285,18 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
     expect(fx.creates()).toHaveLength(0);
   });
 
-  it('AI ack: draft topilmadi (eski / saqlanmagan) — fail-open, ai_audit.checks_unverified=true', async () => {
-    const fx = setup({ contexts: [] });
+  it('AI ack: draft shu market uchun topilmadi — 400 AI_DRAFT_NOT_FOUND, yaratilmaydi', async () => {
+    const fx = setup({ contexts: { drafts: [] } });
+    await expect(
+      fx.controller.aiConfirm({ orders: [order(0), order(1)] }, marketReq),
+    ).rejects.toMatchObject({
+      response: { code: 'AI_DRAFT_NOT_FOUND', orders: [0, 1] },
+    });
+    expect(fx.creates()).toHaveLength(0);
+  });
+
+  it('AI ack: eski draft (snapshot yo‘q) — fail-open, ai_audit.checks_unverified=true', async () => {
+    const fx = setup({ contexts: { drafts: [{ draft_id: DRAFT }] } });
     const res = await fx.controller.aiConfirm(
       { orders: [order(0)] },
       marketReq,
@@ -295,7 +305,7 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
     expect(fx.creates()[0][1].ai_audit).toMatchObject({
       ai: true,
       ai_draft_id: DRAFT,
-      ai_draft_verified: false,
+      ai_draft_verified: true,
       edited_fields: null,
       checks_unverified: true,
     });

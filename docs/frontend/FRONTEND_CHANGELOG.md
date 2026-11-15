@@ -40,13 +40,14 @@ Deploy: api-gateway + notification-service (bot). Migratsiya YO'Q. `openapi.json
 - 🟢 Tahrir istisnosi: operator tegishli maydonni O'ZI o'zgartirgan bo'lsa (server hisoblagan `edited_fields`), tasdiq shart emas — tuman (`district_id`) almashtirilsa `district_low_confidence`, summa (`total_price`) o'zgartirilsa `price_check` talab qilinmaydi. Viloyat / manzil tahriri tuman tekshiruvini olib tashlamaydi.
 - ⚠️ `draft_id` va `ai_item_index` endi MAJBURIY (har buyurtmada) — bo'lmasa **400** `{ code: "AI_DRAFT_REQUIRED", orders: number[] }` (so'rovdagi o'rinlar), hech narsa yaratilmaydi. Tasdiqni chetlab o'tish yo'li qolmasin (FE sessiya / ega, 2026-11-15).
 - ⚠️ ai-service javob bermasa (timeout / xato) — **FAIL-CLOSED 503** `{ code: "AI_CHECKS_UNAVAILABLE", retryable: true, retry_after_seconds: 5 }`, hech narsa yaratilmaydi; FE `retry_after_seconds` dan keyin qayta yuboradi.
-- 🟢 Orqaga moslik: draft topilmadi yoki snapshot'da `check_codes` yo'q (feature'dan oldingi draft) — tasdiq so'ralmaydi, yaratiladi; audit metadata'da `checks_unverified: true`.
+- ⚠️ `draft_id` shu market uchun ai-service'da topilmasa (soxta yoki saqlanmagan) — **400** `{ code: "AI_DRAFT_NOT_FOUND", orders: number[] }`, hech narsa yaratilmaydi. FE matni: «AI natijasi topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating».
+- 🟢 Orqaga moslik: draft bor, lekin snapshot yoki undagi `check_codes` yo'q (feature'dan oldingi draft) — tasdiq so'ralmaydi, yaratiladi; audit metadata'da `checks_unverified: true`.
 - 🟢 Telegram bot: preview'da tekshiruvlar oddiy tilda «⚠️» qatorlari («Tuman aniq emas: AI «…» deb o'qidi — tekshiring», «Summa matndagidan farq qiladi: matnda 150 000, AI 15 000»). Bloklovchi bo'lsa «✅ Yaratish» avval «Baribir yaratamanmi?» deb so'raydi («✅ Ha, yaratish» / «↩️ Yo'q, orqaga»), keyin `ack_checks` bilan yuboradi.
 
 **Frontend action items:**
 - 🔧 Kartada `district_low_confidence` yoki `price_check` bo'lsa (va operator tuman / summani o'zgartirmagan bo'lsa) «Yaratish»dan oldin tasdiq oynasi (yoki kartadagi «Tekshirdim» belgisi) ko'rsating va shu buyurtmaning `ack_checks` ga AYNAN o'sha kodlarni yuboring.
 - 🔧 409 `CHECKS_NOT_ACKNOWLEDGED` ni ishlang: `orders[].index` bo'yicha kartalarni belgilang, `missing` kodlari uchun tasdiq so'rang va so'rovni (`ack_checks` bilan) qayta yuboring — so'rovdagi boshqa buyurtmalar ham yaratilmagan.
-- 🔧 503 `AI_CHECKS_UNAVAILABLE` — «Qayta urinish» (`retry_after_seconds`); 400 `AI_DRAFT_REQUIRED` — FE xatosi (har buyurtmaga `draft_id` + `ai_item_index` yuboring).
+- 🔧 503 `AI_CHECKS_UNAVAILABLE` — «Qayta urinish» (`retry_after_seconds`); 400 `AI_DRAFT_REQUIRED` — FE xatosi (har buyurtmaga `draft_id` + `ai_item_index` yuboring); 400 `AI_DRAFT_NOT_FOUND` — yuqoridagi matn, `orders[]` bo'yicha kartalarni belgilang.
 
 ### 2026-11-14 — AI preview: tuman qanday aniqlangani, viloyat taxmini, yumshoq tekshiruvlar (`checks[]`)
 

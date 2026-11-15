@@ -141,10 +141,16 @@ const makeController = (
   };
   const poller = { getState: jest.fn(() => 'enabled') };
 
-  ai.send.mockImplementation((pattern) =>
+  ai.send.mockImplementation((pattern, payload) =>
     pattern.cmd === 'ai.order.extract'
       ? of({ ok: true, orders: [{ customer_name: 'Ali' }] })
-      : of({ updated: 1 }),
+      : pattern.cmd === 'ai.draft.confirm_context'
+        ? of({
+            drafts: ((payload as { draft_ids?: string[] }).draft_ids ?? []).map(
+              (draft_id) => ({ draft_id }),
+            ),
+          })
+        : of({ updated: 1 }),
   );
   let nextOrderId = 1000;
   order.send.mockImplementation((pattern, payload) => {
