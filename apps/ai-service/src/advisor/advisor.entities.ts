@@ -137,6 +137,10 @@ export class AiAdvisorAlert extends BaseEntity {
   /** `backfill` va h.k. — dispatch qilinmagan sabab. */
   @Column({ type: 'varchar', length: 32, nullable: true })
   notify_skipped!: string | null;
+
+  /** R6: kechiktirilgan Telegram vaqti (09:00 Toshkent; migratsiya 229). */
+  @Column({ type: 'timestamptz', nullable: true })
+  telegram_due_at!: Date | null;
 }
 
 /** Takror (alohida `fact_key`) — `history` va dedup manbai. */

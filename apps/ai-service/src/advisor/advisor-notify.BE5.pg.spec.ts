@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import { from, of, throwError } from 'rxjs';
 import type { ActivityLogService } from '@app/common';
 import { AiAdvisorAlerts1716000000224 } from '../../../../migrations/1716000000224-AiAdvisorAlerts';
+import { AiAdvisorTelegramDue1716000000229 } from '../../../../migrations/1716000000229-AiAdvisorTelegramDue';
 import { AdvisorNotifier } from './advisor-notify';
 import { AdvisorSettingsService } from './advisor-settings.service';
 
@@ -41,6 +42,8 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
     try {
       await qr.query('CREATE SCHEMA IF NOT EXISTS ai_schema');
       await new AiAdvisorAlerts1716000000224().up(qr);
+      await new AiAdvisorTelegramDue1716000000229().up(qr);
+      await new AiAdvisorTelegramDue1716000000229().up(qr); // idempotent
     } finally {
       await qr.release();
     }
@@ -231,5 +234,109 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       { id: old, notify_skipped: 'stale' },
       { id: fresh, notify_skipped: null },
     ]);
+  });
+
+  describe('R6 Telegram 09:00 Toshkent (ega, 2026-11-15)', () => {
+    const night = new Date('2026-10-22T21:30:00.000Z'); // 23.10 02:30
+    const nine = new Date('2026-10-23T04:00:00.000Z'); // 23.10 09:00
+    const payloads = () =>
+      dispatch.mock.calls.map(
+        (c: unknown[]) =>
+          c[1] as {
+            channels: string[];
+            client_request_id: string;
+            data: { alert_id: string };
+          },
+      );
+    const due = (id: string) =>
+      ds
+        .query<
+          Array<{ telegram_due_at: Date | null; notified_at: Date | null }>
+        >(
+          `SELECT telegram_due_at, notified_at FROM ai_schema.ai_advisor_alerts WHERE id = $1`,
+          [id],
+        )
+        .then((r) => r[0]);
+
+    it('tunda: ilova darhol, Telegram 09:00 da bir marta (alohida client_request_id)', async () => {
+      const [{ id }] = await insert('critical', 'new', null, 'R6');
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      expect(await notifier.dispatchPending(night)).toEqual({
+        sent: 1,
+        failed: 0,
+      });
+      expect(payloads()[0].channels).toEqual(['in_app', 'realtime']);
+      expect((await due(id)).telegram_due_at?.toISOString()).toBe(
+        nine.toISOString(),
+      );
+
+      // 08:59 — hali yo'q.
+      expect(
+        await notifier.dispatchPending(new Date(nine.getTime() - 60_000)),
+      ).toEqual({ sent: 0, failed: 0 });
+      // 09:00 — faqat Telegram, boshqa client_request_id.
+      expect(await notifier.dispatchPending(nine)).toEqual({
+        sent: 1,
+        failed: 0,
+      });
+      const [first, tg] = payloads();
+      expect(tg.channels).toEqual(['telegram']);
+      expect(tg.data.alert_id).toBe(id);
+      expect(tg.client_request_id).not.toBe(first.client_request_id);
+      expect((await due(id)).telegram_due_at).toBeNull();
+      // Qayta — hech narsa.
+      expect(
+        await notifier.dispatchPending(new Date(nine.getTime() + 30 * 60_000)),
+      ).toEqual({ sent: 0, failed: 0 });
+      expect(dispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('09:00 gacha hal qilingan — Telegram yuborilmaydi; Telegram xatosi — keyingi tick qayta', async () => {
+      const [{ id: closed }] = await insert('critical', 'new', null, 'R6');
+      const [{ id: retry }] = await insert('critical', 'new', null, 'R6');
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      await notifier.dispatchPending(night);
+      await ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET status = 'resolved' WHERE id = $1`,
+        [closed],
+      );
+      dispatch.mockClear();
+      dispatch.mockReturnValueOnce(throwError(() => new Error('down')));
+      expect(await notifier.dispatchPending(nine)).toEqual({
+        sent: 0,
+        failed: 1,
+      });
+      expect(payloads().map((p) => p.data.alert_id)).toEqual([retry]);
+      expect((await due(closed)).telegram_due_at).toBeNull();
+      expect((await due(retry)).telegram_due_at).not.toBeNull();
+      dispatch.mockReturnValue(
+        of({ statusCode: 201, data: { duplicate: false } }),
+      );
+      expect(
+        await notifier.dispatchPending(new Date(nine.getTime() + 30 * 60_000)),
+      ).toEqual({ sent: 1, failed: 0 });
+      expect((await due(retry)).telegram_due_at).toBeNull();
+    });
+
+    it('09:00 dan keyin ochilgan R6 — darhol Telegram bilan; R2 tunda ham darhol', async () => {
+      const [{ id: day }] = await insert('critical', 'new', null, 'R6');
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      await notifier.dispatchPending(new Date(nine.getTime() + 3600_000));
+      expect(payloads()[0].channels).toEqual([
+        'in_app',
+        'realtime',
+        'telegram',
+      ]);
+      expect((await due(day)).telegram_due_at).toBeNull();
+
+      dispatch.mockClear();
+      await insert('critical', 'new', null, 'R2');
+      await notifier.dispatchPending(night);
+      expect(payloads()[0].channels).toEqual([
+        'in_app',
+        'realtime',
+        'telegram',
+      ]);
+    });
   });
 });
