@@ -190,8 +190,8 @@
    "full_address": "Toshkent viloyati, O'rta Chirchiq tumani, 5-uy"
   },
   "seed": {
-   "sato": "1727419",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
    "sato": "1727253",
@@ -302,12 +302,12 @@
    "district_name": "Toshkent tumani"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_not_found"
+   "sato": "1727265",
+   "reason": null
   },
   "full": {
-   "sato": null,
-   "reason": "district_not_found"
+   "sato": "1727265",
+   "reason": null
   }
  },
  {
@@ -1386,6 +1386,370 @@
   "full": {
    "sato": null,
    "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent shahri, Chilonzor tumani, 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent sh., Yunusobod t., 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent sh., Sergeli tumani, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent shahri"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent shahar, Mirzo Ulug'bek tumani, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent shahri, Chilonzor, 5-uy"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Ташкентская обл., Верхнечирчикский р-н, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Ташкентская область, Нижнечирчикский район, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Ташкентская обл., Среднечирчикский р-н, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Ташкентская обл., Уртачирчикский р-н, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Верхнечирчикский р-н, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "full_address": "Quvasoy sh., Mustaqillik 12-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": "1730408",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "full_address": "Quvasoy sh."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": "1730408",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "full_address": "Farg'ona viloyati, Quvasoy shahri, Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": "1730408",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qashqadaryo viloyati, Kosonsoy shaharchasi, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qashqadaryo viloyati, Kosonsoy tumani, 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Farg'ona viloyati, Quvasoy shahri, Navoiy ko'chasi 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": "1730408",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent viloyati, Urtachirchiq tumani, 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Кашкадарьинская обл., Шахрисабзский р-н, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": "1710245",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qashqadaryo viloyati, Shaxrisabz tumani, 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": "1710245",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Xorazm",
+   "full_address": "г. Ургенч, ул. Навои 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": "1733401",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi t."
+  },
+  "seed": {
+   "sato": "1710224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710224",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "г. Ташкент, Сергелийская ул. 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent shahri, Yunusobod 5, Sergeli"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "district_name": "Toshkent tumani"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "district_name": "Toshkent"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
   }
  }
 ]
