@@ -1100,8 +1100,27 @@ export class OrderLifecycleService {
     return createHash('sha256').update(token).digest('hex');
   }
 
+  /**
+   * MCR — market ekranidagi QR. Apparat (klaviatura-wedge) skaner uni KLAVIATURA kabi yozadi, harf registri esa
+   * Shift / Caps Lock'ga bog'liq: skaner Caps Lock holatini noto'g'ri bilsa (ko'pincha birinchi skanda) katta-kichik
+   * harf almashadi. base64url'da ikkala registr ham, `-` / `_` (Shift+Minus) ham bor edi — xesh mos kelmasdi,
+   * birinchi skan «QR topilmadi», ikkinchisi o'tardi (2026-11-15). Endi MCR — faqat kichik hex (registrsiz
+   * belgilar; BeePost 91a55e8c bilan bir xil sabab), tekshiruv esa registrni e'tiborsiz qoldiradi
+   * (`canonicalMarketQrToken`). MHA skanerlanmaydi (JSON'da keladi) — o'zgarmaydi.
+   */
   private generateHandoverToken(prefix: 'MCR' | 'MHA'): string {
-    return `${prefix}-${randomBytes(32).toString('base64url')}`;
+    return prefix === 'MCR'
+      ? `${prefix}-${randomBytes(32).toString('hex')}`
+      : `${prefix}-${randomBytes(32).toString('base64url')}`;
+  }
+
+  /** Skanerlangan market QR → kanonik ko'rinish (`MCR-` + kichik harf); MCR bo'lmasa — `null`. */
+  private canonicalMarketQrToken(raw: string): string | null {
+    const token = String(raw ?? '').trim();
+    if (token.length <= 4 || token.slice(0, 4).toUpperCase() !== 'MCR-') {
+      return null;
+    }
+    return `MCR-${token.slice(4).toLowerCase()}`;
   }
 
   /** zkRab9M2 (BG6) — 6 xonali kod (identity OTP bilan bir xil generator). */
@@ -7679,7 +7698,7 @@ export class OrderLifecycleService {
       // qilgan xodim o'zi, muddati o'tmagan. ⚠️ `consumed_at` TEKSHIRILMAYDI va
       // YOZILMAYDI — bitta market QR 5 daqiqa ichida bir nechta buyurtmaga (har
       // biri alohida markReturnedToMarket) ishlatilishi mumkin; bulk `complete`
-      // yo'li esa bir martalik (consumed) ishlatadi.
+      // ham ko'p martalik (skan = topshirish), `consumed_at` u yerda partiya vaqti.
       const marketId = String(order.market_id ?? '').trim();
       const session = await sessionRepo.findOne({
         where: {
@@ -7901,11 +7920,19 @@ export class OrderLifecycleService {
     qr_token: string;
     requester: { id: string; roles?: string[] };
   }) {
-    const qrToken = String(input?.qr_token ?? '').trim();
+    const rawQrToken = String(input?.qr_token ?? '').trim();
+    const qrToken = this.canonicalMarketQrToken(rawQrToken);
     const requesterId = String(input?.requester?.id ?? '').trim();
-    if (!qrToken.startsWith('MCR-') || !requesterId) {
+    if (!qrToken || !requesterId) {
       this.badRequest('QR token yoki requester noto‘g‘ri');
     }
+    // Kanonik (registrsiz) xesh; aynan yozilgani — deploy paytida tirik qolgan eski base64url QR uchun (2 daqiqa).
+    const qrTokenHashes = [
+      ...new Set([
+        this.hashHandoverToken(qrToken),
+        this.hashHandoverToken(rawQrToken),
+      ]),
+    ];
 
     // Skan — HQ yoki filial xodimi (F3). Natija bu yerda kerak emas, faqat
     // chaqiruvchi haqiqiy xodim ekani tekshiriladi.
@@ -7920,10 +7947,10 @@ export class OrderLifecycleService {
         MarketCancelledHandoverSession,
       );
       const session = await sessionRepo.findOne({
-        where: {
-          qr_token_hash: this.hashHandoverToken(qrToken),
+        where: qrTokenHashes.map((qr_token_hash) => ({
+          qr_token_hash,
           isDeleted: false,
-        },
+        })),
         lock: { mode: 'pessimistic_write' },
       });
 
@@ -8224,15 +8251,21 @@ export class OrderLifecycleService {
         if (String(session.scanned_by_user_id ?? '') !== requesterId) {
           this.forbidden('Ruxsat boshqa xodimga tegishli');
         }
-        if (session.consumed_at) {
-          this.forbidden('Topshirish ruxsati allaqachon ishlatilgan');
-        }
+        // SKAN = TOPSHIRISH (ega qarori 2026-11-15, BeePost 7182e81d): ruxsat 5 daqiqa ichida KO'P MARTA
+        // ishlatiladi — xodim har posilkani skanerlaganda alohida `complete([id])` keladi (ilgari bir martalik
+        // edi: `consumed_at` bo'lsa 403, ya'ni skanerlanganlar oxirida bitta so'rov bilan yuborilardi). Parallel
+        // so'rovlar sessiya qatoridagi `pessimistic_write` qulfi bilan navbatga tushadi. `consumed_at` endi —
+        // sessiyaning BIRINCHI topshirish vaqti (partiya vaqti, pastda).
         if (session.authorization_expires_at.getTime() <= now.getTime()) {
           this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
         }
       }
 
       authorizedVia = session ? marketHandoverMethodOf(session) : null;
+      // «Topshirilgan» partiyasi = market + `market_handover_at` + xodim (`handover-batches.ts`), sessiya esa
+      // `consumed_at` bilan tanib olinadi. Shuning uchun bitta sessiyadagi HAR skan sessiyaning birinchi
+      // topshirish vaqti bilan yoziladi — partiya bitta bo'lib qoladi. Haqiqiy vaqt — `last_handover_at` va tracking.
+      const batchAt = session?.consumed_at ?? now;
 
       // F3 — HQ xodimi HQda turgan orderlarni, filial xodimi esa FAQAT o'z
       // filialida turgan bekor orderlarni topshira oladi.
@@ -8289,7 +8322,7 @@ export class OrderLifecycleService {
           : isQrRequired
             ? (authorizedVia ?? 'qr')
             : 'no_qr';
-        order.market_handover_at = now;
+        order.market_handover_at = batchAt;
         order.market_handover_by = this.numericActorId(requesterId);
         order.market_handover_method = handoverMethod;
         order.market_handover_branch_id = handoverBranchId;
@@ -8353,7 +8386,8 @@ export class OrderLifecycleService {
         await this.syncOrderToSearch(order, queryRunner.manager);
       }
 
-      if (session) {
+      // Partiya vaqti faqat BIRINCHI topshirishda yoziladi (keyingi skanlar uni o'zgartirmaydi — `batchAt`).
+      if (session && !session.consumed_at) {
         session.consumed_at = now;
         await sessionRepo.save(session);
       }
