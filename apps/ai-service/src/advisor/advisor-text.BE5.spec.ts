@@ -177,7 +177,7 @@ describe('advisor-text (BE-5)', () => {
 });
 
 describe('AdvisorScheduler env (BE-5)', () => {
-  it.each(['off', 'false', '0', 'OFF'])(
+  it.each(['off', 'false', '0', 'OFF', '', 'yes', undefined])(
     'AI_ADVISOR_RULES=%s — cron yo‘q',
     (v) => {
       const registry = { addCronJob: jest.fn() };
@@ -193,12 +193,12 @@ describe('AdvisorScheduler env (BE-5)', () => {
     },
   );
 
-  it('sukut — yoqiq: ikki cron (30 daq va 02:30 Toshkent)', () => {
+  it('faqat aniq on — yoqiq: ikki cron (30 daq va 02:30 Toshkent)', () => {
     const registry = { addCronJob: jest.fn() };
     const s = new AdvisorScheduler(
       {} as never,
       {} as never,
-      { get: () => undefined } as never,
+      { get: () => ' ON ' } as never,
       registry as never,
     );
     s.onModuleInit();
