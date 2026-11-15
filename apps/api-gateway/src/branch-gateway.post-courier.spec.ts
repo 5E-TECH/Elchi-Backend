@@ -538,6 +538,67 @@ describe('BranchGatewayController — Pochta → HQ kuryeri (HTTP)', () => {
       expect(branchSend).not.toHaveBeenCalled();
     });
 
+    it('⭐ URL’dagi id kanonik bo‘lmasa (077) — integration kanonik id (77) bilan so‘raladi: bog‘langan — 409, o‘tkazish YO‘Q', async () => {
+      integrationSend.mockImplementation(
+        (_pattern: unknown, payload: { courier_ids: string[] }) =>
+          payload.courier_ids.every((id) => /^[1-9]\d*$/.test(id))
+            ? of({
+                statusCode: 200,
+                data: payload.courier_ids.includes('77')
+                  ? [
+                      {
+                        courier_user_id: '77',
+                        name: 'BeePost',
+                        is_active: true,
+                      },
+                    ]
+                  : [],
+              })
+            : throwError(() => ({
+                statusCode: 400,
+                message: "courier_ids da noto'g'ri id bor",
+              })),
+      );
+      branchRoutes();
+
+      const res = await request(http())
+        .patch('/couriers/077/branch')
+        .send({ branch_id: '15' });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({
+        data: {
+          reason: 'courier_carrier_linked',
+          details: { courier_id: '77' },
+        },
+      });
+      expect(integrationSend).toHaveBeenCalledWith(
+        { cmd: 'integration.carrier.find_by_courier_ids' },
+        { courier_ids: ['77'] },
+      );
+      expect(
+        branchSend.mock.calls.map(([p]) => (p as { cmd: string }).cmd),
+      ).toEqual(['branch.find_hq']);
+    });
+
+    it.each(['0', '99999999999999999999'])(
+      'yaroqsiz kuryer id (%s) — 400 (503 EMAS), integration va o‘tkazish chaqirilmaydi',
+      async (id) => {
+        branchRoutes();
+
+        const res = await request(http())
+          .patch(`/couriers/${id}/branch`)
+          .send({ branch_id: '15' });
+
+        expect(res.status).toBe(400);
+        expect((res.body as { message: string }).message).toBe(
+          "Kuryer id noto'g'ri",
+        );
+        expect(integrationSend).not.toHaveBeenCalled();
+        expect(branchSend).not.toHaveBeenCalled();
+      },
+    );
+
     it('bog‘langan kuryer, branch.find_hq javob bermadi — 503', async () => {
       integrationSend.mockReturnValue(
         of({

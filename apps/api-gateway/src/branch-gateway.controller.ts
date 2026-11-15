@@ -279,6 +279,13 @@ export class BranchGatewayController {
   ): Observable<void> {
     const unavailable = (message: string) => () =>
       throwError(() => new ServiceUnavailableException(message));
+    // integration faqat kanonik BIGINT id qabul qiladi, branch-service esa
+    // URL id'sini o'zi kanonik qiladi ('077' → 77-kuryer). Kanonik qilinmasa
+    // shunday so'rov har doim «integratsiya javob bermadi» (503) olardi.
+    const lookupId = bigintIdText(courierId);
+    if (!lookupId) {
+      return throwError(() => new BadRequestException("Kuryer id noto'g'ri"));
+    }
     return defer(() => {
       if (!this.integrationClient) {
         return throwError(
@@ -289,7 +296,7 @@ export class BranchGatewayController {
       return this.integrationClient
         .send(
           { cmd: 'integration.carrier.find_by_courier_ids' },
-          { courier_ids: [courierId] },
+          { courier_ids: [lookupId] },
         )
         .pipe(
           timeout(CARRIER_LINK_LOOKUP_TIMEOUT_MS),
@@ -305,7 +312,7 @@ export class BranchGatewayController {
               new ServiceUnavailableException(CARRIER_LINK_UNAVAILABLE_MESSAGE),
           );
         }
-        const link = carrierLinksOf(response).get(courierId);
+        const link = carrierLinksOf(response).get(lookupId);
         if (!link) {
           return of(undefined);
         }
@@ -324,7 +331,7 @@ export class BranchGatewayController {
                 message: courierCarrierLinkedMessage(link.name),
                 data: {
                   reason: 'courier_carrier_linked',
-                  details: { courier_id: courierId },
+                  details: { courier_id: lookupId },
                 },
               });
             }
