@@ -1,4 +1,14 @@
-import type { AiAdvisorCandidate, AiAdvisorCashboxRef } from '@app/common';
+import {
+  WEB_ROUTES,
+  type AiAdvisorCandidate,
+  type AiAdvisorCashboxRef,
+} from '@app/common';
+
+/** Bo'lim yo'llari — yagona manba `WEB_ROUTES` (FE route-map bilan solishtiriladi). */
+const shiftHref = (id: string) =>
+  WEB_ROUTES.shiftReport.replace(':id', encodeURIComponent(id));
+const cashDetailHref = (ownerId: string) =>
+  WEB_ROUTES.cashDetail.replace(':id', encodeURIComponent(ownerId));
 
 /**
  * BE-5 — server matnlari (`title`) va bo'limga havolalar (§5.1, §5.6,
@@ -48,6 +58,15 @@ const nameOf = (ref: unknown, fallback: string): string => {
   return fallback;
 };
 
+/** «Samarqand filiali kassasi» → «…kassasida» (§4.2 sarlavha namunasi). */
+const inCashbox = (ref: unknown): string => {
+  const name = nameOf(ref, '');
+  if (!name) return 'Kassada';
+  if (/kassa$/i.test(name)) return `${name}da`;
+  if (/kassasi$/i.test(name)) return `${name}da`;
+  return `${name} kassasida`;
+};
+
 const clip = (s: string) =>
   s.length > TITLE_MAX ? `${s.slice(0, TITLE_MAX - 1)}…` : s;
 
@@ -56,19 +75,30 @@ export function advisorTitle(c: AiAdvisorCandidate): string {
   const f = c.facts;
   switch (c.rule_key) {
     case 'R1': {
-      const cashbox = nameOf(f.cashbox, 'Kassa');
+      // §4.2/§7.2: «Samarqand filiali kassasida 3 smena ketma-ket kamomad:
+      // −445 000 so'm» / «… smena kamomadi: −120 000 so'm». Ketma-ketlikda
+      // N va summa — uzluksiz manfiy qator (birlashgan yakka kamomadlarsiz).
+      const where = inCashbox(f.cashbox);
+      if (f.trigger === 'consecutive_negative') {
+        const n = Number(f.streak_length ?? f.shifts_count);
+        const sum = Number(f.streak_total ?? f.total_difference);
+        return clip(
+          `${where} ${n} smena ketma-ket kamomad: ${formatSom(sum)} so'm`,
+        );
+      }
       return clip(
-        f.trigger === 'consecutive_negative'
-          ? `${cashbox}: ${Number(f.shifts_count)} smena ketma-ket kamomad, jami ${formatSom(Number(f.total_difference))} so'm`
-          : `${cashbox}: smena kamomadi ${formatSom(Number(f.last_difference))} so'm`,
+        `${where} smena kamomadi: ${formatSom(Number(f.last_difference))} so'm`,
       );
     }
     case 'R3': {
       const where = nameOf(f.branch ?? f.cashbox, 'Kassa');
       const category = nameOf(f.category, 'xarajat');
       const ratio = formatRatio(f.ratio_to_median);
+      // scope=category — statistika butun tizim bo'yicha (openapi FactsR3.scope).
+      const basis =
+        f.scope === 'category' ? "tizim bo'yicha odatdagidan" : 'odatdagidan';
       return clip(
-        `${where} · ${category}: ${formatSom(Number(f.amount))} so'm${ratio ? ` — odatdagidan ${ratio} barobar` : ''}`,
+        `${where} · ${category}: ${formatSom(Number(f.amount))} so'm${ratio ? ` — ${basis} ${ratio} barobar` : ''}`,
       );
     }
     case 'R2': {
@@ -104,9 +134,9 @@ export function operationHref(
   historyId: string,
 ): string {
   if (cashbox?.type === 'branch') {
-    return `/payments/cash-detail/${cashbox.owner_id}?type=branch&history=${historyId}`;
+    return `${cashDetailHref(cashbox.owner_id)}?type=branch&history=${encodeURIComponent(historyId)}`;
   }
-  return `/payments/main-cashbox?history=${historyId}`;
+  return `${WEB_ROUTES.mainCashbox}?history=${encodeURIComponent(historyId)}`;
 }
 
 /** Bo'limga havolalar (§5.6). Bittasi `primary`. Pul amali yo'q. */
@@ -120,7 +150,7 @@ export function advisorLinks(c: AiAdvisorCandidate): AdvisorLink[] {
       if (shiftId) {
         links.push({
           kind: 'shift_report',
-          href: `/payments/shifts/${shiftId}`,
+          href: shiftHref(shiftId),
           entity_id: shiftId,
           primary: true,
         });
@@ -129,14 +159,14 @@ export function advisorLinks(c: AiAdvisorCandidate): AdvisorLink[] {
       if (cb?.type === 'branch') {
         links.push({
           kind: 'branch_cashbox',
-          href: `/payments/cash-detail/${cb.owner_id}?type=branch`,
+          href: `${cashDetailHref(cb.owner_id)}?type=branch`,
           entity_id: cb.owner_id,
           primary: !shiftId,
         });
       } else {
         links.push({
           kind: 'main_cashbox',
-          href: '/payments/main-cashbox',
+          href: WEB_ROUTES.mainCashbox,
           entity_id: null,
           primary: !shiftId,
         });
@@ -185,7 +215,7 @@ export function advisorLinks(c: AiAdvisorCandidate): AdvisorLink[] {
       return [
         {
           kind: 'financial_balance',
-          href: `/financial-balance?tab=history&financialBalanceHistoryFrom=${from}&financialBalanceHistoryTo=${to}`,
+          href: `${WEB_ROUTES.financialBalance}?tab=history&financialBalanceHistoryFrom=${from}&financialBalanceHistoryTo=${to}`,
           entity_id: null,
           primary: true,
         },
@@ -222,11 +252,15 @@ export function withEvidenceHrefs(
     (c.evidence.rows as Array<Record<string, unknown>> | undefined) ?? [];
   return {
     ...c.evidence,
-    rows: rows.map((r) => ({
+    // Har qator O'Z kassasi bilan (finance `cashbox` — ichki, REST'da yo'q).
+    rows: rows.map(({ cashbox: own, ...r }) => ({
       ...r,
       href:
         typeof r.history_id === 'string'
-          ? operationHref(cashbox, r.history_id)
+          ? operationHref(
+              (own as AiAdvisorCashboxRef | undefined) ?? cashbox,
+              r.history_id,
+            )
           : null,
     })),
   };

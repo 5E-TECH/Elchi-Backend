@@ -78,6 +78,9 @@ describe('PIJN1lGp — cabinetLinks', () => {
       '/cash-box',
       '/payments',
       '/payments/shifts/:id',
+      '/payments/main-cashbox',
+      '/payments/cash-detail/:id',
+      '/financial-balance',
       '/courier-bulk',
     ];
     for (const route of Object.values(WEB_ROUTES)) {
