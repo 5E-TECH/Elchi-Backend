@@ -43,7 +43,7 @@ describe('advisor-text (BE-5)', () => {
       last_shift_id: '818',
     };
     expect(advisorTitle(base({ facts }))).toBe(
-      "Samarqand filiali kassasi: 3 smena ketma-ket kamomad, jami −445 000 so'm",
+      "Samarqand filiali kassasida 3 smena ketma-ket kamomad: −445 000 so'm",
     );
     expect(
       advisorTitle(
@@ -55,7 +55,7 @@ describe('advisor-text (BE-5)', () => {
           },
         }),
       ),
-    ).toBe("#7: smena kamomadi −240 000 so'm");
+    ).toBe("#7 kassasida smena kamomadi: −240 000 so'm");
   });
 
   it('R3 sarlavha va operation havolasi (filial / asosiy kassa), dalil href', () => {
@@ -95,6 +95,36 @@ describe('advisor-text (BE-5)', () => {
       '/payments/cash-detail/9?type=branch&history=5521',
       '/payments/cash-detail/9?type=branch&history=10',
     ]);
+    // round-2 S2: scope=category — har qator O'Z kassasi (ichki `cashbox`
+    // REST'ga chiqmaydi); sarlavha «tizim bo'yicha».
+    const wide = base({
+      ...c,
+      facts: { ...c.facts, scope: 'category' },
+      evidence: {
+        kind: 'expense_stats',
+        rows: [
+          { history_id: '5521', cashbox: c.facts.cashbox },
+          {
+            history_id: '10',
+            cashbox: { type: 'branch', owner_id: '10', name: 'X' },
+          },
+          {
+            history_id: '11',
+            cashbox: { type: 'main', owner_id: '0', name: null },
+          },
+        ],
+      },
+    });
+    expect(advisorTitle(wide)).toContain("tizim bo'yicha odatdagidan 3,4");
+    const wideRows = withEvidenceHrefs(wide).rows as Array<
+      Record<string, unknown>
+    >;
+    expect(wideRows.map((r) => r.href)).toEqual([
+      '/payments/cash-detail/9?type=branch&history=5521',
+      '/payments/cash-detail/10?type=branch&history=10',
+      '/payments/main-cashbox?history=11',
+    ]);
+    expect(wideRows.every((r) => !('cashbox' in r))).toBe(true);
     const main = base({
       ...c,
       facts: {

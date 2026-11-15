@@ -948,6 +948,7 @@ export class CashboxReceiptService {
       );
       update.ai_status = derived.status;
       update.ai_difference = derived.difference;
+      update.ai_error_reason = derived.error_reason;
     }
     await repo.update({ id: receipt.id }, update);
     return { receipt_id: String(receipt.id) };

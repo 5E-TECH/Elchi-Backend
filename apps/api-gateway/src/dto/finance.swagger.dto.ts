@@ -295,6 +295,16 @@ export class FindHistoryQueryDto {
   @Matches(/^\d+$/)
   source_user_id?: string;
 
+  @ApiPropertyOptional({
+    example: '11',
+    description:
+      "2026-11-15 — filial bo'yicha manba: `source_user_id = <filial id>` va faqat filial yozadigan turlar (`branch_to_main` va uning teskari yozuvi `payment_reversal`). `source_user_id` da market/kuryer id'lari ham turadi, filial id'lari alohida sanaladi — filial tarixi uchun shu filtr ishlatilsin (id'si filialnikiga teng marketga to'lov aralashmaydi).",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_branch_id?: string;
+
   @ApiPropertyOptional({ example: '999' })
   @IsOptional()
   @IsString()

@@ -324,6 +324,11 @@ export interface AiAdvisorFactKey {
   fact_key: string;
   /** Hodisa vaqti (ISO). */
   fact_at: string;
+  /**
+   * R1: shu fakt-smena farqi (so'm). Dvigatel ochiq ogohlantirishga yangi
+   * faktlarni QO'SHGANDA jami/sonni shu orqali yig'adi (round-2 #651 B1).
+   */
+  amount?: number;
 }
 
 /**
@@ -340,6 +345,11 @@ export interface AiAdvisorCandidate {
   headline_amount: number | null;
   facts: Record<string, unknown>;
   evidence: Record<string, unknown>;
+  /**
+   * §5.1 `first_fact_at` faktlardan farq qilsa (R6/R8 — davr boshi).
+   * Berilmasa — faktlar `fact_at` minimumi.
+   */
+  first_fact_at?: string;
 }
 
 export interface AiAdvisorRuleInputsResponse {
@@ -348,4 +358,15 @@ export interface AiAdvisorRuleInputsResponse {
   cursors: Partial<Record<AiAdvisorCursorRule, string | null>>;
   /** Qoida bo'yicha o'tkazib yuborish sababi (masalan R3 namuna < 5). */
   skipped?: Partial<Record<AiAdvisorRuleKey, string>>;
+  /**
+   * Qoida bo'yicha xato (timeout va h.k.): shu qoidaning nomzodlari va
+   * kursori yo'q, boshqa qoidalar odatdagidek (round-2 #651 ops-B1).
+   */
+  errors?: Partial<Record<AiAdvisorRuleKey, string>>;
 }
+
+/** finance kirish chegaralari (round-2 #651 S10): davrlar va orqa oyna. */
+export const AI_ADVISOR_INPUT_MAX_PERIODS = 14;
+export const AI_ADVISOR_INPUT_MAX_SINCE_DAYS = 30;
+/** «Butun tizim» — `subject.kind = system` nomi (§5.1). */
+export const AI_ADVISOR_SYSTEM_SUBJECT_NAME = 'Butun tizim';
