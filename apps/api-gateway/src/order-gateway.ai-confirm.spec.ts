@@ -133,7 +133,12 @@ const makeController = () => {
   const file = fakeClient();
   const ai = fakeClient();
   const catalog = fakeClient();
-  const config = { get: jest.fn(() => undefined) };
+  // AI ack S2: darvoza majburiy rejimda (sukut — log-only).
+  const config = {
+    get: jest.fn((key: string) =>
+      key === 'AI_ACK_CHECKS_ENFORCE' ? 'on' : undefined,
+    ),
+  };
   const poller = { getState: jest.fn(() => 'enabled') };
 
   logistics.send.mockImplementation((_pattern, payload) =>
@@ -617,7 +622,7 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
     expect(err?.getStatus()).toBe(400);
     expect(err?.getResponse()).toMatchObject({
       code: 'AI_DRAFT_REQUIRED',
-      orders: [1, 2],
+      indexes: [1, 2],
     });
     expect(orderCreateCalls(fx.order)).toHaveLength(0);
   });

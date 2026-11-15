@@ -154,7 +154,12 @@ function setup(
     asClient(fake()),
     asClient(ai),
     asClient(catalog),
-    { get: jest.fn(() => undefined) } as unknown as ConfigService,
+    // AI ack S2: darvoza majburiy rejimda (sukut — log-only).
+    {
+      get: jest.fn((key: string) =>
+        key === 'AI_ACK_CHECKS_ENFORCE' ? 'on' : undefined,
+      ),
+    } as unknown as ConfigService,
     { getState: jest.fn(() => 'enabled') } as unknown as AiStatusPoller,
   );
   const creates = () =>
@@ -290,7 +295,7 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
     await expect(
       fx.controller.aiConfirm({ orders: [order(0), order(1)] }, marketReq),
     ).rejects.toMatchObject({
-      response: { code: 'AI_DRAFT_NOT_FOUND', orders: [0, 1] },
+      response: { code: 'AI_DRAFT_NOT_FOUND', indexes: [0, 1] },
     });
     expect(fx.creates()).toHaveLength(0);
   });

@@ -252,21 +252,26 @@ export class AiConfirmOrderDto {
   @IsString({ message: "region_id matn bo'lishi kerak" })
   region_id?: string;
 
-  @ApiPropertyOptional({
+  // (AI ack S5) Swagger'da MAJBURIY; runtime tekshiruvi kontrollerda (400
+  // `AI_DRAFT_REQUIRED` + `indexes` shakli saqlanishi uchun class-validator
+  // `@IsOptional` qoladi).
+  @ApiProperty({
+    required: true,
     example: '3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c',
     description:
-      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`.',
+      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED` (`indexes`). Shu market uchun topilmasa — 400 `AI_DRAFT_NOT_FOUND`.',
   })
   @IsOptional()
   @IsUUID('all', { message: "draft_id UUID bo'lishi kerak" })
   draft_id?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
+    required: true,
     example: 0,
     minimum: 0,
     maximum: AI_MAX_ORDERS_PER_PARSE - 1,
     description:
-      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`. Qayta yuborishda O‘ZGARTIRMANG.',
+      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`; saqlangan preview’da bunday `index` bo‘lmasa 400 `AI_DRAFT_ITEM_NOT_FOUND` (`indexes`). Qayta yuborishda O‘ZGARTIRMANG.',
   })
   @IsOptional()
   @IsInt({ message: "ai_item_index butun son bo'lishi kerak" })
