@@ -67,7 +67,11 @@ export const RECEIPT_EXTRACT_SCHEMA: Record<string, unknown> = Object.freeze({
   ],
 });
 
-export const RECEIPT_EXTRACT_MAX_TOKENS = 384;
+/**
+ * F2: 384 da (thinking + JSON birga) javob kesilib, 2× qayta yuborish yoki
+ * "o'qib bo'lmadi" bo'lardi. effort 'low' bilan 1536 yetarli zaxira.
+ */
+export const RECEIPT_EXTRACT_MAX_TOKENS = 1536;
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 /**

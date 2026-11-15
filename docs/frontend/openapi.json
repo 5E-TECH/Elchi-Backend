@@ -10433,6 +10433,16 @@
             }
           },
           {
+            "name": "source_branch_id",
+            "required": false,
+            "in": "query",
+            "description": "2026-11-15 — filial bo'yicha manba: `source_user_id = <filial id>` va faqat filial yozadigan turlar (`branch_to_main` va uning teskari yozuvi `payment_reversal`). `source_user_id` da market/kuryer id'lari ham turadi, filial id'lari alohida sanaladi — filial tarixi uchun shu filtr ishlatilsin (id'si filialnikiga teng marketga to'lov aralashmaydi).",
+            "schema": {
+              "example": "11",
+              "type": "string"
+            }
+          },
+          {
             "name": "created_by",
             "required": false,
             "in": "query",
@@ -11361,7 +11371,7 @@
     },
     "/finance/receipts/summary": {
       "get": {
-        "description": "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart (BE-C, 2026-11-10: qo'lda chiqimdan faqat karta — `click`; naqd chiqim `none` ga kirmaydi). Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
+        "description": "Davr (Toshkent kuni, ≤ 366 kun, sukut — joriy oy) bo'yicha: `{ period, counts: { match, mismatch, unreadable, pending, error, disabled, none }, total, mismatch_total (Σ|farq|; so'mda bo'lmagan cheklar — farqi null — kirmaydi), by_branch: [{ branch_id, counts }], by_category: [{ expense_category_id, name, counts }], top: [≤ 15, |farq| bo'yicha, farqi null cheklarsiz — { receipt_id, history_id, kind, entered_amount, difference, date }] }`. Operatsiya sanasi bo'yicha; `none` — `GET /finance/history?receipt_status=none` bilan AYNI shart (BE-C, 2026-11-10: qo'lda chiqimdan faqat karta — `click`; naqd chiqim `none` ga kirmaydi). Ism, rasm havolasi, karta raqami yo'q. Faqat superadmin/admin (menejer, kuryer — 403).",
         "operationId": "FinanceGatewayController_receiptChecksSummary",
         "parameters": [
           {
@@ -11473,7 +11483,7 @@
     },
     "/finance/receipts/{id}": {
       "get": {
-        "description": "Superadmin/admin — har chek; menejer — faqat o'z filiali (`branch_id`), boshqasi 403. `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url, photo_url_expires_in: 300, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale (pending > 3 daqiqa), can_reanalyze (faqat SA/admin), ai: { amount, difference, currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence, flags[], checked_at, attempts, max_attempts: 5, error_reason } | null }`. Biriktirilgan chek va rasmi saqlanadi — havola har so'rovda yangidan beriladi.",
+        "description": "Superadmin/admin — har chek; menejer — faqat o'z filiali (`branch_id`), boshqasi 403. `{ id, kind, history_id, counter_history_id, entered_amount, payment_method, photo_url, photo_url_expires_in: 300, uploaded_by: { id, name }, uploaded_at, ai_status, ai_stale (pending > 3 daqiqa), can_reanalyze (faqat SA/admin), ai: { amount, difference (chek valyutasi UZS bo'lmasa null, error_reason 'currency_not_uzs'), currency, date, recipient, recipient_last4, payer, payer_last4, bank, reference, confidence, flags[], checked_at, attempts, max_attempts: 5, error_reason } | null }`. Biriktirilgan chek va rasmi saqlanadi — havola har so'rovda yangidan beriladi.",
         "operationId": "FinanceGatewayController_getReceipt",
         "parameters": [
           {
@@ -23646,8 +23656,9 @@
             "in": "query",
             "schema": {
               "minimum": 1,
+              "maximum": 1000000,
               "default": 1,
-              "type": "number"
+              "type": "integer"
             }
           },
           {
@@ -23658,7 +23669,7 @@
               "minimum": 1,
               "maximum": 100,
               "default": 20,
-              "type": "number"
+              "type": "integer"
             }
           }
         ],
@@ -23690,9 +23701,10 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "Ogohlantirish ID si (`^\\d{1,18}$`)",
+            "description": "Ogohlantirish ID si",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
             }
           },
           {
@@ -23736,7 +23748,8 @@
             "in": "path",
             "description": "Ogohlantirish ID si",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
             }
           }
         ],
@@ -36761,8 +36774,8 @@
             ]
           },
           "note": {
-            "type": "object",
-            "description": "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500.",
+            "type": "string",
+            "description": "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500. Boshqaruv belgilari (\\n, \\t dan tashqari) — 400.",
             "example": "Kartadagi tushum keyingi kuni kelgan, tekshirildi.",
             "nullable": true
           }

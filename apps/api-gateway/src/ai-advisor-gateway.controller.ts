@@ -93,7 +93,11 @@ export class AiAdvisorGatewayController {
 
   @Get('alerts/:id')
   @Roles(RoleEnum.SUPERADMIN)
-  @ApiParam({ name: 'id', description: 'Ogohlantirish ID si (`^\\d{1,18}$`)' })
+  @ApiParam({
+    name: 'id',
+    description: 'Ogohlantirish ID si',
+    schema: { type: 'string', pattern: '^\\d{1,18}$' },
+  })
   @ApiOperation({
     summary:
       'AI maslahatchi: ogohlantirish tafsiloti — ochilganda «Ko‘rildi» (faqat superadmin)',
@@ -118,7 +122,11 @@ export class AiAdvisorGatewayController {
 
   @Patch('alerts/:id')
   @Roles(RoleEnum.SUPERADMIN)
-  @ApiParam({ name: 'id', description: 'Ogohlantirish ID si' })
+  @ApiParam({
+    name: 'id',
+    description: 'Ogohlantirish ID si',
+    schema: { type: 'string', pattern: '^\\d{1,18}$' },
+  })
   @ApiOperation({
     summary:
       'AI maslahatchi: «Hal qilindi» / «Ahamiyatsiz» (faqat superadmin, audit)',

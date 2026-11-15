@@ -235,4 +235,36 @@ describe('AiAdvisorGatewayController (BE-5)', () => {
       );
     }
   });
+
+  it('round-2 #654: from/to aniq kalendar kuni, q/note boshqaruv belgilarisiz, page ≤ 1 000 000', async () => {
+    const bad = async (cls: new () => object, body: object) =>
+      (await validate(plainToInstance(cls, body))).length;
+    expect(
+      await bad(AiAdvisorAlertsQueryDto, {
+        from: '2026-02-28',
+        to: '2026-03-01',
+      }),
+    ).toBe(0);
+    for (const body of [
+      { from: '2026-02-30' },
+      { to: '2026-04-31' },
+      { from: '0000-01-01' },
+      { q: 'a\u0000b' },
+      { page: 1_000_001 },
+    ]) {
+      expect(await bad(AiAdvisorAlertsQueryDto, body)).toBeGreaterThan(0);
+    }
+    expect(
+      await bad(AiAdvisorAlertPatchDto, {
+        status: 'resolved',
+        note: 'Bir\nikki',
+      }),
+    ).toBe(0);
+    expect(
+      await bad(AiAdvisorAlertPatchDto, {
+        status: 'resolved',
+        note: 'a\u0000b',
+      }),
+    ).toBeGreaterThan(0);
+  });
 });

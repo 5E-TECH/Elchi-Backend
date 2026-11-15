@@ -154,6 +154,14 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * ⚠️ Qulf — sessiya `pg_try_advisory_lock` alohida ulanishda; u uzilsa
+   * (tarmoq, pooler failover) qulf bo'shaydi va boshqa replika ayni guruhni
+   * parallel boshlashi mumkin. Dvigatel idempotent (ochiq qator FOR UPDATE,
+   * `(dedup_key, fact_key)` UNIQUE), bildirishnoma — deterministik
+   * `client_request_id` bilan dedup; shuning uchun ikki marta ishlash
+   * natijani buzmaydi (round-2 ops-S6).
+   */
   /** Bitta tick; qulf boshqa replikada bo'lsa — `null`. Xato yutiladi (log). */
   async tick(
     group: AdvisorRunGroup,
