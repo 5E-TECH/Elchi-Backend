@@ -11,6 +11,7 @@ import { AiBudgetService } from '../budget/ai-budget.service';
 import { AiUsageLog } from '../entities/ai-usage-log.entity';
 import { globalAiOrderPriceUzs } from './ai-order-price';
 import {
+  CACHE_WRITE_1H_MULTIPLIER,
   CACHE_WRITE_MULTIPLIER,
   priceFor,
   roundMoney2,
@@ -102,6 +103,9 @@ export const AI_MARGIN_BY_FEATURE_SQL = `
  * Kesh — model bo'yicha (yozish jarimasi model kirish narxiga bog'liq).
  * `saved_*` — qatorda muzlatilgan `cache_saved_usd` (cache_read × in × 0.9).
  * `creation_rate_tokens` — Σ(cache_creation × kurs), so'm jarimasi uchun.
+ * `cache_creation_1h_tokens` / `creation_1h_rate_tokens` — shundan 1 soatlik
+ * TTL bilan yozilgani (C1, migratsiya 225): uning qo'shimchasi × 1.0, 5
+ * daqiqalikniki × 0.25.
  */
 export const AI_MARGIN_CACHE_BY_MODEL_SQL = `
   SELECT model,
@@ -110,7 +114,9 @@ export const AI_MARGIN_CACHE_BY_MODEL_SQL = `
          COALESCE(SUM(cache_creation_tokens), 0)::float8 AS cache_creation_tokens,
          COALESCE(SUM(cache_saved_usd), 0)::float8 AS saved_usd,
          COALESCE(SUM(cache_saved_usd * usd_uzs_rate), 0)::float8 AS saved_uzs,
-         COALESCE(SUM(cache_creation_tokens::numeric * usd_uzs_rate), 0)::float8 AS creation_rate_tokens
+         COALESCE(SUM(cache_creation_tokens::numeric * usd_uzs_rate), 0)::float8 AS creation_rate_tokens,
+         COALESCE(SUM(cache_creation_1h_tokens), 0)::float8 AS cache_creation_1h_tokens,
+         COALESCE(SUM(cache_creation_1h_tokens::numeric * usd_uzs_rate), 0)::float8 AS creation_1h_rate_tokens
   FROM ai_schema.ai_usage_log
   WHERE ${USAGE_RANGE} AND ${MARKET_FILTER}
   GROUP BY model
@@ -238,7 +244,10 @@ export interface AiMarginReport {
     /** Kesh tejagan summa: cache_read × in × 0.9 / 1M (× kurs) — cache_read ga proporsional. */
     cacheSavedUsd: number;
     cacheSavedUzs: number;
-    /** Kesh YOZISH qo'shimchasi: cache_creation × in × 0.25 / 1M (× kurs). */
+    /**
+     * Kesh YOZISH qo'shimchasi: (5m yozish × 0.25 + 1h yozish × 1.0) × in / 1M
+     * (× kurs).
+     */
     cacheWriteCostUsd: number;
     cacheWriteCostUzs: number;
     /** Sof tejov = tejov − yozish qo'shimchasi (manfiy bo'lishi mumkin). */
@@ -299,6 +308,7 @@ function rowsOf(result: unknown): RawRow[] {
 const TOKENS_PER_UNIT = 1_000_000;
 /** Kesh yozish narxining oddiy kirishdan ORTIQ qismi (1.25 − 1). */
 const CACHE_WRITE_EXTRA = CACHE_WRITE_MULTIPLIER - 1;
+const CACHE_WRITE_1H_EXTRA = CACHE_WRITE_1H_MULTIPLIER - 1;
 
 export interface AiMarginRawInput {
   fromDay: string;
@@ -456,10 +466,16 @@ export function buildAiMarginReport(input: AiMarginRawInput): AiMarginReport {
     cacheCreationTokens += creation;
     cacheSavedUsd += num(r.saved_usd);
     cacheSavedUzs += num(r.saved_uzs);
+    const c1h = Math.min(num(r.cache_creation_1h_tokens), creation);
+    const rate = num(r.creation_rate_tokens);
+    const rate1h = Math.min(num(r.creation_1h_rate_tokens), rate);
     cacheWriteCostUsd +=
-      (creation * inPrice * CACHE_WRITE_EXTRA) / TOKENS_PER_UNIT;
+      (((creation - c1h) * CACHE_WRITE_EXTRA + c1h * CACHE_WRITE_1H_EXTRA) *
+        inPrice) /
+      TOKENS_PER_UNIT;
     cacheWriteCostUzs +=
-      (num(r.creation_rate_tokens) * inPrice * CACHE_WRITE_EXTRA) /
+      (((rate - rate1h) * CACHE_WRITE_EXTRA + rate1h * CACHE_WRITE_1H_EXTRA) *
+        inPrice) /
       TOKENS_PER_UNIT;
   }
   const cacheDenominator = cacheReadTokens + cacheCreationTokens;

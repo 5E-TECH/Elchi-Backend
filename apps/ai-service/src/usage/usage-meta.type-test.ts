@@ -63,6 +63,7 @@ export function usageMetaTypeTests(
     outputTokens: 1,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
+    cacheCreation1hTokens: 0,
     steps: 1,
     stopReason: 'end_turn',
     outcome: 'ok',

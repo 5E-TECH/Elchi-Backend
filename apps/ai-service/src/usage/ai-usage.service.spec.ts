@@ -28,6 +28,7 @@ function makeRecord(over: Partial<ClaudeUsageRecord> = {}): ClaudeUsageRecord {
     outputTokens: 567,
     cacheCreationTokens: 4072,
     cacheReadTokens: 89,
+    cacheCreation1hTokens: 0,
     steps: 1,
     stopReason: 'end_turn',
     outcome: 'ok',
@@ -112,6 +113,18 @@ describe('AiUsageService (lYVuADRE)', () => {
         feature: 'order_extract_multi',
         request_area: 'order',
       });
+    });
+
+    it('C1 (#648 M5): cache_creation_1h_tokens yoziladi (jamiga qisiladi) va narxda × 2', async () => {
+      const { service, savedRow } = setup();
+      service.record(makeRecord({ cacheCreation1hTokens: 4000 }));
+      service.record(makeRecord({ cacheCreation1hTokens: 9999 }));
+      await flush();
+      expect(savedRow(0).cache_creation_1h_tokens).toBe(4000);
+      expect(savedRow(1).cache_creation_1h_tokens).toBe(4072);
+      const usd =
+        (1234 * 3 + 567 * 15 + (72 * 1.25 + 4000 * 2) * 3 + 89 * 3 * 0.1) / 1e6;
+      expect(savedRow(0).cost_usd).toBeCloseTo(usd, 6);
     });
 
     it('xarajat: cost_usd, cache_saved_usd, cost_uzs (kurs qatorda), applied_price_uzs', async () => {
