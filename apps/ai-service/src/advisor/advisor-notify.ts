@@ -16,6 +16,7 @@ import {
 } from '@app/common';
 import { AdvisorSettingsService } from './advisor-settings.service';
 import { formatDay, formatRatio, formatSom, r7Sentence } from './advisor-text';
+import { returnedRows } from './advisor-sql';
 
 /**
  * BE-5 (LhTIno57) — `ai.advisor_alert` bildirishnomasi (§9.1–9.3).
@@ -33,6 +34,8 @@ import { formatDay, formatRatio, formatSom, r7Sentence } from './advisor-text';
  * - Matnda AI matni va PII yo'q (karta — faqat `*_last4`, ism yo'q).
  */
 export const ADVISOR_NOTIFY_TYPE = 'ai.advisor_alert';
+/** Shundan eski ogohlantirish bildirishnomasiz qoladi (soat). */
+export const ADVISOR_NOTIFY_MAX_AGE_HOURS = 24;
 /** Dispatch qulfi (qoidalar tick qulflari 716000000224/225 dan alohida). */
 export const ADVISOR_NOTIFY_LOCK_KEY = 716_000_000_901;
 export const ADVISOR_NOTIFY_BATCH = 20;
@@ -231,6 +234,8 @@ export class AdvisorNotifier {
         fields: 'minimal',
         limit: 100,
         with_total: false,
+        // §9.3: faqat FAOL superadminlar (nofaol — inbox/Telegram yo'q).
+        active_only: true,
       },
       { timeoutMs: 5_000, retries: 1 },
     );
@@ -280,6 +285,20 @@ export class AdvisorNotifier {
 
   private async dispatchBatch(): Promise<{ sent: number; failed: number }> {
     const out = { sent: 0, failed: 0 };
+    // 24 soatdan eski (birinchi aniqlangan) ogohlantirish endi yuborilmaydi —
+    // uzilish/superadmin yo'qligidan keyin eski xabarlar to'lqini bo'lmasin
+    // (round-2 S3, kelishilgan). `notify_skipped='stale'` REST'da ko'rinmaydi.
+    const stale = returnedRows<{ id: string }>(
+      await this.ds.query<unknown>(
+        `UPDATE ai_schema.ai_advisor_alerts SET "notify_skipped" = 'stale', "updatedAt" = now()
+          WHERE "severity" = 'critical' AND "status" IN ('new','seen') AND "is_deleted" = false
+            AND "notified_at" IS NULL AND "notify_skipped" IS NULL
+            AND "first_at" < now() - INTERVAL '${ADVISOR_NOTIFY_MAX_AGE_HOURS} hours'
+          RETURNING "id"::text AS id`,
+      ),
+    );
+    if (stale.length)
+      this.logger.warn(`ai_advisor_notify_stale skipped=${stale.length}`);
     // Tartib — oxirgi urinish bo'yicha (xatoda `updatedAt` yangilanadi):
     // doimiy xatoli qatorlar yangilarini to'sib qo'ymaydi (round-2 S2).
     const rows = await this.ds.query<AdvisorNotifyRow[]>(

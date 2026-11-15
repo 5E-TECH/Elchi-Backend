@@ -116,6 +116,7 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
         fields: 'minimal',
         limit: 100,
         with_total: false,
+        active_only: true,
       }),
     ]);
     const rows = await notified();
@@ -204,5 +205,31 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       [bad],
     );
     expect(row.fresh).toBe(true);
+  });
+
+  it('round-2 S3: 24 soatdan eski ogohlantirish — stale, yuborilmaydi; yangisi yuboriladi', async () => {
+    const [{ id: old }] = await insert('critical');
+    await ds.query(
+      `UPDATE ai_schema.ai_advisor_alerts SET first_at = now() - INTERVAL '25 hours' WHERE id = $1`,
+      [old],
+    );
+    const [{ id: fresh }] = await insert('critical');
+    dispatch.mockReturnValue(of({ statusCode: 201 }));
+    expect(await notifier.dispatchPending()).toEqual({ sent: 1, failed: 0 });
+    expect(
+      dispatch.mock.calls.map(
+        (c: unknown[]) =>
+          (c[1] as { data: { alert_id: string } }).data.alert_id,
+      ),
+    ).toEqual([fresh]);
+    const rows = await ds.query<
+      Array<{ id: string; notify_skipped: string | null }>
+    >(
+      `SELECT id::text AS id, notify_skipped FROM ai_schema.ai_advisor_alerts ORDER BY id`,
+    );
+    expect(rows).toEqual([
+      { id: old, notify_skipped: 'stale' },
+      { id: fresh, notify_skipped: null },
+    ]);
   });
 });
