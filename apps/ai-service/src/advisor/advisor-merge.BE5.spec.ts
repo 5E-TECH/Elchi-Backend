@@ -1,6 +1,6 @@
 import type { AiAdvisorCandidate } from '@app/common';
 import { mergeR1 } from './advisor-merge';
-import { r6Periods } from './advisor-engine.service';
+import { catchingUp, r6Periods } from './advisor-engine.service';
 
 const row = (id: string, at: string, diff: number) => ({
   shift_id: id,
@@ -175,5 +175,28 @@ describe('r6Periods (BE-5 round-2 #651 S2/S3)', () => {
     expect(late.days).toHaveLength(7);
     expect(late.days[6]).toBe('2026-10-26');
     expect(late.weeks).toEqual(['2026-10-12', '2026-10-19']);
+  });
+});
+
+describe('catchingUp (BE-5 round-2 ops-S1)', () => {
+  const now = new Date('2026-10-22T09:00:00.000Z');
+  const h = (n: number) => new Date(now.getTime() - n * 3600_000);
+  it('birinchi ish — ha; kursor 30 daq — yo‘q; > 24 soat — ha; R6 — > 48 soat', () => {
+    expect(catchingUp('R1', undefined, now)).toBe(true);
+    expect(
+      catchingUp('R1', { first_run_at: h(100), cursor_at: h(0.5) }, now),
+    ).toBe(false);
+    expect(
+      catchingUp('R1', { first_run_at: h(100), cursor_at: h(25) }, now),
+    ).toBe(true);
+    expect(
+      catchingUp('R6', { first_run_at: h(100), cursor_at: h(27) }, now),
+    ).toBe(false);
+    expect(
+      catchingUp('R6', { first_run_at: h(100), cursor_at: h(50) }, now),
+    ).toBe(true);
+    expect(
+      catchingUp('R2', { first_run_at: h(100), cursor_at: null }, now),
+    ).toBe(false);
   });
 });

@@ -51,7 +51,7 @@ Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q.
 
 Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_rule_state`). Yangi endpoint YO'Q — ogohlantirishlar `ai_advisor_alerts` ga yoziladi; ro'yxat/tafsilot endpointlari keyingi PR'da.
 
-- 🟢 Qoidalar har 30 daqiqada (R1 smena kamomadi, R3 g'ayrioddiy xarajat) va har kuni 02:30 Toshkent (R6 zarar — kecha; dushanba — o'tgan hafta ham) tekshiriladi. `AI_ADVISOR_RULES=off` — o'chiq.
+- 🟢 Qoidalar har 30 daqiqada (R1 smena kamomadi, R3 g'ayrioddiy xarajat) va har kuni 02:30 Toshkent (R6 zarar — kecha; dushanba — o'tgan hafta ham) tekshiriladi. `AI_ADVISOR_RULES` sukut **o'chiq** — faqat aniq `on` yoqadi (muhitda qo'lda). Kursor bo'shlig'i ≤ 7 kun; qoida > 24 soat to'xtab qolgan bo'lsa (o'chirib-yoqish, uzilish) — 24 soatdan eski faktlardan ochilganlar bildirishnomasiz (backfill).
 - 🟢 Birinchi ishga tushish: 7 kunlik orqa oyna; 24 soatdan eski faktlardan ochilganlar bildirishnomasiz (`notify_skipped='backfill'`, §4.3).
 - 🟢 R3: namuna < 5 — qoida jim; filial+kategoriya namunasi < 5 bo'lsa butun tizim (`facts.scope`); minimal MAD = mediana × 5% (BQ9).
 - 🟢 Hozircha `explanation_status: none` (avtomatik izoh — 5-qism), bildirishnoma — 4-qism. R2/R4/R5 va R7/R8 — keyingi PR'lar.
