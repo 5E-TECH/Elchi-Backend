@@ -1,6 +1,6 @@
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
-import { Roles, rmqSend } from '@app/common';
+import { Roles, Status, rmqSend } from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 import { User } from '../entities/user.entity';
 
@@ -102,6 +102,11 @@ export interface AudienceResolveInput {
   with_stats?: unknown;
   /** `minimal` — id/role/language; `contact` (sukut) — + name/phone. */
   fields?: unknown;
+  /**
+   * `true` — faqat `status = active` foydalanuvchilar (masalan BE-5 AI
+   * maslahatchi: «faol superadminlar», §9.3). Sukut — barcha o'chirilmaganlar.
+   */
+  active_only?: unknown;
 }
 
 export interface AudienceItem {
@@ -127,6 +132,7 @@ export interface NormalizedAudience {
   withTotal: boolean;
   withStats: boolean;
   fields: AudienceFields;
+  activeOnly: boolean;
 }
 
 const badRequest = (message: string): never => {
@@ -295,6 +301,7 @@ export function normalizeAudienceInput(
     withTotal: input.with_total !== false,
     withStats: input.with_stats === true,
     fields: input.fields === 'minimal' ? 'minimal' : 'contact',
+    activeOnly: input.active_only === true,
   };
 }
 
@@ -353,6 +360,11 @@ function scopeQuery(
   const qb = users
     .createQueryBuilder('u')
     .where('u.isDeleted = :isDeleted', { isDeleted: false });
+  if (audience.activeOnly) {
+    qb.andWhere('u.status = :audienceActiveStatus', {
+      audienceActiveStatus: Status.ACTIVE,
+    });
+  }
 
   const roleScoped =
     audience.broadcast ||
