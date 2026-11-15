@@ -310,6 +310,57 @@ describe('AssistantService (F7PWp6cK)', () => {
   });
 
   describe('oqim va audit', () => {
+    it('C1 (#648 B1): cacheTtl 1h; 1 soatlik yozish × 2 — done, xabar shifti va audit qatori', async () => {
+      const oneHour = {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 1_000_000,
+        cache_read_input_tokens: 0,
+        cache_creation_1h_input_tokens: 1_000_000,
+      };
+      let guard!: ClaudeToolLoopOptions['beforeStep'];
+      const runToolLoop = okLoop((o) => {
+        guard = o.beforeStep;
+        o.onStep?.({
+          step: 1,
+          model: 'claude-sonnet-5',
+          usage: oneHour,
+          stopReason: 'end_turn',
+          toolCalls: 0,
+        });
+        return Promise.resolve({
+          usage: oneHour,
+          newMessages: [
+            { role: 'assistant', content: [{ type: 'text', text: 'Javob' }] },
+          ],
+        });
+      });
+      const { svc, store } = makeService({ runToolLoop });
+      const events = await collect(svc, SA_REQ);
+
+      expect(runToolLoop.mock.calls[0][0].cacheTtl).toBe('1h');
+      const done = events[events.length - 1] as Extract<
+        AiAssistantEvent,
+        { type: 'done' }
+      >;
+      // 1M × $3 × 2 / 1M = $6.00 (5 daqiqalik bo'lsa $3.75 bo'lardi).
+      expect(done.usage.cost_usd).toBeCloseTo(6, 6);
+      const rows = store.appendMessages.mock.calls[0][3] as any[];
+      expect(rows[0].cost_usd).toBeCloseTo(6, 6);
+      // 100k 1h yozish = $0.60 > sukut shift $0.50 (5m hisobda $0.375 — o'tib ketardi).
+      expect(
+        guard!({
+          step: 2,
+          usage: {
+            ...oneHour,
+            cache_creation_input_tokens: 100_000,
+            cache_creation_1h_input_tokens: 100_000,
+          },
+          model: 'claude-sonnet-5',
+        }),
+      ).toEqual({ ok: false, reason: 'message_usd_cap' });
+    });
+
     it('meta → step → tool_call → tool_result → delta → done (manba bilan); audit qatorlari yoziladi', async () => {
       const runToolLoop = okLoop(async (o) => {
         o.onEvent?.({ type: 'step_start', step: 1 });

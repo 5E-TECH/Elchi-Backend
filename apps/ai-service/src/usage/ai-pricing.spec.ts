@@ -156,6 +156,23 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
     });
   });
 
+  it('C1: 1 soatlik kesh yozish × 2, 5 daqiqalik × 1.25 (1h qismi jamidan oshmaydi)', () => {
+    const u = usage({
+      model: 'claude-sonnet-5-5',
+      cacheCreationTokens: M,
+      cacheCreation1hTokens: 400_000,
+    });
+    // 600K × 2 × 1.25 + 400K × 2 × 2 = 1.5 + 1.6
+    expect(computeCostUsd(u)).toBeCloseTo(3.1, 9);
+    expect(computeCostUsd({ ...u, cacheCreation1hTokens: 5 * M })).toBeCloseTo(
+      4,
+      9,
+    );
+    expect(
+      computeCostUsd({ ...u, cacheCreation1hTokens: undefined }),
+    ).toBeCloseTo(2.5, 9);
+  });
+
   describe('normalizeModelId', () => {
     it.each([
       ['claude-sonnet-5', 'sonnet-5'],

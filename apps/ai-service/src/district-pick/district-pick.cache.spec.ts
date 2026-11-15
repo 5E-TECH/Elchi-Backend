@@ -205,7 +205,10 @@ describe('tuman LLM fallback — prompt keshi (5Z1ZvvzE TC9)', () => {
     // System — bitta blok, cache_control ephemeral, ikkala chaqiruvda AYNAN bir xil.
     for (const b of bodies) {
       expect(b.system).toHaveLength(1);
-      expect(b.system[0].cache_control).toEqual({ type: 'ephemeral' });
+      expect(b.system[0].cache_control).toEqual({
+        type: 'ephemeral',
+        ttl: '1h',
+      });
     }
     expect(bodies[1].system[0].text).toBe(bodies[0].system[0].text);
     expect(bodies[0].system[0].text).toBe(buildDistrictCatalogSystem(CATALOG));
