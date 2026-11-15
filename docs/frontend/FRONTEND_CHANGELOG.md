@@ -22,6 +22,10 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-15 — AI maslahatchi (BE-5): shartnoma v0.4 eslatmasi — R7 Telegram
+
+- 🟢 Ega qarori (2026-11-15): `rules.R7.telegram` **qulflanmaydi** — sukut `false` (R7 jiddiy ogohlantirishi Telegram'ga ketmaydi: ilova ichi + kunlik hisobot), lekin superadmin Sozlamalarda R7 uchun Telegram'ni o'zi yoqishi mumkin (`PATCH /ai/advisor/settings` → `rules.R7.telegram: true` ruxsat). Kod o'zgarmadi — joriy xatti-harakat aynan shu. Shartnoma v0.4: «R7: telegram sukut false, opt-in».
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 5-qism): AI izohi
 
 Shartnoma v0.3 §6, §7.4. Deploy: api-gateway + ai-service, migratsiyasiz. Env: `AI_ADVISOR_EXPLAIN` (sukut on), `AI_ADVISOR_MODEL` (bo'sh — joriy sukut model).
