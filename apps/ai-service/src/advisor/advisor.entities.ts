@@ -206,4 +206,10 @@ export class AiAdvisorRuleState extends BaseEntity {
 
   @Column({ type: 'int', default: 0 })
   last_candidates!: number;
+
+  @Column({ type: 'int', default: 0 })
+  last_failed!: number;
+
+  @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
+  failures!: Record<string, number>;
 }

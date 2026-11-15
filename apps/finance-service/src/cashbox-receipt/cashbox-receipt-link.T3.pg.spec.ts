@@ -1200,6 +1200,32 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     expect(hqOnly.data.total).toBe(0);
   });
 
+  it('⭐ F1: USD chek — mismatch, farq null, currency_not_uzs; xulosa summasi va top-15 ga kirmaydi', async () => {
+    const uzs = await checked(145_000, 150_000);
+    const usd = await linkedReceipt(125_000);
+    await receipts.applyAiResult({
+      receipt_id: usd.receiptId,
+      ai_request_id: usd.requestId,
+      result: aiOk({ amount: 10, currency: 'USD' }),
+    });
+    const detail = (await finance.findHistoryById(usd.historyId, {
+      include_receipts: true,
+    })) as any;
+    expect(detail.data.receipt).toMatchObject({ ai_status: 'mismatch' });
+    expect(detail.data.receipt.ai).toMatchObject({
+      amount: 10,
+      currency: 'USD',
+      difference: null,
+      error_reason: 'currency_not_uzs',
+    });
+
+    const res = await summary();
+    expect(res.data.counts).toMatchObject({ mismatch: 2 });
+    // Ilgari |10 − 125 000| = 124 990 qo'shilardi.
+    expect(res.data.mismatch_total).toBe(5_000);
+    expect(res.data.top.map((t: any) => t.receipt_id)).toEqual([uzs.receiptId]);
+  });
+
   it('xulosa: filial → HQ cheki va cheksiz click o`tkazma by_branch da; davr tashqarisi kirmaydi', async () => {
     const receiptId = await upload('branch_to_hq');
     await branchToMain({ receipt_id: receiptId });

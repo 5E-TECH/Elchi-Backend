@@ -2410,6 +2410,40 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** T3 — chek jadvali / tarix / kassa yo'llari (TypeORM metadata). */
+  /**
+   * 2026-11-15 — `source_user_id` ga filial id'si yoziladigan turlar
+   * (`branch_to_main` oyoqlari va ularning T6 teskari yozuvi). Boshqa turlarda
+   * u foydalanuvchi (market, kuryer) id'si.
+   */
+  private static readonly BRANCH_SOURCE_HISTORY_TYPES: readonly Source_type[] =
+    [Source_type.BRANCH_TO_MAIN, Source_type.PAYMENT_REVERSAL];
+
+  /** `cashbox_history` jadvali (sxema bilan), SQL uchun qo'shtirnoqda. */
+  private historyTableSql(): string {
+    let tablePath = 'cashbox_history';
+    try {
+      tablePath = this.dataSource.getMetadata(CashboxHistory).tablePath;
+    } catch {
+      // Eski spec'lar DataSource'siz — jadval nomi sukut bo'yicha.
+    }
+    return tablePath
+      .split('.')
+      .map((part) => `"${part.replace(/"/g, '')}"`)
+      .join('.');
+  }
+
+  private emptyHistoryPage(page: number, limit: number) {
+    return this.successRes(
+      {
+        items: [],
+        counts: { all: 0, income: 0, expense: 0 },
+        pagination: { total: 0, page, limit, totalPages: 0 },
+      },
+      200,
+      'Cashbox histories',
+    );
+  }
+
   private receiptTables(): ReceiptTables | null {
     try {
       return {
@@ -2527,6 +2561,38 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       if (dto.source_user_id) {
         this.assertBigIntId(dto.source_user_id, 'source_user_id');
         where.source_user_id = dto.source_user_id;
+      }
+      // 2026-11-15 — filial tarixi (HQ ko'rinishi, asosiy kassa qatorlari).
+      // `source_user_id` foydalanuvchi va filial id'larini aralash saqlaydi
+      // (ikki xil ketma-ketlik): id'si filialnikiga teng marketga HQ to'lovi
+      // (`market_payment`, manba = market) filial tarixiga tushardi. Filial
+      // id'si bo'yicha faqat filial yozadigan turlar olinadi; teskari yozuv
+      // (`payment_reversal`) — faqat `branch_to_main` ni qaytargan bo'lsa.
+      if (dto.source_branch_id) {
+        this.assertBigIntId(dto.source_branch_id, 'source_branch_id');
+        const requestedTypes = sourceTypes?.length
+          ? sourceTypes
+          : dto.source_type
+            ? [dto.source_type]
+            : null;
+        const branchTypes =
+          FinanceServiceService.BRANCH_SOURCE_HISTORY_TYPES.filter(
+            (type) => !requestedTypes || requestedTypes.includes(type),
+          );
+        if (
+          !branchTypes.length ||
+          (dto.source_user_id && dto.source_user_id !== dto.source_branch_id)
+        ) {
+          return this.emptyHistoryPage(page, limit);
+        }
+        where.source_user_id = dto.source_branch_id;
+        where.source_type = In(branchTypes);
+        const historyTable = this.historyTableSql();
+        where.reverses_history_id = Raw(
+          (alias) =>
+            `(${alias} IS NULL OR ${alias} IN (SELECT o."id" FROM ${historyTable} o WHERE o."source_type"::text = :branchReversedType))`,
+          { branchReversedType: Source_type.BRANCH_TO_MAIN },
+        );
       }
       if (dto.created_by) {
         this.assertBigIntId(dto.created_by, 'created_by');
