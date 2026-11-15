@@ -22,6 +22,22 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-15 — AI kalit va modellar (BE-1d): `/ai/config*` endpointlari (gateway)
+
+Deploy: **ai-service OLDIN** (BE-1b), keyin api-gateway. Yangi navbat `ai_config_queue` (env `RABBITMQ_AI_CONFIG_QUEUE`, sukut). Shakllar — openapi-fragment v0.2 (`openapi.json` yangilandi). Hammasi **faqat SUPERADMIN** (ADMIN — 403 kodsiz).
+
+- 🆕 `GET /ai/config` → `{statusCode, message, data: AiConfigView}`. Flag o'chiq bo'lsa ham ishlaydi (faqat ko'rish).
+- 🆕 `PUT /ai/config/key` `{key_envelope, label?, version}` — kalit FAQAT muhrlangan konvertda (`AiKeyEnvelope`: `v:1, kid, alg:"RSA-OAEP-256+A256GCM", ek (400–700), iv (16), ct (40–1024)`, base64url). Tanada `api_key` bo'lsa — 400 (noma'lum maydon).
+- 🆕 `POST /ai/config/key/verify` (tanasiz), `POST /ai/config/key/restore-previous` `{version}`, `POST /ai/config/key/deactivate` `{version, reason?}`, `DELETE /ai/config/key/previous?version=N`, `GET /ai/config/history?limit=&cursor=`.
+- ✏️ Muvaffaqiyatli yozuv javobi — yangilangan `AiConfigView` (`data`), qayta GET shart emas.
+- ✏️ Xatolar: `{statusCode, message, code, …}` — maydonlar faqat oq ro'yxatdan (`version`, `field`, `retry_after_seconds`, `slot`, `model`, `reason`). **Hech biri 401 emas.** 504 — kodsiz: hech narsa o'zgarmagan (ai-service 6,5 s dan keyin COMMIT qilmaydi) → `GET /ai/config` ni qayta o'qing (va kerak bo'lsa izni solishtiring).
+- 🟢 Gateway cheklovi: `/ai/config/key*` — bitta foydalanuvchiga daqiqasiga 10, bitta IP'ga 30 (umumiy hisob) → 429 (kodsiz, `Retry-After`). ai-service cheklovi (`AI_KEY_ATTEMPTS_EXCEEDED`, 5/daqiqa) alohida.
+- 🟢 CORS: `X-Step-Up-Token` ruxsat etildi (step-up BE-5 da; hozircha gateway `step_up: false` yuboradi — `AI_CONFIG_STEP_UP_REQUIRED=true` muhitda kalit amallari `403 AI_STEP_UP_REQUIRED` oladi).
+- 🟢 Yozuvdan keyin gateway AI holatini darhol yangilaydi (`/orders/ai-availability`, `/health`).
+
+**Frontend action items:**
+- 🔧 Mock'larni real endpointga ulash (shakllar fragment bilan bir xil). Swagger DTO nomlari: `AiKeySetDto`, `AiKeyEnvelopeDto`, `AiVersionedDto`, `AiDeactivateDto`.
+
 ### 2026-11-15 — AI kalit va modellar (BE-1b): ai-service kalit saqlash va `ai.config.*` RMQ handler'lari
 
 Deploy: ai-service (gateway'dan OLDIN), migratsiya **228** (`ai_schema.ai_provider_keys`, `ai_runtime_settings`, `ai_config_attempts`; `ai_usage_log` + `key_id`, `key_source`, `key_fingerprint`, `config_version`). HTTP endpointlar hali YO'Q — BE-1d (gateway) da. `AI_CONFIG_UI_ENABLED` sukut `false`: prod'da xulq o'zgarmaydi.

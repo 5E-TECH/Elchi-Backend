@@ -23163,6 +23163,230 @@
         ]
       }
     },
+    "/ai/config": {
+      "get": {
+        "description": "`data` = AiConfigView (openapi-fragment v0.2). Kalit qiymati yoki shifrmatni HECH QACHON qaytmaydi. `AI_CONFIG_UI_ENABLED=false` da ham ishlaydi (faqat ko‘rish; `key_locked_reason: feature_off`). `key_wrap` — brauzer kalitni muhrlaydigan ai-service ochiq kaliti (yozish mumkin bo‘lmasa null).",
+        "operationId": "AiConfigGatewayController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI kalit va modellar: sozlama ko‘rinishi (faqat superadmin)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key": {
+      "put": {
+        "description": "Brauzer `{api_key, uid, nonce}` ni `key_wrap` bilan muhrlaydi (AiKeyEnvelope). Bepul tekshiruv (`GET /v1/models`) → shifrlab saqlash; audit `ai.key.add|replace`. Xatolar: 400 AI_KEY_FORMAT / AI_KEY_ADMIN_KEY / AI_KEY_OAUTH_TOKEN / AI_KEY_WRAP_INVALID / AI_CONFIG_INVALID {field}; 403 AI_CONFIG_UI_DISABLED / AI_CONFIG_NOT_ALLOWED / AI_CONFIG_UNSIGNED / AI_STEP_UP_REQUIRED; 409 AI_CONFIG_CONFLICT {version} / AI_KEY_SAME / AI_KEY_WRAP_STALE; 422 AI_KEY_REJECTED / AI_KEY_FORBIDDEN / AI_KEY_BAD_REQUEST / AI_KEY_BILLING; 429 AI_KEY_ATTEMPTS_EXCEEDED / AI_KEY_UPSTREAM_RATE_LIMITED {retry_after_seconds}; 502 AI_KEY_VERIFY_UNAVAILABLE; 503 AI_KEY_STORAGE_UNAVAILABLE / AI_CONFIG_EXPIRED; 504 (kodsiz) — hech narsa o‘zgarmagan. Javob — yangilangan AiConfigView.",
+        "operationId": "AiConfigGatewayController_setKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiKeySetDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Anthropic kalitini qo‘shish yoki almashtirish (muhrlangan)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/verify": {
+      "post": {
+        "description": "UI kaliti (yoki u yo‘q bo‘lsa server kaliti) `GET /v1/models` bilan tekshiriladi; aniq rad ham 200 — natija `verify.state` da. Audit `ai.key.verify`. Step-up talab qilinmaydi. 404 AI_KEY_NONE; 429 AI_KEY_ATTEMPTS_EXCEEDED.",
+        "operationId": "AiConfigGatewayController_verifyKey",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ishlatilayotgan kalitni qayta tekshirish (bepul)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/restore-previous": {
+      "post": {
+        "description": "Faol ↔ oldingi almashadi. 404 AI_KEY_NO_PREVIOUS; 409 AI_CONFIG_CONFLICT; 422/429/502 — tekshiruv natijasi; 503 AI_KEY_STORAGE_UNAVAILABLE / AI_CONFIG_EXPIRED. Audit `ai.key.restore`.",
+        "operationId": "AiConfigGatewayController_restoreKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiVersionedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Oldingi kalitga qaytarish (qayta tekshiruv bilan)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/deactivate": {
+      "post": {
+        "description": "Faol → oldingi; eski oldingisi o‘chiriladi (shifrmatn yo‘q qilinadi). Shifr kalitisiz ham ishlaydi — bir bosishda tiklash. Anthropic’da kalitni bekor QILMAYDI. 404 AI_KEY_NONE; 409 AI_CONFIG_CONFLICT; 400 AI_CONFIG_INVALID {field:\"reason\"}. Audit `ai.key.deactivate`.",
+        "operationId": "AiConfigGatewayController_deactivateKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiDeactivateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Faol UI kalitini o‘chirish (server kaliti ishlaydi yoki AI o‘chadi)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/previous": {
+      "delete": {
+        "description": "Faqat jonli bazadan (WAL/zaxiralarda muddati tugaguncha qoladi). Anthropic’da bekor QILMAYDI. 404 AI_KEY_NO_PREVIOUS; 409 AI_CONFIG_CONFLICT. Audit `ai.key.forget`.",
+        "operationId": "AiConfigGatewayController_forgetPrevious",
+        "parameters": [
+          {
+            "name": "version",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Oldingi kalit shifrmatnini o‘chirish",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/history": {
+      "get": {
+        "description": "`data` = `{items[{id, action, created_at, actor, details, reason, context{ip, device}}], next_cursor}`. Eng yangisi tepada; tizim qatorlari (rad etilgan urinish, runtime xatosi) ham.",
+        "operationId": "AiConfigGatewayController_history",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kalit va model o‘zgarishlari tarixi",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/ai-usage/dashboard": {
       "get": {
         "operationId": "AiUsageGatewayController_dashboard",
@@ -36452,6 +36676,109 @@
         "required": [
           "extra_usd",
           "reason"
+        ]
+      },
+      "AiKeyEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "v": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "kid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "description": "key_wrap.kid"
+          },
+          "alg": {
+            "type": "string",
+            "enum": [
+              "RSA-OAEP-256+A256GCM"
+            ]
+          },
+          "ek": {
+            "type": "string",
+            "minLength": 400,
+            "maxLength": 700,
+            "description": "base64url"
+          },
+          "iv": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{16}$"
+          },
+          "ct": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 1024,
+            "description": "base64url"
+          }
+        },
+        "required": [
+          "v",
+          "kid",
+          "alg",
+          "ek",
+          "iv",
+          "ct"
+        ]
+      },
+      "AiKeySetDto": {
+        "type": "object",
+        "properties": {
+          "key_envelope": {
+            "description": "Brauzerda (WebCrypto) ai-service ochiq kaliti bilan muhrlangan kalit. Ochiq kalit HECH QACHON yuborilmaydi.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiKeyEnvelopeDto"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "Ixtiyoriy; sukut «Anthropic kaliti». Harf, raqam, bo'sh joy va . , _ ( ) ' ʻ ʼ -. Kalit o'xshash qiymat → 400 AI_CONFIG_INVALID {field:'label'}."
+          },
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          }
+        },
+        "required": [
+          "key_envelope",
+          "version"
+        ]
+      },
+      "AiVersionedDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          }
+        },
+        "required": [
+          "version"
+        ]
+      },
+      "AiDeactivateDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "version"
         ]
       },
       "AiAssistantMessageDto": {

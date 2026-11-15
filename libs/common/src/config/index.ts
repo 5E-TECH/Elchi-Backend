@@ -287,6 +287,8 @@ export const gatewayValidationSchema = Joi.object({
    * yiqitmasin — bo'sh qiymat sukutga tushadi (AI_ORDER_ENABLED uchun `false`).
    */
   RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  // «AI kalit va modellar»: ai.config.* va ai.status (DLX'siz navbat).
+  RABBITMQ_AI_CONFIG_QUEUE: Joi.string().empty('').default('ai_config_queue'),
   // (dgvwZasd B) Shaxsiy fayl egaligi reestrini o'qishda qo'llash. `off` —
   // reestr faqat yoziladi, kirish eski qoida bilan; `on` — reestrdagi fayl
   // egalik qoidasi bilan (reestrda yo'q eski fayl baribir eski qoida bilan).
