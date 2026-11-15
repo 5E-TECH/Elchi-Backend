@@ -498,6 +498,34 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     jest.restoreAllMocks();
   });
 
+  it('round-2 ops-S1: eski kursor (30 kun) — since now−7 kun; 24 soatdan eski faktlar backfill, yangisi — oddiy', async () => {
+    await warmUp();
+    await ds.query(
+      `UPDATE ai_schema.ai_advisor_rule_state SET cursor_at = $1 WHERE rule_key = 'R1'`,
+      [new Date(NOW.getTime() - 30 * 24 * 3600_000)],
+    );
+    reply = {
+      candidates: [
+        r1([['40', '2026-10-18T10:00:00Z']]),
+        r1([['41', '2026-10-22T08:30:00Z']], { dedup_key: 'R1:cashbox:41' }),
+      ],
+      cursors: { R1: '2026-10-22T08:30:00Z' },
+    };
+    await engine.run('frequent', NOW);
+    expect(requests[requests.length - 1].since.R1).toBe(
+      new Date(NOW.getTime() - 7 * 24 * 3600_000).toISOString(),
+    );
+    const rows = await ds.query<
+      Array<{ dedup_key: string; notify_skipped: string | null }>
+    >(
+      `SELECT dedup_key, notify_skipped FROM ai_schema.ai_advisor_alerts ORDER BY dedup_key`,
+    );
+    expect(rows).toEqual([
+      { dedup_key: 'R1:cashbox:41', notify_skipped: null },
+      { dedup_key: 'R1:cashbox:7', notify_skipped: 'backfill' },
+    ]);
+  });
+
   it('round-2: finance qoida xatosi (errors) — faqat o‘sha qoida error, boshqasi ok', async () => {
     await warmUp();
     reply = {
