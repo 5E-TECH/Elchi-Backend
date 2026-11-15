@@ -96,6 +96,8 @@ describe('aiValidationSchema', () => {
     });
   });
 
+  const FAKE_KEY = 'sk-ant-api03-' + 'x'.repeat(40);
+
   describe('ANTHROPIC_API_KEY (cSUBv0tY #11, bVeyEuIR #1)', () => {
     it("berilmasa boot muvaffaqiyatli (AI o'chiq)", () => {
       const { error, value } = validate(aiValidationSchema, AI_REQUIRED);
@@ -106,8 +108,9 @@ describe('aiValidationSchema', () => {
     it.each([
       ['', ''],
       ['   ', ''],
-      ['sk-ant-api03-abc', 'sk-ant-api03-abc'],
-      ['  sk-ant-api03-abc  ', 'sk-ant-api03-abc'],
+      // D8: 40–256 belgi (soxta kalit).
+      [FAKE_KEY, FAKE_KEY],
+      [`  ${FAKE_KEY}  `, FAKE_KEY],
     ])("%j o'tadi → %j", (input, expected) => {
       const { error, value } = validate(aiValidationSchema, {
         ...AI_REQUIRED,
@@ -117,17 +120,23 @@ describe('aiValidationSchema', () => {
       expect(value.ANTHROPIC_API_KEY).toBe(expected);
     });
 
-    it.each(['abc', 'sk-foo', 'sk-proj-SECRETVALUE123', 'SK-ANT-abc'])(
-      '%j — boot yiqiladi',
-      (input) => {
-        const { error } = validate(aiValidationSchema, {
-          ...AI_REQUIRED,
-          ANTHROPIC_API_KEY: input,
-        });
-        expect(error).toBeDefined();
-        expect(error!.message).toContain('ANTHROPIC_API_KEY');
-      },
-    );
+    it.each([
+      'abc',
+      'sk-foo',
+      'sk-proj-SECRETVALUE123',
+      'SK-ANT-abc',
+      'sk-ant-api03-abc',
+      `sk-ant-admin01-${'x'.repeat(40)}`,
+      `sk-ant-oat01-${'x'.repeat(40)}`,
+      `${FAKE_KEY} x`,
+    ])('%j — boot yiqiladi', (input) => {
+      const { error } = validate(aiValidationSchema, {
+        ...AI_REQUIRED,
+        ANTHROPIC_API_KEY: input,
+      });
+      expect(error).toBeDefined();
+      expect(error!.message).toContain('ANTHROPIC_API_KEY');
+    });
 
     it('xato xabarida kalit QIYMATI chiqmaydi (boot logi / Sentry)', () => {
       const secret = 'sk-proj-SECRETVALUE123';

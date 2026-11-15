@@ -22,6 +22,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-15 — AI kalit va modellar (BE-1a): umumiy asos, API o'zgarishi YO'Q
+
+Spec «AI kalit va modellar» v0.2 (`openapi-fragment.json` v0.2). Bu PR faqat `libs/common` (endpoint, migratsiya, deploy o'zgarishi yo'q); endpointlar BE-1b/BE-1d da.
+
+- 🟢 Xato kodlari (`AI_CONFIG_*`, `AI_KEY_*`, `AI_MODEL_*`, `AI_STEP_UP_REQUIRED`) gateway oq ro'yxatiga qo'shildi: `version` (409 `AI_CONFIG_CONFLICT`), `field` (400 `AI_CONFIG_INVALID`), `retry_after_seconds` (429), `slot/model/reason` (400 `AI_MODEL_NOT_ALLOWED`). Hech biri 401 emas.
+- 🟢 Kalit formati va erkin matn qoidalari (`libs/common/src/ai/ai-key-format.ts`) — FE `src/entities/ai-config/validation.ts` bilan bir xil bo'lishi kerak: trim, `^sk-ant-[A-Za-z0-9_-]+$`, 40–256; `sk-ant-admin…` → `AI_KEY_ADMIN_KEY`; `sk-ant-oat…`/`sk-ant-ort…` → `AI_KEY_OAUTH_TOKEN`; iz = SHA-256 ning 12 hex belgisi, 4 tadan bo'sh joy bilan (`fingerprintOf('abc') === 'ba78 16bf 8f01'`); `label`/`reason` da `sk-ant-` yoki 40+ belgilik `[A-Za-z0-9_-]` ketma-ketlik → `AI_CONFIG_INVALID {field}`. Jadvalli test: `ai-key-format.spec.ts` (`AI_KEY_FORMAT_TABLE`) — FE testiga shu qatorlarni ko'chiring.
+
+**Frontend action items:** yo'q (FE mock'lar fragment v0.2 bo'yicha qoladi).
+
 ### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
 
 Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.

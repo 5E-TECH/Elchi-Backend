@@ -1,4 +1,5 @@
 import { maskPhonesForLog } from '../pii/mask-phones';
+import { scrubAiKeys, scrubAiKeysDeep } from '../ai/ai-key-format';
 
 /**
  * Sentry event'idan biz tozalaydigan maydonlar. `@sentry/node` ning
@@ -11,6 +12,8 @@ export interface ScrubbableSentryEvent {
   request?: { url?: string; data?: unknown };
   exception?: { values?: { value?: string }[] };
   extra?: Record<string, unknown>;
+  contexts?: Record<string, unknown>;
+  breadcrumbs?: { message?: string; data?: unknown }[];
 }
 
 /**
@@ -19,8 +22,19 @@ export interface ScrubbableSentryEvent {
  */
 const AI_ORDER_ROUTE_RE = /\/orders\/ai-/;
 
+/**
+ * AI kalit sozlamasi va step-up yo'llari (be-brief §7): tanada muhrlangan
+ * kalit konverti yoki parol — `request.data` butunlay olib tashlanadi.
+ */
+const AI_CONFIG_ROUTE_RE = /(\/v\d+)?\/(ai\/config|auth\/step-up)(\/|$|\?)/;
+
+/** Telefon maskasi + Anthropic kaliti (`sk-ant-[REDACTED]`). */
+function scrubText(value: string): string {
+  return scrubAiKeys(maskPhonesForLog(value));
+}
+
 function maskIfString(value: unknown): unknown {
-  return typeof value === 'string' ? maskPhonesForLog(value) : value;
+  return typeof value === 'string' ? scrubText(value) : scrubAiKeysDeep(value);
 }
 
 /**
@@ -43,21 +57,24 @@ export function scrubSentryEvent<E extends ScrubbableSentryEvent>(event: E): E {
     const request = { ...out.request };
     if (
       typeof request.url === 'string' &&
-      AI_ORDER_ROUTE_RE.test(request.url)
+      (AI_ORDER_ROUTE_RE.test(request.url) ||
+        AI_CONFIG_ROUTE_RE.test(request.url))
     ) {
       delete request.data;
+    } else if (request.data !== undefined) {
+      request.data = scrubAiKeysDeep(request.data);
     }
     out.request = request;
   }
 
   if (typeof out.message === 'string') {
-    out.message = maskPhonesForLog(out.message);
+    out.message = scrubText(out.message);
   }
 
   if (out.logentry && typeof out.logentry.message === 'string') {
     out.logentry = {
       ...out.logentry,
-      message: maskPhonesForLog(out.logentry.message),
+      message: scrubText(out.logentry.message),
     };
   }
 
@@ -66,7 +83,7 @@ export function scrubSentryEvent<E extends ScrubbableSentryEvent>(event: E): E {
       ...out.exception,
       values: out.exception.values.map((ex) =>
         typeof ex?.value === 'string'
-          ? { ...ex, value: maskPhonesForLog(ex.value) }
+          ? { ...ex, value: scrubText(ex.value) }
           : ex,
       ),
     };
@@ -78,6 +95,24 @@ export function scrubSentryEvent<E extends ScrubbableSentryEvent>(event: E): E {
       extra[key] = maskIfString(value);
     }
     out.extra = extra;
+  }
+
+  if (out.contexts && typeof out.contexts === 'object') {
+    out.contexts = scrubAiKeysDeep(out.contexts);
+  }
+
+  if (Array.isArray(out.breadcrumbs)) {
+    out.breadcrumbs = out.breadcrumbs.map((b) =>
+      b && typeof b === 'object'
+        ? {
+            ...b,
+            ...(typeof b.message === 'string'
+              ? { message: scrubText(b.message) }
+              : {}),
+            ...(b.data !== undefined ? { data: scrubAiKeysDeep(b.data) } : {}),
+          }
+        : b,
+    );
   }
 
   return out as E;

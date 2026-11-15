@@ -2,7 +2,7 @@ import { DynamicModule, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { RequestContextRmqSerializer } from '../context/rmq-context.serializer';
-import { RmqService } from './rmq.service';
+import { RmqService, rmqNoDlxProfile } from './rmq.service';
 
 interface RmqModuleOptions {
   name: string;
@@ -24,11 +24,16 @@ export class RmqModule {
               const ttl = Number(
                 configService.get<string>('RMQ_RPC_TTL_MS') ?? 60000,
               );
+              // AI_CONFIG: DLX'siz, saqlanmaydigan navbat (rmq.service.ts).
+              const noDlx = rmqNoDlxProfile(name);
               return {
                 transport: Transport.RMQ,
                 options: {
                   urls: [configService.get<string>('RABBITMQ_URI')!],
-                  queue: configService.get<string>(`RABBITMQ_${name}_QUEUE`)!,
+                  queue:
+                    configService.get<string>(`RABBITMQ_${name}_QUEUE`) ||
+                    noDlx?.defaultName ||
+                    configService.get<string>(`RABBITMQ_${name}_QUEUE`)!,
                   noAssert: true,
                   /**
                    * f2Ud5tju — trace va IP/qurilma kontekstini HAR chiquvchi
@@ -59,8 +64,13 @@ export class RmqModule {
                   },
                   queueOptions: {
                     durable: true,
-                    messageTtl: Number.isFinite(ttl) && ttl > 0 ? ttl : 60000,
+                    messageTtl: noDlx
+                      ? noDlx.messageTtl
+                      : Number.isFinite(ttl) && ttl > 0
+                        ? ttl
+                        : 60000,
                   },
+                  ...(noDlx ? { persistent: false } : {}),
                 },
               };
             },

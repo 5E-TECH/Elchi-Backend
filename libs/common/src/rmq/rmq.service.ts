@@ -13,6 +13,37 @@ export const RMQ_BOOTSTRAP_CONNECT_TIMEOUT_MS = 5_000;
 /** (BOT-3a) `ensureQueue` umumiy chegarasi — listen'ni cheksiz to'smasin. */
 export const RMQ_ENSURE_QUEUE_TIMEOUT_MS = 15_000;
 
+/**
+ * DLX'siz, saqlanmaydigan navbatlar (AI kalit/model sozlamasi, be-brief
+ * §6.1). Bu navbatdagi xabarda muhrlangan kalit konverti bo'lishi mumkin —
+ * u DLQ'da yoki diskda (persistent) QOLMASLIGI kerak: TTL tugasa xabar
+ * shunchaki yo'qoladi, gateway 504 oladi (= hech narsa o'zgarmadi).
+ *
+ * `durable: true` faqat navbat METADATASI (broker qayta ishga tushganda
+ * navbat qoladi), xabarlar `persistent: false`.
+ */
+export interface RmqNoDlxQueueProfile {
+  /** Navbat nomi env berilmasa. */
+  defaultName: string;
+  messageTtl: number;
+  prefetch: number;
+}
+
+export const RMQ_NO_DLX_QUEUES: Readonly<Record<string, RmqNoDlxQueueProfile>> =
+  Object.freeze({
+    AI_CONFIG: {
+      defaultName: 'ai_config_queue',
+      messageTtl: 8000,
+      prefetch: 4,
+    },
+  });
+
+export function rmqNoDlxProfile(queueId: string): RmqNoDlxQueueProfile | null {
+  return Object.prototype.hasOwnProperty.call(RMQ_NO_DLX_QUEUES, queueId)
+    ? RMQ_NO_DLX_QUEUES[queueId]
+    : null;
+}
+
 export interface NackOptions {
   requeue?: boolean;
 }
@@ -28,7 +59,10 @@ export class RmqService {
     dlq: string;
     dlx: string;
   } {
-    const main = this.configService.get<string>(`RABBITMQ_${queueId}_QUEUE`)!;
+    const main =
+      this.configService.get<string>(`RABBITMQ_${queueId}_QUEUE`) ||
+      rmqNoDlxProfile(queueId)?.defaultName ||
+      this.configService.get<string>(`RABBITMQ_${queueId}_QUEUE`)!;
     return {
       main,
       dlq: `${main}_dlq`,
@@ -59,6 +93,11 @@ export class RmqService {
   async setupDlqTopology(queueId: string): Promise<void> {
     const url = this.configService.get<string>('RABBITMQ_URI')!;
     const { main, dlq, dlx } = this.getQueueNames(queueId);
+    if (rmqNoDlxProfile(queueId)) {
+      // DLX/DLQ YO'Q (ataylab) — faqat argumentlar mosligi tekshiriladi.
+      await this.assertMainQueueArgsMatch(url, queueId, main);
+      return;
+    }
     const connection = await this.connect(url);
     const channel = await connection.createChannel();
     try {
@@ -202,9 +241,11 @@ export class RmqService {
    */
   private mainQueueArguments(queueId: string): {
     messageTtl: number;
-    deadLetterExchange: string;
-    deadLetterRoutingKey: string;
+    deadLetterExchange?: string;
+    deadLetterRoutingKey?: string;
   } {
+    const noDlx = rmqNoDlxProfile(queueId);
+    if (noDlx) return { messageTtl: noDlx.messageTtl };
     const { dlq, dlx } = this.getQueueNames(queueId);
     return {
       messageTtl: this.resolveTtlMs(),
@@ -252,6 +293,23 @@ export class RmqService {
       this.configService.get<string>('RMQ_PREFETCH') ?? 20,
     );
     const { main, dlq, dlx } = this.getQueueNames(queueId);
+    const noDlx = rmqNoDlxProfile(queueId);
+    if (noDlx) {
+      return {
+        transport: Transport.RMQ,
+        options: {
+          urls: [this.configService.get<string>('RABBITMQ_URI')!],
+          queue: main,
+          socketOptions: { connectionOptions: { noDelay: true } },
+          prefetchCount: noDlx.prefetch,
+          isGlobalPrefetchCount: false,
+          // DLX YO'Q: rad etilgan/eskirgan xabar DLQ'ga tushmaydi.
+          queueOptions: { durable: true, ...this.mainQueueArguments(queueId) },
+          noAck,
+          persistent: false,
+        },
+      };
+    }
 
     return {
       transport: Transport.RMQ,

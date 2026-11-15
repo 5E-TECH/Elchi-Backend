@@ -12,3 +12,5 @@ export * from './balance-screenshot.contract';
 export * from './receipt-extract.contract';
 export * from './assistant.contract';
 export * from './advisor.contract';
+export * from './ai-key-format';
+export * from './ai-config.contract';

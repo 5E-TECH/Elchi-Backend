@@ -48,6 +48,7 @@ export * from './security/user-summary';
 export * from './security/password-policy';
 export * from './security/temp-password';
 export * from './security/ip-allowlist-rule';
+export * from './crypto/secret-cipher';
 
 export * from './filters/rpc-exception.filter';
 export * from './filters/all-exceptions.filter';

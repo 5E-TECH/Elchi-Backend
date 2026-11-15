@@ -18,6 +18,7 @@ import { inspectAnthropicEnv } from './ai-key-check';
 import { isAiAllowedInEnv } from '../staging/outbound-guard';
 import {
   AI_MODEL_DEFAULTS,
+  ANTHROPIC_API_BASE_URL,
   ANTHROPIC_API_KEY_ENV,
   ANTHROPIC_CLIENT_FACTORY,
   ANTHROPIC_MAX_RETRIES,
@@ -60,6 +61,11 @@ import type {
 export const defaultAnthropicClientFactory: AnthropicClientFactory = (o) =>
   new Anthropic({
     apiKey: o.apiKey,
+    // be-brief §7: manzil MAHKAM — SDK `ANTHROPIC_BASE_URL` env'ini o'qimasin
+    // (kalit boshqa hostga ketmasin). Joi ham bu env'ni taqiqlaydi.
+    baseURL: ANTHROPIC_API_BASE_URL,
+    // SDK debug logi so'rov sarlavhalarini (kalit) yozishi mumkin — faqat warn.
+    logLevel: 'warn',
     timeout: o.timeout,
     maxRetries: o.maxRetries,
   });
