@@ -24,19 +24,24 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-11-14 — «Hududlar»: yetishmagan 25 tuman qo'shildi, avtomatik biriktirish ogohlantirishi (D1)
 
-Ega qarori (2026-11-14): rasmiy SOATO'dagi yetishmagan 25 tuman/shahar («Farg'ona shahri», «Zomin tumani», «Xiva shahri» …) prod'ga qo'shiladi va filialga AVTOMATIK biriktiriladi; ops tasdiqlaguncha superadmin/admin ogohlantirish ko'radi.
+Ega qarori (2026-11-14): rasmiy SOATO'dagi yetishmagan 25 tuman/shahar («Farg'ona shahri», «Zomin tumani», «Xiva shahri» …) prod'ga qo'shiladi va viloyat filialiga AVTOMATIK biriktiriladi; ops tasdiqlaguncha superadmin/admin ogohlantirish ko'radi.
+Biriktirish — VILOYAT qoidasi (district-coverage.ts, anKpzwxk): tuman buyurtmasini xizmat viloyati (`assigned_region ?? region_id`) dagi HAR QANDAY faol REGIONAL/HYBRID filial ko'radi. Eski `districts.serving_branch_id` qamrovga ta'sir qilmaydi — ogohlantirishdagi filial undan EMAS, viloyat qoidasidan CHAQIRUV paytida hisoblanadi.
 Deploy: logistics-service + api-gateway, migratsiya **227** (`logistics_schema.districts`: `assignment_review_required` sukut `false`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at`). ⚠️ Migratsiya logistics-service qayta ishga tushishidan OLDIN — qatorlar servis ishga tushganda seed bilan qo'shiladi.
 
 - 🆕 `GET /region/district-coverage` (SUPERADMIN, ADMIN) → `data`:
-  `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, sato_code, kind: 'city' | 'tuman' | null, serving_branch: { id, name } | null, reason: 'auto_assigned_D1' | 'no_branch_found', flagged_at }], checked_at }`.
-  `missing_official` — rasmiy ro'yxatda bor, bazada yo'q birliklar (deploy'dan keyin odatda bo'sh); `region.id` — bazada viloyat bo'lmasa `null`. `serving_branch.name` — filial xizmati javob bermasa `null`.
-- 🆕 `POST /region/district/:id/confirm-assignment` (SUPERADMIN, ADMIN) — idempotent 200: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }`; audit yoziladi. Tuman yo'q — 404.
-- ✏️ `PUT /branches/:id/districts` — tanlangan (yoki filialdan olingan) tumanlarning belgisi SHU tranzaksiyada tushadi (audit: `cleared_by_reassign`).
-- ✏️ `GET /district`, `GET /district/:id`, `GET /region/:id` (tumanlar) — har tumanda yangi maydonlar: `assignment_review_required: boolean`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at`.
+  `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city' | 'tuman' | null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1' | 'no_branch_found', flagged_at }], checked_at }`.
+  `missing_official` — rasmiy ro'yxatda bor, bazada yo'q birliklar (deploy'dan keyin odatda bo'sh); `region.id` — bazada viloyat bo'lmasa `null`.
+  `region` — geografik viloyat; `service_region` — buyurtmani yo'naltiradigan xizmat viloyati (tuman boshqa viloyatga o'tkazilgan bo'lsa farq qiladi).
+  `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o'sish tartibida) — ularning HAR BIRI tuman buyurtmalarini ko'radi; `serving_branch` — ulardan biri (ko'rsatish uchun). `serving_branch: null` + `reason: 'no_branch_found'` — FAQAT xizmat viloyatida faol filial yo'q bo'lsa (buyurtmani faqat HQ ko'radi).
+  Filial xizmati javob bermasa — **503** (boshqa qamrov tekshiruvlari bilan bir xil): «filial yo'q» deb ko'rsatmang, «qayta urinish» bering.
+- 🆕 `POST /region/district/:id/confirm-assignment` (SUPERADMIN, ADMIN) — idempotent 200: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }`; audit yoziladi. Ikki admin bir vaqtda bossa — ikkalasi 200, audit bitta, ikkalasi yutgan tasdiqning `confirmed_by/at` ni oladi. Tuman yo'q — 404.
+- ✏️ `PATCH /district/:id` (`assigned_region`) — «O'zgartirish» shu yerga: viloyat o'zgarsa belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).
+- ✏️ `PUT /branches/:id/districts` (eskirgan) — tanlangan (yoki filialdan olingan) tumanlarning belgisi ham tushadi (audit: `cleared_by_reassign`). Filial o'chirilishi / nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI — tekshiruv baribir kerak; ogohlantirishdagi filial viloyat qoidasidan qayta hisoblanadi.
+- ✏️ `GET /district`, `GET /district/:id`, `GET /district/sato/:code`, `GET /region`, `GET /region/:id` (tumanlar) — har tumanda yangi maydonlar `assignment_review_required: boolean`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` — **faqat SUPERADMIN/ADMIN** javobida; MARKET, COURIER, MARKET_OPERATOR, MANAGER, REGISTRATOR javobida bu maydonlar YO'Q.
 
 **Frontend action items:**
-- 🔧 «Hududlar»: `review_required` bo'sh bo'lmasa banner + ro'yxat (tuman, viloyat, filial, sabab); «Tasdiqlash» → confirm-assignment; «O'zgartirish» → mavjud biriktirish sahifasi. `no_branch_found` — filialsiz, qizil.
-- 🔧 Tuman ro'yxatida `assignment_review_required` — sariq belgi.
+- 🔧 «Hududlar»: `review_required` bo'sh bo'lmasa banner + ro'yxat (tuman, xizmat viloyati, filial(lar) — `region_branches`, sabab); «Tasdiqlash» → confirm-assignment; «O'zgartirish» → `PATCH /district/:id` (viloyat). `no_branch_found` — «Filial yo'q · Faqat Toshkent HQ ko'radi», qizil. 503 — xato holati, «filial yo'q» EMAS.
+- 🔧 Tuman ro'yxatida `assignment_review_required` — sariq belgi (faqat admin; boshqa rollarda maydon yo'q — `undefined` ni `false` deb oling).
 
 ### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
 
