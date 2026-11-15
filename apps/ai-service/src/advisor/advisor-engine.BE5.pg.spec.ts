@@ -713,6 +713,33 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     );
     expect(Number(row.headline_amount)).toBe(-9000);
 
+    // round-3 N3: ayni faktlar bilan qayta skan — noop, last_at o'zgarmaydi;
+    // faktlar o'zgarsa ham last_at («oxirgi aniqlash») o'zgarmaydi.
+    const lastAt = () =>
+      ds
+        .query<Array<{ last_at: Date }>>(
+          `SELECT last_at FROM ai_schema.ai_advisor_alerts`,
+        )
+        .then((r) => new Date(r[0].last_at).toISOString());
+    const before = await lastAt();
+    expect(before).toBe(NOW.toISOString());
+    for (const at of [
+      '2026-10-22T10:30:00Z',
+      '2026-10-22T11:00:00Z',
+      '2026-10-23T10:00:00Z',
+    ]) {
+      expect(await engine.run('frequent', new Date(at))).toMatchObject({
+        refreshed: 0,
+        occurred: 0,
+      });
+    }
+    expect(await lastAt()).toBe(before);
+    reply = { candidates: [r7(-5000)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-23T10:30:00Z')),
+    ).toMatchObject({ refreshed: 1 });
+    expect(await lastAt()).toBe(before);
+
     // Chorshanba 02:30 — o'tgan (yopilgan) hafta baribir so'raladi.
     reply = { candidates: [], cursors: {} };
     await engine.run('daily', new Date('2026-10-27T21:30:00Z'));

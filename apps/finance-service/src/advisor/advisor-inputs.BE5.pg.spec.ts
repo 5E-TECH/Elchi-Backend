@@ -803,6 +803,16 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           [['card'], null, -100000, 0],
         ]);
       });
+
+      it('round-3 N1: AI karta raqamini o‘qiy olmadi (last4 NULL), summa teng — R7 ochilmaydi', async () => {
+        await check({
+          entered: 1000000,
+          read: 1000000,
+          expected: 1000000,
+          last4: null,
+        });
+        expect((await runR7('2026-10-22T08:00:00Z')).candidates).toEqual([]);
+      });
     });
 
     describe('R7 chek', () => {
@@ -1009,7 +1019,8 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
             mismatch: ['card'],
             cashbox: { type: 'branch', owner_id: '9' },
             // round-2 #654: shartnoma enum — chek turi, source_type emas.
-            operation: { history_id: income, kind: 'branch_to_hq' },
+            // round-3 S1: o'tkazmada — jo'natuvchining chiqim oyog'i (facts.cashbox tarixida).
+            operation: { history_id: out1, kind: 'branch_to_hq' },
           },
         });
 
@@ -1023,6 +1034,25 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(later.candidates.map((c) => c.dedup_key)).toContain(
           `R7:receipt:${edited}`,
         );
+      });
+
+      it('round-3 S2: #643 dan oldingi sinonim valyutali chek, farq 0 — «0 so‘m» ogohlantirishi yo‘q', async () => {
+        await receipt({ currency: 'SUM', amount: 350000, difference: 0 });
+        const other = await histRow(
+          cb,
+          'expense',
+          'manual_expense',
+          '2026-10-22T06:10:00Z',
+        );
+        await receipt({
+          currency: 'SUM',
+          amount: 350000,
+          difference: 0,
+          flags: ['card_mismatch'],
+          history: other,
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates.map((c) => c.facts.mismatch)).toEqual([['card']]);
       });
 
       it('S5: receipt_ai_enabled — chek sozlamasidan (stub)', async () => {
