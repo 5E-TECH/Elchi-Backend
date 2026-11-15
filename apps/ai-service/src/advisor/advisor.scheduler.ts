@@ -29,7 +29,7 @@ export const ADVISOR_LOCK_KEYS: Record<AdvisorRunGroup, number> = {
 /**
  * BE-5 (LhTIno57) — qoidalar rejalashtiruvchisi. 2 replikada bitta ishlaydi:
  * `pg_try_advisory_lock` (sessiya qulfi, alohida ulanishda; ish tugagach
- * ochiladi). `AI_ADVISOR_RULES=off` — cron ishga tushmaydi.
+ * ochiladi). Cron faqat `AI_ADVISOR_RULES=on` da (sukut — o'chiq).
  */
 @Injectable()
 export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
@@ -48,13 +48,15 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
     const flag = String(this.config?.get<string>('AI_ADVISOR_RULES') ?? '')
       .trim()
       .toLowerCase();
-    return !(flag === 'off' || flag === 'false' || flag === '0');
+    // Sukut — O'CHIQ: faqat aniq 'on'/'true'/'1' yoqadi (round-2 ops-S3,
+    // kelishilgan): deploy bilan backfill o'z-o'zidan boshlanmaydi.
+    return flag === 'on' || flag === 'true' || flag === '1';
   }
 
   onModuleInit(): void {
     if (!this.enabled()) {
       this.logger.warn(
-        'AI_ADVISOR_RULES=off — maslahatchi qoidalari tekshirilmaydi',
+        'AI_ADVISOR_RULES on emas — maslahatchi qoidalari tekshirilmaydi',
       );
       return;
     }

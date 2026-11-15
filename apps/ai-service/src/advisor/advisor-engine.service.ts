@@ -169,10 +169,16 @@ export class AdvisorEngineService {
     for (const k of keys) {
       if (!isCursorRule(k)) continue;
       const cursor = states.get(k)?.cursor_at;
-      request.since[k] = (
+      // Bo'shliq ≤ 7 kun (o'chirib-yoqish, uzoq to'xtash — §4.3 ruhi,
+      // round-2 ops-S1, kelishilgan): eski kursor butun tarixni o'qitmaydi.
+      const floor = now.getTime() - ADVISOR_BACKFILL_WINDOW_MS;
+      request.since[k] = new Date(
         cursor
-          ? new Date(new Date(cursor).getTime() - ADVISOR_CURSOR_OVERLAP_MS)
-          : new Date(now.getTime() - ADVISOR_BACKFILL_WINDOW_MS)
+          ? Math.max(
+              new Date(cursor).getTime() - ADVISOR_CURSOR_OVERLAP_MS,
+              floor,
+            )
+          : floor,
       ).toISOString();
     }
     if (keys.includes('R6') || keys.includes('R8')) {
@@ -237,7 +243,7 @@ export class AdvisorEngineService {
         delete outcome.failures[c.dedup_key];
         continue;
       }
-      const firstRun = !states.get(c.rule_key)?.first_run_at;
+      const firstRun = catchingUp(c.rule_key, states.get(c.rule_key), now);
       try {
         const applied = await this.apply(c, rules, now, firstRun);
         delete outcome.failures[c.dedup_key];
@@ -498,6 +504,23 @@ export class AdvisorEngineService {
       );
     }
   }
+}
+
+/**
+ * §4.3 backfill rejimi: qoidaning birinchi ishi YOKI kursordan beri > 24 soat
+ * (R6 — > 48 soat: kursori kechagi kun oxiri) o'tgan — 24 soatdan eski
+ * faktlardan ochilganlar bildirishnomasiz (`notify_skipped='backfill'`;
+ * round-2 ops-S1, kelishilgan).
+ */
+export function catchingUp(
+  rule: AiAdvisorRuleKey,
+  state: Pick<RuleStateRow, 'first_run_at' | 'cursor_at'> | undefined,
+  now: Date,
+): boolean {
+  if (!state?.first_run_at) return true;
+  if (!state.cursor_at || !(isCursorRule(rule) || rule === 'R6')) return false;
+  const gap = now.getTime() - new Date(state.cursor_at).getTime();
+  return gap > (rule === 'R6' ? 2 : 1) * ADVISOR_BACKFILL_NOTIFY_MS;
 }
 
 /** Qoida xatosi: kursor siljimaydi, xatolar hisoblagichi saqlanadi. */
