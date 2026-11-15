@@ -190,6 +190,7 @@ interface ReceiptRow {
   /** Kursor qiymati: GREATEST(ai_checked_at, "updatedAt") (T6 qayta hisobi). */
   seen_at: Date;
   history_id: string | null;
+  counter_history_id: string | null;
   receipt_branch_id: string | null;
   op_at: Date | null;
   source_type: string | null;
@@ -219,6 +220,8 @@ const R7_TOLERANCE = 1;
  * - `dd.mm.yyyy` / `dd/mm/yyyy` / `dd-mm-yyyy` (1–2 xonali kun/oy) va
  *   `yyyy-mm-dd`, matn ichida ham (`receipt.rules.ts` parseReceiptDate bilan
  *   bir xil kun); kalendar tekshiriladi (31.02 — yo'q), vaqt ≤ 23:59:59.
+ * - `date_day` — mintaqali kirishda o'sha lahzaning TOSHKENT kuni
+ *   (`2026-10-22T22:00:00Z` → 2026-10-23); `T` o'rnida bo'sh joy ham bo'ladi.
  */
 export function parseReceiptDateTime(raw: string | null | undefined): {
   date_at: string | null;
@@ -228,7 +231,7 @@ export function parseReceiptDateTime(raw: string | null | undefined): {
   if (typeof raw !== 'string') return none;
   const text = raw.trim();
   const zoned =
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.exec(
+    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.exec(
       text,
     );
   if (zoned) {
@@ -305,9 +308,26 @@ export function isForeignReceipt(
   errorReason: string | null,
 ): boolean {
   if (errorReason === 'currency_not_uzs') return true;
-  const c = (currency ?? '').trim().toUpperCase();
-  return c !== '' && c !== 'UZS' && c !== "SO'M" && c !== 'SUM';
+  const c = (currency ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[ʻ‘’`]/g, "'");
+  return c !== '' && !R7_UZS_SYNONYMS.has(c);
 }
+
+/**
+ * So'm yozuvlari — `cashbox-receipt/receipt.rules.ts` UZS_SYNONYMS bilan
+ * BIR XIL (#643; round-3 N2 tozalash). O'zgarsa — ikkalasi birga.
+ */
+const R7_UZS_SYNONYMS: ReadonlySet<string> = new Set([
+  'UZS',
+  'UZB',
+  'SUM',
+  'SOM',
+  "SO'M",
+  'СУМ',
+  'СЎМ',
+]);
 
 interface R3Row {
   id: string;
@@ -1371,7 +1391,8 @@ export class AdvisorInputsService {
               r."entered_amount", r."ai_amount", r."ai_difference", r."ai_currency", r."ai_error_reason",
               r."ai_date", r."ai_recipient_last4", r."ai_payer_last4",
               r."ai_bank", r."ai_reference", r."ai_confidence", ${receiptSeen} AS seen_at,
-              r."history_id"::text AS history_id, r."branch_id"::text AS receipt_branch_id,
+              r."history_id"::text AS history_id, r."counter_history_id"::text AS counter_history_id,
+              r."branch_id"::text AS receipt_branch_id,
               h."createdAt" AS op_at, h."source_type"::text AS source_type,
               h."expense_category_name" AS category_name, h."created_by"::text AS created_by,
               c."cashbox_type"::text AS cashbox_type, c."user_id"::text AS owner,
@@ -1391,6 +1412,22 @@ export class AdvisorInputsService {
       [since, now],
     );
     const cursor = r7Cursor([cards, receipts]);
+    // Bir lahzadagi > R7_MAX_ROWS qator (ommaviy updatedAt) — kursor
+    // siljimaydi; jim qolmasin (round-3 S3).
+    for (const [name, rows] of [
+      ['card', cards],
+      ['receipt', receipts],
+    ] as const) {
+      if (rows.length)
+        warnIfStalled(
+          this.logger,
+          `R7 ${name}`,
+          rows.length,
+          R7_MAX_ROWS,
+          rows[0].seen_at,
+          iso(rows[rows.length - 1].seen_at),
+        );
+    }
     if (!cards.length && !receipts.length) return { candidates: [], cursor };
 
     const receiptAi = await this.receiptAiEnabled();
@@ -1428,6 +1465,9 @@ export class AdvisorInputsService {
         last4 !== detected
       )
         mismatch.push('card');
+      // Haqiqiy farq yo'q (masalan AI karta raqamini o'qiy olmadi — finance
+      // buni `mismatch` deb belgilaydi): R7 «farq» ochmaydi (round-3 N1).
+      if (!mismatch.length) continue;
       const at = r.closed_at ?? r.seen_at;
       const shiftDate = tashkentDateKey(new Date(r.opened_at ?? at));
       candidates.push({
@@ -1498,11 +1538,20 @@ export class AdvisorInputsService {
         ? r.ai_flags.filter((f): f is string => typeof f === 'string')
         : [];
       const foreign = isForeignReceipt(r.ai_currency, r.ai_error_reason);
+      // 'amount' — faqat haqiqiy so'm farqi (> 1 so'm): #643 dan oldingi
+      // sinonim valyutali (SUM, …) cheklar 0 farq bilan `mismatch` bo'lib
+      // qolgan — «0 so'm» ogohlantirishi yo'q (round-3 S2).
+      const gap = foreign ? null : moneyOrNull(r.ai_difference);
       const mismatch = [
-        ...(r.ai_status === 'mismatch' && !foreign ? ['amount'] : []),
+        ...(r.ai_status === 'mismatch' &&
+        gap !== null &&
+        Math.abs(gap) > R7_TOLERANCE
+          ? ['amount']
+          : []),
         ...(foreign ? ['currency'] : []),
         ...(flags.includes('card_mismatch') ? ['card'] : []),
       ];
+      if (!mismatch.length) continue;
       // Valyuta so'm emas — summalarni solishtirib bo'lmaydi (#643, review B2).
       const difference = foreign ? null : moneyOrNull(r.ai_difference);
       const at = r.op_at ?? r.seen_at;
@@ -1532,7 +1581,12 @@ export class AdvisorInputsService {
           difference,
           operation: r.history_id
             ? {
-                history_id: r.history_id,
+                // O'tkazmada — jo'natuvchining CHIQIM oyog'i (facts.cashbox
+                // tarixida bor; MAIN kirim oyog'i emas — round-3 S1).
+                history_id:
+                  transfer && r.counter_owner && r.counter_history_id
+                    ? r.counter_history_id
+                    : r.history_id,
                 // Shartnoma enum (CASHBOX_RECEIPT_KINDS) — chek turi, `source_type` emas
                 // (round-2 #654: HQ o'tkazmalari courier_to_hq / branch_to_hq).
                 kind: r.kind,

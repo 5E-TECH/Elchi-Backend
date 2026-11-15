@@ -31,7 +31,10 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 - ✏️ `evidence.receipt.date_at` — faqat sana+vaqt bo'lsa (aniq mintaqa hurmat qilinadi), faqat sana — `date_at: null` + yangi `date_day: 'YYYY-MM-DD'`; noto'g'ri sana (31.02) — ikkalasi null. Valyutali chekda — faqat xom `date`.
 - ⚠️ **PII**: `evidence.receipt.recipient` va `payer` endi doim `null` (faqat `*_last4`).
 - ✏️ **R8**: ega qarori — `count ≥ max(min_count, ratio × weekly_avg)`; yangi sozlama `rules.R8.min_count` (sukut 3, 1–50, UI'da ko'rsatilmaydi — Q12), `limits.rules.R8.min_count`, `rule.thresholds.min_count`, `evidence.baseline.{min_count, ratio}`. Baza 0 bo'lsa `facts.ratio: null` (nullable). Oxirgi yopilgan hafta (R6/R8) har kuni 02:30 da so'raladi (dushanba yiqilsa ham yo'qolmaydi).
-- 🟢 R7 ochiq ogohlantirishda ayni chek/tekshiruv qayta tahlil qilinsa — faktlar va sarlavha yangilanadi (`occurrences` o'zgarmaydi).
+- 🟢 R7 ochiq ogohlantirishda ayni chek/tekshiruv qayta tahlil qilinsa — faktlar va sarlavha yangilanadi (`occurrences` o'zgarmaydi). (round-3) Faktlar o'zgarmagan qayta skan — hech narsa; o'zgarganda ham **`last_at` o'zgarmaydi** (ro'yxat tepasiga chiqmaydi).
+- ✏️ (round-3) R7 `facts.mismatch` **hech qachon bo'sh emas**: AI karta raqamini o'qiy olmagan, summa teng bo'lsa — R7 yo'q; #643 dan oldingi sinonim valyutali (SUM, …) 0 farqli chek — yo'q. `amount` — faqat |farq| > 1 so'm.
+- ✏️ (round-3) R7 `facts.operation.kind` — chek turi (`manual_expense|courier_to_hq|branch_to_hq`), `source_type` emas. O'tkazma chekida `operation.history_id` — jo'natuvchining chiqim oyog'i (`facts.cashbox` tarixida ochiladi).
+- ⚠️ Deploy tartibi: `scripts/finance/fix-receipt-foreign-currency.sql` `updatedAt` ni yangilaydi — R7 yoqilishidan ≥ 7 kun OLDIN yurgizing, aks holda har tarixiy chet valyuta cheki R7 (backfill, bildirishnomasiz) bo'lib ochiladi.
 
 ### 2026-11-14 — AI maslahatchi (BE-5, 2c): R7 chek/karta farqi, R8 tuzatishlar
 
