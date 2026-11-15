@@ -285,6 +285,25 @@ export const gatewayValidationSchema = Joi.object({
    * yiqitmasin — bo'sh qiymat sukutga tushadi (AI_ORDER_ENABLED uchun `false`).
    */
   RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  /**
+   * (AI ack B1) ai-service'ning TEZ navbati — faqat arzon DB amallari
+   * (`ai.draft.confirm_context`, `ai.draft.attach_preview`,
+   * `ai.usage.link_orders`). Umumiy `ai_queue` da ular Claude chaqiruvlari
+   * (prefetch 8) ortida qolib, ai-confirm 503 bo'lardi.
+   */
+  RABBITMQ_AI_FAST_QUEUE: Joi.string().empty('').default('ai_fast_queue'),
+  /**
+   * (AI ack S2) ai-confirm ack tekshiruvlarini MAJBURIY qilish. `off`
+   * (sukut) — faqat WARN log (`ai_ack would_409/would_400/would_503`),
+   * buyurtmalar avvalgidek yaratiladi; `on` — 409/400/503. FE va bot
+   * deploy qilingandan KEYIN `on` qilinadi.
+   */
+  AI_ACK_CHECKS_ENFORCE: Joi.string()
+    .trim()
+    .lowercase()
+    .valid('on', 'off')
+    .empty('')
+    .default('off'),
   // (dgvwZasd B) Shaxsiy fayl egaligi reestrini o'qishda qo'llash. `off` —
   // reestr faqat yoziladi, kirish eski qoida bilan; `on` — reestrdagi fayl
   // egalik qoidasi bilan (reestrda yo'q eski fayl baribir eski qoida bilan).
@@ -909,6 +928,8 @@ export const aiValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('ai_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  // (AI ack B1) ikkinchi iste'molchi — arzon draft/usage amallari.
+  RABBITMQ_AI_FAST_QUEUE: Joi.string().empty('').default('ai_fast_queue'),
   // Kunlik shift 80% / 100% ga yetganda superadmin/admin'ga bildirishnoma.
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
   /**
@@ -1045,4 +1066,11 @@ export const aiValidationSchema = Joi.object({
   // ai-service navbatining prefetch'i (faqat kanal QoS). Bir vaqtda nechta
   // Anthropic chaqiruvi ochiq turishi mumkinligini cheklaydi.
   AI_RMQ_PREFETCH: Joi.number().integer().min(1).max(50).empty('').default(8),
+  // (AI ack B1) TEZ navbat prefetch'i — faqat DB amallari, Claude yo'q.
+  AI_FAST_PREFETCH: Joi.number()
+    .integer()
+    .min(1)
+    .max(200)
+    .empty('')
+    .default(32),
 });

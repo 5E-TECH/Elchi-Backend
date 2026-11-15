@@ -14,6 +14,7 @@ import {
   type AiDraftConfirmContext,
   type AiDraftLinkItem,
   type AiDraftPreviewSnapshot,
+  type AiDraftSnapshotState,
   type AiDraftTrace,
   type AiFieldCorrections,
   type AiParseTimings,
@@ -306,6 +307,33 @@ function timingsOf(value: unknown): Partial<AiOrderDraft> {
   };
 }
 
+/** (AI ack S1) timestamptz → ISO satr (pg Date yoki satr qaytaradi). */
+function isoOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const date =
+    value instanceof Date
+      ? value
+      : typeof value === 'string' || typeof value === 'number'
+        ? new Date(value)
+        : null;
+  return date && Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+/**
+ * (AI ack S1) `confirm_context.snapshot_state`: snapshot bor → `present`;
+ * retention tozalagan (`text_purged_at`) → `purged`; aks holda hali yetib
+ * kelmagan → `pending`.
+ */
+function snapshotStateOf(
+  previews: AiDraftPreviewSnapshot[] | null,
+  textPurgedAt: unknown,
+): AiDraftSnapshotState {
+  if (previews !== null) return 'present';
+  return textPurgedAt !== null && textPurgedAt !== undefined
+    ? 'purged'
+    : 'pending';
+}
+
 function snapshotsOf(value: unknown): AiDraftPreviewSnapshot[] | null {
   if (!Array.isArray(value)) return null;
   return value
@@ -477,7 +505,8 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
     if (!market || ids.length === 0) return { drafts: [] };
 
     const rows: Row[] = await this.drafts.query(
-      `SELECT id::text AS id, model, prompt_version, preview_count, resolved_preview
+      `SELECT id::text AS id, model, prompt_version, preview_count, resolved_preview,
+              created_at, text_purged_at
        FROM ai_schema.ai_order_draft
        WHERE id = ANY($1::uuid[]) AND market_id = $2::bigint`,
       [ids, market],
@@ -487,6 +516,7 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
     return {
       drafts: rows.map((r) => {
         const cost = costs.get(String(r.id));
+        const previews = snapshotsOf(r.resolved_preview);
         return {
           draft_id: String(r.id),
           model: str(r.model, 64) ?? '',
@@ -494,7 +524,11 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
           preview_count: num(r.preview_count),
           cost_usd: round6(cost?.cost_usd ?? 0),
           cost_uzs: round2(cost?.cost_uzs ?? 0),
-          previews: snapshotsOf(r.resolved_preview),
+          previews,
+          // (AI ack S1) gateway yosh draft'da snapshot yo'qligini (poyga)
+          // eski/tozalangan draft'dan ajratadi: 503 yoki fail-open.
+          created_at: isoOrNull(r.created_at),
+          snapshot_state: snapshotStateOf(previews, r.text_purged_at),
         };
       }),
     };

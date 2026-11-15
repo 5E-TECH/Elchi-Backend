@@ -14,6 +14,7 @@ import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-cod
 import {
   AI_CHECKS_NOT_ACKNOWLEDGED,
   AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_ITEM_NOT_FOUND,
   AI_DRAFT_NOT_FOUND,
   AI_DRAFT_REQUIRED,
 } from '../ai/ai-draft.contract';
@@ -174,10 +175,13 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [AI_CHECKS_NOT_ACKNOWLEDGED]: ['missing', 'orders'],
   // (AI ack) 503 — tekshiruvlarni o'qib bo'lmadi, qayta urinish mumkin.
   [AI_CHECKS_UNAVAILABLE]: ['retryable', 'retry_after_seconds'],
-  // (AI ack) 400 — draft_id / ai_item_index yo'q buyurtmalar (`orders`).
-  [AI_DRAFT_REQUIRED]: ['orders'],
-  // (AI ack) 400 — draft shu market uchun topilmadi (`orders`).
-  [AI_DRAFT_NOT_FOUND]: ['orders'],
+  // (AI ack) 400 — draft_id / ai_item_index yo'q buyurtmalar (`indexes` —
+  // so'rovdagi `orders[]` o'rinlari).
+  [AI_DRAFT_REQUIRED]: ['indexes'],
+  // (AI ack) 400 — draft shu market uchun topilmadi (`indexes`).
+  [AI_DRAFT_NOT_FOUND]: ['indexes'],
+  // (AI ack B2) 400 — snapshot'da shu `ai_item_index` yo'q (`indexes`).
+  [AI_DRAFT_ITEM_NOT_FOUND]: ['indexes'],
   // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),
@@ -194,8 +198,9 @@ export const PUBLIC_ERROR_LIST_FIELDS: Readonly<
   Record<string, readonly string[]>
 > = {
   [AI_CHECKS_NOT_ACKNOWLEDGED]: ['missing', 'orders'],
-  [AI_DRAFT_REQUIRED]: ['orders'],
-  [AI_DRAFT_NOT_FOUND]: ['orders'],
+  [AI_DRAFT_REQUIRED]: ['indexes'],
+  [AI_DRAFT_NOT_FOUND]: ['indexes'],
+  [AI_DRAFT_ITEM_NOT_FOUND]: ['indexes'],
 };
 
 export type PublicErrorValue = string | number | boolean | null;
