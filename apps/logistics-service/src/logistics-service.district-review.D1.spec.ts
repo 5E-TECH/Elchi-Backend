@@ -50,7 +50,11 @@ function districtRepoOf(initial: Row[]) {
     ),
     create: jest.fn((row: Row) => ({ ...row })),
     save: jest.fn((row: Row) => {
-      const saved = { isDeleted: false, ...row, id: String(nextId++) };
+      const saved = {
+        isDeleted: false,
+        ...row,
+        id: row.id ? String(row.id) : String(nextId++),
+      };
       rows.set(saved.id, saved);
       return Promise.resolve({ ...saved });
     }),
@@ -95,6 +99,8 @@ function setup(
   opts: {
     regions?: Row[];
     branches?: Record<string, Row | 'down'>;
+    /** `branch.dispatch_destinations` javob bermaydi. */
+    destinationsDown?: boolean;
   } = {},
 ) {
   const districtRepo = districtRepoOf(districts);
@@ -133,6 +139,18 @@ function setup(
           if (reply === 'down') return throwError(() => new Error('down'));
           if (!reply) return throwError(() => ({ statusCode: 404 }));
           return of({ statusCode: 200, data: reply });
+        }
+        if (pattern.cmd === 'branch.dispatch_destinations') {
+          if (opts.destinationsDown) {
+            return throwError(() => new Error('down'));
+          }
+          // branch-service faqat faol REGIONAL/HYBRID qaytaradi; mock esa
+          // ATAYLAB filtrlamaydi — logistics tomonidagi himoya filtri ham
+          // tekshiriladi (HQ / nofaol / PICKUP chiqmasligi kerak).
+          const items = Object.values(branches).filter(
+            (b): b is Row => b !== 'down',
+          );
+          return of({ statusCode: 200, data: { items, total: items.length } });
         }
         return of({ data: null });
       },
@@ -179,25 +197,47 @@ describe('D1: seedAutoAssignment', () => {
   const auto = (ctx: ReturnType<typeof setup>, name: string) =>
     (ctx.service as any).seedAutoAssignment('1', name);
 
-  it('shahar/tuman jufti — juftning filiali', async () => {
+  it('shahar/tuman jufti — juftning viloyati va (shu viloyatda bo‘lsa) filial ishorasi', async () => {
     const ctx = setup([
       d('1', { name: "Farg'ona", serving_branch_id: '11' }),
       d('2', { serving_branch_id: '10' }),
       d('3', { serving_branch_id: '10' }),
     ]);
     await expect(auto(ctx, "Farg'ona shahri")).resolves.toEqual({
+      assigned_region: '1',
       branch_id: '11',
       reason: 'auto_assigned_D1',
     });
   });
 
-  it('jufti yo‘q — viloyatda eng ko‘p tumanga xizmat qiladigan filial; teng bo‘lsa kichik id', async () => {
+  it('jufti boshqa viloyatga ko‘chirilgan — juftning assigned_region i, filial ko‘chirilmaydi (ko‘pchilik ham emas)', async () => {
+    // Sintetik: "Yangiyo'l" tumani xizmat viloyati #2 ga ko'chirilgan, uning
+    // filiali #20 — #2 viloyatniki. Yangi shahar #2 ga yo'naltiriladi,
+    // #1 viloyat filiali (#10) unga yopishtirilmaydi.
+    const ctx = setup([
+      d('1', {
+        name: "Yangiyo'l",
+        assigned_region: '2',
+        serving_branch_id: '20',
+      }),
+      d('2', { serving_branch_id: '10' }),
+      d('3', { serving_branch_id: '10' }),
+    ]);
+    await expect(auto(ctx, "Yangiyo'l shahri")).resolves.toEqual({
+      assigned_region: '2',
+      branch_id: null,
+      reason: 'auto_assigned_D1',
+    });
+  });
+
+  it('jufti yo‘q — xizmat viloyati SHU viloyat bo‘lgan qo‘shnilarda eng ko‘p filial; teng bo‘lsa kichik id', async () => {
     let ctx = setup([
       d('1', { serving_branch_id: '11' }),
       d('2', { serving_branch_id: '10' }),
       d('3', { serving_branch_id: '10' }),
     ]);
     await expect(auto(ctx, "Qo'shtepa tumani")).resolves.toEqual({
+      assigned_region: '1',
       branch_id: '10',
       reason: 'auto_assigned_D1',
     });
@@ -206,26 +246,39 @@ describe('D1: seedAutoAssignment', () => {
       d('2', { serving_branch_id: '9' }),
     ]);
     await expect(auto(ctx, "Qo'shtepa tumani")).resolves.toEqual({
+      assigned_region: '1',
       branch_id: '9',
+      reason: 'auto_assigned_D1',
+    });
+    // Boshqa viloyatga ko'chirilgan qo'shnilar sanalmaydi.
+    ctx = setup([
+      d('1', { serving_branch_id: '11' }),
+      d('2', { serving_branch_id: '20', assigned_region: '2' }),
+      d('3', { serving_branch_id: '20', assigned_region: '2' }),
+    ]);
+    await expect(auto(ctx, "Qo'shtepa tumani")).resolves.toEqual({
+      assigned_region: '1',
+      branch_id: '11',
       reason: 'auto_assigned_D1',
     });
   });
 
-  it('o‘chirilgan / boshqa viloyat qatorlari hisobga olinmaydi; filial yo‘q — no_branch_found', async () => {
+  it('o‘chirilgan / boshqa viloyat qatorlari hisobga olinmaydi; ishora yo‘q — null (prod: ustun hamma joyda NULL)', async () => {
     const ctx = setup([
       d('1', { serving_branch_id: '10', isDeleted: true }),
       d('2', { serving_branch_id: '10', region_id: '2' }),
       d('3'),
     ]);
     await expect(auto(ctx, "Qo'shtepa tumani")).resolves.toEqual({
+      assigned_region: '1',
       branch_id: null,
-      reason: 'no_branch_found',
+      reason: 'auto_assigned_D1',
     });
   });
 });
 
 describe('D1: onModuleInit seed', () => {
-  it('MAVJUD viloyatga qo‘shilgan tuman — avtomatik filial + belgi + audit; bor tumanlar tegilmaydi', async () => {
+  it('MAVJUD viloyatga qo‘shilgan tuman — avtomatik biriktirish + belgi + audit; bor tumanlar tegilmaydi', async () => {
     // Farg'ona viloyatida seed'dagi hamma tuman bor, faqat "Farg'ona shahri" yo'q.
     const { regions } = jest.requireActual('./data/regions-districts.data');
     const fergana = regions.find((r: Row) => r.sato_code === '1730');
@@ -252,6 +305,7 @@ describe('D1: onModuleInit seed', () => {
       expect.objectContaining({
         name: "Farg'ona shahri",
         sato_code: '1730401',
+        assigned_region: '1',
         serving_branch_id: '11',
         assignment_review_required: true,
         assignment_review_reason: 'auto_assigned_D1',
@@ -270,16 +324,112 @@ describe('D1: onModuleInit seed', () => {
       expect.objectContaining({
         entity_type: 'District',
         action: ActivityAction.ASSIGN,
+        new_value: expect.objectContaining({ assigned_region: '1' }),
         metadata: { source: 'seed_auto_assign_D1' },
       }),
+    );
+  });
+
+  it('jufti boshqa viloyatga ko‘chirilgan — yangi qator ham o‘sha viloyatga yo‘naltiriladi', async () => {
+    const { regions } = jest.requireActual('./data/regions-districts.data');
+    const fergana = regions.find((r: Row) => r.sato_code === '1730');
+    const existing = (fergana.districts as Row[])
+      .filter((x) => x.name !== "Farg'ona shahri")
+      .map((x, i) =>
+        d(String(i + 1), {
+          name: x.name,
+          sato_code: x.sato_code,
+          ...(x.name === "Farg'ona"
+            ? { assigned_region: '2', serving_branch_id: '20' }
+            : {}),
+        }),
+      );
+    const ctx = setup(existing, {
+      regions: [
+        { id: '1', name: fergana.name.trim(), sato_code: '1730' },
+        { id: '2', name: 'Sintetik viloyat', sato_code: '1799' },
+      ],
+    });
+    await ctx.service.onModuleInit();
+    const added = [...ctx.districtRepo.rows.values()].find(
+      (r) => r.name === "Farg'ona shahri",
+    );
+    expect(added).toEqual(
+      expect.objectContaining({
+        region_id: '1',
+        assigned_region: '2',
+        serving_branch_id: null,
+        assignment_review_required: true,
+      }),
+    );
+    expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
+      expect.objectContaining({ action: ActivityAction.CREATED }),
     );
   });
 });
 
 describe('D1: district coverage review', () => {
-  it('missing_official + review_required (filial nomi, kind); faqat SA/ADMIN', async () => {
+  const REGIONS = [
+    { id: '1', name: "Farg'ona viloyati", sato_code: '1730' },
+    { id: '2', name: 'Sintetik shahar', sato_code: '1726' },
+    { id: '3', name: 'Filialsiz viloyat', sato_code: '1735' },
+  ];
+  const BRANCHES: Record<string, Row> = {
+    '11': {
+      id: '11',
+      name: 'Quva filiali',
+      type: 'REGIONAL',
+      status: 'active',
+      region_id: '1',
+    },
+    '10': {
+      id: '10',
+      name: "Farg'ona filiali",
+      type: 'HYBRID',
+      status: 'active',
+      region_id: '1',
+    },
+    '12': {
+      id: '12',
+      name: 'Yopilgan filial',
+      type: 'REGIONAL',
+      status: 'inactive',
+      region_id: '1',
+    },
+    '13': {
+      id: '13',
+      name: 'Pickup',
+      type: 'PICKUP',
+      status: 'active',
+      region_id: '1',
+    },
+    '1': {
+      id: '1',
+      name: 'HQ',
+      type: 'HQ',
+      status: 'active',
+      region_id: '3',
+    },
+    '20': {
+      id: '20',
+      name: 'Shahar filiali',
+      type: 'REGIONAL',
+      status: 'active',
+      region_id: '2',
+    },
+  };
+  type ReviewRes = {
+    data: {
+      missing_official: Row[];
+      review_required: Row[];
+      checked_at: string;
+    };
+  };
+
+  it('missing_official + review_required: filial CHAQIRUV paytida viloyat qoidasidan; faqat SA/ADMIN', async () => {
     const ctx = setup(
       [
+        // Saqlangan ishora (#11) viloyat ro'yxatida — o'sha.
         d('5', {
           name: "Farg'ona shahri",
           sato_code: '1730401',
@@ -288,26 +438,49 @@ describe('D1: district coverage review', () => {
           assignment_review_reason: 'auto_assigned_D1',
           assignment_flagged_at: new Date('2026-11-14T10:00:00Z'),
         }),
+        // Prod holati: ustun NULL — eng kichik id (#10), «filial yo'q» EMAS.
         d('6', {
           name: "Qo'shtepa tumani",
           sato_code: '1730206',
           assignment_review_required: true,
           assignment_review_reason: 'no_branch_found',
         }),
+        // Eskirgan ishora (nofaol #12) — e'tiborsiz, eng kichik id.
+        d('8', {
+          sato_code: '1730208',
+          serving_branch_id: '12',
+          assignment_review_required: true,
+        }),
+        // Boshqa viloyatga ko'chirilgan — o'sha viloyat filiali.
+        d('9', {
+          sato_code: '1730209',
+          assigned_region: '2',
+          assignment_review_required: true,
+        }),
+        // Viloyatda faol REGIONAL/HYBRID yo'q (faqat HQ) — no_branch_found.
+        d('10', {
+          region_id: '3',
+          sato_code: '1735401',
+          assignment_review_required: true,
+        }),
         d('7', { name: 'Eski', sato_code: '1730233', isDeleted: true }),
       ],
-      {},
+      { regions: REGIONS, branches: BRANCHES },
     );
-    const res = (await ctx.service.districtCoverageReview(ADMIN)) as {
-      data: {
-        missing_official: Row[];
-        review_required: Row[];
-        checked_at: string;
-      };
-    };
+    const res = (await ctx.service.districtCoverageReview(ADMIN)) as ReviewRes;
     const official = satoRegions.flatMap((r) => r.districts);
-    // 2 ta tirik qator bor; o'chirilgan qator "bor" hisoblanmaydi.
-    expect(res.data.missing_official).toHaveLength(official.length - 2);
+    const officialCodes = new Set(official.map((x) => x.sato_code));
+    const liveOfficial = [
+      '1730401',
+      '1730206',
+      '1730208',
+      '1730209',
+      '1735401',
+    ].filter((c) => officialCodes.has(c)).length;
+    // O'chirilgan qator "bor" hisoblanmaydi.
+    expect(res.data.missing_official).toHaveLength(
+      official.length - liveOfficial,
+    );
     expect(res.data.missing_official).toContainEqual({
       sato_code: '1730233',
       name: expect.any(String),
@@ -319,42 +492,79 @@ describe('D1: district coverage review', () => {
         region: { id: null, name: null, sato_code: '1703' },
       }),
     );
+    const fergRegion = {
+      id: '1',
+      name: "Farg'ona viloyati",
+      sato_code: '1730',
+    };
+    const fergBranches = [
+      { id: '10', name: "Farg'ona filiali" },
+      { id: '11', name: 'Quva filiali' },
+    ];
     expect(res.data.review_required).toEqual([
       {
         district_id: '5',
         name: "Farg'ona shahri",
-        region: { id: '1', name: "Farg'ona viloyati", sato_code: '1730' },
+        region: fergRegion,
+        service_region: fergRegion,
         sato_code: '1730401',
         kind: 'city',
         serving_branch: { id: '11', name: 'Quva filiali' },
+        region_branches: fergBranches,
         reason: 'auto_assigned_D1',
         flagged_at: new Date('2026-11-14T10:00:00Z'),
       },
       expect.objectContaining({
         district_id: '6',
         kind: 'tuman',
+        serving_branch: { id: '10', name: "Farg'ona filiali" },
+        region_branches: fergBranches,
+        reason: 'auto_assigned_D1',
+      }),
+      expect.objectContaining({
+        district_id: '8',
+        serving_branch: { id: '10', name: "Farg'ona filiali" },
+        reason: 'auto_assigned_D1',
+      }),
+      expect.objectContaining({
+        district_id: '9',
+        region: fergRegion,
+        service_region: { id: '2', name: 'Sintetik shahar', sato_code: '1726' },
+        serving_branch: { id: '20', name: 'Shahar filiali' },
+        region_branches: [{ id: '20', name: 'Shahar filiali' }],
+        reason: 'auto_assigned_D1',
+      }),
+      expect.objectContaining({
+        district_id: '10',
         serving_branch: null,
+        region_branches: [],
         reason: 'no_branch_found',
       }),
     ]);
     expect(typeof res.data.checked_at).toBe('string');
+    // Saqlangan ustunlar tegilmaydi (faqat o'qish).
+    expect(ctx.districtRepo.rows.get('6')!.serving_branch_id).toBeNull();
+    expect(ctx.districtRepo.update).not.toHaveBeenCalled();
     expect(
       (await rpcError(ctx.service.districtCoverageReview(MANAGER))).statusCode,
     ).toBe(403);
   });
 
-  it('filial xizmati javob bermasa — nom null, javob baribir', async () => {
+  it('filial xizmati javob bermasa — 503 (qamrov tekshiruvlari bilan bir xil), «filial yo‘q» deb ko‘rsatilmaydi', async () => {
     const ctx = setup(
       [d('5', { serving_branch_id: '10', assignment_review_required: true })],
-      { branches: { '10': 'down' } },
+      { destinationsDown: true },
     );
-    const res = (await ctx.service.districtCoverageReview(SA)) as {
-      data: { review_required: Row[] };
-    };
-    expect(res.data.review_required[0].serving_branch).toEqual({
-      id: '10',
-      name: null,
-    });
+    expect(
+      (await rpcError(ctx.service.districtCoverageReview(SA))).statusCode,
+    ).toBe(503);
+  });
+
+  it('belgili tuman yo‘q — filial xizmati chaqirilmaydi', async () => {
+    const ctx = setup([d('5')], { destinationsDown: true });
+    const res = (await ctx.service.districtCoverageReview(SA)) as ReviewRes;
+    expect(res.data.review_required).toEqual([]);
+    expect(ctx.branchClient.send).not.toHaveBeenCalled();
   });
 });
 
@@ -399,6 +609,60 @@ describe('D1: confirm assignment', () => {
       confirmed_by: '7',
     });
     expect(ctx.activityLog.logChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('poyga: ikki parallel tasdiq — bitta audit, ikkalasi ham yutgan yozuvni qaytaradi', async () => {
+    const ctx = setup([
+      d('5', {
+        assignment_review_required: true,
+        assignment_review_reason: 'auto_assigned_D1',
+      }),
+    ]);
+    const [a, b] = (await Promise.all([
+      ctx.service.confirmDistrictAssignment('5', SA),
+      ctx.service.confirmDistrictAssignment('5', ADMIN),
+    ])) as Array<{ data: Row }>;
+    expect(ctx.activityLog.logChange).toHaveBeenCalledTimes(1);
+    const winner = ctx.districtRepo.rows.get('5')!;
+    for (const res of [a, b]) {
+      expect(res.data).toEqual({
+        district_id: '5',
+        assignment_review_required: false,
+        confirmed_by: winner.assignment_confirmed_by,
+        confirmed_at: winner.assignment_confirmed_at,
+      });
+    }
+  });
+
+  it('poyga: tasdiq qayta biriktirishdan keyin yetib keldi — audit yo‘q, saqlangan confirmed_by/at', async () => {
+    const ctx = setup([
+      d('5', {
+        assignment_review_required: true,
+        assignment_review_reason: 'auto_assigned_D1',
+      }),
+    ]);
+    // findOne (o'qish) belgili qatorni ko'rdi; UPDATE'gacha boshqa admin
+    // viloyatni o'zgartirib belgini tushirdi.
+    const confirmedAt = new Date('2026-11-15T08:00:00Z');
+    ctx.districtRepo.findOne.mockImplementationOnce(() => {
+      const snapshot = { ...ctx.districtRepo.rows.get('5')! };
+      Object.assign(ctx.districtRepo.rows.get('5')!, {
+        assignment_review_required: false,
+        assignment_confirmed_by: '8',
+        assignment_confirmed_at: confirmedAt,
+      });
+      return Promise.resolve(snapshot);
+    });
+    const res = (await ctx.service.confirmDistrictAssignment('5', SA)) as {
+      data: Row;
+    };
+    expect(res.data).toEqual({
+      district_id: '5',
+      assignment_review_required: false,
+      confirmed_by: '8',
+      confirmed_at: confirmedAt,
+    });
+    expect(ctx.activityLog.logChange).not.toHaveBeenCalled();
   });
 
   it('rol, noto‘g‘ri id, yo‘q tuman', async () => {
@@ -448,5 +712,71 @@ describe('D1: qayta biriktirish belgini tushiradi', () => {
     expect(
       sources.filter((m) => m.source === 'cleared_by_reassign'),
     ).toHaveLength(2);
+  });
+
+  it('PATCH /district/:id (updateDistrict) — viloyat o‘zgarsa belgi SHU saqlashda tushadi (audit cleared_by_region_move)', async () => {
+    const ctx = setup(
+      [
+        d('5', {
+          assigned_region: '1',
+          assignment_review_required: true,
+          assignment_review_reason: 'auto_assigned_D1',
+        }),
+        d('6', { assigned_region: '1' }),
+      ],
+      {
+        regions: [
+          { id: '1', name: "Farg'ona viloyati", sato_code: '1730' },
+          { id: '2', name: 'Sintetik viloyat', sato_code: '1799' },
+        ],
+      },
+    );
+    await ctx.service.updateDistrict('5', { assigned_region: '2' } as any, SA);
+    expect(ctx.districtRepo.save).toHaveBeenCalledTimes(1);
+    const row = ctx.districtRepo.rows.get('5')!;
+    expect(row).toMatchObject({
+      assigned_region: '2',
+      assignment_review_required: false,
+      assignment_review_reason: 'auto_assigned_D1',
+      assignment_confirmed_by: '7',
+      assignment_confirmed_at: expect.any(Date),
+    });
+    expect(ctx.activityLog.logChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_id: '5',
+        old_value: { assignment_review_required: true },
+        metadata: {
+          source: 'cleared_by_region_move',
+          reason: 'auto_assigned_D1',
+        },
+        user_id: '7',
+      }),
+    );
+
+    // Belgisiz tuman — belgi audit'i yo'q.
+    ctx.activityLog.logChange.mockClear();
+    await ctx.service.updateDistrict('6', { assigned_region: '2' } as any, SA);
+    expect(ctx.districtRepo.rows.get('6')!.assignment_confirmed_by).toBeNull();
+    expect(
+      ctx.activityLog.logChange.mock.calls.filter(
+        (c) =>
+          ((c[0] as Row).metadata as Row | undefined)?.source ===
+          'cleared_by_region_move',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('clear_serving_branch — filial bo‘shatiladi, belgi QOLADI (tekshiruv baribir kerak)', async () => {
+    const ctx = setup([
+      d('5', {
+        serving_branch_id: '10',
+        assignment_review_required: true,
+        assignment_review_reason: 'auto_assigned_D1',
+      }),
+    ]);
+    await ctx.service.clearDistrictServingBranch('10');
+    const row = ctx.districtRepo.rows.get('5')!;
+    expect(row.serving_branch_id).toBeNull();
+    expect(row.assignment_review_required).toBe(true);
   });
 });
