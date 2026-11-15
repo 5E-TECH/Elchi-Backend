@@ -252,6 +252,11 @@ export class BranchGatewayController {
             )
             .pipe(timeout(CARRIER_LINK_LOOKUP_TIMEOUT_MS)),
         );
+        // Noto'g'ri javob (`data` massiv emas) — «bog'lanmagan» deb
+        // hisoblanmaydi (B6 bilan bir xil): belgisiz, `failed: true`.
+        if (!Array.isArray(asRecord(response)?.data)) {
+          return { links: new Map(), failed: true };
+        }
         for (const [id, link] of carrierLinksOf(response)) {
           links.set(id, link);
         }

@@ -171,6 +171,24 @@ describe('BranchGatewayController — Pochta → HQ kuryeri (HTTP)', () => {
       ]);
     });
 
+    it('integration noto‘g‘ri javob qaytardi (data massiv emas) — «bog‘lanmagan» EMAS: carrier_lookup_failed: true (B6 bilan bir xil)', async () => {
+      integrationSend.mockReturnValue(of({ statusCode: 200, data: null }));
+
+      const res = await request(http()).get(
+        '/branches/posts/123/courier-destinations',
+      );
+
+      expect(res.status).toBe(200);
+      const body = res.body as { data: Row & { couriers: Row[] } };
+      expect(body.data.carrier_lookup_failed).toBe(true);
+      expect(
+        body.data.couriers.map((c) => [c.carrier_name, c.carrier_active]),
+      ).toEqual([
+        [null, null],
+        [null, null],
+      ]);
+    });
+
     it('kuryer yo‘q — integration’ga bormaydi', async () => {
       logisticsSend.mockReturnValue(
         of({
