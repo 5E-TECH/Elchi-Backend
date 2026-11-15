@@ -62,6 +62,13 @@ export interface AiPreviewOrder {
    * yumshoq ogohlantirish. Noma'lum kod e'tiborsiz qoldiriladi.
    */
   checks?: AiPreviewCheck[];
+  /**
+   * (AI ack B3) BOT ICHKI maydoni (gateway'dan kelmaydi): operator
+   * «Baribir yaratamanmi?» oynasida AYNAN ko'rgan va «✅ Ha, yaratish» bilan
+   * tasdiqlagan bloklovchi kodlar. ai-confirm `ack_checks` faqat shundan —
+   * ko'rsatilmagan ogohlantirish hech qachon avtomatik tasdiqlanmaydi.
+   */
+  acked_checks?: string[];
 }
 
 /** order-service `AiCheck` — bot o'qiydigan maydonlar. */
@@ -87,6 +94,23 @@ export function blockingCheckCodes(order: AiPreviewOrder): string[] {
       .filter((code) => BLOCKING_CODES.has(code)),
   );
   return AI_BLOCKING_CHECK_CODES.filter((code) => codes.has(code));
+}
+
+/** (AI ack B3) Operator tasdiqlagan bloklovchi kodlar (qat'iy tartibda). */
+export function ackedCodes(order: AiPreviewOrder): string[] {
+  const acked = new Set(
+    Array.isArray(order.acked_checks) ? order.acked_checks : [],
+  );
+  return AI_BLOCKING_CHECK_CODES.filter((code) => acked.has(code));
+}
+
+/**
+ * (AI ack B3) Preview'dagi bloklovchi kodlarning HAMMASI operator
+ * tomonidan tasdiqlanganmi (ko'rsatilgan oynada). Kodsiz buyurtma — ha.
+ */
+export function isFullyAcked(order: AiPreviewOrder): boolean {
+  const acked = new Set(ackedCodes(order));
+  return blockingCheckCodes(order).every((code) => acked.has(code));
 }
 
 /** Bot "✅ Yaratish" tugmasida operator hal qiladigan kamchiliklar. */
@@ -219,11 +243,9 @@ export function toConfirmOrder(
         ? {}
         : { total_price: Number(order.total_price) }),
     ...(replacedOrderId ? { replaced_order_id: replacedOrderId } : {}),
-    // AI ack: operator «Baribir yaratamanmi?» ni tasdiqlagan — bloklovchi
-    // kodlar (faqat shu preview'dagi). Yo'q bo'lsa maydon yuborilmaydi.
-    ...(blockingCheckCodes(order).length
-      ? { ack_checks: blockingCheckCodes(order) }
-      : {}),
+    // AI ack (B3): faqat operator «Baribir yaratamanmi?» oynasida KO'RGAN va
+    // tasdiqlagan kodlar (`acked_checks`). Yo'q bo'lsa maydon yuborilmaydi.
+    ...(ackedCodes(order).length ? { ack_checks: ackedCodes(order) } : {}),
     where_deliver: order.where_deliver,
     ...(address ? { address } : {}),
     ...(clip(order.comment, 1000)
@@ -362,14 +384,107 @@ export function aiCheckLines(order: AiPreviewOrder): string[] {
 
 /** Yaratiladigan (🟢) buyurtmalardan birortasida bloklovchi tekshiruv bormi. */
 export function needsAckConfirm(orders: AiPreviewOrder[]): boolean {
-  return orders.some(
-    (order) => isCreatable(order) && blockingCheckCodes(order).length > 0,
-  );
+  return ackTargets(orders).length > 0;
 }
 
-/** «✅ Yaratish» → qayta so'rash matni (preview ostida). */
+/** «✅ Yaratish» → qayta so'rash oynasining sarlavhasi. */
 export const AI_ACK_CONFIRM_TEXT =
-  '⚠️ <b>Baribir yaratamanmi?</b> AI tuman yoki summada ikkilandi (yuqorida ⚠️). Tekshirdingizmi?';
+  '⚠️ <b>Baribir yaratamanmi?</b> AI quyidagi buyurtmalarda tuman yoki summada ikkilandi:';
+/** Ro'yxat sig'madi — «Ha» yo'q, kabinetga yo'naltiriladi. */
+export const AI_ACK_TOO_MANY_TEXT =
+  '⚠️ <b>AI {n} ta buyurtmada tuman yoki summada ikkilandi</b> — ularning hammasini bu yerda ko‘rsatib bo‘lmaydi. Iltimos, buyurtmalarni kabinetda tekshirib yarating.';
+/** (S3) Server (409) qo'shimcha tasdiq so'radi — oyna ustidagi izoh. */
+export const AI_ACK_SERVER_ASKED_TEXT =
+  'ℹ️ Server bu buyurtmalar uchun AI ogohlantirishini tasdiqlashni so‘radi.';
+
+/** «Baribir yaratamanmi?» oynasidagi bitta buyurtma va tasdiqlanadigan kodlar. */
+export interface AiAckTarget {
+  order: AiPreviewOrder;
+  codes: string[];
+}
+
+/** «✅ Ha, yaratish» tugmasi payload'i: preview `index` → tasdiqlangan kodlar. */
+export interface AiAckEntry {
+  index: number;
+  codes: string[];
+}
+
+/** Oynada ko'pi bilan shuncha buyurtma (undan ko'pi — kabinet). */
+export const ACK_PROMPT_MAX_ORDERS = 10;
+/** Telegram 4096 belgi chegarasidan zaxira bilan. */
+const ACK_PROMPT_MAX_CHARS = 3900;
+
+/**
+ * (AI ack B3/S3) Tasdiq talab qiladigan YARATILADIGAN (🟢) buyurtmalar:
+ * preview'dagi bloklovchi kodlar ∪ server (409 `orders[].missing`) so'ragan
+ * kodlar (`extra`: preview `index` → kodlar). Tartib — preview tartibi.
+ */
+export function ackTargets(
+  orders: AiPreviewOrder[],
+  extra: ReadonlyMap<number, readonly string[]> = new Map(),
+): AiAckTarget[] {
+  const targets: AiAckTarget[] = [];
+  for (const order of orders) {
+    if (!isCreatable(order)) continue;
+    const codes = new Set([
+      ...blockingCheckCodes(order),
+      ...(extra.get(order.index) ?? []).filter((c) => BLOCKING_CODES.has(c)),
+    ]);
+    if (codes.size === 0) continue;
+    targets.push({
+      order,
+      codes: AI_BLOCKING_CHECK_CODES.filter((code) => codes.has(code)),
+    });
+  }
+  return targets;
+}
+
+/** Faqat berilgan bloklovchi kodlar uchun «⚠️» qatorlari. */
+function blockingLines(order: AiPreviewOrder, codes: string[]): string[] {
+  const checks = Array.isArray(order.checks) ? order.checks : [];
+  return aiCheckLines({
+    ...order,
+    checks: codes.map(
+      (code) => checks.find((check) => check?.code === code) ?? { code },
+    ),
+  });
+}
+
+/**
+ * (AI ack B3) «Baribir yaratamanmi?» oynasi — har tasdiqlanadigan buyurtma
+ * ANIQ ro'yxatda («N) ⚠️ ism, telefon» + bloklovchi qatorlar). «Yuqorida ⚠️»
+ * kabi havola YO'Q: operator tasdiqlagan hamma narsa shu xabarda ko'rinadi.
+ * `fits=false` — ro'yxat (≤10 ta, ≤3900 belgi) sig'madi: «✅ Ha» berilmaydi,
+ * kabinetga yo'naltiriladi.
+ */
+export function ackPromptText(
+  targets: AiAckTarget[],
+  intro?: string,
+): { text: string; fits: boolean } {
+  const head = intro ? [intro, ''] : [];
+  const tooMany = () => ({
+    text: [
+      ...head,
+      AI_ACK_TOO_MANY_TEXT.replace('{n}', String(targets.length)),
+    ].join('\n'),
+    fits: false,
+  });
+  if (targets.length > ACK_PROMPT_MAX_ORDERS) return tooMany();
+  const lines = [...head, AI_ACK_CONFIRM_TEXT];
+  for (const { order, codes } of targets) {
+    lines.push(
+      '',
+      `<b>${order.index + 1})</b> ⚠️ 👤 ${html(order.customer_name) || '—'}, 📞 ${html(order.phone_number, 40) || '—'}`,
+      ...blockingLines(order, codes),
+    );
+  }
+  lines.push(
+    '',
+    'Tekshirdingizmi? «✅ Ha, yaratish» — faqat shu ro‘yxatdagi ogohlantirishlar tasdiqlanadi.',
+  );
+  const text = lines.join('\n');
+  return text.length > ACK_PROMPT_MAX_CHARS ? tooMany() : { text, fits: true };
+}
 
 /** Preview kartasi (shaxsiy chat — operatorning o'z buyurtmalari, PII bor). */
 export function aiPreviewText(orders: AiPreviewOrder[]): string {

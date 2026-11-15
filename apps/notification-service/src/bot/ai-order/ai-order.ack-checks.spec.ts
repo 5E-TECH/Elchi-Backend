@@ -4,8 +4,11 @@ import {
   makeRouter,
   textUpdate,
 } from '../testing/bot-kit-spec';
+import { AI_CHECKS_RETRY_TEXT, AI_DRAFT_GONE_TEXT } from './ai-order.service';
 import {
   AI_ACK_CONFIRM_TEXT,
+  AI_ACK_SERVER_ASKED_TEXT,
+  ackPromptText,
   aiCheckLines,
   aiPreviewText,
   blockingCheckCodes,
@@ -56,7 +59,29 @@ const preview = (
 
 type GatewayCall = { tg: string; method: string; path: string; body: unknown };
 
-function setup(orders: AiPreviewOrder[]) {
+type ConfirmReply = { status: number; body: unknown };
+
+/** Sukut: har yuborilgan buyurtma yaratildi. */
+const okReply = (body: unknown): ConfirmReply => {
+  const sent = (body as { orders?: unknown[] }).orders ?? [];
+  return {
+    status: 200,
+    body: {
+      data: {
+        results: sent.map((_o, index) => ({
+          index,
+          ok: true,
+          order_id: String(81 + index),
+        })),
+      },
+    },
+  };
+};
+
+function setup(
+  orders: AiPreviewOrder[],
+  confirmReplies: Array<(body: unknown) => ConfirmReply> = [],
+) {
   const calls: GatewayCall[] = [];
   const gateway = jest.fn(
     (tg: string, method: string, path: string, body: unknown) => {
@@ -68,12 +93,7 @@ function setup(orders: AiPreviewOrder[]) {
         });
       }
       if (path === '/orders/ai-confirm') {
-        return Promise.resolve({
-          status: 200,
-          body: {
-            data: { results: [{ index: 0, ok: true, order_id: '81' }] },
-          },
-        });
+        return Promise.resolve((confirmReplies.shift() ?? okReply)(body));
       }
       return Promise.resolve({ status: 404, body: null });
     },
@@ -85,7 +105,7 @@ function setup(orders: AiPreviewOrder[]) {
       status: 'active',
       market_id: '40',
       region_id: null,
-    } as never,
+    },
     gateway,
     aiOrder: true,
   });
@@ -224,10 +244,17 @@ describe('aiCheckLines — oddiy tildagi ogohlantirishlar', () => {
       'district_low_confidence',
       'price_check',
     ]);
-    expect(toConfirmOrder(order, DRAFT_ID).ack_checks).toEqual([
-      'district_low_confidence',
-      'price_check',
-    ]);
+    // B3: ack_checks — faqat operator oynada tasdiqlagan kodlar.
+    expect(toConfirmOrder(order, DRAFT_ID)).not.toHaveProperty('ack_checks');
+    expect(
+      toConfirmOrder(
+        {
+          ...order,
+          acked_checks: ['price_check', 'district_low_confidence', 'x'],
+        },
+        DRAFT_ID,
+      ).ack_checks,
+    ).toEqual(['district_low_confidence', 'price_check']);
     const soft = preview(0, { checks: [{ code: 'phone_is_market' }] });
     expect(toConfirmOrder(soft, DRAFT_ID)).not.toHaveProperty('ack_checks');
     // Yaratilmaydigan (🟠) buyurtmaning tekshiruvi qayta so'rovga olib kelmaydi.
@@ -317,4 +344,260 @@ describe('«✅ Yaratish» — bloklovchi tekshiruvda qayta tasdiq', () => {
     };
     expect(body.orders[0]).not.toHaveProperty('ack_checks');
   });
+});
+
+const sentOrders = (calls: GatewayCall[], n = 0) =>
+  (confirms(calls)[n].body as { orders: Array<Record<string, unknown>> })
+    .orders;
+const lastText = (ctx: Ctx) => lastEdit(ctx)[2].text;
+const draftRow = (ctx: Ctx) => [...ctx.aiDrafts.rows.values()][0];
+const fakeCtx = () =>
+  ({
+    chatId: '40',
+    fromId: '40',
+    isPrivate: true,
+    reply: jest.fn(() => Promise.resolve({ result: {} })),
+  }) as never;
+
+describe('AI ack round-3 — B3: faqat KO‘RSATILGAN ogohlantirish tasdiqlanadi', () => {
+  it('⭐ 12 ta tayyor buyurtma, #12 da price_check — oynada aniq «12) ⚠️» qatori, ack faqat shunga', async () => {
+    const orders = Array.from({ length: 12 }, (_, i) =>
+      preview(i, {
+        total_price: 150000,
+        phone_number: `+9989012345${String(i).padStart(2, '0')}`,
+        checks:
+          i === 11
+            ? [{ code: 'price_check', kind: 'mismatch', mentions: [99000] }]
+            : [],
+      }),
+    );
+    const { ctx, calls } = setup(orders);
+    await send(ctx, ORDER_TEXT);
+    // Preview kartasi 10 tadan keyin kesiladi — #12 u yerda ko'rinmaydi.
+    expect(lastText(ctx)).not.toContain('<b>12)</b>');
+
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    const prompt = lastText(ctx);
+    expect(prompt).toContain(AI_ACK_CONFIRM_TEXT);
+    expect(prompt).not.toContain('yuqorida');
+    expect(prompt).toContain('<b>12)</b> ⚠️');
+    expect(prompt).toContain(
+      '⚠️ Summa matndagidan farq qiladi: matnda 99 000, AI 150 000',
+    );
+    expect(Object.keys(buttons(ctx))).toEqual([
+      '✅ Ha, yaratish',
+      '↩️ Yo‘q, orqaga',
+    ]);
+
+    await press(ctx, buttons(ctx)['✅ Ha, yaratish']);
+    const sent = sentOrders(calls);
+    expect(sent).toHaveLength(12);
+    expect(sent.filter((o) => 'ack_checks' in o)).toEqual([
+      expect.objectContaining({
+        ai_item_index: 11,
+        ack_checks: ['price_check'],
+      }),
+    ]);
+  });
+
+  it('⭐ 6 ta uzun buyurtma (preview 3900 belgida kesiladi), #6 da tuman — oynada #6 ko‘rinadi va faqat u tasdiqlanadi', async () => {
+    const long = 'Juda uzun manzil matni '.repeat(30);
+    const orders = Array.from({ length: 6 }, (_, i) =>
+      preview(i, {
+        total_price: 150000,
+        phone_number: `+9989012345${String(i).padStart(2, '0')}`,
+        address: long,
+        comment: long,
+        items: Array.from({ length: 8 }, (_x, k) => ({
+          name: `${'&'.repeat(58)} ${k}`,
+          quantity: 1,
+          product_id: '15',
+        })),
+        checks: i === 5 ? [{ code: 'district_low_confidence' }] : [],
+      }),
+    );
+    expect(aiPreviewText(orders)).not.toContain('<b>6)</b>');
+    const { ctx, calls } = setup(orders);
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(lastText(ctx)).toContain('<b>6)</b> ⚠️');
+    expect(lastText(ctx)).toContain(
+      '⚠️ Tuman aniq emas: AI «Asakaa» deb o‘qidi — tekshiring',
+    );
+    await press(ctx, buttons(ctx)['✅ Ha, yaratish']);
+    expect(
+      sentOrders(calls)
+        .filter((o) => 'ack_checks' in o)
+        .map((o) => [o.ai_item_index, o.ack_checks]),
+    ).toEqual([[5, ['district_low_confidence']]]);
+  });
+
+  it('ro‘yxat sig‘maydi (>10 ta ogohlantirishli) — «Ha» YO‘Q, kabinetga yo‘naltiriladi, hech narsa yuborilmaydi', async () => {
+    const orders = Array.from({ length: 11 }, (_, i) =>
+      preview(i, {
+        phone_number: `+9989012345${String(i).padStart(2, '0')}`,
+        checks: [{ code: 'district_low_confidence' }],
+      }),
+    );
+    const { ctx, calls } = setup(orders);
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(lastText(ctx)).toContain('kabinetda tekshirib yarating');
+    const keyboard = (lastEdit(ctx)[2].reply_markup?.inline_keyboard ?? [])
+      .flat()
+      .map((b) => b.text);
+    expect(keyboard).toContain('🌐 Kabinetda yaratish');
+    expect(keyboard).not.toContain('✅ Ha, yaratish');
+    expect(confirms(calls)).toHaveLength(0);
+  });
+
+  it('ackPromptText — matn 3900 belgidan oshsa fits=false', () => {
+    // HTML qochirish (& → &amp;) matnni 5 baravar uzaytiradi.
+    const huge = '&'.repeat(500);
+    const targets = Array.from({ length: 10 }, (_, i) => ({
+      order: preview(i, {
+        customer_name: huge,
+        district_match: { ai_text: huge },
+        checks: [{ code: 'district_low_confidence' }],
+      }),
+      codes: ['district_low_confidence'],
+    }));
+    const prompt = ackPromptText(targets);
+    expect(prompt.fits).toBe(false);
+    expect(prompt.text.length).toBeLessThan(4096);
+  });
+
+  it('eski «Ha» tugmasi (payload’da `acks` yo‘q) — hech narsa yuborilmaydi, oyna qayta ko‘rsatiladi', async () => {
+    const { ctx, calls } = setup([
+      preview(0, { checks: [{ code: 'district_low_confidence' }] }),
+    ]);
+    await send(ctx, ORDER_TEXT);
+    await ctx.aiService!.confirmAcked(
+      fakeCtx(),
+      String(draftRow(ctx).id),
+      undefined,
+    );
+    await ctx.aiService!.idle();
+    expect(confirms(calls)).toHaveLength(0);
+    expect(draftRow(ctx).status).toBe('preview');
+    expect(lastText(ctx)).toContain(AI_ACK_CONFIRM_TEXT);
+  });
+
+  it('acked_checks ko‘rsatilmagan buyurtmaga yetmasa — yuborilmaydi, «kabinetda yarating» qatori', async () => {
+    const { ctx, calls } = setup([
+      preview(0, { total_price: 150000, checks: [] }),
+      preview(1, {
+        phone_number: '+998901234500',
+        checks: [{ code: 'price_check', kind: 'too_high', mentions: [] }],
+      }),
+    ]);
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    // Oynada faqat #2 — lekin «Ha» payload'i bo'sh deb faraz qilamiz
+    // (masalan oynadan keyin preview o'zgargan): #2 yuborilmasligi shart.
+    await ctx.aiService!.confirmAcked(fakeCtx(), String(draftRow(ctx).id), []);
+    await ctx.aiService!.idle();
+    expect(sentOrders(calls).map((o) => o.ai_item_index)).toEqual([0]);
+    expect(lastText(ctx)).toContain(
+      '⚠️ 2) AI ogohlantirishi tasdiqlanmagan — kabinetda yarating',
+    );
+  });
+});
+
+describe('AI ack round-3 — S3: ai-confirm xatolari', () => {
+  const blockingOrder = () =>
+    preview(0, { checks: [{ code: 'district_low_confidence' }] });
+
+  it('409 CHECKS_NOT_ACKNOWLEDGED — server `missing` bilan oyna qayta, «Ha» shu kodlarni yuboradi', async () => {
+    const { ctx, calls } = setup(
+      [blockingOrder()],
+      [
+        () => ({
+          status: 409,
+          body: {
+            statusCode: 409,
+            code: 'CHECKS_NOT_ACKNOWLEDGED',
+            message: 'AI ogohlantirishlari tasdiqlanmagan: …',
+            missing: ['price_check'],
+            orders: [{ index: 0, missing: ['price_check'] }],
+          },
+        }),
+      ],
+    );
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    await press(ctx, buttons(ctx)['✅ Ha, yaratish']);
+    expect(sentOrders(calls, 0)[0].ack_checks).toEqual([
+      'district_low_confidence',
+    ]);
+    // Server summani ham so'radi — oyna qayta, ikkala kod bilan.
+    expect(draftRow(ctx).status).toBe('preview');
+    expect(lastText(ctx)).toContain(AI_ACK_SERVER_ASKED_TEXT);
+    expect(lastText(ctx)).toContain('⚠️ Summa matndagidan farq qiladi');
+    expect(lastText(ctx)).not.toContain('AI ogohlantirishlari tasdiqlanmagan');
+    await press(ctx, buttons(ctx)['✅ Ha, yaratish']);
+    expect(confirms(calls)).toHaveLength(2);
+    expect(sentOrders(calls, 1)[0].ack_checks).toEqual([
+      'district_low_confidence',
+      'price_check',
+    ]);
+    expect(lastText(ctx)).toContain('yaratildi');
+  });
+
+  it('503 AI_CHECKS_UNAVAILABLE — «birozdan so‘ng qayta urinib ko‘ring», preview tugmalari', async () => {
+    const { ctx } = setup(
+      [preview(0, { total_price: 150000 })],
+      [
+        () => ({
+          status: 503,
+          body: {
+            statusCode: 503,
+            code: 'AI_CHECKS_UNAVAILABLE',
+            message: 'server matni',
+            retryable: true,
+            retry_after_seconds: 5,
+          },
+        }),
+      ],
+    );
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(lastText(ctx)).toContain(AI_CHECKS_RETRY_TEXT);
+    expect(lastText(ctx)).toContain('birozdan so‘ng qayta urinib ko‘ring');
+    expect(lastText(ctx)).not.toContain('server matni');
+    expect(draftRow(ctx).status).toBe('preview');
+    expect(Object.keys(buttons(ctx))).toContain('✅ Yaratish');
+  });
+
+  it.each([
+    'AI_DRAFT_NOT_FOUND',
+    'AI_DRAFT_ITEM_NOT_FOUND',
+    'AI_DRAFT_REQUIRED',
+  ])(
+    '400 %s — tushunarli matn (server matni emas), kabinet tugmasi',
+    async (code) => {
+      const { ctx } = setup(
+        [preview(0, { total_price: 150000 })],
+        [
+          () => ({
+            status: 400,
+            body: {
+              statusCode: 400,
+              code,
+              message: 'texnik matn',
+              indexes: [0],
+            },
+          }),
+        ],
+      );
+      await send(ctx, ORDER_TEXT);
+      await press(ctx, buttons(ctx)['✅ Yaratish']);
+      expect(lastText(ctx)).toBe(AI_DRAFT_GONE_TEXT);
+      expect(draftRow(ctx).status).toBe('failed');
+      const keyboard = (lastEdit(ctx)[2].reply_markup?.inline_keyboard ?? [])
+        .flat()
+        .map((b) => b.text);
+      expect(keyboard).toEqual(['🌐 Kabinetda yaratish']);
+    },
+  );
 });

@@ -134,7 +134,15 @@ export class AiOrderActions {
       {
         action: AI_ORDER_ACTIONS.ack,
         expiredText: AI_EXPIRED_TEXT,
-        handle: privateOnly((ctx, id) => this.ai.confirmAcked(ctx, id)),
+        // (AI ack B3) `acks` — oynada ko'rsatilgan buyurtmalar va kodlar.
+        handle: async (ctx: BotContext, action: TelegramBotAction) => {
+          if (!ctx.isPrivate) return;
+          await this.ai.confirmAcked(
+            ctx,
+            draftOf(action),
+            action.payload?.acks,
+          );
+        },
       },
       {
         action: AI_ORDER_ACTIONS.back,

@@ -26,11 +26,14 @@ import { BotTransportService } from '../bot-transport.service';
 import type { BotContext } from '../handlers/bot-context';
 import type { InlineKeyboardButton } from '../telegram.types';
 import {
-  AI_ACK_CONFIRM_TEXT,
+  AI_ACK_SERVER_ASKED_TEXT,
+  AiAckEntry,
   AiPreviewOrder,
+  ackPromptText,
+  ackTargets,
   aiPreviewText,
   isCreatable,
-  needsAckConfirm,
+  isFullyAcked,
   toConfirmOrder,
 } from './ai-preview';
 
@@ -59,6 +62,16 @@ export const AI_CREATING_TEXT = '⏳ Buyurtmalar yaratilmoqda…';
 export const AI_ALREADY_CREATED_TEXT = 'ℹ️ Bu ro‘yxat allaqachon yaratilgan.';
 export const AI_CONFIRM_FAILED_TEXT =
   '❌ Javob olinmadi — «✅ Yaratish» ni qayta bosing (takroriy buyurtma yaratilmaydi).';
+/** (AI ack S3) 503 `AI_CHECKS_UNAVAILABLE` — hech narsa yaratilmadi. */
+export const AI_CHECKS_RETRY_TEXT =
+  '⏳ AI tekshiruvlari hozircha tayyor emas — birozdan so‘ng qayta urinib ko‘ring («✅ Yaratish»). Hech narsa yaratilmadi.';
+/** (AI ack S3) 400 `AI_DRAFT_*` — server AI natijasini topmadi. */
+export const AI_DRAFT_GONE_TEXT =
+  '❌ AI natijasi topilmadi — matnni qayta yuboring yoki buyurtmani kabinetda yarating. Hech narsa yaratilmadi.';
+/** (AI ack B3) Tasdiqlanmagan ogohlantirishli buyurtma yuborilmadi. */
+export const AI_UNACKED_SKIPPED_TEXT =
+  'AI ogohlantirishi tasdiqlanmagan — kabinetda yarating';
+
 /** (BOT-3b) 2 daqiqadan eski `parsing` — ishchi yiqilgan / qotgan. */
 export const AI_STALE_TEXT =
   '⏳ AI javobi kechikdi. Matningiz saqlangan — «🔁 Qayta urinish» ni bosing.';
@@ -103,6 +116,28 @@ interface ParseData {
   reason?: string;
   message?: string;
 }
+
+/** (AI ack) ai-confirm xato tanasi (gateway filtri — `code` + ro'yxatlar). */
+interface ConfirmErrorBody {
+  message?: unknown;
+  code?: unknown;
+  orders?: unknown;
+}
+
+/** «✅ Ha, yaratish» payload'idagi `acks` — faqat to'g'ri shakldagi yozuvlar. */
+const ackEntriesOf = (value: unknown): AiAckEntry[] | null => {
+  if (!Array.isArray(value)) return null;
+  return value.flatMap((entry: unknown) => {
+    const e = entry as { index?: unknown; codes?: unknown } | null;
+    if (!e || !Number.isInteger(e.index) || !Array.isArray(e.codes)) return [];
+    return [
+      {
+        index: e.index as number,
+        codes: e.codes.filter((c): c is string => typeof c === 'string'),
+      },
+    ];
+  });
+};
 
 interface ConfirmResult {
   index: number;
@@ -510,15 +545,27 @@ export class AiOrderService implements OnModuleDestroy {
    */
   async confirm(ctx: BotContext, draftId: string): Promise<void> {
     if (await this.askAckConfirm(ctx, draftId)) return;
-    await this.startCreating(ctx, draftId);
+    await this.startCreating(ctx, draftId, []);
   }
 
   /**
-   * AI ack: «✅ Ha, yaratish» — operator ogohlantirishlarni ko'rdi.
-   * ai-confirm `ack_checks` bilan (`toConfirmOrder`) yuboriladi.
+   * AI ack: «✅ Ha, yaratish» — operator oynada RO'YXATLANGAN
+   * ogohlantirishlarni ko'rdi. `acks` — AYNAN o'sha ro'yxat (tugma
+   * payload'i); ai-confirm `ack_checks` faqat shulardan (B3). Eski tugma
+   * (`acks` yo'q, deploy'dan oldin) — oyna qayta ko'rsatiladi.
    */
-  async confirmAcked(ctx: BotContext, draftId: string): Promise<void> {
-    await this.startCreating(ctx, draftId);
+  async confirmAcked(
+    ctx: BotContext,
+    draftId: string,
+    acks?: unknown,
+  ): Promise<void> {
+    const entries = ackEntriesOf(acks);
+    if (!entries) {
+      if (await this.askAckConfirm(ctx, draftId)) return;
+      await this.startCreating(ctx, draftId, []);
+      return;
+    }
+    await this.startCreating(ctx, draftId, entries);
   }
 
   /** AI ack: «↩️ Yo‘q, orqaga» — preview tugmalari bilan qaytadi. */
@@ -544,30 +591,54 @@ export class AiOrderService implements OnModuleDestroy {
     draftId: string,
   ): Promise<boolean> {
     const draft = await this.previewDraft(draftId);
-    const previews = (draft?.orders ?? []) as AiPreviewOrder[];
-    if (!draft || !needsAckConfirm(previews)) return false;
-    await this.show(
+    if (!draft) return false;
+    return this.showAckPrompt(ctx, draft);
+  }
+
+  /**
+   * (AI ack B3/S3) «Baribir yaratamanmi?» oynasi: har tasdiqlanadigan 🟢
+   * buyurtma ANIQ ro'yxatda (bloklovchi qatorlari bilan). «✅ Ha, yaratish»
+   * payload'i — AYNAN shu ro'yxat (`acks`), ya'ni operator ko'rmagan
+   * ogohlantirish hech qachon tasdiqlanmaydi. Ro'yxat sig'masa «Ha» yo'q —
+   * kabinet. `extra` — server 409 da so'ragan kodlar (preview `index` →
+   * kodlar). `false` — tasdiq kerak emas.
+   */
+  private async showAckPrompt(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    extra?: ReadonlyMap<number, readonly string[]>,
+    intro?: string,
+  ): Promise<boolean> {
+    const previews = (draft.orders ?? []) as AiPreviewOrder[];
+    const targets = ackTargets(previews, extra);
+    if (targets.length === 0) return false;
+    const { text, fits } = ackPromptText(targets, intro);
+    const back = await this.button(
       ctx,
       draft,
-      `${aiPreviewText(previews)}\n\n${AI_ACK_CONFIRM_TEXT}`,
-      [
-        [
-          await this.button(
-            ctx,
-            draft,
-            '✅ Ha, yaratish',
-            AI_ORDER_ACTIONS.ack,
-          ),
-          await this.button(
-            ctx,
-            draft,
-            '↩️ Yo‘q, orqaga',
-            AI_ORDER_ACTIONS.back,
-          ),
-        ],
-      ],
-      'HTML',
+      '↩️ Yo‘q, orqaga',
+      AI_ORDER_ACTIONS.back,
     );
+    const rows: InlineKeyboardButton[][] = fits
+      ? [
+          [
+            await this.button(
+              ctx,
+              draft,
+              '✅ Ha, yaratish',
+              AI_ORDER_ACTIONS.ack,
+              {
+                acks: targets.map(({ order, codes }): AiAckEntry => ({
+                  index: order.index,
+                  codes,
+                })),
+              },
+            ),
+            back,
+          ],
+        ]
+      : [[this.cabinetCreateButton()], [back]];
+    await this.show(ctx, draft, text, rows, 'HTML');
     return true;
   }
 
@@ -585,12 +656,28 @@ export class AiOrderService implements OnModuleDestroy {
     return draft;
   }
 
-  private async startCreating(ctx: BotContext, draftId: string) {
+  private async startCreating(
+    ctx: BotContext,
+    draftId: string,
+    acks: AiAckEntry[],
+  ) {
     const draft = await this.claim(draftId, ['preview'], 'creating');
     if (!draft) {
       await this.explainState(ctx, draftId);
       return;
     }
+    // (AI ack B3) Shu bosishdagi tasdiq — avvalgilari o'chiriladi: operator
+    // ko'rgan ro'yxatdagi kodlargina `acked_checks` bo'ladi.
+    const ackByIndex = new Map(acks.map((a) => [a.index, a.codes]));
+    draft.orders = ((draft.orders ?? []) as AiPreviewOrder[]).map((order) => {
+      const rest: AiPreviewOrder = { ...order };
+      delete rest.acked_checks;
+      const codes = ackByIndex.get(order.index);
+      return codes?.length ? { ...rest, acked_checks: codes } : rest;
+    });
+    await this.drafts.update({ id: draft.id }, {
+      orders: draft.orders,
+    } as never);
     await this.show(ctx, draft, AI_CREATING_TEXT, []);
     this.schedule(draft.id, 'creating');
   }
@@ -600,7 +687,19 @@ export class AiOrderService implements OnModuleDestroy {
     draft: TelegramAiDraft,
   ): Promise<void> {
     const previews = (draft.orders ?? []) as AiPreviewOrder[];
-    const ready = previews.filter(isCreatable);
+    const creatable = previews.filter(isCreatable);
+    // (AI ack B3) Bloklovchi ogohlantirishi operatorga KO'RSATILIB
+    // tasdiqlanmagan buyurtma yuborilmaydi — «kabinetda yarating».
+    const ready = creatable.filter(isFullyAcked);
+    const unacked = creatable.filter((order) => !isFullyAcked(order));
+    if (ready.length === 0) {
+      // Hammasi tasdiq kutadi (masalan eski tugma) — oyna qayta.
+      if (!(await this.finish(draft, { status: 'preview' }))) return;
+      if (!(await this.showAckPrompt(ctx, draft))) {
+        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
+      }
+      return;
+    }
     const telegramId = ctx.fromId ?? ctx.chatId;
     let res: { status: number; body: unknown };
     try {
@@ -629,10 +728,14 @@ export class AiOrderService implements OnModuleDestroy {
       await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
       return;
     }
-    const body = res.body as {
-      data?: { results?: ConfirmResult[] };
-      message?: unknown;
-    } | null;
+    const body = res.body as
+      ({ data?: { results?: ConfirmResult[] } } & ConfirmErrorBody) | null;
+    if (
+      res.status >= 400 &&
+      (await this.handleAckError(ctx, draft, ready, res.status, body))
+    ) {
+      return;
+    }
     if (res.status >= 400 || !Array.isArray(body?.data?.results)) {
       await this.backToPreview(
         ctx,
@@ -659,18 +762,71 @@ export class AiOrderService implements OnModuleDestroy {
         ? `✅ ${n}) Buyurtma ${orderNumber(result.order_id)} ${result.idempotent_replay ? 'avval yaratilgan' : 'yaratildi'}`
         : `❌ ${n}) ${str(result.reason) || 'yaratilmadi'}`;
     });
-    const skipped = previews.length - ready.length;
-    if (skipped > 0) {
+    for (const order of unacked) {
+      lines.push(`⚠️ ${order.index + 1}) ${AI_UNACKED_SKIPPED_TEXT}`);
+    }
+    const incomplete = previews.length - creatable.length;
+    if (incomplete > 0) {
       lines.push(
-        `🟠 ${skipped} ta buyurtma kamchilik bilan — kabinetda yarating.`,
+        `🟠 ${incomplete} ta buyurtma kamchilik bilan — kabinetda yarating.`,
       );
     }
+    const skipped = incomplete + unacked.length;
     await this.show(
       ctx,
       draft,
       lines.join('\n'),
       skipped > 0 ? [[this.cabinetCreateButton()]] : [],
     );
+  }
+
+  /**
+   * (AI ack S3) ai-confirm AI ack xatolari — server matni EMAS, tushunarli
+   * o'zbekcha javob. `true` — xato shu yerda hal qilindi.
+   *  - 409 `CHECKS_NOT_ACKNOWLEDGED`: server `orders[].index` (yuborilgan
+   *    ro'yxatdagi o'rin) → preview buyurtmasi; `missing` kodlari bilan
+   *    oyna qayta ko'rsatiladi («✅ Ha» — aynan shu kodlar yuboriladi);
+   *  - 503 `AI_CHECKS_UNAVAILABLE`: «birozdan so‘ng qayta urinib ko‘ring»;
+   *  - 400 `AI_DRAFT_*`: AI natijasi topilmadi — qayta yuboring / kabinet.
+   */
+  private async handleAckError(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    sent: AiPreviewOrder[],
+    status: number,
+    body: ConfirmErrorBody | null,
+  ): Promise<boolean> {
+    const code = str(body?.code);
+    if (status === 409 && code === 'CHECKS_NOT_ACKNOWLEDGED') {
+      const extra = new Map<number, string[]>();
+      for (const entry of Array.isArray(body?.orders) ? body.orders : []) {
+        const e = entry as { index?: unknown; missing?: unknown } | null;
+        const order = Number.isInteger(e?.index)
+          ? sent[e?.index as number]
+          : undefined;
+        if (!order || !Array.isArray(e?.missing)) continue;
+        extra.set(
+          order.index,
+          e.missing.filter((c): c is string => typeof c === 'string'),
+        );
+      }
+      if (!(await this.finish(draft, { status: 'preview' }))) return true;
+      if (
+        !(await this.showAckPrompt(ctx, draft, extra, AI_ACK_SERVER_ASKED_TEXT))
+      ) {
+        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
+      }
+      return true;
+    }
+    if (status === 503 && code === 'AI_CHECKS_UNAVAILABLE') {
+      await this.backToPreview(ctx, draft, AI_CHECKS_RETRY_TEXT);
+      return true;
+    }
+    if (status === 400 && code.startsWith('AI_DRAFT_')) {
+      await this.fail(ctx, draft, AI_DRAFT_GONE_TEXT, false);
+      return true;
+    }
+    return false;
   }
 
   /** `✏️ Tuzatish` / `❌ Bekor` — preview yopiladi, hech narsa yaratilmaydi. */
@@ -833,6 +989,7 @@ export class AiOrderService implements OnModuleDestroy {
     draft: TelegramAiDraft,
     text: string,
     action: string,
+    extra: Record<string, unknown> = {},
   ): Promise<InlineKeyboardButton> {
     return {
       text,
@@ -840,7 +997,8 @@ export class AiOrderService implements OnModuleDestroy {
         chatId: ctx.chatId,
         action,
         actorUserId: String(draft.actor_user_id),
-        payload: { draft_id: draft.id },
+        // (AI ack B3) `extra` — masalan «✅ Ha» ning `acks` ro'yxati (PII yo'q).
+        payload: { ...extra, draft_id: draft.id },
         oneShot: false,
       }),
     };
