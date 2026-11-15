@@ -332,3 +332,26 @@ describe('A3: qo‘shimcha guruhlashlar va summa himoyasi', () => {
     expect(maskPhonesForLog('tel +998 901 23 45 67')).toBe('tel +99890*****67');
   });
 });
+
+describe('#647 round 2: log maskalash (pul qo‘riqchisisiz)', () => {
+  const digits = (t: string) => maskPhonesForLog(t).replace(/\D/g, '');
+
+  it.each([
+    'Aziza 901 234 567 Chilonzor',
+    'Aziza 901-234-567',
+    'Азиза 901 234 567 Чиланзар',
+    'Aziza 901 / 234 / 567',
+    'Aziza 901234000',
+    'Aziza 901 23 45 67. Chilonzor',
+    'Tel.901 23 45 67',
+    '+998 ( 90 ) 123-45-67',
+    'narxi 901234567 so‘m',
+  ])('%s — log’da milliy raqam qolmaydi', (text) => {
+    const national = text.includes('901234000') ? '901234000' : '901234567';
+    expect(digits(text)).not.toContain(national);
+  });
+
+  it('log maskasi kodni va oxirgi 2 raqamni qoldiradi', () => {
+    expect(maskPhonesForLog('Aziza 901 234 567')).toBe('Aziza +99890*****67');
+  });
+});

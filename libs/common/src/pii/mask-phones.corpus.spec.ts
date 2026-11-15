@@ -3,8 +3,9 @@ import { maskPhones, maskPhonesForLog, unmaskPhones } from './mask-phones';
 /**
  * #647 review korpuslari: maxfiylik (telefonning hamma yozilishi
  * maskalanadi) va summa saqlash (narx/id telefon deb yutilmaydi). Sintetik
- * ma'lumot. KNOWN_GAPS — hali qamralmagan holatlar (regressiya emas, dev'da
- * ham shunday); ro'yxat faqat qisqaradi.
+ * ma'lumot. KNOWN_*_GAPS — hali qamralmagan holatlar (regressiya emas, dev'da
+ * ham shunday); ro'yxat faqat qisqaradi: gap tuzatilsa test yiqiladi va
+ * holatni ro'yxatdan olib tashlash SHART (jimgina o'tib ketmaydi).
  */
 type C = { id: string; text: string; phones: string[]; keep?: string[] };
 type Case = { text: string; phones: string[]; keep?: string[]; tag?: string };
@@ -570,6 +571,197 @@ const PRIVACY_CASES: C[] = [
     text: '90 123 45 67 мингбулоқ',
     phones: [P('901234567')],
   },
+  // #647 round 2 (N1, N2, S1, S3, S4)
+  {
+    id: 'N1a Jamila',
+    text: 'Jamila 901234567 Chilonzor 5-uy',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1b Nurjamila',
+    text: 'Nurjamila 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1c Summaya',
+    text: 'Summaya 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1d Jamiyat',
+    text: 'Jamiyat 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1e Buyurtmachi raqami',
+    text: 'Buyurtmachi raqami 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1f Заказчика номер',
+    text: 'Заказчика номер 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1g Kuyov raqami',
+    text: 'Kuyov raqami 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1h Uy raqami',
+    text: 'Uy raqami 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1i Бизнес центр',
+    text: 'Бизнес центр 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1j Tel … ming rahmat',
+    text: 'Tel 901234567 ming rahmat',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1k name … ming rahmat',
+    text: 'Aziza 901234567 ming rahmat',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N1l Mijoz Jamila',
+    text: 'Mijoz Jamila 901234567',
+    phones: [P('901234567')],
+  },
+  {
+    id: "N1m To'lovchi",
+    text: "To'lovchi 901234567",
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N2a 90 123-45-67',
+    text: '90 123-45-67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N2b (90) 123-45-67',
+    text: '(90) 123-45-67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N2c 90/123/45/67',
+    text: '90/123/45/67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N2d 90.123.45.67',
+    text: '90.123.45.67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N2e 90 123 4567',
+    text: '90 123 4567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N2f a/b contiguous',
+    text: '901234567/912345678',
+    phones: [P('901234567'), P('912345678')],
+  },
+  {
+    id: 'N2g +998 2-3-2-2',
+    text: '+998 90 123 45 67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'N2h tel + date-like groups',
+    text: 'tel 90 000 12 11',
+    phones: [P('900001211')],
+  },
+  {
+    id: 'N2i a/b 2-3-2-2 no spaces',
+    text: '90 123 45 67/91 234 56 78',
+    phones: [P('901234567'), P('912345678')],
+  },
+  {
+    id: 'S1a tel … 3-2-2-2.',
+    text: 'Mijoz Aziza, tel 901 23 45 67.',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S1b 3-2-2-2 dashes.',
+    text: 'Aziza 901-23-45-67.',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S1c 3-2-2-2. Chilonzor',
+    text: 'Aziza 901 23 45 67. Chilonzor',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S1d Tel.901',
+    text: 'Tel.901 23 45 67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S1e тел.901',
+    text: 'тел.901 23 45 67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S3a list 3-3-3 yoki',
+    text: 'tel 901 234 567 yoki 911 234 567',
+    phones: [P('901234567'), P('911234567')],
+  },
+  {
+    id: 'S3b list 3-3-3 ;',
+    text: 'tel: 901 234 567; 911 234 567; 931 234 567',
+    phones: [P('901234567'), P('911234567'), P('931234567')],
+  },
+  {
+    id: 'S3c Tel 1 / Tel 2',
+    text: 'Tel 1: 901 234 567, Tel 2: 911 234 567',
+    phones: [P('901234567'), P('911234567')],
+  },
+  {
+    id: 'S3d Tel1:',
+    text: 'Tel1: 901 234 567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S3e Tel (WhatsApp):',
+    text: 'Tel (WhatsApp): 901 234 567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S3f 0 + 3-3-3',
+    text: '0 901 234 567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S3g 8 + 3-3-3',
+    text: '8 901 234 567',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S3h 0901 23 45 67',
+    text: '0901 23 45 67',
+    phones: [P('901234567')],
+  },
+  {
+    id: 'S4a Tel: …000',
+    text: 'Tel: 991000000',
+    phones: [P('991000000')],
+  },
+  {
+    id: 'S4b nomer …000',
+    text: 'Aziza nomer 901234000',
+    phones: [P('901234000')],
+  },
+  {
+    id: 'S4c name …000 (no phone word)',
+    text: 'Aziza 901234000',
+    phones: [P('901234000')],
+  },
 ];
 
 const amountsOnly: { id: string; text: string; keep: string }[] = [
@@ -1054,44 +1246,197 @@ const AMOUNT_CASES: Case[] = [
   },
   { text: '+998 90 123 45 67 Kosonsoy', phones: [P('901234567')] },
   { text: '901234567 Sumka', phones: [P('901234567')] },
+  // #647 round 2
+  {
+    text: 'narxi 901234567 so‘m',
+    phones: [],
+    keep: ['901234567'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Buyurtma raqami 901 234 567',
+    phones: [],
+    keep: ['901 234 567'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Uy raqami 205 000 000',
+    phones: [],
+    keep: ['205 000 000'],
+    tag: 'round 2',
+  },
+  { text: '#901234567', phones: [], keep: ['#901234567'], tag: 'round 2' },
+  { text: '№ 901234567', phones: [], keep: ['№ 901234567'], tag: 'round 2' },
+  {
+    text: 'Narxi 90 000 12/11 da olib keling',
+    phones: [],
+    keep: ['90 000 12/11'],
+    tag: 'round 2',
+  },
+  {
+    text: '2 ta 50 000 25/11 kuni',
+    phones: [],
+    keep: ['50 000 25/11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Jami 99 000 01/12',
+    phones: [],
+    keep: ['99 000 01/12'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Atir 75 000 14/11/2026 gacha',
+    phones: [],
+    keep: ['75 000 14/11/2026'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Atir 75 000 14/11',
+    phones: [],
+    keep: ['75 000 14/11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Mahsulot 65 000 15/11 gacha',
+    phones: [],
+    keep: ['65 000 15/11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Narxi 70 000  12 11',
+    phones: [],
+    keep: ['70 000  12 11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Atir 75 000 – 14 – 11',
+    phones: [],
+    keep: ['75 000 – 14 – 11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Atir 75 000 14.11.2026',
+    phones: [],
+    keep: ['75 000 14.11.2026'],
+    tag: 'round 2',
+  },
+  {
+    text: '2 ta 50 000 25.11 kuni',
+    phones: [],
+    keep: ['50 000 25.11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Atir 90 500 – 14 – 11',
+    phones: [],
+    keep: ['90 500 – 14 – 11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Jami: 90 500 12 11',
+    phones: [],
+    keep: ['90 500 12 11'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Atir 90 500 2026-11-14 gacha',
+    phones: [],
+    keep: ['90 500 2026-11-14'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Pasport AA 901234567',
+    phones: [],
+    keep: ['AA 901234567'],
+    tag: 'round 2',
+  },
+  { text: 'INN 301234567', phones: [], keep: ['301234567'], tag: 'round 2' },
+  {
+    text: 'Televizor 905 450 990',
+    phones: [],
+    keep: ['905 450 990'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Телевизор 905 450 990',
+    phones: [],
+    keep: ['905 450 990'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Telefon 905000000',
+    phones: [],
+    keep: ['905000000'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Buyurtma # 2 789 957 18 10 22',
+    phones: [],
+    keep: ['2 789 957 18 10 22'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Narxi 8 905 000 000',
+    phones: [],
+    keep: ['8 905 000 000'],
+    tag: 'round 2',
+  },
+  {
+    text: 'Narxi 8 901 234 567 so‘m',
+    phones: [],
+    keep: ['8 901 234 567'],
+    tag: 'round 2',
+  },
+  {
+    text: 'tel: 901 234 567, 905 000 000 so‘m',
+    phones: [P('901234567')],
+    keep: ['905 000 000 so‘m'],
+    tag: 'round 2',
+  },
 ];
 
 /**
- * Hali qamralmagan (dev'da ham shunday edi, regressiya EMAS):
- * - prefikssiz 3-3-3 telefon so'zisiz — narx bilan farqlab bo'lmaydi;
- * - prefikssiz 2-2-2-3, qavs ichida bo'shliq, ro'yxatdagi ikkinchi 3-3-3.
+ * Hali qamralmagan, narxdan farqlab bo'lmaydi; log'da (`maskPhonesForLog`)
+ * baribir yashiriladi:
+ * - prefikssiz 3-3-3 telefon so'zisiz (dev'da ham maskalanmasdi) —
+ *   `Malibu 335 450 990` narx bo'lishi mumkin;
+ * - `…000` bilan tugagan yaxlit 9 raqam telefon so'zisiz (dev maskalardi —
+ *   ATAYLAB: `Malibu 335450000` narxini yo'qotish qimmatroq).
  */
 const KNOWN_PRIVACY_GAPS: ReadonlySet<string> = new Set<string>([
-  'A26 spaces inside parens',
   'B54 3-3-3 no word',
   'B55 3-3-3 dashes no word',
-  'B56 2-2-2-3 local',
   'B61 3-3-3 local Cyrillic around',
-  'D103 3-3-3 two after tel',
+  'S4c name …000 (no phone word)',
 ]);
-/** 9 raqamli id'lar (STIR, trek, ID) — dev'da ham telefon deb maskalanardi. */
-const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([
-  'STIR 551234567, hisob-faktura',
-  'Trek EE905123456UZ',
-  'ID 771234567 buyurtma',
-]);
+/** Hozircha bo'sh (STIR/Trek/ID #647 round 2 da tuzatildi). */
+const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([]);
+
+/** Log matnida milliy 9 raqam (ajratgichlarsiz ham) qolmaganmi. */
+const logLeaks = (log: string, phones: string[]) =>
+  phones.filter((p) => log.replace(/\D/g, '').includes(p.slice(4)));
 
 describe('maskPhones — maxfiylik korpusi (#647)', () => {
   it.each(PRIVACY_CASES.map((c) => [c.id, c] as const))('%s', (_id, c) => {
-    if (KNOWN_PRIVACY_GAPS.has(c.id)) return;
     const { masked, tokens } = maskPhones(c.text);
     const got = [...tokens.values()];
-    expect({
-      missed: c.phones.filter((p) => !got.includes(p)),
-      masked,
-    }).toEqual({
-      missed: [],
-      masked,
-    });
-    for (const k of c.keep ?? []) expect(masked).toContain(k);
-    // Log maskalash ham telefonni yashiradi (pul qo'riqchisisiz).
-    const log = maskPhonesForLog(c.text);
-    for (const p of c.phones) expect(log).not.toContain(p.slice(4));
+    const missed = c.phones.filter((p) => !got.includes(p));
+    if (KNOWN_PRIVACY_GAPS.has(c.id)) {
+      // Gap hali ham ochiq — tuzatilgan bo'lsa ro'yxatdan olib tashlang.
+      expect(missed).not.toEqual([]);
+    } else {
+      expect({ missed, masked }).toEqual({ missed: [], masked });
+      for (const k of c.keep ?? []) expect(masked).toContain(k);
+    }
+    // Log maskalash HAR DOIM telefonni yashiradi (pul qo'riqchisisiz),
+    // ma'lum gap'larda ham.
+    expect(logLeaks(maskPhonesForLog(c.text), c.phones)).toEqual([]);
+  });
+
+  it('KNOWN_PRIVACY_GAPS dagi har bir id korpusda bor', () => {
+    const ids = new Set(PRIVACY_CASES.map((c) => c.id));
+    expect([...KNOWN_PRIVACY_GAPS].filter((id) => !ids.has(id))).toEqual([]);
   });
 
   it.each(amountsOnly.map((m) => [m.id, m] as const))(
@@ -1105,15 +1450,20 @@ describe('maskPhones — maxfiylik korpusi (#647)', () => {
 describe('maskPhones — summa korpusi (#647)', () => {
   it.each(AMOUNT_CASES.map((c, i) => [`${i} ${c.text}`, c] as const))(
     '%s',
-    (key, c) => {
-      if (KNOWN_AMOUNT_GAPS.has(c.text)) return;
+    (_key, c) => {
       const { masked, tokens } = maskPhones(c.text);
       const got = [...tokens.values()];
-      expect({
+      const result = {
         extra: got.filter((g) => !c.phones.includes(g)),
         missed: c.phones.filter((p) => !got.includes(p)),
         lost: (c.keep ?? []).filter((k) => !masked.includes(k)),
-      }).toEqual({ extra: [], missed: [], lost: [] });
+      };
+      if (KNOWN_AMOUNT_GAPS.has(c.text)) {
+        // Gap hali ham ochiq — tuzatilgan bo'lsa ro'yxatdan olib tashlang.
+        expect(result).not.toEqual({ extra: [], missed: [], lost: [] });
+        return;
+      }
+      expect(result).toEqual({ extra: [], missed: [], lost: [] });
       // Teskari yo'l: unmask asl matnni beradi, tokenlar birinchi uchrash tartibida.
       expect(unmaskPhones({ t: masked }, tokens).t).not.toBeNull();
       const order = [...masked.matchAll(/\[TEL_(\d+)\]/g)].map((x) =>
@@ -1121,7 +1471,11 @@ describe('maskPhones — summa korpusi (#647)', () => {
       );
       const first = order.filter((n, i) => order.indexOf(n) === i);
       expect(first).toEqual([...first].sort((a, b) => a - b));
-      void key;
     },
   );
+
+  it('KNOWN_AMOUNT_GAPS dagi har bir matn korpusda bor', () => {
+    const texts = new Set(AMOUNT_CASES.map((c) => c.text));
+    expect([...KNOWN_AMOUNT_GAPS].filter((t) => !texts.has(t))).toEqual([]);
+  });
 });
