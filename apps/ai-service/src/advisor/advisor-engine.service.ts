@@ -360,7 +360,8 @@ export class AdvisorEngineService {
             // o'qiydi — faktlar o'zgarmagan bo'lsa hech narsa; o'zgarsa
             // (T6 tahriri) faktlar yangilanadi, `last_at` («oxirgi
             // aniqlash») O'ZGARMAYDI (§6 «ayni fact_key — hech narsa»).
-            if (sameJson(open[0].facts, c.facts)) return 'noop';
+            if (sameJson(open[0].facts, c.facts))
+              return { outcome: 'noop', alertId: null };
             const present = this.presentation(c);
             await m.query(
               `UPDATE ${ALERTS}
@@ -370,7 +371,7 @@ export class AdvisorEngineService {
                 WHERE "id" = $1`,
               [alertId, ...present],
             );
-            return 'refreshed';
+            return { outcome: 'refreshed', alertId };
           }
           const factAt = now;
           const present = this.presentation(c);
