@@ -234,6 +234,8 @@ export class AdvisorNotifier {
         fields: 'minimal',
         limit: 100,
         with_total: false,
+        // §9.3: faqat FAOL superadminlar (nofaol — inbox/Telegram yo'q).
+        active_only: true,
       },
       { timeoutMs: 5_000, retries: 1 },
     );

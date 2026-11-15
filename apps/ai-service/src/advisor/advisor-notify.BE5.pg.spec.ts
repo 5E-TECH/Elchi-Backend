@@ -116,6 +116,7 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
         fields: 'minimal',
         limit: 100,
         with_total: false,
+        active_only: true,
       }),
     ]);
     const rows = await notified();
