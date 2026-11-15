@@ -31,6 +31,8 @@ SELECT set_config('ai_eval.days', :'days', true) \g /dev/null
 
 \echo '=== 1. Maydon bo''yicha tuzatilgan / AI bo''sh qoldirgan ulushi (model × prompt_version) ==='
 \echo '    edited_pct — operator o''zgartirgan; ai_null_pct — AI qiymat bermagan, operator to''ldirgan'
+\echo '    ai_null_base — ai_null_pct maxraji. Shaxsiy maydonlar (ism, telefon, manzil, izoh,'
+\echo '    operator) tuzatishi 30 kunda tozalanadi: ular uchun faqat oxirgi 30 kun sanaladi.'
 SELECT e.model,
        e.prompt_version,
        f.field,
@@ -42,13 +44,30 @@ SELECT e.model,
            AND e.fc ? f.field
            AND (jsonb_typeof(e.fc -> f.field -> 'ai') = 'null'
                 OR e.fc -> f.field -> 'ai' = '[]'::jsonb)
+           AND (f.field NOT IN ('customer_name', 'phone_number', 'extra_number',
+                                'address', 'comment', 'operator')
+                OR e.created_at >= now() - interval '30 days')
        ) AS ai_null,
+       -- 30 kundan eski shaxsiy maydon tuzatishi tozalangan (ai_null emas,
+       -- shunchaki yo'q) — maxrajdan chiqariladi.
+       COUNT(*) FILTER (
+         WHERE f.field NOT IN ('customer_name', 'phone_number', 'extra_number',
+                               'address', 'comment', 'operator')
+            OR e.created_at >= now() - interval '30 days'
+       ) AS ai_null_base,
        ROUND(100.0 * COUNT(*) FILTER (
          WHERE e.edited ? f.field
            AND e.fc ? f.field
            AND (jsonb_typeof(e.fc -> f.field -> 'ai') = 'null'
                 OR e.fc -> f.field -> 'ai' = '[]'::jsonb)
-       ) / COUNT(*), 2) AS ai_null_pct
+           AND (f.field NOT IN ('customer_name', 'phone_number', 'extra_number',
+                                'address', 'comment', 'operator')
+                OR e.created_at >= now() - interval '30 days')
+       ) / NULLIF(COUNT(*) FILTER (
+         WHERE f.field NOT IN ('customer_name', 'phone_number', 'extra_number',
+                               'address', 'comment', 'operator')
+            OR e.created_at >= now() - interval '30 days'
+       ), 0), 2) AS ai_null_pct
 FROM :eval_items e
 CROSS JOIN unnest(ARRAY[
   'customer_name', 'phone_number', 'extra_number', 'region_id', 'district_id',
@@ -59,7 +78,9 @@ ORDER BY 1, 2, edited_pct DESC;
 
 \echo '=== 2. Tuman chalkashlik juftlari (AI → operator), same_region bilan ==='
 SELECT e.fc -> 'district_id' ->> 'ai' AS ai_district_id,
-       COALESCE(da.name, 'unknown_district') AS ai_district,
+       -- 2b bilan bir xil: AI bermagan → 'ai_null' (unknown_district emas).
+       CASE WHEN e.fc -> 'district_id' ->> 'ai' IS NULL THEN 'ai_null'
+            ELSE COALESCE(da.name, 'unknown_district') END AS ai_district,
        e.fc -> 'district_id' ->> 'final' AS final_district_id,
        COALESCE(df.name, 'unknown_district') AS final_district,
        COALESCE(da.region_id = df.region_id, false) AS same_region,
@@ -110,9 +131,11 @@ SELECT model,
          WHEN ai > 0 AND ai = fin * 1000 THEN '/1000'
          WHEN ai > 0 AND (fin = ai * 10 OR fin = ai * 100) THEN 'x10/x100 (nol yo''qolgan)'
          WHEN ai > 0 AND (ai = fin * 10 OR ai = fin * 100) THEN '/10 yoki /100'
-         WHEN abs(fin - ai) <= 60000 THEN '|farq| <= 60k (dostavka?)'
+         -- Butun karralilar dostavka sinfidan OLDIN (aks holda 20k → 40k
+         -- "dostavka?" bo'lib ketadi).
          WHEN ai > 0 AND fin > ai AND mod(fin, NULLIF(ai, 0)) = 0 THEN 'final = ai × N (miqdor?)'
          WHEN fin > 0 AND ai > fin AND mod(ai, NULLIF(fin, 0)) = 0 THEN 'ai = final × N (dona narxi × son?)'
+         WHEN abs(fin - ai) <= 60000 THEN '|farq| <= 60k (dostavka?)'
          ELSE 'boshqa'
        END AS class,
        COUNT(*) AS n,
@@ -134,7 +157,7 @@ SELECT d.model,
          SELECT 1 FROM ai_schema.ai_order_draft_item i WHERE i.draft_id = d.id
        )) / NULLIF(COUNT(*), 0), 2) AS abandoned_pct
 FROM ai_schema.ai_order_draft d
-WHERE d.created_at >= now() - (:days::int * interval '1 day')
+WHERE d.created_at >= now() - (current_setting('ai_eval.days')::int * interval '1 day')
   AND d.created_at < now() - interval '1 day'
   AND d.preview_count > 0
 GROUP BY 1, 2, 3
@@ -161,7 +184,7 @@ SELECT COUNT(*) FILTER (
        -- Qisman sotilgan buyurtmada summa qonuniy o'zgaradi — drift emas.
        COUNT(*) FILTER (
          WHERE jsonb_typeof(e.fc -> 'total_price' -> 'final') = 'number'
-           AND o.id IS NOT NULL AND p.partly_sold
+           AND o.id IS NOT NULL AND NOT o.is_deleted AND p.partly_sold
        ) AS price_partly_sold,
        COUNT(*) FILTER (
          WHERE (e.fc ? 'district_id' OR e.fc ? 'total_price') AND o.id IS NULL
@@ -171,10 +194,17 @@ SELECT COUNT(*) FILTER (
        ) AS order_deleted
 FROM :eval_items e
 LEFT JOIN order_schema.orders o ON o.id = e.order_id
+-- Bola buyurtmasi bor ota-buyurtmalar: bitta hash join. orders.parent_order_id
+-- da indeks YO'Q — har eval qatori uchun korrelyatsiyali EXISTS butun
+-- orders'ni qayta skanerlab 60s timeout'ga urilardi (~100k buyurtma).
+LEFT JOIN (
+  SELECT DISTINCT c.parent_order_id
+  FROM order_schema.orders c
+  WHERE c.parent_order_id IS NOT NULL AND NOT c.is_deleted
+) kids ON kids.parent_order_id = o.id
 CROSS JOIN LATERAL (
   SELECT (o.partly_sell_original_total_price IS NOT NULL
-          OR EXISTS (SELECT 1 FROM order_schema.orders c
-                     WHERE c.parent_order_id = o.id)) AS partly_sold
+          OR kids.parent_order_id IS NOT NULL) AS partly_sold
 ) p;
 
 \echo '=== 6. Kunlik model va outcome aralashmasi (draftlar) ==='
@@ -183,7 +213,7 @@ SELECT date_trunc('day', d.created_at AT TIME ZONE 'Asia/Tashkent')::date AS day
        d.outcome,
        COUNT(*) AS drafts
 FROM ai_schema.ai_order_draft d
-WHERE d.created_at >= now() - (:days::int * interval '1 day')
+WHERE d.created_at >= now() - (current_setting('ai_eval.days')::int * interval '1 day')
 GROUP BY 1, 2, 3
 ORDER BY 1 DESC, drafts DESC;
 
@@ -198,7 +228,7 @@ SELECT u.feature,
          AS cache_read_pct,
        ROUND(SUM(u.cost_usd)::numeric, 4) AS cost_usd
 FROM ai_schema.ai_usage_log u
-WHERE u."createdAt" >= now() - (:days::int * interval '1 day')
+WHERE u."createdAt" >= now() - (current_setting('ai_eval.days')::int * interval '1 day')
   AND u.is_deleted = false
 GROUP BY 1, 2, 3, 4
 ORDER BY 1, calls DESC;

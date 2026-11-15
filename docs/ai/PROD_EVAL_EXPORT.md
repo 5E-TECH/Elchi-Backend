@@ -45,11 +45,11 @@ grep -c 'export const UNEDITED_SAMPLE_SQL' scripts/ai-eval-collect.ts
 
 `scripts/ai/eval-aggregates.sql` — oxirgi `days` kun:
 
-1. maydon bo'yicha tuzatilgan va AI bo'sh qoldirgan ulush, `model × prompt_version` kesimida (preview bilan solishtirib bo'lmagan qatorlar chiqarilgan);
-2. tuman chalkashlik juftlari (AI → operator) va `same_region` / boshqa viloyat / AI bo'sh jami;
-3. narx tuzatishlari sinflari: `ai_null`, `×1000`, `×10/×100`, `|farq| ≤ 60k` (dostavka?), butun karrali (miqdor/dona narxi?), boshqa;
-4. tashlab ketilgan draftlar (preview bor, birorta tasdiq yo'q);
-5. tasdiqdan keyingi drift: `orders.district_id` / `total_price` hozir operator tasdiqlagan qiymatdan farq qiladimi (o'chirilgan/yo'q buyurtmalar alohida sanaladi);
+1. maydon bo'yicha tuzatilgan va AI bo'sh qoldirgan ulush, `model × prompt_version` kesimida (preview bilan solishtirib bo'lmagan qatorlar chiqarilgan). Shaxsiy maydonlar (`customer_name`, `phone_number`, `extra_number`, `address`, `comment`, `operator`) tuzatishi 30 kunda tozalanadi — ular uchun `ai_null` faqat oxirgi 30 kundan sanaladi, maxraj `ai_null_base` ustunida (days > 30 da `confirmed` dan kichik bo'ladi);
+2. tuman chalkashlik juftlari (AI → operator) va `same_region` / boshqa viloyat / AI bo'sh jami (AI tuman bermagan qator ikkala jadvalda ham `ai_null`);
+3. narx tuzatishlari sinflari: `ai_null`, `×1000`, `×10/×100`, butun karrali (miqdor/dona narxi?), `|farq| ≤ 60k` (dostavka?), boshqa — shu tartibda tekshiriladi;
+4. tashlab ketilgan draftlar (preview bor, birorta tasdiq yo'q, 1 kundan eski — shuning uchun `days` kamida 2 bo'lsin);
+5. tasdiqdan keyingi drift: `orders.district_id` / `total_price` hozir operator tasdiqlagan qiymatdan farq qiladimi (o'chirilgan/yo'q buyurtmalar alohida sanaladi; qisman sotilgan — `partly_sell_original_total_price` yoki o'chirilmagan bola buyurtmasi bor — narx drifti hisoblanmaydi);
 6. kunlik model × outcome aralashmasi; funksiya bo'yicha outcome, `stop_reason`, keshdan o'qish ulushi va xarajat.
 
 ```sh
