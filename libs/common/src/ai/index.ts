@@ -14,3 +14,4 @@ export * from './assistant.contract';
 export * from './advisor.contract';
 export * from './ai-key-format';
 export * from './ai-config.contract';
+export * from './anthropic-client.provider';

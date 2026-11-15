@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import {
@@ -31,6 +31,7 @@ import {
   slotVerdict,
 } from './ai-model-slots';
 import { normalizeModelId } from '../usage/ai-pricing';
+import { AiRuntimeProvider } from './ai-runtime.provider';
 
 /**
  * `GET /ai/config` ko'rinishi (openapi-fragment v0.2 `AiConfigView`).
@@ -85,6 +86,8 @@ export class AiConfigViewService {
     @InjectDataSource() private readonly ds: DataSource,
     private readonly env: AiConfigEnv,
     private readonly envelope: AiKeyEnvelopeService,
+    // BE-1c: xotiradagi HAQIQIY holat (config_stale, manba). Ixtiyoriy — testlar.
+    @Optional() private readonly runtime?: AiRuntimeProvider,
   ) {}
 
   async build(requesterId: string | null): Promise<Record<string, unknown>> {
@@ -184,11 +187,29 @@ export class AiConfigViewService {
     if (active && envFp && active.fingerprint === envFp)
       warnings.push('same_as_env');
 
-    const disabledReason: AiDisabledReason | null = this.env.stagingAiDisabled
+    let disabledReason: AiDisabledReason | null = this.env.stagingAiDisabled
       ? 'staging_disabled'
       : (keyProblem ?? (source === 'none' ? 'no_key' : null));
+    // Runtime (xotira) holati DB'dan farq qilishi mumkin (15 s yangilanish,
+    // oxirgi ma'lum holat) — UI aynan ishlayotgan holatni ko'rsatadi.
+    const rt = this.runtime?.status() ?? null;
+    if (rt) {
+      source = rt.source;
+      if (!this.env.stagingAiDisabled) {
+        disabledReason =
+          rt.disabledReason ??
+          (rt.unavailableSlots.some((x) => x === 'order' || x === 'vision')
+            ? 'model_unavailable'
+            : null);
+      }
+    }
+    const configStale = rt?.configStale ?? false;
 
-    const perms = configPermissions(this.env.access(), requesterId, false);
+    const perms = configPermissions(
+      this.env.access(),
+      requesterId,
+      configStale,
+    );
 
     const catalogRaw = setting(AI_SETTING_CATALOG)?.value ?? {};
     const fetchedAt =
@@ -219,8 +240,8 @@ export class AiConfigViewService {
       policy_strict: this.env.policyStrict,
       runtime: {
         staging_ai_disabled: this.env.stagingAiDisabled,
-        config_stale: false,
-        config_loaded_at: null,
+        config_stale: configStale,
+        config_loaded_at: rt?.loadedAt ?? null,
         disabled_reason: disabledReason,
       },
       limits: {

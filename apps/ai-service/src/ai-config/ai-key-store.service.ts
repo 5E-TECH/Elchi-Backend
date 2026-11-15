@@ -107,7 +107,9 @@ export class AiKeyStoreService implements OnApplicationBootstrap {
   /** Runtime provayderi (BE-1c) shu orqali darhol qayta yuklaydi. */
   onChange(listener: AiKeyChangeListener): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   private emit(event: AiKeyChangeEvent): void {

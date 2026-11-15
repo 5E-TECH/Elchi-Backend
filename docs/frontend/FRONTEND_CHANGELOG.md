@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-15 — AI kalit va modellar (BE-1c): UI kaliti haqiqatan ishlatiladi; `ai.status` qo'shimchalari
+
+Deploy: ai-service. Migratsiya yo'q (228 ustunlari endi yoziladi). `AI_CONFIG_UI_ENABLED=false` (prod sukuti) — xulq bayt-aniq o'zgarmagan (golden test).
+
+- ✏️ UI'dan qo'shilgan kalit qayta ishga tushirishsiz keyingi AI so'rovida ishlatiladi (15 s yangilanish, yozuvdan keyin darhol). Ustuvorlik: UI kaliti > server kaliti > yo'q. UI kaliti rad etilsa / pul tugasa / ruxsat bo'lmasa / ochilmasa — AI **to'xtaydi** (server kalitiga avtomatik o'tmaydi), ops xabari va inbox; «Kalitni o'chirish» → server kaliti darhol.
+- ✏️ `GET /ai/config` `runtime`: `config_stale`, `config_loaded_at`, `disabled_reason` endi ishlayotgan (xotiradagi) holatdan; `key.effective_source` ham. Haqiqiy so'rovdagi xato: `verify.origin: "runtime"`.
+- 🟢 `ai.status` / gateway AI holati (qo'shimcha, eski maydonlar o'zgarmagan): `key_source`, `key_verify_state`, `disabled_reason`, `unavailable_slots`, `models_all`. Buyurtma/rasm modeli mavjud bo'lmasa (`model_unavailable`) AI buyurtma uchun o'chiq.
+
+**Frontend action items:** yo'q (fragment v0.2 dagi shakllar).
+
 ### 2026-11-15 — AI kalit va modellar (BE-1e): inbox xabarlari, ops alert, deploy
 
 Deploy: ai-service. Migratsiya yo'q. Ops: `scripts/ai-config-alert.sh` (host cron), `docs/ops/ai-config.md`.

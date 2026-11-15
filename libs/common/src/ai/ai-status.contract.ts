@@ -54,4 +54,47 @@ export interface AiStatusResponse {
   };
   /** Fire-and-forget jurnal yozuvi yiqilgan chaqiruvlar soni. */
   usage_persist_failures: number;
+  /**
+   * «AI kalit va modellar» (openapi-fragment `AiStatusAdditions`) — QO'SHIMCHA,
+   * ixtiyoriy maydonlar; `key_state` enumi o'zgarmaydi.
+   */
+  key_source?: 'ui' | 'env' | 'none';
+  key_verify_state?:
+    | 'ok'
+    | 'rejected'
+    | 'forbidden'
+    | 'bad_request'
+    | 'billing'
+    | 'unavailable'
+    | 'unverified';
+  disabled_reason?:
+    | 'staging_disabled'
+    | 'no_key'
+    | 'key_rejected'
+    | 'key_billing'
+    | 'key_forbidden'
+    | 'key_unreadable'
+    | 'model_unavailable'
+    | 'config_stale'
+    | 'client_error'
+    | null;
+  unavailable_slots?: Array<
+    | 'order'
+    | 'vision'
+    | 'district'
+    | 'classify'
+    | 'finance_vision'
+    | 'assistant'
+  >;
+  models_all?: Partial<
+    Record<
+      | 'order'
+      | 'vision'
+      | 'district'
+      | 'classify'
+      | 'finance_vision'
+      | 'assistant',
+      string
+    >
+  >;
 }

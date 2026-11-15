@@ -15,6 +15,7 @@ import {
 import { AiKeyEnvelopeService } from './ai-key-envelope.service';
 import { AiKeyStoreService } from './ai-key-store.service';
 import { AiKeyVerifierService } from './ai-key-verifier.service';
+import { AiRuntimeProvider } from './ai-runtime.provider';
 
 /**
  * «AI kalit va modellar» (be-brief v0.2) — kalit saqlash, tekshirish va
@@ -42,8 +43,10 @@ import { AiKeyVerifierService } from './ai-key-verifier.service';
     AiConfigViewService,
     AiConfigHistoryService,
     AiConfigNotifier,
+    AiRuntimeProvider,
   ],
   exports: [
+    AiRuntimeProvider,
     AiConfigEnv,
     AiKeyStoreService,
     AiConfigViewService,
