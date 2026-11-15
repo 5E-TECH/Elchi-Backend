@@ -205,6 +205,45 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       expect((await r1('2026-10-22T08:00:00Z')).candidates).toEqual([]);
     });
 
+    it('round-2 S1: orqa oynada TUGAGAN ketma-ketlik ham topiladi; uzunligi — butun manfiy qator', async () => {
+      const s1 = await shift('0', '2026-10-17T15:50:00Z', -1000, 0);
+      const s2 = await shift('0', '2026-10-18T15:50:00Z', -1000, 0);
+      const s3 = await shift('0', '2026-10-19T15:50:00Z', -1000, 0);
+      await shift('0', '2026-10-20T15:50:00Z', 5000, 0);
+      const out = await r1('2026-10-15T09:00:00Z'); // 7 kunlik backfill
+      expect(out.candidates).toHaveLength(1);
+      expect(out.candidates[0].fact_keys.map((f) => f.fact_key)).toEqual([
+        s1,
+        s2,
+        s3,
+      ]);
+      expect(out.candidates[0].facts).toMatchObject({
+        trigger: 'consecutive_negative',
+        streak_length: 3,
+        streak_total: -3000,
+      });
+    });
+
+    it('round-2: davom etayotgan ketma-ketlik — fakt_keys amount bilan, streak_length = butun qator', async () => {
+      await shift('0', '2026-10-18T15:50:00Z', -10000, 0);
+      await shift('0', '2026-10-19T15:50:00Z', -10000, 0);
+      await shift('0', '2026-10-20T15:50:00Z', -10000, 0);
+      await shift('0', '2026-10-21T15:50:00Z', -10000, 0);
+      const s5 = await shift('0', '2026-10-22T08:40:00Z', -20000, 0);
+      const out = await r1('2026-10-22T08:00:00Z');
+      const c = out.candidates[0];
+      expect(c.fact_keys.map((f) => f.amount)).toEqual([
+        -10000, -10000, -20000,
+      ]);
+      expect(c.facts).toMatchObject({
+        trigger: 'consecutive_negative',
+        last_shift_id: s5,
+        shifts_count: 3,
+        streak_length: 5,
+        streak_total: -60000,
+      });
+    });
+
     it('yangi chegara (200 000) qo‘llanadi', async () => {
       await shift('7', '2026-10-22T08:40:00Z', -120000, null);
       const out = await r1('2026-10-22T08:00:00Z', {
@@ -304,6 +343,24 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         scope: 'category',
         sample_size: 5,
       });
+      // round-2 S2: boshqa filial qatorlari O'Z kassasi nomi/egasi bilan.
+      const rows = out.candidates[0].evidence.rows as Array<{
+        cashbox_name: string | null;
+        cashbox: { owner_id: string };
+      }>;
+      expect(rows.map((r) => r.cashbox.owner_id).sort()).toEqual([
+        '10',
+        '10',
+        '9',
+        '9',
+        '9',
+        '9',
+      ]);
+      expect(
+        rows
+          .filter((r) => r.cashbox.owner_id === '10')
+          .map((r) => r.cashbox_name),
+      ).toEqual(['Filial 10 kassasi', 'Filial 10 kassasi']);
     });
 
     it('BQ9: MAD = 0 (bir xil summalar) — minimal MAD = mediana × 5%', async () => {
@@ -351,7 +408,8 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       expect(out.candidates[0]).toMatchObject({
         dedup_key: 'R6:day:2026-10-20',
         fact_keys: [{ fact_key: 'R6:day:2026-10-20' }],
-        subject: { kind: 'system', id: null },
+        subject: { kind: 'system', id: null, name: 'Butun tizim' },
+        first_fact_at: '2026-10-19T19:00:00.000Z', // davr boshi (§5.1)
         headline_amount: -380000,
         facts: {
           period: 'day',
@@ -373,5 +431,30 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       // Hafta: −380 000 + 900 000 > 0 → zarar yo'q.
       expect(week.candidates).toEqual([]);
     });
+  });
+
+  it('round-2: bir qoida xatosi — `errors` da, boshqasi odatdagidek; since ≤ 30 kun', async () => {
+    await db.query(
+      `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('branch', 7)`,
+    );
+    await shift('7', '2026-10-22T08:40:00Z', -120000, null);
+    await db.query(
+      `ALTER TABLE "finance_schema"."cashbox_history" RENAME TO "cashbox_history_x"`,
+    );
+    try {
+      const out = await svc.ruleInputs({
+        rules: ['R1', 'R3'],
+        now: NOW.toISOString(),
+        thresholds: {},
+        since: { R1: '2025-01-01T00:00:00Z', R3: '2026-10-22T00:00:00Z' },
+      });
+      expect(out.candidates.map((c) => c.rule_key)).toEqual(['R1']);
+      expect(out.cursors.R3).toBeUndefined();
+      expect(out.errors?.R3).toMatch(/cashbox_history/);
+    } finally {
+      await db.query(
+        `ALTER TABLE "finance_schema"."cashbox_history_x" RENAME TO "cashbox_history"`,
+      );
+    }
   });
 });

@@ -1,15 +1,19 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, type QueryRunner } from 'typeorm';
 import {
-  TASHKENT_OFFSET_MINUTES,
+  AI_ADVISOR_INPUT_MAX_PERIODS,
+  AI_ADVISOR_INPUT_MAX_SINCE_DAYS,
+  AI_ADVISOR_SYSTEM_SUBJECT_NAME,
+  startOfTashkentDay,
   rmqSend,
   type AiAdvisorCandidate,
   type AiAdvisorCashboxRef,
   type AiAdvisorRef,
   type AiAdvisorRuleInputsRequest,
   type AiAdvisorRuleInputsResponse,
+  type AiAdvisorRuleKey,
 } from '@app/common';
 import { FinanceDailyService } from '../aggregates/finance-daily.service';
 import { Cashbox } from '../entities/cashbox.entity';
@@ -39,6 +43,20 @@ export const R3_MIN_SAMPLE = 5;
 export const R3_MIN_MAD_RATIO = 0.05;
 
 const NAME_TIMEOUT_MS = 5_000;
+/** Filial nomlari: parallel so'rovlar chegarasi (round-2 #652). */
+const BRANCH_NAME_CONCURRENCY = 5;
+/**
+ * Har SQL ifoda chegarasi — AdvisorReader 30 s timeout'idan PAST (round-2
+ * #651 ops-B1): og'ir so'rov finance'ni band qilib qolmaydi, qoida xatosi
+ * faqat o'sha qoidaga tegadi (`errors`).
+ */
+export const ADVISOR_STATEMENT_TIMEOUT_MS = 15_000;
+/** R3: bitta tekshiruvdagi vaqt byudjeti — oshsa, ishlangan qismgacha kursor. */
+export const R3_TIME_BUDGET_MS = 12_000;
+/** R3: yangi qatorlar shu bo'laklarda ishlanadi (progress kafolati). */
+const R3_CHUNK = 200;
+/** R1: ketma-ketlik uzunligini aniqlash uchun oldingi smenalar chegarasi. */
+const R1_STREAK_LOOKBACK = 50;
 const SYSTEM_BRANCH_REQUESTER = { id: 'system', roles: ['superadmin'] };
 const MAIN_CASHBOX_NAME = 'Asosiy kassa';
 
@@ -54,7 +72,9 @@ const isId = (v: unknown): v is string =>
 
 /** Toshkent kalendar kuni `YYYY-MM-DD`. */
 export function tashkentDateKey(date: Date): string {
-  return new Date(date.getTime() + TASHKENT_OFFSET_MINUTES * 60_000)
+  // Kun boshi (UTC lahza) + 12 soat — Toshkent kalendar kunining ichida;
+  // qo'lda «+5 soat» yo'q (§10, round-2 #651 S9).
+  return new Date(startOfTashkentDay(date).getTime() + 12 * 3600_000)
     .toISOString()
     .slice(0, 10);
 }
@@ -65,6 +85,9 @@ export function addDaysKey(day: string, n: number): string {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
+
+/** Bitta tranzaksiya ichidagi so'rov (statement_timeout bilan). */
+type SqlQuery = <R = unknown>(sql: string, params?: unknown[]) => Promise<R>;
 
 interface ShiftRow {
   id: string;
@@ -130,34 +153,83 @@ export class AdvisorInputsService {
   ): Promise<AiAdvisorRuleInputsResponse> {
     const now = new Date(input?.now ?? Date.now());
     if (Number.isNaN(now.getTime())) throw new Error('now noto‘g‘ri');
+    const started = Date.now();
     const rules = new Set(Array.isArray(input?.rules) ? input.rules : []);
     const out: AiAdvisorRuleInputsResponse = { candidates: [], cursors: {} };
     const names = new NameCache(this);
+    // Har qoida alohida: biri yiqilsa (timeout) — boshqalari odatdagidek,
+    // yiqilgan qoida `errors` da, kursorsiz (round-2 #651 ops-B1).
+    const guard = async (rule: AiAdvisorRuleKey, fn: () => Promise<void>) => {
+      try {
+        await fn();
+      } catch (error) {
+        (out.errors ??= {})[rule] = short(error);
+        this.logger.warn(`advisor.rule_inputs ${rule} xato: ${short(error)}`);
+      }
+    };
 
     if (rules.has('R1')) {
-      const t = input.thresholds?.R1 ?? {};
-      const since = parseSince(input.since?.R1, now);
-      const r = await this.r1(since, now, t, names);
-      out.candidates.push(...r.candidates);
-      out.cursors.R1 = r.cursor;
+      await guard('R1', async () => {
+        const t = input.thresholds?.R1 ?? {};
+        const since = parseSince(input.since?.R1, now);
+        const r = await this.withTimeout((q) =>
+          this.r1(q, since, now, t, names),
+        );
+        out.candidates.push(...r.candidates);
+        out.cursors.R1 = r.cursor;
+      });
     }
     if (rules.has('R3')) {
-      const t = input.thresholds?.R3 ?? {};
-      const since = parseSince(input.since?.R3, now);
-      const r = await this.r3(since, now, t, names);
-      out.candidates.push(...r.candidates);
-      out.cursors.R3 = r.cursor;
+      await guard('R3', async () => {
+        const t = input.thresholds?.R3 ?? {};
+        const since = parseSince(input.since?.R3, now);
+        const r = await this.withTimeout((q) =>
+          this.r3(q, since, now, t, names, started + R3_TIME_BUDGET_MS),
+        );
+        out.candidates.push(...r.candidates);
+        out.cursors.R3 = r.cursor;
+      });
     }
     if (rules.has('R6')) {
-      out.candidates.push(...(await this.r6(input.periods ?? {}, now)));
+      await guard('R6', async () => {
+        out.candidates.push(...(await this.r6(input.periods ?? {}, now)));
+      });
     }
     await names.fill(out.candidates);
     return out;
   }
 
+  /**
+   * O'qish so'rovlari alohida ulanishda, `statement_timeout` bilan (SET
+   * LOCAL — faqat shu tranzaksiya). Hech narsa yozilmaydi.
+   */
+  private async withTimeout<T>(fn: (q: SqlQuery) => Promise<T>): Promise<T> {
+    const runner: QueryRunner = this.ds.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.startTransaction();
+      await runner.query(
+        `SET LOCAL statement_timeout = ${ADVISOR_STATEMENT_TIMEOUT_MS}`,
+      );
+      const result = await fn(
+        <R>(sql: string, params?: unknown[]) =>
+          runner.query(sql, params) as Promise<R>,
+      );
+      await runner.commitTransaction();
+      return result;
+    } catch (error) {
+      if (runner.isTransactionActive)
+        await runner.rollbackTransaction().catch(() => undefined);
+      throw error;
+    } finally {
+      await runner.release();
+    }
+  }
+
   // ─── R1 Smena kamomadi (§4.2) ─────────────────────────────────────────
 
   private async r1(
+    q: SqlQuery,
     since: Date,
     now: Date,
     t: Record<string, number>,
@@ -168,71 +240,106 @@ export class AdvisorInputsService {
       2,
       Math.floor(positive(t.consecutive_negative, 3)),
     );
-    const select = `
-      SELECT s."id"::text AS id,
+    const columns = `s."id"::text AS id,
              COALESCE(s."cashbox_user_id", 0)::text AS owner,
              s."closed_at", s."closed_by"::text AS closed_by, s."closed_by_system",
              s."expected_balance_cash", s."expected_balance_card",
              s."discrepancy_cash", s."discrepancy_card",
              (COALESCE(s."discrepancy_cash", 0) + COALESCE(s."discrepancy_card", 0)) AS difference,
              (COALESCE(s."discrepancy_cash", 0) + COALESCE(s."discrepancy_card", 0)) < -($1::numeric) AS is_short,
-             (COALESCE(s."discrepancy_cash", 0) + COALESCE(s."discrepancy_card", 0)) < 0 AS is_negative
-        FROM ${this.tables().shifts} s`;
+             (COALESCE(s."discrepancy_cash", 0) + COALESCE(s."discrepancy_card", 0)) < 0 AS is_negative`;
     // Mos smena: yopilgan, kamida bitta qismi sanalgan (avtomatik yopilgan —
     // ikkalasi NULL — o'tkaziladi, ketma-ketlikni na uzaytiradi, na uzadi).
-    const eligible = `s."status" = 'closed' AND s."is_deleted" = false
-        AND (s."discrepancy_cash" IS NOT NULL OR s."discrepancy_card" IS NOT NULL)`;
-    const fresh = await this.ds.query<ShiftRow[]>(
-      `${select}
-        WHERE ${eligible} AND s."closed_at" >= $2 AND s."closed_at" <= $3
+    const eligible = (
+      a: string,
+    ) => `${a}."status" = 'closed' AND ${a}."is_deleted" = false
+        AND (${a}."discrepancy_cash" IS NOT NULL OR ${a}."discrepancy_card" IS NOT NULL)`;
+    const fresh = await q<ShiftRow[]>(
+      `SELECT ${columns} FROM ${this.tables().shifts} s
+        WHERE ${eligible('s')} AND s."closed_at" >= $2 AND s."closed_at" <= $3
         ORDER BY s."closed_at" ASC, s."id" ASC
         LIMIT ${R1_MAX_NEW_SHIFTS}`,
       [shortage, since, now],
     );
     if (!fresh.length) return { candidates: [], cursor: null };
     const cursor = iso(fresh[fresh.length - 1].closed_at);
-    const owners = [...new Set(fresh.map((r) => r.owner))];
-    const recent = await this.ds.query<Array<ShiftRow & { rn: string }>>(
-      `SELECT * FROM (
-         ${select.replace('SELECT', 'SELECT ROW_NUMBER() OVER (PARTITION BY COALESCE(s."cashbox_user_id", 0) ORDER BY s."closed_at" DESC, s."id" DESC) AS rn,')}
-          WHERE ${eligible} AND s."closed_at" <= $2
-            AND COALESCE(s."cashbox_user_id", 0)::text = ANY($3::text[])
-       ) x WHERE x.rn <= $4
-       ORDER BY x.owner, x."closed_at" ASC, x.id ASC`,
-      [shortage, now, owners, streakLen],
+    warnIfStalled(
+      this.logger,
+      'R1',
+      fresh.length,
+      R1_MAX_NEW_SHIFTS,
+      fresh[0].closed_at,
+      cursor,
     );
-    const types = await this.cashboxTypes(owners);
+    const owners = [...new Set(fresh.map((r) => r.owner))];
+    // Har kassa uchun birinchi yangi smenadan OLDINGI mos smenalar (≤ 50):
+    // ketma-ketlik oynasi har YANGI smenada tugaydigan qilib tekshiriladi
+    // (orqa oynada tugagan ketma-ketlik ham — round-2 #651 S1), uzunligi
+    // esa butun uzluksiz manfiy qator bo'yicha.
+    const prior = await q<ShiftRow[]>(
+      `SELECT p.* FROM unnest($2::text[]) AS o(owner)
+         CROSS JOIN LATERAL (
+           SELECT ${columns} FROM ${this.tables().shifts} s
+            WHERE ${eligible('s')} AND COALESCE(s."cashbox_user_id", 0) = o.owner::bigint
+              AND (s."closed_at", s."id") < (
+                SELECT f."closed_at", f."id" FROM ${this.tables().shifts} f
+                 WHERE ${eligible('f')} AND COALESCE(f."cashbox_user_id", 0) = o.owner::bigint
+                   AND f."closed_at" >= $3 AND f."closed_at" <= $4
+                 ORDER BY f."closed_at" ASC, f."id" ASC LIMIT 1)
+            ORDER BY s."closed_at" DESC, s."id" DESC
+            LIMIT ${R1_STREAK_LOOKBACK}
+         ) p`,
+      [shortage, owners, since, now],
+    );
+    const types = await this.cashboxTypes(q, owners);
 
     const candidates: AiAdvisorCandidate[] = [];
     for (const owner of owners) {
-      const freshIds = new Set(
-        fresh.filter((r) => r.owner === owner).map((r) => r.id),
-      );
-      const singles = fresh.filter((r) => r.owner === owner && r.is_short);
-      const lastN = recent.filter((r) => r.owner === owner);
-      const streak =
-        lastN.length === streakLen &&
-        lastN.every((r) => r.is_negative) &&
-        lastN.some((r) => freshIds.has(r.id));
+      const freshRows = fresh.filter((r) => r.owner === owner);
+      const freshIds = new Set(freshRows.map((r) => r.id));
+      const series = [...prior.filter((r) => r.owner === owner), ...freshRows]
+        .filter((r, i, all) => all.findIndex((x) => x.id === r.id) === i)
+        .sort(byClosedAt);
       const byId = new Map<string, ShiftRow>();
-      for (const r of singles) byId.set(r.id, r);
-      if (streak) for (const r of lastN) byId.set(r.id, r);
+      for (const r of freshRows) if (r.is_short) byId.set(r.id, r);
+      // Oxirgi N ta mos smena hammasi manfiy bo'lgan har oyna, oxiri YANGI
+      // smena bo'lsa — oynadagi N smena fakt.
+      let lastStreakEnd = -1;
+      for (let i = streakLen - 1; i < series.length; i++) {
+        if (!freshIds.has(series[i].id)) continue;
+        const window = series.slice(i - streakLen + 1, i + 1);
+        if (!window.every((r) => r.is_negative)) continue;
+        for (const r of window) byId.set(r.id, r);
+        lastStreakEnd = i;
+      }
       if (!byId.size) continue;
-      const shifts = [...byId.values()].sort(
-        (a, b) =>
-          +new Date(a.closed_at) - +new Date(b.closed_at) || cmpId(a.id, b.id),
-      );
+      const shifts = [...byId.values()].sort(byClosedAt);
       const last = shifts[shifts.length - 1];
       const total = money(
         shifts.reduce((sum, r) => sum + Number(r.difference), 0),
       );
       const lastDiff = money(last.difference);
+      // trigger — OXIRGI fakt-smenani chaqirgan shart (§4.2).
+      const streak = lastStreakEnd >= 0 && series[lastStreakEnd].id === last.id;
       const trigger = streak ? 'consecutive_negative' : 'single_shortage';
+      // Ketma-ketlik uzunligi/jami — oxirgi oynani o'z ichiga olgan butun
+      // uzluksiz manfiy qator (sarlavha «N smena ketma-ket», round-2 B1).
+      let streakFrom = lastStreakEnd;
+      if (streak) {
+        while (streakFrom > 0 && series[streakFrom - 1].is_negative)
+          streakFrom -= 1;
+      }
+      const run = streak ? series.slice(streakFrom, lastStreakEnd + 1) : [];
       const cashbox = cashboxRef(owner, types.get(owner));
       const branch: AiAdvisorRef | null =
         cashbox.type === 'branch' ? { id: owner, name: null } : null;
       const closedBy = [
-        ...new Set(shifts.map((r) => r.closed_by).filter(isId)),
+        ...new Set(
+          [...shifts]
+            .reverse()
+            .map((r) => r.closed_by)
+            .filter(isId),
+        ),
       ].slice(0, 5);
       for (const id of closedBy) names.wantUser(id);
       if (branch) names.wantBranch(branch.id);
@@ -242,6 +349,7 @@ export class AdvisorInputsService {
         fact_keys: shifts.map((r) => ({
           fact_key: r.id,
           fact_at: iso(r.closed_at),
+          amount: money(r.difference),
         })),
         branch,
         subject: { kind: 'cashbox', id: owner, name: null },
@@ -255,6 +363,10 @@ export class AdvisorInputsService {
           last_difference: lastDiff,
           closed_by: closedBy.map((id) => ({ id, name: null })),
           last_shift_id: last.id,
+          streak_length: streak ? run.length : null,
+          streak_total: streak
+            ? money(run.reduce((sum, r) => sum + Number(r.difference), 0))
+            : null,
         },
         evidence: {
           kind: 'shifts',
@@ -271,13 +383,15 @@ export class AdvisorInputsService {
   // ─── R3 G'ayrioddiy xarajat (§4.2, BQ9, Q18, Q24) ─────────────────────
 
   private async r3(
+    q: SqlQuery,
     since: Date,
     now: Date,
     t: Record<string, number>,
     names: NameCache,
+    deadline: number,
   ): Promise<{ candidates: AiAdvisorCandidate[]; cursor: string | null }> {
     const k = positive(t.mad_multiplier, 3);
-    const fresh = await this.ds.query<Array<{ id: string; createdAt: Date }>>(
+    const fresh = await q<Array<{ id: string; createdAt: Date }>>(
       `SELECT h."id"::text AS id, h."createdAt"
          FROM ${this.tables().history} h
         WHERE h."source_type" = 'manual_expense' AND h."operation_type" = 'expense'
@@ -288,9 +402,19 @@ export class AdvisorInputsService {
       [since, now],
     );
     if (!fresh.length) return { candidates: [], cursor: null };
-    const cursor = iso(fresh[fresh.length - 1].createdAt);
+    warnIfStalled(
+      this.logger,
+      'R3',
+      fresh.length,
+      R3_MAX_NEW_ROWS,
+      fresh[0].createdAt,
+      iso(fresh[fresh.length - 1].createdAt),
+    );
     // Har yangi qator uchun oldingi 30 kun statistikasi (joriy qatorsiz):
     // avval shu kassa + kategoriya, namuna < 5 bo'lsa butun tizim + kategoriya.
+    // Oyna — qator vaqtidan 30×24 soat orqaga (sirpanuvchi; Toshkent kun
+    // chegarasi emas). Mediana/MAD `percentile_cont` (float8) → 2 xonaga
+    // yaxlitlanadi, chegara solishtiruvi numeric'da (so'm aniqligi yetarli).
     const window = (scopeCashbox: boolean) => `
       SELECT ABS(w."amount") AS a FROM ${this.tables().history} w
        WHERE w."source_type" = 'manual_expense' AND w."operation_type" = 'expense'
@@ -299,21 +423,22 @@ export class AdvisorInputsService {
          AND w."id" <> h."id"
          AND w."createdAt" >= h."createdAt" - INTERVAL '${R3_WINDOW_DAYS} days'
          AND w."createdAt" < h."createdAt"`;
-    const stats = (alias: string, scopeCashbox: boolean) => `
+    // `gate` — butun tizim statistikasi FAQAT kassa namunasi < 5 bo'lsa
+    // hisoblanadi (aks holda skan yo'q — round-2 #651 ops-B1).
+    const stats = (alias: string, scopeCashbox: boolean, gate = '') => `
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS n,
                ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY a)::numeric, 2) AS med
-          FROM (${window(scopeCashbox)}) x
+          FROM (${window(scopeCashbox)}) x ${gate ? `WHERE ${gate}` : ''}
       ) ${alias} ON true
       LEFT JOIN LATERAL (
         SELECT ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY ABS(a - ${alias}.med))::numeric, 2) AS mad
-          FROM (${window(scopeCashbox)}) x
+          FROM (${window(scopeCashbox)}) x ${gate ? `WHERE ${gate}` : ''}
       ) ${alias}m ON true`;
-    const rows = await this.ds.query<R3Row[]>(
-      `SELECT * FROM (
+    const sql = `SELECT * FROM (
          SELECT h."id"::text AS id, ABS(h."amount") AS amount, h."createdAt",
                 h."cashbox_id"::text AS cashbox_id, c."cashbox_type"::text AS cashbox_type,
-                c."user_id"::text AS owner,
+                COALESCE(c."user_id", 0)::text AS owner,
                 h."expense_category_id"::text AS category_id,
                 COALESCE(cat."name", h."expense_category_name") AS category_name,
                 h."created_by"::text AS created_by,
@@ -325,22 +450,40 @@ export class AdvisorInputsService {
            JOIN ${this.tables().cashboxes} c ON c."id" = h."cashbox_id"
            LEFT JOIN ${this.tables().categories} cat ON cat."id" = h."expense_category_id"
            ${stats('sb', true)}
-           ${stats('sc', false)}
-          WHERE h."id"::text = ANY($1::text[])
+           ${stats('sc', false, 'sb.n < $3')}
+          WHERE h."id" = ANY($1::bigint[])
        ) r,
        LATERAL (
          SELECT (r.median + $2::numeric * GREATEST(r.mad, ROUND(r.median * $4::numeric, 2)))::numeric(20,2) AS threshold
        ) th
        WHERE r.sample_size >= $3 AND r.amount > th.threshold
-       ORDER BY r."createdAt" ASC, r.id ASC`,
-      [fresh.map((r) => r.id), k, R3_MIN_SAMPLE, R3_MIN_MAD_RATIO],
-    );
+       ORDER BY r."createdAt" ASC, r.id ASC`;
+    // Bo'laklarda: vaqt byudjeti tugasa — ishlangan qismgacha kursor
+    // (keyingi tick davom ettiradi; bir xil oyna qayta-qayta o'qilmaydi).
+    const rows: R3Row[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < fresh.length; i += R3_CHUNK) {
+      const chunk = fresh.slice(i, i + R3_CHUNK);
+      rows.push(
+        ...(await q<R3Row[]>(sql, [
+          chunk.map((r) => r.id),
+          k,
+          R3_MIN_SAMPLE,
+          R3_MIN_MAD_RATIO,
+        ])),
+      );
+      cursor = iso(chunk[chunk.length - 1].createdAt);
+      if (Date.now() > deadline && i + R3_CHUNK < fresh.length) {
+        this.logger.warn(
+          `advisor R3: vaqt byudjeti tugadi — ${i + chunk.length}/${fresh.length} qator, kursor ${cursor}`,
+        );
+        break;
+      }
+    }
 
-    const types = new Map<string, string>();
     const candidates: AiAdvisorCandidate[] = [];
     for (const row of rows) {
       const cashbox = cashboxRef(row.owner, row.cashbox_type);
-      types.set(row.owner, row.cashbox_type);
       const branch: AiAdvisorRef | null =
         cashbox.type === 'branch' ? { id: row.owner, name: null } : null;
       if (branch) names.wantBranch(branch.id);
@@ -349,7 +492,8 @@ export class AdvisorInputsService {
       const median = money(row.median);
       const mad = money(row.mad);
       const threshold = money(row.threshold);
-      const sample = await this.r3Sample(row);
+      const sample = await this.r3Sample(q, row);
+      for (const r of sample.rows) names.wantCashbox(r.cashbox);
       candidates.push({
         rule_key: 'R3',
         dedup_key: `R3:history:${row.id}`,
@@ -400,6 +544,7 @@ export class AdvisorInputsService {
                 : null,
               is_trigger: true,
               href: null,
+              cashbox,
             },
             ...sample.rows,
           ],
@@ -413,10 +558,18 @@ export class AdvisorInputsService {
     return { candidates, cursor };
   }
 
-  /** R3 dalili: statistika oynasidagi eng katta 14 qator. */
+  /**
+   * R3 dalili: statistika oynasidagi eng katta 14 qator. Har qator O'Z
+   * kassasi bilan (`cashbox` — ai-service `href` va nom uchun; REST'ga
+   * chiqishidan oldin olib tashlanadi; round-2 #651 S2).
+   */
   private async r3Sample(
+    q: SqlQuery,
     row: R3Row,
-  ): Promise<{ total: number; rows: Array<Record<string, unknown>> }> {
+  ): Promise<{
+    total: number;
+    rows: Array<Record<string, unknown> & { cashbox: AiAdvisorCashboxRef }>;
+  }> {
     const scopeCashbox = row.scope === 'category_branch';
     const params = [
       row.category_id,
@@ -429,18 +582,23 @@ export class AdvisorInputsService {
          AND w."id" <> $3 AND w."createdAt" >= $2::timestamptz - INTERVAL '${R3_WINDOW_DAYS} days'
          AND w."createdAt" < $2::timestamptz
          ${scopeCashbox ? 'AND w."cashbox_id" = $4' : ''}`;
-    const list = await this.ds.query<
+    const list = await q<
       Array<{
         id: string;
         createdAt: Date;
         amount: string;
         created_by: string | null;
+        owner: string | null;
+        cashbox_type: string | null;
         total: string;
       }>
     >(
       `SELECT w."id"::text AS id, w."createdAt", ABS(w."amount") AS amount,
-              w."created_by"::text AS created_by, COUNT(*) OVER () AS total
-         FROM ${this.tables().history} w WHERE ${where}
+              w."created_by"::text AS created_by, COALESCE(c."user_id", 0)::text AS owner,
+              c."cashbox_type"::text AS cashbox_type, COUNT(*) OVER () AS total
+         FROM ${this.tables().history} w
+         LEFT JOIN ${this.tables().cashboxes} c ON c."id" = w."cashbox_id"
+        WHERE ${where}
         ORDER BY ABS(w."amount") DESC, w."id" DESC
         LIMIT ${ADVISOR_EVIDENCE_LIMIT - 1}`,
       params,
@@ -457,6 +615,7 @@ export class AdvisorInputsService {
           : null,
         is_trigger: false,
         href: null,
+        cashbox: cashboxRef(r.owner ?? '0', r.cashbox_type ?? undefined),
       })),
     };
   }
@@ -468,10 +627,13 @@ export class AdvisorInputsService {
     now: Date,
   ): Promise<AiAdvisorCandidate[]> {
     const today = tashkentDateKey(now);
-    const days = (periods.days ?? []).filter((d) => isDay(d) && d < today);
-    const weeks = (periods.weeks ?? []).filter(
-      (d) => isDay(d) && addDaysKey(d, 6) < today,
-    );
+    // Faqat yopilgan davrlar, ≤ 14 tadan (round-2 #651 S10).
+    const days = [...new Set(periods.days ?? [])]
+      .filter((d) => isDay(d) && d < today)
+      .slice(-AI_ADVISOR_INPUT_MAX_PERIODS);
+    const weeks = [...new Set(periods.weeks ?? [])]
+      .filter((d) => isDay(d) && addDaysKey(d, 6) < today)
+      .slice(-AI_ADVISOR_INPUT_MAX_PERIODS);
     const candidates: AiAdvisorCandidate[] = [];
     const load = async (from: string, to: string) => {
       const res = (await this.daily.financialBalanceDaily({
@@ -508,13 +670,19 @@ export class AdvisorInputsService {
       const net = money(income - expense);
       if (!(net < 0)) return null;
       const key = period === 'day' ? `R6:day:${from}` : `R6:week:${from}`;
+      // §5.1: R6 — first_fact_at = davr boshi, last_fact_at = davr oxiri.
       const factAt = new Date(`${to}T23:59:59.999+05:00`).toISOString();
       return {
         rule_key: 'R6',
         dedup_key: key,
         fact_keys: [{ fact_key: key, fact_at: factAt }],
+        first_fact_at: new Date(`${from}T00:00:00.000+05:00`).toISOString(),
         branch: null,
-        subject: { kind: 'system', id: null, name: null },
+        subject: {
+          kind: 'system',
+          id: null,
+          name: AI_ADVISOR_SYSTEM_SUBJECT_NAME,
+        },
         headline_amount: net,
         facts: { period, from, to, income, expense, net },
         evidence: {
@@ -540,16 +708,17 @@ export class AdvisorInputsService {
 
   // ─── Yordamchilar ─────────────────────────────────────────────────────
 
-  private async cashboxTypes(owners: string[]): Promise<Map<string, string>> {
+  private async cashboxTypes(
+    q: SqlQuery,
+    owners: string[],
+  ): Promise<Map<string, string>> {
     const ids = owners.filter((o) => o !== '0');
     const out = new Map<string, string>();
     if (!ids.length) return out;
-    const rows = await this.ds.query<
-      Array<{ owner: string; cashbox_type: string }>
-    >(
+    const rows = await q<Array<{ owner: string; cashbox_type: string }>>(
       `SELECT DISTINCT ON ("user_id") "user_id"::text AS owner, "cashbox_type"::text AS cashbox_type
          FROM ${this.tables().cashboxes}
-        WHERE "user_id"::text = ANY($1::text[]) AND "cashbox_type" IN ('branch', 'main')
+        WHERE "user_id" = ANY($1::bigint[]) AND "cashbox_type" IN ('branch', 'main')
           AND "is_deleted" = false
         ORDER BY "user_id", ("cashbox_type" = 'branch') DESC`,
       [ids],
@@ -585,27 +754,37 @@ export class AdvisorInputsService {
     return out;
   }
 
-  /** Filial nomlari (`branch.find_by_id`, kam sonli) — fail-open. */
+  /**
+   * Filial nomlari (`branch.find_by_id`) — fail-open, parallel (≤ 5 bir
+   * vaqtda): osilgan branch-service tick'ni 30 s dan oshirmasin (round-2).
+   */
   async branchNames(ids: string[]): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     if (!this.branchClient) return out;
-    for (const id of [...new Set(ids.filter(isId))]) {
-      try {
-        const response = await rmqSend<{ data?: { name?: unknown } }>(
-          this.branchClient,
-          { cmd: 'branch.find_by_id' },
-          { id, requester: SYSTEM_BRANCH_REQUESTER },
-          { timeoutMs: NAME_TIMEOUT_MS, retries: 0 },
-        );
-        const name = response?.data?.name;
-        if (typeof name === 'string' && name.trim())
-          out.set(id, name.trim().slice(0, 120));
-      } catch (error) {
-        this.logger.warn(
-          `advisor: filial nomi olinmadi (${id}) — ${short(error)}`,
-        );
+    const client = this.branchClient;
+    const queue = [...new Set(ids.filter(isId))];
+    const worker = async () => {
+      for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+        try {
+          const response = await rmqSend<{ data?: { name?: unknown } }>(
+            client,
+            { cmd: 'branch.find_by_id' },
+            { id, requester: SYSTEM_BRANCH_REQUESTER },
+            { timeoutMs: NAME_TIMEOUT_MS, retries: 0 },
+          );
+          const name = response?.data?.name;
+          if (typeof name === 'string' && name.trim())
+            out.set(id, name.trim().slice(0, 120));
+        } catch (error) {
+          this.logger.warn(
+            `advisor: filial nomi olinmadi (${id}) — ${short(error)}`,
+          );
+        }
       }
-    }
+    };
+    await Promise.all(
+      Array.from({ length: BRANCH_NAME_CONCURRENCY }, () => worker()),
+    );
     return out;
   }
 }
@@ -626,6 +805,13 @@ class NameCache {
 
   wantBranch(id: string): void {
     this.branches.add(id);
+  }
+
+  /** Dalil qatori kassasi (R3 «tizim bo'yicha» — har qator o'z kassasi). */
+  wantCashbox(cb: AiAdvisorCashboxRef | undefined): void {
+    if (!cb || cb.owner_id === '0') return;
+    if (cb.type === 'branch') this.branches.add(cb.owner_id);
+    else if (cb.type !== 'main') this.users.add(cb.owner_id);
   }
 
   async fill(candidates: AiAdvisorCandidate[]): Promise<void> {
@@ -666,8 +852,11 @@ class NameCache {
         userRef(row.closed_by);
         userRef(row.created_by);
         if ('cashbox_name' in row && row.cashbox_name === null) {
+          const own = row.cashbox as AiAdvisorCashboxRef | undefined;
+          if (own) cashboxName(own);
           row.cashbox_name =
-            (f.cashbox as AiAdvisorCashboxRef | undefined)?.name ?? null;
+            (own ?? (f.cashbox as AiAdvisorCashboxRef | undefined))?.name ??
+            null;
         }
       }
     }
@@ -718,7 +907,11 @@ function cashboxRef(
 
 function parseSince(value: string | undefined, now: Date): Date {
   const d = value ? new Date(value) : null;
-  if (d && !Number.isNaN(d.getTime()) && d <= now) return d;
+  // Orqa oyna ≤ 30 kun (round-2 #651 S10) — finance'ni himoya qiladi.
+  const floor = new Date(
+    now.getTime() - AI_ADVISOR_INPUT_MAX_SINCE_DAYS * 24 * 3600_000,
+  );
+  if (d && !Number.isNaN(d.getTime()) && d <= now) return d < floor ? floor : d;
   // Kursor yo'q / noto'g'ri — §4.3 qisqa orqa oyna (7 kun).
   return new Date(now.getTime() - 7 * 24 * 3600_000);
 }
@@ -729,6 +922,29 @@ function positive(v: unknown, fallback: number): number {
 
 function isDay(v: unknown): v is string {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+}
+
+/**
+ * Partiya to'la va hammasi bir lahzada (masalan bitta tranzaksiyadagi
+ * ommaviy yozuv) — kursor siljiy olmaydi; jim qolmasin (round-2 ops-S8).
+ */
+function warnIfStalled(
+  logger: Logger,
+  rule: string,
+  count: number,
+  limit: number,
+  first: Date,
+  cursor: string,
+): void {
+  if (count >= limit && iso(first) === cursor) {
+    logger.error(
+      `advisor ${rule}: kursor siljimaydi — ${count} qator bir lahzada (${cursor})`,
+    );
+  }
+}
+
+function byClosedAt(a: ShiftRow, b: ShiftRow): number {
+  return +new Date(a.closed_at) - +new Date(b.closed_at) || cmpId(a.id, b.id);
 }
 
 function cmpId(a: string, b: string): number {

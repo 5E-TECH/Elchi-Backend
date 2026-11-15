@@ -155,7 +155,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       severity: 'warning',
       occurrences: 1,
       explanation_status: 'none',
-      title: "Samarqand filiali kassasi: smena kamomadi −120 000 so'm",
+      title: "Samarqand filiali kassasida smena kamomadi: −120 000 so'm",
       rule_snapshot: {
         key: 'R1',
         severity: 'warning',
@@ -316,6 +316,208 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       severity: 'critical',
       title: "25.10.2026 kuni sof foyda −380 000 so'm",
     });
+    // round-2: system → «Butun tizim»; R6 kursori — kechagi kun oxiri.
+    const [subj] = await ds.query<Array<{ subject: { name: string } }>>(
+      `SELECT subject FROM ai_schema.ai_advisor_alerts`,
+    );
+    expect(subj.subject.name).toBe('Butun tizim');
+    const [st] = await ds.query<Array<{ cursor_at: Date }>>(
+      `SELECT cursor_at FROM ai_schema.ai_advisor_rule_state WHERE rule_key = 'R6'`,
+    );
+    expect(st.cursor_at.toISOString()).toBe('2026-10-25T18:59:59.999Z');
+    // Seshanba ishi o'tkazilsa — chorshanba ikkala kun so'raladi.
+    reply = { candidates: [], cursors: {} };
+    await engine.run('daily', new Date('2026-10-27T21:30:00Z'));
+    expect(requests[requests.length - 1].periods).toEqual({
+      days: ['2026-10-26', '2026-10-27'],
+    });
+  });
+
+  it('round-2 B1: R1 ikki tick — faktlar va dalil saqlanganlarga qo‘shiladi', async () => {
+    await warmUp();
+    const shift = (id: string, at: string, diff: number) => ({
+      shift_id: id,
+      closed_at: at,
+      difference: diff,
+    });
+    reply = {
+      candidates: [
+        r1([['1', '2026-10-21T08:10:00Z']], {
+          fact_keys: [
+            { fact_key: '1', fact_at: '2026-10-21T08:10:00Z', amount: -120000 },
+          ],
+          evidence: {
+            kind: 'shifts',
+            total_rows: 1,
+            truncated: false,
+            rows: [shift('1', '2026-10-21T08:10:00.000Z', -120000)],
+            totals: { count: 1, difference: -120000 },
+          },
+        }),
+      ],
+      cursors: { R1: '2026-10-21T08:10:00Z' },
+    };
+    await engine.run('frequent', new Date('2026-10-21T08:30:00Z'));
+    reply = {
+      candidates: [
+        r1([['3', '2026-10-22T08:10:00Z']], {
+          headline_amount: -80000,
+          fact_keys: [
+            { fact_key: '3', fact_at: '2026-10-22T08:10:00Z', amount: -80000 },
+          ],
+          facts: {
+            ...r1([['3', '2026-10-22T08:10:00Z']]).facts,
+            total_difference: -80000,
+            last_difference: -80000,
+          },
+          evidence: {
+            kind: 'shifts',
+            total_rows: 1,
+            truncated: false,
+            rows: [shift('3', '2026-10-22T08:10:00.000Z', -80000)],
+            totals: { count: 1, difference: -80000 },
+          },
+        }),
+      ],
+      cursors: { R1: '2026-10-22T08:10:00Z' },
+    };
+    await engine.run('frequent', new Date('2026-10-22T08:30:00Z'));
+    const [row] = await ds.query<
+      Array<{
+        occurrences: number;
+        facts: Record<string, unknown>;
+        evidence: Record<string, unknown>;
+        headline_amount: string;
+        title: string;
+      }>
+    >(
+      `SELECT occurrences, facts, evidence, headline_amount, title FROM ai_schema.ai_advisor_alerts`,
+    );
+    expect(row.occurrences).toBe(2);
+    expect(row.facts).toMatchObject({
+      shifts_count: 2,
+      total_difference: -200000,
+      last_difference: -80000,
+      last_shift_id: '3',
+    });
+    expect(row.evidence).toMatchObject({
+      total_rows: 2,
+      totals: { count: 2, difference: -200000 },
+    });
+    expect(
+      (row.evidence.rows as Array<{ shift_id: string }>).map((r) => r.shift_id),
+    ).toEqual(['1', '3']);
+    expect(Number(row.headline_amount)).toBe(-80000);
+    expect(row.title).toBe(
+      "Samarqand filiali kassasida smena kamomadi: −80 000 so'm",
+    );
+  });
+
+  it('round-2 B2: apply xatosi — kursor ushlanadi (partial), keyingi tick qayta o‘qiydi; 5 urinishdan keyin o‘tkaziladi', async () => {
+    await warmUp();
+    const a = r1([['10', '2026-10-22T08:00:00Z']]);
+    const b = r1([['11', '2026-10-22T08:50:00Z']], {
+      dedup_key: 'R1:cashbox:9',
+    });
+    reply = { candidates: [a, b], cursors: { R1: '2026-10-22T08:50:00Z' } };
+    // Spy'siz ikkinchi nusxa — haqiqiy apply (ayni baza).
+    const real = new AdvisorEngineService(
+      ds,
+      settings,
+      reader as unknown as AdvisorReader,
+    );
+    const spy = jest
+      .spyOn(engine, 'apply')
+      .mockImplementation(
+        (c: AiAdvisorCandidate, ...rest: [never, never, never]) =>
+          c.dedup_key === 'R1:cashbox:7'
+            ? Promise.reject(new Error('Connection terminated unexpectedly'))
+            : real.apply(c, ...rest),
+      );
+    const first = await engine.run('frequent', NOW);
+    expect(first).toMatchObject({ opened: 1, failed: 1 });
+    const state = () =>
+      ds
+        .query<
+          Array<{
+            cursor_at: Date;
+            last_status: string;
+            last_failed: number;
+            failures: Record<string, number>;
+          }>
+        >(
+          `SELECT cursor_at, last_status, last_failed, failures FROM ai_schema.ai_advisor_rule_state WHERE rule_key = 'R1'`,
+        )
+        .then((r) => r[0]);
+    let st = await state();
+    expect(st).toMatchObject({
+      last_status: 'partial',
+      last_failed: 1,
+      failures: { 'R1:cashbox:7': 1 },
+    });
+    expect(st.cursor_at.toISOString()).toBe('2026-10-22T08:00:00.000Z');
+    // Keyingi tick: since = 08:00 − 5 daq → nomzod qayta keladi, endi o'tadi.
+    spy.mockRestore();
+    await engine.run('frequent', new Date(NOW.getTime() + 30 * 60_000));
+    expect(requests[requests.length - 1].since.R1).toBe(
+      '2026-10-22T07:55:00.000Z',
+    );
+    st = await state();
+    expect(st).toMatchObject({
+      last_status: 'ok',
+      last_failed: 0,
+      failures: {},
+    });
+    expect((await alerts()).map((r) => r.title)).toHaveLength(2);
+
+    // Doimiy xato: 5 urinishdan keyin o'tkaziladi, kursor oldinga siljiydi.
+    const c = r1([['20', '2026-10-22T10:00:00Z']], {
+      dedup_key: 'R1:cashbox:20',
+    });
+    reply = { candidates: [c], cursors: { R1: '2026-10-22T10:00:00Z' } };
+    jest.spyOn(engine, 'apply').mockRejectedValue(new Error('bad data'));
+    for (let i = 0; i < 6; i++)
+      await engine.run(
+        'frequent',
+        new Date(NOW.getTime() + (2 + i) * 3600_000),
+      );
+    st = await state();
+    expect(st.failures).toEqual({});
+    expect(st.cursor_at.toISOString()).toBe('2026-10-22T10:00:00.000Z');
+    expect(
+      await ds.query(
+        `SELECT 1 FROM ai_schema.ai_advisor_alerts WHERE dedup_key = 'R1:cashbox:20'`,
+      ),
+    ).toEqual([]);
+    jest.restoreAllMocks();
+  });
+
+  it('round-2: finance qoida xatosi (errors) — faqat o‘sha qoida error, boshqasi ok', async () => {
+    await warmUp();
+    reply = {
+      candidates: [r1([['30', '2026-10-22T08:00:00Z']])],
+      cursors: { R1: '2026-10-22T08:00:00Z' },
+      errors: { R3: 'canceling statement due to statement timeout' },
+    };
+    const res = await engine.run('frequent', NOW);
+    expect(res.opened).toBe(1);
+    const rows = await ds.query<
+      Array<{
+        rule_key: string;
+        last_status: string;
+        last_error: string | null;
+      }>
+    >(
+      `SELECT rule_key, last_status, last_error FROM ai_schema.ai_advisor_rule_state ORDER BY rule_key`,
+    );
+    expect(rows).toEqual([
+      { rule_key: 'R1', last_status: 'ok', last_error: null },
+      {
+        rule_key: 'R3',
+        last_status: 'error',
+        last_error: 'canceling statement due to statement timeout',
+      },
+    ]);
   });
 
   it('nomzod qoidasi so‘ralmagan bo‘lsa e’tiborsiz; reader xatosi — holat error, throw', async () => {
