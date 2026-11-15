@@ -33,6 +33,9 @@ describe('advisor-inputs yordamchilari (BE-5)', () => {
     // Aniq mintaqa — o'sha bo'yicha.
     ['2026-10-22T11:05:00Z', '2026-10-22T11:05:00.000Z', '2026-10-22'],
     ['2026-10-22T11:05:00+05:00', '2026-10-22T06:05:00.000Z', '2026-10-22'],
+    // round-3 S5: bo'sh joy + Z; date_day — Toshkent kuni.
+    ['2026-10-22 10:00Z', '2026-10-22T10:00:00.000Z', '2026-10-22'],
+    ['2026-10-22T22:00:00Z', '2026-10-22T22:00:00.000Z', '2026-10-23'],
   ])('vaqtli: %s → %s', (raw, at, day) => {
     expect(parseReceiptDateTime(raw)).toEqual({ date_at: at, date_day: day });
   });
@@ -88,6 +91,9 @@ describe('advisor-inputs yordamchilari (BE-5)', () => {
     expect(isForeignReceipt(' uzs ', null)).toBe(false);
     expect(isForeignReceipt('USD', null)).toBe(true);
     expect(isForeignReceipt(null, 'currency_not_uzs')).toBe(true);
+    // round-3 N2: #643 so'm sinonimlari va apostrof variantlari — so'm.
+    for (const c of ['SUM', 'SOM', 'UZB', "SO'M", 'SOʻM', 'so‘m', 'СУМ', 'СЎМ'])
+      expect(isForeignReceipt(c, null)).toBe(false);
   });
 
   it('R7 kursori: LIMIT’ga yetgan manba — o‘sha manbaning oxirgisidan oshmaydi', () => {
