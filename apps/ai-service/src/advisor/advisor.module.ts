@@ -6,8 +6,12 @@ import { AdvisorController } from './advisor.controller';
 import {
   AiAdvisorAlert,
   AiAdvisorAlertOccurrence,
+  AiAdvisorRuleState,
   AiAdvisorSetting,
 } from './advisor.entities';
+import { AdvisorEngineService } from './advisor-engine.service';
+import { AdvisorReader } from './advisor-reader';
+import { AdvisorScheduler } from './advisor.scheduler';
 import { AdvisorSettingsService } from './advisor-settings.service';
 
 /**
@@ -21,13 +25,21 @@ import { AdvisorSettingsService } from './advisor-settings.service';
       AiAdvisorAlert,
       AiAdvisorAlertOccurrence,
       AiAdvisorSetting,
+      AiAdvisorRuleState,
     ]),
+    // AdvisorReader — FAQAT `finance.advisor.rule_inputs` (o'qish).
+    RmqModule.register({ name: 'FINANCE' }),
     // ActivityLogService — AiUsageModule re-export qilgan YAGONA
     // ActivityLogModule nusxasidan (forService bu yerda chaqirilmaydi).
     AiUsageModule,
   ],
   controllers: [AdvisorController],
-  providers: [AdvisorSettingsService],
-  exports: [AdvisorSettingsService],
+  providers: [
+    AdvisorSettingsService,
+    AdvisorReader,
+    AdvisorEngineService,
+    AdvisorScheduler,
+  ],
+  exports: [AdvisorSettingsService, AdvisorEngineService],
 })
 export class AdvisorModule {}
