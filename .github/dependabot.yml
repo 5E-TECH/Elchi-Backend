@@ -47,6 +47,24 @@ updates:
       - dependency-name: web-push
         update-types:
           - version-update:semver-major
+      # 2026-11-17: major yangilanishlar rejali PR bilan, qo'lda sinab ko'tariladi.
+      # typeorm 1.x (#681) — ORM major, CI'da postgres spec'lar va DI boot yiqiladi.
+      # @eslint/js 10 (#680) — ESLint 10 bilan birga, CI'da lint/testlar yiqiladi.
+      # @types/node major (#683) — serverlar Node 22 da (.nvmrc, node:22-alpine);
+      # turlar runtime major'iga teng turadi, Node ko'tarilganda birga o'zgaradi.
+      # Har qoida o'z migratsiya PR'i bilan olib tashlanadi. minor/patch odatdagidek.
+      - dependency-name: typeorm
+        update-types:
+          - version-update:semver-major
+      - dependency-name: '@eslint/js'
+        update-types:
+          - version-update:semver-major
+      - dependency-name: eslint
+        update-types:
+          - version-update:semver-major
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
     groups:
       nestjs:
         patterns:
