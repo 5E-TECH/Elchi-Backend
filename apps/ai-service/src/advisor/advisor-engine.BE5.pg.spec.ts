@@ -144,7 +144,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     };
     const res = await engine.run('frequent', NOW);
     expect(res).toMatchObject({
-      rules: ['R1', 'R2', 'R3', 'R4', 'R5'],
+      rules: ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'],
       candidates: 2,
       opened: 2,
     });
@@ -266,7 +266,10 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     await settings.update(SA, {
       version: 1,
       rules: Object.fromEntries(
-        ['R1', 'R2', 'R3', 'R4', 'R5'].map((k) => [k, { enabled: false }]),
+        ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'].map((k) => [
+          k,
+          { enabled: false },
+        ]),
       ),
     });
     const res = await engine.run('frequent', NOW);
@@ -332,6 +335,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     await engine.run('daily', new Date('2026-10-27T21:30:00Z'));
     expect(requests[requests.length - 1].periods).toEqual({
       days: ['2026-10-26', '2026-10-27'],
+      weeks: ['2026-10-19'], // R8 (va R6): oxirgi yopilgan hafta har kuni
     });
   });
 
@@ -555,8 +559,8 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       candidates: [
         {
           ...r1([['1', NOW.toISOString()]]),
-          rule_key: 'R7',
-          dedup_key: 'R7:receipt:1',
+          rule_key: 'R8',
+          dedup_key: 'R8:week:2026-10-12',
         },
       ],
       cursors: {},
@@ -588,6 +592,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       'R3',
       'R4',
       'R5',
+      'R7',
     ]);
     expect(
       state.every(
@@ -663,6 +668,84 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     expect(rows[1]).toMatchObject({
       status: 'new',
       reopened_from_id: rows[0].id,
+    });
+  });
+
+  it('R7: ochiq ogohlantirishda ayni fakt — faktlar yangilanadi (occurrences va last_fact_at o‘zgarmaydi); R6/R8 haftasi har kuni so‘raladi', async () => {
+    await warmUp();
+    const r7 = (title: number): AiAdvisorCandidate => ({
+      rule_key: 'R7',
+      dedup_key: 'R7:receipt:77',
+      fact_keys: [
+        { fact_key: 'R7:receipt:77', fact_at: '2026-10-22T06:05:00.000Z' },
+      ],
+      branch: null,
+      subject: { kind: 'cashbox', id: '0', name: 'Asosiy kassa' },
+      headline_amount: title,
+      facts: {
+        source: 'receipt',
+        mismatch: ['amount'],
+        branch: { name: 'Asosiy kassa' },
+        entered_amount: 1,
+        read_amount: 2,
+        difference: title,
+      },
+      evidence: { kind: 'receipt_check' },
+    });
+    reply = { candidates: [r7(-18000)], cursors: {} };
+    await engine.run('frequent', NOW);
+    reply = { candidates: [r7(-9000)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-22T10:00:00Z')),
+    ).toMatchObject({ refreshed: 1, occurred: 0 });
+    const [row] = await ds.query<
+      Array<{
+        occurrences: number;
+        last_fact_at: Date;
+        headline_amount: string;
+      }>
+    >(
+      `SELECT occurrences, last_fact_at, headline_amount FROM ai_schema.ai_advisor_alerts`,
+    );
+    expect(row.occurrences).toBe(1);
+    expect(new Date(row.last_fact_at).toISOString()).toBe(
+      '2026-10-22T06:05:00.000Z',
+    );
+    expect(Number(row.headline_amount)).toBe(-9000);
+
+    // round-3 N3: ayni faktlar bilan qayta skan — noop, last_at o'zgarmaydi;
+    // faktlar o'zgarsa ham last_at («oxirgi aniqlash») o'zgarmaydi.
+    const lastAt = () =>
+      ds
+        .query<Array<{ last_at: Date }>>(
+          `SELECT last_at FROM ai_schema.ai_advisor_alerts`,
+        )
+        .then((r) => new Date(r[0].last_at).toISOString());
+    const before = await lastAt();
+    expect(before).toBe(NOW.toISOString());
+    for (const at of [
+      '2026-10-22T10:30:00Z',
+      '2026-10-22T11:00:00Z',
+      '2026-10-23T10:00:00Z',
+    ]) {
+      expect(await engine.run('frequent', new Date(at))).toMatchObject({
+        refreshed: 0,
+        occurred: 0,
+      });
+    }
+    expect(await lastAt()).toBe(before);
+    reply = { candidates: [r7(-5000)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-23T10:30:00Z')),
+    ).toMatchObject({ refreshed: 1 });
+    expect(await lastAt()).toBe(before);
+
+    // Chorshanba 02:30 — o'tgan (yopilgan) hafta baribir so'raladi.
+    reply = { candidates: [], cursors: {} };
+    await engine.run('daily', new Date('2026-10-27T21:30:00Z'));
+    expect(requests[requests.length - 1].periods).toEqual({
+      days: ['2026-10-27'],
+      weeks: ['2026-10-19'],
     });
   });
 
