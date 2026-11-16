@@ -22,6 +22,50 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-15 — AI maslahatchi (BE-5): shartnoma v0.4 eslatmasi — R7 Telegram
+
+- 🟢 Ega qarori (2026-11-15): `rules.R7.telegram` **qulflanmaydi** — sukut `false` (R7 jiddiy ogohlantirishi Telegram'ga ketmaydi: ilova ichi + kunlik hisobot), lekin superadmin Sozlamalarda R7 uchun Telegram'ni o'zi yoqishi mumkin (`PATCH /ai/advisor/settings` → `rules.R7.telegram: true` ruxsat). Kod o'zgarmadi — joriy xatti-harakat aynan shu. Shartnoma v0.4: «R7: telegram sukut false, opt-in».
+
+### 2026-11-14 — AI maslahatchi (BE-5, 5-qism): AI izohi
+
+Shartnoma v0.3 §6, §7.4. Deploy: api-gateway + ai-service, migratsiyasiz. Env: `AI_ADVISOR_EXPLAIN` (sukut on), `AI_ADVISOR_MODEL` (bo'sh — joriy sukut model).
+
+- 🆕 `POST /ai/advisor/alerts/:id/explain` (FAQAT superadmin, tana yo'q) — doim **202**: `data = {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}`. `ready` — keshdan (`cached: true`, `poll_after_ms: null`); `pending` — `GET /ai/advisor/alerts/:id` ni `poll_after_ms` (2000) da poll qiling yoki realtime `ai.advisor.alert_changed {change: "explanation"}` ni kuting. 3 daqiqadan yangi `pending` — qayta navbat yo'q.
+- 🟢 Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`; 429 `AI_ADVISOR_BUDGET_EXCEEDED {scope: "global", period: "day", reset_at, retry_after_seconds}` (maslahatchi budjeti — BE-1); 503 `AI_ADVISOR_AI_DISABLED {reason: ai_disabled|feature_disabled|budget_unreadable}`. 429/503 `explanation_status` ni o'zgartirmaydi.
+- 🟢 Fonda xato bo'lsa tafsilotda `explanation_status: "failed"` + `explanation_error: budget_exceeded|ai_disabled|error` (budjetda `explanation_error_scope`, `explanation_retry_at`) — «Qayta urinish» = yana `POST explain`.
+- 🟢 `critical` ogohlantirishlarga izoh avtomatik (har tick'dan keyin ≤ 5 ta, backfill'siz); `warning` — faqat so'rov bilan. Matn — o'zbekcha cheklangan markdown (≤ 2000, HTML yo'q), pul amali taklif qilinmaydi; promptda chek oluvchi/to'lovchi ismi va tranzaksiya raqami yo'q.
+
+- ✏️ (round-3) Avtomatik izoh faqat SHU tekshiruvda ochilgan `critical` ga (≤ 5, eng yangilari) — eski izohsiz jiddiylar `none` bo'lib qoladi, so'ralganda. Javob `message: "Explanation queued"`. So'rov paytida ogohlantirish yopilsa — 202 emas, 409; generatsiya paytida yopilsa — natija yozilmaydi.
+- 🟢 Izoh matnida havola/rasm/URL va HTML teglari yo'q (solishtirish belgilari «<», «>» saqlanadi).
+**Frontend action items:**
+- 🔧 «AI izohi» tugmasi → `POST explain`; 202 `pending` — skeleton + poll/realtime; 429 — `reset_at` gacha tugma o'chiq; 503 — «AI vaqtincha o'chiq».
+
+### 2026-11-14 — AI maslahatchi (BE-5, 4-qism): bildirishnoma, faoliyat jurnali, realtime
+
+Shartnoma v0.3 §9, §11, §12. Deploy: api-gateway + ai-service (+ notification-service — faqat reyestr), migratsiyasiz.
+
+- 🆕 Bildirishnoma turi `ai.advisor_alert` (`category: finance`, `priority: critical`, «Muhim»): FAQAT `critical` ogohlantirish OCHILGANDA bir marta; aniq `recipient_ids` (faol superadminlar) — ochiq ilovaga `notification:new` to'liq qator bilan keladi (`id, title, body, link, data`). `link` = `/ai-assistant?tab=alerts&alert=:id`; `data = {alert_id, rule_key, severity, variant (R7: receipt|card_balance, aks holda null), subject_name, telegram_buttons}`. Sarlavha «Jiddiy ogohlantirish · {qisqa nom}», matnda AI matni va PII yo'q.
+- 🟢 Kanallar: `in_app` + `realtime` doim; `telegram` faqat `settings.telegram.enabled` (BE-1 bo'lguncha yoqiq) VA `rules.<R>.telegram` — **R7 sukuti false** (ilova ichi + kunlik hisobot, Telegram'ga yo'q). Telegram tugmasi «Ogohlantirishni ochish».
+- 🆕 Realtime `ai.advisor.alert_changed` (superadminlarga, summasiz): `{alert_id, rule_key, severity, status, change: opened|occurred|status|explanation, explanation_status, at}` — ochilish/takror (tick), «Ko'rildi» va PATCH'dan keyin. FE `overview`, ro'yxat va ochiq tafsilotni qayta o'qiydi.
+- 🆕 `/activity-logs`: `ai` xizmati oyog'i qo'shildi (`_service: "ai"`) — `ai.advisor.alert.resolve|dismiss`, `ai.advisor.settings.update`, `ai.cap.raise` endi ko'rinadi.
+
+- ✏️ (review round-2) `ai.advisor_alert` — `priority: critical` bo'lsa ham **SMS eskalatsiyasi YO'Q** (reyestr `escalation: false`): faqat `in_app` + `realtime` (+ Telegram sozlamaga ko'ra, R7 — yo'q).
+- 🟢 `/activity-logs` `ai` oyog'i 3 s timeout bilan (AI band bo'lsa — `failed_services: ["ai"]`, qolgan jurnal kutmaydi); swagger `service` enum'iga `ai` qo'shildi.
+- 🟢 Faqat **faol** superadminlarga yuboriladi; 24 soatdan eski (birinchi aniqlangan) ogohlantirish bildirishnomasiz qoladi (ro'yxatda ko'rinadi).
+- ✏️ (ega, 2026-11-15) R6 zarar ogohlantirishi tunda (02:30) ochilsa — ilova ichida (`notification:new`, realtime) darhol, **Telegram esa Toshkent 09:00 da** (o'sha kun; 09:00 dan keyin ochilgan — darhol). 09:00 gacha hal qilingan / ahamiyatsiz — Telegram ketmaydi. Migratsiya 229 (`telegram_due_at`, REST'da yo'q).
+**Frontend action items:**
+- 🔧 `ACTIVITY_SERVICES` ga `"ai"` + filtr yorlig'i (uz/ru/en).
+- 🔧 `notification:new` `type === "ai.advisor_alert"` — doimiy toast (`duration: 0`) + `overview`/ro'yxat bekor qilish; `ai.advisor.alert_changed` — invalidatsiya.
+
+### 2026-11-14 — AI maslahatchi (BE-5, 3-qism): ogohlantirishlar endpointlari
+
+Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migratsiyasiz. Hammasi FAQAT SUPERADMIN (ADMIN — 403).
+
+- 🆕 `GET /ai/advisor/overview` — `{alerts{new, open, critical, critical_open, critical_rule_keys[], critical_open_rule_keys[]}, recommendations: null, budget: null, usd_uzs_rate: null, generated_at}`. Banner (Q8) — `critical` + `critical_rule_keys` (faqat `new` jiddiylar), tartib `MAX(last_at) DESC`.
+- 🆕 `GET /ai/advisor/alerts?status&severity&rule_key&from&to&q&sort_by&sort_dir&page&limit` — `{items, meta{page, limit, total, totalPages}, counts{by_status}}`. Holatni o'zgartirmaydi. `counts.by_status` — `status` filtrisiz. Saralash oxirida doim `id DESC`. Noto'g'ri query — kodsiz 400.
+- 🆕 `GET /ai/advisor/alerts/:id[?include=history]` — tafsilot; `new` bo'lsa atomik `new → seen` (`seen_at`, `seen_by`), audit yo'q. ⚠️ prefetch/hover'da yubormang. 3 daqiqadan eski `pending` izoh — `failed` + `explanation_error: "error"`; `pending` da `explanation_poll_after_ms: 2000`. 404 `AI_ADVISOR_ALERT_NOT_FOUND`.
+- 🆕 `PATCH /ai/advisor/alerts/:id {status: resolved|dismissed, note?}` — `resolved` uchun izoh 3–500 (trim) majburiy → 400 `AI_ADVISOR_NOTE_INVALID {reason, min_length, max_length}`; `dismissed` — ixtiyoriy ≤ 500. Ayni foydalanuvchi ayni holatni qayta yuborsa — 200 (idempotent). Boshqa holat / boshqa superadmin yopgan — 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Javob — yangilangan tafsilot. Audit `ai.advisor.alert.resolve|dismiss` (`/activity-logs` da `ai` xizmati — 4-qism).
+- 🟢 `explain` (AI izohi) — 5-qism; hozircha `explanation_status` doim `none`.
 ### 2026-11-14 — AI maslahatchi (BE-5, 2c review tuzatishlari): R7/R8 semantikasi — shartnoma v0.4 uchun
 
 #653 mustaqil review (FE sessiya) va ega qarori asosida. Deploy: ai-service + finance-service, migratsiyasiz.
@@ -71,6 +115,9 @@ Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir m
 - 🟢 Chek tekshiruvi xulosasi (`GET /finance/receipts/summary` → `mismatch_total`, `top`): bunday cheklar summaga va top-15 ga kirmaydi; `counts.mismatch` da qoladi. AI yordamchining `get_receipt_checks` vositasi ham xuddi shunday.
 - 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
 
+- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\n`, `\t` dan tashqari) → 400; `page` ≤ 1 000 000.
+- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
+- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
 **Frontend action items:**
 - 🔧 `ai_status === "mismatch"` va `ai.difference === null` bo'lishi mumkin — farq ustunida «—», `error_reason === "currency_not_uzs"` uchun matn tavsiya: «Chek so'mda emas ({currency}) — summani qo'lda tekshiring».
 

@@ -6,6 +6,7 @@ import {
   NotificationChannel,
   NotificationPriority,
   OutboxService,
+  findNotificationType,
 } from '@app/common';
 import { Notification } from '../entities/notification.entity';
 import { SmsConfigService } from '../sms/sms-config.service';
@@ -76,8 +77,11 @@ export class NotificationEscalationService {
     priority: string | null | undefined,
     channels: readonly string[],
     now = new Date(),
+    type?: string | null,
   ): Date | null {
     if (priority !== NotificationPriority.CRITICAL) return null;
+    // Reyestrda eskalatsiyadan chiqarilgan tur (masalan `ai.advisor_alert`).
+    if (type && findNotificationType(type)?.escalation === false) return null;
     if (channels.includes(NotificationChannel.SMS)) return null;
     const minutes = this.delayMinutes;
     if (!minutes) return null;

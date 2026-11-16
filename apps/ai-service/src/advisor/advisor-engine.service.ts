@@ -76,6 +76,10 @@ const ALERTS = 'ai_schema.ai_advisor_alerts';
 const OCC = 'ai_schema.ai_advisor_alert_occurrences';
 
 export type AdvisorApplyOutcome = 'opened' | 'occurred' | 'refreshed' | 'noop';
+export interface AdvisorApplyResult {
+  outcome: AdvisorApplyOutcome;
+  alertId: string | null;
+}
 
 export interface AdvisorRunResult {
   group: AdvisorRunGroup;
@@ -85,6 +89,8 @@ export interface AdvisorRunResult {
   occurred: number;
   refreshed: number;
   failed: number;
+  /** Realtime uchun: ochilgan / takrorlangan ogohlantirishlar. */
+  changes: Array<{ alert_id: string; change: 'opened' | 'occurred' }>;
 }
 
 interface RuleStateRow {
@@ -154,6 +160,7 @@ export class AdvisorEngineService {
       occurred: 0,
       refreshed: 0,
       failed: 0,
+      changes: [],
     };
     if (!keys.length) return result;
 
@@ -245,9 +252,17 @@ export class AdvisorEngineService {
       }
       const firstRun = catchingUp(c.rule_key, states.get(c.rule_key), now);
       try {
-        const applied = await this.apply(c, rules, now, firstRun);
+        const { outcome: applied, alertId } = await this.apply(
+          c,
+          rules,
+          now,
+          firstRun,
+        );
         delete outcome.failures[c.dedup_key];
         if (applied !== 'noop') result[applied] += 1;
+        if (alertId && (applied === 'opened' || applied === 'occurred')) {
+          result.changes.push({ alert_id: alertId, change: applied });
+        }
       } catch (error) {
         // Vaqtinchalik xato (ulanish, deadlock, lock_timeout): kursor shu
         // nomzod faktlaridan oshmaydi — keyingi tick qayta o'qiydi (round-2 B2).
@@ -285,9 +300,9 @@ export class AdvisorEngineService {
     rules: AiAdvisorRulesSettings,
     now: Date,
     firstRun: boolean,
-  ): Promise<AdvisorApplyOutcome> {
+  ): Promise<AdvisorApplyResult> {
     const facts = dedupeFacts(c.fact_keys);
-    if (!facts.length) return 'noop';
+    if (!facts.length) return { outcome: 'noop', alertId: null };
     return this.ds.transaction(async (m) => {
       // Ochiq qator GET/PATCH qulfida uzoq qolsa — tick osilmaydi: xato
       // vaqtinchalik deb hisoblanadi, kursor ushlanadi (round-2 S7/B2).
@@ -334,7 +349,7 @@ export class AdvisorEngineService {
               WHERE "id" = $1`,
             [alertId, inserted, now, maxFactAt(fresh), ...present],
           );
-          return inserted > 0 ? 'occurred' : 'noop';
+          return { outcome: inserted > 0 ? 'occurred' : 'noop', alertId };
         }
         if (ADVISOR_REFRESH_RULES.has(c.rule_key)) {
           // R2/R4/R5: epizod davom etmoqda — `last_fact_at` = endi.
@@ -345,7 +360,8 @@ export class AdvisorEngineService {
             // o'qiydi — faktlar o'zgarmagan bo'lsa hech narsa; o'zgarsa
             // (T6 tahriri) faktlar yangilanadi, `last_at` («oxirgi
             // aniqlash») O'ZGARMAYDI (§6 «ayni fact_key — hech narsa»).
-            if (sameJson(open[0].facts, c.facts)) return 'noop';
+            if (sameJson(open[0].facts, c.facts))
+              return { outcome: 'noop', alertId: null };
             const present = this.presentation(c);
             await m.query(
               `UPDATE ${ALERTS}
@@ -355,7 +371,7 @@ export class AdvisorEngineService {
                 WHERE "id" = $1`,
               [alertId, ...present],
             );
-            return 'refreshed';
+            return { outcome: 'refreshed', alertId };
           }
           const factAt = now;
           const present = this.presentation(c);
@@ -368,13 +384,13 @@ export class AdvisorEngineService {
               WHERE "id" = $1`,
             [alertId, now, factAt, ...present],
           );
-          return 'refreshed';
+          return { outcome: 'refreshed', alertId };
         }
-        return 'noop';
+        return { outcome: 'noop', alertId };
       }
 
       // Ochiq yo'q: faqat YANGI fakt yangi ogohlantirish ochadi.
-      if (!fresh.length) return 'noop';
+      if (!fresh.length) return { outcome: 'noop', alertId: null };
       const rule = rules[c.rule_key];
       const previous = await m.query<Array<{ id: string }>>(
         `SELECT "id"::text AS id FROM ${ALERTS}
@@ -417,9 +433,9 @@ export class AdvisorEngineService {
           backfill ? 'backfill' : null,
         ],
       );
-      if (!created) return 'noop';
+      if (!created) return { outcome: 'noop', alertId: null };
       await this.insertOccurrences(m, created.id, c.dedup_key, fresh, now);
-      return 'opened';
+      return { outcome: 'opened', alertId: created.id };
     });
   }
 

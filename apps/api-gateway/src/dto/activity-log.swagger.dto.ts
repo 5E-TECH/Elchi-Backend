@@ -50,6 +50,7 @@ export class ActivityLogQueryDto {
       'catalog',
       'investor',
       'notification',
+      'ai',
     ],
   })
   @IsOptional()
