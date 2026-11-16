@@ -24,6 +24,7 @@ import {
   startOfTashkentDay,
   startOfTashkentMonth,
   startOfTashkentWeek,
+  transferBatchCancelBlock,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
 import { OrderCustodyService } from '../custody/order-custody.service';
@@ -3064,26 +3065,32 @@ export class BranchTransferBatchService {
         BranchTransferBatchHistory,
       );
 
+      // oP02jE2P — qator qulflanadi: holat tekshiruvi va bekor qilish orasida
+      // paket jo'natilib (SENT) qolmasin.
       const batch = await batchRepo.findOne({
         where: { id: batchId, isDeleted: false },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!batch) {
         this.notFound('Paket topilmadi');
       }
 
-      if (batch.status === BranchTransferBatchStatus.RECEIVED) {
-        this.badRequest("RECEIVED paketni bekor qilib bo'lmaydi");
-      }
-      if (batch.status === BranchTransferBatchStatus.CANCELLED) {
-        this.badRequest("Bekor qilingan paketni qayta bekor qilib bo'lmaydi");
-      }
-      if (
-        batch.status !== BranchTransferBatchStatus.PENDING &&
-        batch.status !== BranchTransferBatchStatus.SENT
-      ) {
-        this.badRequest(
-          `Paketni bekor qilib bo'lmaydi. Current status: ${String(batch.status)}`,
-        );
+      // oP02jE2P — faqat jo'natilmagan (PENDING) paket. Yo'ldagi (SENT) paket
+      // hech kimga bekor qilinmaydi (409 `batch_in_transit`): aks holda
+      // posilkalar tizimda manba filialda «yangi» bo'lib qolardi.
+      const block = transferBatchCancelBlock(batch.status);
+      if (block) {
+        throw new RpcException({
+          statusCode: block.statusCode,
+          message: block.message,
+          data: {
+            reason: block.reason,
+            details: {
+              batch_id: String(batch.id),
+              status: String(batch.status),
+            },
+          },
+        });
       }
 
       batch.status = BranchTransferBatchStatus.CANCELLED;

@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-17 — Yo'ldagi paketni bekor qilish taqiqlandi (oP02jE2P)
+
+Maqsad: jo'natilgan paket bekor qilinib, posilkalar tizimda manba filialda «yangi» bo'lib qolmasin (aslida ular yo'lda yoki manzil filialda).
+Deploy: order-service + branch-service (gateway — Swagger matni). Migratsiya **yo'q**. So'rov va muvaffaqiyat javobi o'zgarmadi.
+
+- ⚠️ [branch, order] `POST /transfer-batches/:id/cancel` — endi faqat hali jo'natilmagan (`PENDING`) paket bekor qilinadi. Jo'natilgan (`SENT`: yo'lda yoki qisman qabul qilingan) paket — **409** «Paket yo'lda — jo'natilgan paketni bekor qilib bo'lmaydi …», `data: { reason: "batch_in_transit", details: { batch_id, status } }`. Hech kimga ruxsat yo'q, superadmin va adminga ham (avval `SENT` ham bekor qilinardi).
+- ✏️ Qolgan holat xatolariga `data.reason` qo'shildi, status kodi avvalgidek 400: `batch_received` (qabul qilingan), `batch_already_cancelled` (allaqachon bekor), `batch_not_cancellable` (boshqa holat). Matnlar o'zbekcha («Qabul qilingan paketni bekor qilib bo'lmaydi», «Paket allaqachon bekor qilingan»).
+- 🟢 Kim bekor qila oladi — o'zgarmagan: superadmin, admin va paketni yig'gan (manba) filialning registratori yoki menejeri (yoki menejer daraxti); boshqasi — 403. Boshqa filial xodimiga holat oshkor qilinmaydi (403 holat tekshiruvidan oldin).
+- 🟢 order-service holatni paket qatorini qulflab qayta tekshiradi: tekshiruv bilan bekor qilish orasida jo'natilgan paket ham bekor bo'lmaydi (bunday kamyob holatda 409 `data.reason` siz kelishi mumkin).
+
+**Frontend action items:**
+- 🔧 «Paketni bekor qilish» paket sahifasiga (`/batches/:id`) ko'chadi: tugma faqat `PENDING` paketda, tasdiq oynasida paket raqami, yo'nalishi, holati, buyurtmalar soni va sabab (≥ 10 belgi). 409 / `batch_in_transit` — «Paket yo'lda» matni; `/batches` pastidagi qo'lda raqam formasi olib tashlanadi.
+
 ### 2026-11-16 — Operatori yo'q buyurtmaga keyin operator biriktirish
 
 Egasi (2026-11-16): «buyurtma yaratayorganda operatorni o'zi yaratsa operator tomonidan yaratilsin, operator tanlanmasa shu buyurtmaga operator biriktirib qo'yish imkoni bo'lishi kerak». Yaratishdagi tanlov (`POST /orders` `operator_id`) va market operatorining o'zi yozilishi avvaldan bor; yangisi — keyin biriktirish.

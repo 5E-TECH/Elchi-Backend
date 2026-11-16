@@ -102,6 +102,86 @@ describe('BranchTransferBatchService transfer batch cancel', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  const rpcError = async (promise: Promise<unknown>) => {
+    let error: unknown;
+    try {
+      await promise;
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(RpcException);
+    return (error as RpcException).getError() as {
+      statusCode?: number;
+      message?: string;
+      data?: { reason?: string; details?: Record<string, unknown> };
+    };
+  };
+
+  it('oP02jE2P — locks the batch row before checking its status', async () => {
+    const { service, batchRepo } = createSetup(
+      BranchTransferBatchStatus.PENDING,
+    );
+
+    await service.cancelBranchTransferBatch({
+      batch_id: '900',
+      reason: "noto'g'ri viloyat tanlangan",
+    });
+
+    expect(batchRepo.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
+  });
+
+  it('oP02jE2P — SENT (yo‘ldagi) batch → 409 batch_in_transit, nothing changes', async () => {
+    const { service, batchRepo, historyRepo, orderUpdateQb, queryRunner } =
+      createSetup(BranchTransferBatchStatus.SENT);
+
+    const err = await rpcError(
+      service.cancelBranchTransferBatch({
+        batch_id: '900',
+        reason: "noto'g'ri viloyat tanlangan",
+        requester_id: '1',
+        requester_roles: ['superadmin'],
+      }),
+    );
+
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toMatch(/yo'lda/);
+    expect(err.data).toEqual({
+      reason: 'batch_in_transit',
+      details: { batch_id: '900', status: 'SENT' },
+    });
+    expect(batchRepo.save).not.toHaveBeenCalled();
+    expect(orderUpdateQb.execute).not.toHaveBeenCalled();
+    expect(historyRepo.save).not.toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+    expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+  });
+
+  it('oP02jE2P — RECEIVED / CANCELLED keep 400 and gain a reason code', async () => {
+    const received = await rpcError(
+      createSetup(
+        BranchTransferBatchStatus.RECEIVED,
+      ).service.cancelBranchTransferBatch({
+        batch_id: '900',
+        reason: 'received batch cancel test',
+      }),
+    );
+    expect(received.statusCode).toBe(400);
+    expect(received.data?.reason).toBe('batch_received');
+
+    const cancelled = await rpcError(
+      createSetup(
+        BranchTransferBatchStatus.CANCELLED,
+      ).service.cancelBranchTransferBatch({
+        batch_id: '900',
+        reason: 'already cancelled test',
+      }),
+    );
+    expect(cancelled.statusCode).toBe(400);
+    expect(cancelled.data?.reason).toBe('batch_already_cancelled');
+  });
+
   it('rejects cancel when batch is RECEIVED', async () => {
     const { service, queryRunner } = createSetup(
       BranchTransferBatchStatus.RECEIVED,
