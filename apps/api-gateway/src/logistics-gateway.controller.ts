@@ -186,7 +186,7 @@ function pickPostOrderDistrict(value: unknown) {
 
 /** CODE-12 — o'chirilgan eski pochta route'lari (PATCH post/:id, post/reassign/:id). */
 export const LEGACY_POST_ROUTE_DISABLED_MESSAGE =
-  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
+  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, HQ kuryeriga POST /branches/posts/:postId/dispatch-to-courier, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
 
 /**
  * Eski pochtalar — `GET /post/orders/:id?view=`: `all` — pochtaga HAR QACHON

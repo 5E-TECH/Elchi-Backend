@@ -123,6 +123,7 @@ import {
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import { SetOrderSpecialCategoriesRequestDto } from './order-create/order-special-categories';
+import { AssignOrderOperatorRequestDto } from './order-create/order-assign-operator.dto';
 import {
   ORDER_INTAKE_STATE_DESCRIPTION,
   UpdateOrderIntakeSettingsRequestDto,
@@ -6107,8 +6108,9 @@ export class OrderGatewayController {
   @ApiOperation({
     summary: 'HQ cancelled → market handover batches («Topshirilgan» cards)',
     description:
-      "One card = one «Marketga jo'natish» press at HQ (POST /orders/markets/:marketId/cancelled/handover): " +
-      'orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers ' +
+      'One card = one market QR/PIN session at HQ (every POST /orders/markets/:marketId/cancelled/handover of ' +
+      'that session — scan = handover): orders sharing market_id + market_handover_at + market_handover_by. ' +
+      'Branch single-order handovers ' +
       '(POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ ' +
       'registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). ' +
       'Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day ' +
@@ -6574,6 +6576,9 @@ export class OrderGatewayController {
   }
 
   @Post('markets/:marketId/cancelled/handover')
+  // R6R8BLGA: SKAN = TOPSHIRISH (2026-11-15) — har skanerlangan buyurtma alohida POST, HQ bitta IP: yuqoriroq
+  // per-IP skaner limiti (aks holda tez skanerlashda 61-skan 429).
+  @Throttle(SCAN_THROTTLE)
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -6587,7 +6592,11 @@ export class OrderGatewayController {
     summary:
       'Selected CANCELLED orderlarni QR ruxsati bilan marketga topshirish',
     description:
-      'All-or-nothing. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is ' +
+      'All-or-nothing. Scan = handover (2026-11-15): one market QR/PIN authorization (`MHA-…`, 5 minutes) may be ' +
+      'used MANY times — the staff page sends `order_ids: [id]` for each scanned parcel; parallel calls queue on ' +
+      "the session row lock. Every call of one session is written with the session's FIRST handover time " +
+      '(`market_handover_at`), so all of them form ONE «Topshirilgan» batch; the real time is in ' +
+      '`last_handover_at` and tracking. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is ' +
       'never handed to the market — 409 `{ code: "WAREHOUSE_ORDER_RETURNS_TO_STOCK", data: { details: { order_ids: ' +
       '[...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection ' +
       'contains a WAREHOUSE order — 503.',
@@ -7999,6 +8008,121 @@ export class OrderGatewayController {
               id: req.user.sub,
               roles,
               ...(marketId ? { market_id: marketId } : {}),
+            },
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
+      }
+      throw error;
+    });
+  }
+
+  /**
+   * 2026-11-16 (Dilshod): «operator tanlanmasa shu buyurtmaga operator
+   * biriktirib qo'yish imkoni bo'lishi kerak». Operatori YO'Q buyurtmaga keyin
+   * operator biriktirish (almashtirish emas — bor bo'lsa 409).
+   *
+   * Rollar — yaratish formasida «Operator» tanlovini ko'radiganlar (market
+   * operatori o'zi avtomatik yoziladi, unga yo'q). Doira: superadmin/admin —
+   * istalgan buyurtma; market — o'z buyurtmasi; registrator / menejer /
+   * filial — o'z filiali (`PATCH /orders/:id` bilan AYNI). Operator —
+   * buyurtma marketining FAOL operatori (`resolveChosenOrderOperator`,
+   * yaratishdagi tekshiruv bilan AYNI). Qulf, takror biriktirish, integratsiya
+   * buyurtmasi va sotilgan buyurtmadagi operator ulushi — order-service'da
+   * (`order.operator.assign`).
+   */
+  @Put(':id/operator')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Operatori yo'q buyurtmaga operator biriktirish",
+    description:
+      "Faqat `operator_id` bo'sh buyurtmaga. Operator — buyurtma marketining faol operatori " +
+      '(`GET /market-operators/selectable?market_id=…`). Buyurtma sotilgan bo`lsa (sold, paid, partly_paid) ' +
+      "operator ulushi sotuvdagidek yoziladi. Holat o'zgarmaydi. Xatolar: 400 — operator bu marketniki emas / " +
+      'faol emas; 403 — begona buyurtma; 404; 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` (operator bor), ' +
+      '`ORDER_OPERATOR_EXTERNAL` (integratsiya buyurtmasi), `ORDER_OPERATOR_MARKET_CHANGED` (qayta urinish).',
+  })
+  @ApiParam({ name: 'id', description: 'Order ID (bigint)' })
+  @ApiBody({ type: AssignOrderOperatorRequestDto })
+  @ApiOkResponse({
+    description:
+      "{ statusCode: 200, message: 'success', data: { id, operator_id, operator, earning_recorded } }",
+  })
+  @ApiConflictResponse({
+    description:
+      'ORDER_OPERATOR_ALREADY_ASSIGNED | ORDER_OPERATOR_EXTERNAL | ORDER_OPERATOR_MARKET_CHANGED',
+  })
+  async assignOperator(
+    @Param('id') id: string,
+    @Body() dto: AssignOrderOperatorRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const roles = this.normalizeRoles(req.user.roles);
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    const marketScope =
+      !isSystemPrivileged && roles.includes(RoleEnum.MARKET)
+        ? String(req.user.sub ?? '').trim()
+        : null;
+    if (!isSystemPrivileged && !marketScope) {
+      await this.assertOrderInRequesterBranch(
+        req.user,
+        id,
+        'Bu buyurtma sizning filialingizga tegishli emas — unga operator biriktira olmaysiz',
+      );
+    }
+    const order = await this.findOrderRowForScope(id);
+    if (!order) {
+      throw new NotFoundException('Buyurtma topilmadi');
+    }
+    const marketId = this.asStr(order.market_id ?? order.marketId).trim();
+    if (marketScope && marketId !== marketScope) {
+      throw new ForbiddenException(
+        'Bu buyurtma sizning marketingizga tegishli emas — unga operator biriktira olmaysiz',
+      );
+    }
+    const chosen = await resolveChosenOrderOperator({
+      operatorId: dto.operator_id,
+      roles,
+      requesterId: req.user.sub,
+      marketId,
+      loadSelectable: (payload) =>
+        this.sendIdentityWithTimeout(
+          { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+          payload,
+        ),
+    });
+    if (!chosen) {
+      throw new BadRequestException('operator_id majburiy');
+    }
+
+    return firstValueFrom(
+      this.orderClient
+        .send<unknown>(
+          { cmd: 'order.operator.assign' },
+          {
+            id,
+            operator_id: chosen.id,
+            operator_name: chosen.name || null,
+            market_id: marketId,
+            requester: {
+              id: req.user.sub,
+              roles,
+              ...(marketScope ? { market_id: marketScope } : {}),
             },
           },
         )

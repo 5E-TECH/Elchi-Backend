@@ -233,7 +233,7 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
     summary:
-      'Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti',
+      'Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti, posilka, webhook, COD',
   })
   @ApiQuery({
     name: 'hours',
@@ -243,7 +243,12 @@ export class IntegrationGatewayController {
   })
   @ApiOkResponse({
     description:
-      '{ statusCode, message, data: { window_hours, totals, connections[] } }',
+      '{ statusCode, message, data: { window_hours, totals: { events, failed, queued }, connections[] } }. ' +
+      'Har ulanish (6qfzLBcR): { uid, kind, id, events, delivered, failed, queued, success_rate, avg_ms, last_event_at, shipments, webhooks, cod }. ' +
+      "shipments { total, delivered, failed, mismatch } — oynada yaratilgan yoki holati o'zgargan posilkalar; mismatch: null — status xaritasi yo'q; hamkorda faqat total (qolgani null); to'lov / ko'zgu integratsiyasida blok null. " +
+      'webhooks { success, failed, invalid_signature } — oyna ichida: integratsiyada kiruvchi webhook jurnali (processed / rejected + failed / signature_valid = false), hamkorda outbox yetkazishlari va invalid_signature: null. ' +
+      "cod { dispatched, collected, remitted, debt } — butun vaqt, faqat provider_receivables / provider_remittances: collected — kutilayotgan + yopilgan qarz, remitted — faol to'lovlar, debt — kutilayotgan qarz (receivable-balance outstanding_amount bilan bir xil), dispatched — har doim null (daftarda yozilmaydi); faqat tashuvchi integratsiyada, aks holda null. " +
+      "O'lchanmagan qiymat null, hech qachon 0 emas.",
   })
   integrationMetrics(@Query('hours') hours?: string) {
     return this.integrationClient

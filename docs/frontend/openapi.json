@@ -4682,7 +4682,7 @@
     },
     "/orders/markets/cancelled/handovers": {
       "get": {
-        "description": "One card = one «Marketga jo'natish» press at HQ (POST /orders/markets/:marketId/cancelled/handover): orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers (POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day (Tashkent YYYY-MM-DD), handed_by: { id, name } | null, method: 'qr'|'pin'|'no_qr'|'manual'|null, manual_count, orders_count, total_price_sum }], total, page, limit, totals: { batches, orders, amount } }` (+ pagination meta). `method` — the non-manual method of the batch; `manual_count` — orders confirmed manually (broken label). 503 while the HQ branch id is unknown.",
+        "description": "One card = one market QR/PIN session at HQ (every POST /orders/markets/:marketId/cancelled/handover of that session — scan = handover): orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers (POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day (Tashkent YYYY-MM-DD), handed_by: { id, name } | null, method: 'qr'|'pin'|'no_qr'|'manual'|null, manual_count, orders_count, total_price_sum }], total, page, limit, totals: { batches, orders, amount } }` (+ pagination meta). `method` — the non-manual method of the batch; `manual_count` — orders confirmed manually (broken label). 503 while the HQ branch id is unknown.",
         "operationId": "OrderGatewayController_findCancelledHandoverBatches",
         "parameters": [
           {
@@ -5023,7 +5023,7 @@
     },
     "/orders/markets/{marketId}/cancelled/handover": {
       "post": {
-        "description": "All-or-nothing. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is never handed to the market — 409 `{ code: \"WAREHOUSE_ORDER_RETURNS_TO_STOCK\", data: { details: { order_ids: [...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection contains a WAREHOUSE order — 503.",
+        "description": "All-or-nothing. Scan = handover (2026-11-15): one market QR/PIN authorization (`MHA-…`, 5 minutes) may be used MANY times — the staff page sends `order_ids: [id]` for each scanned parcel; parallel calls queue on the session row lock. Every call of one session is written with the session's FIRST handover time (`market_handover_at`), so all of them form ONE «Topshirilgan» batch; the real time is in `last_handover_at` and tracking. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is never handed to the market — 409 `{ code: \"WAREHOUSE_ORDER_RETURNS_TO_STOCK\", data: { details: { order_ids: [...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection contains a WAREHOUSE order — 503.",
         "operationId": "OrderGatewayController_handoverCancelledOrdersToMarket",
         "parameters": [
           {
@@ -6313,6 +6313,58 @@
           "manager",
           "branch",
           "market_operator"
+        ]
+      }
+    },
+    "/orders/{id}/operator": {
+      "put": {
+        "description": "Faqat `operator_id` bo'sh buyurtmaga. Operator — buyurtma marketining faol operatori (`GET /market-operators/selectable?market_id=…`). Buyurtma sotilgan bo`lsa (sold, paid, partly_paid) operator ulushi sotuvdagidek yoziladi. Holat o'zgarmaydi. Xatolar: 400 — operator bu marketniki emas / faol emas; 403 — begona buyurtma; 404; 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` (operator bor), `ORDER_OPERATOR_EXTERNAL` (integratsiya buyurtmasi), `ORDER_OPERATOR_MARKET_CHANGED` (qayta urinish).",
+        "operationId": "OrderGatewayController_assignOperator",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Order ID (bigint)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignOrderOperatorRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message: 'success', data: { id, operator_id, operator, earning_recorded } }"
+          },
+          "409": {
+            "description": "ORDER_OPERATOR_ALREADY_ASSIGNED | ORDER_OPERATOR_EXTERNAL | ORDER_OPERATOR_MARKET_CHANGED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Operatori yo'q buyurtmaga operator biriktirish",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market"
         ]
       }
     },
@@ -15377,7 +15429,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ statusCode, message, data: { window_hours, totals, connections[] } }"
+            "description": "{ statusCode, message, data: { window_hours, totals: { events, failed, queued }, connections[] } }. Har ulanish (6qfzLBcR): { uid, kind, id, events, delivered, failed, queued, success_rate, avg_ms, last_event_at, shipments, webhooks, cod }. shipments { total, delivered, failed, mismatch } — oynada yaratilgan yoki holati o'zgargan posilkalar; mismatch: null — status xaritasi yo'q; hamkorda faqat total (qolgani null); to'lov / ko'zgu integratsiyasida blok null. webhooks { success, failed, invalid_signature } — oyna ichida: integratsiyada kiruvchi webhook jurnali (processed / rejected + failed / signature_valid = false), hamkorda outbox yetkazishlari va invalid_signature: null. cod { dispatched, collected, remitted, debt } — butun vaqt, faqat provider_receivables / provider_remittances: collected — kutilayotgan + yopilgan qarz, remitted — faol to'lovlar, debt — kutilayotgan qarz (receivable-balance outstanding_amount bilan bir xil), dispatched — har doim null (daftarda yozilmaydi); faqat tashuvchi integratsiyada, aks holda null. O'lchanmagan qiymat null, hech qachon 0 emas."
           }
         },
         "security": [
@@ -15385,7 +15437,7 @@
             "bearer": []
           }
         ],
-        "summary": "Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti",
+        "summary": "Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti, posilka, webhook, COD",
         "tags": [
           "Integrations"
         ],
@@ -19033,6 +19085,7 @@
     },
     "/transfer-batches/{id}/cancel": {
       "post": {
+        "description": "oP02jE2P — faqat hali jo'natilmagan (`PENDING`) paket bekor qilinadi. Ruxsat: superadmin, admin va paketni yig'gan (manba) filialning registratori yoki menejeri (yoki menejer daraxti); boshqasi — 403. 409 `data.reason = batch_in_transit` — paket jo'natilgan (`SENT`, yo'lda yoki qisman qabul qilingan): hech kimga, superadmin va adminga ham bekor qilinmaydi (`details: { batch_id, status }`). 400 `batch_received` — qabul qilingan paket, 400 `batch_already_cancelled` — allaqachon bekor qilingan, 400 `batch_not_cancellable` — boshqa holat. 400 — sabab (`reason`) 10 belgidan qisqa. Muvaffaqiyatda FORWARD paket buyurtmalari paketdan yechilib `new` holatiga qaytadi.",
         "operationId": "BranchGatewayController_cancelTransferBatch",
         "parameters": [
           {
@@ -19144,6 +19197,112 @@
           "admin",
           "branch",
           "manager",
+          "registrator"
+        ]
+      }
+    },
+    "/branches/posts/{postId}/courier-destinations": {
+      "get": {
+        "description": "Faqat faol HQ kuryerlari (HQ `branch_users`, rol COURIER), nom bo'yicha. Pochta viloyati = HQ viloyati — HAR BIR HQ kuryeri (`region_match: hq_region`); aks holda faqat o'z viloyati (`home`), «Xizmat viloyatlari»da (`courier_regions`, `listed`) yoki `serves_all_regions` (`all_regions`) bo'lgan HQ kuryeri. Javob `data: { post_id, region_id, is_hq_region, couriers: [{ courier_user_id, name, phone, region_match, carrier_name, carrier_active }], carrier_lookup_failed }` — `carrier_*` bog'lanmagan kuryerda yoki tekshirib bo'lmaganda `null`. 403 `new_posts_hq_only`; 404 «Pochta topilmadi»; 400 `post_not_sendable` (`details: { post_id, post_status, post_courier_id }`) — faqat yangi ('new'), kuryersiz pochta; 400 `branch_region_missing` (`details: { post_id, missing: 'post' }`); 503 — filial yoki foydalanuvchilar xizmati javob bermadi.",
+        "operationId": "BranchGatewayController_findPostCourierDestinations",
+        "parameters": [
+          {
+            "name": "postId",
+            "required": true,
+            "in": "path",
+            "description": "Logistics post ID (NEW HQ post)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "HQ couriers for post region (Pochta → HQ kuryeri)",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
+        ]
+      }
+    },
+    "/branches/posts/{postId}/dispatch-to-courier": {
+      "post": {
+        "description": "Ega qarori 2026-11-15. Kuryer — `GET /branches/posts/:postId/courier-destinations` ro'yxatidagi HQ kuryeri. Javob `data: { post_id, courier_id, courier_post_id, courier_post_created, moved_order_ids, moved_orders_count, skipped_order_ids, post_deleted }` (bekor / yopilgan buyurtmalar jimgina `skipped_order_ids` ga). Xatolar (tekshiruv tartibida, hammasi `data.reason`): 403 `new_posts_hq_only`; 404 «Pochta topilmadi»; 400 `post_not_sendable` (`details: { post_id, post_status, post_courier_id }`); 400 `branch_region_missing` (`details: { post_id, missing }`); 400 `courier_not_hq` (`details.courier_id`); 400 `courier_inactive` (`details.courier_id`); 403 `courier_region_not_served` (`details: { courier_id, post_region_id }`) — «Xizmat viloyatlari»da belgilanmagan; 409 `order_not_in_post` (`details.order_ids`) — sahifani yangilab qayta tanlang; 400 `no_dispatchable_orders`; 400 `order_not_dispatchable` (`details.order_ids`) — faqat HQ qabul qilgan (received), kuryersiz buyurtma; 409 `order_in_outgoing_batch` (`details.order_ids`); 409 `order_region_mismatch` (`details.order_ids`); 403 `hq_courier_region_only` (`details.order_ids`) — faqat pochta viloyati = HQ viloyati bo'lganda; 503 — xizmat javob bermadi.",
+        "operationId": "BranchGatewayController_dispatchPostToCourier",
+        "parameters": [
+          {
+            "name": "postId",
+            "required": true,
+            "in": "path",
+            "description": "Logistics post ID (NEW HQ post)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "courier_id",
+                  "order_ids"
+                ],
+                "properties": {
+                  "courier_id": {
+                    "type": "string",
+                    "example": "77",
+                    "description": "HQ kuryeri user ID (bigint satr)"
+                  },
+                  "order_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "example": [
+                      "101",
+                      "102"
+                    ],
+                    "description": "Majburiy (1–1000): pochtadan beriladigan buyurtmalar. Birortasi shu pochtada bo'lmasa — 409 `order_not_in_post`, hech narsa berilmaydi"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Give HQ post orders directly to an HQ courier",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
           "registrator"
         ]
       }
@@ -19358,6 +19517,7 @@
     },
     "/couriers/{id}/branch": {
       "patch": {
+        "description": "Tashqi yetkazuvchiga (carrier) bog'langan kuryer faqat HQ'da bo'ladi: boshqa filialga o'tkazish — 409 `data.reason = courier_carrier_linked` (`details.courier_id`); bog'lanishni tekshirib bo'lmasa (integratsiya / filial xizmati javob bermadi) — 503.",
         "operationId": "BranchGatewayController_transferCourierBranch",
         "parameters": [
           {
@@ -20876,7 +21036,8 @@
                 "logistics",
                 "catalog",
                 "investor",
-                "notification"
+                "notification",
+                "ai"
               ]
             }
           },
@@ -21101,7 +21262,8 @@
                 "logistics",
                 "catalog",
                 "investor",
-                "notification"
+                "notification",
+                "ai"
               ]
             }
           },
@@ -22951,6 +23113,7 @@
     },
     "/admin/carriers": {
       "post": {
+        "description": "Kurier — faqat HQ kuryeri (HQ `branch_users`, rol COURIER; ega qarori 2026-11-15); aks holda 400 `data.reason = courier_not_hq` (`details: { courier_id, branch_id | null }`). Filial xizmati javob bermasa — 503 (kuryer HQ’da ekanini tekshirib bo‘lmadi, qayta urinish). Mavjud akkauntlar (rotate-key / status) bu tekshiruvdan o‘tmaydi.",
         "operationId": "CarrierAdminGatewayController_create",
         "parameters": [],
         "requestBody": {
@@ -23576,6 +23739,306 @@
         "summary": "AI yordamchi ruxsatini berish/olish va kunlik limit (faqat superadmin)",
         "tags": [
           "AI"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/advisor/overview": {
+      "get": {
+        "description": "`data` = `{alerts{new, open, critical, critical_open, critical_rule_keys[], critical_open_rule_keys[]}, recommendations, budget, usd_uzs_rate, generated_at}`. `critical` = jiddiy VA `new`; `critical_rule_keys` — ayni to‘plam, `MAX(last_at) DESC`. `open` — filtrsiz new+seen. `recommendations`, `budget`, `usd_uzs_rate` — BE-4/BE-1, hozircha null.",
+        "operationId": "AiAdvisorGatewayController_overview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: tab nishonlari va banner (faqat superadmin)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/advisor/alerts": {
+      "get": {
+        "description": "Holatni O‘ZGARTIRMAYDI. `data` = `{items[AiAdvisorAlertListItem], meta{page, limit, total, totalPages}, counts{by_status{new, seen, resolved, dismissed}}}`. `counts.by_status` — `status` filtrisiz, qolgan filtrlar bilan. Saralash oxirida doim `id DESC`. Noto‘g‘ri query — kodsiz 400.",
+        "operationId": "AiAdvisorGatewayController_listAlerts",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "`open` = new + seen",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "new",
+                "seen",
+                "resolved",
+                "dismissed",
+                "open"
+              ]
+            }
+          },
+          {
+            "name": "severity",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "warning",
+                "critical"
+              ]
+            }
+          },
+          {
+            "name": "rule_key",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "R1",
+                "R2",
+                "R3",
+                "R4",
+                "R5",
+                "R6",
+                "R7",
+                "R8"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "`last_at` Toshkent kuni ≥ from (YYYY-MM-DD); from–to ≤ 366 kun",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "`last_at` Toshkent kuni ≤ to (YYYY-MM-DD)",
+            "schema": {
+              "example": "2026-10-31",
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Sarlavha / obyekt nomi (ILIKE), ≤ 100",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "last_at",
+              "type": "string",
+              "enum": [
+                "last_at",
+                "first_at",
+                "occurrences",
+                "severity"
+              ]
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000000,
+              "default": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: ogohlantirishlar ro‘yxati (faqat superadmin)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/advisor/alerts/{id}": {
+      "get": {
+        "description": "`new` bo‘lsa atomik `new → seen` (`seen_at`, `seen_by`), javob yangi holat bilan; boshqa holatga tegmaydi; audit yo‘q. ⚠️ Prefetch/hover’da YUBORILMASIN. `?include=history` — `history[]` (≤ 50). `explanation_status=pending` bo‘lsa `explanation_poll_after_ms` oralig‘ida qayta so‘rang; 3 daqiqadan eski `pending` — `failed` + `error`. Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`, 400 (ID, kodsiz).",
+        "operationId": "AiAdvisorGatewayController_getAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ogohlantirish ID si",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
+            }
+          },
+          {
+            "name": "include",
+            "required": false,
+            "in": "query",
+            "description": "`history[]` (≤ 50) — faqat so‘ralganda",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "history"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: ogohlantirish tafsiloti — ochilganda «Ko‘rildi» (faqat superadmin)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      },
+      "patch": {
+        "description": "Faqat `new|seen` dan. `resolved` — `note` majburiy 3–500 (trim), `dismissed` — ixtiyoriy ≤ 500. Idempotent: ayni foydalanuvchi ayni holatni qayta yuborsa — 200, o‘zgarishsiz. Javob — yangilangan tafsilot. Xatolar: 400 `AI_ADVISOR_NOTE_INVALID {reason: required|too_short|too_long, min_length, max_length}`; 400 kodsiz (`status`); 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Audit `ai.advisor.alert.resolve|dismiss`. Pul amali yo‘q.",
+        "operationId": "AiAdvisorGatewayController_updateAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ogohlantirish ID si",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAdvisorAlertPatchDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: «Hal qilindi» / «Ahamiyatsiz» (faqat superadmin, audit)",
+        "tags": [
+          "AI advisor"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/advisor/alerts/{id}/explain": {
+      "post": {
+        "description": "Tana yo‘q. LLM sinxron kutilmaydi: `202 data = {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}`. `ready` — keshdan (`cached: true`, narx 0). `pending` (3 daqiqadan yangi) — qayta navbat yo‘q. Natija: `GET /ai/advisor/alerts/:id` poll (`poll_after_ms`) yoki realtime `ai.advisor.alert_changed {change: explanation}`. Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`; 429 `AI_ADVISOR_BUDGET_EXCEEDED {scope: global, period: day, reset_at, retry_after_seconds}`; 503 `AI_ADVISOR_AI_DISABLED {reason: ai_disabled|feature_disabled|budget_unreadable}`. 429/503 `explanation_status` ni o‘zgartirmaydi. Jiddiy ogohlantirishlarga izoh avtomatik (tick’dan keyin, ≤ 5 ta). Pul amali yo‘q.",
+        "operationId": "AiAdvisorGatewayController_explainAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Ogohlantirish ID si",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,18}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "`{statusCode: 202, message: \"Explanation queued\", data: {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}}`"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI maslahatchi: AI izohini so‘rash (faqat superadmin, doim 202)",
+        "tags": [
+          "AI advisor"
         ],
         "x-roles": [
           "superadmin"
@@ -26475,7 +26938,7 @@
           },
           "expense_proof_conditions": {
             "type": "array",
-            "description": "Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh = isbot talab qilinmaydi. Yaratishda berilmasa — sotish va bekor qilishdagi qo‘shimcha xarajat isboti (sell_extra_cost, cancel_extra_cost).",
+            "description": "Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh = isbot talab qilinmaydi. Yaratishda berilmasa — sotish va bekor qilishdagi qo‘shimcha xarajat isboti hamda qisman sotishda isbot (sell_extra_cost, cancel_extra_cost, partly_sell).",
             "example": [
               "cancel_extra_cost",
               "cancel_zero_total"
@@ -26488,7 +26951,8 @@
                 "sell_zero_total",
                 "cancel_any",
                 "cancel_extra_cost",
-                "cancel_zero_total"
+                "cancel_zero_total",
+                "partly_sell"
               ]
             }
           },
@@ -26669,7 +27133,8 @@
                 "sell_zero_total",
                 "cancel_any",
                 "cancel_extra_cost",
-                "cancel_zero_total"
+                "cancel_zero_total",
+                "partly_sell"
               ]
             }
           }
@@ -29166,6 +29631,19 @@
         },
         "required": [
           "special_categories"
+        ]
+      },
+      "AssignOrderOperatorRequestDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "412",
+            "description": "Buyurtma marketining FAOL operatori (`GET /market-operators/selectable?market_id=<buyurtma marketi>` ro'yxatidan). Boshqa market operatori, o'chirilgan yoki bloklangan — 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas». Buyurtmaga `operator_id` va `operator` = operator ismi yoziladi."
+          }
+        },
+        "required": [
+          "operator_id"
         ]
       },
       "UpdateOrderByIdRequestDto": {
@@ -36561,6 +37039,27 @@
         "required": [
           "user_id",
           "enabled"
+        ]
+      },
+      "AiAdvisorAlertPatchDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "dismissed"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "«Hal qilindi» — majburiy, trim'dan keyin 3–500 belgi; «Ahamiyatsiz» — ixtiyoriy, ≤ 500. Boshqaruv belgilari (\\n, \\t dan tashqari) — 400.",
+            "example": "Kartadagi tushum keyingi kuni kelgan, tekshirildi.",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status"
         ]
       },
       "AiAdvisorSettingsPatchDto": {

@@ -137,6 +137,10 @@ export class AiAdvisorAlert extends BaseEntity {
   /** `backfill` va h.k. — dispatch qilinmagan sabab. */
   @Column({ type: 'varchar', length: 32, nullable: true })
   notify_skipped!: string | null;
+
+  /** R6: kechiktirilgan Telegram vaqti (09:00 Toshkent; migratsiya 229). */
+  @Column({ type: 'timestamptz', nullable: true })
+  telegram_due_at!: Date | null;
 }
 
 /** Takror (alohida `fact_key`) — `history` va dedup manbai. */
@@ -180,4 +184,36 @@ export class AiAdvisorSetting extends BaseEntity {
 
   @Column({ type: 'varchar', length: 200, nullable: true })
   updated_by_name!: string | null;
+}
+
+/** Qoida holati: kursor, birinchi/oxirgi ishga tushish (migratsiya 226). */
+@Entity({ name: 'ai_advisor_rule_state', schema: 'ai_schema' })
+@Index('UQ_AI_ADVISOR_RULE_STATE_RULE', ['rule_key'], { unique: true })
+export class AiAdvisorRuleState extends BaseEntity {
+  @Column({ type: 'varchar', length: 4 })
+  rule_key!: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  cursor_at!: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  first_run_at!: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  last_run_at!: Date | null;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  last_status!: string | null;
+
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  last_error!: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  last_candidates!: number;
+
+  @Column({ type: 'int', default: 0 })
+  last_failed!: number;
+
+  @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
+  failures!: Record<string, number>;
 }

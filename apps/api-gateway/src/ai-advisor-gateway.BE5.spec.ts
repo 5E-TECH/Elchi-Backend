@@ -1,5 +1,9 @@
 import 'reflect-metadata';
-import { GatewayTimeoutException, RequestMethod } from '@nestjs/common';
+import {
+  BadRequestException,
+  GatewayTimeoutException,
+  RequestMethod,
+} from '@nestjs/common';
 import {
   GUARDS_METADATA,
   METHOD_METADATA,
@@ -19,7 +23,11 @@ import { AiAdvisorGatewayController } from './ai-advisor-gateway.controller';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ROLES_KEY } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
-import { AiAdvisorSettingsPatchDto } from './dto/ai-advisor.dto';
+import {
+  AiAdvisorAlertPatchDto,
+  AiAdvisorAlertsQueryDto,
+  AiAdvisorSettingsPatchDto,
+} from './dto/ai-advisor.dto';
 
 /** BE-5 (LhTIno57) — `/ai/advisor/settings`: faqat superadmin, kodli xatolar. */
 describe('AiAdvisorGatewayController (BE-5)', () => {
@@ -38,13 +46,17 @@ describe('AiAdvisorGatewayController (BE-5)', () => {
       string,
       object
     >;
-    for (const [name, method] of [
-      ['getSettings', RequestMethod.GET],
-      ['updateSettings', RequestMethod.PATCH],
+    for (const [name, method, path] of [
+      ['getSettings', RequestMethod.GET, 'settings'],
+      ['updateSettings', RequestMethod.PATCH, 'settings'],
+      ['overview', RequestMethod.GET, 'overview'],
+      ['listAlerts', RequestMethod.GET, 'alerts'],
+      ['getAlert', RequestMethod.GET, 'alerts/:id'],
+      ['updateAlert', RequestMethod.PATCH, 'alerts/:id'],
     ] as const) {
       const handler = proto[name];
       expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(method);
-      expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe('settings');
+      expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(path);
       // ADMIN ham YO'Q (ega qarori 1) → RolesGuard 403.
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual(['superadmin']);
     }
@@ -155,5 +167,104 @@ describe('AiAdvisorGatewayController (BE-5)', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('alerts/:id — ID naqshi (19 raqam, harf) kodsiz 400; get mark_seen=true va include', async () => {
+    const send = jest.fn().mockReturnValue(of({ statusCode: 200 }));
+    const c = make(send);
+    for (const bad of ['1234567890123456789', '12a', '-1', '']) {
+      expect(() => c.getAlert(bad, {}, req)).toThrow(BadRequestException);
+    }
+    await c.getAlert('1040', { include: 'history' }, req);
+    expect(send).toHaveBeenLastCalledWith(
+      { cmd: 'ai.advisor.alerts.get' },
+      expect.objectContaining({
+        id: '1040',
+        mark_seen: true,
+        include: ['history'],
+      }),
+    );
+    await c.updateAlert(
+      '1040',
+      plainToInstance(AiAdvisorAlertPatchDto, {
+        status: 'resolved',
+        note: 'ok',
+      }),
+      req,
+    );
+    expect(send).toHaveBeenLastCalledWith(
+      { cmd: 'ai.advisor.alerts.update' },
+      expect.objectContaining({ id: '1040', status: 'resolved', note: 'ok' }),
+    );
+  });
+
+  it('DTO: PATCH status @IsIn (kodsiz 400), note uzunligi gateway’da TEKSHIRILMAYDI; query enum/limit', async () => {
+    const check = (cls: new () => object, body: object) =>
+      validate(plainToInstance(cls, body), {
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      });
+    expect(
+      await check(AiAdvisorAlertPatchDto, {
+        status: 'resolved',
+        note: 'x'.repeat(900),
+      }),
+    ).toEqual([]);
+    expect(
+      await check(AiAdvisorAlertPatchDto, { status: 'dismissed' }),
+    ).toEqual([]);
+    expect(
+      (await check(AiAdvisorAlertPatchDto, { status: 'seen' })).length,
+    ).toBeGreaterThan(0);
+    expect(
+      await check(AiAdvisorAlertsQueryDto, {
+        status: 'open',
+        limit: '25',
+        page: '2',
+        sort_by: 'severity',
+      }),
+    ).toEqual([]);
+    for (const q of [
+      { limit: '101' },
+      { status: 'closed' },
+      { rule_key: 'R9' },
+      { from: '22.10.2026' },
+    ]) {
+      expect((await check(AiAdvisorAlertsQueryDto, q)).length).toBeGreaterThan(
+        0,
+      );
+    }
+  });
+
+  it('round-2 #654: from/to aniq kalendar kuni, q/note boshqaruv belgilarisiz, page ≤ 1 000 000', async () => {
+    const bad = async (cls: new () => object, body: object) =>
+      (await validate(plainToInstance(cls, body))).length;
+    expect(
+      await bad(AiAdvisorAlertsQueryDto, {
+        from: '2026-02-28',
+        to: '2026-03-01',
+      }),
+    ).toBe(0);
+    for (const body of [
+      { from: '2026-02-30' },
+      { to: '2026-04-31' },
+      { from: '0000-01-01' },
+      { q: 'a\u0000b' },
+      { page: 1_000_001 },
+    ]) {
+      expect(await bad(AiAdvisorAlertsQueryDto, body)).toBeGreaterThan(0);
+    }
+    expect(
+      await bad(AiAdvisorAlertPatchDto, {
+        status: 'resolved',
+        note: 'Bir\nikki',
+      }),
+    ).toBe(0);
+    expect(
+      await bad(AiAdvisorAlertPatchDto, {
+        status: 'resolved',
+        note: 'a\u0000b',
+      }),
+    ).toBeGreaterThan(0);
   });
 });

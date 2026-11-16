@@ -39,12 +39,13 @@ import type { DistrictResolveByTextPayload } from './district-resolver/district-
  *   buyurtmalar custody'si eski kuryerda qolardi.
  *
  * Frontend ularni chaqirmaydi. Ish oqimlari: filialga —
- * POST /branches/posts/:postId/dispatch, kuryerga — POST
- * /orders/assign-to-courier yoki skan. Servis metodlari o'zgarmagan: qayta
- * yoqish = shu handlerlarni qaytarish.
+ * POST /branches/posts/:postId/dispatch, HQ pochtasini HQ kuryeriga —
+ * POST /branches/posts/:postId/dispatch-to-courier (2026-11-15), kuryerga —
+ * POST /orders/assign-to-courier yoki skan. Servis metodlari o'zgarmagan:
+ * qayta yoqish = shu handlerlarni qaytarish.
  */
 export const LEGACY_POST_COMMAND_DISABLED_MESSAGE =
-  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
+  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, HQ kuryeriga POST /branches/posts/:postId/dispatch-to-courier, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
 
 const rejectLegacyPostCommand = (): never => {
   throw new RpcException(errorRes(LEGACY_POST_COMMAND_DISABLED_MESSAGE, 410));
@@ -489,6 +490,54 @@ export class LogisticsServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.assignOrdersToCourier(data.requester, data.dto),
+    );
+  }
+
+  // Pochta → HQ kuryeri (ega qarori 2026-11-15): ro'yxat va yozuv bitta
+  // tekshiruvdan (`resolveHqCouriersForRegion`) o'tadi.
+  @MessagePattern({ cmd: 'logistics.post.courier_destinations' })
+  postCourierDestinations(
+    @Payload()
+    data: { post_id?: string; requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = data?.requester
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+        }
+      : undefined;
+    return this.executeAndAck(context, () =>
+      this.logisticsService.listPostCourierDestinations(
+        requester,
+        data?.post_id,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.dispatch_to_courier' })
+  dispatchPostToCourier(
+    @Payload()
+    data: {
+      post_id?: string;
+      courier_id?: string;
+      order_ids?: string[];
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = data?.requester
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+        }
+      : undefined;
+    return this.executeAndAck(context, () =>
+      this.logisticsService.dispatchPostToCourier(requester, {
+        post_id: data?.post_id,
+        courier_id: data?.courier_id,
+        order_ids: data?.order_ids,
+      }),
     );
   }
 

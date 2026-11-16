@@ -87,10 +87,24 @@ describe('/admin/carriers — rollback_enabled (round-trip)', () => {
       }),
     ),
   };
+  // Ega qarori 2026-11-15: carrier faqat HQ kuryeriga — kuryer 55 HQ'da.
+  const branchClient = {
+    send: jest.fn(() =>
+      of({
+        data: {
+          user_id: '55',
+          branch_id: '1',
+          role: 'COURIER',
+          branch: { id: '1', type: 'HQ' },
+        },
+      }),
+    ),
+  };
   const service = new CarrierAccountService(
     repo as never,
     activityLog as never,
     identityClient as never,
+    branchClient as never,
   );
   const rmqController = new CarrierAccountController(
     { ack: jest.fn(), nackForError: jest.fn() } as never,

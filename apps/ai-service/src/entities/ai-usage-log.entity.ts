@@ -52,6 +52,10 @@ export class AiUsageLog extends BaseEntity {
   @Column({ type: 'int', default: 0 })
   cache_creation_tokens!: number;
 
+  /** C1: `cache_creation_tokens` dan 1 soatlik TTL bilan yozilgani (× 2 narx). */
+  @Column({ type: 'int', default: 0 })
+  cache_creation_1h_tokens!: number;
+
   @Column({ type: 'int', default: 0 })
   cache_read_tokens!: number;
 
