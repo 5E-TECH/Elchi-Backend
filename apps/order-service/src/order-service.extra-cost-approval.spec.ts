@@ -304,6 +304,102 @@ describe('OrderServiceService extra cost approval flow', () => {
     );
   });
 
+  describe('2026-11-16: «Qisman sotishda isbot» (partly_sell)', () => {
+    const partlyDto = (extra: Record<string, unknown> = {}) => ({
+      totalPrice: 180000,
+      extraCost: 9000,
+      comment: 'Qisman sotildi',
+      order_item_info: [{ product_id: 'p-1', quantity: 1 }],
+      ...extra,
+    });
+
+    it('yoqilgan: isbotsiz qisman sotish 400, so‘rov ochilmaydi', async () => {
+      const { service, extraCostApprovalRepo } = makeService({
+        marketProofConditions: [ExpenseProofCondition.PARTLY_SELL],
+      });
+
+      await expectRpc(
+        service.partlySellOrder(
+          { id: '301', roles: ['courier'], branch_id: '77' },
+          '7001',
+          partlyDto({ extraCost: 0 }),
+        ),
+        400,
+      );
+      await expectRpc(
+        service.partlySellOrder(
+          { id: '301', roles: ['courier'], branch_id: '77' },
+          '7001',
+          partlyDto(),
+        ),
+        400,
+      );
+      expect(extraCostApprovalRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('yoqilgan: isbot bilan qisman sotish o‘tadi, isbot saqlanadi', async () => {
+      const { service, extraCostApprovalRepo, fileClient } = makeService({
+        marketProofConditions: [ExpenseProofCondition.PARTLY_SELL],
+      });
+
+      const res: any = await service.partlySellOrder(
+        { id: '301', roles: ['courier'], branch_id: '77' },
+        '7001',
+        partlyDto({ proofFileKeys: ['proof/partly.jpg'] }),
+      );
+
+      expect(res.statusCode).toBe(202);
+      expect(fileClient.send).toHaveBeenCalledWith(
+        { cmd: 'file.exists' },
+        expect.objectContaining({ key: 'proof/partly.jpg' }),
+      );
+      expect(extraCostApprovalRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'partly_sell',
+          proof_file_keys: ['proof/partly.jpg'],
+        }),
+      );
+    });
+
+    it('yoqilgan: to‘liq sotuvga ta’sir qilmaydi (isbotsiz sotish so‘rovi ochiladi)', async () => {
+      const { service, extraCostApprovalRepo } = makeService({
+        marketProofConditions: [ExpenseProofCondition.PARTLY_SELL],
+      });
+
+      const res: any = await service.sellOrder(
+        { id: '301', roles: ['courier'], branch_id: '77' },
+        '7001',
+        { extraCost: 12000, comment: 'Yo‘l xarajati' },
+      );
+
+      expect(res.statusCode).toBe(202);
+      expect(extraCostApprovalRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'sell', proof_file_keys: [] }),
+      );
+    });
+
+    it('o‘chiq: qisman sotish avvalgidek isbotsiz o‘tadi', async () => {
+      const { service, extraCostApprovalRepo, fileClient } = makeService({
+        marketProofConditions: [ExpenseProofCondition.SELL_ZERO_TOTAL],
+      });
+
+      const res: any = await service.partlySellOrder(
+        { id: '301', roles: ['courier'], branch_id: '77' },
+        '7001',
+        partlyDto(),
+      );
+
+      expect(res.statusCode).toBe(202);
+      expect(fileClient.send).not.toHaveBeenCalledWith(
+        { cmd: 'file.exists' },
+        expect.anything(),
+      );
+      expect(extraCostApprovalRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'partly_sell' }),
+      );
+    });
+  });
+
   it('manager partly-sell extra cost ham approval kutadi', async () => {
     const { service, extraCostApprovalRepo } = makeService();
 

@@ -84,12 +84,13 @@ describe('activity_logs.description migratsiyasi (2WRzdWpZ)', () => {
     const legs = [...src.matchAll(/\{\s*name:\s*'(\w+)',\s*client:/g)].map(
       (m) => `${m[1]}_schema`,
     );
-    expect(legs.length).toBe(9);
+    // BE-5 (LhTIno57 §11): 9 servis + ai-service oyog'i (`ai.cap.raise`,
+    // `ai.advisor.*` yozuvlari `/activity-logs` da ko'rinsin).
+    expect(legs.length).toBe(10);
+    expect(legs).toContain('ai_schema');
     expect(
       legs.filter((s) => !ACTIVITY_LOG_DESCRIPTION_SCHEMAS.includes(s)),
     ).toEqual([]);
-    // ai_schema gateway fan-out'da yo'q, lekin jadvali bor — ro'yxatda bo'lishi SHART.
-    expect(ACTIVITY_LOG_DESCRIPTION_SCHEMAS).toContain('ai_schema');
   });
 
   it('ro`yxatda dublikat yo`q', () => {

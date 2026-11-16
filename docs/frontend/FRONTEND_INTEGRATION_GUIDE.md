@@ -261,7 +261,8 @@ Tracks how far COD cash has flowed back up the chain for that order. See §7.
 
 ### Expense-proof conditions — `ExpenseProofCondition`
 A market can require photo/video proof for sell/cancel under conditions:
-`sell_any · sell_extra_cost · sell_zero_total · cancel_any · cancel_extra_cost · cancel_zero_total`
+`sell_any · sell_extra_cost · sell_zero_total · cancel_any · cancel_extra_cost · cancel_zero_total · partly_sell`
+(`partly_sell` — only the partly-sell call; a full sell is not affected)
 (set via `PATCH /markets/{id}/expense-proof`). When a condition matches, the
 courier sell/cancel call **must** include file proof or it is rejected — the UI
 must capture media in those cases.
