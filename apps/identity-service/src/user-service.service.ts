@@ -3682,11 +3682,14 @@ export class UserServiceService implements OnModuleInit {
       cancelled_handover_qr_required:
         dto.cancelled_handover_qr_required ?? true,
       // Ega qarori 2026-11-02: YANGI marketda sotishda va bekor qilishda
-      // qo'shimcha xarajat isboti sukut bo'yicha majburiy. Admin yaratishda
-      // boshqa to'plam (bo'sh ham) yuborsa — o'shasi saqlanadi.
+      // qo'shimcha xarajat isboti sukut bo'yicha majburiy; 2026-11-16 —
+      // qisman sotishda isbot ham («bu ham default yoqiq tursin»). Admin
+      // yaratishda boshqa to'plam (bo'sh ham) yuborsa — o'shasi saqlanadi.
+      // Mavjud marketlar o'zgarmaydi.
       expense_proof_conditions: dto.expense_proof_conditions ?? [
         ExpenseProofCondition.SELL_EXTRA_COST,
         ExpenseProofCondition.CANCEL_EXTRA_COST,
+        ExpenseProofCondition.PARTLY_SELL,
       ],
       // w2bDrE3i: YANGI market — sukut yopiq, tasdiq talab qilinadi.
       extra_cost_enabled: dto.extra_cost_enabled ?? false,
