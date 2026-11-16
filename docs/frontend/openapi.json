@@ -26833,7 +26833,8 @@
                 "sell_zero_total",
                 "cancel_any",
                 "cancel_extra_cost",
-                "cancel_zero_total"
+                "cancel_zero_total",
+                "partly_sell"
               ]
             }
           },
@@ -27014,7 +27015,8 @@
                 "sell_zero_total",
                 "cancel_any",
                 "cancel_extra_cost",
-                "cancel_zero_total"
+                "cancel_zero_total",
+                "partly_sell"
               ]
             }
           }

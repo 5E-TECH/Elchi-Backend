@@ -2540,6 +2540,8 @@ export class OrderLifecycleService {
     action: 'sell' | 'cancel';
     extraCost: number;
     totalPrice: number;
+    /** Qisman sotish (`partlySellOrder`) — `PARTLY_SELL` ham mos keladi. */
+    partly?: boolean;
   }): Set<ExpenseProofCondition> {
     const matched = new Set<ExpenseProofCondition>();
     const hasExtra = ctx.extraCost > 0;
@@ -2554,6 +2556,7 @@ export class OrderLifecycleService {
       matched.add(ExpenseProofCondition.SELL_ANY);
       if (hasExtra) matched.add(ExpenseProofCondition.SELL_EXTRA_COST);
       if (isZeroTotal) matched.add(ExpenseProofCondition.SELL_ZERO_TOTAL);
+      if (ctx.partly) matched.add(ExpenseProofCondition.PARTLY_SELL);
     }
     return matched;
   }
@@ -2577,12 +2580,14 @@ export class OrderLifecycleService {
     proofFileKeys?: string[];
     forceRequired?: boolean;
     proofFileKeysVerified?: boolean;
+    partly?: boolean;
   }): Promise<string[]> {
     const {
       market,
       action,
       extraCost,
       totalPrice,
+      partly = false,
       proofFileKeys,
       forceRequired = false,
       proofFileKeysVerified = false,
@@ -2608,6 +2613,7 @@ export class OrderLifecycleService {
       action,
       extraCost,
       totalPrice,
+      partly,
     });
     const required = forceRequired || enabled.some((c) => matched.has(c));
     if (!required) {
@@ -13192,10 +13198,12 @@ export class OrderLifecycleService {
       });
     }
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
-    // the new (partial) price as the operation total.
+    // the new (partial) price as the operation total — plus its own
+    // PARTLY_SELL condition (2026-11-16).
     const proofFiles = await this.enforceOperationProof({
       market,
       action: 'sell',
+      partly: true,
       extraCost,
       totalPrice: price,
       proofFileKeys: dto?.proofFileKeys,
