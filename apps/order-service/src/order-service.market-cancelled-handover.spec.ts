@@ -258,6 +258,59 @@ describe('OrderServiceService market cancelled handover', () => {
     );
   });
 
+  // 2026-11-15: apparat skaner QR'ni klaviatura kabi yozadi — Caps Lock'ni noto'g'ri bilsa registr almashadi.
+  // base64url (katta-kichik harf, `-`/`_`) bilan xesh mos kelmasdi: birinchi skan «QR topilmadi», ikkinchisi o'tardi.
+  it('🔑 market QR — faqat kichik hex; skaner registrni almashtirsa ham o`sha sessiya topiladi', async () => {
+    const { service, session, sessionRepo } = setup();
+
+    const created: any = await service.createMarketCancelledHandoverQr({
+      market_id: '16',
+      requester: { id: '16', roles: ['market'] },
+    });
+    const token: string = created.data.qr_token;
+    expect(token).toMatch(/^MCR-[0-9a-f]{64}$/);
+    const storedHash = sessionRepo.create.mock.calls[0][0].qr_token_hash;
+
+    for (const scanned of [token.toUpperCase(), ` mcr-${token.slice(4)} `]) {
+      // Har urinish — yangi (hali skanerlanmagan) sessiya.
+      session.scanned_at = null;
+      session.authorization_token_hash = null;
+      await service.scanMarketCancelledHandoverQr({
+        qr_token: scanned,
+        requester: { id: '9', roles: ['admin'] },
+      });
+      expect(sessionRepo.findOne.mock.calls.at(-1)?.[0].where).toEqual(
+        expect.arrayContaining([
+          { qr_token_hash: storedHash, isDeleted: false },
+        ]),
+      );
+    }
+  });
+
+  it('🔑 eski (registrli base64url) QR aynan yozilgani bilan ham qidiriladi; MCR bo`lmasa — 400', async () => {
+    const { service, sessionRepo } = setup();
+    const legacy = 'MCR-Ab_9-xYz';
+    const sha = (value: string) =>
+      createHash('sha256').update(value).digest('hex');
+
+    await service.scanMarketCancelledHandoverQr({
+      qr_token: legacy,
+      requester: { id: '9', roles: ['admin'] },
+    });
+    expect(sessionRepo.findOne.mock.calls.at(-1)?.[0].where).toEqual([
+      { qr_token_hash: sha('MCR-ab_9-xyz'), isDeleted: false },
+      { qr_token_hash: sha(legacy), isDeleted: false },
+    ]);
+
+    await expectRpc(
+      service.scanMarketCancelledHandoverQr({
+        qr_token: 'MHA-not-a-market-qr',
+        requester: { id: '9', roles: ['admin'] },
+      }),
+      400,
+    );
+  });
+
   it('opens a five-minute authorization when HQ admin scans the QR', async () => {
     const { service, sessionRepo, queryRunner } = setup();
 
@@ -484,6 +537,52 @@ describe('OrderServiceService market cancelled handover', () => {
       }),
       400,
     );
+  });
+
+  // Ega qarori 2026-11-15 (BeePost 7182e81d): skan = topshirish — har posilka alohida `complete([id])`.
+  it('⭐ bitta ruxsat 5 daqiqa ichida qayta ishlatiladi; hammasi birinchi topshirish vaqti bilan — bitta partiya', async () => {
+    const { service, session, sessionRepo, order, orderRepo } = setup();
+    const admin = { id: '9', roles: ['admin'] };
+
+    await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      authorization_token: 'MHA-valid-token',
+      requester: admin,
+    });
+    const first = orderRepo.save.mock.calls[0][0];
+    const savedSession = sessionRepo.save.mock.calls.find(
+      ([value]: any[]) => value.consumed_at,
+    )?.[0];
+    // Partiya vaqti = birinchi topshirish.
+    expect(savedSession.consumed_at).toBe(first.market_handover_at);
+
+    // Bazada saqlandi (bir daqiqa oldin); keyingi skan — boshqa posilka.
+    const batchAt = new Date(Date.now() - 60_000);
+    session.consumed_at = batchAt;
+    sessionRepo.save.mockClear();
+    orderRepo.save.mockClear();
+    orderRepo.find.mockResolvedValueOnce([{ ...order, id: '102' }]);
+
+    const response: any = await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['102'],
+      authorization_token: 'MHA-valid-token',
+      requester: admin,
+    });
+
+    expect(response.data).toEqual(
+      expect.objectContaining({ closed_count: 1, order_ids: ['102'] }),
+    );
+    const second = orderRepo.save.mock.calls[0][0];
+    // «Topshirilgan» partiyasi bitta: `market_handover_at` — sessiyaning birinchi topshirishi, haqiqiy vaqt —
+    // `last_handover_at`.
+    expect(second.market_handover_at).toEqual(batchAt);
+    expect(second.last_handover_at.getTime()).toBeGreaterThan(
+      batchAt.getTime(),
+    );
+    // Partiya vaqti qayta yozilmaydi.
+    expect(sessionRepo.save).not.toHaveBeenCalled();
   });
 
   it('rejects an expired five-minute authorization', async () => {

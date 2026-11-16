@@ -306,6 +306,8 @@ jobs:
           apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
           apps/ai-service/src/usage/ai-margin.pg.spec.ts
           apps/ai-service/src/usage/ai-usage.dashboard.pg.spec.ts
+          apps/ai-service/src/advisor/advisor-engine.BE5.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-inputs.BE5.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test

@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-14 — AI maslahatchi (BE-5, 2a): qoidalar dvigateli — R1, R3, R6
+
+Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_rule_state`). Yangi endpoint YO'Q — ogohlantirishlar `ai_advisor_alerts` ga yoziladi; ro'yxat/tafsilot endpointlari keyingi PR'da.
+
+- 🟢 Qoidalar har 30 daqiqada (R1 smena kamomadi, R3 g'ayrioddiy xarajat) va har kuni 02:30 Toshkent (R6 zarar — kecha; dushanba — o'tgan hafta ham) tekshiriladi. `AI_ADVISOR_RULES` sukut **o'chiq** — faqat aniq `on` yoqadi (muhitda qo'lda). Kursor bo'shlig'i ≤ 7 kun; qoida > 24 soat to'xtab qolgan bo'lsa (o'chirib-yoqish, uzilish) — 24 soatdan eski faktlardan ochilganlar bildirishnomasiz (backfill).
+- 🟢 Birinchi ishga tushish: 7 kunlik orqa oyna; 24 soatdan eski faktlardan ochilganlar bildirishnomasiz (`notify_skipped='backfill'`, §4.3).
+- 🟢 R3: namuna < 5 — qoida jim; filial+kategoriya namunasi < 5 bo'lsa butun tizim (`facts.scope`); minimal MAD = mediana × 5% (BQ9).
+- 🟢 Hozircha `explanation_status: none` (avtomatik izoh — 5-qism), bildirishnoma — 4-qism. R2/R4/R5 va R7/R8 — keyingi PR'lar.
+- ✏️ (review round-2) R1: ochiq ogohlantirishga yangi kamomad qo'shilsa `facts.shifts_count`/`total_difference`/`closed_by` va `evidence.rows` (≤ 15, `shift_id` bo'yicha) **birlashtiriladi** — «N marta» bilan «Jami kamomad» mos. Yangi maydonlar: `facts.streak_length`, `facts.streak_total` (faqat `consecutive_negative`, aks holda null) — «N smena ketma-ket» uchun (birlashgan yakka kamomadlarsiz).
+- ✏️ Sarlavhalar §4.2 shaklida: «Samarqand filiali kassasida 3 smena ketma-ket kamomad: −445 000 so'm», «… kassasida smena kamomadi: −120 000 so'm»; R3 `scope: category` — «tizim bo'yicha odatdagidan».
+- ✏️ R3 `scope: category` dalilida har qatorning `cashbox_name` va `href` — o'sha qator kassasidan (ilgari trigger kassasi). R6: `subject.name = "Butun tizim"`, `first_fact_at` = davr boshi.
+- 🟢 R6: 02:30 ishi o'tkazib yuborilsa keyingi ishda o'tgan kunlar (≤ 7) va hafta ham tekshiriladi.
+
 ### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
 
 Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.
