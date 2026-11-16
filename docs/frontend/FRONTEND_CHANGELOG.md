@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-16 — Integratsiya metrikasi: posilka, webhook va COD bloklari (6qfzLBcR)
+
+Deploy: faqat integration-service (gateway — Swagger matni). Migratsiya **yo'q**, mavjud jadvallardan o'qiladi. Kontrakt `src/entities/integrations/metrics.ts` dagi `ShipmentMetrics` / `WebhookMetrics` / `CodMetrics` bilan bir xil. O'lchanmagan qiymat `null`, hech qachon `0` emas.
+
+- ✏️ [integration] `GET /integrations/metrics` — har `connections[]` qatorida yangi bloklar:
+  - `shipments { total, delivered, failed, mismatch }` — OYNA (`window_hours`) ichida yaratilgan yoki holati o'zgargan posilkalar. Integratsiyada `provider_shipments`, Posilkalar tabi pillari bilan ayni filtrlar (`delivered` — sotilgan / to'langan / yopilgan, `failed` — xato matni bor, `mismatch` — tashuvchi statusi xaritadagi ichki statusdan farq qiladi). `mismatch: null` — ulanishda kiruvchi status xaritasi yo'q. To'lov / ko'zgu (`payment` / `mirror`) integratsiyasida blok `null`. Hamkorda faqat `total` (`partner_shipment_refs`), `delivered` / `failed` / `mismatch` — `null` (holat buyurtmaning o'zida).
+  - `webhooks { success, failed, invalid_signature }` — OYNA ichida. Integratsiyada kiruvchi webhook jurnali (Hodisalar tabi): `success` — `processed`, `failed` — `rejected` + `failed`, `invalid_signature` — `signature_valid = false`. Hamkorda — bizning outbox yetkazishlarimiz (`delivered` / `failed` bilan bir xil), `invalid_signature: null`.
+  - `cod { dispatched, collected, remitted, debt }` — BUTUN VAQT, manba faqat `provider_receivables` / `provider_remittances`: `collected` — kutilayotgan + yopilgan qarz qatorlari (bekor qilingani kirmaydi), `remitted` — faol to'lovlar summasi, `debt` — kutilayotgan qarz (`GET /integrations/:id/receivable-balance` → `outstanding_amount` bilan ayni so'rov). `dispatched` — **har doim `null`**: daftar qarzni faqat sotuvda ochadi, jo'natilgan COD unda yozilmaydi. COD faqat tashuvchi (`carrier`) integratsiyada (yoki daftarda qatori bo'lsa); boshqa rollarda va hamkorda — `null`.
+- ✏️ [integration] `connections[]` endi hodisasi yo'q, lekin posilkasi, oynadagi webhooki, COD yozuvi yoki navbati bor ulanishni ham qaytaradi (`events: 0`, `success_rate: null`, `last_event_at: null`). Hech bir manbada qatori yo'q ulanish avvalgidek ro'yxatda yo'q. Navbatdagi, lekin sinxron tarixi yo'q integratsiya ham `totals.queued` ga kiradi.
+
+**Frontend action items:**
+- 🟢 `ConnectionOverview` va `normalizeIntegrationMetrics` tayyor — bloklarda raqamlar chiqadi. «Jo'natilgan COD» `dispatched: null` sababli «—» bo'lib qoladi (ataylab). «Yopilmagan qarz» avvalgidek `receivable-balance` dan.
+
 ### 2026-11-16 — Skan bilan olish: xato matnlari to'liq o'zbekcha (MWYaqprw)
 
 Status kodlari va `details.reason` o'zgarmadi — faqat `message` matni. Migratsiya **yo'q**.
