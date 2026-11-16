@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-16 — Skan bilan olish: xato matnlari to'liq o'zbekcha (MWYaqprw)
+
+Status kodlari va `details.reason` o'zgarmadi — faqat `message` matni. Migratsiya **yo'q**.
+
+- ✏️ [logistics] `POST /orders/scan-assign` (filial va HQ kuryeri) va `POST /orders/assign-to-courier`: boshqa kuryerdagi buyurtma — 400 «Buyurtma allaqachon boshqa kuryerga biriktirilgan» (assign-to-courier: «Buyurtma #N allaqachon boshqa kuryerga biriktirilgan»; avval «Order … boshqa courierga …»).
+- ✏️ [logistics] `POST /orders/scan-assign`: 403 «Boshqa filial buyurtmasi — qabul qila olmaysiz» (avval «Boshqa filial orderi …»), 400 «Buyurtma filialga biriktirilmagan» (avval «Order filialga …»).
+
+**Frontend action items:**
+- 🟢 `/scan` va `/tg/scan` boshqa kuryer xatosini `/boshqa\s+(courier|kuryer)/i` bilan taniydi — ikkala matn ham mos, o'zgarish shart emas. Testlardagi soxta javoblarda eski matnni («Order allaqachon boshqa courierga biriktirilgan», «Boshqa filial orderi …») yangisiga almashtirish mumkin.
+
 ### 2026-11-15 — Pochta → HQ kuryeri; tashqi yetkazuvchi faqat HQ kuryeriga
 
 Egasi (2026-11-15): «Pochta jo'natishda ham agar HQ ning shu viloyatda o'z kurieri bo'lsa u ham ro'yxatda chiqib kelishi kerak»; «faqat integratsiya qilingan tashqi yetkazib beruvchiga faqat HQ ga ochilgan o'z kurieri bo'lsagina biriktirish mumkin bo'lishi kerak»; «jo'natuvchilar adashmasligi uchun nimadur qilish kerak, yani filial bilan kurerni almashtirib yuborishmasin».

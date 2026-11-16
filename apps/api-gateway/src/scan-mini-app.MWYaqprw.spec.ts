@@ -205,7 +205,7 @@ describe('MWYaqprw — scan-assign javobida buyurtma xulosasi', () => {
     const sendOrder = jest.fn();
     const error = {
       statusCode: 400,
-      message: 'Order allaqachon boshqa courierga biriktirilgan',
+      message: 'Buyurtma allaqachon boshqa kuryerga biriktirilgan',
     };
     const sendLogistics = jest.fn().mockRejectedValue(error);
     await expect(

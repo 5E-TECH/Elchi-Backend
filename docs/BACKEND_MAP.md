@@ -568,7 +568,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     (`order.transfer_batch.receive_one_by_scan`): downstream 4xx keep their
     status (CODE-13); a **transit** reply (`reason:'transit'`) → clear 400
     ("boshqa hudud uchun (tranzit) … kuryerga berilmaydi") instead of
-    "Boshqa filial orderi" — the order is not assigned (§5.3).
+    "Boshqa filial buyurtmasi" — the order is not assigned (§5.3).
 - **Delivery pricing engine (DAqXPeSy, 2026-10-24, migration 142)** —
   `src/delivery-pricing/` (own controller + service; NOT in the 7k-line
   service). Math is the pure `computeDeliveryQuote` in
