@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { RmqModule } from '@app/common';
+import { ClaudeModule, RmqModule } from '@app/common';
+import { AiBudgetService } from '../budget/ai-budget.service';
+import { AiUsageService } from '../usage/ai-usage.service';
 import { AiUsageModule } from '../usage/ai-usage.module';
 import { AdvisorController } from './advisor.controller';
 import {
@@ -12,6 +14,7 @@ import {
 import { AdvisorAlertsService } from './advisor-alerts.service';
 import { AdvisorActivityLogController } from './advisor-activity-log.controller';
 import { AdvisorEngineService } from './advisor-engine.service';
+import { AdvisorExplainService } from './advisor-explain.service';
 import { AdvisorNotifier } from './advisor-notify';
 import { AdvisorRealtime } from './advisor-realtime';
 import { AdvisorReader } from './advisor-reader';
@@ -41,6 +44,14 @@ import { AdvisorSettingsService } from './advisor-settings.service';
     // ActivityLogService — AiUsageModule re-export qilgan YAGONA
     // ActivityLogModule nusxasidan (forService bu yerda chaqirilmaydi).
     AiUsageModule,
+    // §6 AI izohi: ClaudeService ildiz modulda faqat AiServiceModule'ga
+    // eksport qilingan — shu yerda ayni portlar bilan (sarf `ai_usage_log`,
+    // umumiy kunlik shift) ulanadi. ClaudeService holatsiz (faqat mijoz).
+    ClaudeModule.forRoot({
+      imports: [AiUsageModule],
+      usageSink: AiUsageService,
+      budgetGuard: AiBudgetService,
+    }),
   ],
   controllers: [AdvisorController, AdvisorActivityLogController],
   providers: [
@@ -48,6 +59,7 @@ import { AdvisorSettingsService } from './advisor-settings.service';
     AdvisorAlertsService,
     AdvisorReader,
     AdvisorEngineService,
+    AdvisorExplainService,
     AdvisorNotifier,
     AdvisorRealtime,
     AdvisorScheduler,

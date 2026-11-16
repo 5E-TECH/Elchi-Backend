@@ -12,6 +12,7 @@ import { CronJob } from 'cron';
 import { DataSource } from 'typeorm';
 import { AdvisorNotifier } from './advisor-notify';
 import { AdvisorRealtime } from './advisor-realtime';
+import { AdvisorExplainService } from './advisor-explain.service';
 import {
   AdvisorEngineService,
   type AdvisorRunGroup,
@@ -46,6 +47,7 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly registry?: SchedulerRegistry,
     @Optional() private readonly notifier?: AdvisorNotifier,
     @Optional() private readonly realtime?: AdvisorRealtime,
+    @Optional() private readonly explain?: AdvisorExplainService,
   ) {}
 
   enabled(): boolean {
@@ -155,6 +157,23 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
       }
     }
     await this.notifyPending();
+    if (this.explain) {
+      // §6: jiddiylarga darhol izoh (≤ 5/tick), eskirgan `pending` → failed.
+      try {
+        const opened = result.changes
+          .filter((c) => c.change === 'opened')
+          .map((c) => c.alert_id);
+        const e = await this.explain.autoExplain(new Date(), opened);
+        if (e.queued || e.stale)
+          this.logger.log(
+            `ai_advisor_explain queued=${e.queued} stale=${e.stale}`,
+          );
+      } catch (error) {
+        this.logger.warn(
+          `ai_advisor_explain_auto_failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown'}`,
+        );
+      }
+    }
   }
 
   /**
@@ -196,7 +215,11 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
       );
       // Qoidalar yiqilsa ham kutayotgan bildirishnomalar qayta urinadi
       // (finance o'chiq bo'lsa ham; round-2 S4).
-      if (locked) await this.notifyPending();
+      if (locked) {
+        await this.notifyPending();
+        // Eskirgan `pending` tozalash qoidalar yiqilsa ham (round-3 nit).
+        await this.explain?.autoExplain(new Date(), []).catch(() => undefined);
+      }
       return null;
     } finally {
       if (locked) {
