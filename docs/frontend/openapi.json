@@ -6316,6 +6316,58 @@
         ]
       }
     },
+    "/orders/{id}/operator": {
+      "put": {
+        "description": "Faqat `operator_id` bo'sh buyurtmaga. Operator — buyurtma marketining faol operatori (`GET /market-operators/selectable?market_id=…`). Buyurtma sotilgan bo`lsa (sold, paid, partly_paid) operator ulushi sotuvdagidek yoziladi. Holat o'zgarmaydi. Xatolar: 400 — operator bu marketniki emas / faol emas; 403 — begona buyurtma; 404; 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` (operator bor), `ORDER_OPERATOR_EXTERNAL` (integratsiya buyurtmasi), `ORDER_OPERATOR_MARKET_CHANGED` (qayta urinish).",
+        "operationId": "OrderGatewayController_assignOperator",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Order ID (bigint)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignOrderOperatorRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message: 'success', data: { id, operator_id, operator, earning_recorded } }"
+          },
+          "409": {
+            "description": "ORDER_OPERATOR_ALREADY_ASSIGNED | ORDER_OPERATOR_EXTERNAL | ORDER_OPERATOR_MARKET_CHANGED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Operatori yo'q buyurtmaga operator biriktirish",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "branch",
+          "market"
+        ]
+      }
+    },
     "/orders/{id}/full": {
       "patch": {
         "operationId": "OrderGatewayController_updateFull",
@@ -29513,6 +29565,19 @@
         },
         "required": [
           "special_categories"
+        ]
+      },
+      "AssignOrderOperatorRequestDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "412",
+            "description": "Buyurtma marketining FAOL operatori (`GET /market-operators/selectable?market_id=<buyurtma marketi>` ro'yxatidan). Boshqa market operatori, o'chirilgan yoki bloklangan — 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas». Buyurtmaga `operator_id` va `operator` = operator ismi yoziladi."
+          }
+        },
+        "required": [
+          "operator_id"
         ]
       },
       "UpdateOrderByIdRequestDto": {

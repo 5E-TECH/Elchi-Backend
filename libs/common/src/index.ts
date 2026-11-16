@@ -83,6 +83,7 @@ export * from './order/cancel-return-stage';
 export * from './order/courier-order-list';
 export * from './order/order-create-content';
 export * from './order/order-special-categories';
+export * from './order/order-operator-assign';
 export * from './order/order-tracking-notes';
 export * from './order/order-number';
 export * from './order/order-intake';

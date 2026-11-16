@@ -123,6 +123,7 @@ import {
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import { SetOrderSpecialCategoriesRequestDto } from './order-create/order-special-categories';
+import { AssignOrderOperatorRequestDto } from './order-create/order-assign-operator.dto';
 import {
   ORDER_INTAKE_STATE_DESCRIPTION,
   UpdateOrderIntakeSettingsRequestDto,
@@ -8007,6 +8008,121 @@ export class OrderGatewayController {
               id: req.user.sub,
               roles,
               ...(marketId ? { market_id: marketId } : {}),
+            },
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException(
+          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+        );
+      }
+      throw error;
+    });
+  }
+
+  /**
+   * 2026-11-16 (Dilshod): «operator tanlanmasa shu buyurtmaga operator
+   * biriktirib qo'yish imkoni bo'lishi kerak». Operatori YO'Q buyurtmaga keyin
+   * operator biriktirish (almashtirish emas — bor bo'lsa 409).
+   *
+   * Rollar — yaratish formasida «Operator» tanlovini ko'radiganlar (market
+   * operatori o'zi avtomatik yoziladi, unga yo'q). Doira: superadmin/admin —
+   * istalgan buyurtma; market — o'z buyurtmasi; registrator / menejer /
+   * filial — o'z filiali (`PATCH /orders/:id` bilan AYNI). Operator —
+   * buyurtma marketining FAOL operatori (`resolveChosenOrderOperator`,
+   * yaratishdagi tekshiruv bilan AYNI). Qulf, takror biriktirish, integratsiya
+   * buyurtmasi va sotilgan buyurtmadagi operator ulushi — order-service'da
+   * (`order.operator.assign`).
+   */
+  @Put(':id/operator')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Operatori yo'q buyurtmaga operator biriktirish",
+    description:
+      "Faqat `operator_id` bo'sh buyurtmaga. Operator — buyurtma marketining faol operatori " +
+      '(`GET /market-operators/selectable?market_id=…`). Buyurtma sotilgan bo`lsa (sold, paid, partly_paid) ' +
+      "operator ulushi sotuvdagidek yoziladi. Holat o'zgarmaydi. Xatolar: 400 — operator bu marketniki emas / " +
+      'faol emas; 403 — begona buyurtma; 404; 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` (operator bor), ' +
+      '`ORDER_OPERATOR_EXTERNAL` (integratsiya buyurtmasi), `ORDER_OPERATOR_MARKET_CHANGED` (qayta urinish).',
+  })
+  @ApiParam({ name: 'id', description: 'Order ID (bigint)' })
+  @ApiBody({ type: AssignOrderOperatorRequestDto })
+  @ApiOkResponse({
+    description:
+      "{ statusCode: 200, message: 'success', data: { id, operator_id, operator, earning_recorded } }",
+  })
+  @ApiConflictResponse({
+    description:
+      'ORDER_OPERATOR_ALREADY_ASSIGNED | ORDER_OPERATOR_EXTERNAL | ORDER_OPERATOR_MARKET_CHANGED',
+  })
+  async assignOperator(
+    @Param('id') id: string,
+    @Body() dto: AssignOrderOperatorRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const roles = this.normalizeRoles(req.user.roles);
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    const marketScope =
+      !isSystemPrivileged && roles.includes(RoleEnum.MARKET)
+        ? String(req.user.sub ?? '').trim()
+        : null;
+    if (!isSystemPrivileged && !marketScope) {
+      await this.assertOrderInRequesterBranch(
+        req.user,
+        id,
+        'Bu buyurtma sizning filialingizga tegishli emas — unga operator biriktira olmaysiz',
+      );
+    }
+    const order = await this.findOrderRowForScope(id);
+    if (!order) {
+      throw new NotFoundException('Buyurtma topilmadi');
+    }
+    const marketId = this.asStr(order.market_id ?? order.marketId).trim();
+    if (marketScope && marketId !== marketScope) {
+      throw new ForbiddenException(
+        'Bu buyurtma sizning marketingizga tegishli emas — unga operator biriktira olmaysiz',
+      );
+    }
+    const chosen = await resolveChosenOrderOperator({
+      operatorId: dto.operator_id,
+      roles,
+      requesterId: req.user.sub,
+      marketId,
+      loadSelectable: (payload) =>
+        this.sendIdentityWithTimeout(
+          { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+          payload,
+        ),
+    });
+    if (!chosen) {
+      throw new BadRequestException('operator_id majburiy');
+    }
+
+    return firstValueFrom(
+      this.orderClient
+        .send<unknown>(
+          { cmd: 'order.operator.assign' },
+          {
+            id,
+            operator_id: chosen.id,
+            operator_name: chosen.name || null,
+            market_id: marketId,
+            requester: {
+              id: req.user.sub,
+              roles,
+              ...(marketScope ? { market_id: marketScope } : {}),
             },
           },
         )

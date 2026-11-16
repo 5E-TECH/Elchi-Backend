@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-16 — Operatori yo'q buyurtmaga keyin operator biriktirish
+
+Egasi (2026-11-16): «buyurtma yaratayorganda operatorni o'zi yaratsa operator tomonidan yaratilsin, operator tanlanmasa shu buyurtmaga operator biriktirib qo'yish imkoni bo'lishi kerak». Yaratishdagi tanlov (`POST /orders` `operator_id`) va market operatorining o'zi yozilishi avvaldan bor; yangisi — keyin biriktirish.
+Deploy: order-service + api-gateway, keyin frontend. Migratsiya **yo'q**.
+
+- 🆕 `PUT /orders/:id/operator` `{ operator_id }` (SUPERADMIN, ADMIN, REGISTRATOR, MANAGER, BRANCH, MARKET; market operatori va kuryer — 403): faqat `operator_id` bo'sh buyurtmaga. Ro'yxat — `GET /market-operators/selectable?market_id=<buyurtma marketi>` (market — `market_id` siz, o'zi). Doira: market — o'z buyurtmasi, filial xodimi — o'z filiali, SA/admin — istalgan. Javob `data: { id, operator_id, operator, earning_recorded }`. Buyurtma sotilgan bo'lsa (`sold`, `paid`, `partly_paid`) operator ulushi sotuvdagidek yoziladi (`earning_recorded: true`). Holat o'zgarmaydi; tarixda `operator_assigned` yozuvi, faoliyat jurnalida «Operator biriktirildi».
+- 🟢 Xatolar: 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas»; 403 begona buyurtma; 404; 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` «Bu buyurtmaga operator allaqachon biriktirilgan», `ORDER_OPERATOR_EXTERNAL` «Integratsiya buyurtmasiga operator biriktirib bo'lmaydi», `ORDER_OPERATOR_MARKET_CHANGED` (qayta urinish).
+
+**Frontend action items:**
+- 🔧 Buyurtma tafsiloti «Buyurtma ma'lumotlari»: «Operator» qatori (ism yoki «Tanlanmagan»); operatori yo'q va integratsiyadan kelmagan buyurtmada yuqoridagi rollarga «Biriktirish» → operator tanlash oynasi → `PUT`. Muvaffaqiyatdan keyin buyurtma qayta o'qiladi.
+
 ### 2026-11-16 — Integratsiya metrikasi: posilka, webhook va COD bloklari (6qfzLBcR)
 
 Deploy: faqat integration-service (gateway — Swagger matni). Migratsiya **yo'q**, mavjud jadvallardan o'qiladi. Kontrakt `src/entities/integrations/metrics.ts` dagi `ShipmentMetrics` / `WebhookMetrics` / `CodMetrics` bilan bir xil. O'lchanmagan qiymat `null`, hech qachon `0` emas.
