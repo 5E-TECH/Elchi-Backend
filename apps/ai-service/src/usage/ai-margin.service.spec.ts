@@ -216,6 +216,7 @@ describe('NFiXfmq6 — AI marja hisoboti (buildAiMarginReport)', () => {
     expect(at(5e5).cacheWriteCostUsd).toBeCloseTo(1.875, 6);
     // 1h jamidan oshsa — jamiga qisiladi.
     expect(at(5e6).cacheWriteCostUsd).toBeCloseTo(3, 6);
+    expect(at(5e6).cacheWriteCostUzs).toBeCloseTo(3 * 12800, 2);
   });
 
   it('TC5: kesh butunlay buzilganda (cache_read = 0) — tejov 0 va critical alert', () => {

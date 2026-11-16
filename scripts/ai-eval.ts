@@ -110,7 +110,11 @@ class CapturingClient implements AnthropicClientLike {
       const res: unknown = await this.inner.messages.create(body, opts);
       const r = res as {
         content?: { type?: string; text?: unknown }[];
-        usage?: Partial<RecordedUsage> | null;
+        usage?:
+          | (Partial<RecordedUsage> & {
+              cache_creation?: { ephemeral_1h_input_tokens?: number } | null;
+            })
+          | null;
       };
       const text = r?.content?.find((b) => b?.type === 'text')?.text;
       let parsed: unknown = null;
@@ -128,6 +132,8 @@ class CapturingClient implements AnthropicClientLike {
               cache_creation_input_tokens:
                 r.usage.cache_creation_input_tokens ?? 0,
               cache_read_input_tokens: r.usage.cache_read_input_tokens ?? 0,
+              cache_creation_1h_input_tokens:
+                r.usage.cache_creation?.ephemeral_1h_input_tokens ?? 0,
             }
           : null,
       };
@@ -206,6 +212,7 @@ async function live(
           output_tokens: u.outputTokens,
           cache_creation_input_tokens: u.cacheCreationTokens,
           cache_read_input_tokens: u.cacheReadTokens,
+          cache_creation_1h_input_tokens: u.cacheCreation1hTokens,
         },
       });
     }
