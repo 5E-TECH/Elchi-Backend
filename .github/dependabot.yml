@@ -30,6 +30,16 @@ updates:
       - dependency-name: typescript
         update-types:
           - version-update:semver-major
+      # NestJS major (12.x) — avtomatik PR ochilmaydi, barcha @nestjs/*
+      # paketlari bitta rejali migratsiya PR'ida birga ko'tariladi. Sabab
+      # (#634, #635, 2026-11-16): Dependabot major'ni har paket uchun alohida
+      # ochadi; faqat @nestjs/core yoki @nestjs/websockets 12 ga o'tsa, qolgan
+      # @nestjs/* 11.x bilan peer ziddiyati — CI'da `npm ci` ERESOLVE bilan
+      # yiqiladi (9 tekshiruvdan 7 tasi). minor/patch «nestjs» guruhida
+      # odatdagidek keladi. Qoida migratsiya PR'i bilan olib tashlanadi.
+      - dependency-name: '@nestjs/*'
+        update-types:
+          - version-update:semver-major
     groups:
       nestjs:
         patterns:
