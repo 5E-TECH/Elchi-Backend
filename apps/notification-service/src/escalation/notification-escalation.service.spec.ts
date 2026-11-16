@@ -121,6 +121,18 @@ describe('NotificationEscalationService', () => {
     it('critical emas / SMS allaqachon so‘ralgan / N=0 — eskalatsiya rejalashtirilmaydi', () => {
       expect(service.dueAt('high', ['in_app'])).toBeNull();
       expect(service.dueAt('critical', ['in_app', 'sms'])).toBeNull();
+      // Reyestrda escalation:false (BE-5 maslahatchi, §9.2) — SMS yo'q.
+      expect(
+        service.dueAt(
+          'critical',
+          ['in_app', 'realtime'],
+          undefined,
+          'ai.advisor_alert',
+        ),
+      ).toBeNull();
+      expect(
+        service.dueAt('critical', ['in_app'], undefined, 'x.security.alert'),
+      ).not.toBeNull();
       config.get.mockReturnValue(0);
       expect(service.dueAt('critical', ['in_app'])).toBeNull();
       config.get.mockReturnValue('3');

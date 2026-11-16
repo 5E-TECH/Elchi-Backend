@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { RmqModule } from '@app/common';
+import { ClaudeModule, RmqModule } from '@app/common';
+import { AiBudgetService } from '../budget/ai-budget.service';
+import { AiUsageService } from '../usage/ai-usage.service';
 import { AiUsageModule } from '../usage/ai-usage.module';
 import { AdvisorController } from './advisor.controller';
 import {
@@ -10,7 +12,11 @@ import {
   AiAdvisorSetting,
 } from './advisor.entities';
 import { AdvisorAlertsService } from './advisor-alerts.service';
+import { AdvisorActivityLogController } from './advisor-activity-log.controller';
 import { AdvisorEngineService } from './advisor-engine.service';
+import { AdvisorExplainService } from './advisor-explain.service';
+import { AdvisorNotifier } from './advisor-notify';
+import { AdvisorRealtime } from './advisor-realtime';
 import { AdvisorReader } from './advisor-reader';
 import { AdvisorScheduler } from './advisor.scheduler';
 import { AdvisorSettingsService } from './advisor-settings.service';
@@ -30,16 +36,32 @@ import { AdvisorSettingsService } from './advisor-settings.service';
     ]),
     // AdvisorReader — FAQAT `finance.advisor.rule_inputs` (o'qish).
     RmqModule.register({ name: 'FINANCE' }),
+    // §9: faol superadminlar (`identity.audience.resolve`) va dispatch;
+    // §12: `realtime.notify` (emit, javobsiz).
+    RmqModule.register({ name: 'IDENTITY' }),
+    RmqModule.register({ name: 'NOTIFICATION' }),
+    RmqModule.register({ name: 'GATEWAY' }),
     // ActivityLogService — AiUsageModule re-export qilgan YAGONA
     // ActivityLogModule nusxasidan (forService bu yerda chaqirilmaydi).
     AiUsageModule,
+    // §6 AI izohi: ClaudeService ildiz modulda faqat AiServiceModule'ga
+    // eksport qilingan — shu yerda ayni portlar bilan (sarf `ai_usage_log`,
+    // umumiy kunlik shift) ulanadi. ClaudeService holatsiz (faqat mijoz).
+    ClaudeModule.forRoot({
+      imports: [AiUsageModule],
+      usageSink: AiUsageService,
+      budgetGuard: AiBudgetService,
+    }),
   ],
-  controllers: [AdvisorController],
+  controllers: [AdvisorController, AdvisorActivityLogController],
   providers: [
     AdvisorSettingsService,
     AdvisorAlertsService,
     AdvisorReader,
     AdvisorEngineService,
+    AdvisorExplainService,
+    AdvisorNotifier,
+    AdvisorRealtime,
     AdvisorScheduler,
   ],
   exports: [AdvisorSettingsService, AdvisorEngineService],

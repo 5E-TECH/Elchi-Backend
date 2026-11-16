@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import {
@@ -27,6 +32,8 @@ import {
   type AiAdvisorUserRef,
 } from '@app/common';
 import { advisorError } from './advisor-errors';
+import { returnedRows } from './advisor-sql';
+import { AdvisorRealtime } from './advisor-realtime';
 
 const ALERTS = 'ai_schema.ai_advisor_alerts';
 const OCC = 'ai_schema.ai_advisor_alert_occurrences';
@@ -211,7 +218,23 @@ export class AdvisorAlertsService {
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
     private readonly activityLog: ActivityLogService,
+    @Optional() private readonly realtime?: AdvisorRealtime,
   ) {}
+
+  /** `ai.advisor.alert_changed` (`change: status`) — summasiz signal. */
+  private signal(detail: AiAdvisorAlertDetail, now: Date): void {
+    this.realtime?.emit([
+      {
+        alert_id: detail.id,
+        rule_key: detail.rule_key,
+        severity: detail.severity,
+        status: detail.status,
+        change: 'status',
+        explanation_status: detail.explanation_status,
+        at: now.toISOString(),
+      },
+    ]);
+  }
 
   // ─── overview (§5.5) ──────────────────────────────────────────────────
 
@@ -346,17 +369,27 @@ export class AdvisorAlertsService {
     now: Date = new Date(),
   ): Promise<AiAdvisorAlertDetail> {
     const alertId = parseId(id);
+    let seen = false;
     if (options.mark_seen !== false) {
       // Atomik: faqat `new` bo'lsa; boshqa holatga tegmaydi; audit yo'q (EGA-1029/2).
-      await this.ds.query(
+      const changed = await this.ds.query<unknown>(
         `UPDATE ${ALERTS}
             SET "status" = 'seen', "seen_at" = $2, "seen_by" = $3, "seen_by_name" = $4, "updatedAt" = now()
-          WHERE "id" = $1 AND "status" = 'new' AND "is_deleted" = false`,
+          WHERE "id" = $1 AND "status" = 'new' AND "is_deleted" = false
+          RETURNING "id"`,
         [alertId, now, requester.id, nameOf(requester)],
       );
+      // UPDATE … RETURNING → TypeORM `[rows, count]` (advisor-sql.ts).
+      seen = returnedRows(changed).length > 0;
     }
     const row = await this.findRow(alertId);
-    return this.toDetail(row, now, (options.include ?? []).includes('history'));
+    const detail = await this.toDetail(
+      row,
+      now,
+      (options.include ?? []).includes('history'),
+    );
+    if (seen) this.signal(detail, now);
+    return detail;
   }
 
   // ─── holat (§7.5): «Hal qilindi» / «Ahamiyatsiz» ───────────────────────
@@ -407,7 +440,9 @@ export class AdvisorAlertsService {
     });
     if (outcome.changed)
       await this.audit(requester, outcome.before, status, text);
-    return this.toDetail(await this.findRow(alertId), now, false);
+    const detail = await this.toDetail(await this.findRow(alertId), now, false);
+    if (outcome.changed) this.signal(detail, now);
+    return detail;
   }
 
   private async audit(

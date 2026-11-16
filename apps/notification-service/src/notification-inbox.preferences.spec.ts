@@ -276,7 +276,7 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
       type: 'order.cancelled',
       data: { order_id: 5 },
       telegram: { market_id: '5' },
-    } as any);
+    });
     const recordQb = (service as any).repo.createQueryBuilder.mock.results
       .map((r: any) => r.value)
       .find((qb: any) => qb.setParameter.mock.calls.length);
@@ -312,6 +312,25 @@ describe('NotificationInboxService — sozlamalar va kanal rejasi', () => {
     expect(call[3].scheduledAt.getTime()).toBeGreaterThanOrEqual(
       before + 10 * 60_000,
     );
+  });
+
+  it('BE-5 round-2: ai.advisor_alert (critical) — SMS eskalatsiyasi rejalashtirilmaydi (reyestr escalation:false)', async () => {
+    await dispatch({
+      recipient_ids: ['42'],
+      type: 'ai.advisor_alert',
+      priority: NotificationPriority.CRITICAL,
+      category: NotificationCategory.FINANCE,
+      channels: ['in_app', 'realtime'],
+      data: { alert_id: '1040' },
+    } as never);
+    expect(
+      outbox.enqueue.mock.calls.filter(
+        (c: any[]) => c[1] === 'notification.escalate',
+      ),
+    ).toEqual([]);
+    expect(
+      txRepo.insert.mock.calls[0][0][0].delivery.escalation,
+    ).toBeUndefined();
   });
 
   it('critical emas — eskalatsiya rejalashtirilmaydi', async () => {

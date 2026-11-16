@@ -4,9 +4,11 @@ import {
   Controller,
   GatewayTimeoutException,
   Get,
+  HttpCode,
   Inject,
   Param,
   Patch,
+  Post,
   Query,
   Req,
   UseGuards,
@@ -17,6 +19,7 @@ import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
@@ -147,6 +150,40 @@ export class AiAdvisorGatewayController {
       id: this.alertId(id),
       status: dto.status,
       note: dto.note ?? null,
+    });
+  }
+
+  @Post('alerts/:id/explain')
+  @HttpCode(202)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiParam({
+    name: 'id',
+    description: 'Ogohlantirish ID si',
+    schema: { type: 'string', pattern: '^\\d{1,18}$' },
+  })
+  @ApiResponse({
+    status: 202,
+    description:
+      '`{statusCode: 202, message: "Explanation queued", data: {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}}`',
+  })
+  @ApiOperation({
+    summary: 'AI maslahatchi: AI izohini so‘rash (faqat superadmin, doim 202)',
+    description:
+      'Tana yo‘q. LLM sinxron kutilmaydi: `202 data = {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}`. ' +
+      '`ready` — keshdan (`cached: true`, narx 0). `pending` (3 daqiqadan yangi) — qayta navbat yo‘q. ' +
+      'Natija: `GET /ai/advisor/alerts/:id` poll (`poll_after_ms`) yoki realtime `ai.advisor.alert_changed {change: explanation}`. ' +
+      'Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`; ' +
+      '429 `AI_ADVISOR_BUDGET_EXCEEDED {scope: global, period: day, reset_at, retry_after_seconds}`; ' +
+      '503 `AI_ADVISOR_AI_DISABLED {reason: ai_disabled|feature_disabled|budget_unreadable}`. 429/503 `explanation_status` ni o‘zgartirmaydi. ' +
+      'Jiddiy ogohlantirishlarga izoh avtomatik (tick’dan keyin, ≤ 5 ta). Pul amali yo‘q.',
+  })
+  explainAlert(
+    @Param('id') id: string,
+    @Req() req: AuthedRequest,
+  ): Promise<unknown> {
+    return this.call(AI_ADVISOR_PATTERNS.ALERTS_EXPLAIN, {
+      requester: this.requester(req),
+      id: this.alertId(id),
     });
   }
 

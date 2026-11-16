@@ -26,6 +26,7 @@ describePg('AdvisorAlertsService — real Postgres (BE-5)', () => {
   const dbName = `elchi_ai_alerts_${process.pid}_${Date.now()}`;
   let admin: DataSource;
   let ds: DataSource;
+  const realtimeEmit = jest.fn();
   let svc: AdvisorAlertsService;
   const log = jest.fn<Promise<void>, [Record<string, unknown>]>();
 
@@ -50,9 +51,11 @@ describePg('AdvisorAlertsService — real Postgres (BE-5)', () => {
     } finally {
       await qr.release();
     }
-    svc = new AdvisorAlertsService(ds, {
-      log,
-    } as unknown as ActivityLogService);
+    svc = new AdvisorAlertsService(
+      ds,
+      { log } as unknown as ActivityLogService,
+      { emit: realtimeEmit } as never,
+    );
   });
 
   afterAll(async () => {
@@ -241,9 +244,19 @@ describePg('AdvisorAlertsService — real Postgres (BE-5)', () => {
       reopened_from: null,
     });
     expect(first).not.toHaveProperty('history');
+    // new → seen signali faqat haqiqiy o'tishda (UPDATE … RETURNING `[rows, count]`).
+    expect(realtimeEmit).toHaveBeenCalledTimes(1);
+    expect(realtimeEmit).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        alert_id: id,
+        change: 'status',
+        status: 'seen',
+      }),
+    ]);
     expect(first).not.toHaveProperty('explanation_model');
     const again = await svc.get(SA2, id, {}, new Date(NOW.getTime() + 60_000));
     expect(again.seen_by).toEqual({ id: '1', name: 'Shodiyor Ergashev' });
+    expect(realtimeEmit).toHaveBeenCalledTimes(1); // takroriy GET — signal yo'q
 
     const closed = await alert({
       status: 'resolved',

@@ -35,7 +35,9 @@ export type AiFeature =
   // T3 (QlLf33Ma) — kassa cheki tahlili (ichki xarajat).
   | 'finance_receipt_check'
   // F7PWp6cK — AI moliyaviy yordamchi (chat + faqat o'qiydigan tool'lar).
-  | 'assistant';
+  | 'assistant'
+  // BE-5 (LhTIno57) — AI maslahatchi ogohlantirishi izohi (ichki xarajat).
+  | 'advisor_alert';
 
 /**
  * Dashboard filtri uchun qo'pol guruh (ai_usage_log.request_area).

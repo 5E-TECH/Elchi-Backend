@@ -133,6 +133,36 @@ const localTestDatabase = (() => {
       ]);
     });
 
+    it('active_only: nofaol superadmin faqat bayroqsiz qaytadi (BE-5 «faol superadminlar»)', async () => {
+      const [inactive] = await insertUsers([
+        { role: Roles.SUPERADMIN, name: 'Nofaol', phone: '+998900000099' },
+      ]);
+      await db.query(
+        `UPDATE "identity_schema"."admins" SET "status" = 'inactive' WHERE "id" = $1`,
+        [inactive],
+      );
+      try {
+        const all = await run({ roles: ['superadmin'], fields: 'minimal' });
+        expect(all.data.items.map((i: { id: string }) => i.id).sort()).toEqual(
+          [superadminId, inactive].sort(),
+        );
+        const active = await run({
+          roles: ['superadmin'],
+          fields: 'minimal',
+          active_only: true,
+        });
+        expect(active.data.items.map((i: { id: string }) => i.id)).toEqual([
+          superadminId,
+        ]);
+        expect(active.data.total).toBe(1);
+      } finally {
+        await db.query(
+          `DELETE FROM "identity_schema"."admins" WHERE "id" = $1`,
+          [inactive],
+        );
+      }
+    });
+
     it('TC2/TC4: roles:[customer] + include_customers + confirm — mijozlar qaytadi, o‘chirilganlar yo‘q', async () => {
       const res = await run({
         roles: ['customer'],
