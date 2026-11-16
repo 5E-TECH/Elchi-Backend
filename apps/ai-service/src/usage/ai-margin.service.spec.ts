@@ -187,6 +187,38 @@ describe('NFiXfmq6 — AI marja hisoboti (buildAiMarginReport)', () => {
     expect(one.hitRate).toBeCloseTo(10_000 / 11_000, 4);
   });
 
+  it('TC4b: 1 soatlik kesh yozish qo‘shimchasi × 1.0 (5 daqiqalik × 0.25) — #648 B3', () => {
+    const at = (c1h: number) =>
+      buildAiMarginReport(
+        input({
+          costByMarket: [{ market_id: '12', calls: 1, usd: '0', uzs: '0' }],
+          cacheByModel: [
+            {
+              model: 'claude-sonnet-5',
+              calls: 1,
+              cache_read_tokens: '0',
+              cache_creation_tokens: '1000000',
+              saved_usd: '0',
+              saved_uzs: '0',
+              creation_rate_tokens: String(1e6 * 12800),
+              cache_creation_1h_tokens: String(c1h),
+              creation_1h_rate_tokens: String(c1h * 12800),
+            },
+          ],
+        }),
+      ).cache;
+    // Hammasi 1h: 1M × $3 × 1.0 / 1M = $3.00.
+    expect(at(1e6).cacheWriteCostUsd).toBeCloseTo(3, 6);
+    expect(at(1e6).cacheNetSavedUsd).toBeCloseTo(-3, 6);
+    expect(at(1e6).cacheWriteCostUzs).toBeCloseTo(3 * 12800, 2);
+    // Hammasi 5m: $0.75. Yarmi 1h: 0.375 + 1.5.
+    expect(at(0).cacheWriteCostUsd).toBeCloseTo(0.75, 6);
+    expect(at(5e5).cacheWriteCostUsd).toBeCloseTo(1.875, 6);
+    // 1h jamidan oshsa — jamiga qisiladi.
+    expect(at(5e6).cacheWriteCostUsd).toBeCloseTo(3, 6);
+    expect(at(5e6).cacheWriteCostUzs).toBeCloseTo(3 * 12800, 2);
+  });
+
   it('TC5: kesh butunlay buzilganda (cache_read = 0) — tejov 0 va critical alert', () => {
     const r = buildAiMarginReport(
       input({

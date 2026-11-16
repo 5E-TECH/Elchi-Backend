@@ -14,7 +14,11 @@ import {
   type ClaudeToolLoopStep,
   type ClaudeUsage,
 } from '@app/common';
-import { computeCostUsd, roundUsd } from '../usage/ai-pricing';
+import {
+  assistantEffortParam,
+  costOfClaudeUsage,
+  roundUsd,
+} from '../usage/ai-pricing';
 import { nextTashkentMidnight, tashkentDay } from '../usage/tashkent-day';
 import { AssistantReader } from './assistant-reader';
 import { AssistantStore, type AppendRow } from './assistant-store.service';
@@ -321,7 +325,9 @@ export class AssistantService {
         model: this.model,
         maxSteps: this.maxSteps,
         maxTokens: this.maxTokens,
-        effort: this.effort,
+        ...assistantEffortParam(this.model, this.effort),
+        // C1: system bloki katta va o'zgarmas, xabarlar orasida daqiqalar.
+        cacheTtl: '1h',
         meta: {
           feature: 'assistant',
           requestArea: 'internal',
@@ -376,15 +382,7 @@ export class AssistantService {
         onStep: (s) => steps.push(s),
       });
 
-      const costUsd = roundUsd(
-        computeCostUsd({
-          model: result.model,
-          inputTokens: result.usage.input_tokens,
-          outputTokens: result.usage.output_tokens,
-          cacheCreationTokens: result.usage.cache_creation_input_tokens,
-          cacheReadTokens: result.usage.cache_read_input_tokens,
-        }),
-      );
+      const costUsd = roundUsd(costOfClaudeUsage(result.model, result.usage));
 
       const answered =
         result.stop === 'end_turn' ||
@@ -477,13 +475,7 @@ export class AssistantService {
     usage: ClaudeUsage,
     model: string,
   ): { ok: true } | { ok: false; reason: string } {
-    const cost = computeCostUsd({
-      model,
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-      cacheCreationTokens: usage.cache_creation_input_tokens,
-      cacheReadTokens: usage.cache_read_input_tokens,
-    });
+    const cost = costOfClaudeUsage(model, usage);
     if (this.maxUsdPerMessage > 0 && cost >= this.maxUsdPerMessage) {
       return { ok: false, reason: 'message_usd_cap' };
     }
@@ -557,17 +549,7 @@ export class AssistantService {
           output_tokens: s?.usage.output_tokens ?? 0,
           cache_read_tokens: s?.usage.cache_read_input_tokens ?? 0,
           cache_creation_tokens: s?.usage.cache_creation_input_tokens ?? 0,
-          cost_usd: s
-            ? roundUsd(
-                computeCostUsd({
-                  model: s.model,
-                  inputTokens: s.usage.input_tokens,
-                  outputTokens: s.usage.output_tokens,
-                  cacheCreationTokens: s.usage.cache_creation_input_tokens,
-                  cacheReadTokens: s.usage.cache_read_input_tokens,
-                }),
-              )
-            : 0,
+          cost_usd: s ? roundUsd(costOfClaudeUsage(s.model, s.usage)) : 0,
         });
       } else {
         const blocks = Array.isArray(msg.content) ? msg.content : [];

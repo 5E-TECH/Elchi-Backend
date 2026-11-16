@@ -448,8 +448,10 @@ emas, "boshqa" deb qabul qilsin.
 
 **Elchi tomoni (operator):**
 
-1. Naqd qabul qilinadigan filialda yangi kurier ochiladi (`POST /couriers`).
-   Undagi tarif — kompaniyaning har bir buyurtma uchun oladigan haqi.
+1. HQ'da (Markaziy ombor) yangi kurier ochiladi (`POST /couriers`); boshqa
+   filial kurieri — 400 `courier_not_hq`. Kurier qaysi viloyat pochtasini
+   olishini admin «Xizmat viloyatlari»da belgilaydi. Undagi tarif —
+   kompaniyaning har bir buyurtma uchun oladigan haqi.
 2. `POST /admin/carriers` `{ name, courier_id, ip_allowlist? }` — javobdagi
    `api_key` kompaniyaga xavfsiz kanal orqali beriladi.
 3. Kurier paroli kompaniyaga **berilmaydi**.

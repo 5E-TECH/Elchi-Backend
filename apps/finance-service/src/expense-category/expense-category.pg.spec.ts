@@ -8,6 +8,7 @@ import {
 } from '../../../../migrations/1716000000129-CreateCashboxExpenseCategories';
 import { FinancialExpenseCategory1716000000197 } from '../../../../migrations/1716000000197-FinancialExpenseCategory';
 import { CashboxExpenseCategoryIsDefault1716000000214 } from '../../../../migrations/1716000000214-CashboxExpenseCategoryIsDefault';
+import { RestoreDefaultExpenseCategories1716000000230 } from '../../../../migrations/1716000000230-RestoreDefaultExpenseCategories';
 import { FinanceServiceService } from '../finance-service.service';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
@@ -68,6 +69,8 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
   const ledgerMigration = new FinancialExpenseCategory1716000000197();
   // Ega 2026-11-11 — `is_default` (standart kategoriya qulfi) migratsiya 214 da.
   const defaultMigration = new CashboxExpenseCategoryIsDefault1716000000214();
+  // Prod 2026-11-15 — seed'i yo'q bazada standart 17 ta kategoriyani tiklash (migratsiya 230).
+  const restoreMigration = new RestoreDefaultExpenseCategories1716000000230();
   const ORIGINAL_ENV = process.env.FINANCE_REQUIRE_OPEN_SHIFT;
 
   const dbUrl = () => {
@@ -493,6 +496,115 @@ describePg('Elchi Pochta №1 — xarajat kategoriyalari, haqiqiy Postgres', () 
         user_id: '1',
         amount: 20_000,
         dedup_epoch: 'pg-spend-default',
+        expense_category_id: foodId,
+        financial_ledger: true,
+      }),
+    );
+    expect(spent.data.history).toMatchObject({
+      expense_category_id: foodId,
+      expense_category_name: 'Ovqatlanish',
+    });
+  });
+
+  it("⭐ migratsiya 230 (prod 2026-11-15): seed'i yo'q bazada 17 ta standart tiklanadi (tartib, ledger_category, is_default); seed bor bazada — hech narsa; qayta up() — no-op; faol bir xil nomga tegilmaydi", async () => {
+    type Row = {
+      id: string;
+      name: string;
+      sort_order: number;
+      ledger_category: string | null;
+      is_default: boolean;
+      is_deleted: boolean;
+      created_by: string | null;
+    };
+    const all = () =>
+      db.query<Row[]>(
+        `SELECT "id"::text AS id, "name", "sort_order", "ledger_category",
+                "is_default", "is_deleted", "created_by"::text AS created_by
+           FROM "finance_schema"."cashbox_expense_categories" c
+          ORDER BY c."id"`,
+      );
+    const runRestore = async () => {
+      const runner = db.createQueryRunner();
+      try {
+        await restoreMigration.up(runner);
+      } finally {
+        await runner.release();
+      }
+    };
+
+    // 1) Seed bor (o'chirilgani ham) — hech narsa qo'shilmaydi, o'chirilgan qaytmaydi.
+    await db.query(
+      `UPDATE "finance_schema"."cashbox_expense_categories"
+          SET "is_deleted" = true WHERE "name" IN ('Ovqatlanish', 'Yoqilg''i')`,
+    );
+    const seededBefore = await all();
+    await runRestore();
+    expect(await all()).toEqual(seededBefore);
+
+    // 2) Prod holati: jadval bo'sh (seed yo'q, ketma-ketlik 1 dan), superadmin
+    //    bitta kategoriya qo'shib o'chirgan va bittasini faol qoldirgan
+    //    («Ijara (arenda)» — seed nomi bilan bir xil).
+    await db.query(
+      `TRUNCATE TABLE "finance_schema"."cashbox_expense_categories" RESTART IDENTITY`,
+    );
+    await db.query(
+      `INSERT INTO "finance_schema"."cashbox_expense_categories"
+         ("name", "sort_order", "created_by", "is_deleted")
+       VALUES ('Test', 0, 1, true), ('Ijara (arenda)', 0, 1, false)`,
+    );
+    await runRestore();
+    await runRestore(); // idempotent
+    const rows = await all();
+    const defaults = rows.filter((r) => r.is_default);
+    expect(defaults).toHaveLength(16);
+    expect(defaults.every((r) => r.created_by === null && !r.is_deleted)).toBe(
+      true,
+    );
+    expect(defaults.map((r) => r.name)).toEqual(
+      seededNames().filter((n) => n !== 'Ijara (arenda)'),
+    );
+    expect(defaults.map((r) => r.sort_order)).toEqual(
+      CASHBOX_EXPENSE_CATEGORY_SEED.map((_, i) => i + 1).filter((n) => n !== 4),
+    );
+    expect(rows.find((r) => r.name === "Yoqilg'i")?.ledger_category).toBe(
+      'fuel',
+    );
+    expect(
+      rows.find((r) => r.name === 'Qaytarilgan pullar')?.ledger_category,
+    ).toBeNull();
+    // Superadmin qatorlari o'zgarmagan.
+    expect(rows.filter((r) => !r.is_default)).toEqual([
+      expect.objectContaining({
+        id: '1',
+        name: 'Test',
+        is_deleted: true,
+        created_by: '1',
+      }),
+      expect.objectContaining({
+        id: '2',
+        name: 'Ijara (arenda)',
+        is_deleted: false,
+        created_by: '1',
+      }),
+    ]);
+
+    // Servis ro'yxati va qulf: tiklangani — standart, chiqim ishlaydi.
+    const list = await result<{ items: ExpenseCategoryView[] }>(
+      categories.list(),
+    );
+    expect(list.data.items).toHaveLength(17);
+    const foodId = await idOf('Ovqatlanish');
+    expect(
+      await rpcError(categories.remove({ id: foodId, deleted_by: '1' })),
+    ).toEqual({
+      statusCode: 403,
+      message: "Standart xarajat kategoriyasini o'chirib bo'lmaydi",
+    });
+    const spent = await result<{ history: HistoryRow }>(
+      finance.spendMoney({
+        user_id: '1',
+        amount: 10_000,
+        dedup_epoch: 'pg-spend-restored',
         expense_category_id: foodId,
         financial_ledger: true,
       }),

@@ -22,7 +22,7 @@ import { DISTRICT_PICK_SCHEMA } from '../prompts/district-pick.schema';
 import {
   AI_LOW_EFFORT_MODELS,
   cacheMinTokensFor,
-  supportsEffort,
+  effortParam,
 } from '../usage/ai-pricing';
 
 /**
@@ -125,7 +125,12 @@ export class DistrictPickService {
       model,
       maxTokens: DISTRICT_PICK_MAX_TOKENS,
       deadlineAt,
-      ...(supportsEffort(model) ? { effort: 'low' as const } : {}),
+      ...effortParam(model, 'low'),
+      // C1: tuman katalogi (~2k token) system'da, chaqiruvlar siyrak (faqat
+      // fallback) — 5 daqiqalik kesh deyarli hech qachon o'qilmasdi. Eski
+      // DISTRICT_PICK_SYSTEM (~480 token) kesh minimumidan kichik — 1h
+      // marker ma'nosiz, 5m qoladi.
+      cacheTtl: plan ? '1h' : '5m',
       meta: {
         feature: 'order_district',
         requestArea: 'order',

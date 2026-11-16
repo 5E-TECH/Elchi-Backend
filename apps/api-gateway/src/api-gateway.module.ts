@@ -65,6 +65,7 @@ import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import { AiGatewayController } from './ai-gateway.controller';
 import { AiUsageGatewayController } from './ai-usage-gateway.controller';
 import { AiAssistantGatewayController } from './ai-assistant-gateway.controller';
+import { AiAdvisorGatewayController } from './ai-advisor-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
@@ -180,6 +181,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     AiUsageGatewayController,
     // F7PWp6cK — AI moliyaviy yordamchi (SSE).
     AiAssistantGatewayController,
+    // BE-5 LhTIno57 — AI maslahatchi: ogohlantirishlar R1–R8 (superadmin).
+    AiAdvisorGatewayController,
     // i76gGjyq: market o'z operatorlarini boshqaradi (/market-operators).
     MarketOperatorGatewayController,
     // hiqRNhkI: GET /customers/suggest — telefon bo'yicha mijoz taklifi.

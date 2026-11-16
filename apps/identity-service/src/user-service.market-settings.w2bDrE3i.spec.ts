@@ -91,8 +91,13 @@ describe('w2bDrE3i / VRyloH62 — market sozlamalari (identity)', () => {
         extra_cost_requires_approval: true,
         require_operator_phone: false,
         default_operator_phone: null,
-        // Ega qarori 2026-11-02: qo'shimcha xarajat isboti sukut bo'yicha yoqiq.
-        expense_proof_conditions: ['sell_extra_cost', 'cancel_extra_cost'],
+        // Ega qarori 2026-11-02: qo'shimcha xarajat isboti sukut bo'yicha yoqiq;
+        // 2026-11-16: qisman sotishda isbot ham.
+        expense_proof_conditions: [
+          'sell_extra_cost',
+          'cancel_extra_cost',
+          'partly_sell',
+        ],
       }),
     );
   });

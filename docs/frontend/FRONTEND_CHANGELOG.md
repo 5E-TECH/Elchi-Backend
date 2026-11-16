@@ -22,6 +22,205 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-17 — Yo'ldagi paketni bekor qilish taqiqlandi (oP02jE2P)
+
+Maqsad: jo'natilgan paket bekor qilinib, posilkalar tizimda manba filialda «yangi» bo'lib qolmasin (aslida ular yo'lda yoki manzil filialda).
+Deploy: order-service + branch-service (gateway — Swagger matni). Migratsiya **yo'q**. So'rov va muvaffaqiyat javobi o'zgarmadi.
+
+- ⚠️ [branch, order] `POST /transfer-batches/:id/cancel` — endi faqat hali jo'natilmagan (`PENDING`) paket bekor qilinadi. Jo'natilgan (`SENT`: yo'lda yoki qisman qabul qilingan) paket — **409** «Paket yo'lda — jo'natilgan paketni bekor qilib bo'lmaydi …», `data: { reason: "batch_in_transit", details: { batch_id, status } }`. Hech kimga ruxsat yo'q, superadmin va adminga ham (avval `SENT` ham bekor qilinardi).
+- ✏️ Qolgan holat xatolariga `data.reason` qo'shildi, status kodi avvalgidek 400: `batch_received` (qabul qilingan), `batch_already_cancelled` (allaqachon bekor), `batch_not_cancellable` (boshqa holat). Matnlar o'zbekcha («Qabul qilingan paketni bekor qilib bo'lmaydi», «Paket allaqachon bekor qilingan»).
+- 🟢 Kim bekor qila oladi — o'zgarmagan: superadmin, admin va paketni yig'gan (manba) filialning registratori yoki menejeri (yoki menejer daraxti); boshqasi — 403. Boshqa filial xodimiga holat oshkor qilinmaydi (403 holat tekshiruvidan oldin).
+- 🟢 order-service holatni paket qatorini qulflab qayta tekshiradi: tekshiruv bilan bekor qilish orasida jo'natilgan paket ham bekor bo'lmaydi (bunday kamyob holatda 409 `data.reason` siz kelishi mumkin).
+
+**Frontend action items:**
+- 🔧 «Paketni bekor qilish» paket sahifasiga (`/batches/:id`) ko'chadi: tugma faqat `PENDING` paketda, tasdiq oynasida paket raqami, yo'nalishi, holati, buyurtmalar soni va sabab (≥ 10 belgi). 409 / `batch_in_transit` — «Paket yo'lda» matni; `/batches` pastidagi qo'lda raqam formasi olib tashlanadi.
+
+### 2026-11-16 — Operatori yo'q buyurtmaga keyin operator biriktirish
+
+Egasi (2026-11-16): «buyurtma yaratayorganda operatorni o'zi yaratsa operator tomonidan yaratilsin, operator tanlanmasa shu buyurtmaga operator biriktirib qo'yish imkoni bo'lishi kerak». Yaratishdagi tanlov (`POST /orders` `operator_id`) va market operatorining o'zi yozilishi avvaldan bor; yangisi — keyin biriktirish.
+Deploy: order-service + api-gateway, keyin frontend. Migratsiya **yo'q**.
+
+- 🆕 `PUT /orders/:id/operator` `{ operator_id }` (SUPERADMIN, ADMIN, REGISTRATOR, MANAGER, BRANCH, MARKET; market operatori va kuryer — 403): faqat `operator_id` bo'sh buyurtmaga. Ro'yxat — `GET /market-operators/selectable?market_id=<buyurtma marketi>` (market — `market_id` siz, o'zi). Doira: market — o'z buyurtmasi, filial xodimi — o'z filiali, SA/admin — istalgan. Javob `data: { id, operator_id, operator, earning_recorded }`. Buyurtma sotilgan bo'lsa (`sold`, `paid`, `partly_paid`) operator ulushi sotuvdagidek yoziladi (`earning_recorded: true`). Holat o'zgarmaydi; tarixda `operator_assigned` yozuvi, faoliyat jurnalida «Operator biriktirildi».
+- 🟢 Xatolar: 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas»; 403 begona buyurtma; 404; 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` «Bu buyurtmaga operator allaqachon biriktirilgan», `ORDER_OPERATOR_EXTERNAL` «Integratsiya buyurtmasiga operator biriktirib bo'lmaydi», `ORDER_OPERATOR_MARKET_CHANGED` (qayta urinish).
+
+**Frontend action items:**
+- 🔧 Buyurtma tafsiloti «Buyurtma ma'lumotlari»: «Operator» qatori (ism yoki «Tanlanmagan»); operatori yo'q va integratsiyadan kelmagan buyurtmada yuqoridagi rollarga «Biriktirish» → operator tanlash oynasi → `PUT`. Muvaffaqiyatdan keyin buyurtma qayta o'qiladi.
+
+### 2026-11-16 — Integratsiya metrikasi: posilka, webhook va COD bloklari (6qfzLBcR)
+
+Deploy: faqat integration-service (gateway — Swagger matni). Migratsiya **yo'q**, mavjud jadvallardan o'qiladi. Kontrakt `src/entities/integrations/metrics.ts` dagi `ShipmentMetrics` / `WebhookMetrics` / `CodMetrics` bilan bir xil. O'lchanmagan qiymat `null`, hech qachon `0` emas.
+
+- ✏️ [integration] `GET /integrations/metrics` — har `connections[]` qatorida yangi bloklar:
+  - `shipments { total, delivered, failed, mismatch }` — OYNA (`window_hours`) ichida yaratilgan yoki holati o'zgargan posilkalar. Integratsiyada `provider_shipments`, Posilkalar tabi pillari bilan ayni filtrlar (`delivered` — sotilgan / to'langan / yopilgan, `failed` — xato matni bor, `mismatch` — tashuvchi statusi xaritadagi ichki statusdan farq qiladi). `mismatch: null` — ulanishda kiruvchi status xaritasi yo'q. To'lov / ko'zgu (`payment` / `mirror`) integratsiyasida blok `null`. Hamkorda faqat `total` (`partner_shipment_refs`), `delivered` / `failed` / `mismatch` — `null` (holat buyurtmaning o'zida).
+  - `webhooks { success, failed, invalid_signature }` — OYNA ichida. Integratsiyada kiruvchi webhook jurnali (Hodisalar tabi): `success` — `processed`, `failed` — `rejected` + `failed`, `invalid_signature` — `signature_valid = false`. Hamkorda — bizning outbox yetkazishlarimiz (`delivered` / `failed` bilan bir xil), `invalid_signature: null`.
+  - `cod { dispatched, collected, remitted, debt }` — BUTUN VAQT, manba faqat `provider_receivables` / `provider_remittances`: `collected` — kutilayotgan + yopilgan qarz qatorlari (bekor qilingani kirmaydi), `remitted` — faol to'lovlar summasi, `debt` — kutilayotgan qarz (`GET /integrations/:id/receivable-balance` → `outstanding_amount` bilan ayni so'rov). `dispatched` — **har doim `null`**: daftar qarzni faqat sotuvda ochadi, jo'natilgan COD unda yozilmaydi. COD faqat tashuvchi (`carrier`) integratsiyada (yoki daftarda qatori bo'lsa); boshqa rollarda va hamkorda — `null`.
+- ✏️ [integration] `connections[]` endi hodisasi yo'q, lekin posilkasi, oynadagi webhooki, COD yozuvi yoki navbati bor ulanishni ham qaytaradi (`events: 0`, `success_rate: null`, `last_event_at: null`). Hech bir manbada qatori yo'q ulanish avvalgidek ro'yxatda yo'q. Navbatdagi, lekin sinxron tarixi yo'q integratsiya ham `totals.queued` ga kiradi.
+
+**Frontend action items:**
+- 🟢 `ConnectionOverview` va `normalizeIntegrationMetrics` tayyor — bloklarda raqamlar chiqadi. «Jo'natilgan COD» `dispatched: null` sababli «—» bo'lib qoladi (ataylab). «Yopilmagan qarz» avvalgidek `receivable-balance` dan.
+
+### 2026-11-16 — Skan bilan olish: xato matnlari to'liq o'zbekcha (MWYaqprw)
+
+Status kodlari va `details.reason` o'zgarmadi — faqat `message` matni. Migratsiya **yo'q**.
+
+- ✏️ [logistics] `POST /orders/scan-assign` (filial va HQ kuryeri) va `POST /orders/assign-to-courier`: boshqa kuryerdagi buyurtma — 400 «Buyurtma allaqachon boshqa kuryerga biriktirilgan» (assign-to-courier: «Buyurtma #N allaqachon boshqa kuryerga biriktirilgan»; avval «Order … boshqa courierga …»).
+- ✏️ [logistics] `POST /orders/scan-assign`: 403 «Boshqa filial buyurtmasi — qabul qila olmaysiz» (avval «Boshqa filial orderi …»), 400 «Buyurtma filialga biriktirilmagan» (avval «Order filialga …»).
+
+**Frontend action items:**
+- 🟢 `/scan` va `/tg/scan` boshqa kuryer xatosini `/boshqa\s+(courier|kuryer)/i` bilan taniydi — ikkala matn ham mos, o'zgarish shart emas. Testlardagi soxta javoblarda eski matnni («Order allaqachon boshqa courierga biriktirilgan», «Boshqa filial orderi …») yangisiga almashtirish mumkin.
+
+### 2026-11-15 — Pochta → HQ kuryeri; tashqi yetkazuvchi faqat HQ kuryeriga
+
+Egasi (2026-11-15): «Pochta jo'natishda ham agar HQ ning shu viloyatda o'z kurieri bo'lsa u ham ro'yxatda chiqib kelishi kerak»; «faqat integratsiya qilingan tashqi yetkazib beruvchiga faqat HQ ga ochilgan o'z kurieri bo'lsagina biriktirish mumkin bo'lishi kerak»; «jo'natuvchilar adashmasligi uchun nimadur qilish kerak, yani filial bilan kurerni almashtirib yuborishmasin».
+Deploy tartibi: 1) integration-service + logistics-service, 2) api-gateway, 3) frontend. Migratsiya **yo'q**. Deploydan oldin: integration-service muhitida `RABBITMQ_BRANCH_QUEUE` bo'lsin (bootda tekshirilmaydi; yo'q bo'lsa carrier yaratish 503).
+
+- 🆕 `GET /branches/posts/:postId/courier-destinations` (SUPERADMIN, ADMIN, REGISTRATOR; logistics «Yangi pochtalar» qoidasi — boshqa filial registratori 403 `new_posts_hq_only`): NEW HQ pochtasi viloyatiga xizmat qiladigan FAOL HQ kuryerlari, nom bo'yicha. Javob `data: { post_id, region_id, is_hq_region, couriers: [{ courier_user_id, name, phone, region_match, carrier_name, carrier_active }], carrier_lookup_failed }`. `region_match`: `hq_region` (pochta viloyati = HQ viloyati — har bir HQ kuryeri), `home` (kuryerning o'z viloyati), `listed` («Xizmat viloyatlari»), `all_regions` (`serves_all_regions`). `carrier_*` — bog'lanmagan kuryerda yoki integratsiya javob bermaganda `null` (`carrier_lookup_failed: true`, ro'yxat baribir 200). Xatolar: 404 «Pochta topilmadi»; 400 `post_not_sendable` (`details: { post_id, post_status, post_courier_id }`); 400 `branch_region_missing` (`details: { post_id, missing: 'post' }`); 503.
+- 🆕 `POST /branches/posts/:postId/dispatch-to-courier` `{ courier_id, order_ids }` (rollar — yuqoridagidek): tanlangan buyurtmalar filialga EMAS, HQ kuryerining bugungi pochtasiga («Yo'lda»). `order_ids` — 1..1000 ta bigint satr, `courier_id` — bigint satr; aks holda 400 «order_ids majburiy — kamida bitta buyurtma tanlang» / «courier_id noto'g'ri …». Javob `data: { post_id, courier_id, courier_post_id, courier_post_created, moved_order_ids, moved_orders_count, skipped_order_ids, post_deleted }` (bekor / yopilgan — jimgina `skipped_order_ids` ga). Xatolar tekshiruv tartibida (hech biri yozuvdan keyin emas — rad bo'lsa hech narsa berilmaydi): 403 `new_posts_hq_only`; 404; 400 `post_not_sendable`; 400 `branch_region_missing`; 400 `courier_not_hq`; 400 `courier_inactive`; 403 `courier_region_not_served` (`details: { courier_id, post_region_id }`); 409 `order_not_in_post` (`details.order_ids`); 400 `no_dispatchable_orders`; 400 `order_not_dispatchable` (`details.order_ids` — faqat HQ qabul qilgan `received`, kuryersiz); 409 `order_in_outgoing_batch`; 409 `order_region_mismatch`; 403 `hq_courier_region_only` (faqat pochta viloyati = HQ viloyati bo'lganda); 503. Filialga jo'natishdan farqli — orqaga qaytarib (`reassign`) bo'lmaydi.
+- ✏️ `POST /admin/carriers`: kuryer faqat HQ kuryeri — aks holda 400 `data.reason = courier_not_hq` (`details: { courier_id, branch_id | null }`), xabar «Tashqi yetkazuvchiga faqat HQ'da ochilgan kuryer bog'lanadi — bu kuryer HQ'da emas»; filial xizmati javob bermasa — 503. Mavjud akkauntlar (rotate-key / status) o'zgarmaydi.
+- ⚠️ `PATCH /couriers/:id/branch`: tashqi yetkazuvchiga bog'langan kuryerni HQ'dan boshqa filialga o'tkazish — 409 `data.reason = courier_carrier_linked` (`details.courier_id`), xabar «Kuryer «X» tashqi yetkazuvchisiga bog'langan — u faqat HQ'da bo'ladi»; bog'lanishni tekshirib bo'lmasa — 503 (o'tkazish bajarilmaydi).
+- 🟢 HQ kuryeri boshqa viloyat pochtasida faqat admin uni «Xizmat viloyatlari»da (`PUT /couriers/:id/regions`) belgilaganda chiqadi. Bu ISTISNO faqat Pochta yo'lida: `POST /orders/assign-to-courier` va skan qoidasi o'zgarmadi (HQ kuryeri — faqat HQ viloyati, 403 `hq_courier_region_only`).
+
+**Frontend action items:**
+- 🔧 Pochta tafsiloti «Jo'natish»: bosilganda (sahifa yuklanganda EMAS) filiallar (`GET /branches/dispatch-destinations`) va HQ kuryerlari (`GET …/courier-destinations`) birga olinadi; oyna ikki turli — «Filialga» / «HQ kuryeriga» (alohida yorliq, ikonka, tugma matni), hech narsa oldindan tanlanmaydi, kuryerga berishda tasdiq bosqichi (carrier bo'lsa nomi bilan). `carrier_active === false` kuryer — tanlab bo'lmaydi.
+- 🔧 Carrier yaratish: kuryer ro'yxati — faqat HQ kuryerlari (`GET /branches/:hqId/users`, rol COURIER); `courier_not_hq` — alohida xato xabari.
+- 🔧 Foydalanuvchi (kuryer) tafsiloti: «Xizmat viloyatlari» kartasi — `GET` / `PUT /couriers/:id/regions` (SA/ADMIN).
+- 🔧 Kuryerni filialga o'tkazish: 409 `courier_carrier_linked` — `message` ni ko'rsating.
+
+### 2026-11-15 — AI maslahatchi (BE-5): shartnoma v0.4 eslatmasi — R7 Telegram
+
+- 🟢 Ega qarori (2026-11-15): `rules.R7.telegram` **qulflanmaydi** — sukut `false` (R7 jiddiy ogohlantirishi Telegram'ga ketmaydi: ilova ichi + kunlik hisobot), lekin superadmin Sozlamalarda R7 uchun Telegram'ni o'zi yoqishi mumkin (`PATCH /ai/advisor/settings` → `rules.R7.telegram: true` ruxsat). Kod o'zgarmadi — joriy xatti-harakat aynan shu. Shartnoma v0.4: «R7: telegram sukut false, opt-in».
+
+### 2026-11-14 — AI maslahatchi (BE-5, 5-qism): AI izohi
+
+Shartnoma v0.3 §6, §7.4. Deploy: api-gateway + ai-service, migratsiyasiz. Env: `AI_ADVISOR_EXPLAIN` (sukut on), `AI_ADVISOR_MODEL` (bo'sh — joriy sukut model).
+
+- 🆕 `POST /ai/advisor/alerts/:id/explain` (FAQAT superadmin, tana yo'q) — doim **202**: `data = {alert_id, explanation_status: pending|ready, explanation_md, explained_at, cached, poll_after_ms}`. `ready` — keshdan (`cached: true`, `poll_after_ms: null`); `pending` — `GET /ai/advisor/alerts/:id` ni `poll_after_ms` (2000) da poll qiling yoki realtime `ai.advisor.alert_changed {change: "explanation"}` ni kuting. 3 daqiqadan yangi `pending` — qayta navbat yo'q.
+- 🟢 Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`; 429 `AI_ADVISOR_BUDGET_EXCEEDED {scope: "global", period: "day", reset_at, retry_after_seconds}` (maslahatchi budjeti — BE-1); 503 `AI_ADVISOR_AI_DISABLED {reason: ai_disabled|feature_disabled|budget_unreadable}`. 429/503 `explanation_status` ni o'zgartirmaydi.
+- 🟢 Fonda xato bo'lsa tafsilotda `explanation_status: "failed"` + `explanation_error: budget_exceeded|ai_disabled|error` (budjetda `explanation_error_scope`, `explanation_retry_at`) — «Qayta urinish» = yana `POST explain`.
+- 🟢 `critical` ogohlantirishlarga izoh avtomatik (har tick'dan keyin ≤ 5 ta, backfill'siz); `warning` — faqat so'rov bilan. Matn — o'zbekcha cheklangan markdown (≤ 2000, HTML yo'q), pul amali taklif qilinmaydi; promptda chek oluvchi/to'lovchi ismi va tranzaksiya raqami yo'q.
+
+- ✏️ (round-3) Avtomatik izoh faqat SHU tekshiruvda ochilgan `critical` ga (≤ 5, eng yangilari) — eski izohsiz jiddiylar `none` bo'lib qoladi, so'ralganda. Javob `message: "Explanation queued"`. So'rov paytida ogohlantirish yopilsa — 202 emas, 409; generatsiya paytida yopilsa — natija yozilmaydi.
+- 🟢 Izoh matnida havola/rasm/URL va HTML teglari yo'q (solishtirish belgilari «<», «>» saqlanadi).
+**Frontend action items:**
+- 🔧 «AI izohi» tugmasi → `POST explain`; 202 `pending` — skeleton + poll/realtime; 429 — `reset_at` gacha tugma o'chiq; 503 — «AI vaqtincha o'chiq».
+
+### 2026-11-14 — AI maslahatchi (BE-5, 4-qism): bildirishnoma, faoliyat jurnali, realtime
+
+Shartnoma v0.3 §9, §11, §12. Deploy: api-gateway + ai-service (+ notification-service — faqat reyestr), migratsiyasiz.
+
+- 🆕 Bildirishnoma turi `ai.advisor_alert` (`category: finance`, `priority: critical`, «Muhim»): FAQAT `critical` ogohlantirish OCHILGANDA bir marta; aniq `recipient_ids` (faol superadminlar) — ochiq ilovaga `notification:new` to'liq qator bilan keladi (`id, title, body, link, data`). `link` = `/ai-assistant?tab=alerts&alert=:id`; `data = {alert_id, rule_key, severity, variant (R7: receipt|card_balance, aks holda null), subject_name, telegram_buttons}`. Sarlavha «Jiddiy ogohlantirish · {qisqa nom}», matnda AI matni va PII yo'q.
+- 🟢 Kanallar: `in_app` + `realtime` doim; `telegram` faqat `settings.telegram.enabled` (BE-1 bo'lguncha yoqiq) VA `rules.<R>.telegram` — **R7 sukuti false** (ilova ichi + kunlik hisobot, Telegram'ga yo'q). Telegram tugmasi «Ogohlantirishni ochish».
+- 🆕 Realtime `ai.advisor.alert_changed` (superadminlarga, summasiz): `{alert_id, rule_key, severity, status, change: opened|occurred|status|explanation, explanation_status, at}` — ochilish/takror (tick), «Ko'rildi» va PATCH'dan keyin. FE `overview`, ro'yxat va ochiq tafsilotni qayta o'qiydi.
+- 🆕 `/activity-logs`: `ai` xizmati oyog'i qo'shildi (`_service: "ai"`) — `ai.advisor.alert.resolve|dismiss`, `ai.advisor.settings.update`, `ai.cap.raise` endi ko'rinadi.
+
+- ✏️ (review round-2) `ai.advisor_alert` — `priority: critical` bo'lsa ham **SMS eskalatsiyasi YO'Q** (reyestr `escalation: false`): faqat `in_app` + `realtime` (+ Telegram sozlamaga ko'ra, R7 — yo'q).
+- 🟢 `/activity-logs` `ai` oyog'i 3 s timeout bilan (AI band bo'lsa — `failed_services: ["ai"]`, qolgan jurnal kutmaydi); swagger `service` enum'iga `ai` qo'shildi.
+- 🟢 Faqat **faol** superadminlarga yuboriladi; 24 soatdan eski (birinchi aniqlangan) ogohlantirish bildirishnomasiz qoladi (ro'yxatda ko'rinadi).
+- ✏️ (ega, 2026-11-15) R6 zarar ogohlantirishi tunda (02:30) ochilsa — ilova ichida (`notification:new`, realtime) darhol, **Telegram esa Toshkent 09:00 da** (o'sha kun; 09:00 dan keyin ochilgan — darhol). 09:00 gacha hal qilingan / ahamiyatsiz — Telegram ketmaydi. Migratsiya 229 (`telegram_due_at`, REST'da yo'q).
+**Frontend action items:**
+- 🔧 `ACTIVITY_SERVICES` ga `"ai"` + filtr yorlig'i (uz/ru/en).
+- 🔧 `notification:new` `type === "ai.advisor_alert"` — doimiy toast (`duration: 0`) + `overview`/ro'yxat bekor qilish; `ai.advisor.alert_changed` — invalidatsiya.
+
+### 2026-11-14 — AI maslahatchi (BE-5, 3-qism): ogohlantirishlar endpointlari
+
+Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migratsiyasiz. Hammasi FAQAT SUPERADMIN (ADMIN — 403).
+
+- 🆕 `GET /ai/advisor/overview` — `{alerts{new, open, critical, critical_open, critical_rule_keys[], critical_open_rule_keys[]}, recommendations: null, budget: null, usd_uzs_rate: null, generated_at}`. Banner (Q8) — `critical` + `critical_rule_keys` (faqat `new` jiddiylar), tartib `MAX(last_at) DESC`.
+- 🆕 `GET /ai/advisor/alerts?status&severity&rule_key&from&to&q&sort_by&sort_dir&page&limit` — `{items, meta{page, limit, total, totalPages}, counts{by_status}}`. Holatni o'zgartirmaydi. `counts.by_status` — `status` filtrisiz. Saralash oxirida doim `id DESC`. Noto'g'ri query — kodsiz 400.
+- 🆕 `GET /ai/advisor/alerts/:id[?include=history]` — tafsilot; `new` bo'lsa atomik `new → seen` (`seen_at`, `seen_by`), audit yo'q. ⚠️ prefetch/hover'da yubormang. 3 daqiqadan eski `pending` izoh — `failed` + `explanation_error: "error"`; `pending` da `explanation_poll_after_ms: 2000`. 404 `AI_ADVISOR_ALERT_NOT_FOUND`.
+- 🆕 `PATCH /ai/advisor/alerts/:id {status: resolved|dismissed, note?}` — `resolved` uchun izoh 3–500 (trim) majburiy → 400 `AI_ADVISOR_NOTE_INVALID {reason, min_length, max_length}`; `dismissed` — ixtiyoriy ≤ 500. Ayni foydalanuvchi ayni holatni qayta yuborsa — 200 (idempotent). Boshqa holat / boshqa superadmin yopgan — 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Javob — yangilangan tafsilot. Audit `ai.advisor.alert.resolve|dismiss` (`/activity-logs` da `ai` xizmati — 4-qism).
+- 🟢 `explain` (AI izohi) — 5-qism; hozircha `explanation_status` doim `none`.
+### 2026-11-14 — AI maslahatchi (BE-5, 2c review tuzatishlari): R7/R8 semantikasi — shartnoma v0.4 uchun
+
+#653 mustaqil review (FE sessiya) va ega qarori asosida. Deploy: ai-service + finance-service, migratsiyasiz.
+
+- ✏️ **R7 karta** (`facts.source = card_balance`) — ega qarori 2026-11-14: faqat HAQIQIY farqda. `mismatch` hisoblanadi — `amount` (|AI o'qigan − tizimdagi| > 1; tizim qoldig'i noma'lum eski qatorda — AI o'qigan vs kiritilgan), `card` (rasmdagi karta oxirgi 4 raqami ≠ kassa kartasi). Kassir faqat noto'g'ri raqam kiritgan (AI = tizim) — R7 YO'Q (smena hisobotida). Yangi maydonlar: `facts.expected_balance`, `facts.system_difference` (= AI o'qigan − tizimdagi), `facts.entered_ok`; dalilda ham. `headline_amount` = `system_difference` (`amount` bo'lsa), aks holda null. Kursor — `GREATEST(ai_checked_at, confirmed_at)` (smena yopilgandan keyin ham ko'rinadi).
+- ✏️ **R7 chek**: so'mda bo'lmagan chek — `mismatch` ga `currency` (⊂ {amount, card, currency}), `difference`/`headline_amount`/`read_amount` = null, yangi `facts.read_currency`, `facts.read_amount_original`; `evidence.receipt.{amount, currency, error_reason, kind}`. `facts.receipt_kind` (`manual_expense|courier_to_hq|branch_to_hq`) — o'tkazmada `card` = «Pul HQ kartasiga tushmagan»; filial — jo'natuvchi. T6 bilan qaytarilgan operatsiya cheklari — R7 yo'q. Kursor — `GREATEST(ai_checked_at, updatedAt)`.
+- ✏️ `evidence.receipt.date_at` — faqat sana+vaqt bo'lsa (aniq mintaqa hurmat qilinadi), faqat sana — `date_at: null` + yangi `date_day: 'YYYY-MM-DD'`; noto'g'ri sana (31.02) — ikkalasi null. Valyutali chekda — faqat xom `date`.
+- ⚠️ **PII**: `evidence.receipt.recipient` va `payer` endi doim `null` (faqat `*_last4`).
+- ✏️ **R8**: ega qarori — `count ≥ max(min_count, ratio × weekly_avg)`; yangi sozlama `rules.R8.min_count` (sukut 3, 1–50, UI'da ko'rsatilmaydi — Q12), `limits.rules.R8.min_count`, `rule.thresholds.min_count`, `evidence.baseline.{min_count, ratio}`. Baza 0 bo'lsa `facts.ratio: null` (nullable). Oxirgi yopilgan hafta (R6/R8) har kuni 02:30 da so'raladi (dushanba yiqilsa ham yo'qolmaydi).
+- 🟢 R7 ochiq ogohlantirishda ayni chek/tekshiruv qayta tahlil qilinsa — faktlar va sarlavha yangilanadi (`occurrences` o'zgarmaydi). (round-3) Faktlar o'zgarmagan qayta skan — hech narsa; o'zgarganda ham **`last_at` o'zgarmaydi** (ro'yxat tepasiga chiqmaydi).
+- ✏️ (round-3) R7 `facts.mismatch` **hech qachon bo'sh emas**: AI karta raqamini o'qiy olmagan, summa teng bo'lsa — R7 yo'q; #643 dan oldingi sinonim valyutali (SUM, …) 0 farqli chek — yo'q. `amount` — faqat |farq| > 1 so'm.
+- ✏️ (round-3) R7 `facts.operation.kind` — chek turi (`manual_expense|courier_to_hq|branch_to_hq`), `source_type` emas. O'tkazma chekida `operation.history_id` — jo'natuvchining chiqim oyog'i (`facts.cashbox` tarixida ochiladi).
+- ⚠️ Deploy tartibi: `scripts/finance/fix-receipt-foreign-currency.sql` `updatedAt` ni yangilaydi — R7 yoqilishidan ≥ 7 kun OLDIN yurgizing, aks holda har tarixiy chet valyuta cheki R7 (backfill, bildirishnomasiz) bo'lib ochiladi.
+
+### 2026-11-14 — AI maslahatchi (BE-5, 2c): R7 chek/karta farqi, R8 tuzatishlar
+
+Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q. Endi R1–R8 hammasi tekshiriladi.
+
+- 🟢 R7 (har 30 daqiqada; kursor — pastdagi review tuzatishiga qarang): `facts.source = card_balance` — faqat tasdiqlangan (smena yopilgan) karta tekshiruvi `mismatch`, `difference = AI o'qigan − kiritilgan`; `receipt` — bog'langan chek AI `mismatch` yoki `card_mismatch` bayrog'i, `facts.mismatch ⊂ {amount, card}`. `evidence.receipt.date` — xom OCR matni, `date_at` — tahlil qilingan ISO (aks holda null); `week_summary` — joriy hafta (du–ya). Sukut darajasi `critical`, Telegram'ga yuborilmaydi (Q2 c).
+- 🟢 R8 (dushanba 02:30, o'tgan hafta): sanaladi — qo'lda tuzatish + T6 qaytarish/tahrir; buyurtma qaytarilishi (`order_rollback`) faqat `by_kind` da ko'rinadi (Q4). [TAKLIF] haftada kamida 3 ta tuzatish bo'lmasa ogohlantirilmaydi (baza 0 bo'lgan haftada 1–2 ta tuzatish shovqin bo'lmasin). Havola — `/payments/main-cashbox` (Q12).
+
+### 2026-11-14 — AI maslahatchi (BE-5, 2b): R2, R4, R5 — epizod qoidalari
+
+Deploy: ai-service + finance-service, migratsiyasiz. Yangi endpoint YO'Q.
+
+- 🟢 R2 kuryer qarzi (o'sish VA > 2 mln) YOKI (> 3 kun topshirilmagan) — `facts.trigger: growth|no_handover|both`; `branch` — kuryer filiali. R4 market to'lovi (> 0 VA > 7 kun), R5 filial → HQ o'tkazma (> 5 mln VA > 3 kun). Har 30 daqiqada.
+- 🟢 Takror = **epizod** (oxirgi topshirish/to'lov/o'tkazma): epizod ichida ochiq ogohlantirish faqat yangilanadi (`occurrences` o'zgarmaydi); yopilgan bo'lsa davom etayotgan holat qayta ochilmaydi (Q23); yangi epizod — yangi ogohlantirish (`reopened_from_id`). T6 bilan qaytarilgan topshirish sanalmaydi.
+
+### 2026-11-14 — AI maslahatchi (BE-5, 2a): qoidalar dvigateli — R1, R3, R6
+
+Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_rule_state`). Yangi endpoint YO'Q — ogohlantirishlar `ai_advisor_alerts` ga yoziladi; ro'yxat/tafsilot endpointlari keyingi PR'da.
+
+- 🟢 Qoidalar har 30 daqiqada (R1 smena kamomadi, R3 g'ayrioddiy xarajat) va har kuni 02:30 Toshkent (R6 zarar — kecha; dushanba — o'tgan hafta ham) tekshiriladi. `AI_ADVISOR_RULES` sukut **o'chiq** — faqat aniq `on` yoqadi (muhitda qo'lda). Kursor bo'shlig'i ≤ 7 kun; qoida > 24 soat to'xtab qolgan bo'lsa (o'chirib-yoqish, uzilish) — 24 soatdan eski faktlardan ochilganlar bildirishnomasiz (backfill).
+- 🟢 Birinchi ishga tushish: 7 kunlik orqa oyna; 24 soatdan eski faktlardan ochilganlar bildirishnomasiz (`notify_skipped='backfill'`, §4.3).
+- 🟢 R3: namuna < 5 — qoida jim; filial+kategoriya namunasi < 5 bo'lsa butun tizim (`facts.scope`); minimal MAD = mediana × 5% (BQ9).
+- 🟢 Hozircha `explanation_status: none` (avtomatik izoh — 5-qism), bildirishnoma — 4-qism. R2/R4/R5 va R7/R8 — keyingi PR'lar.
+- ✏️ (review round-2) R1: ochiq ogohlantirishga yangi kamomad qo'shilsa `facts.shifts_count`/`total_difference`/`closed_by` va `evidence.rows` (≤ 15, `shift_id` bo'yicha) **birlashtiriladi** — «N marta» bilan «Jami kamomad» mos. Yangi maydonlar: `facts.streak_length`, `facts.streak_total` (faqat `consecutive_negative`, aks holda null) — «N smena ketma-ket» uchun (birlashgan yakka kamomadlarsiz).
+- ✏️ Sarlavhalar §4.2 shaklida: «Samarqand filiali kassasida 3 smena ketma-ket kamomad: −445 000 so'm», «… kassasida smena kamomadi: −120 000 so'm»; R3 `scope: category` — «tizim bo'yicha odatdagidan».
+- ✏️ R3 `scope: category` dalilida har qatorning `cashbox_name` va `href` — o'sha qator kassasidan (ilgari trigger kassasi). R6: `subject.name = "Butun tizim"`, `first_fact_at` = davr boshi.
+- 🟢 R6: 02:30 ishi o'tkazib yuborilsa keyingi ishda o'tgan kunlar (≤ 7) va hafta ham tekshiriladi.
+
+### 2026-11-14 — «Hududlar»: yetishmagan 25 tuman qo'shildi, avtomatik biriktirish ogohlantirishi (D1)
+
+Ega qarori (2026-11-14): rasmiy SOATO'dagi yetishmagan 25 tuman/shahar («Farg'ona shahri», «Zomin tumani», «Xiva shahri» …) prod'ga qo'shiladi va viloyat filialiga AVTOMATIK biriktiriladi; ops tasdiqlaguncha superadmin/admin ogohlantirish ko'radi.
+Biriktirish — VILOYAT qoidasi (district-coverage.ts, anKpzwxk): tuman buyurtmasini xizmat viloyati (`assigned_region ?? region_id`) dagi HAR QANDAY faol REGIONAL/HYBRID filial ko'radi. Eski `districts.serving_branch_id` qamrovga ta'sir qilmaydi — ogohlantirishdagi filial undan EMAS, viloyat qoidasidan CHAQIRUV paytida hisoblanadi.
+Deploy: logistics-service + api-gateway, migratsiya **227** (`logistics_schema.districts`: `assignment_review_required` sukut `false`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at`). ⚠️ Migratsiya logistics-service qayta ishga tushishidan OLDIN — qatorlar servis ishga tushganda seed bilan qo'shiladi.
+
+- 🆕 `GET /region/district-coverage` (SUPERADMIN, ADMIN) → `data`:
+  `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city' | 'tuman' | null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1' | 'no_branch_found', flagged_at }], checked_at }`.
+  `missing_official` — rasmiy ro'yxatda bor, bazada yo'q birliklar (deploy'dan keyin odatda bo'sh); `region.id` — bazada viloyat bo'lmasa `null`.
+  `region` — geografik viloyat; `service_region` — buyurtmani yo'naltiradigan xizmat viloyati (tuman boshqa viloyatga o'tkazilgan bo'lsa farq qiladi).
+  `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o'sish tartibida) — ularning HAR BIRI tuman buyurtmalarini ko'radi; `serving_branch` — ulardan biri (ko'rsatish uchun). `serving_branch: null` + `reason: 'no_branch_found'` — FAQAT xizmat viloyatida faol filial yo'q bo'lsa (buyurtmani faqat HQ ko'radi).
+  Filial xizmati javob bermasa — **503** (boshqa qamrov tekshiruvlari bilan bir xil): «filial yo'q» deb ko'rsatmang, «qayta urinish» bering.
+- 🆕 `POST /region/district/:id/confirm-assignment` (SUPERADMIN, ADMIN) — idempotent 200: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }`; audit yoziladi. Ikki admin bir vaqtda bossa — ikkalasi 200, audit bitta, ikkalasi yutgan tasdiqning `confirmed_by/at` ni oladi. Tuman yo'q — 404.
+- ✏️ `PATCH /district/:id` (`assigned_region`) — «O'zgartirish» shu yerga: viloyat o'zgarsa belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).
+- ✏️ `PUT /branches/:id/districts` (eskirgan) — tanlangan (yoki filialdan olingan) tumanlarning belgisi ham tushadi (audit: `cleared_by_reassign`). Filial o'chirilishi / nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI — tekshiruv baribir kerak; ogohlantirishdagi filial viloyat qoidasidan qayta hisoblanadi.
+- ✏️ `GET /district`, `GET /district/:id`, `GET /district/sato/:code`, `GET /region`, `GET /region/:id` (tumanlar) — har tumanda yangi maydonlar `assignment_review_required: boolean`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` — **faqat SUPERADMIN/ADMIN** javobida; MARKET, COURIER, MARKET_OPERATOR, MANAGER, REGISTRATOR javobida bu maydonlar YO'Q.
+
+**Frontend action items:**
+- 🔧 «Hududlar»: `review_required` bo'sh bo'lmasa banner + ro'yxat (tuman, xizmat viloyati, filial(lar) — `region_branches`, sabab); «Tasdiqlash» → confirm-assignment; «O'zgartirish» → `PATCH /district/:id` (viloyat). `no_branch_found` — «Filial yo'q · Faqat Toshkent HQ ko'radi», qizil. 503 — xato holati, «filial yo'q» EMAS.
+- 🔧 Tuman ro'yxatida `assignment_review_required` — sariq belgi (faqat admin; boshqa rollarda maydon yo'q — `undefined` ni `false` deb oling).
+
+### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
+
+Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.
+
+- ✏️ Kassa cheki (`ai` obyekti, chek tekshiruvi): chek valyutasi UZS bo'lmasa (USD, RUB, …) — `ai_status: "mismatch"` (avvalgidek), lekin **`ai.difference: null`** va **`ai.error_reason: "currency_not_uzs"`** (yangi qiymat). Ilgari chet valyuta summasidan so'm ayirib katta «farq» chiqarardi.
+- 🟢 Chek tekshiruvi xulosasi (`GET /finance/receipts/summary` → `mismatch_total`, `top`): bunday cheklar summaga va top-15 ga kirmaydi; `counts.mismatch` da qoladi. AI yordamchining `get_receipt_checks` vositasi ham xuddi shunday.
+- 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
+
+- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\n`, `\t` dan tashqari) → 400; `page` ≤ 1 000 000.
+- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
+- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
+**Frontend action items:**
+- 🔧 `ai_status === "mismatch"` va `ai.difference === null` bo'lishi mumkin — farq ustunida «—», `error_reason === "currency_not_uzs"` uchun matn tavsiya: «Chek so'mda emas ({currency}) — summani qo'lda tekshiring».
+
+### 2026-11-14 — AI maslahatchi (BE-5, 1-qism): qoidalar sozlamasi `GET/PATCH /ai/advisor/settings`
+
+API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7.7, §8. Deploy: api-gateway + ai-service, migratsiya **224** (`ai_schema.ai_advisor_alerts`, `ai_advisor_alert_occurrences`, `ai_advisor_settings` — yangi jadvallar). Ogohlantirishlar endpointlari (`overview`, `alerts*`) — keyingi PR'larda.
+
+- 🆕 `GET /ai/advisor/settings` (FAQAT SUPERADMIN; ADMIN — 403): `{version, rules{R1..R8}, limits{rules{<R>{<maydon>{min,max,step,unit,default}}}}, telegram, budget, schedule, updated_at, updated_by}`. Saqlangan qator bo'lmasa — `version: 1`, sukutlar, `updated_at/by: null`.
+- 🆕 `PATCH /ai/advisor/settings` — qisman, hammasi yoki hech narsa, `version` MAJBURIY. Javob — to'liq sozlamalar. O'zgarishsiz PATCH `version` ni oshirmaydi. Audit `ai.advisor.settings.update` (eski → yangi).
+- 🟢 Audit yozuvi `ai_schema.activity_logs` ga tushadi, lekin `/activity-logs` da `ai` xizmati hali YO'Q — BE-5 ning 4-qismida (audit-gateway `ai` oyog'i) ko'rinadi.
+- 🟢 Noma'lum TOP-level kalit (masalan `foo`) — gateway `forbidNonWhitelisted` bilan **kodsiz** 400; `version`/`rules` ichidagi xatolar — kodli (`AI_ADVISOR_*`).
+- 🟢 Ega javoblari (Q1/Q2): `severity` qotirilgan — R2, R6, **R7** `critical`, qolgani `warning`; `rules.R7.telegram` sukuti **`false`** (openapi misolidagi R7 `warning`/`telegram:true` eskirgan). `rules.<R>.telegram` o'zgartiriladi.
+- 🟢 `telegram`, `budget`, `schedule` — hozircha `null` (BE-1); PATCH'da yuborilsa 400 `AI_ADVISOR_INVALID_SETTING {field}`.
+- 🟢 Kodli xatolar (`code` javobga chiqadi): 400 `AI_ADVISOR_INVALID_RULE {field, min, max}` (chegara/qadam/tur), 400 `AI_ADVISOR_INVALID_SETTING {field}` (noma'lum kalit, `version` yo'q, `rules.<R>.severity`), 409 `AI_ADVISOR_SETTINGS_CONFLICT {version}` (joriy versiya). Qolgan `AI_ADVISOR_*` kodlari ham `PUBLIC_ERROR_CODES` ga qo'shildi.
+
+**Frontend action items:**
+- 🔧 Qoidalar oynasi: forma chegaralari `limits.rules` dan; 400 `field` bo'yicha xato maydon ostida; 409 → sozlamalarni qayta o'qish. `severity` PATCH'da yuborilmasin.
+
 ### 2026-11-14 — AI buyurtma: `district_low_confidence` va `price_check` endi tasdiq talab qiladi (`ack_checks`, 409 `CHECKS_NOT_ACKNOWLEDGED`)
 
 Ega qarori (2026-11-14): AI ogohlantirishlaridan FAQAT ikkitasi BLOKLOVCHI — tuman aniq emas (`district_low_confidence`) va summa matndagidan farq qiladi / juda katta (`price_check`). Qolganlari (`qty_check`, `duplicate_items`, `phone_is_market`, `same_phone_multi`) — avvalgidek yumshoq ogohlantirish, tasdiq so'ralmaydi.

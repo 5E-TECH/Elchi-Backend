@@ -41,6 +41,7 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import { projectDistrictReviewFields } from './auth/district-review-projection';
 import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
   ProblemContactsService,
@@ -185,7 +186,7 @@ function pickPostOrderDistrict(value: unknown) {
 
 /** CODE-12 — o'chirilgan eski pochta route'lari (PATCH post/:id, post/reassign/:id). */
 export const LEGACY_POST_ROUTE_DISABLED_MESSAGE =
-  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
+  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, HQ kuryeriga POST /branches/posts/:postId/dispatch-to-courier, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
 
 /**
  * Eski pochtalar — `GET /post/orders/:id?view=`: `all` — pochtaga HAR QACHON
@@ -1641,12 +1642,19 @@ export class LogisticsGatewayController {
     RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all regions' })
+  @ApiOperation({
+    summary: 'Get all regions',
+    description:
+      'Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.',
+  })
   @ApiOkResponse({ description: 'Region list' })
-  getAllRegions() {
-    return this.sendLogisticsWithTimeout(
-      { cmd: 'logistics.region.find_all' },
-      {},
+  async getAllRegions(@Req() req: { user: JwtUser }) {
+    return projectDistrictReviewFields(
+      await this.sendLogisticsWithTimeout(
+        { cmd: 'logistics.region.find_all' },
+        {},
+      ),
+      req.user?.roles,
     );
   }
 
@@ -1941,6 +1949,53 @@ export class LogisticsGatewayController {
     );
   }
 
+  // D1 — statik yo'llar `region/:id` dan OLDIN.
+  @Get('region/district-coverage')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Tuman qamrovi ogohlantirishi (D1)',
+    description:
+      "«Hududlar» sahifasi ogohlantirishi. Javob `data`: `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city'|'tuman'|null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1'|'no_branch_found', flagged_at }], checked_at }`. " +
+      '`missing_official` — rasmiy SOATO ro‘yxatida bor, bazada (o‘chirilmagan) qatori yo‘q birliklar. `review_required` — seed qo‘shib viloyatga AVTOMATIK biriktirgan va ops hali tasdiqlamagan tumanlar. ' +
+      '`region` — geografik viloyat (`region_id`), `service_region` — buyurtmani yo‘naltiradigan XIZMAT viloyati (`assigned_region ?? region_id`). ' +
+      '`serving_branch` VILOYAT qoidasidan (district-coverage.ts, `isOrderServedByBranch`) CHAQIRUV paytida hisoblanadi: `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o‘sish tartibida; ularning HAR BIRI tuman buyurtmalarini ko‘radi), `serving_branch` — ulardan biri (eski `serving_branch_id` ro‘yxatda bo‘lsa o‘sha, aks holda eng kichik id). `reason: no_branch_found` va `serving_branch: null` — FAQAT xizmat viloyatida faol filial yo‘q bo‘lsa (buyurtmani faqat HQ ko‘radi). ' +
+      'Filial xizmati javob bermasa — 503 (qamrov tekshiruvlari bilan bir xil; «filial yo‘q» deb ko‘rsatilmaydi). Belgini `POST /region/district/:id/confirm-assignment`, `PATCH /district/:id` (viloyat o‘zgarsa) yoki `PUT /branches/:id/districts` tushiradi; filial o‘chirilishi/nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI. Faqat SUPERADMIN/ADMIN.',
+  })
+  @ApiOkResponse({ description: 'Coverage review' })
+  getDistrictCoverageReview(@Req() req: { user: JwtUser }) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.district.coverage_review' },
+      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Post('region/district/:id/confirm-assignment')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Avtomatik filial biriktirishini tasdiqlash (D1)',
+    description:
+      'Tumanning `assignment_review_required` belgisini tushiradi (audit yoziladi). IDEMPOTENT: belgi yo‘q bo‘lsa ham 200; parallel tasdiq yoki qayta biriktirish bilan poygada faqat yutgan so‘rov audit yozadi, qolgani saqlangan `confirmed_by`/`confirmed_at` ni qaytaradi. Javob `data`: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }` (hech qachon tasdiqlanmagan va belgisiz tuman — `confirmed_by`/`confirmed_at` `null`). Tuman yo‘q — 404. Faqat SUPERADMIN/ADMIN.',
+  })
+  @ApiParam({ name: 'id', description: 'District ID (bigint string)' })
+  @ApiOkResponse({ description: 'Assignment confirmed' })
+  confirmDistrictAssignment(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.district.confirm_assignment' },
+      {
+        district_id: id,
+        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+      },
+    );
+  }
+
   @Get('region/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   // (OfRSoRUX / N11, MO-7) MARKET_OPERATOR — buyurtmani qo'lda yaratishda viloyat tumanlari (faqat o'qish; MARKET
@@ -1955,12 +2010,19 @@ export class LogisticsGatewayController {
     RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get region by id' })
+  @ApiOperation({
+    summary: 'Get region by id',
+    description:
+      'Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.',
+  })
   @ApiParam({ name: 'id', description: 'Region ID (id)' })
-  getRegionById(@Param('id') id: string) {
-    return this.sendLogisticsWithTimeout(
-      { cmd: 'logistics.region.find_by_id' },
-      { id },
+  async getRegionById(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    return projectDistrictReviewFields(
+      await this.sendLogisticsWithTimeout(
+        { cmd: 'logistics.region.find_by_id' },
+        { id },
+      ),
+      req.user?.roles,
     );
   }
 
@@ -2028,13 +2090,23 @@ export class LogisticsGatewayController {
     RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all districts' })
+  @ApiOperation({
+    summary: 'Get all districts',
+    description:
+      '`assignment_review_required`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` (D1) — faqat SUPERADMIN/ADMIN ga; boshqa rollarga bu maydonlar qaytmaydi.',
+  })
   @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiOkResponse({ description: 'District list' })
-  getAll(@Query('region_id') region_id?: string) {
-    return this.sendLogisticsWithTimeout(
-      { cmd: 'logistics.district.find_all' },
-      { region_id },
+  async getAll(
+    @Req() req: { user: JwtUser },
+    @Query('region_id') region_id?: string,
+  ) {
+    return projectDistrictReviewFields(
+      await this.sendLogisticsWithTimeout(
+        { cmd: 'logistics.district.find_all' },
+        { region_id },
+      ),
+      req.user?.roles,
     );
   }
 
@@ -2086,12 +2158,24 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get district by sato_code' })
+  @ApiOperation({
+    summary: 'Get district by sato_code',
+    description:
+      '`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.',
+  })
   @ApiParam({ name: 'satoCode', description: 'District SATO code' })
-  getDistrictBySato(@Param('satoCode') satoCode: string) {
+  getDistrictBySato(
+    @Param('satoCode') satoCode: string,
+    @Req() req: { user: JwtUser },
+  ) {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.find_by_sato' }, { sato_code: satoCode })
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        map((res: unknown) =>
+          projectDistrictReviewFields(res, req.user?.roles),
+        ),
+      );
   }
 
   @Get('district/:id')
@@ -2107,12 +2191,21 @@ export class LogisticsGatewayController {
     RoleEnum.MARKET_OPERATOR,
   )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get district by id' })
+  @ApiOperation({
+    summary: 'Get district by id',
+    description:
+      '`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.',
+  })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
-  getById(@Param('id') id: string) {
+  getById(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.find_by_id' }, { id })
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        map((res: unknown) =>
+          projectDistrictReviewFields(res, req.user?.roles),
+        ),
+      );
   }
 
   // LC-08 / RBAC-06 — tumanni boshqa hududga biriktirish HQ intake'da
@@ -2129,7 +2222,8 @@ export class LogisticsGatewayController {
     summary: 'Assign district to another region',
     description:
       "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. " +
-      "Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi.",
+      "Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi. " +
+      "D1: tuman «tekshirilmagan» (`assignment_review_required: true`) bo'lsa, viloyat o'zgarishi bilan belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).",
   })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   @ApiBody({ type: UpdateDistrictRequestDto })

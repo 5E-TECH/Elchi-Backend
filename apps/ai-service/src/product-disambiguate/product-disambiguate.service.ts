@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { effortParam } from '../usage/ai-pricing';
 import {
   AI_MODEL_DEFAULTS,
   ClaudeService,
@@ -54,14 +55,17 @@ export class ProductDisambiguateService {
       return { ok: true, picks: [] };
     }
 
+    const model = this.classifyModel();
     const r = await this.claude.extractJson<{ picks: unknown }>({
       system: PRODUCT_DISAMBIG_SYSTEM,
       // Mahsulot nomlari market nazoratida — faqat user text'da (DATA),
       // system-prompt'ga hech qachon qo'shilmaydi.
       userText: buildProductDisambigUserText(req),
       schema: PRODUCT_DISAMBIG_SCHEMA,
-      model: this.classifyModel(),
+      model,
       maxTokens: PRODUCT_DISAMBIG_MAX_TOKENS,
+      // M2: 5.5 avlodida effort sukuti baland — aniq 'low' (kesilmasin).
+      ...effortParam(model, 'low'),
       deadlineAt,
       meta: {
         feature: 'order_item_match',

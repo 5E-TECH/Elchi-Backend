@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { effortParam } from '../usage/ai-pricing';
 import {
   AI_MODEL_DEFAULTS,
   ClaudeService,
@@ -39,7 +40,8 @@ export const BALANCE_SCREENSHOT_SCHEMA: Record<string, unknown> = Object.freeze(
   },
 );
 
-export const BALANCE_SCREENSHOT_MAX_TOKENS = 256;
+/** F2: 256 da kesilardi (thinking + JSON birga); effort 'low' bilan 1024. */
+export const BALANCE_SCREENSHOT_MAX_TOKENS = 1024;
 /** base64 ≤ ~5 MB rasm (gateway chegarasi) + zaxira. */
 export const BALANCE_SCREENSHOT_MAX_BASE64 = 7 * 1024 * 1024;
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -105,12 +107,15 @@ export class BalanceScreenshotService {
     ) {
       return { ok: false, reason: 'invalid_json' };
     }
+    const model = this.model();
     const r = await this.claude.extractJson<Record<string, unknown>>({
       system: BALANCE_SCREENSHOT_SYSTEM,
       userText: "Skrinshotdagi karta qoldig'ini o'qing.",
       schema: BALANCE_SCREENSHOT_SCHEMA,
-      model: this.model(),
+      model,
       maxTokens: BALANCE_SCREENSHOT_MAX_TOKENS,
+      // M2: 5.5 avlodida effort sukuti baland — aniq 'low' (kesilmasin).
+      ...effortParam(model, 'low'),
       deadlineAt,
       images: [
         {

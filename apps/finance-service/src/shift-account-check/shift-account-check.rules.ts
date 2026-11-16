@@ -136,7 +136,7 @@ const UNREADABLE_REASONS = new Set(['refused', 'invalid_json', 'truncated']);
  *   match    — |o'qilgan − kutilgan| ≤ 1 so'm VA last4 mos (kartada last4
  *              bo'lsa rasmda ham aynan shu 4 raqam o'qilishi shart);
  *   mismatch — aks holda;
- *   unreadable — qoldiq o'qilmadi / ishonch < 0.5 / model rad etdi;
+ *   unreadable — qoldiq o'qilmadi / ishonch yo'q yoki < 0.5 / model rad etdi;
  *   error    — tarmoq, cap, AI o'chiq va h.k.
  */
 export function deriveAiStatus(input: {
@@ -156,7 +156,11 @@ export function deriveAiStatus(input: {
   if (
     input.read_balance == null ||
     !Number.isFinite(Number(input.read_balance)) ||
-    (input.confidence != null && input.confidence < AI_MIN_CONFIDENCE)
+    // F2: ishonch yo'q (null / NaN) = o'qib bo'lmadi — ilgari null
+    // "ishonchli" deb o'tib ketardi.
+    input.confidence == null ||
+    !Number.isFinite(Number(input.confidence)) ||
+    input.confidence < AI_MIN_CONFIDENCE
   ) {
     return ShiftAccountAiStatus.UNREADABLE;
   }

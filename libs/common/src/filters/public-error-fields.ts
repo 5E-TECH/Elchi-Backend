@@ -4,6 +4,7 @@ import { SHIFT_LATE_PHOTO_ERROR_CODES as SLP } from '../finance/shift-account-ch
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
+import { ORDER_OPERATOR_ERROR_CODES } from '../order/order-operator-assign';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
 import {
@@ -11,6 +12,7 @@ import {
   ORDER_RECEIVE_CLOSED,
 } from '../order/order-intake';
 import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
+import { AI_ADVISOR_PUBLIC_ERROR_FIELDS } from '../ai/advisor.contract';
 import {
   AI_CHECKS_NOT_ACKNOWLEDGED,
   AI_CHECKS_UNAVAILABLE,
@@ -153,6 +155,11 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
   // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
   [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
+  // (2026-11-16) buyurtmaga keyin operator biriktirish — 409: operator bor,
+  // integratsiya buyurtmasi yoki tekshiruvdan keyin market o'zgardi.
+  [ORDER_OPERATOR_ERROR_CODES.ALREADY_ASSIGNED]: [],
+  [ORDER_OPERATOR_ERROR_CODES.EXTERNAL]: [],
+  [ORDER_OPERATOR_ERROR_CODES.MARKET_CHANGED]: [],
   // (2026-11-09) bugungi buyurtma qabuli yopiq — 409; `reopens_at` — kun
   // almashadigan lahza (ISO), `cutoff_time` — qo'yilgan qabul vaqti (HH:MM).
   [ORDER_INTAKE_CLOSED]: ['reopens_at', 'cutoff_time'],
@@ -186,6 +193,13 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),
   ),
+  // (BE-5 LhTIno57) AI maslahatchi — ogohlantirishlar va sozlamalar:
+  // 404 ALERT_NOT_FOUND, 409 ALERT_CLOSED `alert_status`, 400 NOTE_INVALID
+  // `reason/min_length/max_length`, 400 INVALID_RULE `field/min/max`,
+  // 400 INVALID_SETTING `field`, 409 SETTINGS_CONFLICT `version`,
+  // 429 BUDGET_EXCEEDED `scope/period/reset_at/retry_after_seconds`,
+  // 503 AI_DISABLED `reason`.
+  ...AI_ADVISOR_PUBLIC_ERROR_FIELDS,
 };
 
 /**

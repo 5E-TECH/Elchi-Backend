@@ -69,6 +69,18 @@ export class FindHistoryDto {
   @Matches(/^\d+$/)
   source_user_id?: string;
 
+  /**
+   * 2026-11-15 — filial bo'yicha manba: `source_user_id = <filial id>` VA faqat
+   * filial yozadigan turlar (`branch_to_main` va uning T6 teskari yozuvi).
+   * `source_user_id` ustunida foydalanuvchi (market, kuryer) id'lari ham turadi,
+   * filial id'lari esa alohida sanaladi — `source_user_id=11` id'si 11 bo'lgan
+   * marketga HQ to'lovini ham filial 11 tarixiga olib kelardi.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_branch_id?: string;
+
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)

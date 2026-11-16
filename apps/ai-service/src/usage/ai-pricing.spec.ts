@@ -3,7 +3,11 @@ import {
   AI_MODEL_CACHE_MIN_TOKENS,
   AI_MODEL_PRICES,
   cacheMinTokensFor,
+  cacheReadMultiplierFor,
   computeCacheSavedUsd,
+  assistantEffortParam,
+  effortParam,
+  supportsEffort,
   computeCostUsd,
   normalizeModelId,
   priceFor,
@@ -38,6 +42,9 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
 
   it('narx map kartadagi (opus-5 5/25, sonnet-5 3/15, haiku-4-5 1/5, fable-5 10/50) + prod modeli sonnet-4-6 3/15', () => {
     expect(AI_MODEL_PRICES).toEqual({
+      'opus-5-5': { in: 4, out: 20 },
+      'sonnet-5-5': { in: 2, out: 10 },
+      'haiku-5-5': { in: 0.1, out: 0.5 },
       'opus-5': { in: 5, out: 25 },
       'sonnet-5': { in: 3, out: 15 },
       'sonnet-4-6': { in: 3, out: 15 },
@@ -51,6 +58,9 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
       Object.keys(AI_MODEL_PRICES).sort(),
     );
     expect(AI_MODEL_CACHE_MIN_TOKENS).toEqual({
+      'opus-5-5': 512,
+      'sonnet-5-5': 512,
+      'haiku-5-5': 512,
       'opus-5': 512,
       'sonnet-5': 1024,
       'sonnet-4-6': 1024,
@@ -60,6 +70,107 @@ describe('ai-pricing (lYVuADRE 5-band)', () => {
     expect(cacheMinTokensFor('claude-haiku-4-5-20251001')).toBe(4096);
     expect(cacheMinTokensFor('claude-sonnet-5')).toBe(1024);
     expect(cacheMinTokensFor('claude-sonet-5')).toBeNull();
+  });
+
+  describe('M1: 5.5 avlodi', () => {
+    it("noma'lum model tarifiga TUSHMAYDI (eng qimmat 10/50 emas)", () => {
+      expect(priceFor('claude-sonnet-5-5')).toEqual({ in: 2, out: 10 });
+      expect(priceFor('claude-opus-5-5')).toEqual({ in: 4, out: 20 });
+      expect(priceFor('claude-haiku-5-5')).toEqual({ in: 0.1, out: 0.5 });
+    });
+
+    it("kesh o'qish: sonnet/opus 5.5 — 0.05×, qolganlar 0.1×", () => {
+      expect(cacheReadMultiplierFor('claude-sonnet-5-5')).toBe(0.05);
+      expect(cacheReadMultiplierFor('claude-opus-5-5')).toBe(0.05);
+      expect(cacheReadMultiplierFor('claude-haiku-5-5')).toBe(0.1);
+      expect(cacheReadMultiplierFor('claude-sonnet-5')).toBe(0.1);
+      expect(cacheReadMultiplierFor('constructor')).toBe(0.1);
+    });
+
+    it('sonnet-5-5 xarajati: 1M in + 1M out + 1M write + 1M read = 2+10+2.5+0.1', () => {
+      const u = usage({
+        model: 'claude-sonnet-5-5',
+        inputTokens: M,
+        outputTokens: M,
+        cacheCreationTokens: M,
+        cacheReadTokens: M,
+      });
+      expect(computeCostUsd(u)).toBeCloseTo(14.6, 9);
+      expect(computeCacheSavedUsd(u)).toBeCloseTo(1.9, 9);
+    });
+
+    it("haiku-5-5: 100K gacha 0.10/0.50; 100K dan oshsa BUTUN so'rov 0.50/2.50", () => {
+      const small = usage({
+        model: 'claude-haiku-5-5',
+        inputTokens: 100_000,
+        outputTokens: 1_000,
+      });
+      expect(computeCostUsd(small)).toBeCloseTo(
+        (100_000 * 0.1 + 1_000 * 0.5) / M,
+        12,
+      );
+      const big = usage({
+        model: 'claude-haiku-5-5',
+        inputTokens: 60_000,
+        cacheReadTokens: 50_000,
+        outputTokens: 1_000,
+      });
+      expect(computeCostUsd(big)).toBeCloseTo(
+        (60_000 * 0.5 + 50_000 * 0.5 * 0.1 + 1_000 * 2.5) / M,
+        12,
+      );
+      // Tejash ham uzun so'rov tarifida (0.10 emas, 0.50).
+      expect(computeCacheSavedUsd(big)).toBeCloseTo(
+        (50_000 * 0.5 * 0.9) / M,
+        12,
+      );
+    });
+
+    it("M2: effort 5.5 avlodiga va 5-avlodga yuboriladi, Haiku 4.5 / Sonnet 4.6 / noma'lumga yo'q", () => {
+      for (const m of [
+        'claude-sonnet-5-5',
+        'claude-opus-5-5',
+        'claude-haiku-5-5',
+        'claude-sonnet-5',
+        'claude-opus-5',
+        'claude-fable-5',
+      ]) {
+        expect(supportsEffort(m)).toBe(true);
+        expect(effortParam(m, 'low')).toEqual({ effort: 'low' });
+      }
+      for (const m of ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-x']) {
+        expect(effortParam(m, 'low')).toEqual({});
+      }
+      // Yordamchi: dev xulqi — rad etmaydigan har modelga (Sonnet 4.6,
+      // Opus 4.x, noma'lum ham) yuboriladi; faqat Haiku 4.5 ga yo'q.
+      for (const m of [
+        'claude-sonnet-4-6',
+        'claude-opus-4-8',
+        'claude-sonnet-5-5',
+      ]) {
+        expect(assistantEffortParam(m, 'medium')).toEqual({ effort: 'medium' });
+      }
+      expect(assistantEffortParam('claude-haiku-4-5-20251001', 'low')).toEqual(
+        {},
+      );
+    });
+  });
+
+  it('C1: 1 soatlik kesh yozish × 2, 5 daqiqalik × 1.25 (1h qismi jamidan oshmaydi)', () => {
+    const u = usage({
+      model: 'claude-sonnet-5-5',
+      cacheCreationTokens: M,
+      cacheCreation1hTokens: 400_000,
+    });
+    // 600K × 2 × 1.25 + 400K × 2 × 2 = 1.5 + 1.6
+    expect(computeCostUsd(u)).toBeCloseTo(3.1, 9);
+    expect(computeCostUsd({ ...u, cacheCreation1hTokens: 5 * M })).toBeCloseTo(
+      4,
+      9,
+    );
+    expect(
+      computeCostUsd({ ...u, cacheCreation1hTokens: undefined }),
+    ).toBeCloseTo(2.5, 9);
   });
 
   describe('normalizeModelId', () => {

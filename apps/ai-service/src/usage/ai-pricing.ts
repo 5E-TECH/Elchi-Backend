@@ -20,7 +20,15 @@ export interface AiModelPrice {
 
 export const AI_MODEL_PRICES: Readonly<Record<string, AiModelPrice>> =
   Object.freeze({
+    // 5.5 avlodi (Anthropic narx jadvali, 2026-11): kesh o'qish 0.05×
+    // (sonnet/opus) — AI_MODEL_CACHE_READ_MULTIPLIERS; haiku-5-5 100K
+    // tokendan katta so'rovda qimmatroq tarif — AI_MODEL_LONG_PROMPT_PRICES.
+    'opus-5-5': { in: 4, out: 20 },
+    'sonnet-5-5': { in: 2, out: 10 },
+    'haiku-5-5': { in: 0.1, out: 0.5 },
     'opus-5': { in: 5, out: 25 },
+    // ⚠️ SAVOL (ega hisob-faktura bilan tasdiqlasin): Anthropic'ning joriy
+    // jadvalida Sonnet 5 = $2/$10; bu yerda $3/$15 — ataylab o'zgartirilmadi.
     'sonnet-5': { in: 3, out: 15 },
     // Prod `.env.production` dagi AI_ORDER_MODEL (BeePost'dan qolgan) — jadval
     // tanimasa xarajat eng qimmat tarifda yozilardi (LP3RKvXY TC12). Ekstraksiya
@@ -40,6 +48,9 @@ export const AI_MODEL_PRICES: Readonly<Record<string, AiModelPrice>> =
  */
 export const AI_MODEL_CACHE_MIN_TOKENS: Readonly<Record<string, number>> =
   Object.freeze({
+    'opus-5-5': 512,
+    'sonnet-5-5': 512,
+    'haiku-5-5': 512,
     'opus-5': 512,
     'sonnet-5': 1024,
     'sonnet-4-6': 1024,
@@ -58,7 +69,48 @@ export const AI_LOW_EFFORT_MODELS: ReadonlySet<string> = new Set([
   'sonnet-5',
   'opus-5',
   'fable-5',
+  // 5.5 avlodi: thinking O'CHIRILMAYDI (disabled/budget_tokens → 400) va
+  // sukut effort baland (Sonnet 5.5 — high, Opus/Haiku 5.5 — medium).
+  // Effort berilmasa kichik max_tokens thinking'ga ketib javob kesiladi —
+  // shuning uchun HAR chaqiruv effort'ni aniq yuboradi (`effortParam`).
+  'sonnet-5-5',
+  'opus-5-5',
+  'haiku-5-5',
 ]);
+
+export type AiEffort = 'low' | 'medium' | 'high';
+
+/**
+ * Chaqiruvga qo'shiladigan `effort` qismi: model effort'ni qabul qilsa
+ * `{ effort }`, aks holda `{}` (Haiku 4.5 — 400). Barcha chaqiruv joylari
+ * shu BITTA funksiyadan foydalanadi (ai-request-guard.spec qulflaydi).
+ */
+export function effortParam(
+  model: string,
+  effort: AiEffort,
+): { effort?: AiEffort } {
+  return supportsEffort(model) ? { effort } : {};
+}
+
+/**
+ * Effort'ni RAD etadigan (400) ma'lum modellar — Haiku 4.5. Yordamchi
+ * (`AI_ASSISTANT_EFFORT`) ilgari effort'ni HAR DOIM yuborardi (Sonnet 4.6,
+ * Opus 4.6–4.8 ham qabul qiladi, sukut 'high'); o'sha xulq saqlanadi, faqat
+ * rad etadigan modelga yuborilmaydi.
+ */
+export const AI_EFFORT_REJECTING_MODELS: ReadonlySet<string> = new Set([
+  'haiku-4-5',
+]);
+
+/** Yordamchi uchun: model effort'ni rad etmasa `{ effort }`. */
+export function assistantEffortParam(
+  model: string,
+  effort: AiEffort,
+): { effort?: AiEffort } {
+  return AI_EFFORT_REJECTING_MODELS.has(normalizeModelId(model))
+    ? {}
+    : { effort };
+}
 
 /** Modelga `effort` yuborish mumkinmi (`AI_LOW_EFFORT_MODELS`). */
 export function supportsEffort(model: string): boolean {
@@ -75,8 +127,38 @@ export function cacheMinTokensFor(model: string): number | null {
 
 /** Kesh yozish = kirish × 1.25 (Anthropic prompt caching, 5 daqiqa TTL). */
 export const CACHE_WRITE_MULTIPLIER = 1.25;
-/** Kesh o'qish = kirish × 0.1 — ya'ni tejash kirish narxining 90%. */
+/** C1: 1 soatlik TTL bilan kesh yozish = kirish × 2. */
+export const CACHE_WRITE_1H_MULTIPLIER = 2;
+/** Kesh o'qish (sukut) = kirish × 0.1 — ya'ni tejash kirish narxining 90%. */
 export const CACHE_READ_MULTIPLIER = 0.1;
+
+/** Sukutdan farq qiladigan kesh o'qish ko'paytiruvchilari (model bo'yicha). */
+export const AI_MODEL_CACHE_READ_MULTIPLIERS: Readonly<Record<string, number>> =
+  Object.freeze({
+    'opus-5-5': 0.05,
+    'sonnet-5-5': 0.05,
+  });
+
+/**
+ * Uzun so'rov tarifi: kirish (kesh bilan birga) `threshold` tokendan oshsa
+ * BUTUN so'rov shu narxda (Haiku 5.5: 100K dan ortiq — $0.50/$2.50).
+ */
+export const AI_MODEL_LONG_PROMPT_PRICES: Readonly<
+  Record<string, { threshold: number; price: AiModelPrice }>
+> = Object.freeze({
+  'haiku-5-5': { threshold: 100_000, price: { in: 0.5, out: 2.5 } },
+});
+
+/** Model bo'yicha kesh o'qish ko'paytiruvchisi. */
+export function cacheReadMultiplierFor(model: string): number {
+  const key = normalizeModelId(model);
+  return Object.prototype.hasOwnProperty.call(
+    AI_MODEL_CACHE_READ_MULTIPLIERS,
+    key,
+  )
+    ? AI_MODEL_CACHE_READ_MULTIPLIERS[key]
+    : CACHE_READ_MULTIPLIER;
+}
 
 const TOKENS_PER_UNIT = 1_000_000;
 
@@ -128,6 +210,12 @@ export interface AiTokenUsage {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
+  /**
+   * C1: `cacheCreationTokens` dan 1 soatlik TTL bilan yozilgani. ⚠️ MAJBURIY
+   * — ixtiyoriy bo'lsa chaqiruvchi uni unutib 1h yozishni × 1.25 da
+   * hisoblaydi (#648 review B1). 1h bo'lmasa 0 bering.
+   */
+  cacheCreation1hTokens: number;
 }
 
 /** Manfiy/NaN/kasr qiymatni butun nomanfiy songa keltiradi. */
@@ -138,30 +226,90 @@ export function safeTokenCount(value: unknown): number {
 }
 
 /**
+ * Kesh yozish tokenlari narx og'irligi bilan: 5 daqiqalik × 1.25, 1 soatlik
+ * × 2 (1h qismi jami yozishdan oshmaydi).
+ */
+function cacheWriteTokensWeighted(u: AiTokenUsage): number {
+  const total = safeTokenCount(u.cacheCreationTokens);
+  const oneHour = Math.min(safeTokenCount(u.cacheCreation1hTokens), total);
+  return (
+    (total - oneHour) * CACHE_WRITE_MULTIPLIER +
+    oneHour * CACHE_WRITE_1H_MULTIPLIER
+  );
+}
+
+/** So'rov hajmini hisobga olgan narx (uzun so'rov tarifi bo'lsa — o'sha). */
+function effectivePriceFor(u: AiTokenUsage): AiModelPrice {
+  const key = normalizeModelId(u.model);
+  const long = Object.prototype.hasOwnProperty.call(
+    AI_MODEL_LONG_PROMPT_PRICES,
+    key,
+  )
+    ? AI_MODEL_LONG_PROMPT_PRICES[key]
+    : undefined;
+  if (long) {
+    const promptTokens =
+      safeTokenCount(u.inputTokens) +
+      safeTokenCount(u.cacheCreationTokens) +
+      safeTokenCount(u.cacheReadTokens);
+    if (promptTokens > long.threshold) return long.price;
+  }
+  return priceFor(u.model);
+}
+
+/**
  * Bitta javobning USD xarajati (yaxlitlanmagan):
- * in×input + out×output + in×1.25×cache_write + in×0.1×cache_read.
+ * in×input + out×output + in×(1.25×write_5m + 2×write_1h) + in×R×cache_read
+ * (R — model bo'yicha, `cacheReadMultiplierFor`).
  */
 export function computeCostUsd(u: AiTokenUsage): number {
-  const p = priceFor(u.model);
+  const p = effectivePriceFor(u);
   return (
     (safeTokenCount(u.inputTokens) * p.in +
       safeTokenCount(u.outputTokens) * p.out +
-      safeTokenCount(u.cacheCreationTokens) * p.in * CACHE_WRITE_MULTIPLIER +
-      safeTokenCount(u.cacheReadTokens) * p.in * CACHE_READ_MULTIPLIER) /
+      cacheWriteTokensWeighted(u) * p.in +
+      safeTokenCount(u.cacheReadTokens) *
+        p.in *
+        cacheReadMultiplierFor(u.model)) /
     TOKENS_PER_UNIT
   );
+}
+
+/**
+ * `ClaudeUsage` (API javobi / tool-loop yig'indisi) → USD. Assistant va
+ * eval shu yordamchidan foydalanadi — 1h qismi unutilmaydi.
+ */
+export function costOfClaudeUsage(
+  model: string,
+  u: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_1h_input_tokens: number;
+  },
+): number {
+  return computeCostUsd({
+    model,
+    inputTokens: u.input_tokens,
+    outputTokens: u.output_tokens,
+    cacheCreationTokens: u.cache_creation_input_tokens,
+    cacheReadTokens: u.cache_read_input_tokens,
+    cacheCreation1hTokens: u.cache_creation_1h_input_tokens,
+  });
 }
 
 /**
  * Prompt caching tejagan summa (USD) — dashboard uchun:
  * cache_read × in × 0.9 / 1M (keshsiz narx minus kesh o'qish narxi).
  */
-export function computeCacheSavedUsd(
-  u: Pick<AiTokenUsage, 'model' | 'cacheReadTokens'>,
-): number {
-  const p = priceFor(u.model);
+export function computeCacheSavedUsd(u: AiTokenUsage): number {
+  // Uzun so'rov tarifi (Haiku 5.5 100K+) — tejash ham shu narxda.
+  const p = effectivePriceFor(u);
   return (
-    (safeTokenCount(u.cacheReadTokens) * p.in * (1 - CACHE_READ_MULTIPLIER)) /
+    (safeTokenCount(u.cacheReadTokens) *
+      p.in *
+      (1 - cacheReadMultiplierFor(u.model))) /
     TOKENS_PER_UNIT
   );
 }

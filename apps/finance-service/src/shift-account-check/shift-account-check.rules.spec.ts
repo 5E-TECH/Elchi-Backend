@@ -40,6 +40,11 @@ describe('shift-account-check rules (kiZgTybn)', () => {
   it('unreadable / error', () => {
     expect(deriveAiStatus({ ...base, read_balance: null })).toBe('unreadable');
     expect(deriveAiStatus({ ...base, confidence: 0.2 })).toBe('unreadable');
+    // F2: ishonch yo'q — o'qib bo'lmadi (ilgari null match bo'lib o'tardi).
+    expect(deriveAiStatus({ ...base, confidence: null })).toBe('unreadable');
+    expect(deriveAiStatus({ ...base, confidence: Number.NaN })).toBe(
+      'unreadable',
+    );
     expect(deriveAiStatus({ ...base, ok: false, reason: 'refused' })).toBe(
       'unreadable',
     );

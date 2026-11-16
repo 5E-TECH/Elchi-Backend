@@ -3,6 +3,8 @@
  * ikki snapshotda: SEED (regions-districts.data.ts — prod'dagi hozirgi
  * qatorlar) va FULL (seed + rasmiy SOATO ro'yxatidagi yetishmayotgan
  * qatorlar, D1 bajarilgandan keyingi holat).
+ * D1 (#656) dan keyin seed'da 25 ta qator bor — SEED = FULL, shuning uchun
+ * fixture'da `seed` ustuni `full` bilan bir xil.
  *
  * Kutilgan qiymat o'zgarsa — fixture'ni ataylab yangilang va PR'da sababini
  * yozing. Sweep testlari esa invariant: hech qachon BOSHQA tumanni

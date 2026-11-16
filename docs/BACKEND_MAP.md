@@ -510,7 +510,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   reassign, cancel (`post.cancel.create`, `cancel.receive`), check/check_cancel,
   courier-scoped lists (`new`, `on_the_road`, `my_for_courier`, `old_for_courier`,
   `rejected*`), return-requests (`list`/`approve`/`reject`).
-- **Order assignment:** `logistics.order.assign_to_courier`, `scan_assign`.
+- **Order assignment:** `logistics.order.assign_to_courier`, `scan_assign`,
+  `post.dispatch_to_courier` / `post.courier_destinations` (NEW HQ post →
+  HQ courier, 2026-11-15 — §5.3).
 - **Geo:** regions/districts CRUD, SATO match preview/apply, region stats.
 - **fix3 (2026-10-01):**
   - **Disabled for launch (CODE-12):** `logistics.post.create`,
@@ -518,7 +520,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     RpcException **410** without calling the service (methods kept, re-enable =
     restore the handlers); the gateway's `PATCH /post/:id` and
     `PATCH /post/reassign/:id` throw 410 and send no RPC. Posts reach a branch
-    via `POST /branches/posts/:postId/dispatch`, a courier via
+    via `POST /branches/posts/:postId/dispatch`, an HQ courier straight from a
+    NEW HQ post via `POST /branches/posts/:postId/dispatch-to-courier`
+    (`logistics.post.dispatch_to_courier`, 2026-11-15 — see §5.3), a courier via
     `POST /orders/assign-to-courier` or a scan.
   - `post.receive` keeps the post SENT while any ON_THE_ROAD order remains and
     adds top-level `failures` / `not_received_order_ids` (LC-11); `post.new`
@@ -564,7 +568,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
     (`order.transfer_batch.receive_one_by_scan`): downstream 4xx keep their
     status (CODE-13); a **transit** reply (`reason:'transit'`) → clear 400
     ("boshqa hudud uchun (tranzit) … kuryerga berilmaydi") instead of
-    "Boshqa filial orderi" — the order is not assigned (§5.3).
+    "Boshqa filial buyurtmasi" — the order is not assigned (§5.3).
 - **Delivery pricing engine (DAqXPeSy, 2026-10-24, migration 142)** —
   `src/delivery-pricing/` (own controller + service; NOT in the 7k-line
   service). Math is the pure `computeDeliveryQuote` in
@@ -1058,6 +1062,27 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   host bits, IPv6; no IPv6 CIDR), ids are BIGINT-bounded. Separate from
   `partners` on purpose: a carrier key can't reach `/partner/*` and vice
   versa. See §5.5.
+  - **HQ-only create (owner decision 2026-11-15):** «faqat integratsiya
+    qilingan tashqi yetkazib beruvchiga faqat HQ ga ochilgan o'z kurieri
+    bo'lsagina biriktirish mumkin». `create` (after the identity check,
+    before the existing-account 409) asks branch-service through the new
+    **BRANCH** RMQ client (`branch.user.find_by_user`, system requester,
+    ≤6.5 s; `branch.find_hq` 3 s only when the row has no branch type): the
+    courier's active `branch_users` row must be COURIER in the HQ branch,
+    else 400 `courier_not_hq` (`details: {courier_id, branch_id|null}`);
+    branch-service down → 503. `rotate_key` / `set_active` / `validate_key`
+    are NOT checked — legacy non-HQ accounts keep working. Needs
+    `RABBITMQ_BRANCH_QUEUE` in integration-service's env (not validated at
+    boot; missing → carrier create 503).
+  - `integration.carrier.find_by_courier_ids {courier_ids}` (internal, ≤500
+    bigint ids, deduplicated): non-deleted rows as
+    `{courier_user_id, name, is_active}` only (no id / key hash / ip list /
+    hidden toggles). Used by the gateway for the «Tashqi: …» marker in
+    `GET /branches/posts/:postId/courier-destinations` (fail-soft, 3 s) and
+    by the transfer guard: `PATCH /couriers/:id/branch` of a linked courier
+    to a non-HQ branch → 409 `courier_carrier_linked`; integration or
+    `branch.find_hq` down → 503. `DELETE /branches/:id/users/:userId` is not
+    guarded.
   **Hidden rollback toggle (2026-11-14):** `rollback_enabled` (migration
   223, `NOT NULL DEFAULT false` — new AND existing accounts off). Only
   `update` (`PATCH /admin/carriers/:id`) changes it (create always false;
@@ -1525,6 +1550,28 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   tracking rows with `from_status = to_status` (status-less edits on a
   cancelled order). Migration: CHECK `NOT VALID`, `lock_timeout` 5 s inside
   the block.
+- **Operator after create (2026-11-16, owner request, no migration):** an
+  order created without an operator (`operator_id IS NULL`) gets one later via
+  `PUT /orders/:id/operator` `{ operator_id }` → `order.operator.assign`
+  (`OrderLifecycleService.assignOperator`). Roles: SUPERADMIN, ADMIN,
+  REGISTRATOR, MANAGER, BRANCH, MARKET (not MARKET_OPERATOR — he is written as
+  operator automatically at create; not COURIER). Scope in the gateway: market
+  own order, branch staff own branch triple (as `PATCH /orders/:id`), SA/admin
+  any. The operator must be an active operator of the ORDER's market —
+  `resolveChosenOrderOperator` with `identity.market_operator.selectable`
+  (same check as `POST /orders` `operator_id`), else 400. Under FOR UPDATE
+  (`libs/common/src/order/order-operator-assign.ts`): market ownership again
+  (403); `operator_id` already set → 409 `ORDER_OPERATOR_ALREADY_ASSIGNED`
+  (assign only, no change of operator); `operator` text `external_…`
+  (integration status-sync key) → 409 `ORDER_OPERATOR_EXTERNAL`; order market ≠
+  the checked market → 409 `ORDER_OPERATOR_MARKET_CHANGED`. Writes
+  `operator_id`, `operator` = operator name (typed text kept if the name is
+  empty), `order_tracking` `action: operator_assigned` (from = to = status) and
+  activity verb `order.operator_assigned`. Status is unchanged. If the order is
+  already sold (`sold`, `paid`, `partly_paid` — `ORDER_OPERATOR_EARNING_STATUSES`)
+  the sale-time `finance.operator.earning.record` is enqueued in the same
+  transaction (finance is idempotent on `order_id`); a later rollback removes
+  it as usual.
 - **Read scope (gateway):** `GET /orders/:id` — market own, market_operator own
   market, customer own, courier (`courier_id`/`holder_courier_id`), branch
   staff own branch triple (+ HQ staff: HQ-held), operator/investor 403;
@@ -1773,6 +1820,41 @@ create from a branch by `order_ids` → `send` (vehicle info) → `receive` /
   (fallback: the order's region); no region at all → 400 naming the ids
   (LC-13). The source post is deleted only if a re-query shows it empty
   (LC-02).
+- **Pochta → HQ courier (owner decision 2026-11-15)** — «Pochta jo'natishda
+  ham agar HQ ning shu viloyatda o'z kurieri bo'lsa u ham ro'yxatda chiqib
+  kelishi kerak». Two routes next to `post.dispatch` (gateway
+  SUPERADMIN/ADMIN/REGISTRATOR; logistics re-checks the «Yangi pochtalar»
+  rule — SA/ADMIN or an HQ registrator, else 403 `new_posts_hq_only`):
+  - `GET /branches/posts/:postId/courier-destinations` →
+    `logistics.post.courier_destinations` (15 s) + gateway enrichment
+    `carrier_name` / `carrier_active` / `carrier_lookup_failed`.
+  - `POST /branches/posts/:postId/dispatch-to-courier`
+    `{courier_id, order_ids[1..1000]}` → `logistics.post.dispatch_to_courier`
+    (120 s).
+  - Both use ONE helper, `resolveHqCouriersForRegion(R)`: HQ couriers =
+    active COURIER rows of HQ `branch_users`; they serve the post region R when
+    R = HQ region (every HQ courier, `region_match: hq_region`) or identity
+    `courier.find_all {user_ids, status: active, region_id: R}` returns them
+    (own region `home`, super-courier «Xizmat viloyatlari» `listed`,
+    `serves_all_regions` `all_regions`). branch-service / identity down → 503.
+  - **Exception to owner decision 6 (HQ courier = HQ-region orders only) on
+    this Pochta path ONLY.** `assignOrdersToCourier` (/dispatch) and
+    scan-assign keep 403 `hq_courier_region_only`.
+  - Checks before any write: post NEW + courierless + has region (400
+    `post_not_sendable` / `branch_region_missing`), courier in HQ (400
+    `courier_not_hq`), active (400 `courier_inactive`), serves R (403
+    `courier_region_not_served`), every selected id in the post (409
+    `order_not_in_post`), cancelled/closed/deleted skipped (none left → 400
+    `no_dispatchable_orders`), only RECEIVED, courierless, HQ-held orders
+    (400 `order_not_dispatchable`), region: R = HQ region → existing
+    `assertOrdersServedByBranch`; else batch 409 `order_in_outgoing_batch` and
+    service region ≠ R → 409 `order_region_mismatch`.
+  - Write: `moveOrdersToCourierDailyPost` — the write tail extracted from
+    `assignOrdersToCourier` (today's courier SENT post or a new one with
+    `region_id = R`, per-order update, counters, best-effort rollback), then
+    `releaseOrderFromNewRegionPost` per order and `deletePost` when the NEW
+    post has no orders left (failure → `post_deleted: false`, request still
+    200). No migration.
 - **`order.transfer_batch.receive_one_by_scan`** (a branch courier scans an
   order of a SENT batch addressed to his branch): when the batch has a
   `target_region_id` and the order's region differs (incl. NULL), custody
