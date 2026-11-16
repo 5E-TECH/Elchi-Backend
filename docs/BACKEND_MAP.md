@@ -1550,6 +1550,28 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   tracking rows with `from_status = to_status` (status-less edits on a
   cancelled order). Migration: CHECK `NOT VALID`, `lock_timeout` 5 s inside
   the block.
+- **Operator after create (2026-11-16, owner request, no migration):** an
+  order created without an operator (`operator_id IS NULL`) gets one later via
+  `PUT /orders/:id/operator` `{ operator_id }` → `order.operator.assign`
+  (`OrderLifecycleService.assignOperator`). Roles: SUPERADMIN, ADMIN,
+  REGISTRATOR, MANAGER, BRANCH, MARKET (not MARKET_OPERATOR — he is written as
+  operator automatically at create; not COURIER). Scope in the gateway: market
+  own order, branch staff own branch triple (as `PATCH /orders/:id`), SA/admin
+  any. The operator must be an active operator of the ORDER's market —
+  `resolveChosenOrderOperator` with `identity.market_operator.selectable`
+  (same check as `POST /orders` `operator_id`), else 400. Under FOR UPDATE
+  (`libs/common/src/order/order-operator-assign.ts`): market ownership again
+  (403); `operator_id` already set → 409 `ORDER_OPERATOR_ALREADY_ASSIGNED`
+  (assign only, no change of operator); `operator` text `external_…`
+  (integration status-sync key) → 409 `ORDER_OPERATOR_EXTERNAL`; order market ≠
+  the checked market → 409 `ORDER_OPERATOR_MARKET_CHANGED`. Writes
+  `operator_id`, `operator` = operator name (typed text kept if the name is
+  empty), `order_tracking` `action: operator_assigned` (from = to = status) and
+  activity verb `order.operator_assigned`. Status is unchanged. If the order is
+  already sold (`sold`, `paid`, `partly_paid` — `ORDER_OPERATOR_EARNING_STATUSES`)
+  the sale-time `finance.operator.earning.record` is enqueued in the same
+  transaction (finance is idempotent on `order_id`); a later rollback removes
+  it as usual.
 - **Read scope (gateway):** `GET /orders/:id` — market own, market_operator own
   market, customer own, courier (`courier_id`/`holder_courier_id`), branch
   staff own branch triple (+ HQ staff: HQ-held), operator/investor 403;
