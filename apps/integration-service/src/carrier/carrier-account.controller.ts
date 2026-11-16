@@ -56,6 +56,21 @@ export class CarrierAccountController {
     );
   }
 
+  /**
+   * Ichki: kuryer id'lari → bog'langan carrier `{courier_user_id, name,
+   * is_active}` (gateway: «HQ kuryeriga» ro'yxatidagi belgi va kuryerni
+   * HQ'dan chiqarish to'sig'i). Kalit, IP va yashirin ruxsatlar qaytmaydi.
+   */
+  @MessagePattern({ cmd: 'integration.carrier.find_by_courier_ids' })
+  findByCourierIds(
+    @Payload() data: { courier_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.carrierService.findByCourierIds(data?.courier_ids),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.carrier.list' })
   list(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.carrierService.list());
