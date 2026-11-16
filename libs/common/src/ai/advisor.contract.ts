@@ -272,3 +272,97 @@ export interface AiAdvisorSettingsUpdateRequest {
   /** Gateway DTO'dan o'tgan tana — ichki tekshiruv ai-service'da. */
   patch: Record<string, unknown>;
 }
+
+// ─── BE-5 2-qism: qoida ma'lumotlari (finance → ai-service, §4.4) ─────────
+
+/** finance-service: FAQAT o'qiydigan qoida ma'lumotlari RMQ'si. */
+export const AI_ADVISOR_FINANCE_RULE_INPUTS = 'finance.advisor.rule_inputs';
+
+/** Inkremental (kursorli) qoidalar — §4.0. */
+export const AI_ADVISOR_CURSOR_RULES = ['R1', 'R3', 'R7'] as const;
+export type AiAdvisorCursorRule = (typeof AI_ADVISOR_CURSOR_RULES)[number];
+
+export interface AiAdvisorRuleInputsRequest {
+  rules: AiAdvisorRuleKey[];
+  /** Tekshiruv lahzasi (ISO) — barcha «bugun/kecha» shundan. */
+  now: string;
+  /** Qoida chegaralari (`aiAdvisorThresholds`). */
+  thresholds: Partial<Record<AiAdvisorRuleKey, Record<string, number>>>;
+  /** Kursorli qoidalar: shu lahzadan keyingi hodisalar (kursor − 5 daq). */
+  since: Partial<Record<AiAdvisorCursorRule, string>>;
+  /** R6: tekshiriladigan yopilgan davrlar. */
+  periods?: {
+    days?: string[];
+    /** Hafta dushanbasi (YYYY-MM-DD). */
+    weeks?: string[];
+  };
+}
+
+export interface AiAdvisorRef {
+  id: string;
+  name: string | null;
+}
+
+export interface AiAdvisorCashboxRef {
+  type: 'main' | 'branch' | 'couriers' | 'markets';
+  owner_id: string;
+  name: string | null;
+}
+
+export interface AiAdvisorSubjectRef {
+  kind: 'branch' | 'courier' | 'market' | 'cashbox' | 'system';
+  id: string | null;
+  name: string | null;
+}
+
+/** Bitta fakt (takror): `fact_key` — §4.1. */
+export interface AiAdvisorFactKey {
+  fact_key: string;
+  /** Hodisa vaqti (ISO). */
+  fact_at: string;
+  /**
+   * R1: shu fakt-smena farqi (so'm). Dvigatel ochiq ogohlantirishga yangi
+   * faktlarni QO'SHGANDA jami/sonni shu orqali yig'adi (round-2 #651 B1).
+   */
+  amount?: number;
+}
+
+/**
+ * Bitta nomzod ogohlantirish — bitta `dedup_key` va uning shu tekshiruvda
+ * topilgan faktlari. `facts`/`evidence` — §5.3/§5.4 shakli (ism
+ * snapshotlari bilan); sarlavha va havolalarni ai-service quradi.
+ */
+export interface AiAdvisorCandidate {
+  rule_key: AiAdvisorRuleKey;
+  dedup_key: string;
+  fact_keys: AiAdvisorFactKey[];
+  branch: AiAdvisorRef | null;
+  subject: AiAdvisorSubjectRef;
+  headline_amount: number | null;
+  facts: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  /**
+   * §5.1 `first_fact_at` faktlardan farq qilsa (R6/R8 — davr boshi).
+   * Berilmasa — faktlar `fact_at` minimumi.
+   */
+  first_fact_at?: string;
+}
+
+export interface AiAdvisorRuleInputsResponse {
+  candidates: AiAdvisorCandidate[];
+  /** Kursorli qoidalarning yangi qiymati (ko'rilgan eng katta vaqt). */
+  cursors: Partial<Record<AiAdvisorCursorRule, string | null>>;
+  /** Qoida bo'yicha o'tkazib yuborish sababi (masalan R3 namuna < 5). */
+  skipped?: Partial<Record<AiAdvisorRuleKey, string>>;
+  /**
+   * Qoida bo'yicha xato (timeout va h.k.): shu qoidaning nomzodlari va
+   * kursori yo'q, boshqa qoidalar odatdagidek (round-2 #651 ops-B1).
+   */
+  errors?: Partial<Record<AiAdvisorRuleKey, string>>;
+}
+
+/** finance kirish chegaralari (round-2 #651 S10): davrlar va orqa oyna. */
+export const AI_ADVISOR_INPUT_MAX_PERIODS = 14;
+export const AI_ADVISOR_INPUT_MAX_SINCE_DAYS = 30;
+/** «Butun tizim» — `subject.kind = system` nomi (§5.1). */
+export const AI_ADVISOR_SYSTEM_SUBJECT_NAME = 'Butun tizim';
