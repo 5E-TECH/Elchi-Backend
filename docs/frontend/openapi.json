@@ -4682,7 +4682,7 @@
     },
     "/orders/markets/cancelled/handovers": {
       "get": {
-        "description": "One card = one «Marketga jo'natish» press at HQ (POST /orders/markets/:marketId/cancelled/handover): orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers (POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day (Tashkent YYYY-MM-DD), handed_by: { id, name } | null, method: 'qr'|'pin'|'no_qr'|'manual'|null, manual_count, orders_count, total_price_sum }], total, page, limit, totals: { batches, orders, amount } }` (+ pagination meta). `method` — the non-manual method of the batch; `manual_count` — orders confirmed manually (broken label). 503 while the HQ branch id is unknown.",
+        "description": "One card = one market QR/PIN session at HQ (every POST /orders/markets/:marketId/cancelled/handover of that session — scan = handover): orders sharing market_id + market_handover_at + market_handover_by. Branch single-order handovers (POST /orders/:id/mark-returned-to-market) are NOT included. Newest first. SUPERADMIN, ADMIN and the HQ registrator only (other registrators — 403). `start_day`/`end_day` filter the handover time (Tashkent days). Response: `{ data: [{ id, market_id, market: { id, name, phone_number } | null, handed_at, day (Tashkent YYYY-MM-DD), handed_by: { id, name } | null, method: 'qr'|'pin'|'no_qr'|'manual'|null, manual_count, orders_count, total_price_sum }], total, page, limit, totals: { batches, orders, amount } }` (+ pagination meta). `method` — the non-manual method of the batch; `manual_count` — orders confirmed manually (broken label). 503 while the HQ branch id is unknown.",
         "operationId": "OrderGatewayController_findCancelledHandoverBatches",
         "parameters": [
           {
@@ -5023,7 +5023,7 @@
     },
     "/orders/markets/{marketId}/cancelled/handover": {
       "post": {
-        "description": "All-or-nothing. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is never handed to the market — 409 `{ code: \"WAREHOUSE_ORDER_RETURNS_TO_STOCK\", data: { details: { order_ids: [...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection contains a WAREHOUSE order — 503.",
+        "description": "All-or-nothing. Scan = handover (2026-11-15): one market QR/PIN authorization (`MHA-…`, 5 minutes) may be used MANY times — the staff page sends `order_ids: [id]` for each scanned parcel; parallel calls queue on the session row lock. Every call of one session is written with the session's FIRST handover time (`market_handover_at`), so all of them form ONE «Topshirilgan» batch; the real time is in `last_handover_at` and tracking. VkKDSNNn: a Central-warehouse order (`fulfillment_source=WAREHOUSE`, home branch = HQ) is never handed to the market — 409 `{ code: \"WAREHOUSE_ORDER_RETURNS_TO_STOCK\", data: { details: { order_ids: [...] } } }` lists the offending ids (deselect them and retry). HQ branch id unknown while the selection contains a WAREHOUSE order — 503.",
         "operationId": "OrderGatewayController_handoverCancelledOrdersToMarket",
         "parameters": [
           {
@@ -19083,6 +19083,112 @@
         ]
       }
     },
+    "/branches/posts/{postId}/courier-destinations": {
+      "get": {
+        "description": "Faqat faol HQ kuryerlari (HQ `branch_users`, rol COURIER), nom bo'yicha. Pochta viloyati = HQ viloyati — HAR BIR HQ kuryeri (`region_match: hq_region`); aks holda faqat o'z viloyati (`home`), «Xizmat viloyatlari»da (`courier_regions`, `listed`) yoki `serves_all_regions` (`all_regions`) bo'lgan HQ kuryeri. Javob `data: { post_id, region_id, is_hq_region, couriers: [{ courier_user_id, name, phone, region_match, carrier_name, carrier_active }], carrier_lookup_failed }` — `carrier_*` bog'lanmagan kuryerda yoki tekshirib bo'lmaganda `null`. 403 `new_posts_hq_only`; 404 «Pochta topilmadi»; 400 `post_not_sendable` (`details: { post_id, post_status, post_courier_id }`) — faqat yangi ('new'), kuryersiz pochta; 400 `branch_region_missing` (`details: { post_id, missing: 'post' }`); 503 — filial yoki foydalanuvchilar xizmati javob bermadi.",
+        "operationId": "BranchGatewayController_findPostCourierDestinations",
+        "parameters": [
+          {
+            "name": "postId",
+            "required": true,
+            "in": "path",
+            "description": "Logistics post ID (NEW HQ post)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "HQ couriers for post region (Pochta → HQ kuryeri)",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
+        ]
+      }
+    },
+    "/branches/posts/{postId}/dispatch-to-courier": {
+      "post": {
+        "description": "Ega qarori 2026-11-15. Kuryer — `GET /branches/posts/:postId/courier-destinations` ro'yxatidagi HQ kuryeri. Javob `data: { post_id, courier_id, courier_post_id, courier_post_created, moved_order_ids, moved_orders_count, skipped_order_ids, post_deleted }` (bekor / yopilgan buyurtmalar jimgina `skipped_order_ids` ga). Xatolar (tekshiruv tartibida, hammasi `data.reason`): 403 `new_posts_hq_only`; 404 «Pochta topilmadi»; 400 `post_not_sendable` (`details: { post_id, post_status, post_courier_id }`); 400 `branch_region_missing` (`details: { post_id, missing }`); 400 `courier_not_hq` (`details.courier_id`); 400 `courier_inactive` (`details.courier_id`); 403 `courier_region_not_served` (`details: { courier_id, post_region_id }`) — «Xizmat viloyatlari»da belgilanmagan; 409 `order_not_in_post` (`details.order_ids`) — sahifani yangilab qayta tanlang; 400 `no_dispatchable_orders`; 400 `order_not_dispatchable` (`details.order_ids`) — faqat HQ qabul qilgan (received), kuryersiz buyurtma; 409 `order_in_outgoing_batch` (`details.order_ids`); 409 `order_region_mismatch` (`details.order_ids`); 403 `hq_courier_region_only` (`details.order_ids`) — faqat pochta viloyati = HQ viloyati bo'lganda; 503 — xizmat javob bermadi.",
+        "operationId": "BranchGatewayController_dispatchPostToCourier",
+        "parameters": [
+          {
+            "name": "postId",
+            "required": true,
+            "in": "path",
+            "description": "Logistics post ID (NEW HQ post)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "courier_id",
+                  "order_ids"
+                ],
+                "properties": {
+                  "courier_id": {
+                    "type": "string",
+                    "example": "77",
+                    "description": "HQ kuryeri user ID (bigint satr)"
+                  },
+                  "order_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "example": [
+                      "101",
+                      "102"
+                    ],
+                    "description": "Majburiy (1–1000): pochtadan beriladigan buyurtmalar. Birortasi shu pochtada bo'lmasa — 409 `order_not_in_post`, hech narsa berilmaydi"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Give HQ post orders directly to an HQ courier",
+        "tags": [
+          "Branch"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator"
+        ]
+      }
+    },
     "/branches/posts/{postId}/reassign": {
       "post": {
         "description": "Eski pochtalar → «Filialga o'tkazish». The post (same id) and all its on-the-road orders move to the destination branch. Rules: post status 'sent' without courier; destination is an active REGIONAL/HYBRID branch of the post's region with a manager and serves every order's service region; every order is still on the road (not received). The 409s for post not sent / partly received / empty post / concurrent change (and 503 reassign failure, 400 post has courier / same branch) carry NO machine code in the response — show `message`. Machine codes come only as `data.reason`: 409 `district_not_served_by_branch` (`details.{order_ids, district_ids}`), 400 `region_mismatch`, 400 `branch_region_missing`. anKpzwxk: coverage is the region rule (any branch of the order's service region); 400 `data.reason = region_mismatch` (post region ≠ destination region) or `branch_region_missing` (post or destination has no region, `details.missing`) — nothing moves.",
@@ -19293,6 +19399,7 @@
     },
     "/couriers/{id}/branch": {
       "patch": {
+        "description": "Tashqi yetkazuvchiga (carrier) bog'langan kuryer faqat HQ'da bo'ladi: boshqa filialga o'tkazish — 409 `data.reason = courier_carrier_linked` (`details.courier_id`); bog'lanishni tekshirib bo'lmasa (integratsiya / filial xizmati javob bermadi) — 503.",
         "operationId": "BranchGatewayController_transferCourierBranch",
         "parameters": [
           {
@@ -22888,6 +22995,7 @@
     },
     "/admin/carriers": {
       "post": {
+        "description": "Kurier — faqat HQ kuryeri (HQ `branch_users`, rol COURIER; ega qarori 2026-11-15); aks holda 400 `data.reason = courier_not_hq` (`details: { courier_id, branch_id | null }`). Filial xizmati javob bermasa — 503 (kuryer HQ’da ekanini tekshirib bo‘lmadi, qayta urinish). Mavjud akkauntlar (rotate-key / status) bu tekshiruvdan o‘tmaydi.",
         "operationId": "CarrierAdminGatewayController_create",
         "parameters": [],
         "requestBody": {

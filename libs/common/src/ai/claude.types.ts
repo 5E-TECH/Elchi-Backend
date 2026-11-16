@@ -68,9 +68,22 @@ export interface ClaudeUsageMeta {
 export interface ClaudeUsage {
   input_tokens: number;
   output_tokens: number;
+  /** Kesh yozish JAMI (5 daqiqa + 1 soat). */
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
+  /**
+   * C1: shundan 1 soatlik TTL bilan yozilgani (`usage.cache_creation.
+   * ephemeral_1h_input_tokens`) — narxi kirish × 2 (5 daqiqalik × 1.25).
+   */
+  cache_creation_1h_input_tokens: number;
 }
+
+/**
+ * C1: prompt kesh TTL. '5m' — sukut (yozish × 1.25); '1h' — yozish × 2,
+ * o'qishlar orasidagi oraliq 5–60 daqiqa bo'lgan kam chastotali prefikslar
+ * uchun (tuman katalogi, yordamchi system).
+ */
+export type ClaudeCacheTtl = '5m' | '1h';
 
 /**
  * `extractJson` natijasi — HECH QACHON throw qilinmaydi, har holat shu union
@@ -113,6 +126,8 @@ export interface ExtractJsonOptions {
    * chaqiruvchida.
    */
   effort?: 'low' | 'medium' | 'high';
+  /** C1: system prefiksi kesh TTL'i (sukut '5m'). */
+  cacheTtl?: ClaudeCacheTtl;
 }
 
 /** Javob olingan chaqiruvning natijasi (xarajat yozuvi uchun). */
@@ -130,6 +145,8 @@ export interface ClaudeUsageRecord extends ClaudeUsageMeta {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
+  /** C1: `cacheCreationTokens` dan 1 soatlik TTL bilan yozilgani (yo'q — 0). */
+  cacheCreation1hTokens: number;
   /** Urinish raqami (1 yoki 2). */
   steps: number;
   stopReason: string | null;
@@ -279,6 +296,11 @@ export interface ClaudeToolLoopOptions {
   /** Har qadamning max_tokens'i (thinking + javob birga). */
   maxTokens: number;
   effort?: 'low' | 'medium' | 'high';
+  /**
+   * C1: system prefiksi kesh TTL'i (sukut '5m'). Suhbat dumi (avtomatik
+   * kesh) doim 5 daqiqa — uzun TTL oldin turishi qoidasiga mos.
+   */
+  cacheTtl?: ClaudeCacheTtl;
   /** Umumiy muddat (epoch ms). */
   deadlineAt?: number;
   /**

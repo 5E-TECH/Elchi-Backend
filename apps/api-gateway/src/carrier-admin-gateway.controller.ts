@@ -32,7 +32,9 @@ type AdminRequest = { user?: { sub?: string; roles?: string[] } };
 
 /**
  * create / rotate-key / status(true): integration identity tekshiruvi
- * ≤ 6.5 s (`IDENTITY_ADMIN_OPTS.deadlineMs`) + DB. Bir martalik kalit javobi
+ * ≤ 6.5 s (`IDENTITY_ADMIN_OPTS.deadlineMs`) + DB; create'da yana HQ
+ * tekshiruvi (filial ≤ 6.5 s + kerak bo'lsa `branch.find_hq` 3 s — jami eng
+ * yomon holat ≈ 16 s). Bir martalik kalit javobi
  * yo'qolmasligi uchun (rotate'da eski kalit allaqachon o'chgan bo'ladi)
  * gateway ancha uzoqroq kutadi.
  */
@@ -66,6 +68,9 @@ export class CarrierAdminGatewayController {
   @ApiOperation({
     summary:
       'Carrier akkaunt yaratish — kurierga bog‘lanadi, API kalit BIR MARTA qaytadi',
+    description:
+      'Kurier — faqat HQ kuryeri (HQ `branch_users`, rol COURIER; ega qarori 2026-11-15); aks holda 400 `data.reason = courier_not_hq` (`details: { courier_id, branch_id | null }`). ' +
+      'Filial xizmati javob bermasa — 503 (kuryer HQ’da ekanini tekshirib bo‘lmadi, qayta urinish). Mavjud akkauntlar (rotate-key / status) bu tekshiruvdan o‘tmaydi.',
   })
   @ApiBody({ type: CreateCarrierAccountRequestDto })
   create(

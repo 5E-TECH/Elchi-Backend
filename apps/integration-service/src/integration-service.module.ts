@@ -51,6 +51,11 @@ import { PartnerWebhookDigestScheduler } from './partner-webhook-digest.schedule
     // tumandan olinadi (`logistics.district.find_by_id`). Navbat nomi
     // (`RABBITMQ_LOGISTICS_QUEUE`) umumiy `.env.production` da bor.
     RmqModule.register({ name: 'LOGISTICS' }),
+    // Carrier akkaunti faqat HQ kuryeriga ochiladi (ega qarori 2026-11-15):
+    // `branch.user.find_by_user` / `branch.find_hq`. Navbat nomi
+    // (`RABBITMQ_BRANCH_QUEUE`) umumiy `.env.production` da bo'lishi SHART —
+    // bootda tekshirilmaydi; yo'q bo'lsa carrier yaratish 503 qaytaradi.
+    RmqModule.register({ name: 'BRANCH' }),
     DatabaseModule,
     ScheduleModule.forRoot(),
     ActivityLogModule.forService('integration-service'),
