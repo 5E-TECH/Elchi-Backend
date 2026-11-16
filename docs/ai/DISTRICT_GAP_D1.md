@@ -1,6 +1,57 @@
 # D1 — yetishmagan tumanlar va shahar/tuman juftlari (ops qarori uchun)
 
-**Holat:** qaror kutilmoqda (Dilshod / ops). Kod o'zgarishi qarordan KEYIN.
+**Holat:** QAROR QILINDI (ega, 2026-11-14) va amalga oshirildi (migratsiya
+227, `feat/district-coverage-review`): 25 birlikning HAMMASI seed'ga
+qo'shildi (rasmiy nomlari bilan — «Farg'ona shahri», «Zomin tumani»);
+mavjud qatorlar qayta nomlanmaydi va kodi o'zgarmaydi (variant (a), faqat
+yangi qator).
+
+**Biriktirish — VILOYAT qoidasi** (anKpzwxk, `libs/common/src/logistics/
+district-coverage.ts`). `districts.serving_branch_id` 2026-11-03 dan beri
+qamrovga ta'sir QILMAYDI (prod'da hamma joyda NULL): buyurtmani tumanning
+xizmat viloyati (`assigned_region ?? region_id`) dagi HAR QANDAY faol
+REGIONAL/HYBRID filial ko'radi. Shuning uchun servis ishga tushganda
+(`onModuleInit`) har yangi qator avvalo VILOYATGA biriktiriladi:
+
+- shahar/tuman jufti bor bo'lsa — juftning `assigned_region`i ko'chiriladi
+  (masalan «Yangiyo'l» Toshkent shahriga o'tkazilgan bo'lsa, «Yangiyo'l
+  shahri» ham o'sha yerga yo'naltiriladi);
+- `serving_branch_id` — faqat ishora: juftniki (juft shu viloyatda qolgan
+  bo'lsa) yoki xizmat viloyati shu viloyat bo'lgan qo'shnilarda eng ko'p
+  uchragani; odatda `NULL`.
+
+Har qator «tekshirilmagan» (`assignment_review_required`, sabab
+`auto_assigned_D1`). «Hududlar» sahifasida superadmin/admin ogohlantirish
+ko'radi (`GET /region/district-coverage`): `serving_branch` va
+`region_branches` CHAQIRUV paytida viloyat qoidasidan hisoblanadi
+(branch-service `branch.dispatch_destinations`; javob bermasa — 503),
+`no_branch_found` — faqat xizmat viloyatida faol filial yo'q bo'lsa. Belgini
+tasdiq (`POST /region/district/:id/confirm-assignment`), viloyatni
+o'zgartirish (`PATCH /district/:id` — «O'zgartirish» tugmasi) yoki eski
+`PUT /branches/:id/districts` tushiradi; filial o'chirilishi
+(`clear_serving_branch`) tushirmaydi.
+
+### Deploy tartibi
+
+1. **Deploy'dan OLDIN** — prod'da faqat o'qish: `scripts/logistics/
+   district-gap-report.sql` (shu PR'da, alohida merge kutilmaydi; buyruq
+   pastda, «1-qadam»). Ko'rib chiqiladigan bo'limlar:
+   - **1-bo'lim** — har birlik uchun prod'da shu SOATO bilan yoki o'xshash
+     nom bilan QO'LDA qo'shilgan qator bormi. `sato_code` NULL yoki boshqa
+     yozilishdagi («Zomin sh.», «Xiva shahar») qator bo'lsa, seed yangi
+     qator qo'shadi va tuman IKKI marta ko'rinadi — deploy'dan oldin o'sha
+     qatorga SOATO kodini yozing (`PATCH /district/sato/:id`) yoki
+     qo'shilgandan keyin birlashtiring.
+   - **3-bo'lim** — 9 juft qatorining `assigned_region`i: juft boshqa
+     viloyatga o'tkazilgan bo'lsa, yangi qator ham o'sha viloyatga
+     yo'naltiriladi — kutilganmi, tekshiring.
+2. Migratsiya **227** — logistics-service qayta ishga tushishidan OLDIN.
+3. logistics-service + api-gateway deploy (seed qatorlarni qo'shadi, WARN
+   log har qator uchun).
+4. «Hududlar» → `GET /region/district-coverage`: 25 qator, har birida
+   `region_branches`; tasdiqlash yoki viloyatni o'zgartirish.
+
+Quyidagi bo'limlar — qarordan oldingi tahlil (tarix uchun).
 
 ## Muammo
 

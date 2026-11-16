@@ -87,9 +87,11 @@ FROM cand c
 ORDER BY c.official_name, c.id;
 
 \echo '=== 3. Seed''dagi yalang''och shahar nomlari (tuman SOATO''si bilan) — 9 juft ==='
-SELECT d.id, r.name AS region, d.name, d.sato_code, d.serving_branch_id
+SELECT d.id, r.name AS region, d.name, d.sato_code, d.assigned_region,
+       ar.name AS assigned_region_name, d.serving_branch_id
 FROM logistics_schema.districts d
 JOIN logistics_schema.regions r ON r.id = d.region_id
+LEFT JOIN logistics_schema.regions ar ON ar.id = d.assigned_region
 WHERE d.sato_code IN ('1714212','1722220','1724220','1727220','1727212',
                       '1727259','1730233','1733217','1735225','1710405')
 ORDER BY d.sato_code;

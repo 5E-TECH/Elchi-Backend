@@ -9,7 +9,7 @@
  * tanlaydi). Qolgan bo'limlar (telefon, narx) — faqat hisobot (A1–A3 keyin).
  *
  * Haqiqiy kod chaqiriladi:
- *  - logistics `resolveDistrictText` (seed snapshot, 181 tuman — xuddi
+ *  - logistics `resolveDistrictText` (seed snapshot, 206 tuman — xuddi
  *    district-resolver.spec.ts dagi kabi sintetik id bilan);
  *  - order-service `AiPreviewService` (haqiqiy ProductResolverService,
  *    haqiqiy DistrictLlmFallbackService; LLM o'rniga YOZIB OLUVCHI picker —

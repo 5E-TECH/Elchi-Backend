@@ -7688,6 +7688,7 @@
     },
     "/region": {
       "get": {
+        "description": "Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.",
         "operationId": "LogisticsGatewayController_getAllRegions",
         "parameters": [],
         "responses": {
@@ -7975,8 +7976,69 @@
         ]
       }
     },
+    "/region/district-coverage": {
+      "get": {
+        "description": "«Hududlar» sahifasi ogohlantirishi. Javob `data`: `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city'|'tuman'|null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1'|'no_branch_found', flagged_at }], checked_at }`. `missing_official` — rasmiy SOATO ro‘yxatida bor, bazada (o‘chirilmagan) qatori yo‘q birliklar. `review_required` — seed qo‘shib viloyatga AVTOMATIK biriktirgan va ops hali tasdiqlamagan tumanlar. `region` — geografik viloyat (`region_id`), `service_region` — buyurtmani yo‘naltiradigan XIZMAT viloyati (`assigned_region ?? region_id`). `serving_branch` VILOYAT qoidasidan (district-coverage.ts, `isOrderServedByBranch`) CHAQIRUV paytida hisoblanadi: `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o‘sish tartibida; ularning HAR BIRI tuman buyurtmalarini ko‘radi), `serving_branch` — ulardan biri (eski `serving_branch_id` ro‘yxatda bo‘lsa o‘sha, aks holda eng kichik id). `reason: no_branch_found` va `serving_branch: null` — FAQAT xizmat viloyatida faol filial yo‘q bo‘lsa (buyurtmani faqat HQ ko‘radi). Filial xizmati javob bermasa — 503 (qamrov tekshiruvlari bilan bir xil; «filial yo‘q» deb ko‘rsatilmaydi). Belgini `POST /region/district/:id/confirm-assignment`, `PATCH /district/:id` (viloyat o‘zgarsa) yoki `PUT /branches/:id/districts` tushiradi; filial o‘chirilishi/nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI. Faqat SUPERADMIN/ADMIN.",
+        "operationId": "LogisticsGatewayController_getDistrictCoverageReview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Coverage review"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tuman qamrovi ogohlantirishi (D1)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/region/district/{id}/confirm-assignment": {
+      "post": {
+        "description": "Tumanning `assignment_review_required` belgisini tushiradi (audit yoziladi). IDEMPOTENT: belgi yo‘q bo‘lsa ham 200; parallel tasdiq yoki qayta biriktirish bilan poygada faqat yutgan so‘rov audit yozadi, qolgani saqlangan `confirmed_by`/`confirmed_at` ni qaytaradi. Javob `data`: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }` (hech qachon tasdiqlanmagan va belgisiz tuman — `confirmed_by`/`confirmed_at` `null`). Tuman yo‘q — 404. Faqat SUPERADMIN/ADMIN.",
+        "operationId": "LogisticsGatewayController_confirmDistrictAssignment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "District ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assignment confirmed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Avtomatik filial biriktirishini tasdiqlash (D1)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/region/{id}": {
       "get": {
+        "description": "Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.",
         "operationId": "LogisticsGatewayController_getRegionById",
         "parameters": [
           {
@@ -8134,6 +8196,7 @@
     },
     "/district": {
       "get": {
+        "description": "`assignment_review_required`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` (D1) — faqat SUPERADMIN/ADMIN ga; boshqa rollarga bu maydonlar qaytmaydi.",
         "operationId": "LogisticsGatewayController_getAll",
         "parameters": [
           {
@@ -8240,6 +8303,7 @@
     },
     "/district/sato/{satoCode}": {
       "get": {
+        "description": "`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.",
         "operationId": "LogisticsGatewayController_getDistrictBySato",
         "parameters": [
           {
@@ -8278,6 +8342,7 @@
     },
     "/district/{id}": {
       "get": {
+        "description": "`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.",
         "operationId": "LogisticsGatewayController_getById",
         "parameters": [
           {
@@ -8315,7 +8380,7 @@
         ]
       },
       "patch": {
-        "description": "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi.",
+        "description": "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi. D1: tuman «tekshirilmagan» (`assignment_review_required: true`) bo'lsa, viloyat o'zgarishi bilan belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).",
         "operationId": "LogisticsGatewayController_update",
         "parameters": [
           {
