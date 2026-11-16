@@ -110,6 +110,7 @@ import {
   SHIPMENT_DELIVERED_STATUSES,
   SHIPMENT_FILTER_SQL,
   SHIPMENT_FILTERS,
+  SHIPMENT_MISMATCH_BY_INTEGRATION_SQL,
   type ShipmentFilter,
 } from './shipment-filters';
 
@@ -3826,8 +3827,15 @@ export class IntegrationServiceService {
    *
    * ⚠️ SO'ROVLAR AGREGAT, qator-qator emas. Har ulanish uchun alohida
    * `find()` qilib mijozda hisoblash 6 ulanishda ham 6 so'rov demak, va
-   * jadval o'sgach bu sekinlashadi. Bu yerda ikkita `GROUP BY` bilan
-   * hammasi bir martada olinadi.
+   * jadval o'sgach bu sekinlashadi. Bu yerda har manba bitta `GROUP BY`
+   * bilan bir martada olinadi (so'rovlar soni ulanish soniga bog'liq emas).
+   *
+   * 6qfzLBcR — «Umumiy holat» bloklari (har ulanishda):
+   *   `shipments` {total, delivered, failed, mismatch} — OYNA ichida;
+   *   `webhooks`  {success, failed, invalid_signature} — OYNA ichida;
+   *   `cod`       {dispatched, collected, remitted, debt} — BUTUN VAQT.
+   * O'lchanmagan qiymat `null` (0 EMAS), blok umuman tegishli bo'lmasa —
+   * blokning o'zi `null`. Qoidalar `loadConnectionBlocks` izohida.
    */
   async integrationMetrics(hours = 24) {
     const windowHours = Math.max(1, Math.min(168, Number(hours) || 24));
@@ -3915,6 +3923,8 @@ export class IntegrationServiceService {
       queueRows.map((r) => [String(r.id), Number(r.queued) || 0]),
     );
 
+    const blocks = await this.loadConnectionBlocks(since);
+
     const n = (v: unknown) => Number(v ?? 0) || 0;
 
     /**
@@ -3931,36 +3941,69 @@ export class IntegrationServiceService {
       return done > 0 ? Math.round((delivered / done) * 1000) / 10 : null;
     };
 
+    /**
+     * Ulanishlar ro'yxati — hodisa manbalari (outbox, sync tarixi, navbat)
+     * VA yangi bloklar manbalari (posilka, webhook jurnali, COD daftari)
+     * birlashmasi. Ilgari faqat hodisasi bor ulanish chiqardi: hodisasiz,
+     * lekin posilkasi yoki COD qarzi bor ulanishda bloklar bo'sh qolardi.
+     * Hech bir manbada qatori yo'q ulanish ro'yxatga kirmaydi (UI uni
+     * "hodisa bo'lmagan" deb ko'rsatadi — avvalgidek).
+     */
+    const partnerById = new Map(partnerRows.map((r) => [String(r.id), r]));
+    const partnerIds = new Set<string>([
+      ...partnerById.keys(),
+      ...blocks.partnerShipmentsById.keys(),
+    ]);
+    const historyById = new Map(integrationRows.map((r) => [String(r.id), r]));
+    const integrationIds = new Set<string>([
+      ...historyById.keys(),
+      ...queueById.keys(),
+      ...blocks.shipmentsById.keys(),
+      ...blocks.webhooksById.keys(),
+      ...blocks.receivablesById.keys(),
+      ...blocks.remittancesById.keys(),
+    ]);
+
     const connections = [
-      ...partnerRows.map((r) => ({
-        kind: 'partner' as const,
-        id: String(r.id),
-        uid: `partner:${r.id}`,
-        events: n(r.events),
-        delivered: n(r.delivered),
-        failed: n(r.failed),
-        queued: n(r.queued),
-        success_rate: rate(n(r.delivered), n(r.failed)),
-        avg_ms: r.avg_ms == null ? null : Math.round(Number(r.avg_ms)),
-        last_event_at: r.last_at ? new Date(r.last_at).toISOString() : null,
-      })),
-      ...integrationRows.map((r) => ({
-        kind: 'integration' as const,
-        id: String(r.id),
-        uid: `integration:${r.id}`,
-        events: n(r.events),
-        delivered: n(r.delivered),
-        failed: n(r.failed),
-        queued: queueById.get(String(r.id)) ?? 0,
-        success_rate: rate(n(r.delivered), n(r.failed)),
-        /**
-         * Outbound uchun javob vaqti O'LCHANMAYDI — `sync_history` da bunday
-         * ustun yo'q. `null` qaytariladi va UI "—" ko'rsatadi. 0 yozish
-         * "bir zumda javob berdi" degan yolg'on bo'lardi.
-         */
-        avg_ms: null as number | null,
-        last_event_at: r.last_at ? new Date(r.last_at).toISOString() : null,
-      })),
+      ...[...partnerIds].map((id) => {
+        const r = partnerById.get(id);
+        const delivered = n(r?.delivered);
+        const failed = n(r?.failed);
+        return {
+          kind: 'partner' as const,
+          id,
+          uid: `partner:${id}`,
+          events: n(r?.events),
+          delivered,
+          failed,
+          queued: n(r?.queued),
+          success_rate: rate(delivered, failed),
+          avg_ms: r?.avg_ms == null ? null : Math.round(Number(r.avg_ms)),
+          last_event_at: r?.last_at ? new Date(r.last_at).toISOString() : null,
+          ...blocks.partnerBlocks(id, { delivered, failed }),
+        };
+      }),
+      ...[...integrationIds].map((id) => {
+        const r = historyById.get(id);
+        return {
+          kind: 'integration' as const,
+          id,
+          uid: `integration:${id}`,
+          events: n(r?.events),
+          delivered: n(r?.delivered),
+          failed: n(r?.failed),
+          queued: queueById.get(id) ?? 0,
+          success_rate: rate(n(r?.delivered), n(r?.failed)),
+          /**
+           * Outbound uchun javob vaqti O'LCHANMAYDI — `sync_history` da bunday
+           * ustun yo'q. `null` qaytariladi va UI "—" ko'rsatadi. 0 yozish
+           * "bir zumda javob berdi" degan yolg'on bo'lardi.
+           */
+          avg_ms: null as number | null,
+          last_event_at: r?.last_at ? new Date(r.last_at).toISOString() : null,
+          ...blocks.integrationBlocks(id),
+        };
+      }),
     ];
 
     const totals = connections.reduce(
@@ -3977,6 +4020,226 @@ export class IntegrationServiceService {
       200,
       'integration metrics',
     );
+  }
+
+  /**
+   * 6qfzLBcR — «UMUMIY HOLAT» BLOKLARI uchun agregatlar (integratsiya
+   * metrikasi). Har manba BITTA `GROUP BY`; migratsiya yo'q — faqat mavjud
+   * jadvallar.
+   *
+   * ⚠️ O'LCHANMAGAN = `null`, HECH QACHON 0. `0` "hammasi joyida / qarz
+   * yo'q" degan yolg'on xabar bo'lardi. Qoidalar:
+   *
+   * POSILKALAR (`shipments`, OYNA ichida — yaratilgan YOKI holati o'zgargan):
+   *   integratsiya — `provider_shipments` (Posilkalar tabi bilan AYNI
+   *     filtrlar, `SHIPMENT_FILTER_SQL`); `mismatch` ulanishning kiruvchi
+   *     status xaritasiga tayanadi — xarita bo'sh bo'lsa `null` (aks holda
+   *     hamma qator nomuvofiq bo'lib ko'rinardi). To'lov / ko'zgu rolida
+   *     posilka yo'q — blok `null` (qatori bo'lsa baribir sanaladi).
+   *   hamkor — `partner_shipment_refs` faqat bog'lanish (status va summa
+   *     buyurtmaning o'zida, boshqa sxemada): `total` sanaladi, `delivered`
+   *     / `failed` / `mismatch` — `null`.
+   *
+   * KIRUVCHI WEBHOOKLAR (`webhooks`, OYNA ichida):
+   *   integratsiya — `provider_webhook_logs` (Hodisalar tabi pillari bilan
+   *     bir xil): `success` — qo'llanilgan (`processed`), `failed` — rad
+   *     etilgan yoki qo'llashda yiqilgan (`rejected`, `failed`),
+   *     `invalid_signature` — `signature_valid = false`.
+   *   hamkor — webhookni BIZ yuboramiz, imzoni ular tekshiradi:
+   *     `success` / `failed` — outbox yetkazishlari (yuqoridagi
+   *     `delivered` / `failed`), `invalid_signature` — `null`.
+   *
+   * COD (`cod`, BUTUN VAQT — davr bilan kesilmaydi). Manba FAQAT
+   * `provider_receivables` / `provider_remittances` (moliya va Hisob-kitob
+   * tabi bilan bitta manba, alohida hisob yo'q):
+   *   `collected` — tashuvchi yig'gan COD: qarz qatorlari (kutilayotgan +
+   *     yopilgan; bekor qilingani kirmaydi);
+   *   `remitted`  — tashuvchi bizga to'lagani: faol to'lovlar summasi;
+   *   `debt`      — kutilayotgan qarz (`getProviderBalance.outstanding_amount`
+   *     bilan AYNI so'rov);
+   *   `dispatched` — HAR DOIM `null`: daftar qarzni faqat sotuvda ochadi,
+   *     jo'natilgan COD unda yozilmaydi. Boshqa manbadan hisoblash ikki
+   *     manba bo'lardi.
+   *   COD faqat tashuvchi (`carrier`) ulanishida (yoki daftarda qatori
+   *   bo'lsa); qolganida va hamkorda — `null`.
+   */
+  private async loadConnectionBlocks(since: Date) {
+    const integrations = await this.integrationRepo.find({
+      where: { isDeleted: false },
+      select: { id: true, role: true, inbound_status_mapping: true },
+    });
+    const roleById = new Map<string, string>();
+    const statusMaps: Record<string, Record<string, string>> = {};
+    for (const row of integrations) {
+      const id = String(row.id);
+      roleById.set(id, String(row.role ?? ''));
+      const map = normalizeInboundStatusMap(row.inbound_status_mapping);
+      if (Object.keys(map).length > 0) statusMaps[id] = map;
+    }
+
+    const shipmentRows = await this.shipmentRepo
+      .createQueryBuilder('s')
+      .select('s.integration_id', 'id')
+      .addSelect('COUNT(*)', 'total')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${SHIPMENT_FILTER_SQL.delivered})`,
+        'delivered',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${SHIPMENT_FILTER_SQL.failed})`,
+        'failed',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${SHIPMENT_MISMATCH_BY_INTEGRATION_SQL})`,
+        'mismatch',
+      )
+      .where('s.is_deleted = false')
+      .andWhere('(s."createdAt" >= :since OR s.status_changed_at >= :since)')
+      .setParameters({
+        since,
+        delivered: [...SHIPMENT_DELIVERED_STATUSES],
+        status_maps: JSON.stringify(statusMaps),
+      })
+      .groupBy('s.integration_id')
+      .getRawMany<{
+        id: string;
+        total: string;
+        delivered: string;
+        failed: string;
+        mismatch: string;
+      }>();
+
+    const partnerShipmentRows = await this.partnerShipmentRefRepo
+      .createQueryBuilder('p')
+      .select('p.partner_id', 'id')
+      .addSelect('COUNT(*)', 'total')
+      .where('p.is_deleted = false')
+      .andWhere('p."createdAt" >= :since', { since })
+      .groupBy('p.partner_id')
+      .getRawMany<{ id: string; total: string }>();
+
+    const webhookRows = await this.webhookLogRepo
+      .createQueryBuilder('wl')
+      .select('wl.integration_id', 'id')
+      .addSelect(`COUNT(*) FILTER (WHERE wl.status = 'processed')`, 'success')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE wl.status IN ('rejected','failed'))`,
+        'failed',
+      )
+      .addSelect(
+        'COUNT(*) FILTER (WHERE wl.signature_valid = false)',
+        'invalid_signature',
+      )
+      .where('wl.integration_id IS NOT NULL')
+      .andWhere('wl.is_deleted = false')
+      .andWhere('wl."createdAt" >= :since', { since })
+      .groupBy('wl.integration_id')
+      .getRawMany<{
+        id: string;
+        success: string;
+        failed: string;
+        invalid_signature: string;
+      }>();
+
+    const receivableRows = await this.receivableRepo
+      .createQueryBuilder('r')
+      .select('r.integration_id', 'id')
+      .addSelect(
+        'COALESCE(SUM(r.amount) FILTER (WHERE r.status IN (:...collected)), 0)',
+        'collected',
+      )
+      .addSelect(
+        'COALESCE(SUM(r.amount) FILTER (WHERE r.status = :pending), 0)',
+        'debt',
+      )
+      .where('r.is_deleted = false')
+      .setParameters({
+        collected: [ReceivableStatus.PENDING, ReceivableStatus.SETTLED],
+        pending: ReceivableStatus.PENDING,
+      })
+      .groupBy('r.integration_id')
+      .getRawMany<{ id: string; collected: string; debt: string }>();
+
+    const remittanceRows = await this.remittanceRepo
+      .createQueryBuilder('m')
+      .select('m.integration_id', 'id')
+      .addSelect('COALESCE(SUM(m.amount), 0)', 'remitted')
+      .where('m.is_deleted = false')
+      .andWhere('m.status = :active', { active: RemittanceStatus.ACTIVE })
+      .groupBy('m.integration_id')
+      .getRawMany<{ id: string; remitted: string }>();
+
+    const byId = <T extends { id: string }>(rows: T[]) =>
+      new Map(rows.map((row) => [String(row.id), row]));
+    const shipmentsById = byId(shipmentRows);
+    const partnerShipmentsById = byId(partnerShipmentRows);
+    const webhooksById = byId(webhookRows);
+    const receivablesById = byId(receivableRows);
+    const remittancesById = byId(remittanceRows);
+
+    const n = (v: unknown) => Number(v ?? 0) || 0;
+
+    const integrationBlocks = (id: string) => {
+      const role = roleById.get(id);
+      const shipment = shipmentsById.get(id);
+      const webhook = webhooksById.get(id);
+      const receivable = receivablesById.get(id);
+      const remittance = remittancesById.get(id);
+      const hasShipmentsTab = role !== 'payment' && role !== 'mirror';
+      const hasLedger = role === 'carrier' || !!receivable || !!remittance;
+      return {
+        shipments:
+          hasShipmentsTab || shipment
+            ? {
+                total: n(shipment?.total),
+                delivered: n(shipment?.delivered),
+                failed: n(shipment?.failed),
+                mismatch: statusMaps[id] ? n(shipment?.mismatch) : null,
+              }
+            : null,
+        webhooks: {
+          success: n(webhook?.success),
+          failed: n(webhook?.failed),
+          invalid_signature: n(webhook?.invalid_signature),
+        },
+        cod: hasLedger
+          ? {
+              dispatched: null as number | null,
+              collected: n(receivable?.collected),
+              remitted: n(remittance?.remitted),
+              debt: n(receivable?.debt),
+            }
+          : null,
+      };
+    };
+
+    const partnerBlocks = (
+      id: string,
+      outbox: { delivered: number; failed: number },
+    ) => ({
+      shipments: {
+        total: n(partnerShipmentsById.get(id)?.total),
+        delivered: null as number | null,
+        failed: null as number | null,
+        mismatch: null as number | null,
+      },
+      webhooks: {
+        success: outbox.delivered,
+        failed: outbox.failed,
+        invalid_signature: null as number | null,
+      },
+      cod: null,
+    });
+
+    return {
+      shipmentsById,
+      partnerShipmentsById,
+      webhooksById,
+      receivablesById,
+      remittancesById,
+      integrationBlocks,
+      partnerBlocks,
+    };
   }
 
   /** Postgres unique-violation (23505) — dedup uchun. */

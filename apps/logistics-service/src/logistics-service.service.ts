@@ -1741,7 +1741,7 @@ export class LogisticsServiceService implements OnModuleInit {
    *
    * Guard xatolari (paket hali jo'natilmagan, bekor qilingan, qaytarish paketi)
    * ATAYLAB yuqoriga uzatiladi — kuryer sababini bilishi kerak, umumiy
-   * "boshqa filial orderi" xabari bu yerda chalg'ituvchi bo'lardi.
+   * "boshqa filial buyurtmasi" xabari bu yerda chalg'ituvchi bo'lardi.
    */
   private async receiveOrderIntoBranchByScan(
     orderId: string,
@@ -7455,7 +7455,7 @@ export class LogisticsServiceService implements OnModuleInit {
     let receivedIntoBranchByScan = false;
 
     if (!orderBranchId) {
-      this.badRequest('Order filialga biriktirilmagan');
+      this.badRequest('Buyurtma filialga biriktirilmagan');
     }
 
     const requesterId = String(requester.id);
@@ -7526,7 +7526,7 @@ export class LogisticsServiceService implements OnModuleInit {
       // Buyurtma HQ'dan kuryer filialiga paket bilan jo'natilgan bo'lsa, uning
       // `branch_id`'si HAMON jo'natuvchi filial bo'ladi (u faqat filial paketni
       // qabul qilganda o'zgaradi). Ilgari kuryer bunday buyurtmani skan qilsa
-      // "boshqa filial orderi" xatosini olardi va filial menejeri paketni qabul
+      // "boshqa filial buyurtmasi" xatosini olardi va filial menejeri paketni qabul
       // qilmaguncha ishlay olmasdi.
       //
       // Endi skanning o'zi filial qabulini ham bajaradi — bitta amal, lekin
@@ -7546,7 +7546,7 @@ export class LogisticsServiceService implements OnModuleInit {
       // viloyat — 403 `district_not_served_by_branch` «Boshqa viloyat
       // buyurtmasi»; tumani filial viloyatiga ko'chgan buyurtma — beriladi.
       if (!scanReceive.received && scanReceive.reason !== 'transit') {
-        this.forbidden('Boshqa filial orderi — qabul qila olmaysiz');
+        this.forbidden('Boshqa filial buyurtmasi — qabul qila olmaysiz');
       }
       receivedIntoBranchByScan = true;
 
@@ -7559,7 +7559,7 @@ export class LogisticsServiceService implements OnModuleInit {
       order = await this.findOrderByQrToken(qrToken);
       orderBranchId = String(order.branch_id ?? '').trim();
       if (orderBranchId !== courierBranchId) {
-        this.forbidden('Boshqa filial orderi — qabul qila olmaysiz');
+        this.forbidden('Boshqa filial buyurtmasi — qabul qila olmaysiz');
       }
     }
 
@@ -7571,7 +7571,7 @@ export class LogisticsServiceService implements OnModuleInit {
       (currentCourierId && currentCourierId !== requesterId) ||
       (currentHolderCourierId && currentHolderCourierId !== requesterId)
     ) {
-      this.badRequest('Order allaqachon boshqa courierga biriktirilgan');
+      this.badRequest('Buyurtma allaqachon boshqa kuryerga biriktirilgan');
     }
 
     // 6qypMFeT: o'z WAITING buyurtmasini qayta skanlash ham idempotent — aks
@@ -7916,7 +7916,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
     if (assignedToAnotherCourier) {
       this.badRequest(
-        `Order #${assignedToAnotherCourier.id} allaqachon boshqa courierga biriktirilgan`,
+        `Buyurtma #${assignedToAnotherCourier.id} allaqachon boshqa kuryerga biriktirilgan`,
       );
     }
 

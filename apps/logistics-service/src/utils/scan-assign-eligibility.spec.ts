@@ -44,7 +44,7 @@ describe('assessHqCourierScan', () => {
         "Buyurtma paketga joylangan — paket jo'natilib qabul qilinmaguncha HQ kuryeri uni ololmaydi.",
       NOT_AT_HQ:
         'Buyurtma HQ da emas — boshqa filialda turibdi. HQ kuryeri faqat HQ da turgan buyurtmani oladi.',
-      WITH_OTHER_COURIER: 'Order allaqachon boshqa courierga biriktirilgan',
+      WITH_OTHER_COURIER: 'Buyurtma allaqachon boshqa kuryerga biriktirilgan',
       WRONG_STATUS:
         "Buyurtma holati noto'g'ri: faqat qabul qilingan yoki kutilayotgan buyurtmani olish mumkin",
       HQ_REGION_MISSING:
