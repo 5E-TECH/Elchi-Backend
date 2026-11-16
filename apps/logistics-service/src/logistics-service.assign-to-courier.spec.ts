@@ -313,7 +313,7 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
         { order_ids: ['101', '102'], courier_id: '44' },
       ),
       400,
-      'boshqa courierga biriktirilgan',
+      'Buyurtma #102 allaqachon boshqa kuryerga biriktirilgan',
     );
 
     const updateCalls = orderClient.send.mock.calls.filter(

@@ -69,7 +69,9 @@ export class IntegrationServiceController {
    */
   /**
    * Integratsiya paneli uchun metrika (hodisa, xato, navbat, javob vaqti).
-   * Ikki manbadan yig'iladi: hamkor webhook outbox'i va sinxron tarixi.
+   * Hodisalar ikki manbadan yig'iladi: hamkor webhook outbox'i va sinxron
+   * tarixi; har ulanishda yana posilka, kiruvchi webhook va COD bloklari
+   * (6qfzLBcR).
    */
   @MessagePattern({ cmd: 'integration.metrics' })
   integrationMetrics(
