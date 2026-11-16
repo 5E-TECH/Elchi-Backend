@@ -69,6 +69,13 @@ import {
   SPECIAL_CATEGORIES_ERROR_CODES,
   SPECIAL_CATEGORIES_LOCKED_MESSAGE,
   SPECIAL_CATEGORIES_TRACKING_ACTION,
+  ORDER_OPERATOR_ALREADY_ASSIGNED_MESSAGE,
+  ORDER_OPERATOR_ASSIGN_TRACKING_ACTION,
+  ORDER_OPERATOR_EARNING_STATUSES,
+  ORDER_OPERATOR_ERROR_CODES,
+  ORDER_OPERATOR_EXTERNAL_MESSAGE,
+  ORDER_OPERATOR_MARKET_CHANGED_MESSAGE,
+  isExternalOperatorText,
   requestContext,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
@@ -7428,6 +7435,179 @@ export class OrderLifecycleService {
 
     return successRes(
       { id: orderId, special_categories: next, changed },
+      200,
+      'success',
+    );
+  }
+
+  /**
+   * 2026-11-16 (Dilshod) — `order.operator.assign`: operatori YO'Q buyurtmaga
+   * keyin operator biriktirish (`PUT /orders/:id/operator`).
+   *
+   * Gateway doirani (kimning buyurtmasi) va operatorni (buyurtma marketining
+   * FAOL operatori — yaratishdagi tanlov bilan AYNI `identity.market_operator
+   * .selectable`) tekshirib, `market_id` ni (tekshirilgan market) va operator
+   * ismini beradi. Bu yerda FOR UPDATE ostida himoya chuqurligi:
+   *  - market tomonida `requester.market_id` buyurtma marketiga teng (403);
+   *  - buyurtma marketi tekshirilgani bilan AYNI (aks holda 409
+   *    `ORDER_OPERATOR_MARKET_CHANGED` — operator boshqa marketniki bo'lib
+   *    qolmasin);
+   *  - `operator_id` bor — 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` (parallel
+   *    ikkinchi biriktirish ham shu yerda to'xtaydi);
+   *  - tashqi integratsiya buyurtmasi — 409 `ORDER_OPERATOR_EXTERNAL`.
+   * Yoziladi: `operator_id`, `operator` (ism), tracking yozuvi; buyurtma
+   * allaqachon sotilgan bo'lsa — sotuvdagidek operator ulushi (outbox, shu
+   * tranzaksiyada; finance `order_id` bo'yicha idempotent). Holat o'zgarmaydi.
+   */
+  async assignOperator(
+    id: string,
+    input: {
+      operator_id?: unknown;
+      operator_name?: unknown;
+      market_id?: unknown;
+    },
+    requester: { id?: string; roles?: string[]; market_id?: string | null },
+  ) {
+    const orderId = String(id ?? '').trim();
+    if (!/^\d{1,18}$/.test(orderId)) {
+      this.notFound('Buyurtma topilmadi');
+    }
+    const idText = (value: unknown): string =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    const operatorId = idText(input?.operator_id);
+    const expectedMarketId = idText(input?.market_id);
+    if (
+      !/^\d{1,19}$/.test(operatorId) ||
+      !/^\d{1,19}$/.test(expectedMarketId)
+    ) {
+      this.badRequest('operator_id va market_id majburiy');
+    }
+    const operatorName =
+      typeof input?.operator_name === 'string' && input.operator_name.trim()
+        ? input.operator_name.trim()
+        : null;
+    const roles = new Set(
+      (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
+    );
+    const isStaff = [
+      Roles.SUPERADMIN,
+      Roles.ADMIN,
+      Roles.REGISTRATOR,
+      Roles.MANAGER,
+      Roles.BRANCH,
+    ].some((role) => roles.has(role));
+    const marketScope = String(requester?.market_id ?? '').trim();
+    // Fail-closed: xodim ham, market doirasi ham bo'lmasa — ruxsat yo'q.
+    if (!requester?.id || (!isStaff && !marketScope)) {
+      this.forbidden("Operator biriktirishga ruxsat yo'q");
+    }
+
+    let status: Order_status = Order_status.NEW;
+    let previousName: string | null = null;
+    let earningQueued = false;
+    await this.dataSource.transaction(async (manager) => {
+      const order = await manager.getRepository(Order).findOne({
+        where: { id: orderId, isDeleted: false },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order) {
+        this.notFound('Buyurtma topilmadi');
+      }
+      if (marketScope && String(order.market_id) !== marketScope) {
+        this.forbidden(
+          'Bu buyurtma sizning marketingizga tegishli emas — unga operator biriktira olmaysiz',
+        );
+      }
+      if (isExternalOperatorText(order.operator)) {
+        throw new RpcException({
+          statusCode: 409,
+          code: ORDER_OPERATOR_ERROR_CODES.EXTERNAL,
+          message: ORDER_OPERATOR_EXTERNAL_MESSAGE,
+        });
+      }
+      if (order.operator_id) {
+        throw new RpcException({
+          statusCode: 409,
+          code: ORDER_OPERATOR_ERROR_CODES.ALREADY_ASSIGNED,
+          message: ORDER_OPERATOR_ALREADY_ASSIGNED_MESSAGE,
+        });
+      }
+      if (String(order.market_id ?? '') !== expectedMarketId) {
+        throw new RpcException({
+          statusCode: 409,
+          code: ORDER_OPERATOR_ERROR_CODES.MARKET_CHANGED,
+          message: ORDER_OPERATOR_MARKET_CHANGED_MESSAGE,
+        });
+      }
+      status = order.status;
+      previousName = order.operator ?? null;
+      await manager.getRepository(Order).update(
+        { id: orderId },
+        {
+          operator_id: operatorId,
+          // Ism kelmasa (identity bo'sh qaytardi) yozilgan matn qoladi.
+          ...(operatorName ? { operator: operatorName } : {}),
+        },
+      );
+      await this.custody.createTrackingEvent(
+        {
+          order_id: orderId,
+          from_status: order.status,
+          to_status: order.status,
+          action: ORDER_OPERATOR_ASSIGN_TRACKING_ACTION,
+          old_value: { operator_id: null, operator: previousName },
+          new_value: {
+            operator_id: operatorId,
+            operator: operatorName ?? previousName,
+          },
+          changed_by: String(requester.id),
+          changed_by_role: this.custody.toTrackingRole(requester.roles),
+          note: `Operator biriktirildi: ${operatorName ?? operatorId}`,
+        },
+        manager.getRepository(OrderTracking),
+      );
+      // Sotilgan buyurtma — operator ulushi sotuvdagidek (o'sha komanda va
+      // payload; finance `order_id` bo'yicha idempotent, komissiya qoidasi
+      // operator profilidan).
+      if (ORDER_OPERATOR_EARNING_STATUSES.includes(order.status)) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.operator.earning.record',
+          {
+            order_id: orderId,
+            operator_id: operatorId,
+            market_id: order.market_id ? String(order.market_id) : null,
+            total_price: Number(order.total_price ?? 0),
+          },
+          { manager },
+        );
+        earningQueued = true;
+      }
+    });
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: orderId,
+      // Literal — action-registry AST tekshiruvi (y8CxCtcK).
+      action: 'order.operator_assigned',
+      old_value: { operator_id: null, operator: previousName },
+      new_value: {
+        operator_id: operatorId,
+        operator: operatorName ?? previousName,
+      },
+      ...this.custody.auditActor(requester),
+      metadata: { status, earning_recorded: earningQueued },
+    });
+
+    return successRes(
+      {
+        id: orderId,
+        operator_id: operatorId,
+        operator: operatorName ?? previousName,
+        earning_recorded: earningQueued,
+      },
       200,
       'success',
     );

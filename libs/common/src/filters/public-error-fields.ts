@@ -4,6 +4,7 @@ import { SHIFT_LATE_PHOTO_ERROR_CODES as SLP } from '../finance/shift-account-ch
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
+import { ORDER_OPERATOR_ERROR_CODES } from '../order/order-operator-assign';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
 import {
@@ -147,6 +148,11 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
   // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
   [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
+  // (2026-11-16) buyurtmaga keyin operator biriktirish — 409: operator bor,
+  // integratsiya buyurtmasi yoki tekshiruvdan keyin market o'zgardi.
+  [ORDER_OPERATOR_ERROR_CODES.ALREADY_ASSIGNED]: [],
+  [ORDER_OPERATOR_ERROR_CODES.EXTERNAL]: [],
+  [ORDER_OPERATOR_ERROR_CODES.MARKET_CHANGED]: [],
   // (2026-11-09) bugungi buyurtma qabuli yopiq — 409; `reopens_at` — kun
   // almashadigan lahza (ISO), `cutoff_time` — qo'yilgan qabul vaqti (HH:MM).
   [ORDER_INTAKE_CLOSED]: ['reopens_at', 'cutoff_time'],
