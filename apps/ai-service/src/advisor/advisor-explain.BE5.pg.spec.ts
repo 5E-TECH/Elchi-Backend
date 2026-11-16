@@ -364,7 +364,12 @@ describePg('AdvisorExplainService — real Postgres (BE-5)', () => {
     expect(
       results.every((r) => ['pending', 'ready'].includes(r.explanation_status)),
     ).toBe(true);
-    expect(results[0].explanation_status).toBe('pending');
+    // Navbatni qaysi so'rov egallashi kafolatlanmagan (parallel): results[0]
+    // emas, navbatga qo'ygan so'rov `pending` qaytaradi. Fon generatsiyasi
+    // tez tugasa, qolganlari — jumladan results[0] ham — keshdan `ready`.
+    expect(
+      results.some((r) => r.explanation_status === 'pending' && !r.cached),
+    ).toBe(true);
     await settle();
     expect(extractJson).toHaveBeenCalledTimes(1);
     expect((await row(id)).explanation_status).toBe('ready');
