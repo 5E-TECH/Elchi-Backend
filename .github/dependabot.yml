@@ -40,6 +40,13 @@ updates:
       - dependency-name: '@nestjs/*'
         update-types:
           - version-update:semver-major
+      # web-push major (4.x) — #675 (2026-11-16): CI'da notification-service
+      # spec'lari «Test suite failed to run» bilan yiqiladi (9 tekshiruvdan 4 tasi).
+      # Push-bildirishnoma kutubxonasi rejali PR'da, push oqimini qo'lda sinab
+      # ko'tariladi; qoida o'sha PR bilan olib tashlanadi. minor/patch odatdagidek.
+      - dependency-name: web-push
+        update-types:
+          - version-update:semver-major
     groups:
       nestjs:
         patterns:
