@@ -39,14 +39,26 @@ import { advisorLinks, advisorTitle, withEvidenceHrefs } from './advisor-text';
 export type AdvisorRunGroup = 'frequent' | 'daily';
 
 /** 30 daqiqalik tick: kursorli va holat qoidalari (§4.0). */
-export const ADVISOR_FREQUENT_RULES: readonly AiAdvisorRuleKey[] = ['R1', 'R3'];
-/** 02:30 Toshkent: R6 (kecha; dushanba — o'tgan hafta ham). */
-export const ADVISOR_DAILY_RULES: readonly AiAdvisorRuleKey[] = ['R6'];
+export const ADVISOR_FREQUENT_RULES: readonly AiAdvisorRuleKey[] = [
+  'R1',
+  'R2',
+  'R3',
+  'R4',
+  'R5',
+  'R7',
+];
+/** 02:30 Toshkent: R6 (kecha; dushanba — o'tgan hafta ham), R8 (dushanba — o'tgan hafta). */
+export const ADVISOR_DAILY_RULES: readonly AiAdvisorRuleKey[] = ['R6', 'R8'];
 /** Holat qoidalari: ayni epizod qayta ko'rilsa ochiq qatorni yangilaydi. */
 export const ADVISOR_STATE_RULES = new Set<AiAdvisorRuleKey>([
   'R2',
   'R4',
   'R5',
+]);
+/** Ochiq ogohlantirishda AYNI fakt qayta kelsa — faktlar/sarlavha yangilanadi. */
+export const ADVISOR_REFRESH_RULES = new Set<AiAdvisorRuleKey>([
+  ...ADVISOR_STATE_RULES,
+  'R7',
 ]);
 export const ADVISOR_CURSOR_OVERLAP_MS = 5 * 60_000;
 export const ADVISOR_BACKFILL_WINDOW_MS = 7 * 24 * 3600_000;
@@ -64,6 +76,10 @@ const ALERTS = 'ai_schema.ai_advisor_alerts';
 const OCC = 'ai_schema.ai_advisor_alert_occurrences';
 
 export type AdvisorApplyOutcome = 'opened' | 'occurred' | 'refreshed' | 'noop';
+export interface AdvisorApplyResult {
+  outcome: AdvisorApplyOutcome;
+  alertId: string | null;
+}
 
 export interface AdvisorRunResult {
   group: AdvisorRunGroup;
@@ -73,6 +89,8 @@ export interface AdvisorRunResult {
   occurred: number;
   refreshed: number;
   failed: number;
+  /** Realtime uchun: ochilgan / takrorlangan ogohlantirishlar. */
+  changes: Array<{ alert_id: string; change: 'opened' | 'occurred' }>;
 }
 
 interface RuleStateRow {
@@ -142,6 +160,7 @@ export class AdvisorEngineService {
       occurred: 0,
       refreshed: 0,
       failed: 0,
+      changes: [],
     };
     if (!keys.length) return result;
 
@@ -169,7 +188,21 @@ export class AdvisorEngineService {
           : floor,
       ).toISOString();
     }
-    if (keys.includes('R6')) request.periods = r6Periods(now, states.get('R6'));
+    if (keys.includes('R6') || keys.includes('R8')) {
+      // R6: kursordan keyingi yopilgan kunlar/haftalar (round-2 catch-up);
+      // R6 va R8: oxirgi YOPILGAN hafta har kuni so'raladi (#653 review S6) —
+      // dushanbadagi ish yiqilsa ham hafta yo'qolmaydi; dedup — takror no-op.
+      const periods = keys.includes('R6')
+        ? r6Periods(now, states.get('R6'))
+        : { days: [] };
+      const lastWeek = tashkentDay(
+        new Date(startOfTashkentWeek(now).getTime() - 7 * DAY_MS),
+      );
+      request.periods = {
+        days: periods.days,
+        weeks: [...new Set([...(periods.weeks ?? []), lastWeek])],
+      };
+    }
 
     let response: Awaited<ReturnType<AdvisorReader['ruleInputs']>>;
     try {
@@ -219,9 +252,17 @@ export class AdvisorEngineService {
       }
       const firstRun = catchingUp(c.rule_key, states.get(c.rule_key), now);
       try {
-        const applied = await this.apply(c, rules, now, firstRun);
+        const { outcome: applied, alertId } = await this.apply(
+          c,
+          rules,
+          now,
+          firstRun,
+        );
         delete outcome.failures[c.dedup_key];
         if (applied !== 'noop') result[applied] += 1;
+        if (alertId && (applied === 'opened' || applied === 'occurred')) {
+          result.changes.push({ alert_id: alertId, change: applied });
+        }
       } catch (error) {
         // Vaqtinchalik xato (ulanish, deadlock, lock_timeout): kursor shu
         // nomzod faktlaridan oshmaydi — keyingi tick qayta o'qiydi (round-2 B2).
@@ -259,9 +300,9 @@ export class AdvisorEngineService {
     rules: AiAdvisorRulesSettings,
     now: Date,
     firstRun: boolean,
-  ): Promise<AdvisorApplyOutcome> {
+  ): Promise<AdvisorApplyResult> {
     const facts = dedupeFacts(c.fact_keys);
-    if (!facts.length) return 'noop';
+    if (!facts.length) return { outcome: 'noop', alertId: null };
     return this.ds.transaction(async (m) => {
       // Ochiq qator GET/PATCH qulfida uzoq qolsa — tick osilmaydi: xato
       // vaqtinchalik deb hisoblanadi, kursor ushlanadi (round-2 S7/B2).
@@ -308,9 +349,31 @@ export class AdvisorEngineService {
               WHERE "id" = $1`,
             [alertId, inserted, now, maxFactAt(fresh), ...present],
           );
-          return inserted > 0 ? 'occurred' : 'noop';
+          return { outcome: inserted > 0 ? 'occurred' : 'noop', alertId };
         }
-        if (ADVISOR_STATE_RULES.has(c.rule_key)) {
+        if (ADVISOR_REFRESH_RULES.has(c.rule_key)) {
+          // R2/R4/R5: epizod davom etmoqda — `last_fact_at` = endi.
+          // R7: ayni chek/tekshiruv qayta tahlil / T6 tahriri — faktlar
+          // yangilanadi, hodisa vaqti o'zgarmaydi (review S1).
+          if (!ADVISOR_STATE_RULES.has(c.rule_key)) {
+            // R7 (round-3 N3): kursor jim davrda oxirgi qatorni qayta
+            // o'qiydi — faktlar o'zgarmagan bo'lsa hech narsa; o'zgarsa
+            // (T6 tahriri) faktlar yangilanadi, `last_at` («oxirgi
+            // aniqlash») O'ZGARMAYDI (§6 «ayni fact_key — hech narsa»).
+            if (sameJson(open[0].facts, c.facts))
+              return { outcome: 'noop', alertId: null };
+            const present = this.presentation(c);
+            await m.query(
+              `UPDATE ${ALERTS}
+                  SET "title" = $2, "facts" = $3::jsonb, "evidence" = $4::jsonb, "links" = $5::jsonb,
+                      "subject" = $6::jsonb, "branch" = $7::jsonb, "branch_id" = $8,
+                      "headline_amount" = $9, "updatedAt" = now()
+                WHERE "id" = $1`,
+              [alertId, ...present],
+            );
+            return { outcome: 'refreshed', alertId };
+          }
+          const factAt = now;
           const present = this.presentation(c);
           await m.query(
             `UPDATE ${ALERTS}
@@ -319,15 +382,15 @@ export class AdvisorEngineService {
                     "subject" = $8::jsonb, "branch" = $9::jsonb, "branch_id" = $10,
                     "headline_amount" = $11, "updatedAt" = now()
               WHERE "id" = $1`,
-            [alertId, now, now, ...present],
+            [alertId, now, factAt, ...present],
           );
-          return 'refreshed';
+          return { outcome: 'refreshed', alertId };
         }
-        return 'noop';
+        return { outcome: 'noop', alertId };
       }
 
       // Ochiq yo'q: faqat YANGI fakt yangi ogohlantirish ochadi.
-      if (!fresh.length) return 'noop';
+      if (!fresh.length) return { outcome: 'noop', alertId: null };
       const rule = rules[c.rule_key];
       const previous = await m.query<Array<{ id: string }>>(
         `SELECT "id"::text AS id FROM ${ALERTS}
@@ -370,9 +433,9 @@ export class AdvisorEngineService {
           backfill ? 'backfill' : null,
         ],
       );
-      if (!created) return 'noop';
+      if (!created) return { outcome: 'noop', alertId: null };
       await this.insertOccurrences(m, created.id, c.dedup_key, fresh, now);
-      return 'opened';
+      return { outcome: 'opened', alertId: created.id };
     });
   }
 
@@ -489,6 +552,26 @@ export function catchingUp(
   if (!state.cursor_at || !(isCursorRule(rule) || rule === 'R6')) return false;
   const gap = now.getTime() - new Date(state.cursor_at).getTime();
   return gap > (rule === 'R6' ? 2 : 1) * ADVISOR_BACKFILL_NOTIFY_MS;
+}
+
+/** Kalit tartibidan qat'i nazar JSON tengligi (jsonb kalitlarni qayta tartiblaydi). */
+export function sameJson(a: unknown, b: unknown): boolean {
+  return canonical(a) === canonical(b);
+}
+
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v as Record<string, unknown>)
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map(
+        (k) =>
+          `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`,
+      )
+      .join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
 }
 
 /** Qoida xatosi: kursor siljimaydi, xatolar hisoblagichi saqlanadi. */

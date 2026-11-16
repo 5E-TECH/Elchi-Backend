@@ -9,6 +9,10 @@ import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { FinanceDailySnapshot } from '../entities/finance-daily-snapshot.entity';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { Shift } from '../entities/shift.entity';
+import { ShiftAccountCheck } from '../entities/shift-account-check.entity';
+import { CashboxReceipt } from '../entities/cashbox-receipt.entity';
+import { CashboxCard } from '../entities/cashbox-card.entity';
+import { PaymentCorrection } from '../entities/payment-correction.entity';
 import { AdvisorInputsService } from './advisor-inputs.service';
 
 /**
@@ -36,8 +40,16 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       })),
     }),
   );
-  const branchSend = jest.fn((_p: unknown, data: { id: string }) =>
-    of({ data: { id: data.id, name: `Filial ${data.id}` } }),
+  const branchSend = jest.fn(
+    (p: { cmd: string }, data: { id?: string; user_ids?: string[] }) =>
+      p.cmd === 'branch.user.find_by_user_ids'
+        ? of({
+            data: (data.user_ids ?? []).map((u) => ({
+              user_id: u,
+              branch: { id: '1', name: 'Toshkent HQ' },
+            })),
+          })
+        : of({ data: { id: data.id, name: `Filial ${data.id}` } }),
   );
 
   beforeAll(async () => {
@@ -61,6 +73,10 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         FinancialBalanceHistory,
         FinanceCashboxDaily,
         FinanceDailySnapshot,
+        ShiftAccountCheck,
+        CashboxReceipt,
+        CashboxCard,
+        PaymentCorrection,
       ],
       synchronize: false,
     });
@@ -85,7 +101,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
 
   beforeEach(async () => {
     await db.query(
-      'TRUNCATE "finance_schema"."shifts", "finance_schema"."cashbox_history", "finance_schema"."cashboxes", "finance_schema"."cashbox_expense_categories", "finance_schema"."financial_balance_history" RESTART IDENTITY CASCADE',
+      'TRUNCATE "finance_schema"."shifts", "finance_schema"."cashbox_history", "finance_schema"."cashboxes", "finance_schema"."cashbox_expense_categories", "finance_schema"."financial_balance_history", "finance_schema"."finance_cashbox_daily", "finance_schema"."shift_account_checks", "finance_schema"."cashbox_receipts", "finance_schema"."cashbox_cards", "finance_schema"."payment_corrections" RESTART IDENTITY CASCADE',
     );
   });
 
@@ -376,6 +392,807 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       expect(out.candidates[0].facts).toMatchObject({
         mad: 0,
         threshold: 460000,
+      });
+    });
+  });
+
+  describe('R2/R4/R5 (epizod)', () => {
+    async function cashbox(
+      type: string,
+      owner: number,
+      balance: number,
+    ): Promise<string> {
+      const [row] = await db.query<Array<{ id: string }>>(
+        `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id", "balance")
+         VALUES ($1, $2, $3) RETURNING "id"::text AS id`,
+        [type, owner, balance],
+      );
+      return row.id;
+    }
+    async function hist(
+      cb: string,
+      op: 'income' | 'expense',
+      source: string,
+      amount: number,
+      balanceAfter: number,
+      at: string,
+      reverses: string | null = null,
+    ): Promise<string> {
+      const [row] = await db.query<Array<{ id: string }>>(
+        `INSERT INTO "finance_schema"."cashbox_history"
+           ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "createdAt", "reverses_history_id")
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING "id"::text AS id`,
+        [op, cb, source, amount, balanceAfter, at, reverses],
+      );
+      return row.id;
+    }
+    async function daily(
+      cb: string,
+      owner: number,
+      day: string,
+      closing: number,
+    ) {
+      await db.query(
+        `INSERT INTO "finance_schema"."finance_cashbox_daily"
+           ("snapshot_date", "cashbox_id", "cashbox_type", "user_id", "opening_balance", "closing_balance", "income")
+         VALUES ($1, $2, 'couriers', $3, 0, $4, 0)`,
+        [day, cb, owner, closing],
+      );
+    }
+    const run = (rules: Array<'R2' | 'R4' | 'R5'>, now = NOW.toISOString()) =>
+      svc.ruleInputs({
+        rules,
+        now,
+        thresholds: {
+          R2: { balance_uzs: 2000000, growth_days: 3, no_handover_days: 3 },
+          R4: { days_without_payout: 7 },
+          R5: { balance_uzs: 5000000, days_without_transfer: 3 },
+        },
+        since: {},
+      });
+
+    it('R2 (b): > 3 kun topshirilmagan; epizod = oxirgi topshirish; T6 qaytarilgan topshirish sanalmaydi', async () => {
+      const cb = await cashbox('couriers', 55, 2840000);
+      const h1 = await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -500000,
+        0,
+        '2026-10-17T10:00:00Z',
+      );
+      // 18.10 dagi topshirish T6 bilan qaytarilgan — oxirgi topshirish h1 bo'lib qoladi.
+      const h2 = await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -100000,
+        0,
+        '2026-10-18T10:00:00Z',
+      );
+      await hist(
+        cb,
+        'income',
+        'payment_reversal',
+        100000,
+        100000,
+        '2026-10-18T11:00:00Z',
+        h2,
+      );
+      await hist(
+        cb,
+        'income',
+        'courier_payment',
+        100000,
+        100000,
+        '2026-10-20T10:00:00Z',
+      ); // qabul tomoni emas
+      const out = await run(['R2']);
+      expect(out.candidates).toHaveLength(1);
+      expect(out.candidates[0]).toMatchObject({
+        dedup_key: 'R2:courier:55',
+        fact_keys: [
+          { fact_key: `ep:h:${h1}`, fact_at: '2026-10-16T19:00:00.000Z' },
+        ],
+        branch: { id: '1', name: 'Toshkent HQ' },
+        subject: { kind: 'courier', id: '55', name: 'User 55' },
+        headline_amount: 2840000,
+        facts: {
+          trigger: 'no_handover',
+          balance: 2840000,
+          days_without_handover: 5,
+          growth_days: 0,
+        },
+        evidence: {
+          kind: 'courier_days',
+          last_handover: { history_id: h1, amount: 500000 },
+        },
+      });
+    });
+
+    it('R2: aynan 3 kun — yo‘q (qat’iy katta); (a) o‘sish 3 yopilgan kun VA > 2 mln → growth', async () => {
+      const cb = await cashbox('couriers', 56, 2500000);
+      await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -1,
+        0,
+        '2026-10-19T10:00:00Z',
+      ); // 3 kun oldin
+      expect((await run(['R2'])).candidates).toEqual([]);
+      for (const [d, v] of [
+        ['2026-10-18', 100],
+        ['2026-10-19', 200],
+        ['2026-10-20', 300],
+        ['2026-10-21', 400],
+      ] as const) {
+        await daily(cb, 56, d, v);
+      }
+      const out = await run(['R2']);
+      expect(out.candidates[0].facts).toMatchObject({
+        trigger: 'growth',
+        growth_days: 3,
+      });
+      expect((out.candidates[0].evidence.rows as unknown[]).length).toBe(4);
+    });
+
+    it('round-2 #652 B1: o‘sish + BUGUN topshirish — yangi epizod ochilmaydi (ayni holat)', async () => {
+      const cb = await cashbox('couriers', 58, 3500000);
+      const h20 = await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -100000,
+        1500000,
+        '2026-10-20T10:00:00Z',
+      );
+      for (const [d, v] of [
+        ['2026-10-18', 1600000],
+        ['2026-10-19', 2100000],
+        ['2026-10-20', 2600000],
+        ['2026-10-21', 3200000],
+      ] as const) {
+        await daily(cb, 58, d, v);
+      }
+      const before = await run(['R2']);
+      expect(before.candidates[0]).toMatchObject({
+        fact_keys: [{ fact_key: `ep:h:${h20}` }],
+        facts: { trigger: 'growth' },
+      });
+      // 22.10 08:30Z: 1,2 mln topshirildi (qoldiq 2,3 mln) — bugungi epizod.
+      await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -1200000,
+        2300000,
+        '2026-10-22T08:30:00Z',
+      );
+      await db.query(
+        `UPDATE "finance_schema"."cashboxes" SET "balance" = 2300000 WHERE "id" = $1`,
+        [cb],
+      );
+      expect((await run(['R2'])).candidates).toEqual([]);
+    });
+
+    it('R2 (a): oynada kun yetishmasa (snapshot yo‘q) — o‘sish tekshirilmaydi', async () => {
+      const cb = await cashbox('couriers', 57, 2500000);
+      await hist(
+        cb,
+        'expense',
+        'courier_payment',
+        -1,
+        0,
+        '2026-10-21T10:00:00Z',
+      );
+      for (const [d, v] of [
+        ['2026-10-18', 100],
+        ['2026-10-19', 200],
+        ['2026-10-21', 400],
+      ] as const) {
+        await daily(cb, 57, d, v);
+      }
+      expect((await run(['R2'])).candidates).toEqual([]);
+    });
+
+    it('R4: qarz > 0 VA > 7 kun to‘lov yo‘q; to‘lov hech bo‘lmasa — qarz boshlangan kun', async () => {
+      const m1 = await cashbox('markets', 70, 3120000);
+      await hist(
+        m1,
+        'expense',
+        'market_payment',
+        -800000,
+        0,
+        '2026-10-13T10:00:00Z',
+      );
+      const m2 = await cashbox('markets', 71, 50000);
+      await hist(m2, 'income', 'sell', 50000, 50000, '2026-10-10T10:00:00Z');
+      const m3 = await cashbox('markets', 72, 0); // qarz yo'q
+      await hist(m3, 'income', 'sell', 50000, 50000, '2026-10-01T10:00:00Z');
+      const out = await run(['R4']);
+      expect(
+        out.candidates.map((c) => [
+          c.dedup_key,
+          c.fact_keys[0].fact_key,
+          c.facts.days_without_payout,
+        ]),
+      ).toEqual([
+        ['R4:market:70', expect.stringMatching(/^ep:h:\d+$/), 9],
+        ['R4:market:71', 'ep:d:2026-10-10', 12],
+      ]);
+      expect(out.candidates[0].facts).toMatchObject({
+        debt: 3120000,
+        last_payout_amount: 800000,
+        market: { id: '70', name: 'User 70' },
+      });
+    });
+
+    it('R5: > 5 mln VA > 3 kun HQ’ga o‘tkazma yo‘q (VA); dalil — o‘tkazmalar', async () => {
+      const b = await cashbox('branch', 12, 6400000);
+      const t1 = await hist(
+        b,
+        'expense',
+        'branch_to_main',
+        -2000000,
+        100,
+        '2026-10-18T10:00:00Z',
+      );
+      const low = await cashbox('branch', 13, 4000000);
+      await hist(
+        low,
+        'expense',
+        'branch_to_main',
+        -1,
+        0,
+        '2026-10-01T10:00:00Z',
+      );
+      const out = await run(['R5']);
+      expect(out.candidates).toHaveLength(1);
+      expect(out.candidates[0]).toMatchObject({
+        dedup_key: 'R5:branch:12',
+        fact_keys: [{ fact_key: `ep:h:${t1}` }],
+        branch: { id: '12', name: 'Filial 12' },
+        subject: { kind: 'branch', id: '12', name: 'Filial 12' },
+        facts: {
+          balance: 6400000,
+          days_without_transfer: 4,
+          last_transfer_amount: 2000000,
+        },
+        evidence: {
+          kind: 'branch_transfers',
+          transfers: [{ history_id: t1, amount: 2000000 }],
+        },
+      });
+    });
+  });
+
+  describe('R7/R8', () => {
+    const runR7 = (since: string, now = NOW.toISOString()) =>
+      svc.ruleInputs({
+        rules: ['R7'],
+        now,
+        thresholds: {},
+        since: { R7: since },
+      });
+
+    describe('R7 karta', () => {
+      let card = '';
+      beforeEach(async () => {
+        await db.query(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0)`,
+        );
+        [{ id: card }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashbox_cards" ("cashbox_id", "name", "last4") VALUES (1, 'Humo virtual', '1234') RETURNING "id"::text AS id`,
+        );
+      });
+      const check = async (o: {
+        status?: string;
+        confirmed?: string | null;
+        checked?: string;
+        entered?: number;
+        read?: number;
+        expected?: number;
+        last4?: string | null;
+      }) => {
+        const [{ id: shiftId }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."shifts" ("cashbox_user_id", "opened_at", "closed_at", "status")
+           VALUES (NULL, '2026-10-21T03:00:00Z', '2026-10-21T15:00:00Z', 'closed') RETURNING "id"::text AS id`,
+        );
+        const [row] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."shift_account_checks"
+             ("shift_id", "cashbox_card_id", "entered_balance", "ai_read_balance", "expected_balance",
+              "ai_status", "ai_checked_at", "confirmed_at", "ai_confidence", "ai_last4_detected")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0.9, $9) RETURNING "id"::text AS id`,
+          [
+            shiftId,
+            card,
+            o.entered ?? 1540000,
+            o.read ?? 1522000,
+            o.expected ?? 1540000,
+            o.status ?? 'mismatch',
+            o.checked ?? '2026-10-22T08:30:00Z',
+            o.confirmed === undefined ? '2026-10-22T08:30:00Z' : o.confirmed,
+            o.last4 === undefined ? '1234' : o.last4,
+          ],
+        );
+        return { id: row.id, shiftId };
+      };
+
+      it('kassir xatosi: farq = o‘qilgan − kiritilgan, tizim farqi ham; qoralama va match — yo‘q', async () => {
+        const ok = await check({});
+        await check({ confirmed: null }); // qoralama
+        await check({ status: 'match' });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates).toHaveLength(1);
+        expect(out.candidates[0]).toMatchObject({
+          dedup_key: `R7:card_check:${ok.id}`,
+          fact_keys: [{ fact_at: '2026-10-21T15:00:00.000Z' }],
+          headline_amount: -18000,
+          facts: {
+            source: 'card_balance',
+            mismatch: ['amount'],
+            entered_amount: 1540000,
+            read_amount: 1522000,
+            difference: -18000,
+            expected_balance: 1540000,
+            system_difference: -18000,
+            shift: { id: ok.shiftId, date: '2026-10-21' },
+            card: { id: card, name: 'Humo virtual' },
+            cashbox: { type: 'main', name: 'Asosiy kassa' },
+          },
+          evidence: {
+            kind: 'card_balance_check',
+            expected_balance: 1540000,
+            ai_confidence: 0.9,
+          },
+        });
+      });
+
+      it('⭐ B1: AI natijasi smena ochiq paytda, tasdiq tick’dan keyin — keyingi tick topadi', async () => {
+        const c = await check({
+          checked: '2026-10-22T08:00:00Z',
+          confirmed: null,
+        });
+        const first = await runR7(
+          '2026-10-22T07:55:00Z',
+          '2026-10-22T08:30:00Z',
+        );
+        expect(first.candidates).toEqual([]);
+        expect(first.cursors.R7).toBeNull(); // dvigatel `now` (08:30) saqlaydi
+        await db.query(
+          `UPDATE "finance_schema"."shift_account_checks" SET "confirmed_at" = '2026-10-22T08:40:00Z' WHERE "id" = $1`,
+          [c.id],
+        );
+        const next = await runR7(
+          '2026-10-22T08:25:00Z',
+          '2026-10-22T09:00:00Z',
+        );
+        expect(next.candidates.map((x) => x.dedup_key)).toEqual([
+          `R7:card_check:${c.id}`,
+        ]);
+        expect(next.cursors.R7).toBe('2026-10-22T08:40:00.000Z');
+      });
+
+      it('⭐ B3: halol kassir (kiritilgan = o‘qilgan), tizimda farq — headline tizim farqi; boshqa karta rasmi — card', async () => {
+        await check({ entered: 950000, read: 950000, expected: 1000000 });
+        await check({
+          entered: 1000000,
+          read: 1000000,
+          expected: 1000000,
+          last4: '9999',
+        });
+        // Ega qarori: kassir xatosi (kiritilgan ≠ AI), lekin AI = tizim — 'amount' emas.
+        await check({
+          entered: 1100000,
+          read: 1000000,
+          expected: 1000000,
+          last4: '9999',
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(
+          out.candidates.map((c) => [
+            c.facts.mismatch,
+            c.headline_amount,
+            c.facts.difference,
+            c.facts.system_difference,
+          ]),
+        ).toEqual([
+          [['amount'], -50000, 0, -50000],
+          [['card'], null, 0, 0],
+          [['card'], null, -100000, 0],
+        ]);
+      });
+
+      it('round-3 N1: AI karta raqamini o‘qiy olmadi (last4 NULL), summa teng — R7 ochilmaydi', async () => {
+        await check({
+          entered: 1000000,
+          read: 1000000,
+          expected: 1000000,
+          last4: null,
+        });
+        expect((await runR7('2026-10-22T08:00:00Z')).candidates).toEqual([]);
+      });
+    });
+
+    describe('R7 chek', () => {
+      let cb = '';
+      let hist = '';
+      beforeEach(async () => {
+        [{ id: cb }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('branch', 9) RETURNING "id"::text AS id`,
+        );
+        hist = await histRow(
+          cb,
+          'expense',
+          'manual_expense',
+          '2026-10-22T06:05:00Z',
+        );
+      });
+      async function histRow(
+        cashbox: string,
+        op: string,
+        source: string,
+        at: string,
+        amount = 350000,
+      ): Promise<string> {
+        const [row] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashbox_history"
+             ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "expense_category_name", "created_by", "createdAt")
+           VALUES ($1, $2, $3, $4, 0, 'Yoqilg‘i', 301, $5) RETURNING "id"::text AS id`,
+          [op, cashbox, source, amount, at],
+        );
+        return row.id;
+      }
+      const receipt = async (o: {
+        state?: string;
+        status?: string;
+        flags?: string[] | null;
+        deleted?: boolean;
+        history?: string | null;
+        counter?: string | null;
+        kind?: string;
+        branchId?: string | null;
+        currency?: string | null;
+        errorReason?: string | null;
+        amount?: number;
+        difference?: number | null;
+        date?: string;
+      }) => {
+        const [row] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashbox_receipts"
+             ("kind", "state", "history_id", "counter_history_id", "branch_id", "file_key", "file_sha256", "mime", "size_bytes", "uploaded_by",
+              "ai_status", "ai_flags", "entered_amount", "ai_amount", "ai_difference", "ai_currency", "ai_error_reason", "ai_date",
+              "ai_recipient", "ai_recipient_last4", "ai_payer", "ai_payer_last4", "ai_checked_at", "updatedAt", "is_deleted")
+           VALUES ($1, $2, $3, $4, $5, 'k', repeat('a', 64), 'image/jpeg', 1, 301, $6, $7::jsonb,
+                   350000, $8, $9, $10, $11, $12, 'ALIYEV ALI', '8840', 'VALIYEV VALI', '3307', '2026-10-22T08:40:00Z', '2026-10-22T08:40:00Z', $13)
+           RETURNING "id"::text AS id`,
+          [
+            o.kind ?? 'manual_expense',
+            o.state ?? 'linked',
+            o.history === undefined ? hist : o.history,
+            o.counter ?? null,
+            o.branchId ?? null,
+            o.status ?? 'mismatch',
+            o.flags ? JSON.stringify(o.flags) : null,
+            o.amount ?? 332000,
+            o.difference === undefined ? -18000 : o.difference,
+            o.currency ?? null,
+            o.errorReason ?? null,
+            o.date ?? '22.10.2026 11:05',
+            o.deleted ?? false,
+          ],
+        );
+        return row.id;
+      };
+
+      it('bog‘langan mismatch / card_mismatch; qoralama, o‘chirilgan, match — yo‘q; PII ism saqlanmaydi', async () => {
+        const a = await receipt({ flags: ['card_mismatch'] });
+        await receipt({ state: 'draft', history: null });
+        await receipt({ deleted: true, history: null });
+        await receipt({ status: 'match', history: null });
+        const b = await receipt({
+          status: 'match',
+          flags: ['card_mismatch'],
+          history: null,
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates.map((c) => c.dedup_key)).toEqual([
+          `R7:receipt:${a}`,
+          `R7:receipt:${b}`,
+        ]);
+        expect(out.candidates[0]).toMatchObject({
+          branch: { id: '9', name: 'Filial 9' },
+          fact_keys: [{ fact_at: '2026-10-22T06:05:00.000Z' }],
+          facts: {
+            source: 'receipt',
+            receipt_kind: 'manual_expense',
+            mismatch: ['amount', 'card'],
+            difference: -18000,
+            read_currency: null,
+            operation: {
+              history_id: hist,
+              kind: 'manual_expense',
+              category_name: 'Yoqilg‘i',
+            },
+            created_by: { id: '301', name: 'User 301' },
+          },
+          evidence: {
+            kind: 'receipt_check',
+            receipt: {
+              date: '22.10.2026 11:05',
+              date_at: '2026-10-22T06:05:00.000Z',
+              date_day: '2026-10-22',
+              recipient: null,
+              payer: null,
+              recipient_last4: '8840',
+              payer_last4: '3307',
+            },
+            week_summary: { from: '2026-10-19', to: '2026-10-25' },
+          },
+        });
+        expect(JSON.stringify(out)).not.toMatch(/ALIYEV|VALIYEV/);
+        expect(out.candidates[1].facts).toMatchObject({
+          mismatch: ['card'],
+          operation: null,
+        });
+      });
+
+      it('⭐ B2: chek so‘mda emas — summa solishtirilmaydi (#643 dan oldin va keyin)', async () => {
+        const pre = await receipt({
+          currency: 'USD',
+          amount: 100,
+          difference: -1249900,
+        });
+        const post = await receipt({
+          currency: 'USD',
+          amount: 100,
+          difference: null,
+          errorReason: 'currency_not_uzs',
+          history: null,
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        for (const [i, id] of [pre, post].entries()) {
+          expect(out.candidates[i]).toMatchObject({
+            dedup_key: `R7:receipt:${id}`,
+            headline_amount: null,
+            facts: {
+              mismatch: ['currency'],
+              difference: null,
+              read_amount: null,
+              read_amount_original: 100,
+              read_currency: 'USD',
+            },
+            evidence: {
+              receipt: { amount: 100, currency: 'USD', date_at: null },
+            },
+          });
+        }
+      });
+
+      it('S2/S3: o‘tkazma cheki — jo‘natuvchi filial; T6 bilan qaytarilgan operatsiya — yo‘q; T6 tahriri (updatedAt) ko‘rinadi', async () => {
+        const [{ id: main }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0) RETURNING "id"::text AS id`,
+        );
+        const income = await histRow(
+          main,
+          'income',
+          'branch_to_main',
+          '2026-10-22T06:00:00Z',
+        );
+        const out1 = await histRow(
+          cb,
+          'expense',
+          'branch_to_main',
+          '2026-10-22T06:00:00Z',
+        );
+        const tr = await receipt({
+          kind: 'branch_to_hq',
+          history: income,
+          counter: out1,
+          flags: ['card_mismatch'],
+          status: 'match',
+        });
+
+        const reversedOp = await histRow(
+          cb,
+          'expense',
+          'manual_expense',
+          '2026-10-22T07:00:00Z',
+          1,
+        );
+        await receipt({ history: reversedOp });
+        await db.query(
+          `INSERT INTO "finance_schema"."cashbox_history" ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "reverses_history_id", "createdAt")
+           VALUES ('income', $1, 'payment_reversal', 1, 0, $2, '2026-10-22T07:30:00Z')`,
+          [cb, reversedOp],
+        );
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates.map((c) => c.dedup_key)).toEqual([
+          `R7:receipt:${tr}`,
+        ]);
+        expect(out.candidates[0]).toMatchObject({
+          branch: { id: '9' },
+          subject: { kind: 'cashbox', id: '9' },
+          facts: {
+            receipt_kind: 'branch_to_hq',
+            mismatch: ['card'],
+            cashbox: { type: 'branch', owner_id: '9' },
+            // round-2 #654: shartnoma enum — chek turi, source_type emas.
+            // round-3 S1: o'tkazmada — jo'natuvchining chiqim oyog'i (facts.cashbox tarixida).
+            operation: { history_id: out1, kind: 'branch_to_hq' },
+          },
+        });
+
+        // T6 tahriri: holat qayta hisoblandi, ai_checked_at eski, updatedAt yangi.
+        const edited = await receipt({ status: 'match', history: null });
+        await db.query(
+          `UPDATE "finance_schema"."cashbox_receipts" SET "ai_status" = 'mismatch', "ai_checked_at" = '2026-10-20T08:00:00Z', "updatedAt" = '2026-10-22T08:50:00Z' WHERE "id" = $1`,
+          [edited],
+        );
+        const later = await runR7('2026-10-22T08:45:00Z');
+        expect(later.candidates.map((c) => c.dedup_key)).toContain(
+          `R7:receipt:${edited}`,
+        );
+      });
+
+      it('round-3 S2: #643 dan oldingi sinonim valyutali chek, farq 0 — «0 so‘m» ogohlantirishi yo‘q', async () => {
+        await receipt({ currency: 'SUM', amount: 350000, difference: 0 });
+        const other = await histRow(
+          cb,
+          'expense',
+          'manual_expense',
+          '2026-10-22T06:10:00Z',
+        );
+        await receipt({
+          currency: 'SUM',
+          amount: 350000,
+          difference: 0,
+          flags: ['card_mismatch'],
+          history: other,
+        });
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates.map((c) => c.facts.mismatch)).toEqual([['card']]);
+      });
+
+      it('S5: receipt_ai_enabled — chek sozlamasidan (stub)', async () => {
+        await receipt({});
+        const withSettings = new AdvisorInputsService(
+          db,
+          new FinanceDailyService(db),
+          { send: identitySend } as never,
+          { send: branchSend } as never,
+          {
+            loadSettings: () =>
+              Promise.resolve({
+                manual_expense: { ai_enabled: false },
+                hq_transfer: { ai_enabled: false },
+              }),
+          } as never,
+        );
+        const out = await withSettings.ruleInputs({
+          rules: ['R7'],
+          now: NOW.toISOString(),
+          thresholds: {},
+          since: { R7: '2026-10-22T08:00:00Z' },
+        });
+        expect(out.candidates[0].facts.receipt_ai_enabled).toBe(false);
+      });
+    });
+
+    describe('R8', () => {
+      beforeEach(async () => {
+        await db.query(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('main', 0), ('couriers', 5)`,
+        );
+      });
+      // Buyurtma qaytarilishi: bitta buyurtma — bir nechta kassada oyoq.
+      const corr = (
+        at: string,
+        sourceId: number | null,
+        source = 'correction',
+        cashbox = 1,
+      ) =>
+        db.query(
+          `INSERT INTO "finance_schema"."cashbox_history" ("operation_type", "cashbox_id", "source_type", "source_id", "amount", "balance_after", "createdAt")
+           VALUES ('income', $4, $1, $2, 1, 0, $3)`,
+          [source, sourceId, at, cashbox],
+        );
+      const t6 = (action: string, at: string) =>
+        db.query(
+          `INSERT INTO "finance_schema"."payment_corrections"
+             ("action", "payment_kind", "original_transfer_id", "root_transfer_id", "reversal_transfer_id",
+              "original_amount", "payment_method", "counterparty_user_id", "receiver_cashbox_id", "reason",
+              "created_by", "idempotency_key", "root_created_at", "createdAt")
+           VALUES ($1, 'courier_payment', gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, 'cash', 1, 1, 'x', 1,
+                   gen_random_uuid()::text, now(), $2)`,
+          [action, at],
+        );
+      const run = (t: Record<string, number>, weeks = ['2026-10-12']) =>
+        svc.ruleInputs({
+          rules: ['R8'],
+          now: NOW.toISOString(),
+          thresholds: { R8: t },
+          since: {},
+          periods: { weeks },
+        });
+
+      it('qo‘lda + T6 sanaladi, buyurtma qaytarilishi va payment_reversal yo‘q; ≥ max(min_count, 2× bazaviy)', async () => {
+        await corr('2026-09-20T05:00:00Z', null);
+        await corr('2026-10-01T05:00:00Z', null);
+        await corr('2026-10-13T05:00:00Z', null);
+        await corr('2026-10-14T05:00:00Z', null);
+        await corr('2026-10-14T06:00:00Z', 500);
+        await corr('2026-10-14T06:00:01Z', 500, 'correction', 2);
+        await corr('2026-10-15T06:00:00Z', null, 'payment_reversal');
+        await t6('reverse', '2026-10-15T05:00:00Z');
+        await t6('edit', '2026-10-16T05:00:00Z');
+        const out = await run({ ratio: 2, min_count: 3 });
+        expect(out.candidates).toHaveLength(1);
+        expect(out.candidates[0]).toMatchObject({
+          dedup_key: 'R8:week:2026-10-12',
+          subject: { kind: 'system', id: null, name: 'Butun tizim' },
+          first_fact_at: '2026-10-11T19:00:00.000Z',
+          facts: {
+            from: '2026-10-12',
+            to: '2026-10-18',
+            count: 4,
+            baseline_weekly_avg: 0.47,
+            ratio: 8.5,
+          },
+          evidence: {
+            kind: 'corrections',
+            by_kind: {
+              manual_correction: 2,
+              order_rollback: 1,
+              payment_reverse: 1,
+              payment_edit: 1,
+            },
+            counted_kinds: [
+              'manual_correction',
+              'payment_reverse',
+              'payment_edit',
+            ],
+            baseline: { window_days: 30, total: 2, min_count: 3, ratio: 2 },
+          },
+        });
+        expect(
+          (out.candidates[0].evidence.days as Array<{ count: number }>).map(
+            (d) => d.count,
+          ),
+        ).toEqual([0, 1, 1, 1, 1, 0, 0]);
+        // min_count 5 — jim; yuqori ratio — jim; tugamagan hafta — tekshirilmaydi.
+        expect((await run({ ratio: 2, min_count: 5 })).candidates).toEqual([]);
+        expect(
+          (await run({ ratio: 10, min_count: 3 }, ['2026-10-12', '2026-10-19']))
+            .candidates,
+        ).toEqual([]);
+      });
+
+      it('baza 0: min_count yetsa ogohlantiradi, ratio null; S7 — butun sonli solishtiruv', async () => {
+        for (const d of ['13', '14', '15'])
+          await corr(`2026-10-${d}T05:00:00Z`, null);
+        const zero = await run({ ratio: 2, min_count: 3 });
+        expect(zero.candidates[0].facts).toMatchObject({
+          count: 3,
+          baseline_weekly_avg: 0,
+          ratio: null,
+        });
+
+        // Baza 4 (30 kunda) → aniq chegara 4,3 × 4 × 7 / 30 = 4,0133: 4 ta — yetmaydi.
+        await db.query(
+          `TRUNCATE "finance_schema"."cashbox_history" RESTART IDENTITY CASCADE`,
+        );
+        for (const d of ['20', '21', '22', '23'])
+          await corr(`2026-09-${d}T05:00:00Z`, null);
+        for (const d of ['13', '14', '15', '16'])
+          await corr(`2026-10-${d}T05:00:00Z`, null);
+        expect((await run({ ratio: 4.3, min_count: 1 })).candidates).toEqual(
+          [],
+        );
+        expect((await run({ ratio: 4, min_count: 1 })).candidates).toHaveLength(
+          1,
+        );
       });
     });
   });

@@ -29,6 +29,9 @@ export const WEB_ROUTES = {
   mainCashbox: '/payments/main-cashbox',
   cashDetail: '/payments/cash-detail/:id',
   financialBalance: '/financial-balance',
+  // (BE-5 LhTIno57) AI maslahatchi — ogohlantirish deep link'i
+  // (`/ai-assistant?tab=alerts&alert=:id`), Telegram «Ogohlantirishni ochish».
+  aiAssistant: '/ai-assistant',
 } as const;
 
 /**

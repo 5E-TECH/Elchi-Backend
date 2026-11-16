@@ -168,6 +168,204 @@ describe('advisor-text (BE-5)', () => {
     ]);
   });
 
+  it('R2/R4/R5: sarlavha (§9.3) va kassa havolasi; R5 o‘tkazma href', () => {
+    const r2 = base({
+      rule_key: 'R2',
+      subject: { kind: 'courier', id: '55', name: 'Jasur Tursunov' },
+      facts: {
+        trigger: 'both',
+        courier: { id: '55', name: 'Jasur Tursunov' },
+        balance: 2840000,
+        days_without_handover: 4,
+      },
+    });
+    expect(advisorTitle(r2)).toBe(
+      "Jasur Tursunov: 2 840 000 so'm, 4 kundan beri topshirilmagan",
+    );
+    expect(
+      advisorTitle(
+        base({
+          ...r2,
+          facts: { ...r2.facts, trigger: 'growth', growth_days: 3 },
+        }),
+      ),
+    ).toBe("Jasur Tursunov: 2 840 000 so'm — qarz 3 kun ketma-ket o'sgan");
+    expect(advisorLinks(r2)).toEqual([
+      {
+        kind: 'courier_cashbox',
+        href: '/payments/cash-detail/55?type=courier',
+        entity_id: '55',
+        primary: true,
+      },
+    ]);
+    const r4 = base({
+      rule_key: 'R4',
+      subject: { kind: 'market', id: '70', name: 'Nur Elektronika' },
+      facts: {
+        market: { id: '70', name: 'Nur Elektronika' },
+        debt: 3120000,
+        days_without_payout: 9,
+      },
+    });
+    expect(advisorTitle(r4)).toBe(
+      "Nur Elektronika: 9 kundan beri to'lov yo'q, qarz 3 120 000 so'm",
+    );
+    expect(advisorLinks(r4)[0].href).toBe(
+      '/payments/cash-detail/70?type=market',
+    );
+    const r5 = base({
+      rule_key: 'R5',
+      subject: { kind: 'branch', id: '12', name: 'Urgut filiali' },
+      facts: {
+        branch: { id: '12', name: 'Urgut filiali' },
+        balance: 6400000,
+        days_without_transfer: 4,
+      },
+      evidence: {
+        kind: 'branch_transfers',
+        transfers: [{ history_id: '77', amount: 1 }],
+      },
+    });
+    expect(advisorTitle(r5)).toBe(
+      "Urgut filiali kassasida 6 400 000 so'm — HQ'ga 4 kundan beri o'tkazma yo'q",
+    );
+    expect(advisorLinks(r5)[0].href).toBe(
+      '/payments/cash-detail/12?type=branch',
+    );
+    expect(
+      (withEvidenceHrefs(r5).transfers as Array<{ href: string }>)[0].href,
+    ).toBe('/payments/cash-detail/12?type=branch&history=77');
+  });
+
+  it('R7: chek (summa + karta), faqat karta, karta qoldig‘i; R8 sarlavha va havolalar', () => {
+    const receipt = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'receipt',
+        mismatch: ['amount', 'card'],
+        branch: { id: '9', name: 'Farg‘ona filiali' },
+        cashbox: { type: 'branch', owner_id: '9' },
+        entered_amount: 350000,
+        read_amount: 332000,
+        difference: -18000,
+        operation: {
+          history_id: '5521',
+          kind: 'manual_expense',
+          category_name: 'Yoqilg‘i',
+        },
+      },
+    });
+    expect(advisorTitle(receipt)).toBe(
+      "Farg‘ona filiali · Yoqilg‘i: kiritilgan 350 000 so'm, chekda 332 000 so'm (\u221218 000 so'm). To'lov filial kartasidan emas",
+    );
+    expect(advisorLinks(receipt)[0]).toMatchObject({
+      kind: 'operation',
+      href: '/payments/cash-detail/9?type=branch&history=5521',
+    });
+    expect(
+      advisorTitle(
+        base({ ...receipt, facts: { ...receipt.facts, mismatch: ['card'] } }),
+      ),
+    ).toBe("Farg‘ona filiali · Yoqilg‘i: To'lov filial kartasidan emas");
+    const card = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'card_balance',
+        mismatch: ['amount'],
+        cashbox: { type: 'main', owner_id: '0', name: 'Asosiy kassa' },
+        card: { id: '3', name: 'Humo virtual' },
+        entered_amount: 1540000,
+        read_amount: 1522000,
+        difference: -18000,
+        shift: { id: '818', date: '2026-10-21' },
+      },
+    });
+    expect(advisorTitle(card)).toBe(
+      "Asosiy kassa · Humo virtual: kiritilgan 1 540 000 so'm, AI o'qigan 1 522 000 so'm (\u221218 000 so'm)",
+    );
+    expect(advisorLinks(card)).toEqual([
+      {
+        kind: 'shift_report',
+        href: '/payments/shifts/818',
+        entity_id: '818',
+        primary: true,
+      },
+    ]);
+    const r8 = base({
+      rule_key: 'R8',
+      facts: { from: '2026-10-12', to: '2026-10-18', count: 14, ratio: 2.3 },
+    });
+    expect(advisorTitle(r8)).toBe(
+      "12.10.2026–18.10.2026: 14 ta tuzatish — 30 kunlik o'rtachadan 2,3 barobar",
+    );
+    expect(advisorLinks(r8)).toEqual([
+      {
+        kind: 'corrections',
+        href: '/payments/main-cashbox',
+        entity_id: null,
+        primary: true,
+      },
+    ]);
+  });
+
+  it('R7 (#653 review): halol kassir — tizim farqi; boshqa karta; valyuta; o‘tkazma cheki', () => {
+    const honest = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'card_balance',
+        mismatch: ['amount'],
+        cashbox: { name: 'Asosiy kassa' },
+        card: { name: 'Humo' },
+        entered_amount: 950000,
+        read_amount: 950000,
+        difference: 0,
+        expected_balance: 1000000,
+        system_difference: -50000,
+      },
+    });
+    expect(advisorTitle(honest)).toBe(
+      "Asosiy kassa · Humo: AI o'qigan 950 000 so'm, tizimda 1 000 000 so'm (\u221250 000 so'm)",
+    );
+    expect(
+      advisorTitle(
+        base({
+          ...honest,
+          facts: { ...honest.facts, mismatch: ['card'], system_difference: 0 },
+        }),
+      ),
+    ).toBe('Asosiy kassa · Humo: rasm boshqa kartaniki');
+    const usd = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'receipt',
+        receipt_kind: 'manual_expense',
+        mismatch: ['currency'],
+        branch: { name: 'Urgut filiali' },
+        entered_amount: 1250000,
+        read_amount: null,
+        read_amount_original: 100,
+        read_currency: 'USD',
+        difference: null,
+        operation: { history_id: '9', category_name: 'Yoqilg‘i' },
+      },
+    });
+    expect(advisorTitle(usd)).toBe(
+      "Urgut filiali · Yoqilg‘i: chek so'mda emas (100 USD), kiritilgan 1 250 000 so'm",
+    );
+    const transfer = base({
+      rule_key: 'R7',
+      facts: {
+        source: 'receipt',
+        receipt_kind: 'branch_to_hq',
+        mismatch: ['card'],
+        branch: { name: 'Urgut filiali' },
+      },
+    });
+    expect(advisorTitle(transfer)).toBe(
+      "Urgut filiali · filial → HQ o'tkazma cheki: Pul HQ kartasiga tushmagan",
+    );
+  });
+
   it('sarlavha ≤ 200 belgi', () => {
     const long = base({
       facts: { cashbox: { name: 'x'.repeat(300) }, last_difference: -1 },

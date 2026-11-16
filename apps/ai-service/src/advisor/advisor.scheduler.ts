@@ -10,6 +10,9 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { CronJob } from 'cron';
 import { DataSource } from 'typeorm';
+import { AdvisorNotifier } from './advisor-notify';
+import { AdvisorRealtime } from './advisor-realtime';
+import { AdvisorExplainService } from './advisor-explain.service';
 import {
   AdvisorEngineService,
   type AdvisorRunGroup,
@@ -42,6 +45,9 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly engine: AdvisorEngineService,
     @Optional() private readonly config?: ConfigService,
     @Optional() private readonly registry?: SchedulerRegistry,
+    @Optional() private readonly notifier?: AdvisorNotifier,
+    @Optional() private readonly realtime?: AdvisorRealtime,
+    @Optional() private readonly explain?: AdvisorExplainService,
   ) {}
 
   enabled(): boolean {
@@ -91,6 +97,86 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Tick'dan keyin (qulf ichida): realtime signal va jiddiylar
+   * bildirishnomasi (§9.2 — `notified_at IS NULL` lar, qayta urinish ham).
+   * Xatolar tick natijasini buzmaydi.
+   */
+  private async notifyPending(): Promise<void> {
+    if (!this.notifier) return;
+    try {
+      const n = await this.notifier.dispatchPending();
+      if (n.sent || n.failed)
+        this.logger.log(`ai_advisor_notify sent=${n.sent} failed=${n.failed}`);
+    } catch (error) {
+      this.logger.warn(
+        `ai_advisor_notify_failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown'}`,
+      );
+    }
+  }
+
+  private async afterRun(result: AdvisorRunResult): Promise<void> {
+    if (this.realtime && result.changes.length) {
+      try {
+        const rows = await this.ds.query<
+          Array<{
+            id: string;
+            rule_key: string;
+            severity: string;
+            status: string;
+            explanation_status: string;
+          }>
+        >(
+          `SELECT "id"::text AS id, "rule_key", "severity", "status", "explanation_status"
+             FROM ai_schema.ai_advisor_alerts WHERE "id" = ANY($1::bigint[])`,
+          [result.changes.map((c) => c.alert_id)],
+        );
+        const at = new Date().toISOString();
+        const byId = new Map(rows.map((r) => [r.id, r]));
+        this.realtime.emit(
+          result.changes.flatMap((c) => {
+            const r = byId.get(c.alert_id);
+            return r
+              ? [
+                  {
+                    alert_id: r.id,
+                    rule_key: r.rule_key,
+                    severity: r.severity,
+                    status: r.status,
+                    change: c.change,
+                    explanation_status: r.explanation_status,
+                    at,
+                  },
+                ]
+              : [];
+          }),
+        );
+      } catch (error) {
+        this.logger.warn(
+          `ai_advisor_realtime_failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown'}`,
+        );
+      }
+    }
+    await this.notifyPending();
+    if (this.explain) {
+      // §6: jiddiylarga darhol izoh (≤ 5/tick), eskirgan `pending` → failed.
+      try {
+        const opened = result.changes
+          .filter((c) => c.change === 'opened')
+          .map((c) => c.alert_id);
+        const e = await this.explain.autoExplain(new Date(), opened);
+        if (e.queued || e.stale)
+          this.logger.log(
+            `ai_advisor_explain queued=${e.queued} stale=${e.stale}`,
+          );
+      } catch (error) {
+        this.logger.warn(
+          `ai_advisor_explain_auto_failed: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown'}`,
+        );
+      }
+    }
+  }
+
+  /**
    * ⚠️ Qulf — sessiya `pg_try_advisory_lock` alohida ulanishda; u uzilsa
    * (tarmoq, pooler failover) qulf bo'shaydi va boshqa replika ayni guruhni
    * parallel boshlashi mumkin. Dvigatel idempotent (ochiq qator FOR UPDATE,
@@ -121,11 +207,19 @@ export class AdvisorScheduler implements OnModuleInit, OnModuleDestroy {
         `ai_advisor_rules group=${group} rules=${result.rules.join(',')} candidates=${result.candidates} ` +
           `opened=${result.opened} occurred=${result.occurred} refreshed=${result.refreshed} failed=${result.failed}`,
       );
+      await this.afterRun(result);
       return result;
     } catch (error) {
       this.logger.error(
         `ai_advisor_rules_failed group=${group}: ${error instanceof Error ? error.message.slice(0, 300) : 'unknown'}`,
       );
+      // Qoidalar yiqilsa ham kutayotgan bildirishnomalar qayta urinadi
+      // (finance o'chiq bo'lsa ham; round-2 S4).
+      if (locked) {
+        await this.notifyPending();
+        // Eskirgan `pending` tozalash qoidalar yiqilsa ham (round-3 nit).
+        await this.explain?.autoExplain(new Date(), []).catch(() => undefined);
+      }
       return null;
     } finally {
       if (locked) {

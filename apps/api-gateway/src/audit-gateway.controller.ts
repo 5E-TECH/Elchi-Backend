@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Inject,
+  Optional,
   Param,
   Query,
   UseGuards,
@@ -41,7 +42,15 @@ type Row = Record<string, any>;
 interface ServiceLeg {
   name: string;
   client: ClientProxy;
+  /** Oyoq bo'yicha timeout (ms); berilmasa — umumiy `TIMEOUT`. */
+  timeoutMs?: number;
 }
+
+/**
+ * ai oyog'i qisqa timeout bilan: `ai_queue` prefetch'i Anthropic chaqiruvlari
+ * bilan umumiy — AI band bo'lsa butun jurnal 12 s kutmasin (round-2 S6).
+ */
+const AI_LEG_TIMEOUT_MS = 3_000;
 
 /** Servis + uning global tartib raqami (k-way merge tie-break'i). */
 interface RankedLeg extends ServiceLeg {
@@ -90,6 +99,9 @@ export class AuditGatewayController {
     @Inject('INVESTOR') investor: ClientProxy,
     @Inject('NOTIFICATION') notification: ClientProxy,
     private readonly enrichment: AuditEnrichmentService,
+    // (BE-5 LhTIno57 §11) ai-service oyog'i — `ai.cap.raise`, `ai.advisor.*`.
+    // Oxirgi va ixtiyoriy: mavjud spec'lar pozitsion konstruktor bilan quradi.
+    @Optional() @Inject('AI') ai?: ClientProxy,
   ) {
     this.services = [
       { name: 'identity', client: identity },
@@ -101,6 +113,7 @@ export class AuditGatewayController {
       { name: 'catalog', client: catalog },
       { name: 'investor', client: investor },
       { name: 'notification', client: notification },
+      ...(ai ? [{ name: 'ai', client: ai, timeoutMs: AI_LEG_TIMEOUT_MS }] : []),
     ];
   }
 
@@ -223,11 +236,9 @@ export class AuditGatewayController {
     limit: number,
   ): Promise<FeedPage> {
     try {
-      const r = await this.send(
-        leg.client,
-        `${leg.name}.activity_log.find_all`,
-        { query: { ...filters, page, limit, with_total: true } },
-      );
+      const r = await this.sendLeg(leg, `${leg.name}.activity_log.find_all`, {
+        query: { ...filters, page, limit, with_total: true },
+      });
       const items = this.itemsOf(r).map((it) => ({
         ...it,
         _service: leg.name,
@@ -269,7 +280,7 @@ export class AuditGatewayController {
     const window = tooDeep ? 1 : offset;
     const keyed = await Promise.all(
       legs.map((leg) =>
-        this.send(leg.client, `${leg.name}.activity_log.find_all`, {
+        this.sendLeg(leg, `${leg.name}.activity_log.find_all`, {
           query: {
             ...filters,
             page: 1,
@@ -338,7 +349,7 @@ export class AuditGatewayController {
   ): Promise<FeedPage> {
     const responses = await Promise.all(
       legs.map((leg) =>
-        this.send(leg.client, `${leg.name}.activity_log.find_all`, {
+        this.sendLeg(leg, `${leg.name}.activity_log.find_all`, {
           query: {
             ...filters,
             page: 1,
@@ -394,7 +405,7 @@ export class AuditGatewayController {
     const limit = Number(limitRaw) > 0 ? Math.min(Number(limitRaw), 500) : 200;
     const responses = await Promise.all(
       this.services.map((leg) =>
-        this.send(leg.client, `${leg.name}.activity_log.find_by_entity`, {
+        this.sendLeg(leg, `${leg.name}.activity_log.find_by_entity`, {
           entity_type: entityType,
           entity_id: entityId,
           limit,
@@ -417,14 +428,23 @@ export class AuditGatewayController {
     @Param('user_id') userId: string,
     @Query() q: ActivityLogQueryDto,
   ) {
-    return this.list({ ...q, user_id: userId } as ActivityLogQueryDto);
+    return this.list({ ...q, user_id: userId });
   }
 
   // ---- helpers ---------------------------------------------------------
 
-  private send(client: ClientProxy, cmd: string, payload: unknown) {
+  private sendLeg(leg: ServiceLeg, cmd: string, payload: unknown) {
+    return this.send(leg.client, cmd, payload, leg.timeoutMs);
+  }
+
+  private send(
+    client: ClientProxy,
+    cmd: string,
+    payload: unknown,
+    timeoutMs: number = this.TIMEOUT,
+  ) {
     return firstValueFrom(
-      client.send({ cmd }, payload).pipe(timeout(this.TIMEOUT)),
+      client.send({ cmd }, payload).pipe(timeout(timeoutMs)),
     );
   }
 
