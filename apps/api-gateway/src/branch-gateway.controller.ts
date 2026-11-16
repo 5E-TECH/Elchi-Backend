@@ -1167,7 +1167,14 @@ export class BranchGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
   )
-  @ApiOperation({ summary: 'Cancel transfer batch and unassign its orders' })
+  @ApiOperation({
+    summary: 'Cancel transfer batch and unassign its orders',
+    description:
+      "oP02jE2P — faqat hali jo'natilmagan (`PENDING`) paket bekor qilinadi. Ruxsat: superadmin, admin va paketni yig'gan (manba) filialning registratori yoki menejeri (yoki menejer daraxti); boshqasi — 403. " +
+      "409 `data.reason = batch_in_transit` — paket jo'natilgan (`SENT`, yo'lda yoki qisman qabul qilingan): hech kimga, superadmin va adminga ham bekor qilinmaydi (`details: { batch_id, status }`). " +
+      '400 `batch_received` — qabul qilingan paket, 400 `batch_already_cancelled` — allaqachon bekor qilingan, 400 `batch_not_cancellable` — boshqa holat. ' +
+      '400 — sabab (`reason`) 10 belgidan qisqa. Muvaffaqiyatda FORWARD paket buyurtmalari paketdan yechilib `new` holatiga qaytadi.',
+  })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: CancelTransferBatchRequestDto })
   cancelTransferBatch(

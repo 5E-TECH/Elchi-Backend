@@ -87,6 +87,7 @@ export * from './order/order-operator-assign';
 export * from './order/order-tracking-notes';
 export * from './order/order-number';
 export * from './order/order-intake';
+export * from './order/transfer-batch-cancel';
 export * from './pricing/delivery-pricing';
 export * from './pricing/sale-tariff';
 export * from './notification/notification-types';
