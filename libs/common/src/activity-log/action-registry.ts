@@ -615,6 +615,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'tag',
     'amber',
   ),
+  // (B0ILd7YI) rejalashtirilgan tarif versiyasi bekor qilindi.
+  'logistics.delivery_tariff_cancelled': entry(
+    'Rejalashtirilgan yetkazish tarifi bekor qilindi',
+    'logistics',
+    'close',
+    'red',
+  ),
   'logistics.delivery_pricing_settings_updated': entry(
     "Yetkazish narxi sozlamalari o'zgardi",
     'logistics',

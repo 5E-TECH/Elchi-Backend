@@ -9,6 +9,7 @@ import { RmqService, executeAndAck } from '@app/common';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import {
   DELIVERY_PRICING_PATTERNS,
+  type CancelDeliveryTariffPayload,
   type CreateDeliveryTariffPayload,
   type DeliveryPricingRequester,
   type DeliveryQuotePayload,
@@ -79,6 +80,20 @@ export class DeliveryPricingController {
   ) {
     return this.executeAndAck(context, () =>
       this.pricing.createTariff(payload?.dto, payload?.requester),
+    );
+  }
+
+  /** B0ILd7YI — rejalashtirilgan tarif versiyasini bekor qilish. */
+  @MessagePattern({ cmd: DELIVERY_PRICING_PATTERNS.TARIFFS_CANCEL })
+  cancelTariff(
+    @Payload()
+    payload: CancelDeliveryTariffPayload & {
+      requester?: DeliveryPricingRequester;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.pricing.cancelScheduledTariff(payload?.id, payload?.requester),
     );
   }
 

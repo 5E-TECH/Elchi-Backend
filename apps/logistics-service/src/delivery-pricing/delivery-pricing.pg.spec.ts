@@ -3,6 +3,7 @@ import { of } from 'rxjs';
 import { DeliveryPricingEngine1716000000142 } from '../../../../migrations/1716000000142-DeliveryPricingEngine';
 import { DeliveryPricingVolumetricFromKg1716000000154 } from '../../../../migrations/1716000000154-DeliveryPricingVolumetricFromKg';
 import { DeliveryPricingSaleGates1716000000183 } from '../../../../migrations/1716000000183-DeliveryPricingSaleGates';
+import { DeliveryTariffCancelScheduled1716000000232 } from '../../../../migrations/1716000000232-DeliveryTariffCancelScheduled';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryTariff } from '../entities/delivery-tariff.entity';
 import { DeliveryPricingSettings } from '../entities/delivery-pricing-settings.entity';
@@ -42,11 +43,13 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
     const fromKgMigration = new DeliveryPricingVolumetricFromKg1716000000154();
     // KmWO9gTA: entity endi `min_delivery_price` / `extra_cost_limit_amount` ni o'qiydi.
     const saleGatesMigration = new DeliveryPricingSaleGates1716000000183();
+    // B0ILd7YI: entity endi `cancelled_at` / `cancelled_by` ni o'qiydi.
+    const cancelMigration = new DeliveryTariffCancelScheduled1716000000232();
     const activityLog = { log: jest.fn(), logChange: jest.fn() };
     const catalogClient = { send: jest.fn(() => of({ data: [] })) };
     let service: DeliveryPricingService;
 
-    /** 142 + 154 + 183 birga (down — teskari tartibda). */
+    /** 142 + 154 + 183 + 232 birga (down — teskari tartibda). */
     const run = async (direction: 'up' | 'down') => {
       const runner = db.createQueryRunner();
       try {
@@ -54,7 +57,9 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
           await migration.up(runner);
           await fromKgMigration.up(runner);
           await saleGatesMigration.up(runner);
+          await cancelMigration.up(runner);
         } else {
+          await cancelMigration.down(runner);
           await saleGatesMigration.down(runner);
           await fromKgMigration.down(runner);
           await migration.down(runner);
@@ -110,7 +115,14 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
           "name" character varying NOT NULL,
           "sato_code" character varying NULL,
           "region_id" bigint NOT NULL REFERENCES logistics_schema.regions(id),
-          "assigned_region" bigint NULL REFERENCES logistics_schema.regions(id)
+          "assigned_region" bigint NULL REFERENCES logistics_schema.regions(id),
+          -- District entity'ning keyingi ustunlari (tuman ↔ filial qamrovi, D1).
+          "serving_branch_id" bigint NULL,
+          "assignment_review_required" boolean NOT NULL DEFAULT false,
+          "assignment_review_reason" character varying(32) NULL,
+          "assignment_flagged_at" TIMESTAMPTZ NULL,
+          "assignment_confirmed_by" bigint NULL,
+          "assignment_confirmed_at" TIMESTAMPTZ NULL
         )
       `);
       // Prod'dagi nomlar: Toshkent VILOYATI — "Toshkent" (SOATO 1727).
@@ -369,6 +381,135 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
       expect(activityLog.log).toHaveBeenCalledTimes(2);
     });
 
+    it('B0ILd7YI: rejalashtirilgan versiya bekor qilinadi — hech qachon kuchga kirmaydi, tarixda qoladi; kuchga kirgani — 409', async () => {
+      activityLog.log.mockClear();
+      const future = new Date(Date.now() + 86_400_000).toISOString();
+      const created = (await service.createTariff(
+        {
+          tariff_id: 'address',
+          base_price: 77000,
+          extra_per_kg: 7000,
+          days_min: 2,
+          days_max: 3,
+          valid_from: future,
+        },
+        ADMIN,
+      )) as { data: DeliveryTariff };
+      const scheduledId = String(created.data.id);
+      const currentAddress = (await service.findCurrentTariff('address'))!;
+
+      const cancelled = (await service.cancelScheduledTariff(scheduledId, {
+        id: '5',
+        roles: ['admin'],
+      })) as {
+        statusCode: number;
+        data: DeliveryTariff & { already_cancelled: boolean };
+      };
+      expect(cancelled.statusCode).toBe(200);
+      expect(cancelled.data.already_cancelled).toBe(false);
+      expect(cancelled.data.is_active).toBe(false);
+      expect(cancelled.data.cancelled_by).toBe('5');
+      expect(cancelled.data.cancelled_at).toBeInstanceOf(Date);
+
+      // Takror (vaqt tugagach qayta bosish) — o'sha qator, jurnal bitta.
+      const again = (await service.cancelScheduledTariff(
+        scheduledId,
+        ADMIN,
+      )) as {
+        statusCode: number;
+        data: { already_cancelled: boolean; cancelled_by: string };
+      };
+      expect(again.statusCode).toBe(200);
+      expect(again.data.already_cancelled).toBe(true);
+      expect(again.data.cancelled_by).toBe('5');
+      expect(
+        activityLog.log.mock.calls.filter(
+          ([entry]) => entry.action === 'logistics.delivery_tariff_cancelled',
+        ),
+      ).toHaveLength(1);
+
+      // Vaqt o'tdi deb faraz: valid_from o'tmishga surilsa ham bekor
+      // qilingan versiya kuchga kirmaydi.
+      await db.query(
+        `UPDATE logistics_schema.delivery_tariffs
+            SET valid_from = now() - interval '1 minute' WHERE id = $1`,
+        [scheduledId],
+      );
+      expect(String((await service.findCurrentTariff('address'))!.id)).toBe(
+        String(currentAddress.id),
+      );
+      const list = (await service.listTariffs({ tariff_id: 'address' })) as {
+        data: {
+          versions: Array<{
+            id: string;
+            is_current: boolean;
+            is_scheduled: boolean;
+            is_cancelled: boolean;
+          }>;
+        };
+      };
+      expect(
+        list.data.versions.find((v) => String(v.id) === scheduledId),
+      ).toMatchObject({
+        is_current: false,
+        is_scheduled: false,
+        is_cancelled: true,
+      });
+
+      // Kuchga kirgan (hozirgi) versiya bekor qilinmaydi.
+      const live = await service
+        .cancelScheduledTariff(String(currentAddress.id), ADMIN)
+        .then(
+          () => null,
+          (error: { getError: () => { statusCode: number } }) =>
+            error.getError(),
+        );
+      expect(live?.statusCode).toBe(409);
+      // Yo'q versiya — 404.
+      const missing = await service.cancelScheduledTariff('999999', ADMIN).then(
+        () => null,
+        (error: { getError: () => { statusCode: number } }) => error.getError(),
+      );
+      expect(missing?.statusCode).toBe(404);
+
+      // DB darajasida: bekor qilingan qator faol bo'la olmaydi (CHECK).
+      await expect(
+        db.query(
+          `UPDATE logistics_schema.delivery_tariffs SET is_active = true WHERE id = $1`,
+          [scheduledId],
+        ),
+      ).rejects.toThrow(/CHK_delivery_tariffs_cancelled/);
+    });
+
+    it('B0ILd7YI: ikki admin bir vaqtda bekor qiladi — bittasi bekor qiladi, ikkinchisi already_cancelled', async () => {
+      activityLog.log.mockClear();
+      const created = (await service.createTariff(
+        {
+          tariff_id: 'city',
+          base_price: 36000,
+          extra_per_kg: 4000,
+          days_min: 1,
+          days_max: 1,
+          valid_from: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+        ADMIN,
+      )) as { data: DeliveryTariff };
+      const id = String(created.data.id);
+      const results = (await Promise.all([
+        service.cancelScheduledTariff(id, ADMIN),
+        service.cancelScheduledTariff(id, ADMIN),
+      ])) as Array<{ data: { already_cancelled: boolean } }>;
+      expect(results.map((r) => r.data.already_cancelled).sort()).toEqual([
+        false,
+        true,
+      ]);
+      expect(
+        activityLog.log.mock.calls.filter(
+          ([entry]) => entry.action === 'logistics.delivery_tariff_cancelled',
+        ),
+      ).toHaveLength(1);
+    });
+
     it('sozlama: yangi versiya, eskisi nofaol; o`zgarishsiz PATCH — versiya ham, jurnal ham yo`q', async () => {
       await service.updateSettings({ round_to: 1000 }, ADMIN);
       // 46 500 → 1000 ga: 47 000
@@ -519,6 +660,26 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
         await fromKgMigration.down(runner); // ikkinchi down — xatosiz
       } finally {
         await runner.release();
+      }
+      // 232 ning o'zi: up — ikki ustun + CHECK, down — o'chadi, ikkinchi marta xatosiz.
+      const cancelColumns = () =>
+        scalar(
+          `SELECT count(*)::int AS v FROM information_schema.columns
+            WHERE table_schema = 'logistics_schema'
+              AND table_name = 'delivery_tariffs'
+              AND column_name IN ('cancelled_at', 'cancelled_by')`,
+        );
+      expect(await cancelColumns()).toBe(2);
+      const cancelRunner = db.createQueryRunner();
+      try {
+        await cancelMigration.up(cancelRunner); // qayta up — xatosiz
+        await cancelMigration.down(cancelRunner);
+        expect(await cancelColumns()).toBe(0);
+        await cancelMigration.down(cancelRunner); // ikkinchi down — xatosiz
+        await cancelMigration.up(cancelRunner);
+        expect(await cancelColumns()).toBe(2);
+      } finally {
+        await cancelRunner.release();
       }
       await run('down');
 

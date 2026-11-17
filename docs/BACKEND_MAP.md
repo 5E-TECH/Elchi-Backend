@@ -583,8 +583,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `assigned_region`. RPCs: `logistics.delivery.quote` (read-only;
   `items[]` = `product_id` → dims via `catalog.product.find_by_ids`, MARKET
   only own products, or raw dims), `logistics.delivery.tariffs.find_all` /
-  `.create`, `logistics.delivery.settings.get` / `.update` (audit verbs
-  `logistics.delivery_tariff_created`,
+  `.create` / `.cancel` (B0ILd7YI: only a scheduled version, `valid_from >
+  now()` in one UPDATE; row kept with `is_active = false`, `cancelled_at`,
+  `cancelled_by` — migration `1716000000232`; repeat → 200
+  `already_cancelled`), `logistics.delivery.settings.get` / `.update` (audit
+  verbs `logistics.delivery_tariff_created`,
+  `logistics.delivery_tariff_cancelled`,
   `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
   returned separately and never part of `total`. **Sale wiring (KmWO9gTA)**:
   `logistics.delivery.sale_quote` (internal: order-service and the partner

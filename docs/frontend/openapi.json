@@ -24815,7 +24815,7 @@
     },
     "/delivery/tariffs": {
       "get": {
-        "description": "`data.current` — `{ city, center, address }` hozir amaldagi versiya (`valid_from <= now()`, eng so'nggisi). `data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan).",
+        "description": "`data.current` — `{ city, center, address }` hozir amaldagi versiya (`valid_from <= now()`, eng so'nggisi). `data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan, `is_cancelled` — bekor qilingan rejalashtirilgan versiya (B0ILd7YI): `cancelled_at`, `cancelled_by`, `cancelled_by_name`).",
         "operationId": "DeliveryPricingGatewayController_listTariffs",
         "parameters": [
           {
@@ -24892,6 +24892,49 @@
           }
         ],
         "summary": "Yangi tarif versiyasi (admin; eski versiya o`chirilmaydi)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/delivery/tariffs/{id}/cancel": {
+      "post": {
+        "description": "B0ILd7YI. Faqat hali kuchga kirmagan (`valid_from` kelajakda, `is_scheduled: true`) versiya bekor qilinadi; qator o'chirilmaydi — `is_active: false`, `cancelled_at`/`cancelled_by` yoziladi, tarixda `is_cancelled: true` bo'lib qoladi. Hozirgi tarif o'zgarmaydi. Takror so`rov (vaqt tugagach qayta bosish) — 200, o`sha qator, `already_cancelled: true`, jurnal ikkinchi marta yozilmaydi. Amal activity-log'ga yoziladi (`logistics.delivery_tariff_cancelled`). Xatolar: 400 (id), 404 (versiya yo'q), 409 (allaqachon kuchga kirgan yoki nofaol — o'zgartirish uchun yangi versiya yarating).",
+        "operationId": "DeliveryPricingGatewayController_cancelTariff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Tarif versiyasi ID",
+            "schema": {
+              "example": "12",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryTariffCancelResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rejalashtirilgan tarif versiyasini bekor qilish (admin; faqat kelajakdagi)",
         "tags": [
           "Delivery pricing"
         ],
@@ -37666,6 +37709,22 @@
             "type": "string",
             "nullable": true,
             "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
+          },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "(B0ILd7YI) Rejalashtirilgan versiya bekor qilingan vaqt; null — bekor qilinmagan"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (foydalanuvchi ID)"
+          },
+          "cancelled_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (ism; GET /delivery/tariffs va bekor qilish javobida)"
           }
         },
         "required": [
@@ -38066,6 +38125,22 @@
             "nullable": true,
             "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
           },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "(B0ILd7YI) Rejalashtirilgan versiya bekor qilingan vaqt; null — bekor qilinmagan"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (foydalanuvchi ID)"
+          },
+          "cancelled_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (ism; GET /delivery/tariffs va bekor qilish javobida)"
+          },
           "is_current": {
             "type": "boolean",
             "description": "Hozir amaldagi versiya"
@@ -38073,6 +38148,10 @@
           "is_scheduled": {
             "type": "boolean",
             "description": "Kelajakda kuchga kiradi"
+          },
+          "is_cancelled": {
+            "type": "boolean",
+            "description": "(B0ILd7YI) Bekor qilingan rejalashtirilgan versiya — hech qachon kuchga kirmaydi (`is_active: false`)"
           }
         },
         "required": [
@@ -38084,7 +38163,8 @@
           "days_max",
           "valid_from",
           "is_current",
-          "is_scheduled"
+          "is_scheduled",
+          "is_cancelled"
         ]
       },
       "DeliveryTariffsListDataDto": {
@@ -38179,6 +38259,121 @@
           "extra_per_kg",
           "days_min",
           "days_max"
+        ]
+      },
+      "DeliveryTariffCancelledDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "2"
+          },
+          "tariff_id": {
+            "type": "string",
+            "enum": [
+              "city",
+              "center",
+              "address"
+            ]
+          },
+          "base_price": {
+            "type": "number",
+            "example": 40000
+          },
+          "extra_per_kg": {
+            "type": "number",
+            "example": 4000
+          },
+          "days_min": {
+            "type": "number",
+            "example": 1
+          },
+          "days_max": {
+            "type": "number",
+            "example": 2
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
+          },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "(B0ILd7YI) Rejalashtirilgan versiya bekor qilingan vaqt; null — bekor qilinmagan"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (foydalanuvchi ID)"
+          },
+          "cancelled_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (ism; GET /delivery/tariffs va bekor qilish javobida)"
+          },
+          "is_current": {
+            "type": "boolean",
+            "description": "Hozir amaldagi versiya"
+          },
+          "is_scheduled": {
+            "type": "boolean",
+            "description": "Kelajakda kuchga kiradi"
+          },
+          "is_cancelled": {
+            "type": "boolean",
+            "description": "(B0ILd7YI) Bekor qilingan rejalashtirilgan versiya — hech qachon kuchga kirmaydi (`is_active: false`)"
+          },
+          "already_cancelled": {
+            "type": "boolean",
+            "description": "true — versiya avvalroq bekor qilingan edi (takror so`rov; jurnal ikkinchi marta yozilmaydi)"
+          }
+        },
+        "required": [
+          "id",
+          "tariff_id",
+          "base_price",
+          "extra_per_kg",
+          "days_min",
+          "days_max",
+          "valid_from",
+          "is_current",
+          "is_scheduled",
+          "is_cancelled",
+          "already_cancelled"
+        ]
+      },
+      "DeliveryTariffCancelResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Rejalashtirilgan tarif versiyasi bekor qilindi"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeliveryTariffCancelledDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
         ]
       },
       "DeliveryPricingSettingsRowDto": {
