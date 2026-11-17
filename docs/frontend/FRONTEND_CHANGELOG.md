@@ -22,6 +22,33 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-17 — «Tizim holati»: Telegram bot nosozligi sababi va «Qayta tekshirish» (BOT-DIAG-BE)
+
+Ega (2026-11-17): «Tizim holati»da NOTIFICATION «Ishlamayapti — Xizmat o'zini nosoz deb bildirdi» — sababini ko'rmoqchi; faqat superadminga.
+Deploy: notification-service, keyin api-gateway. Migratsiya **yo'q**. Ochiq `GET /health/readiness` **o'zgarmagan** (NOTIFICATION qatori avvalgidek faqat `error: "reported degraded"`, `error_kind: "reported"` — oFfOWGuo).
+
+- 🆕 [gateway → notification] `GET /health/notification-bot` (faqat SUPERADMIN; tokensiz 401, boshqa rollar 403). Javob:
+  `{ status: "ok" | "degraded", bot: { enabled, mode, healthy, username, reason, checked_at, error_kind, error_status, error_text, restart_required }, timestamp }`.
+  - `status` — readiness bilan bir xil (`degraded` = token sozlangan, lekin Telegram `getMe` o'tmagan).
+  - `checked_at` — oxirgi token tekshiruvi (ISO; davriy tekshiruv har 5 daqiqada); `null` — hali tekshirilmagan / token yo'q.
+  - `error_kind` — `token_rejected` (Telegram 401/404) · `timeout` · `network` (DNS, ulanish rad etildi/uzildi) · `telegram_error` (boshqa HTTP xato — `error_status`: 429, 5xx …) · `unknown` (kutilmagan); sog' — `null`.
+  - `error_status` — Telegram HTTP statusi yoki `null` (javob kelmagan / sog').
+  - `error_text` — qisqa texnik matn (inglizcha, ≤ 200 belgi, token yashirilgan), masalan `Telegram getMe failed (0): fetch failed (ENOTFOUND)`; sog' — `null`.
+  - `restart_required: true` — token rad etilgan: qayta tekshirish befoyda, yangi token bilan notification-service restart kerak.
+- 🆕 `POST /health/notification-bot/recheck` (faqat SUPERADMIN, tanasiz, **200**) — token rad etilmagan bo'lsa `getMe` HOZIR yurgiziladi (ko'pi bilan 3,5 s), javob — yuqoridagi shakl + `rechecked: true`. Token rad etilgan bo'lsa tekshirilmaydi: `rechecked: false`, `bot.restart_required: true`. Global per-IP limit amal qiladi (429 bo'lishi mumkin).
+- 🟢 Xatolar: bildirishnoma xizmati javob bermasa (GET 3 s, POST 5 s) yoki bog'lanib bo'lmasa — **503**, `message` o'zbekcha («Bildirishnoma xizmati javob bermadi — bot holatini hozir bilib bo'lmaydi …» / «… bilan bog'lanib bo'lmadi …»). Eski notification-service bilan (deploy oralig'ida) GET yangi maydonlarda `null`/`false` qaytaradi, POST — 503.
+- 🟢 `GET /notifications/health` (ochiq) — `bot` endi faqat eski maydonlar bilan (`enabled, mode, healthy, username, reason`); yangi diagnostika maydonlari unga chiqmaydi. Frontend bu yo'ldan foydalanmaydi.
+
+**Frontend action items** (`/ops?tab=system` — «Tizim holati», faqat superadmin; boshqa rollarda so'ralmaydi):
+- 🔧 NOTIFICATION qatori `down` / `error_kind: "reported"` bo'lganda «Bot holati» bloki: `GET /health/notification-bot`. Matn tavsiyasi (`error_kind` bo'yicha; `error_text` — faqat yig'iladigan «Texnik tafsilot» ichida, `formatDateTimeLocalized(checked_at)` — «Oxirgi tekshiruv»):
+  - `token_rejected` — «Bot tokeni rad etildi» · «Telegram tokenni qabul qilmadi (HTTP {error_status}). BotFather'dan yangi token olib, serverga yozing va bildirishnoma xizmatini qayta ishga tushiring.»
+  - `timeout` — «Telegram javob bermadi» · «Telegram belgilangan vaqtda javob bermadi. Odatda vaqtinchalik — birozdan keyin qayta tekshiring.»
+  - `network` — «Telegram'ga ulanib bo'lmadi» · «Serverdan Telegram'ga ulanish yo'q (tarmoq yoki DNS). Server internetini tekshiring.»
+  - `telegram_error` — «Telegram xato qaytardi» · «Telegram HTTP {error_status} qaytardi. 429 — so'rovlar ko'p, biroz kuting; 5xx — Telegram tomonidagi nosozlik.»
+  - `unknown` — «Kutilmagan xato» · «Texnik tafsilotni dasturchiga yuboring.»
+  - `healthy: null`, `enabled: true` — «Hali tekshirilmagan»; `enabled: false` — «Bot o'chiq» (`reason`).
+- 🔧 «Qayta tekshirish» tugmasi → `POST /health/notification-bot/recheck`, javobdagi holat bilan blok yangilanadi (readiness ham qayta so'raladi). `restart_required: true` bo'lsa tugma o'rniga izoh: «Qayta tekshirish yordam bermaydi — yangi token bilan xizmatni qayta ishga tushiring.» 503 — `message` ni `notify.error` bilan.
+
 ### 2026-11-17 — Yo'ldagi paketni bekor qilish taqiqlandi (oP02jE2P)
 
 Maqsad: jo'natilgan paket bekor qilinib, posilkalar tizimda manba filialda «yangi» bo'lib qolmasin (aslida ular yo'lda yoki manzil filialda).

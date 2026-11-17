@@ -33,6 +33,7 @@ import { CarrierAdminGatewayController } from './carrier-admin-gateway.controlle
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
+import { NotificationBotHealthController } from './notification-bot-health.controller';
 import { ClientErrorGatewayController } from './client-error-gateway.controller';
 import { SearchGatewayController } from './search-gateway.controller';
 import { LogisticsGatewayController } from './logistics-gateway.controller';
@@ -207,6 +208,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // KwodkKWY: CSP Report-Only kuzatuvi — `POST /csp-report` (log, 204).
     CspReportController,
     HealthController,
+    // BOT-DIAG-BE: /health/notification-bot (+ /recheck) — faqat superadmin.
+    NotificationBotHealthController,
     // QKCeGZ3N — frontend xato chegarasi hisobotlari (jurnalga, bazaga emas).
     ClientErrorGatewayController,
     // TODO: Qolgan gateway controllerlarni qo'shish
