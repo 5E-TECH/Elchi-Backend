@@ -244,7 +244,8 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         id: '101',
         dto: expect.objectContaining({
           courier_id: 'c1',
-          status: Order_status.ON_THE_ROAD,
+          // COURIER-SCAN: skan = qabul — darhol WAITING (ON_THE_ROAD emas).
+          status: Order_status.WAITING,
           post_id: 'p-open',
         }),
       }),
@@ -363,14 +364,36 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       expect(postIdOfUpdate(orderClient)).toBe('p-old');
     });
 
-    it('yopilgan (RECEIVED) pochta qayta ochilmaydi', async () => {
-      const { service, orderClient } = setup({
+    // COURIER-SCAN: bugungi yopilgan (RECEIVED) o'z pochtasi — kunning
+    // pochtasi: buyurtma unda qoladi, pochta qayta SENT ga ochilmaydi.
+    it('bugungi yopilgan (RECEIVED) o‘z pochtasi qayta ochilmaydi — buyurtma unda qoladi', async () => {
+      const { service, orderClient, postRepo } = setup({
         order: { post_id: 'p-old' },
         linkedPost: {
           id: 'p-old',
           courier_id: 'c1',
           status: Post_status.RECEIVED,
           createdAt: new Date(),
+        },
+      });
+      await service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      );
+      expect(postIdOfUpdate(orderClient)).toBe('p-old');
+      expect(postRepo.save).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'p-old', status: Post_status.SENT }),
+      );
+    });
+
+    it('kechagi yopilgan (RECEIVED) pochta qayta ishlatilmaydi', async () => {
+      const { service, orderClient } = setup({
+        order: { post_id: 'p-old' },
+        linkedPost: {
+          id: 'p-old',
+          courier_id: 'c1',
+          status: Post_status.RECEIVED,
+          createdAt: yesterday(),
         },
       });
       await service.scanAssignOrder(
@@ -389,11 +412,16 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       { qr_token: 'ORD-abc123' },
     );
 
+    // COURIER-SCAN: skan bilan olingan posilka qo'lda — yangi kuryer pochtasi
+    // darhol RECEIVED («qabul qilinadigan» bo'sh SENT pochta yaratilmaydi).
     expect(postRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
         courier_id: 'c1',
-        status: Post_status.SENT,
+        status: Post_status.RECEIVED,
       }),
+    );
+    expect(postRepo.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: Post_status.SENT }),
     );
     expect(result.data.post_created).toBe(true);
     expect(result.data.post_id).toBe('p-new');
@@ -460,33 +488,8 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     );
   });
 
-  it('is idempotent when same courier scans same order again', async () => {
-    const { service, orderClient } = setup({
-      order: {
-        status: Order_status.ON_THE_ROAD,
-        courier_id: 'c1',
-        post_id: 'p-open',
-      },
-      linkedPost: {
-        id: 'p-open',
-        courier_id: 'c1',
-        status: Post_status.SENT,
-        order_quantity: 5,
-        post_total_price: 500000,
-      },
-    });
-
-    const result: any = await service.scanAssignOrder(
-      { id: 'c1', roles: ['courier'] },
-      { qr_token: 'ORD-abc123' },
-    );
-
-    expect(result.data.idempotent).toBe(true);
-    const updateCalls = orderClient.send.mock.calls.filter(
-      ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
-    );
-    expect(updateCalls).toHaveLength(0);
-  });
+  // COURIER-SCAN: o'z ON_THE_ROAD buyurtmasini qayta skanlash endi QABUL
+  // (WAITING) — `logistics-service.courier-scan-accepts.spec.ts`.
 
   // ===== 6qypMFeT — filial qabul qilgan WAITING buyurtma =====
 
@@ -516,13 +519,24 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       expect(result.statusCode).toBe(200);
       expect(result.data.idempotent).toBe(false);
       const updates = orderUpdates(orderClient);
-      // RECEIVED oldi-qadami yo'q: WAITING → ON_THE_ROAD bitta yozuv.
+      // RECEIVED oldi-qadami yo'q: bitta yozuv. COURIER-SCAN: WAITING qoladi
+      // (kuryerda) — ON_THE_ROAD ga qaytmaydi.
       expect(updates).toHaveLength(1);
       expect(updates[0][1].dto).toEqual(
         expect.objectContaining({
           courier_id: 'c1',
-          status: Order_status.ON_THE_ROAD,
+          status: Order_status.WAITING,
           post_id: 'p-open',
+        }),
+      );
+      expect(updates[0][1].requester).toEqual(
+        expect.objectContaining({
+          note: 'Order skan orqali courierga biriktirildi',
+          courier_scan_guard: {
+            status: Order_status.WAITING,
+            post_id: 'p-branch',
+            courier_id: null,
+          },
         }),
       );
     });
@@ -632,7 +646,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     expect(assignCall.dto).toEqual(
       expect.objectContaining({
         courier_id: 'c1',
-        status: Order_status.ON_THE_ROAD,
+        status: Order_status.WAITING,
       }),
     );
   });
@@ -791,7 +805,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       expect((updates[0][1] as { dto: Record<string, unknown> }).dto).toEqual(
         expect.objectContaining({
           courier_id: 'c1',
-          status: Order_status.ON_THE_ROAD,
+          status: Order_status.WAITING,
           post_id: 'p-open',
         }),
       );
@@ -959,30 +973,10 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       expectUntouched(ctx);
     });
 
-    it('H9: o‘z ON_THE_ROAD buyurtmasini qayta skanlash — idempotent, yangilanish yo‘q', async () => {
-      const ctx = hqSetup({
-        order: {
-          branch_id: '1',
-          status: Order_status.ON_THE_ROAD,
-          courier_id: 'c1',
-          holder_courier_id: 'c1',
-          holder_branch_id: '1',
-          post_id: 'p-open',
-        },
-        linkedPost: {
-          id: 'p-open',
-          courier_id: 'c1',
-          status: Post_status.SENT,
-        },
-      });
+    // H9 (o'z ON_THE_ROAD buyurtmasini qayta skanlash) — COURIER-SCAN: endi
+    // qabul (WAITING), `logistics-service.courier-scan-accepts.spec.ts`.
 
-      const result: any = await scanAsC1(ctx.service);
-
-      expect(result.data.idempotent).toBe(true);
-      expect(updateCallsOf(ctx.orderClient)).toHaveLength(0);
-    });
-
-    it('H10: o‘z WAITING_CUSTOMER buyurtmasi — qayta ON_THE_ROAD biriktiriladi', async () => {
+    it('H10: o‘z WAITING_CUSTOMER buyurtmasi — qayta skan = qabul (WAITING)', async () => {
       const ctx = hqSetup({
         order: {
           branch_id: '1',
@@ -1001,7 +995,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       expect((updates[0][1] as { dto: Record<string, unknown> }).dto).toEqual(
         expect.objectContaining({
           courier_id: 'c1',
-          status: Order_status.ON_THE_ROAD,
+          status: Order_status.WAITING,
         }),
       );
     });
@@ -1072,7 +1066,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       expect((updates[1][1] as { dto: Record<string, unknown> }).dto).toEqual(
         expect.objectContaining({
           courier_id: 'c1',
-          status: Order_status.ON_THE_ROAD,
+          status: Order_status.WAITING,
         }),
       );
       // Filial kuryeri uchun find_hq zaxirasi kerak emas (branch.type bor).

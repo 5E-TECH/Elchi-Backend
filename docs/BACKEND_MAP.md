@@ -1451,13 +1451,30 @@ and assigned to couriers (`logistics.order.assign_to_courier`,
 / `could_not_deliver`. Return: `initiate_return` → `mark_returned_to_market`.
 `rollback_waiting` reverses sold/cancelled (settlement-aware). Full history in
 `order_tracking`; custody in `order_custody_event`.
-`order.scan_assign` takes `new`/`received`/`waiting`/`waiting_customer`, re-scan
-of an own `on the road`/`waiting` order is idempotent. The courier list
-(`courierPostOrdersQuery`, also counts and `/region/my/district-stats`) hides
-`on the road` until the post is received, except a parcel the courier took by
-scan himself (`isCourierScanTakenOrder`: holder = courier, `last_handover_by` =
-courier, no `return_requested`); it stays `on the road` until received
-(6qypMFeT). **Auto-receive on sell/cancel (2026-11-12):** `POST
+**Courier scan = acceptance (COURIER-SCAN, owner 2026-11-17).**
+`order.scan_assign` (`POST /orders/scan-assign`) takes
+`new`/`received`/`waiting`/`waiting_customer` and always ends `waiting` with
+the courier (`courier_id`, holder COURIER) — never `on the road`, no separate
+courier «receive» step; sell/cancel work at once. A branch courier also takes an
+`on the road` order from his own branch's HQ → branch transfer post
+(`courier_id` '0', `sent`) before the manager received the post: the scan
+receives just that order into the branch (`receivePostByScan` with
+`courierScan.mode = 'BRANCH'`, same `post_receive:<id>` lock and conditional
+write; LC-11 closes the post and sends one «arrived» notification when the last
+`on the road` order leaves) and then assigns it. `return_requested` → 409
+`order_marked_not_arrived`; other region → 403 before any write; HQ courier
+rule unchanged. Re-scan of an own `on the road` order is acceptance (scan
+receive in his own post, `mode = 'OWN'`); own `waiting` is idempotent. Two
+couriers at once → one winner (`courier_scan_guard`, 409
+`courier_scan_conflict` under the order row lock). Courier post: today's
+`sent` → today's `received` → new `received`; a `sent` one with no `on the
+road` left is closed. Tracking: `courier_scan_received` /
+`branch_post_received_by_courier_scan` (notes `COURIER_SCAN_TRACKING_NOTES`),
+a manager scan of a taken order → 400 `order_taken_by_courier`. The courier
+list (`courierPostOrdersQuery`, also counts and `/region/my/district-stats`)
+hides `on the road` until the post is received; the 6qypMFeT exception
+(`isCourierScanTakenOrder`) is gone — migration 1716000000240 moved those rows
+to `waiting`. **Auto-receive on sell/cancel (2026-11-12):** `POST
 /orders/sell|partly-sell|cancel/:id` on an `on the road`/`waiting_customer`
 order with a `post_id` first runs the scan receive at the gateway
 (`OrderGatewayController.autoReceiveOnRoadOrder` → `logistics.post.receive`

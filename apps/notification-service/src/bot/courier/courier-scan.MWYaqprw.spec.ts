@@ -25,7 +25,8 @@ jest.mock('@app/common', () => {
  * MWYaqprw (backend qismi) — skan Mini App'i:
  *  - `/ishim` da "📷 Skaner" web_app tugmasi (URL'da token yo'q);
  *  - "✅ Tayyor" → botga "N ta buyurtma qabul qilindi" + "📋 Topshiriqlarim";
- *    son serverda: faqat shu kuryerda yo'lda turgan id'lar.
+ *    son serverda: faqat shu kuryerdagi id'lar (COURIER-SCAN: `waiting`,
+ *    eski skan qatorlari — `on the road`).
  */
 beforeEach(() => {
   jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -51,7 +52,9 @@ describe('MWYaqprw — "✅ Tayyor" xulosasi', () => {
     });
   });
 
-  it('⭐ faqat shu kuryerda yo‘lda turgan id’lar sanaladi; begona/o‘ylab topilgani hisobga kirmaydi', async () => {
+  // COURIER-SCAN (ega, 2026-11-17): skan = qabul — olingan posilka darhol
+  // `waiting`; `on the road` — eski skan qatorlari.
+  it('⭐ faqat shu kuryerdagi (skan bilan olingan — waiting; eski — on the road) id’lar sanaladi; begona/o‘ylab topilgani hisobga kirmaydi', async () => {
     const { service, dispatch } = make();
     const res = await service.summarize({
       courier_id: '26',
@@ -63,7 +66,7 @@ describe('MWYaqprw — "✅ Tayyor" xulosasi', () => {
       {
         query: {
           courier_ids: ['26'],
-          status: ['on the road'],
+          status: ['waiting', 'on the road'],
           fetch_all: true,
         },
       },
