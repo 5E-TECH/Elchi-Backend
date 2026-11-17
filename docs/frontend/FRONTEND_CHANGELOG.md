@@ -25,7 +25,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ### 2026-11-17 — Yetkazish tariflari: rejalashtirilgan tarif versiyasini bekor qilish (B0ILd7YI)
 
 Maqsad: «Hududlar → Yetkazish tariflari» (`/delivery-tariffs`)da kelajak sanaga rejalashtirilgan tarif xato kiritilsa, uni kuchga kirishidan oldin bekor qilish (hozir faqat ustidan yangi versiya yozish mumkin edi).
-Deploy: migration-runner (migratsiya **232**), logistics-service, keyin api-gateway.
+Deploy: migration-runner (migratsiya **235**), logistics-service, keyin api-gateway.
 
 - 🆕 [gateway → logistics] `POST /delivery/tariffs/:id/cancel` (SUPERADMIN, ADMIN — tarif tahrirlash bilan bir xil; tanasiz, **200**). Faqat hali kuchga kirmagan versiya (`is_scheduled: true` — `valid_from` kelajakda, faol) bekor qilinadi; shart DB soati bilan bitta `UPDATE` ichida — kuchga kirgan versiya hech qachon bekor qilinmaydi. Qator **o'chirilmaydi**: `is_active: false`, `cancelled_at`, `cancelled_by`; hozirgi tarif va narx hisobi o'zgarmaydi.
   - Javob `data` — versiya qatori + `is_current: false`, `is_scheduled: false`, `is_cancelled: true`, `already_cancelled`, `created_by_name`, `cancelled_by_name`.
@@ -38,6 +38,40 @@ Deploy: migration-runner (migratsiya **232**), logistics-service, keyin api-gate
 **Frontend action items** (`/delivery-tariffs`, superadmin va admin):
 - 🔧 «Rejalashtirilgan: …» qatori (va tarixdagi «Rejalashtirilgan» belgili versiya) yonida «Bekor qilish» — `useConfirm` (`tone: "danger"`) → `POST /delivery/tariffs/:id/cancel`; muvaffaqiyatda tariflar keshini yangilash. `already_cancelled: true` ham muvaffaqiyat. 409 — `message` ni `notify.error` bilan (ro'yxatni qayta o'qish — versiya kuchga kirgan).
 - 🔧 Tarixda `is_cancelled: true` versiyasi — «Bekor qilingan» belgisi (+ `cancelled_by_name`, `cancelled_at`).
+
+### 2026-11-17 — Menejer o'z filiali xodimlarini boshqaradi: huquq hozirgi filial bo'yicha, `created_by` emas (KQINMdeQ)
+
+Ega (2026-11-17): menejer **o'z filialidagi barcha** xodimlarni tahrirlay olishi kerak (boshqa menejerlardan tashqari), kim yaratganidan qat'i nazar; boshqa filialga o'tkazilgan xodim bilan esa hech narsa qila olmaydi.
+Deploy: api-gateway va identity-service. Migratsiya **yo'q**.
+
+- ✏️ [gateway + identity] `PATCH /users/:id`, `POST /users/:id/password/resend-sms`, `GET /users/:id/password/sms-status` — MANAGER: o'zi yoki **hozir** o'z filialining faol a'zosi (`branch_users`, har so'rovda bazadan, JWT'dan emas) bo'lgan **kuryer yoki ro'yxatchi**. `created_by` ruxsat ham bermaydi, cheklamaydi ham:
+  - admin yaratgan kuryer va `created_by = NULL` eski xodim o'z filialida — endi **200** (ilgari identity 403 «Manager faqat o'zi yaratgan userlarni yangilay oladi»);
+  - parol SMS — kuryer **va ro'yxatchi** (ilgari faqat o'zi yaratgan kuryer, «Menejer faqat o'z kuryeriga parol yubora oladi»);
+  - shu filialdagi boshqa menejer, admin, superadmin, market (o'zi yaratgani ham), operator, investor, logist — **403**;
+  - boshqa filialga o'tkazilgan xodim (o'zi yaratgan bo'lsa ham), boshqa filial foydalanuvchisi (IDOR), filialga biriktirilmagan menejer, branch-service xatosi — **403** (500 emas, fail-closed). Tekshiruv gateway'da (identity'ga so'rov ketmaydi) va identity'da (ikkinchi qavat).
+  - Tahrir oynasidagi maydonlar to'plami o'zgarmagan (maosh, to'lov kuni, tarif, `add_order`, holat — avvalgidek). Alohida amallar menejerga avvalgidek yopiq: `DELETE /users/:id`, `PATCH /users/:id/status`, `PATCH /users/:id/role`, `couriers/:id/regions`, `couriers/:id/branch`, `branches/:id/users`.
+- ✏️ `GET /users/:id` — MANAGER: filial turi cheklovi (faqat REGIONAL/HYBRID) **olib tashlandi** — har filial turida o'z filiali a'zosi ochiladi (filialdagi boshqa menejerlar ham, faqat ko'rish). O'zi yaratgan market — avvalgidek ochiladi (faqat ko'rish). Boshqa filial foydalanuvchisi / branch-service xatosi — 403.
+- 🆕 `can_manage: boolean` — `GET /users/:id` javobida va `GET /users` ning har qatorida: so'rovchi shu foydalanuvchini `PATCH /users/:id` orqali boshqara oladimi. Superadmin — hammasi `true`; admin — o'zi va admin/superadmin bo'lmaganlar; menejer — o'zi va hozir o'z filialidagi kuryer/ro'yxatchi (boshqa menejer va o'zi yaratgan market — `false`). Faqat ko'rsatish uchun: haqiqiy ruxsat har so'rovda qayta tekshiriladi.
+- 🟢 `GET /users` ro'yxat ko'lami **o'zgarmagan** (filial a'zolari + o'zi yaratgan marketlar). Bola filiallar «o'z filiali»ga kirmaydi.
+
+**Frontend action items:**
+- 🔧 `User` turiga `can_manage?: boolean`. Foydalanuvchi tafsilotida «Tahrirlash» va «Parolni tiklash va SMS yuborish» — `can_manage` bo'yicha (maydon kelmasa — zaxira: menejer ko'ruvchiga market va boshqa menejerda yashirin).
+- 🔧 Parol SMS menejerda: kuryer **va ro'yxatchi**.
+- 🔧 Saqlashda 403 (oyna ochiq turganda xodim boshqa filialga o'tkazilgan) — xabar + tafsilot so'rovini yangilash (sahifa 403 xato holatini ko'rsatadi).
+
+### 2026-11-17 — Baza tozalanishidan keyin yo'qolgan seed'lar tiklandi (migratsiyalar 232–234)
+
+Muammo: prod bazasi 2026-11-11..14 da tozalanganda migratsiyalar «bajarilgan» bo'lib qolgan, ular yozgan yoki foydalanuvchi yaratishda bir marta yoziladigan qatorlar esa qaytmagan (230 — xarajat kategoriyalari, 231 — «Hisob qoidalari» davomi). Uchta joy:
+- Toshkent shahri «shahar zonasi» belgisi (`logistics_schema.regions.is_city_zone`) — viloyatlarni seed qayta yaratadi, belgini emas: Toshkent ichidagi yetkazish jimgina «center» / «address» bilan hisoblanadi (`city` 35 000 o'rniga 40 000 / 60 000), `city_route: false`, `GET /public/delivery-tariffs` da hamma viloyat `is_city_zone: false`.
+- HQ filiali viloyati (`branch_schema.branches.region_id`) — qayta yaratilgan HQ viloyatsiz yoki eski (o'chgan) viloyat id'siga ishora qiladi: HQ kuryeriga biriktirish / skan 400 «HQ filialiga viloyat biriktirilmagan …» (`branch_region_missing`) yoki 403 `hq_courier_region_only`.
+- Kuryer, market va menejerli filial kassalari (`finance_schema.cashboxes`) — sotuv, qisman sotuv, rollback 404 «Market kassasi topilmadi» / «Kuryer kassasi topilmadi», kuryerdan pul qabul qilish, marketga to'lov, admin kassa tafsiloti 404.
+
+Deploy: migration-runner (servis kodi o'zgarmagan). API va javob shakli **o'zgarmadi**.
+
+- 🟢 [logistics] Migratsiya 232: birorta viloyatda shahar zonasi bo'lmasa (o'chirilgani ham hisob) — belgi faqat o'chirilmagan Toshkent SHAHRI (SOATO 1726) qatoriga qo'yiladi; Toshkent viloyati (`Toshkent`, 1727) — yo'q. Zona bor bazada hech narsa o'zgarmaydi.
+- 🟢 [branch] Migratsiya 233: o'chirilmagan HQ viloyati bo'sh yoki mavjud bo'lmagan viloyatga ishora qilsa — Toshkent shahri yoziladi. Qo'lda qo'yilgan tirik viloyatga, o'chirilgan HQ qatoriga va boshqa filiallarga tegilmaydi.
+- 🟢 [finance] Migratsiya 234: o'chirilmagan har kuryer / market uchun va menejeri bor har HQ bo'lmagan filial uchun shu turdagi kassa umuman bo'lmasa — **0 balans** bilan kassa qo'shiladi. Qo'lda o'chirilgan kassa tiriltirilmaydi, mavjud kassa va balanslarga tegilmaydi, tarix qatori yozilmaydi; MAIN kassani finance-service o'zi yaratadi.
+- 🟢 Deploy'dan keyin (qo'lda, superadmin): «Yetkazish tariflari» kalkulyatorida Toshkent → Toshkent `city` bo'lishini, `/dispatch` / `/scan` da HQ kuryeriga biriktirish ishlashini tekshiring. Tiklangan kassalar 0 dan boshlanadi — haqiqiy qarz / naqd pul qo'lda solishtiriladi. Logist biriktiruvi (`/regions/logist-assignment`) va tuman qayta biriktiruvlari tiklanmaydi (admin qarori) — kerak bo'lsa ekrandan qayta qiling.
 
 ### 2026-11-17 — «Tizim holati»: Telegram bot nosozligi sababi va «Qayta tekshirish» (BOT-DIAG-BE)
 

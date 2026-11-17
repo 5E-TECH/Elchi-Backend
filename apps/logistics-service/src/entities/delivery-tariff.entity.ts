@@ -53,7 +53,7 @@ export class DeliveryTariff extends BaseEntity {
 
   /**
    * B0ILd7YI — rejalashtirilgan versiya bekor qilingan vaqt (migratsiya
-   * 1716000000232). Bekor qilingan qator `is_active = false` (CHECK) va
+   * 1716000000235). Bekor qilingan qator `is_active = false` (CHECK) va
    * o'chirilmaydi — tarixda qoladi.
    */
   @Column({ type: 'timestamptz', nullable: true })

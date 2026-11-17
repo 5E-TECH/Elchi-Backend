@@ -810,7 +810,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q)."
+            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q). KQINMdeQ: har qatorda `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (superadmin — hammasi; admin — o`zi va admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa menejer va o`zi yaratgan market — false)."
           }
         },
         "security": [
@@ -831,6 +831,7 @@
     },
     "/users/{id}": {
       "get": {
+        "description": "SUPERADMIN/ADMIN — har qanday foydalanuvchi. MANAGER — HOZIR o'z filialining faol a'zosi (`branch_users`, so'rov paytida; filial turidan qat'i nazar — KQINMdeQ, ilgari faqat REGIONAL/HYBRID) yoki o'zi yaratgan market (2026-11-12, faqat ko'rish); boshqa filial foydalanuvchisi, filialga biriktirilmagan menejer yoki filial xizmati xatosi — 403.",
         "operationId": "ApiGatewayController_getUserById",
         "parameters": [
           {
@@ -845,7 +846,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`."
+            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users qatoridagi bilan bir xil qoida)."
           },
           "404": {
             "description": "Not found"
@@ -856,7 +857,7 @@
             "bearer": []
           }
         ],
-        "summary": "Get user by id (admin/superadmin)",
+        "summary": "Get user by id (admin/superadmin/manager)",
         "tags": [
           "Identity"
         ],
@@ -867,7 +868,7 @@
         ]
       },
       "patch": {
-        "description": "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi. MANAGER: faqat o'z filialining faol a'zosi (`branch_users`) VA o'zi yaratgan foydalanuvchi; boshqa filialga o'tkazilgan xodim yoki filialga biriktirilmagan menejer — 403.",
+        "description": "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi. MANAGER (KQINMdeQ): o'zi yoki HOZIR o'z filialining faol a'zosi (`branch_users`, so'rov paytida) bo'lgan kuryer / ro'yxatchi — kim yaratganidan (`created_by`) qat'i nazar. Boshqa menejer (shu filialdagisi ham), admin, superadmin, market (o'zi yaratgani ham), operator, investor, logist, boshqa filialga o'tkazilgan xodim, filialga biriktirilmagan menejer yoki filial xizmati xatosi — 403. Tekshiruv gateway va identity'da.",
         "operationId": "ApiGatewayController_updateUser",
         "parameters": [
           {
@@ -954,7 +955,7 @@
     },
     "/users/{id}/password/resend-sms": {
       "post": {
-        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan va hozir o'z filialida (`branch_users`) bo'lgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
+        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — HOZIR o'z filialida (`branch_users`) bo'lgan kuryer yoki ro'yxatchi, kim yaratganidan qat'i nazar (KQINMdeQ; ilgari faqat o'zi yaratgan kuryer). Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
         "operationId": "ApiGatewayController_resendTempPasswordSms",
         "parameters": [
           {

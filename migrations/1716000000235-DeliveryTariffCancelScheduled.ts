@@ -23,8 +23,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * (jurnalda `logistics.delivery_tariff_cancelled` qoladi), bekor qilingan
  * qatorlar esa `is_active = false` bo'lib qoladi (qayta kuchga kirmaydi).
  */
-export class DeliveryTariffCancelScheduled1716000000232 implements MigrationInterface {
-  name = 'DeliveryTariffCancelScheduled1716000000232';
+export class DeliveryTariffCancelScheduled1716000000235 implements MigrationInterface {
+  name = 'DeliveryTariffCancelScheduled1716000000235';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`

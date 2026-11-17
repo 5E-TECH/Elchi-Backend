@@ -3,7 +3,7 @@ import { of } from 'rxjs';
 import { DeliveryPricingEngine1716000000142 } from '../../../../migrations/1716000000142-DeliveryPricingEngine';
 import { DeliveryPricingVolumetricFromKg1716000000154 } from '../../../../migrations/1716000000154-DeliveryPricingVolumetricFromKg';
 import { DeliveryPricingSaleGates1716000000183 } from '../../../../migrations/1716000000183-DeliveryPricingSaleGates';
-import { DeliveryTariffCancelScheduled1716000000232 } from '../../../../migrations/1716000000232-DeliveryTariffCancelScheduled';
+import { DeliveryTariffCancelScheduled1716000000235 } from '../../../../migrations/1716000000235-DeliveryTariffCancelScheduled';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryTariff } from '../entities/delivery-tariff.entity';
 import { DeliveryPricingSettings } from '../entities/delivery-pricing-settings.entity';
@@ -44,12 +44,12 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
     // KmWO9gTA: entity endi `min_delivery_price` / `extra_cost_limit_amount` ni o'qiydi.
     const saleGatesMigration = new DeliveryPricingSaleGates1716000000183();
     // B0ILd7YI: entity endi `cancelled_at` / `cancelled_by` ni o'qiydi.
-    const cancelMigration = new DeliveryTariffCancelScheduled1716000000232();
+    const cancelMigration = new DeliveryTariffCancelScheduled1716000000235();
     const activityLog = { log: jest.fn(), logChange: jest.fn() };
     const catalogClient = { send: jest.fn(() => of({ data: [] })) };
     let service: DeliveryPricingService;
 
-    /** 142 + 154 + 183 + 232 birga (down — teskari tartibda). */
+    /** 142 + 154 + 183 + 235 birga (down — teskari tartibda). */
     const run = async (direction: 'up' | 'down') => {
       const runner = db.createQueryRunner();
       try {
@@ -661,7 +661,7 @@ const ADMIN = { id: '1', roles: ['superadmin'] };
       } finally {
         await runner.release();
       }
-      // 232 ning o'zi: up — ikki ustun + CHECK, down — o'chadi, ikkinchi marta xatosiz.
+      // 235 ning o'zi: up — ikki ustun + CHECK, down — o'chadi, ikkinchi marta xatosiz.
       const cancelColumns = () =>
         scalar(
           `SELECT count(*)::int AS v FROM information_schema.columns

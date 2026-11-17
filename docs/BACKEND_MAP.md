@@ -258,8 +258,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   migration 195); `last_error`, `last_response` and the scheduler log are
   scrubbed with `scrubSmsSecret`. Template `user.temp_password` (class
   `security`, OTP quota) needs provider approval.
-  `POST /users/:id/password/resend-sms`: SA; admin except admin/SA; manager only
-  own (`created_by`) courier; 60 s cooldown and 5/Tashkent day under a per-user
+  `POST /users/:id/password/resend-sms`: SA; admin except admin/SA; manager — a
+  courier or registrator CURRENTLY in his branch (KQINMdeQ, same rule as edit;
+  was: own `created_by` courier); 60 s cooldown and 5/Tashkent day under a per-user
   advisory xact lock (429 `PASSWORD_SMS_COOLDOWN` / `PASSWORD_SMS_DAILY_LIMIT`).
   The hash is swapped and all sessions revoked only AFTER the SMS is queued; a
   queue failure leaves password and sessions untouched. `GET
@@ -298,19 +299,30 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   numeric id) and the condition is `(admin.id IN (...) OR (admin.role =
   'market' AND admin.created_by = :owner))` — a manager sees the markets he
   created (list, `?role=market` tab, counts) and `GET /users/:id` opens such
-  a market without the branch-member / branch-type check
-  (`isManagerOwnMarket`, one extra `identity.user.find_by_id`; lookup error →
-  old check, fail-closed). Other people's markets stay hidden. `POST
+  a market without the branch-member check (`isManagerOwnMarket`, one extra
+  `identity.user.find_by_id`; lookup error → old check, fail-closed;
+  view only — `can_manage: false`). KQINMdeQ (2026-11-17): `GET /users/:id`
+  for a manager no longer requires a REGIONAL/HYBRID branch — any branch type,
+  target must be an active member of his branch (other managers included,
+  read-only); `resolveManagerBranchMembers` errors → 403. Other people's markets stay hidden. `POST
   /markets` by a manager: PICKUP («Qabul punkti») or HYBRID («Aralash»)
   branch only (was HYBRID only), others / unassigned → 403; `created_by` =
   the manager.
   `GET /couriers`: non-SA/ADMIN, non-logist requesters always get their own
   branch's couriers (client `branch_id` ignored); unassigned → empty page.
   Manager mutations (`PATCH /users/:id`, `POST /users/:id/password/resend-sms`,
-  `GET /users/:id/password/sms-status`): the gateway
-  (`assertManagerTargetInOwnBranch`) requires the target to be an active
-  `branch_users` member of the manager's branch (self is exempt; unassigned
-  manager → 403); identity still also requires `created_by === manager`.
+  `GET /users/:id/password/sms-status`) — KQINMdeQ (2026-11-17), the CURRENT
+  branch decides, `created_by` neither grants nor limits: the gateway
+  (`assertManagerTargetInOwnBranch` → `resolveManagerBranchMembers`, read per
+  request) requires the target to be an active `branch_users` member of the
+  manager's branch whose branch role is not MANAGER (self is exempt;
+  unassigned manager or branch-service error → 403, identity not called);
+  identity re-checks (`assertManagerCanManageTarget`: target role courier /
+  registrator, `branch.user.find_by_user_ids` for [manager, target], both
+  branch ids equal; RPC error / null → 403). Child branches are not included.
+  `GET /users/:id` and every `GET /users` row carry `can_manage: boolean`
+  (gateway `computeCanManage`: SA — all; admin — self and non-admin/SA;
+  manager — self and courier/registrator members of his branch).
   The manager's own cashbox (`GET /finance/cashbox/user/:id`) no longer adds
   the unscoped `meta.couriers`.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
@@ -585,7 +597,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   only own products, or raw dims), `logistics.delivery.tariffs.find_all` /
   `.create` / `.cancel` (B0ILd7YI: only a scheduled version, `valid_from >
   now()` in one UPDATE; row kept with `is_active = false`, `cancelled_at`,
-  `cancelled_by` — migration `1716000000232`; repeat → 200
+  `cancelled_by` — migration `1716000000235`; repeat → 200
   `already_cancelled`), `logistics.delivery.settings.get` / `.update` (audit
   verbs `logistics.delivery_tariff_created`,
   `logistics.delivery_tariff_cancelled`,
