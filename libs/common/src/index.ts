@@ -96,6 +96,7 @@ export * from './notification/notification-type.validator';
 export * from './notification/telegram-html';
 export * from './notification/dispatch-request-id';
 export * from './notification/telegram-dm-delivery';
+export * from './notification/bot-diagnostics';
 export * from './finance/payment-correction';
 export * from './finance/expense-category';
 export * from './finance/cashbox-receipt';

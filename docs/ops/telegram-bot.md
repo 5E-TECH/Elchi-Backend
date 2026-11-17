@@ -95,6 +95,12 @@ oraliqda iste'molchi tushsa update yo'qolishi mumkin.
 | token, secret yo'q, leader emas | `off` |
 | getMe 401/404 | bot ishga tushmaydi, `bot_token_healthy=0`, `/health/readiness` → 503 (docker liveness'iga tegmaydi) |
 
+**Sababni ko'rish (BOT-DIAG-BE).** Ochiq readiness ataylab faqat `reported degraded` beradi. Aniq sabab — faqat
+superadmin: `GET /health/notification-bot` → `bot.error_kind` (`token_rejected` · `timeout` · `network` ·
+`telegram_error` · `unknown`), `error_status`, `error_text` (≤ 200 belgi, token yashirilgan), `checked_at`;
+`POST /health/notification-bot/recheck` — getMe'ni hozir qayta yurgizadi (token rad etilgan bo'lsa yo'q:
+`restart_required: true` — yangi token + restart, §4). Panelda: `/ops?tab=system` («Tizim holati», FE ishi alohida).
+
 ## 3. Rollout (prod)
 
 1. BotFather: DEV uchun **alohida** bot yarating. Privacy mode — **yoqilgan**
