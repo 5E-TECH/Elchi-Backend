@@ -55,10 +55,18 @@ const sqlLiteral = (value: string) => `'${value.replace(/'/g, "''")}'`;
  * ishga tushishda o'zi yaratadi.
  *
  * Poyga: `(user_id, cashbox_type)` da UNIQUE indeks yo'q, `my-cashbox` /
- * `ensureBranchCashbox` esa «topilmasa — yaratish» qiladi. Ikki marta kassa
- * bo'lib balans bo'linmasin — jadval tranzaksiya oxirigacha
- * `SHARE ROW EXCLUSIVE` bilan qulflanadi (o'qish ishlayveradi, parallel
- * yozuv kutadi).
+ * `ensureBranchCashbox` esa «topilmasa — yaratish» qiladi. Jadval
+ * tranzaksiya oxirigacha `SHARE ROW EXCLUSIVE` bilan qulflanadi (o'qish
+ * ishlayveradi, parallel yozuv kutadi): qulfdan OLDIN boshlangan yaratish
+ * avval commit bo'ladi va migratsiya uni ko'rib, ikkinchisini yozmaydi.
+ * Qulf to'liq kafolat EMAS: migratsiya INSERT'idan commit'gacha bo'lgan
+ * millisekundlarda «topilmadi» deb o'qigan so'rov commit'dan keyin baribir
+ * ikkinchi qator yozishi mumkin (ikki parallel so'rovda kodning o'zi ham
+ * shunday). Deploy'dan keyin tekshiruv (bo'sh bo'lishi kerak):
+ *   SELECT user_id, cashbox_type, count(*) FROM finance_schema.cashboxes
+ *    WHERE NOT is_deleted GROUP BY 1, 2 HAVING count(*) > 1;
+ * `ACCESS EXCLUSIVE` ataylab olinmaydi: u pg_dump yoki uzun o'qish tugashini
+ * kutadi va shu vaqt ichida kassani o'qishni ham to'xtatib qo'yardi.
  *
  * Qayta yurgizish xavfsiz: ikkinchi marta har kassa allaqachon bor.
  * Jadval(lar) yo'q muhitda — mos qadam o'tkazib yuboriladi.
