@@ -144,12 +144,17 @@ export class BotRuntimeService
   private errorStatus: number | null = null;
   private errorText: string | null = null;
   /**
-   * Har getMe tekshiruviga tartib raqami: davriy tekshiruv va «Qayta
-   * tekshirish» ustma-ust tushsa, KECHROQ boshlangani holatni yozadi
-   * (eskisining kech kelgan natijasi yangisini bosib ketmaydi). Token rad
-   * etilgani (401/404) — har doim yoziladi.
+   * Har getMe tekshiruviga tartib raqami (`checkSeq`) va holatni oxirgi
+   * yozgan tekshiruv raqami (`appliedSeq`): davriy tekshiruv va «Qayta
+   * tekshirish» ustma-ust tushsa, KECHROQ boshlangan tekshiruv natijasi
+   * yozilgach eskisining kech kelgan natijasi uni bosib ketmaydi. Eskisi
+   * BIRINCHI tugasa — u yoziladi (boot getMe natijasi yo'qolmaydi: aks
+   * holda `healthy` null qolib `ready()` ni kutgan webhook update'lari rad
+   * etilardi; ikki «Qayta tekshirish»ning birinchisi ham o'z natijasini
+   * qaytaradi). Token rad etilgani (401/404) — har doim yoziladi.
    */
   private checkSeq = 0;
+  private appliedSeq = 0;
   /** Birinchi getMe — webhook hodisalari shu tugashini kutadi. */
   private bootCheck: Promise<boolean> | null = null;
   private offset = 0;
@@ -267,11 +272,12 @@ export class BotRuntimeService
     const seq = ++this.checkSeq;
     try {
       const me = await this.transport.getMe(options);
-      // Kechroq boshlangan tekshiruv bor yoki token shu orada rad etildi —
-      // bu (eski) natija holatni yozmaydi.
-      if (seq !== this.checkSeq || this.tokenRejected) {
+      // Kechroq boshlangan tekshiruv natijasi allaqachon yozilgan yoki token
+      // shu orada rad etildi — bu (eski) natija holatni yozmaydi.
+      if (seq < this.appliedSeq || this.tokenRejected) {
         return this.healthy === true;
       }
+      this.appliedSeq = seq;
       const before = this.healthy;
       this.healthy = true;
       this.username = me?.username ?? null;
@@ -282,9 +288,10 @@ export class BotRuntimeService
     } catch (error) {
       const permanent =
         error instanceof TelegramApiError && error.kind === 'unauthorized';
-      if (!permanent && (seq !== this.checkSeq || this.tokenRejected)) {
+      if (!permanent && (seq < this.appliedSeq || this.tokenRejected)) {
         return this.healthy === true;
       }
+      this.appliedSeq = Math.max(this.appliedSeq, seq);
       const before = this.healthy;
       this.healthy = false;
       this.recordCheck(error);

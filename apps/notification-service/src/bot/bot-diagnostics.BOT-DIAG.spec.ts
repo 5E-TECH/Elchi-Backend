@@ -430,6 +430,72 @@ describe('BOT-DIAG-BE — recheck() («Qayta tekshirish»)', () => {
       expect.objectContaining({ healthy: true, error_kind: null }),
     );
   });
+
+  /** fetchImpl: har chaqiruv qo'lda yakunlanadigan getMe. */
+  const manualFetch = () => {
+    const pending: Array<{
+      resolve: (response: Response) => void;
+      reject: (error: unknown) => void;
+    }> = [];
+    const fetchImpl = jest.fn(
+      () =>
+        new Promise<Response>((resolve, reject) => {
+          pending.push({ resolve, reject });
+        }),
+    );
+    return { fetchImpl, pending };
+  };
+
+  it('⭐ (review) boot getMe BIRINCHI tugasa natijasi yo‘qolmaydi: ready() true, webhook qabul qilinadi', async () => {
+    const { fetchImpl, pending } = manualFetch();
+    const { runtime } = makeRuntime(fetchImpl);
+
+    const boot = runtime.ready();
+    // Deploy paytida superadmin «Qayta tekshirish» bosdi.
+    const recheck = runtime.recheck();
+    expect(pending).toHaveLength(2);
+
+    pending[0].resolve(ok());
+    // Boot natijasi yozilishi shart — aks holda `healthy` null qolib,
+    // ready() ni kutgan webhook update'lari rad etiladi (tashlanadi).
+    await expect(boot).resolves.toBe(true);
+    expect(runtime.health().healthy).toBe(true);
+    expect(runtime.acceptsWebhook()).toBe(true);
+
+    // Kechroq boshlangan tekshiruv — eng yangi ma'lumot: u ham yoziladi.
+    pending[1].reject(fetchFailed('ENOTFOUND'));
+    await expect(recheck).resolves.toEqual(
+      expect.objectContaining({ healthy: false, error_kind: 'network' }),
+    );
+  });
+
+  it('⭐ (review) ikki «Qayta tekshirish» ustma-ust: birinchisi o‘z natijasini qaytaradi', async () => {
+    const { fetchImpl, pending } = manualFetch();
+    const { runtime } = makeRuntime(fetchImpl);
+    runtime.now = () => new Date('2026-11-17T21:00:00.000Z');
+    const first = runtime.checkToken();
+    pending[0].reject(fetchFailed('ENOTFOUND'));
+    await first;
+    expect(runtime.health().error_kind).toBe('network');
+
+    runtime.now = () => new Date('2026-11-17T21:10:00.000Z');
+    const a = runtime.recheck();
+    const b = runtime.recheck();
+    pending[1].resolve(ok());
+
+    await expect(a).resolves.toEqual(
+      expect.objectContaining({
+        healthy: true,
+        error_kind: null,
+        checked_at: '2026-11-17T21:10:00.000Z',
+        rechecked: true,
+      }),
+    );
+    pending[2].resolve(ok());
+    await expect(b).resolves.toEqual(
+      expect.objectContaining({ healthy: true, rechecked: true }),
+    );
+  });
 });
 
 describe('BOT-DIAG-BE — xato turlari klassifikatori', () => {
