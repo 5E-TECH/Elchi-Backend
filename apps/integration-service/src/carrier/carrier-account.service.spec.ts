@@ -44,9 +44,25 @@ const ACTIVE_COURIER = {
   status: 'active',
 };
 
+/** branch-service `branch.user.find_by_user` javobi: HQ kuryeri (sukut). */
+const HQ_ASSIGNMENT = {
+  user_id: '55',
+  branch_id: '1',
+  role: 'COURIER',
+  branch: { id: '1', type: 'HQ', name: 'Markaziy ombor' },
+};
+
+type BranchReplies = {
+  assignment?: unknown;
+  hq?: unknown;
+  error?: Error;
+  hqError?: Error;
+};
+
 function makeService(
   repo: Repo,
   identityUsers: unknown[] | Error = [ACTIVE_COURIER],
+  branch: BranchReplies = {},
 ) {
   const identityClient = {
     send: jest.fn(() =>
@@ -55,13 +71,29 @@ function makeService(
         : of({ success: true, data: identityUsers }),
     ),
   };
+  const branchClient = {
+    send: jest.fn((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'branch.find_hq') {
+        return branch.hqError
+          ? throwError(() => branch.hqError)
+          : of({ statusCode: 200, data: branch.hq ?? { id: '1' } });
+      }
+      return branch.error
+        ? throwError(() => branch.error)
+        : of({
+            statusCode: 200,
+            data: 'assignment' in branch ? branch.assignment : HQ_ASSIGNMENT,
+          });
+    }),
+  };
   const activityLog = { log: jest.fn(() => Promise.resolve()) };
   const svc = new CarrierAccountService(
     repo as never,
     activityLog as never,
     identityClient as never,
+    branchClient as never,
   );
-  return { svc, identityClient, activityLog };
+  return { svc, identityClient, branchClient, activityLog };
 }
 
 const rpcStatus = async (p: Promise<unknown>): Promise<number | undefined> => {
@@ -504,5 +536,254 @@ describe('CarrierAccountService.rotateKey / setActive / update', () => {
     });
     const { svc: svc2 } = makeService(gone);
     expect(await rpcStatus(svc2.update('11', { name: 'Y' }))).toBe(404);
+  });
+});
+
+/**
+ * EGA QARORI (2026-11-15): «faqat integratsiya qilingan tashqi yetkazib
+ * beruvchiga faqat HQ ga ochilgan o'z kurieri bo'lsagina biriktirish mumkin
+ * bo'lishi kerak». Tekshiruv faqat `create` da; eski akkauntlar
+ * (rotate-key / status / validate_key) avvalgidek.
+ */
+describe('CarrierAccountService.create — faqat HQ kuryeri (courier_not_hq)', () => {
+  const rpcError = async (p: Promise<unknown>) => {
+    try {
+      await p;
+    } catch (e) {
+      return (
+        e as {
+          getError: () => {
+            statusCode: number;
+            message: string;
+            data: unknown;
+          };
+        }
+      ).getError();
+    }
+    throw new Error('RpcException kutilgan edi');
+  };
+
+  it('⭐ HQ kuryeri — yaratiladi; filial tizim so‘rovchisi bilan so‘raladi', async () => {
+    const repo = makeRepo();
+    const { svc, branchClient } = makeService(repo);
+
+    const res = (await svc.create({ name: 'BTS', courier_id: '55' })) as {
+      statusCode: number;
+    };
+
+    expect(res.statusCode).toBe(201);
+    expect(branchClient.send).toHaveBeenCalledWith(
+      { cmd: 'branch.user.find_by_user' },
+      expect.objectContaining({
+        user_id: '55',
+        requester: { id: 'system', roles: ['superadmin'] },
+      }),
+    );
+    // Filial turi javobda bor — branch.find_hq ga bormaydi.
+    expect(branchClient.send).toHaveBeenCalledTimes(1);
+    expect(repo.save).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      'boshqa filial kuryeri',
+      {
+        ...HQ_ASSIGNMENT,
+        branch_id: '10',
+        branch: { id: '10', type: 'REGIONAL' },
+      },
+      '10',
+    ],
+    ['filialga biriktirilmagan', null, null],
+    ['HQ’da, lekin roli MANAGER', { ...HQ_ASSIGNMENT, role: 'MANAGER' }, '1'],
+  ])(
+    '⭐ %s — 400 courier_not_hq, hech narsa saqlanmaydi',
+    async (_label, assignment, branchId) => {
+      const repo = makeRepo();
+      const { svc, activityLog } = makeService(repo, [ACTIVE_COURIER], {
+        assignment,
+      });
+
+      const error = await rpcError(svc.create({ name: 'X', courier_id: '55' }));
+
+      expect(error.statusCode).toBe(400);
+      expect(error.message).toBe(
+        "Tashqi yetkazuvchiga faqat HQ'da ochilgan kuryer bog'lanadi — bu kuryer HQ'da emas",
+      );
+      expect(error.data).toEqual({
+        reason: 'courier_not_hq',
+        details: { courier_id: '55', branch_id: branchId },
+      });
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(activityLog.log).not.toHaveBeenCalled();
+    },
+  );
+
+  it('HQ tekshiruvi mavjud akkaunt 409 dan OLDIN (HQ’dan tashqari kuryer — aniq sabab)', async () => {
+    const repo = makeRepo({
+      findOne: jest.fn(() => Promise.resolve({ id: '2', name: 'Eski' })),
+    });
+    const { svc } = makeService(repo, [ACTIVE_COURIER], {
+      assignment: { ...HQ_ASSIGNMENT, branch: { id: '1', type: 'REGIONAL' } },
+    });
+
+    expect(await rpcStatus(svc.create({ name: 'X', courier_id: '55' }))).toBe(
+      400,
+    );
+    expect(repo.findOne).not.toHaveBeenCalled();
+  });
+
+  it('filial turi javobda yo‘q — branch.find_hq bilan solishtiriladi', async () => {
+    const noType = { ...HQ_ASSIGNMENT, branch: null };
+
+    const ok = makeService(makeRepo(), [ACTIVE_COURIER], {
+      assignment: noType,
+      hq: { id: '1' },
+    });
+    await expect(
+      ok.svc.create({ name: 'X', courier_id: '55' }),
+    ).resolves.toMatchObject({ statusCode: 201 });
+    expect(ok.branchClient.send).toHaveBeenCalledWith(
+      { cmd: 'branch.find_hq' },
+      expect.anything(),
+    );
+
+    const other = makeService(makeRepo(), [ACTIVE_COURIER], {
+      assignment: noType,
+      hq: { id: '7' },
+    });
+    expect(
+      await rpcStatus(other.svc.create({ name: 'X', courier_id: '55' })),
+    ).toBe(400);
+
+    const hqDown = makeService(makeRepo(), [ACTIVE_COURIER], {
+      assignment: noType,
+      hqError: new Error('timeout'),
+    });
+    expect(
+      await rpcStatus(hqDown.svc.create({ name: 'X', courier_id: '55' })),
+    ).toBe(503);
+  });
+
+  it('⭐ branch-service javob bermadi — 503 (400 EMAS), hech narsa saqlanmaydi', async () => {
+    const repo = makeRepo();
+    const { svc } = makeService(repo, [ACTIVE_COURIER], {
+      error: new Error('connection closed'),
+    });
+
+    const error = await rpcError(svc.create({ name: 'X', courier_id: '55' }));
+
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toBe(
+      "Filial xizmati javob bermadi — kuryer HQ'da ekanini tekshirib bo'lmadi. Birozdan so'ng qayta urinib ko'ring",
+    );
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('identity rad etgan kuryer uchun filialga bormaydi (ketma-ket)', async () => {
+    const { svc, branchClient } = makeService(makeRepo(), [
+      { ...ACTIVE_COURIER, role: 'manager' },
+    ]);
+    expect(await rpcStatus(svc.create({ name: 'X', courier_id: '55' }))).toBe(
+      400,
+    );
+    expect(branchClient.send).not.toHaveBeenCalled();
+  });
+
+  it('⭐ eski (HQ’dan tashqari) akkaunt: rotateKey / setActive / validateKey avvalgidek — filial tekshirilmaydi', async () => {
+    const legacy = {
+      assignment: { ...HQ_ASSIGNMENT, branch: { id: '10', type: 'REGIONAL' } },
+    };
+    const repo = makeRepo({ findOne: jest.fn(() => Promise.resolve(ROW())) });
+    const { svc, branchClient } = makeService(repo, [ACTIVE_COURIER], legacy);
+
+    await expect(svc.rotateKey('11')).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    await expect(svc.setActive('11', true)).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    await expect(svc.setActive('11', false)).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    await expect(svc.validateKey('elc_k')).resolves.toMatchObject({
+      courier_active: true,
+    });
+    expect(branchClient.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('CarrierAccountService.findByCourierIds (integration.carrier.find_by_courier_ids)', () => {
+  it('⭐ faqat {courier_user_id, name, is_active}; o‘chirilmaganlar; id’lar takrorsiz', async () => {
+    const repo = makeRepo({
+      find: jest.fn(() =>
+        Promise.resolve([
+          {
+            ...ROW(),
+            courier_user_id: '55',
+            is_active: true,
+          },
+          {
+            ...ROW(),
+            id: '12',
+            name: 'Kargo',
+            courier_user_id: '77',
+            is_active: false,
+          },
+        ]),
+      ),
+    });
+    const { svc } = makeService(repo);
+
+    const res = (await svc.findByCourierIds(['55', 77, '55'])) as {
+      statusCode: number;
+      data: unknown[];
+    };
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toEqual([
+      { courier_user_id: '55', name: 'BTS', is_active: true },
+      { courier_user_id: '77', name: 'Kargo', is_active: false },
+    ]);
+    // Kalit hash'i, IP, akkaunt id'si, yashirin ruxsat — javobda YO'Q.
+    for (const row of res.data) {
+      expect(Object.keys(row as object).sort()).toEqual([
+        'courier_user_id',
+        'is_active',
+        'name',
+      ]);
+    }
+    const [query] = repo.find.mock.calls[0] as [
+      { where: Record<string, unknown>; select: Record<string, unknown> },
+    ];
+    expect(query.where.isDeleted).toBe(false);
+    expect(query.select).toEqual({
+      courier_user_id: true,
+      name: true,
+      is_active: true,
+    });
+    const inOperator = query.where.courier_user_id as { value: unknown };
+    expect(inOperator.value).toEqual(['55', '77']);
+  });
+
+  it('bo‘sh ro‘yxat — bazaga bormaydi; massiv emas / yaroqsiz id / 500 dan ko‘p — 400', async () => {
+    const repo = makeRepo();
+    const { svc } = makeService(repo);
+
+    await expect(svc.findByCourierIds([])).resolves.toMatchObject({
+      data: [],
+    });
+    expect(repo.find).not.toHaveBeenCalled();
+    expect(await rpcStatus(svc.findByCourierIds('55'))).toBe(400);
+    expect(await rpcStatus(svc.findByCourierIds(['abc']))).toBe(400);
+    expect(await rpcStatus(svc.findByCourierIds(['0']))).toBe(400);
+    expect(
+      await rpcStatus(
+        svc.findByCourierIds(
+          Array.from({ length: 501 }, (_, i) => String(i + 1)),
+        ),
+      ),
+    ).toBe(400);
+    expect(repo.find).not.toHaveBeenCalled();
   });
 });

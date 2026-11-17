@@ -24,12 +24,20 @@ import { BranchGatewayController } from './branch-gateway.controller';
 describe('BranchGatewayController — kuryer o`tkazish (R3)', () => {
   let app: INestApplication;
   const send = jest.fn();
+  // B6 (2026-11-15): o'tkazishdan oldin carrier bog'lanishi so'raladi —
+  // bu yerdagi kuryer hech qaysi carrier'ga bog'lanmagan.
+  const integration = {
+    send: jest.fn(() => of({ statusCode: 200, data: [] })),
+  };
   const superadmin = { sub: '1', roles: ['superadmin'] };
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [BranchGatewayController],
-      providers: [{ provide: 'BRANCH', useValue: { send } }],
+      providers: [
+        { provide: 'BRANCH', useValue: { send } },
+        { provide: 'INTEGRATION', useValue: integration },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({
@@ -216,7 +224,14 @@ describe('BranchGatewayController — R3 rollari', () => {
  */
 describe('BranchGatewayController — R3 timeout`lari', () => {
   const send = jest.fn(() => NEVER);
-  const controller = new BranchGatewayController({ send } as never);
+  // B6: carrier bog'lanishi tekshiruvi (bog'lanmagan kuryer) — sinxron javob.
+  const controller = new BranchGatewayController(
+    { send } as never,
+    undefined,
+    undefined,
+    undefined,
+    { send: jest.fn(() => of({ statusCode: 200, data: [] })) } as never,
+  );
   const req = { user: { sub: '1', roles: ['superadmin'] } };
 
   beforeEach(() => jest.useFakeTimers());

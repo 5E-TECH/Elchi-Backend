@@ -9,7 +9,9 @@ import {
   type AiDlqDrain,
   type DlqDrainConnection,
 } from './rpc/run-ai-handler';
+import { AiFastRmqServer } from './rpc/ai-fast-server';
 import {
+  AI_FAST_RMQ_NAME,
   ClaudeService,
   RmqService,
   RmqTraceInterceptor,
@@ -20,6 +22,8 @@ import {
 
 /** AI_RMQ_PREFETCH sukuti (aiValidationSchema bilan bir xil). */
 const AI_RMQ_PREFETCH_DEFAULT = 8;
+/** AI_FAST_PREFETCH sukuti (aiValidationSchema bilan bir xil). */
+const AI_FAST_PREFETCH_DEFAULT = 32;
 
 /** amqplib'da TS tiplari yo'q — drain faqat `connect`ni ishlatadi. */
 const amqp = amqplib as unknown as {
@@ -35,9 +39,11 @@ async function bootstrap() {
   app.useLogger(app.get(Logger));
   app.useGlobalInterceptors(new RmqTraceInterceptor());
   let dlqDrain: AiDlqDrain | null = null;
+  let fastDlqDrain: AiDlqDrain | null = null;
   process.on('SIGTERM', () => {
     void (async () => {
       await dlqDrain?.stop();
+      await fastDlqDrain?.stop();
       await flushSentry();
       await app.close();
       process.exit(0);
@@ -46,6 +52,7 @@ async function bootstrap() {
   process.on('SIGINT', () => {
     void (async () => {
       await dlqDrain?.stop();
+      await fastDlqDrain?.stop();
       await flushSentry();
       await app.close();
       process.exit(0);
@@ -92,6 +99,34 @@ async function bootstrap() {
     connect: () => amqp.connect(rmqUrl),
     queue: `${opts.options!.queue}_dlq`,
     logger: new NestLogger('AiDlqDrain'),
+  });
+
+  /**
+   * (AI ack B1) IKKINCHI iste'molchi — TEZ navbat (`RABBITMQ_AI_FAST_QUEUE`,
+   * sukut `ai_fast_queue`): faqat arzon DB amallari (`AI_FAST_PATTERNS`:
+   * `ai.draft.confirm_context`, `ai.draft.attach_preview`,
+   * `ai.usage.link_orders`). Umumiy navbatda ular Claude chaqiruvlari
+   * (prefetch 8, ack handler tugagach) ortida qolib, ai-confirm'ning
+   * fail-closed 503'iga sabab bo'lardi. O'z kanali va prefetch'i
+   * (`AI_FAST_PREFETCH`, sukut 32). Navbat argumentlari umumiy manbadan
+   * (`getOptions`) — TTL/DLX bir xil. Xuddi shu naqshlar ESKI navbatda ham
+   * javob beradi (rolling deploy). Deploy tartibi: avval ai-service (bu
+   * iste'molchi), keyin gateway.
+   */
+  await rmqService.setupDlqTopology(AI_FAST_RMQ_NAME);
+  const fastOpts = rmqService.getOptions(AI_FAST_RMQ_NAME);
+  fastOpts.options!.prefetchCount =
+    config.get<number>('AI_FAST_PREFETCH') ?? AI_FAST_PREFETCH_DEFAULT;
+  app.connectMicroservice(
+    { strategy: new AiFastRmqServer(fastOpts.options!) },
+    { inheritAppConfig: true },
+  );
+  // attach_preview payload'ida ism/manzil bor — tez navbat DLQ'si ham
+  // xuddi `ai_queue_dlq` kabi darhol tozalanadi (HD5zOyBp).
+  fastDlqDrain = startAiDlqDrain({
+    connect: () => amqp.connect(rmqUrl),
+    queue: `${fastOpts.options!.queue}_dlq`,
+    logger: new NestLogger('AiFastDlqDrain'),
   });
 
   await app.startAllMicroservices();

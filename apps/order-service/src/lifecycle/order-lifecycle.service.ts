@@ -69,6 +69,13 @@ import {
   SPECIAL_CATEGORIES_ERROR_CODES,
   SPECIAL_CATEGORIES_LOCKED_MESSAGE,
   SPECIAL_CATEGORIES_TRACKING_ACTION,
+  ORDER_OPERATOR_ALREADY_ASSIGNED_MESSAGE,
+  ORDER_OPERATOR_ASSIGN_TRACKING_ACTION,
+  ORDER_OPERATOR_EARNING_STATUSES,
+  ORDER_OPERATOR_ERROR_CODES,
+  ORDER_OPERATOR_EXTERNAL_MESSAGE,
+  ORDER_OPERATOR_MARKET_CHANGED_MESSAGE,
+  isExternalOperatorText,
   requestContext,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
@@ -1100,8 +1107,27 @@ export class OrderLifecycleService {
     return createHash('sha256').update(token).digest('hex');
   }
 
+  /**
+   * MCR — market ekranidagi QR. Apparat (klaviatura-wedge) skaner uni KLAVIATURA kabi yozadi, harf registri esa
+   * Shift / Caps Lock'ga bog'liq: skaner Caps Lock holatini noto'g'ri bilsa (ko'pincha birinchi skanda) katta-kichik
+   * harf almashadi. base64url'da ikkala registr ham, `-` / `_` (Shift+Minus) ham bor edi — xesh mos kelmasdi,
+   * birinchi skan «QR topilmadi», ikkinchisi o'tardi (2026-11-15). Endi MCR — faqat kichik hex (registrsiz
+   * belgilar; BeePost 91a55e8c bilan bir xil sabab), tekshiruv esa registrni e'tiborsiz qoldiradi
+   * (`canonicalMarketQrToken`). MHA skanerlanmaydi (JSON'da keladi) — o'zgarmaydi.
+   */
   private generateHandoverToken(prefix: 'MCR' | 'MHA'): string {
-    return `${prefix}-${randomBytes(32).toString('base64url')}`;
+    return prefix === 'MCR'
+      ? `${prefix}-${randomBytes(32).toString('hex')}`
+      : `${prefix}-${randomBytes(32).toString('base64url')}`;
+  }
+
+  /** Skanerlangan market QR → kanonik ko'rinish (`MCR-` + kichik harf); MCR bo'lmasa — `null`. */
+  private canonicalMarketQrToken(raw: string): string | null {
+    const token = String(raw ?? '').trim();
+    if (token.length <= 4 || token.slice(0, 4).toUpperCase() !== 'MCR-') {
+      return null;
+    }
+    return `MCR-${token.slice(4).toLowerCase()}`;
   }
 
   /** zkRab9M2 (BG6) — 6 xonali kod (identity OTP bilan bir xil generator). */
@@ -2521,6 +2547,8 @@ export class OrderLifecycleService {
     action: 'sell' | 'cancel';
     extraCost: number;
     totalPrice: number;
+    /** Qisman sotish (`partlySellOrder`) — `PARTLY_SELL` ham mos keladi. */
+    partly?: boolean;
   }): Set<ExpenseProofCondition> {
     const matched = new Set<ExpenseProofCondition>();
     const hasExtra = ctx.extraCost > 0;
@@ -2535,6 +2563,7 @@ export class OrderLifecycleService {
       matched.add(ExpenseProofCondition.SELL_ANY);
       if (hasExtra) matched.add(ExpenseProofCondition.SELL_EXTRA_COST);
       if (isZeroTotal) matched.add(ExpenseProofCondition.SELL_ZERO_TOTAL);
+      if (ctx.partly) matched.add(ExpenseProofCondition.PARTLY_SELL);
     }
     return matched;
   }
@@ -2558,12 +2587,14 @@ export class OrderLifecycleService {
     proofFileKeys?: string[];
     forceRequired?: boolean;
     proofFileKeysVerified?: boolean;
+    partly?: boolean;
   }): Promise<string[]> {
     const {
       market,
       action,
       extraCost,
       totalPrice,
+      partly = false,
       proofFileKeys,
       forceRequired = false,
       proofFileKeysVerified = false,
@@ -2589,6 +2620,7 @@ export class OrderLifecycleService {
       action,
       extraCost,
       totalPrice,
+      partly,
     });
     const required = forceRequired || enabled.some((c) => matched.has(c));
     if (!required) {
@@ -7408,6 +7440,179 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * 2026-11-16 (Dilshod) — `order.operator.assign`: operatori YO'Q buyurtmaga
+   * keyin operator biriktirish (`PUT /orders/:id/operator`).
+   *
+   * Gateway doirani (kimning buyurtmasi) va operatorni (buyurtma marketining
+   * FAOL operatori — yaratishdagi tanlov bilan AYNI `identity.market_operator
+   * .selectable`) tekshirib, `market_id` ni (tekshirilgan market) va operator
+   * ismini beradi. Bu yerda FOR UPDATE ostida himoya chuqurligi:
+   *  - market tomonida `requester.market_id` buyurtma marketiga teng (403);
+   *  - buyurtma marketi tekshirilgani bilan AYNI (aks holda 409
+   *    `ORDER_OPERATOR_MARKET_CHANGED` — operator boshqa marketniki bo'lib
+   *    qolmasin);
+   *  - `operator_id` bor — 409 `ORDER_OPERATOR_ALREADY_ASSIGNED` (parallel
+   *    ikkinchi biriktirish ham shu yerda to'xtaydi);
+   *  - tashqi integratsiya buyurtmasi — 409 `ORDER_OPERATOR_EXTERNAL`.
+   * Yoziladi: `operator_id`, `operator` (ism), tracking yozuvi; buyurtma
+   * allaqachon sotilgan bo'lsa — sotuvdagidek operator ulushi (outbox, shu
+   * tranzaksiyada; finance `order_id` bo'yicha idempotent). Holat o'zgarmaydi.
+   */
+  async assignOperator(
+    id: string,
+    input: {
+      operator_id?: unknown;
+      operator_name?: unknown;
+      market_id?: unknown;
+    },
+    requester: { id?: string; roles?: string[]; market_id?: string | null },
+  ) {
+    const orderId = String(id ?? '').trim();
+    if (!/^\d{1,18}$/.test(orderId)) {
+      this.notFound('Buyurtma topilmadi');
+    }
+    const idText = (value: unknown): string =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    const operatorId = idText(input?.operator_id);
+    const expectedMarketId = idText(input?.market_id);
+    if (
+      !/^\d{1,19}$/.test(operatorId) ||
+      !/^\d{1,19}$/.test(expectedMarketId)
+    ) {
+      this.badRequest('operator_id va market_id majburiy');
+    }
+    const operatorName =
+      typeof input?.operator_name === 'string' && input.operator_name.trim()
+        ? input.operator_name.trim()
+        : null;
+    const roles = new Set(
+      (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
+    );
+    const isStaff = [
+      Roles.SUPERADMIN,
+      Roles.ADMIN,
+      Roles.REGISTRATOR,
+      Roles.MANAGER,
+      Roles.BRANCH,
+    ].some((role) => roles.has(role));
+    const marketScope = String(requester?.market_id ?? '').trim();
+    // Fail-closed: xodim ham, market doirasi ham bo'lmasa — ruxsat yo'q.
+    if (!requester?.id || (!isStaff && !marketScope)) {
+      this.forbidden("Operator biriktirishga ruxsat yo'q");
+    }
+
+    let status: Order_status = Order_status.NEW;
+    let previousName: string | null = null;
+    let earningQueued = false;
+    await this.dataSource.transaction(async (manager) => {
+      const order = await manager.getRepository(Order).findOne({
+        where: { id: orderId, isDeleted: false },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order) {
+        this.notFound('Buyurtma topilmadi');
+      }
+      if (marketScope && String(order.market_id) !== marketScope) {
+        this.forbidden(
+          'Bu buyurtma sizning marketingizga tegishli emas — unga operator biriktira olmaysiz',
+        );
+      }
+      if (isExternalOperatorText(order.operator)) {
+        throw new RpcException({
+          statusCode: 409,
+          code: ORDER_OPERATOR_ERROR_CODES.EXTERNAL,
+          message: ORDER_OPERATOR_EXTERNAL_MESSAGE,
+        });
+      }
+      if (order.operator_id) {
+        throw new RpcException({
+          statusCode: 409,
+          code: ORDER_OPERATOR_ERROR_CODES.ALREADY_ASSIGNED,
+          message: ORDER_OPERATOR_ALREADY_ASSIGNED_MESSAGE,
+        });
+      }
+      if (String(order.market_id ?? '') !== expectedMarketId) {
+        throw new RpcException({
+          statusCode: 409,
+          code: ORDER_OPERATOR_ERROR_CODES.MARKET_CHANGED,
+          message: ORDER_OPERATOR_MARKET_CHANGED_MESSAGE,
+        });
+      }
+      status = order.status;
+      previousName = order.operator ?? null;
+      await manager.getRepository(Order).update(
+        { id: orderId },
+        {
+          operator_id: operatorId,
+          // Ism kelmasa (identity bo'sh qaytardi) yozilgan matn qoladi.
+          ...(operatorName ? { operator: operatorName } : {}),
+        },
+      );
+      await this.custody.createTrackingEvent(
+        {
+          order_id: orderId,
+          from_status: order.status,
+          to_status: order.status,
+          action: ORDER_OPERATOR_ASSIGN_TRACKING_ACTION,
+          old_value: { operator_id: null, operator: previousName },
+          new_value: {
+            operator_id: operatorId,
+            operator: operatorName ?? previousName,
+          },
+          changed_by: String(requester.id),
+          changed_by_role: this.custody.toTrackingRole(requester.roles),
+          note: `Operator biriktirildi: ${operatorName ?? operatorId}`,
+        },
+        manager.getRepository(OrderTracking),
+      );
+      // Sotilgan buyurtma — operator ulushi sotuvdagidek (o'sha komanda va
+      // payload; finance `order_id` bo'yicha idempotent, komissiya qoidasi
+      // operator profilidan).
+      if (ORDER_OPERATOR_EARNING_STATUSES.includes(order.status)) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.operator.earning.record',
+          {
+            order_id: orderId,
+            operator_id: operatorId,
+            market_id: order.market_id ? String(order.market_id) : null,
+            total_price: Number(order.total_price ?? 0),
+          },
+          { manager },
+        );
+        earningQueued = true;
+      }
+    });
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: orderId,
+      // Literal — action-registry AST tekshiruvi (y8CxCtcK).
+      action: 'order.operator_assigned',
+      old_value: { operator_id: null, operator: previousName },
+      new_value: {
+        operator_id: operatorId,
+        operator: operatorName ?? previousName,
+      },
+      ...this.custody.auditActor(requester),
+      metadata: { status, earning_recorded: earningQueued },
+    });
+
+    return successRes(
+      {
+        id: orderId,
+        operator_id: operatorId,
+        operator: operatorName ?? previousName,
+        earning_recorded: earningQueued,
+      },
+      200,
+      'success',
+    );
+  }
+
   async initiateReturn(
     requester: { id: string; roles?: string[] },
     id: string,
@@ -7679,7 +7884,7 @@ export class OrderLifecycleService {
       // qilgan xodim o'zi, muddati o'tmagan. ⚠️ `consumed_at` TEKSHIRILMAYDI va
       // YOZILMAYDI — bitta market QR 5 daqiqa ichida bir nechta buyurtmaga (har
       // biri alohida markReturnedToMarket) ishlatilishi mumkin; bulk `complete`
-      // yo'li esa bir martalik (consumed) ishlatadi.
+      // ham ko'p martalik (skan = topshirish), `consumed_at` u yerda partiya vaqti.
       const marketId = String(order.market_id ?? '').trim();
       const session = await sessionRepo.findOne({
         where: {
@@ -7901,11 +8106,19 @@ export class OrderLifecycleService {
     qr_token: string;
     requester: { id: string; roles?: string[] };
   }) {
-    const qrToken = String(input?.qr_token ?? '').trim();
+    const rawQrToken = String(input?.qr_token ?? '').trim();
+    const qrToken = this.canonicalMarketQrToken(rawQrToken);
     const requesterId = String(input?.requester?.id ?? '').trim();
-    if (!qrToken.startsWith('MCR-') || !requesterId) {
+    if (!qrToken || !requesterId) {
       this.badRequest('QR token yoki requester noto‘g‘ri');
     }
+    // Kanonik (registrsiz) xesh; aynan yozilgani — deploy paytida tirik qolgan eski base64url QR uchun (2 daqiqa).
+    const qrTokenHashes = [
+      ...new Set([
+        this.hashHandoverToken(qrToken),
+        this.hashHandoverToken(rawQrToken),
+      ]),
+    ];
 
     // Skan — HQ yoki filial xodimi (F3). Natija bu yerda kerak emas, faqat
     // chaqiruvchi haqiqiy xodim ekani tekshiriladi.
@@ -7920,10 +8133,10 @@ export class OrderLifecycleService {
         MarketCancelledHandoverSession,
       );
       const session = await sessionRepo.findOne({
-        where: {
-          qr_token_hash: this.hashHandoverToken(qrToken),
+        where: qrTokenHashes.map((qr_token_hash) => ({
+          qr_token_hash,
           isDeleted: false,
-        },
+        })),
         lock: { mode: 'pessimistic_write' },
       });
 
@@ -8224,15 +8437,21 @@ export class OrderLifecycleService {
         if (String(session.scanned_by_user_id ?? '') !== requesterId) {
           this.forbidden('Ruxsat boshqa xodimga tegishli');
         }
-        if (session.consumed_at) {
-          this.forbidden('Topshirish ruxsati allaqachon ishlatilgan');
-        }
+        // SKAN = TOPSHIRISH (ega qarori 2026-11-15, BeePost 7182e81d): ruxsat 5 daqiqa ichida KO'P MARTA
+        // ishlatiladi — xodim har posilkani skanerlaganda alohida `complete([id])` keladi (ilgari bir martalik
+        // edi: `consumed_at` bo'lsa 403, ya'ni skanerlanganlar oxirida bitta so'rov bilan yuborilardi). Parallel
+        // so'rovlar sessiya qatoridagi `pessimistic_write` qulfi bilan navbatga tushadi. `consumed_at` endi —
+        // sessiyaning BIRINCHI topshirish vaqti (partiya vaqti, pastda).
         if (session.authorization_expires_at.getTime() <= now.getTime()) {
           this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
         }
       }
 
       authorizedVia = session ? marketHandoverMethodOf(session) : null;
+      // «Topshirilgan» partiyasi = market + `market_handover_at` + xodim (`handover-batches.ts`), sessiya esa
+      // `consumed_at` bilan tanib olinadi. Shuning uchun bitta sessiyadagi HAR skan sessiyaning birinchi
+      // topshirish vaqti bilan yoziladi — partiya bitta bo'lib qoladi. Haqiqiy vaqt — `last_handover_at` va tracking.
+      const batchAt = session?.consumed_at ?? now;
 
       // F3 — HQ xodimi HQda turgan orderlarni, filial xodimi esa FAQAT o'z
       // filialida turgan bekor orderlarni topshira oladi.
@@ -8289,7 +8508,7 @@ export class OrderLifecycleService {
           : isQrRequired
             ? (authorizedVia ?? 'qr')
             : 'no_qr';
-        order.market_handover_at = now;
+        order.market_handover_at = batchAt;
         order.market_handover_by = this.numericActorId(requesterId);
         order.market_handover_method = handoverMethod;
         order.market_handover_branch_id = handoverBranchId;
@@ -8353,7 +8572,8 @@ export class OrderLifecycleService {
         await this.syncOrderToSearch(order, queryRunner.manager);
       }
 
-      if (session) {
+      // Partiya vaqti faqat BIRINCHI topshirishda yoziladi (keyingi skanlar uni o'zgartirmaydi — `batchAt`).
+      if (session && !session.consumed_at) {
         session.consumed_at = now;
         await sessionRepo.save(session);
       }
@@ -13158,10 +13378,12 @@ export class OrderLifecycleService {
       });
     }
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
-    // the new (partial) price as the operation total.
+    // the new (partial) price as the operation total — plus its own
+    // PARTLY_SELL condition (2026-11-16).
     const proofFiles = await this.enforceOperationProof({
       market,
       action: 'sell',
+      partly: true,
       extraCost,
       totalPrice: price,
       proofFileKeys: dto?.proofFileKeys,

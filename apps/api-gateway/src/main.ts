@@ -27,6 +27,7 @@ import {
   setRmqSignerKind,
 } from '@app/common';
 import { aiParseStageSeconds } from './ai-order/ai-parse-metrics';
+import { aiConfirmAckTotal } from './ai-order/ai-ack-metrics';
 
 async function bootstrap() {
   // Initialise Sentry before app creation so any boot-time errors are captured.
@@ -171,6 +172,14 @@ async function bootstrap() {
    * yuborgan update JIM yo'qolardi — shuning uchun gateway ham ayni
    * argumentlar bilan e'lon qiladi. Xato deploy'ni to'xtatmaydi.
    */
+  /**
+   * (AI ack B1) ai-service TEZ navbati (`AI_FAST`). Iste'molchi — ai-service
+   * (avval deploy qilinadi); u hali yangilanmagan bo'lsa ham navbat mavjud
+   * bo'lsin — xabar JIM yo'qolmasin (ai-confirm baribir 503 qaytaradi,
+   * buyurtma yaratilmaydi). `ensureQueue` xatoni o'zi faqat log qiladi.
+   */
+  await app.get(RmqService).ensureQueue('AI_FAST');
+
   try {
     await app.get(RmqService).ensureQueue('NOTIFICATION_BOT');
   } catch (error) {
@@ -203,7 +212,8 @@ async function bootstrap() {
   // production'da token yo'q bo'lsa 404 (tunnel orqali ochiq edi).
   // Registered before listen so the middleware wraps all routes.
   // WHMAIqyo #5: ai-parse bosqichlari histogrammasi (p50/p95).
-  registerMetrics(app, 'api-gateway', [aiParseStageSeconds]);
+  // (AI ack S7) ai-confirm ack darvozasi hisoblagichi.
+  registerMetrics(app, 'api-gateway', [aiParseStageSeconds, aiConfirmAckTotal]);
 
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = Number(process.env.PORT || 3004);

@@ -1437,6 +1437,32 @@ export class OrderServiceController {
     );
   }
 
+  /** 2026-11-16 — operatori yo'q buyurtmaga keyin operator biriktirish. */
+  @MessagePattern({ cmd: 'order.operator.assign' })
+  assignOperator(
+    @Payload()
+    data: {
+      id: string;
+      operator_id: string;
+      operator_name?: string | null;
+      market_id: string;
+      requester: { id: string; roles?: string[]; market_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.assignOperator(
+        data.id,
+        {
+          operator_id: data.operator_id,
+          operator_name: data.operator_name,
+          market_id: data.market_id,
+        },
+        data.requester,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.mark_returned_to_market' })
   markReturnedToMarket(
     @Payload()

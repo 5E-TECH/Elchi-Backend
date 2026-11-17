@@ -75,6 +75,10 @@ export const regions: SeedRegion[] = [
       { name: 'Nurafshon', sato_code: '1727401' },
       { name: 'Chirchiq', sato_code: '1727419' },
       { name: 'Qibray', sato_code: '1727248' },
+      { name: 'Bekobod shahri', sato_code: '1727413' },
+      { name: 'Ohangaron shahri', sato_code: '1727415' },
+      { name: "Yangiyo'l shahri", sato_code: '1727424' },
+      { name: "O'rtachirchiq tumani", sato_code: '1727253' },
     ],
   },
   {
@@ -118,6 +122,10 @@ export const regions: SeedRegion[] = [
       { name: 'Toshloq', sato_code: '1730227' },
       { name: "Uchko'prik", sato_code: '1730221' },
       { name: 'Yozyovon', sato_code: '1730242' },
+      { name: "Farg'ona shahri", sato_code: '1730401' },
+      { name: 'Quvasoy shahri', sato_code: '1730408' },
+      { name: "Qo'shtepa tumani", sato_code: '1730206' },
+      { name: "O'zbekiston tumani", sato_code: '1730230' },
     ],
   },
   {
@@ -134,6 +142,8 @@ export const regions: SeedRegion[] = [
       { name: "To'raqo'rg'on", sato_code: '1714224' },
       { name: "Uchqo'rg'on", sato_code: '1714234' },
       { name: "Yangiqo'rg'on", sato_code: '1714242' },
+      { name: 'Namangan shahri', sato_code: '1714401' },
+      { name: 'Uychi tumani', sato_code: '1714229' },
     ],
   },
   {
@@ -189,6 +199,9 @@ export const regions: SeedRegion[] = [
       { name: 'Qiziltepa', sato_code: '1712216' },
       { name: 'Xatirchi', sato_code: '1712251' },
       { name: 'Zarafshon', sato_code: '1712408' },
+      { name: "G'ozg'on shahri", sato_code: '1712412' },
+      { name: 'Tomdi tumani', sato_code: '1712244' },
+      { name: 'Uchquduq tumani', sato_code: '1712248' },
     ],
   },
   {
@@ -204,6 +217,10 @@ export const regions: SeedRegion[] = [
       { name: 'Urganch', sato_code: '1733217' },
       { name: 'Yangiariq', sato_code: '1733233' },
       { name: 'Yangibozor', sato_code: '1733236' },
+      { name: 'Urganch shahri', sato_code: '1733401' },
+      { name: 'Xiva shahri', sato_code: '1733406' },
+      { name: "Tuproqqal'a tumani", sato_code: '1733221' },
+      { name: 'Xonqa tumani', sato_code: '1733223' },
     ],
   },
   {
@@ -224,6 +241,7 @@ export const regions: SeedRegion[] = [
       { name: "Sho'rchi", sato_code: '1722226' },
       { name: 'Termiz', sato_code: '1722220' },
       { name: 'Uzun', sato_code: '1722221' },
+      { name: 'Termiz shahri', sato_code: '1722401' },
     ],
   },
   {
@@ -245,6 +263,7 @@ export const regions: SeedRegion[] = [
       { name: "Yakkabog'", sato_code: '1710250' },
       { name: "Ko'kdala", sato_code: '1710240' },
       { name: 'Qarshi shahri', sato_code: '1710401' },
+      { name: 'Shahrisabz tumani', sato_code: '1710245' },
     ],
   },
   {
@@ -262,6 +281,8 @@ export const regions: SeedRegion[] = [
       { name: 'Yangiobod', sato_code: '1708237' },
       { name: 'Zafarobod', sato_code: '1708225' },
       { name: 'Zarbdor', sato_code: '1708220' },
+      { name: 'Sharof Rashidov tumani', sato_code: '1708212' },
+      { name: 'Zomin tumani', sato_code: '1708218' },
     ],
   },
   {
@@ -278,6 +299,7 @@ export const regions: SeedRegion[] = [
       { name: 'Sirdaryo', sato_code: '1724231' },
       { name: 'Xovos', sato_code: '1724235' },
       { name: 'Yangier', sato_code: '1724413' },
+      { name: 'Guliston shahri', sato_code: '1724401' },
     ],
   },
   {
@@ -298,6 +320,9 @@ export const regions: SeedRegion[] = [
       { name: "Taxtako'pir", sato_code: '1735230' },
       { name: "To'rtko'l", sato_code: '1735233' },
       { name: "Xo'jayli", sato_code: '1735236' },
+      { name: 'Nukus shahri', sato_code: '1735401' },
+      { name: "Bo'zatov tumani", sato_code: '1735209' },
+      { name: 'Taxiatosh tumani', sato_code: '1735228' },
     ],
   },
 ];

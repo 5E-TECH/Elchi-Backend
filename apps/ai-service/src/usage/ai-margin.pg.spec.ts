@@ -94,6 +94,8 @@ const DRAFT_B = '7a1b8c1e-0000-4000-8000-00000000000b';
       images?: number;
       cacheRead?: number;
       cacheCreation?: number;
+      /** #648: shundan 1 soatlik TTL bilan yozilgani. */
+      cache1h?: number;
       savedUsd?: number;
       deleted?: boolean;
     }) {
@@ -102,9 +104,9 @@ const DRAFT_B = '7a1b8c1e-0000-4000-8000-00000000000b';
            (feature, request_area, model, input_tokens, output_tokens, steps,
             cost_usd, cost_uzs, usd_uzs_rate, market_id, "createdAt",
             is_deleted, image_count, cache_read_tokens, cache_creation_tokens,
-            cache_saved_usd)
+            cache_saved_usd, cache_creation_1h_tokens)
          VALUES ($1, $2, 'claude-sonnet-5', 100, 50, 1, $3, $4, 12800, $5, $6,
-                 $7, $8, $9, $10, $11)`,
+                 $7, $8, $9, $10, $11, $12)`,
         [
           row.feature ?? 'order_extract_multi',
           row.area ?? 'order',
@@ -117,6 +119,7 @@ const DRAFT_B = '7a1b8c1e-0000-4000-8000-00000000000b';
           row.cacheRead ?? 1000,
           row.cacheCreation ?? 0,
           row.savedUsd ?? 0,
+          row.cache1h ?? 0,
         ],
       );
     }
@@ -248,6 +251,21 @@ const DRAFT_B = '7a1b8c1e-0000-4000-8000-00000000000b';
       );
       expect(r.totals.chargeableCostUzs).toBe(3072);
       expect(r.totals.costUzs).toBe(6912);
+    });
+
+    it('#648: 1 soatlik kesh yozish qo‘shimchasi haqiqiy SQL orqali (× 1.0, 5m × 0.25)', async () => {
+      await usage({
+        at: '2026-10-01T05:00:00Z',
+        uzs: 50,
+        cacheRead: 0,
+        cacheCreation: 1_000_000,
+        cache1h: 1_000_000,
+      });
+      const r = await service.margin('2026-10-01', '2026-10-01');
+      // 1M × $3 × 1.0 / 1M = $3.00; × 12800 = 38 400 so'm.
+      expect(r.cache.cacheWriteCostUsd).toBeCloseTo(3, 6);
+      expect(r.cache.cacheWriteCostUzs).toBeCloseTo(38_400, 2);
+      await db.query('TRUNCATE ai_schema.ai_usage_log');
     });
 
     it('TC4/TC5: kesh tejovi cache_read ga proporsional; cache_read = 0 → 0 va alert', async () => {

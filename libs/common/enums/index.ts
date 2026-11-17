@@ -170,6 +170,9 @@ export enum ExpenseProofCondition {
   CANCEL_ANY = 'cancel_any', // har qanday bekor qilishda
   CANCEL_EXTRA_COST = 'cancel_extra_cost', // bekor qilishda qo'shimcha xarajat yozilganda
   CANCEL_ZERO_TOTAL = 'cancel_zero_total', // 0 summali buyurtma bekor qilinganda
+  // 2026-11-16 (Dilshod): qisman sotishda (soni yoki narxi kamaytirilib) —
+  // faqat `partlySellOrder`; to'liq sotuvga ta'sir qilmaydi.
+  PARTLY_SELL = 'partly_sell',
 }
 
 export enum Order_status {

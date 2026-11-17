@@ -154,7 +154,12 @@ function setup(
     asClient(fake()),
     asClient(ai),
     asClient(catalog),
-    { get: jest.fn(() => undefined) } as unknown as ConfigService,
+    // AI ack S2: darvoza majburiy rejimda (sukut — log-only).
+    {
+      get: jest.fn((key: string) =>
+        key === 'AI_ACK_CHECKS_ENFORCE' ? 'on' : undefined,
+      ),
+    } as unknown as ConfigService,
     { getState: jest.fn(() => 'enabled') } as unknown as AiStatusPoller,
   );
   const creates = () =>
@@ -268,8 +273,35 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
     ).toContain('ai_item_index');
   });
 
-  it('ai-service ishlamasa ham buyurtma yaratiladi (ai_draft_verified:false, edited_fields:null)', async () => {
+  it('AI ack: ai-service ishlamasa — FAIL-CLOSED 503 AI_CHECKS_UNAVAILABLE, hech narsa yaratilmaydi', async () => {
     const fx = setup({ contextError: true });
+    const err = await fx.controller
+      .aiConfirm({ orders: [order(0)] }, marketReq)
+      .then(
+        () => null,
+        (e: { getStatus(): number; getResponse(): unknown }) => e,
+      );
+    expect(err?.getStatus()).toBe(503);
+    expect(err?.getResponse()).toMatchObject({
+      code: 'AI_CHECKS_UNAVAILABLE',
+      retryable: true,
+      retry_after_seconds: expect.any(Number),
+    });
+    expect(fx.creates()).toHaveLength(0);
+  });
+
+  it('AI ack: draft shu market uchun topilmadi — 400 AI_DRAFT_NOT_FOUND, yaratilmaydi', async () => {
+    const fx = setup({ contexts: { drafts: [] } });
+    await expect(
+      fx.controller.aiConfirm({ orders: [order(0), order(1)] }, marketReq),
+    ).rejects.toMatchObject({
+      response: { code: 'AI_DRAFT_NOT_FOUND', indexes: [0, 1] },
+    });
+    expect(fx.creates()).toHaveLength(0);
+  });
+
+  it('AI ack: eski draft (snapshot yo‘q) — fail-open, ai_audit.checks_unverified=true', async () => {
+    const fx = setup({ contexts: { drafts: [{ draft_id: DRAFT }] } });
     const res = await fx.controller.aiConfirm(
       { orders: [order(0)] },
       marketReq,
@@ -278,20 +310,23 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
     expect(fx.creates()[0][1].ai_audit).toMatchObject({
       ai: true,
       ai_draft_id: DRAFT,
-      ai_draft_verified: false,
+      ai_draft_verified: true,
       edited_fields: null,
-      model: null,
+      checks_unverified: true,
     });
   });
 
-  it('TC2: draft_id’siz buyurtma — ai_audit YUBORILMAYDI', async () => {
+  it('TC2: draft_id’siz buyurtma — 400 AI_DRAFT_REQUIRED, yaratilmaydi', async () => {
     const fx = setup();
-    await fx.controller.aiConfirm(
-      { orders: [order(0, { draft_id: undefined, ai_item_index: undefined })] },
-      marketReq,
-    );
-    expect(fx.creates()[0][1]).not.toHaveProperty('ai_audit');
-    expect(fx.creates()[0][1].request_id).toMatch(/^ai-dedupe:[0-9a-f]{64}$/);
+    await expect(
+      fx.controller.aiConfirm(
+        {
+          orders: [order(0, { draft_id: undefined, ai_item_index: undefined })],
+        },
+        marketReq,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'AI_DRAFT_REQUIRED' } });
+    expect(fx.creates()).toHaveLength(0);
   });
 
   it('link_orders: draft ↔ buyurtma items (edited_fields bilan) va confirmed_by', async () => {

@@ -30,6 +30,41 @@ updates:
       - dependency-name: typescript
         update-types:
           - version-update:semver-major
+      # NestJS major (12.x) — avtomatik PR ochilmaydi, barcha @nestjs/*
+      # paketlari bitta rejali migratsiya PR'ida birga ko'tariladi. Sabab
+      # (#634, #635, 2026-11-16): Dependabot major'ni har paket uchun alohida
+      # ochadi; faqat @nestjs/core yoki @nestjs/websockets 12 ga o'tsa, qolgan
+      # @nestjs/* 11.x bilan peer ziddiyati — CI'da `npm ci` ERESOLVE bilan
+      # yiqiladi (9 tekshiruvdan 7 tasi). minor/patch «nestjs» guruhida
+      # odatdagidek keladi. Qoida migratsiya PR'i bilan olib tashlanadi.
+      - dependency-name: '@nestjs/*'
+        update-types:
+          - version-update:semver-major
+      # web-push major (4.x) — #675 (2026-11-16): CI'da notification-service
+      # spec'lari «Test suite failed to run» bilan yiqiladi (9 tekshiruvdan 4 tasi).
+      # Push-bildirishnoma kutubxonasi rejali PR'da, push oqimini qo'lda sinab
+      # ko'tariladi; qoida o'sha PR bilan olib tashlanadi. minor/patch odatdagidek.
+      - dependency-name: web-push
+        update-types:
+          - version-update:semver-major
+      # 2026-11-17: major yangilanishlar rejali PR bilan, qo'lda sinab ko'tariladi.
+      # typeorm 1.x (#681) — ORM major, CI'da postgres spec'lar va DI boot yiqiladi.
+      # @eslint/js 10 (#680) — ESLint 10 bilan birga, CI'da lint/testlar yiqiladi.
+      # @types/node major (#683) — serverlar Node 22 da (.nvmrc, node:22-alpine);
+      # turlar runtime major'iga teng turadi, Node ko'tarilganda birga o'zgaradi.
+      # Har qoida o'z migratsiya PR'i bilan olib tashlanadi. minor/patch odatdagidek.
+      - dependency-name: typeorm
+        update-types:
+          - version-update:semver-major
+      - dependency-name: '@eslint/js'
+        update-types:
+          - version-update:semver-major
+      - dependency-name: eslint
+        update-types:
+          - version-update:semver-major
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
     groups:
       nestjs:
         patterns:

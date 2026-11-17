@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { createHash, randomBytes } from 'crypto';
 import {
   ActivityAction,
@@ -80,10 +80,50 @@ const IDENTITY_KEY_CHECK_OPTS = { timeoutMs: 2500, retries: 0 };
 const COURIER_STATE_TTL_MS = 30_000;
 const COURIER_STATE_CACHE_MAX = 1000;
 
+/**
+ * HQ tekshiruvi (`create`): branch-service'ga ≈6.5 s dan oshmaymiz. Filial
+ * turi javobda bo'lmasa `branch.find_hq` bitta qisqa urinish (3 s). Eng yomon
+ * holat: identity 6.5 + filial 6.5 + HQ 3 = 16 s — gateway
+ * (`POST /admin/carriers`) 20 s kutadi.
+ */
+const BRANCH_ADMIN_OPTS = { timeoutMs: 3000, retries: 1, deadlineMs: 6500 };
+const BRANCH_HQ_FALLBACK_OPTS = { timeoutMs: 3000, retries: 0 };
+/** branch-service tizim so'rovchisi (doira tekshiruvisiz o'qish). */
+const BRANCH_SYSTEM_REQUESTER = { id: 'system', roles: ['superadmin'] };
+
+/** Ega qarori 2026-11-15: tashqi yetkazuvchi FAQAT HQ'da ochilgan kuryerga. */
+export const CARRIER_COURIER_NOT_HQ_MESSAGE =
+  "Tashqi yetkazuvchiga faqat HQ'da ochilgan kuryer bog'lanadi — bu kuryer HQ'da emas";
+export const CARRIER_HQ_CHECK_UNAVAILABLE_MESSAGE =
+  "Filial xizmati javob bermadi — kuryer HQ'da ekanini tekshirib bo'lmadi. Birozdan so'ng qayta urinib ko'ring";
+
+/** `integration.carrier.find_by_courier_ids` — bir so'rovdagi id'lar chegarasi. */
+export const CARRIER_FIND_BY_COURIER_IDS_MAX = 500;
+
+/**
+ * Kuryer ro'yxatidagi «Tashqi: …» belgisi uchun MINIMAL ko'rinish: kalit
+ * hash'i, IP ro'yxati, akkaunt id'si va yashirin ruxsatlar CHIQMAYDI.
+ */
+export type CarrierCourierLink = {
+  courier_user_id: string;
+  name: string;
+  is_active: boolean;
+};
+
 /** Postgres BIGINT chegarasi — undan kattasi DB'da 22003 (500 + requeue) berardi. */
 const BIGINT_MAX = 9223372036854775807n;
 const isBigintId = (value: string): boolean =>
   /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= BIGINT_MAX;
+/** branch-service javobidagi id (satr / son) → kanonik satr; yaroqsiz — `null`. */
+const idText = (value: unknown): string | null => {
+  const text =
+    typeof value === 'string' || typeof value === 'number'
+      ? String(value).trim()
+      : '';
+  return /^\d{1,19}$/.test(text) && !/^0+$/.test(text)
+    ? BigInt(text).toString()
+    : null;
+};
 
 /**
  * Carrier API akkauntlari (tashqi yetkazuvchi = bitta kurier).
@@ -107,6 +147,8 @@ export class CarrierAccountService {
     private readonly carrierRepo: Repository<CarrierAccount>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    // Ega qarori 2026-11-15: carrier faqat HQ kuryeriga (`assertHqCourier`).
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
 
   private badRequest(message: string): never {
@@ -305,6 +347,90 @@ export class CarrierAccountService {
     return { id: String(user.id), name: user.name ?? null };
   }
 
+  /**
+   * EGA QARORI (2026-11-15): «faqat integratsiya qilingan tashqi yetkazib
+   * beruvchiga faqat HQ ga ochilgan o'z kurieri bo'lsagina biriktirish mumkin
+   * bo'lishi kerak». Kuryerning faol `branch_users` qatori HQ filialida va
+   * roli COURIER bo'lishi shart — aks holda 400 `courier_not_hq`.
+   *
+   * Filial turi javobda bo'lmasa — `branch.find_hq` bilan solishtiriladi
+   * (logistics `isHqCourierAssignment` bilan bir xil). branch-service javob
+   * bermadi / xato — 503 (yopiq: tekshirilmagan kuryerga kalit chiqmaydi).
+   *
+   * Faqat `create` da: eski (HQ'dan tashqari) akkauntlar `rotateKey` /
+   * `setActive` / `validateKey` da avvalgidek ishlaydi.
+   */
+  private async assertHqCourier(courierId: string): Promise<void> {
+    const assignment = await this.sendBranch<{
+      branch_id?: unknown;
+      role?: unknown;
+      branch?: { id?: unknown; type?: unknown } | null;
+    }>(
+      { cmd: 'branch.user.find_by_user' },
+      { user_id: courierId, requester: BRANCH_SYSTEM_REQUESTER },
+      BRANCH_ADMIN_OPTS,
+    );
+    const branchId = idText(assignment?.branch_id);
+    const notHq: () => never = () => {
+      throw new RpcException(
+        errorRes(CARRIER_COURIER_NOT_HQ_MESSAGE, 400, {
+          reason: 'courier_not_hq',
+          details: { courier_id: courierId, branch_id: branchId },
+        }),
+      );
+    };
+    const upper = (value: unknown): string =>
+      typeof value === 'string' ? value.trim().toUpperCase() : '';
+    if (!assignment || !branchId || upper(assignment.role) !== 'COURIER') {
+      notHq();
+    }
+    const branch = assignment.branch;
+    const branchType =
+      branch && idText(branch.id) === branchId ? upper(branch.type) : '';
+    if (branchType) {
+      if (branchType !== 'HQ') {
+        notHq();
+      }
+      return;
+    }
+    const hq = await this.sendBranch<{ id?: unknown }>(
+      { cmd: 'branch.find_hq' },
+      {},
+      BRANCH_HQ_FALLBACK_OPTS,
+    );
+    const hqId = idText(hq?.id);
+    if (!hqId) {
+      this.unavailable(CARRIER_HQ_CHECK_UNAVAILABLE_MESSAGE);
+    }
+    if (hqId !== branchId) {
+      notHq();
+    }
+  }
+
+  /** branch-service so'rovi: `data` (yo'q — `null`); har qanday xato — 503. */
+  private async sendBranch<T>(
+    pattern: { cmd: string },
+    payload: Record<string, unknown>,
+    opts: { timeoutMs: number; retries: number; deadlineMs?: number },
+  ): Promise<T | null> {
+    try {
+      const res = await rmqSend<{ data?: T | null } | null>(
+        this.branchClient,
+        pattern,
+        payload,
+        opts,
+      );
+      return res?.data ?? null;
+    } catch (error) {
+      this.logger.warn(
+        `carrier: ${pattern.cmd} failed: ${
+          (error as Error)?.message ?? String(error)
+        }`,
+      );
+      this.unavailable(CARRIER_HQ_CHECK_UNAVAILABLE_MESSAGE);
+    }
+  }
+
   private rememberCourierState(courierId: string, active: boolean): void {
     if (this.courierState.size >= COURIER_STATE_CACHE_MAX) {
       this.courierState.clear();
@@ -399,6 +525,10 @@ export class CarrierAccountService {
         : this.normalizeIpAllowlist(dto.ip_allowlist);
 
     const courier = await this.assertActiveCourier(courierId);
+    // Ketma-ket (parallel emas): identity rad etgan kuryer uchun filialga
+    // bormaymiz. Mavjud akkaunt 409 dan OLDIN — HQ'dan tashqari kuryer uchun
+    // aniq sabab (400 `courier_not_hq`) chiqsin.
+    await this.assertHqCourier(courierId);
 
     const existing = await this.carrierRepo.findOne({
       where: { courier_user_id: courierId, isDeleted: false },
@@ -462,6 +592,48 @@ export class CarrierAccountService {
       201,
       'carrier account created',
     );
+  }
+
+  /**
+   * `integration.carrier.find_by_courier_ids` (ichki): kuryerlar ro'yxatidagi
+   * «Tashqi: …» belgisi va kuryerni HQ'dan chiqarish to'sig'i uchun. Faqat
+   * o'chirilmagan akkauntlar va faqat `{courier_user_id, name, is_active}`.
+   * Id'lar takrorsiz, BIGINT; boshqasi — 400; 500 tadan ko'p — 400.
+   */
+  async findByCourierIds(raw: unknown) {
+    if (!Array.isArray(raw)) {
+      this.badRequest("courier_ids massiv bo'lishi kerak");
+    }
+    const ids = Array.from(
+      new Set(
+        raw.map((value) =>
+          typeof value === 'string' || typeof value === 'number'
+            ? String(value).trim()
+            : '',
+        ),
+      ),
+    );
+    if (ids.some((id) => !isBigintId(id))) {
+      this.badRequest("courier_ids da noto'g'ri id bor");
+    }
+    if (ids.length > CARRIER_FIND_BY_COURIER_IDS_MAX) {
+      this.badRequest(
+        `courier_ids ${CARRIER_FIND_BY_COURIER_IDS_MAX} tadan oshmasin`,
+      );
+    }
+    if (!ids.length) {
+      return successRes([], 200, 'carrier links');
+    }
+    const rows = await this.carrierRepo.find({
+      where: { courier_user_id: In(ids), isDeleted: false },
+      select: { courier_user_id: true, name: true, is_active: true },
+    });
+    const links: CarrierCourierLink[] = rows.map((row) => ({
+      courier_user_id: String(row.courier_user_id),
+      name: row.name,
+      is_active: row.is_active === true,
+    }));
+    return successRes(links, 200, 'carrier links');
   }
 
   async list() {

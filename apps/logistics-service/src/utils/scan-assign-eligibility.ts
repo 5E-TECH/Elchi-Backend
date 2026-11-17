@@ -28,7 +28,7 @@ export const SCAN_ASSIGN_MESSAGES = {
   NOT_AT_HQ:
     'Buyurtma HQ da emas — boshqa filialda turibdi. HQ kuryeri faqat HQ da turgan buyurtmani oladi.',
   // Mavjud matn ATAYLAB qayta ishlatiladi (filial kuryeri ham aynan shuni oladi).
-  WITH_OTHER_COURIER: 'Order allaqachon boshqa courierga biriktirilgan',
+  WITH_OTHER_COURIER: 'Buyurtma allaqachon boshqa kuryerga biriktirilgan',
   WRONG_STATUS:
     "Buyurtma holati noto'g'ri: faqat qabul qilingan yoki kutilayotgan buyurtmani olish mumkin",
   // anKpzwxk (ega qarori, 6-band) — HQ kuryeri faqat HQ viloyati buyurtmasini oladi.

@@ -408,7 +408,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         { qr_token: 'ORD-abc123' },
       ),
       403,
-      'Boshqa filial orderi',
+      'Boshqa filial buyurtmasi — qabul qila olmaysiz',
     );
   });
 
@@ -456,7 +456,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         { qr_token: 'ORD-abc123' },
       ),
       400,
-      'boshqa courierga',
+      'Buyurtma allaqachon boshqa kuryerga biriktirilgan',
     );
   });
 
@@ -564,7 +564,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
           { qr_token: 'ORD-abc123' },
         ),
         400,
-        'boshqa courierga biriktirilgan',
+        'boshqa kuryerga biriktirilgan',
       );
       expect(orderUpdates(orderClient)).toHaveLength(0);
     });
@@ -650,7 +650,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         { qr_token: 'ORD-abc123' },
       ),
       403,
-      'Boshqa filial orderi',
+      'Boshqa filial buyurtmasi — qabul qila olmaysiz',
     );
 
     const updateCalls = orderClient.send.mock.calls.filter(
@@ -696,7 +696,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       receiveByScan: 'throw',
     });
 
-    // Kuryer aynan SABABINI ko'rishi kerak — "boshqa filial orderi" chalg'ituvchi.
+    // Kuryer aynan SABABINI ko'rishi kerak — "boshqa filial buyurtmasi" chalg'ituvchi.
     await expectRpcStatus(
       service.scanAssignOrder(
         { id: 'c1', roles: ['courier'] },
@@ -942,7 +942,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         },
       });
 
-      await expectRpcStatus(scanAsC1(ctx.service), 400, 'boshqa courierga');
+      await expectRpcStatus(scanAsC1(ctx.service), 400, 'boshqa kuryerga');
       expectUntouched(ctx);
     });
 

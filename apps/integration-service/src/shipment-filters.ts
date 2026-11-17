@@ -10,11 +10,7 @@ import { Order_status } from '@app/common';
  */
 
 export type ShipmentFilter =
-  | 'all'
-  | 'not_sent'
-  | 'failed'
-  | 'delivered'
-  | 'mismatch';
+  'all' | 'not_sent' | 'failed' | 'delivered' | 'mismatch';
 
 export const SHIPMENT_FILTERS = new Set<ShipmentFilter>([
   'all',
@@ -40,6 +36,10 @@ export const SHIPMENT_DELIVERED_STATUSES: readonly string[] = [
  */
 const MAPPED = `(CAST(:status_map AS jsonb) ->> UPPER(s.provider_status))`;
 
+/** Tashuvchi statusi xaritada bor va ichki statusdan farq qiladi. */
+const mismatchWhen = (mapped: string): string =>
+  `s.provider_status IS NOT NULL AND ${mapped} IS NOT NULL AND ${mapped} IS DISTINCT FROM s.internal_status`;
+
 export const SHIPMENT_FILTER_SQL: Record<
   Exclude<ShipmentFilter, 'all'>,
   string
@@ -50,8 +50,20 @@ export const SHIPMENT_FILTER_SQL: Record<
   // Xato MATNI bor — "yiqilgan" ning yagona ishonchli belgisi.
   failed: 's.last_error IS NOT NULL',
   delivered: 's.internal_status IN (:...delivered)',
-  mismatch: `s.provider_status IS NOT NULL AND ${MAPPED} IS NOT NULL AND ${MAPPED} IS DISTINCT FROM s.internal_status`,
+  mismatch: mismatchWhen(MAPPED),
 };
+
+/**
+ * Nomuvofiqlik — KO'P ULANISH bitta agregatda (6qfzLBcR, integratsiya
+ * metrikasi). `:status_maps` — `{ "<integration_id>": { "PROVIDER_STATUS_UPPER":
+ * "internal_status" } }` JSON matni (har ulanishning
+ * `normalizeInboundStatusMap` natijasi). Qoida `mismatch` bilan AYNAN bir
+ * xil; xaritasi yo'q ulanish qatori hech qachon mos kelmaydi (NULL) —
+ * chaqiruvchi esa unga `mismatch: null` qaytaradi.
+ */
+export const SHIPMENT_MISMATCH_BY_INTEGRATION_SQL = mismatchWhen(
+  `(CAST(:status_maps AS jsonb) -> CAST(s.integration_id AS text) ->> UPPER(s.provider_status))`,
+);
 
 /**
  * `inbound_status_mapping` (`{ DELIVERED: { status: 'sold', action } }`) →
@@ -59,9 +71,7 @@ export const SHIPMENT_FILTER_SQL: Record<
  */
 export const normalizeInboundStatusMap = (
   mapping:
-    | Record<string, { status?: unknown } | null | undefined>
-    | null
-    | undefined,
+    Record<string, { status?: unknown } | null | undefined> | null | undefined,
 ): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(mapping ?? {})) {

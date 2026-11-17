@@ -144,6 +144,11 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // 8 s; RABBITMQ_AI_CONFIG_QUEUE, sukut 'ai_config_queue'). ai.config.*
     // va ai.status shu navbat orqali.
     RmqModule.register({ name: 'AI_CONFIG' }),
+    // (AI ack B1) ai-service TEZ navbati (RABBITMQ_AI_FAST_QUEUE, sukut
+    // 'ai_fast_queue'): ai-confirm yo'lidagi arzon DB amallari
+    // (confirm_context, attach_preview, link_orders) Claude chaqiruvlari
+    // ortida kutmasin.
+    RmqModule.register({ name: 'AI_FAST' }),
   ],
   controllers: [
     ApiGatewayController,

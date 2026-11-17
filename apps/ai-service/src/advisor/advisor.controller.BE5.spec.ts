@@ -2,6 +2,7 @@ import { RpcException } from '@nestjs/microservices';
 import type { RmqContext } from '@nestjs/microservices';
 import type { RmqService } from '@app/common';
 import { AdvisorController } from './advisor.controller';
+import type { AdvisorAlertsService } from './advisor-alerts.service';
 import type { AdvisorSettingsService } from './advisor-settings.service';
 
 /** BE-5 — ai-service ikkinchi qavat: faqat superadmin; xato konverti. */
@@ -17,9 +18,16 @@ describe('AdvisorController (BE-5)', () => {
     get: jest.fn().mockResolvedValue({ version: 1 }),
     update: jest.fn().mockResolvedValue({ version: 2 }),
   };
+  const alerts = {
+    overview: jest.fn().mockResolvedValue({ alerts: {} }),
+    list: jest.fn().mockResolvedValue({ items: [] }),
+    get: jest.fn().mockResolvedValue({ id: '1' }),
+    update: jest.fn().mockResolvedValue({ id: '1', status: 'resolved' }),
+  };
   const controller = new AdvisorController(
     rmq,
     settings as unknown as AdvisorSettingsService,
+    alerts as unknown as AdvisorAlertsService,
   );
 
   const errorOf = async (p: Promise<unknown>) => {
@@ -95,5 +103,52 @@ describe('AdvisorController (BE-5)', () => {
       statusCode: 500,
       message: 'ai.advisor.settings.get bajarilmadi',
     });
+  });
+
+  it('alerts: superadmin emas — 403, servis chaqirilmaydi; get sukut mark_seen=true', async () => {
+    const admin = { id: '2', roles: ['admin'] };
+    for (const call of [
+      () => controller.overview({ requester: admin }, ctx),
+      () => controller.listAlerts({ requester: admin }, ctx),
+      () => controller.getAlert({ requester: admin, id: '1' }, ctx),
+      () =>
+        controller.updateAlert(
+          { requester: admin, id: '1', status: 'resolved', note: 'abc' },
+          ctx,
+        ),
+    ]) {
+      expect(await errorOf(call())).toMatchObject({ statusCode: 403 });
+    }
+    expect(alerts.overview).not.toHaveBeenCalled();
+    expect(alerts.get).not.toHaveBeenCalled();
+    expect(alerts.update).not.toHaveBeenCalled();
+
+    const sa = { id: '1', roles: ['superadmin'], name: 'SA' };
+    await expect(
+      controller.getAlert(
+        { requester: sa, id: '7', include: ['history'] },
+        ctx,
+      ),
+    ).resolves.toMatchObject({
+      statusCode: 200,
+      message: 'AI advisor alert',
+    });
+    expect(alerts.get).toHaveBeenCalledWith(sa, '7', {
+      mark_seen: true,
+      include: ['history'],
+    });
+    await controller.getAlert(
+      { requester: sa, id: '7', mark_seen: false },
+      ctx,
+    );
+    expect(alerts.get).toHaveBeenLastCalledWith(sa, '7', {
+      mark_seen: false,
+      include: [],
+    });
+    await controller.updateAlert(
+      { requester: sa, id: '7', status: 'dismissed', note: null },
+      ctx,
+    );
+    expect(alerts.update).toHaveBeenCalledWith(sa, '7', 'dismissed', null);
   });
 });

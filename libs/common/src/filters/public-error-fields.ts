@@ -4,6 +4,7 @@ import { SHIFT_LATE_PHOTO_ERROR_CODES as SLP } from '../finance/shift-account-ch
 import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
+import { ORDER_OPERATOR_ERROR_CODES } from '../order/order-operator-assign';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
 import {
@@ -13,6 +14,13 @@ import {
 import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
 import { AI_ADVISOR_PUBLIC_ERROR_FIELDS } from '../ai/advisor.contract';
 import { AI_CONFIG_PUBLIC_ERROR_FIELDS } from '../ai/ai-config.contract';
+import {
+  AI_CHECKS_NOT_ACKNOWLEDGED,
+  AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_ITEM_NOT_FOUND,
+  AI_DRAFT_NOT_FOUND,
+  AI_DRAFT_REQUIRED,
+} from '../ai/ai-draft.contract';
 
 /**
  * (Elchi Pochta #3) Xato javobidagi mashina o'qiydigan qo'shimcha maydonlar.
@@ -148,6 +156,11 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [CONTACT_ERROR_CODES.NOT_A_MARKET]: [],
   // (T8 0OUcHZ7R) maxsus belgi bu holatda o'zgarmaydi — 409.
   [SPECIAL_CATEGORIES_ERROR_CODES.LOCKED]: [],
+  // (2026-11-16) buyurtmaga keyin operator biriktirish — 409: operator bor,
+  // integratsiya buyurtmasi yoki tekshiruvdan keyin market o'zgardi.
+  [ORDER_OPERATOR_ERROR_CODES.ALREADY_ASSIGNED]: [],
+  [ORDER_OPERATOR_ERROR_CODES.EXTERNAL]: [],
+  [ORDER_OPERATOR_ERROR_CODES.MARKET_CHANGED]: [],
   // (2026-11-09) bugungi buyurtma qabuli yopiq — 409; `reopens_at` — kun
   // almashadigan lahza (ISO), `cutoff_time` — qo'yilgan qabul vaqti (HH:MM).
   [ORDER_INTAKE_CLOSED]: ['reopens_at', 'cutoff_time'],
@@ -164,6 +177,19 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [SLP.NOT_AUTO_CLOSED]: [],
   [SLP.EXPIRED]: ['deadline'],
   [SLP.CARD_NOT_IN_SHIFT]: [],
+  // (AI ack) ai-confirm: bloklovchi AI tekshiruvi tasdiqlanmagan — 409.
+  // `missing` — tasdiqlanmagan kodlar, `orders` — `[{ index, missing }]`
+  // (ikkalasi ham ro'yxat — `PUBLIC_ERROR_LIST_FIELDS`).
+  [AI_CHECKS_NOT_ACKNOWLEDGED]: ['missing', 'orders'],
+  // (AI ack) 503 — tekshiruvlarni o'qib bo'lmadi, qayta urinish mumkin.
+  [AI_CHECKS_UNAVAILABLE]: ['retryable', 'retry_after_seconds'],
+  // (AI ack) 400 — draft_id / ai_item_index yo'q buyurtmalar (`indexes` —
+  // so'rovdagi `orders[]` o'rinlari).
+  [AI_DRAFT_REQUIRED]: ['indexes'],
+  // (AI ack) 400 — draft shu market uchun topilmadi (`indexes`).
+  [AI_DRAFT_NOT_FOUND]: ['indexes'],
+  // (AI ack B2) 400 — snapshot'da shu `ai_item_index` yo'q (`indexes`).
+  [AI_DRAFT_ITEM_NOT_FOUND]: ['indexes'],
   // (T3 QlLf33Ma) kassa cheki — sozlama, yuklash, bog'lash, AI.
   ...Object.fromEntries(
     Object.values(RC).map((code) => [code, [] as readonly string[]]),
@@ -181,7 +207,27 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   ...AI_CONFIG_PUBLIC_ERROR_FIELDS,
 };
 
+/**
+ * (AI ack) RO'YXAT bo'lishi mumkin bo'lgan maydonlar — faqat shu kod/maydon
+ * juftligi uchun. Element: oddiy qiymat yoki tekis obyekt (qiymati oddiy tur
+ * yoki oddiy qiymatlar ro'yxati), ≤50 ta. Boshqa kodlarda ro'yxat avvalgidek
+ * tashlab yuboriladi.
+ */
+export const PUBLIC_ERROR_LIST_FIELDS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  [AI_CHECKS_NOT_ACKNOWLEDGED]: ['missing', 'orders'],
+  [AI_DRAFT_REQUIRED]: ['indexes'],
+  [AI_DRAFT_NOT_FOUND]: ['indexes'],
+  [AI_DRAFT_ITEM_NOT_FOUND]: ['indexes'],
+};
+
 export type PublicErrorValue = string | number | boolean | null;
+
+export type PublicErrorListItem =
+  PublicErrorValue | Record<string, PublicErrorValue | PublicErrorValue[]>;
+
+export type PublicErrorField = PublicErrorValue | PublicErrorListItem[];
 
 const MAX_STRING = 256;
 
@@ -201,6 +247,44 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
     ? (value as Record<string, unknown>)
     : null;
 
+/** Oddiy qiymatlar ro'yxati (≤50); oddiy bo'lmagan element tashlanadi. */
+function primitiveList(value: unknown[]): PublicErrorValue[] {
+  const out: PublicErrorValue[] = [];
+  for (const item of value.slice(0, 50)) {
+    const primitive = publicValue(item);
+    if (primitive !== undefined) out.push(primitive);
+  }
+  return out;
+}
+
+/** (AI ack) ro'yxat maydoni — `PUBLIC_ERROR_LIST_FIELDS` izohi. */
+function publicListField(value: unknown): PublicErrorListItem[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: PublicErrorListItem[] = [];
+  for (const item of value.slice(0, 50)) {
+    const primitive = publicValue(item);
+    if (primitive !== undefined) {
+      out.push(primitive);
+      continue;
+    }
+    const record = asRecord(item);
+    if (!record) continue;
+    const flat: Record<string, PublicErrorValue | PublicErrorValue[]> = {};
+    for (const key of Object.keys(record).slice(0, 50)) {
+      if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) continue;
+      const v = record[key];
+      if (Array.isArray(v)) {
+        flat[key] = primitiveList(v);
+        continue;
+      }
+      const p = publicValue(v);
+      if (p !== undefined) flat[key] = p;
+    }
+    out.push(flat);
+  }
+  return out;
+}
+
 /**
  * Xato obyektidan (yoki ichidagi `response` / `error` obyektidan) javobga
  * chiqadigan `code` va uning ruxsat etilgan maydonlari. Ro'yxatda yo'q kod
@@ -208,7 +292,7 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
  */
 export function publicErrorFields(
   error: unknown,
-): Record<string, PublicErrorValue> {
+): Record<string, PublicErrorField> {
   const root = asRecord(error);
   if (!root) return {};
   const candidates = [root, asRecord(root.response), asRecord(root.error)];
@@ -223,9 +307,12 @@ export function publicErrorFields(
       ? PUBLIC_ERROR_CODES[code]
       : null;
     if (!allowed) continue;
-    const fields: Record<string, PublicErrorValue> = { code };
+    const fields: Record<string, PublicErrorField> = { code };
+    const lists = PUBLIC_ERROR_LIST_FIELDS[code] ?? [];
     for (const key of allowed) {
-      const value = publicValue(source[key]);
+      const value = lists.includes(key)
+        ? publicListField(source[key])
+        : publicValue(source[key]);
       if (value !== undefined) fields[key] = value;
     }
     return fields;

@@ -21,6 +21,7 @@ import {
   Post_status,
   Roles,
   Status,
+  transferBatchCancelBlock,
 } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
@@ -3833,7 +3834,7 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const batchRes = await this.sendOrderCommand<{
-      data?: { source_branch_id?: string };
+      data?: { source_branch_id?: string; status?: string };
     }>('order.transfer_batch.find_by_id', { id });
     const sourceBranchId = String(
       batchRes?.data?.source_branch_id ?? '',
@@ -3843,6 +3844,21 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
+
+    // oP02jE2P — yo'ldagi (SENT) paket hech kimga bekor qilinmaydi (409
+    // `batch_in_transit`). Shu yerda tekshiriladi, chunki order-service xatosi
+    // gateway'ga `data.reason` siz yetadi; order-service tranzaksiyasi esa
+    // qulf bilan qayta tekshiradi (oraliqda jo'natilgan paket uchun).
+    const batchStatus = String(batchRes?.data?.status ?? '').trim();
+    const block = batchStatus ? transferBatchCancelBlock(batchStatus) : null;
+    if (block) {
+      throw new RpcException(
+        errorRes(block.message, block.statusCode, {
+          reason: block.reason,
+          details: { batch_id: id, status: batchStatus.toUpperCase() },
+        }),
+      );
+    }
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
     const requesterName = requesterId;

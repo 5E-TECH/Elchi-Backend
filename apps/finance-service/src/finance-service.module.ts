@@ -43,6 +43,8 @@ import { FinanceCashboxDaily } from './entities/finance-cashbox-daily.entity';
 import { FinanceDailySnapshot } from './entities/finance-daily-snapshot.entity';
 import { FinanceDailySnapshotService } from './aggregates/finance-daily-snapshot.service';
 import { FinanceDailyService } from './aggregates/finance-daily.service';
+import { AdvisorInputsController } from './advisor/advisor-inputs.controller';
+import { AdvisorInputsService } from './advisor/advisor-inputs.service';
 import { PaymentsMetaService } from './aggregates/payments-meta.service';
 import { FinanceAggregatesController } from './aggregates/finance-aggregates.controller';
 import { ShiftScheduleClaim } from './entities/shift-schedule-claim.entity';
@@ -159,9 +161,12 @@ import { PickupVisitController } from './pickup-visit/pickup-visit.controller';
     CashboxReceiptController,
     // B824gOu5 — pickup tashrifi yozuvi, ro'yxat, daromad yig'indisi.
     PickupVisitController,
+    // BE-5 LhTIno57 — AI maslahatchi qoida ma'lumotlari (FAQAT o'qish).
+    AdvisorInputsController,
   ],
   providers: [
     FinanceServiceService,
+    AdvisorInputsService,
     FinanceNotificationService,
     FinanceRealtimeService,
     SettlementUnappliedService,

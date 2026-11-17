@@ -140,6 +140,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'tag',
     'amber',
   ),
+  // (2026-11-16) operatori yo'q buyurtmaga keyin operator biriktirildi.
+  'order.operator_assigned': entry(
+    'Operator biriktirildi',
+    'order',
+    'user-check',
+    'blue',
+  ),
   // (2026-11-09 / 2026-11-11) superadmin buyurtma yaratish chegarasini
   // (har kungi) qo'ydi / o'zgartirdi / olib tashladi.
   'order.intake_cutoff_changed': entry(

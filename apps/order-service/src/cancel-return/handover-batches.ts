@@ -1,13 +1,14 @@
 /**
  * «QABUL VA YARATISH → BEKOR QILINGANLAR → TOPSHIRILGAN» (HQ) — «Marketga jo'natish» PARTIYALARI.
  *
- * Partiya = HQ xodimining BITTA «Marketga jo'natish» bosishi (`order.market_cancelled_handover.complete`).
- * U yo'l hamma buyurtmaga BITTA `now` yozadi (`market_handover_at`), shuning uchun partiya kaliti:
- * `market_id` + `market_handover_at` (mikrosekundgacha) + `market_handover_by`.
+ * Partiya = HQ xodimining BITTA market QR / PIN sessiyasi (`order.market_cancelled_handover.complete`). Skan =
+ * topshirish (ega qarori 2026-11-15, BeePost naqshi): sessiya ichida har skan alohida `complete([id])`, lekin
+ * hammasi sessiyaning BIRINCHI topshirish vaqtini (`consumed_at`) `market_handover_at` sifatida yozadi — partiya
+ * kaliti o'zgarmadi: `market_id` + `market_handover_at` (mikrosekundgacha) + `market_handover_by`.
  *
  * ⚠️ Bittalab yo'l (`mark-returned-to-market`, «Marketga qaytarish») ham xuddi shu ustunlarni yozadi, lekin market QR
- * sessiyasini YOPMAYDI (`consumed_at`). Ommaviy yo'l esa sessiyani AYNAN shu `now` bilan yopadi — partiya shu
- * belgidan ajratiladi (ega qarori 2026-11-10: «Topshirilgan»da faqat HQ'da shu sahifadan berilganlar). Migratsiya
+ * sessiyasini belgilamaydi (`consumed_at`). Ommaviy yo'l esa birinchi topshirishda sessiyaga AYNAN shu vaqtni
+ * yozadi — partiya shu belgidan ajratiladi (ega qarori 2026-11-10: «Topshirilgan»da faqat HQ'da shu sahifadan berilganlar). Migratsiya
  * 155 to'ldirgan eski qatorlarda vaqt tracking yozuvidan olingan (bir necha ms farq) — shuning uchun ± oraliq.
  */
 

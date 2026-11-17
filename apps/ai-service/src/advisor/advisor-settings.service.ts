@@ -55,6 +55,17 @@ export class AdvisorSettingsService {
     return effectiveRules(rows.find((r) => r.key === ADVISOR_RULES_KEY)?.value);
   }
 
+  /**
+   * Telegram kanali (`settings.telegram.enabled`, BE-1). Qator hali yo'q —
+   * yoqiq (sukut, §9.2): jiddiy R2/R6 Telegram'ga ham ketadi.
+   */
+  async telegramEnabled(): Promise<boolean> {
+    const rows = await this.readRows();
+    const value = rows.find((r) => r.key === 'telegram')?.value as
+      { enabled?: unknown } | undefined;
+    return typeof value?.enabled === 'boolean' ? value.enabled : true;
+  }
+
   async get(): Promise<AiAdvisorSettingsView> {
     return this.toView(await this.readRows());
   }

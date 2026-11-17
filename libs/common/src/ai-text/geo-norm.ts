@@ -49,6 +49,13 @@ export function lightNorm(s: string | null | undefined): string {
 }
 
 /**
+ * D5: rus sifat shakli — "Чиланзарский район" → "chilanzar",
+ * "Ташкентская область" → "tashkent". Faqat so'z OXIRIDA, o'zak kamida 3 harf.
+ */
+export const RU_ADJ_SUFFIX_RE =
+  /\b([a-z']{3,}?)(?:skiy|skij|skaya|skaja|skoy|skoye|skoe)\b/g;
+
+/**
  * Geografik nomni BASE holatga keltiradi: tumani/tuman/shahri/shahar/
  * shaharcha/viloyati/viloyat/respublikasi, "sh." va "t." qo'shimchalarini
  * olib tashlaydi (operator odatda qo'shimcha yozmaydi, DB nomida esa bor).
@@ -63,8 +70,12 @@ export function normGeo(s: string | null | undefined): string {
     translit(s)
       // Transliteratsiya: "kh" = "x" (Khiva=Xiva, Khorazm=Xorazm).
       .replace(/kh/g, 'x')
+      // D5: rus sifat shakli — "Чиланзарский район" → "chilanzar",
+      // "Ташкентская область" → "tashkent". Faqat so'z OXIRIDA va o'zak
+      // kamida 3 harf.
+      .replace(RU_ADJ_SUFFIX_RE, '$1')
       .replace(
-        /\s*(\b(?:tumani|tuman|shahri|shahar|shaharcha|viloyati|viloyat|respublikasi)\b|\b(?:sh|t)\.)\s*/g,
+        /\s*(\b(?:tumani|tuman|shahri|shaxri|shahar|shaharchasi|shaharcha|viloyati|viloyat|respublikasi|rayon|rayoni|raion|gorod|oblast|oblasti)\b|\br-n\b\.?|\b(?:sh|t|g|v|vil|obl)\.)\s*/g,
         ' ',
       )
       .replace(/\s+/g, ' ')
@@ -184,11 +195,11 @@ export const REGION_ALIASES: ReadonlyArray<RegionAliasRow> = Object.freeze(
  * topiladi. Alohida so'z bo'lishi shart — "Shahrixon" marker emas.
  */
 const CITY_MARKER_RE =
-  /(?<![\p{L}\p{N}])(?:shahri|shahar|sh|city|gorod)(?![\p{L}\p{N}])/u;
+  /(?<![\p{L}\p{N}])(?:shahri|shaxri|shahar|sh|city|gorod|g(?=\.))(?![\p{L}\p{N}])/u;
 
 /** Viloyat markeri: viloyati | viloyat | vil | vil. | oblast | obl | obl. */
 const REGION_MARKER_RE =
-  /(?<![\p{L}\p{N}])(?:viloyati|viloyat|vil|oblast|obl)(?![\p{L}\p{N}])/u;
+  /(?<![\p{L}\p{N}])(?:viloyati|viloyat|vil|oblast|oblasti|obl|v(?=\.))(?![\p{L}\p{N}])/u;
 
 /**
  * `normGeo` bilmaydigan marker qisqartmalari (vil., obl., oblast, city,
@@ -285,4 +296,174 @@ export function regionAlias(name: string | null | undefined): string | null {
     return scored[0].sato;
   }
   return null;
+}
+
+/** Tokenlar (faqat harf/raqam) — `normGeo` dan keyin. */
+function geoTokens(s: string | null | undefined): string[] {
+  return normGeo(s)
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(' ')
+    .filter(Boolean);
+}
+
+/**
+ * P1-7: AI qaytargan viloyat nomi manba MATNIDA aytilganmi (asos so'zlari
+ * — o'zbek/rus/ingliz shakllari, butun so'z; bitta so'zli asosda imlo
+ * xatosi ham, simRatio ≥ 0.8). `false` — viloyat matnda yo'q, AI uni
+ * tumandan chiqargan (`region_inferred`). Viloyat bo'sh — `true` (taxmin yo'q).
+ */
+export function regionMentionedInText(
+  text: string | null | undefined,
+  regionName: string | null | undefined,
+): boolean {
+  const regionBaseTokens = geoTokens(regionName);
+  if (!regionBaseTokens.length) return true;
+  const textTokens = geoTokens(text);
+  if (!textTokens.length) return false;
+  const sato = regionAlias(regionName);
+  const baseSets: string[][] = [];
+  const rows = sato
+    ? REGION_ALIASES.filter((r) => r.sato === sato)
+    : REGION_ALIASES.filter((r) =>
+        r.bases.some((b) => regionBase(b) === regionBase(regionName)),
+      );
+  for (const row of rows) {
+    for (const b of row.bases) baseSets.push(geoTokens(regionBase(b)));
+  }
+  baseSets.push(regionBaseTokens);
+  const hasSeq = (seq: string[]) =>
+    seq.length > 0 &&
+    textTokens.some((_, i) => seq.every((w, k) => textTokens[i + k] === w));
+  if (baseSets.some(hasSeq)) return true;
+  if (
+    baseSets.some(
+      (seq) =>
+        seq.length === 1 &&
+        seq[0].length >= 5 &&
+        textTokens.some((t) => simRatio(t, seq[0]) >= 0.8),
+    )
+  ) {
+    return true;
+  }
+  return regionAbbreviationInText(text, baseSets, sato);
+}
+
+/** Viloyat qisqartmasidan keyin keladigan so'zlar ("Sam. vil.", "Сырд. обл"). */
+const REGION_WORD_AFTER = new Set([
+  'vil',
+  'viloyat',
+  'viloyati',
+  'viloyatidan',
+  'obl',
+  'oblast',
+  'oblasti',
+]);
+/** Butun so'z qisqartmalari → SOATO ("РК" translit'dan keyin "rk"). */
+const REGION_ABBREVIATIONS: Readonly<Record<string, string>> = {
+  qr: '1735',
+  qqr: '1735',
+  rk: '1735',
+};
+/**
+ * So'z boshi (o'zak) → SOATO: "Qoraqalpoq", "Qoraqalpoqqa" — asosdan
+ * (qoraqalpogiston) "q/g" bilan farq qiladi, prefiks qoidasi topmaydi.
+ */
+const REGION_STEMS: ReadonlyArray<[string, string]> = [
+  ['qoraqalpoq', '1735'],
+  ['karakalpak', '1735'],
+];
+/** "Т.обл" / "T.vil" — Toshkent viloyati; "T.sh" — Toshkent shahri. */
+const TOSHKENT_T_NEXT: Readonly<Record<string, string>> = {
+  obl: TOSHKENT_REGION_SATO,
+  oblast: TOSHKENT_REGION_SATO,
+  vil: TOSHKENT_REGION_SATO,
+  viloyat: TOSHKENT_REGION_SATO,
+  viloyati: TOSHKENT_REGION_SATO,
+  sh: TOSHKENT_CITY_SATO,
+  shahri: TOSHKENT_CITY_SATO,
+  shahar: TOSHKENT_CITY_SATO,
+};
+/**
+ * XOM matnda nuqta bilan tugagan qisqartma ("Sam.", "Nam.", "Бух.") —
+ * `lightNorm` tinish belgisini olib tashlashidan OLDIN qidiriladi.
+ */
+const DOTTED_ABBR_RE = /(?<![\p{L}\p{N}])(\p{L}{3,})\./gu;
+
+function commonPrefixLength(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+function isSubsequence(short: string, long: string): boolean {
+  let i = 0;
+  for (const ch of long) if (ch === short[i]) i++;
+  return i === short.length;
+}
+
+/**
+ * #649 review: qisqartma shakllar ("Sam. vil.", "Sam. Xonobod", "Nam.",
+ * "Farg. vil.", "Qashqa", "Surxon", "Andj", "QR", "РК", "Т.обл", "T.sh",
+ * "Qoraqalpoq", "Сырдарьинская обл") ham "aytilgan" hisoblanadi.
+ *
+ * ⚠️ Ortiqcha "aytilgan" — XAVFSIZ tomon: viloyat almashtirilmaydi
+ * (checklist #1, D4), operator yozgan viloyat saqlanadi. Shu bois
+ * "Samar opa", "Tosh. ko'cha", "Qr kod" kabi tasodifiy mosliklar qabul
+ * qilinadi; aksincha, topilmagan qisqartma D4 almashtirishini yoqib,
+ * operator viloyatini bekor qilishi mumkin (xavfli tomon).
+ */
+function regionAbbreviationInText(
+  text: string | null | undefined,
+  baseSets: string[][],
+  sato: string | null,
+): boolean {
+  const raw = lightNorm(text)
+    .replace(RU_ADJ_SUFFIX_RE, '$1')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(' ')
+    .filter(Boolean);
+  if (!raw.length) return false;
+  if (sato && raw.some((t) => REGION_ABBREVIATIONS[t] === sato)) return true;
+  if (
+    sato &&
+    raw.some((t) =>
+      REGION_STEMS.some(([s, v]) => v === sato && t.startsWith(s)),
+    )
+  ) {
+    return true;
+  }
+  if (
+    sato &&
+    raw.some((t, i) => t === 't' && TOSHKENT_T_NEXT[raw[i + 1] ?? ''] === sato)
+  ) {
+    return true;
+  }
+  const bases = baseSets
+    .filter((seq) => seq.length === 1 && seq[0].length >= 5)
+    .map((seq) => seq[0]);
+  // "Sam. Xonobod": ≥ 3 harfli asos prefiksi + nuqta (xom matnda).
+  for (const m of (typeof text === 'string' ? text : '').matchAll(
+    DOTTED_ABBR_RE,
+  )) {
+    const t = lightNorm(m[1]);
+    if (
+      t.length >= 3 &&
+      bases.some((b) => b.length > t.length && b.startsWith(t))
+    ) {
+      return true;
+    }
+  }
+  return raw.some((t, i) => {
+    if (t.length < 3 || !/^\p{L}+$/u.test(t)) return false;
+    const regionWordNext = REGION_WORD_AFTER.has(raw[i + 1] ?? '');
+    return bases.some((b) => {
+      if (t.slice(0, 2) !== b.slice(0, 2)) return false;
+      // Rus sifat o'zagi ("сырдарьинская" → sirdarin) asosdan uzun bo'lishi
+      // mumkin — "vil/obl" yonida umumiy prefiks ≥ 5 yetarli.
+      if (regionWordNext && commonPrefixLength(t, b) >= 5) return true;
+      if (t.length >= b.length) return false;
+      if (regionWordNext) return isSubsequence(t, b);
+      return t.length >= 4 && (b.startsWith(t) || isSubsequence(t, b));
+    });
+  });
 }

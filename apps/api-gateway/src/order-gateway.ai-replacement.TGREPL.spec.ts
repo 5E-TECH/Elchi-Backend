@@ -141,10 +141,16 @@ const makeController = (
   };
   const poller = { getState: jest.fn(() => 'enabled') };
 
-  ai.send.mockImplementation((pattern) =>
+  ai.send.mockImplementation((pattern, payload) =>
     pattern.cmd === 'ai.order.extract'
       ? of({ ok: true, orders: [{ customer_name: 'Ali' }] })
-      : of({ updated: 1 }),
+      : pattern.cmd === 'ai.draft.confirm_context'
+        ? of({
+            drafts: ((payload as { draft_ids?: string[] }).draft_ids ?? []).map(
+              (draft_id) => ({ draft_id }),
+            ),
+          })
+        : of({ updated: 1 }),
   );
   let nextOrderId = 1000;
   order.send.mockImplementation((pattern, payload) => {
@@ -517,6 +523,9 @@ describe('TGREPL — POST /orders/ai-parse: almashtirish eski buyurtmasi', () =>
   });
 });
 
+// AI ack: ai-confirm draft'ga bog'langan buyurtmani talab qiladi; har
+// chaqiruvga alohida ai_item_index (barqaror kalit to'qnashmasin).
+let nextItemIndex = 0;
 const confirmOrder = (
   n: number,
   extra: Partial<AiConfirmOrderDto> = {},
@@ -526,6 +535,8 @@ const confirmOrder = (
   items: [{ product_id: '15', quantity: 1 }],
   total_price: 0,
   where_deliver: Where_deliver.CENTER,
+  draft_id: 'eeeeeeee-0000-4000-8000-000000000000',
+  ai_item_index: nextItemIndex++ % 30,
   ...extra,
 });
 

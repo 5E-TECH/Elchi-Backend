@@ -104,7 +104,32 @@ export interface RawOrderExtraction {
   operator: string | null;
   /** J3hEDtFN: noaniq maydonlar (bo'sh massiv — ogohlantirish yo'q). */
   warnings: AiExtractWarning[];
+  /**
+   * P1-7 (ai-service qo'yadi, model EMAS): viloyat nomi bor, lekin manba
+   * matnida aytilmagan — AI uni tumandan chiqargan. Faqat rasmsiz matnda;
+   * aniqlab bo'lmasa kalit yo'q.
+   */
+  region_inferred?: boolean;
+  /**
+   * P1-7 / A1(a) (ai-service qo'yadi): matndagi so'm eslatmalari — FAQAT
+   * bitta buyurtmali rasmsiz matnda (ko'p buyurtmada bog'lab bo'lmaydi).
+   */
+  money_mentions?: {
+    value: number;
+    kind: 'unit' | 'total' | 'delivery' | 'prepaid' | null;
+    ambiguous?: true;
+    /** Dostavka oldingi jami ichida ("shundan dostavka 20 ming"). */
+    included?: true;
+    /** Ming/mln qismi (2–10) matnda miqdor sifatida aytilgan ("2 ta"). */
+    count_stated?: true;
+  }[];
 }
+
+/** Model (sxema) chiqaradigan maydonlar — ai-service qo'yadigan belgilarsiz. */
+export type RawOrderModelKey = Exclude<
+  keyof RawOrderExtraction,
+  'region_inferred' | 'money_mentions'
+>;
 
 /** WHMAIqyo: Anthropic qabul qiladigan va gateway ruxsat bergan rasm turlari. */
 export type AiImageMediaType = 'image/jpeg' | 'image/png' | 'image/webp';
