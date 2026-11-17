@@ -87,6 +87,20 @@ export const DELIVERY_PRICING_SETTINGS_SEED = Object.freeze({
   express_multiplier: 1.4,
 });
 
+/**
+ * Shahar zonasi seed'i (3-band): Toshkent SHAHRI — SOATO `1726`; SOATO'si
+ * yo'q qatorda faqat shu aniq nomlar (`lower(btrim(name))`). Migratsiya 232
+ * (bazadan yo'qolgan belgini tiklash) shu qiymatlarni qayta ishlatadi.
+ */
+export const CITY_ZONE_SATO_CODE = '1726';
+export const CITY_ZONE_FALLBACK_NAMES: ReadonlyArray<string> = Object.freeze([
+  'toshkent shahri',
+  'toshkent sh.',
+  'toshkent sh',
+]);
+
+const sqlLiteral = (value: string) => `'${value.replace(/'/g, "''")}'`;
+
 export class DeliveryPricingEngine1716000000142 implements MigrationInterface {
   name = 'DeliveryPricingEngine1716000000142';
 
@@ -226,10 +240,10 @@ export class DeliveryPricingEngine1716000000142 implements MigrationInterface {
 
         UPDATE "logistics_schema"."regions"
            SET "is_city_zone" = true
-         WHERE "sato_code" = '1726'
+         WHERE "sato_code" = ${sqlLiteral(CITY_ZONE_SATO_CODE)}
             OR (
               "sato_code" IS NULL
-              AND lower(btrim("name")) IN ('toshkent shahri', 'toshkent sh.', 'toshkent sh')
+              AND lower(btrim("name")) IN (${CITY_ZONE_FALLBACK_NAMES.map(sqlLiteral).join(', ')})
             );
       END
       $$;
