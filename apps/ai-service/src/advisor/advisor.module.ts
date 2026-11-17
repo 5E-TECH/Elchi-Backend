@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClaudeModule, RmqModule } from '@app/common';
 import { AiBudgetService } from '../budget/ai-budget.service';
+import { AiConfigModule } from '../ai-config/ai-config.module';
+import { AiRuntimeProvider } from '../ai-config/ai-runtime.provider';
 import { AiUsageService } from '../usage/ai-usage.service';
 import { AiUsageModule } from '../usage/ai-usage.module';
 import { AdvisorController } from './advisor.controller';
@@ -47,10 +49,15 @@ import { AdvisorSettingsService } from './advisor-settings.service';
     // §6 AI izohi: ClaudeService ildiz modulda faqat AiServiceModule'ga
     // eksport qilingan — shu yerda ayni portlar bilan (sarf `ai_usage_log`,
     // umumiy kunlik shift) ulanadi. ClaudeService holatsiz (faqat mijoz).
+    // «AI kalit va modellar»: kalit manbai ildiz modul bilan bir xil —
+    // AiRuntimeProvider (UI > env > yo'q). AiConfigModule yagona nusxa,
+    // ya'ni provayder holati ildiz ClaudeService bilan umumiy. Flag o'chiq
+    // (AI_CONFIG_UI_ENABLED=false, sukut) — faqat env kaliti, DB o'qilmaydi.
     ClaudeModule.forRoot({
-      imports: [AiUsageModule],
+      imports: [AiUsageModule, AiConfigModule],
       usageSink: AiUsageService,
       budgetGuard: AiBudgetService,
+      clientProvider: AiRuntimeProvider,
     }),
   ],
   controllers: [AdvisorController, AdvisorActivityLogController],
