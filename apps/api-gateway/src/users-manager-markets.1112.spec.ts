@@ -10,6 +10,8 @@ import { ApiGatewayController } from './api-gateway.controller';
  *    menejeri; boshqa turlar va biriktirilmagan menejer — 403;
  *  - GET /users/:id — o'zi yaratgan market (created_by = menejer) filial
  *    a'zoligi va filial turisiz ochiladi; boshqaning marketi — eski tekshiruv.
+ *  - KQINMdeQ: o'zi yaratgan market — `can_manage: false` (faqat ko'rish);
+ *    filial a'zosi tafsiloti filial turidan qat'i nazar ochiladi.
  */
 type Row = Record<string, unknown>;
 type Pattern = { cmd: string };
@@ -121,7 +123,12 @@ describe('2026-11-12 — qabul/aralash menejer marketlari', () => {
         data: Row;
       };
 
-      expect(res.data).toMatchObject({ id: '700', role: 'market' });
+      // KQINMdeQ (1-savol sukuti): faqat ko'rish — tahrir yo'q.
+      expect(res.data).toMatchObject({
+        id: '700',
+        role: 'market',
+        can_manage: false,
+      });
       expect(branchClient.send).not.toHaveBeenCalled();
     });
 
@@ -138,9 +145,22 @@ describe('2026-11-12 — qabul/aralash menejer marketlari', () => {
       assignment('PICKUP');
       target = { id: '101', role: 'courier', created_by: '25' };
 
-      // PICKUP — foydalanuvchi ko'rish ruxsati yo'q (avvalgidek).
+      // KQINMdeQ (3-savol sukuti): filial turidan qat'i nazar bir xil —
+      // PICKUP menejeri ham o'z filiali a'zosini (101) ko'radi. Ilgari
+      // faqat REGIONAL/HYBRID (PICKUP — 403).
+      const res = (await controller.getUserById('101', manager())) as {
+        data: Row;
+      };
+      expect(res.data).toMatchObject({ id: '101', can_manage: true });
+      expect(branchClient.send).toHaveBeenCalledWith(
+        { cmd: 'branch.user.find_by_branch' },
+        expect.objectContaining({ branch_id: '3' }),
+      );
+
+      // A'zo bo'lmagan kuryer — filial turidan qat'i nazar 403.
+      target = { id: '102', role: 'courier', created_by: '25' };
       await expect(
-        controller.getUserById('101', manager()),
+        controller.getUserById('102', manager()),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 

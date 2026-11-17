@@ -229,6 +229,10 @@ describe('2CBnPAeg — menejer ro`yxati: ko`lam identity so`rovida', () => {
  * admin uni B filialiga o'tkazgandan keyin ham GET /users/263 — 403, lekin
  * PATCH /users/263 {password} bilan parolni almashtirib, B filiali kuryeri
  * sifatida kira olardi (maosh, telefon, to'liq qator ham ochiq edi).
+ *
+ * KQINMdeQ (2026-11-17): filial sharti qoladi, `created_by` («qo'shimcha
+ * shart») bekor; filialdagi boshqa menejer — gateway'da 403
+ * (users-manager-branch-scope.KQINMdeQ.spec.ts).
  */
 describe('2026-11-04 — menejer tahrirlash / parol SMS: faqat o`z filiali a`zosi', () => {
   let controller: ApiGatewayController;
@@ -303,7 +307,7 @@ describe('2026-11-04 — menejer tahrirlash / parol SMS: faqat o`z filiali a`zos
       );
     });
 
-    it('o`z filiali kuryeri (101) — identity`ga uzatiladi (created_by qarori identity`da)', async () => {
+    it('o`z filiali kuryeri (101) — identity`ga uzatiladi (KQINMdeQ: created_by ahamiyatsiz, identity filialni yana tekshiradi)', async () => {
       branchReplies({ branch_id: '3', role: 'MANAGER' }, OWN_BRANCH_MEMBERS);
 
       await call('101', MANAGER);
