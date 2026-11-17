@@ -24,6 +24,7 @@ interface HarnessOptions {
   rows?: Row[];
   assign?: (attempt: number) => Observable<unknown>;
   findByUser?: () => Observable<unknown>;
+  findByUserIds?: (userIds: string[]) => Observable<unknown>;
   remove?: () => Observable<unknown>;
   cashbox?: () => Observable<unknown>;
   failCompensationSave?: boolean;
@@ -62,7 +63,7 @@ function makeHarness(options: HarnessOptions = {}) {
   };
 
   const branchClient = {
-    send: jest.fn(({ cmd }: { cmd: string }) => {
+    send: jest.fn(({ cmd }: { cmd: string }, payload?: unknown) => {
       switch (cmd) {
         case 'branch.find_hq':
           return of({ statusCode: 200, data: { id: '1', type: 'HQ' } });
@@ -75,6 +76,14 @@ function makeHarness(options: HarnessOptions = {}) {
           });
         case 'branch.user.find_by_user':
           return options.findByUser ? options.findByUser() : of({ data: null });
+        case 'branch.user.find_by_user_ids':
+          return options.findByUserIds
+            ? options.findByUserIds(
+                ((payload as { user_ids?: string[] })?.user_ids ?? []).map(
+                  String,
+                ),
+              )
+            : of({ data: [] });
         case 'branch.user.remove':
           return options.remove
             ? options.remove()
@@ -277,8 +286,15 @@ describe('RBAC-19: admin o‘z profilini tahrirlaydi', () => {
 
 describe('RBAC-09: parol/telefon o‘zgarsa sessiyalar yopiladi', () => {
   it('menejer kuryer parolini almashtirsa — refresh hashi o‘chiriladi', async () => {
-    // #3 — manager faqat O'ZI yaratgan foydalanuvchini tahrirlaydi: courier.created_by = manager.id ('2').
-    const h = makeHarness({ rows: [{ ...courierRow(), created_by: '2' }] });
+    // KQINMdeQ — menejer o'z filialidagi kuryerni tahrirlaydi (kim
+    // yaratganidan qat'i nazar): ikkalasi ham filial 3 da.
+    const h = makeHarness({
+      rows: [{ ...courierRow(), created_by: '77' }],
+      findByUserIds: (ids) =>
+        of({
+          data: ids.map((id) => ({ user_id: id, branch: { id: '3' } })),
+        }),
+    });
 
     await h.service.updateUser(
       '9',

@@ -1059,12 +1059,12 @@ export class UserServiceService implements OnModuleInit {
     targetRole: Roles,
     options: {
       allowSelf?: boolean;
-      // fix #3: manager faqat UPDATE oqimida — va faqat O'ZI YARATGAN
-      // (created_by) userlarni tahrirlay oladi. Delete/status oqimlari bu
-      // bayroqni BERMAYDI, shuning uchun manager u yerda ruxsatsiz qoladi
-      // (admin/superadmin-only). targetCreatedBy — nishon userning created_by'si.
-      allowManagerOwnership?: boolean;
-      targetCreatedBy?: string | null;
+      // KQINMdeQ (2026-11-17): manager faqat UPDATE oqimida boshqa userni
+      // tahrirlay oladi — va faqat nishon HOZIR menejerning o'z filialida
+      // bo'lsa (`assertManagerCanManageTarget`, chaqiruvchi alohida await
+      // qiladi). Delete/status oqimlari bu bayroqni BERMAYDI, shuning uchun
+      // manager u yerda ruxsatsiz qoladi (admin/superadmin-only).
+      allowManagerBranchScope?: boolean;
     } = {},
   ) {
     if (!requester) {
@@ -1105,29 +1105,135 @@ export class UserServiceService implements OnModuleInit {
         this.forbidden('Manager admin/superadmin/managerni boshqara olmaydi');
       }
 
-      // fix #3: delete/status oqimlari managerga ruxsat bermaydi
-      // (admin/superadmin-only). Faqat UPDATE oqimi allowManagerOwnership
-      // beradi; u yerda ham egalik created_by bo'yicha tekshiriladi.
-      if (!options.allowManagerOwnership) {
+      // Delete/status oqimlari managerga ruxsat bermaydi (admin/superadmin-
+      // only). Faqat UPDATE oqimi allowManagerBranchScope beradi.
+      if (!options.allowManagerBranchScope) {
         this.forbidden('Bu amal uchun ruxsat yoq');
       }
 
-      // fix #3: branch_users (allowed_user_ids) o'rniga — manager faqat O'ZI
-      // YARATGAN userni (created_by === requester.id) tahrirlay oladi.
-      // 2026-11-04: bu QO'SHIMCHA shart — filial a'zoligini (nishon menejer
-      // filialining faol `branch_users` a'zosi) gateway tekshiradi
-      // (assertManagerTargetInOwnBranch: PATCH /users/:id, parol SMS).
-      const targetCreatedBy = String(options.targetCreatedBy ?? '').trim();
-      if (
-        !targetCreatedBy ||
-        targetCreatedBy !== String(requester.id ?? '').trim()
-      ) {
-        this.forbidden("Manager faqat o'zi yaratgan userlarni yangilay oladi");
-      }
+      // KQINMdeQ (ega, 2026-11-17): «fix #3» dagi `created_by` (o'zi
+      // yaratgan) sharti BEKOR — u ruxsat ham bermaydi, cheklamaydi ham.
+      // Filial qoidasi (nishon HOZIR menejerning o'z filialida, `branch_users`
+      // so'rov paytida) async — `assertManagerCanManageTarget`, chaqiruvchi
+      // (updateUser) shu tekshiruvdan keyin await qiladi.
       return;
     }
 
     this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
+  /**
+   * KQINMdeQ — menejer boshqara oladigan nishon rollari: filial xodimlari
+   * (kuryer va ro'yxatchi). Manager / admin / superadmin — yo'q (shu
+   * filialdagi boshqa menejer ham). Market, operator, investor, logist
+   * filial a'zosi emas — yo'q (menejer o'zi yaratgan market — faqat ko'rish,
+   * 2026-11-12).
+   */
+  private static readonly MANAGER_MANAGEABLE_ROLES: ReadonlySet<string> =
+    new Set([Roles.COURIER, Roles.REGISTRATOR]);
+
+  /**
+   * KQINMdeQ (ega, 2026-11-17): menejer boshqa foydalanuvchini (tahrirlash,
+   * parol SMS) FAQAT shu ikki shart bajarilganda boshqaradi:
+   *  - nishon roli kuryer yoki ro'yxatchi (`MANAGER_MANAGEABLE_ROLES`);
+   *  - nishonning HOZIRGI filiali menejerning hozirgi filiali bilan bir xil —
+   *    ikkalasi so'rov paytida branch-service `branch_users` (faol qator)
+   *    dan bitta `branch.user.find_by_user_ids` bilan olinadi, JWT'dan emas.
+   * `created_by` ruxsat ham bermaydi, cheklamaydi ham. Bola filiallar — yo'q
+   * (faqat aynan o'z filiali). Boshqa filialga o'tkazilgan xodim darhol
+   * yopiladi. Gateway'dagi `assertManagerTargetInOwnBranch` — ko'zgusi
+   * (ikki qavat: identity RPC'si gateway'siz chaqirilsa ham himoya bor).
+   *
+   * FAIL-CLOSED: branch-service xatosi / javobsiz / filial topilmasa — 403.
+   * Superadmin, admin, menejer bo'lmagan so'rovchi va o'zini — tekshiruvsiz
+   * (ularning qoidasi chaqiruvchida).
+   */
+  private async assertManagerCanManageTarget(
+    requester: RequesterContext | undefined,
+    target: Pick<User, 'id' | 'role'>,
+  ): Promise<void> {
+    if (!requester || !this.hasRole(requester, Roles.MANAGER)) {
+      return;
+    }
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN)
+    ) {
+      return;
+    }
+    if (this.isSelfRequester(requester, String(target.id))) {
+      return;
+    }
+    if (!UserServiceService.MANAGER_MANAGEABLE_ROLES.has(target.role)) {
+      this.forbidden(
+        "Menejer faqat o'z filialidagi kuryer va ro'yxatchini boshqara oladi",
+      );
+    }
+
+    const requesterId = primitiveText(requester.id).trim();
+    const targetId = primitiveText(target.id).trim();
+    const branches = await this.findCurrentBranchIds(requester, [
+      requesterId,
+      targetId,
+    ]);
+    if (!branches) {
+      this.forbidden("Filialni aniqlab bo'lmadi — amal rad etildi");
+    }
+    const branchOf = (userId: string) =>
+      branches.find((row) => sameEntityId(row.user_id, userId))?.branch_id ??
+      '';
+    const ownBranchId = branchOf(requesterId);
+    if (!ownBranchId) {
+      this.forbidden('Manager hech qaysi filialga biriktirilmagan');
+    }
+    if (!sameEntityId(ownBranchId, branchOf(targetId))) {
+      this.forbidden('Siz bu foydalanuvchini boshqara olmaysiz');
+    }
+  }
+
+  /**
+   * KQINMdeQ — foydalanuvchilarning HOZIRGI filiali (faol `branch_users`
+   * qatori, o'chirilmagan filial) bitta so'rov bilan. Xato yoki kutilmagan
+   * javob — null (chaqiruvchi buni RAD ETISH deb qaraydi, fail-closed;
+   * `getUserBranchAssignment` kabi «null = filialsiz» emas).
+   */
+  private async findCurrentBranchIds(
+    requester: RequesterContext,
+    userIds: string[],
+  ): Promise<Array<{ user_id: string; branch_id: string }> | null> {
+    try {
+      const response = await rmqSend<{
+        data?: Array<{
+          user_id?: unknown;
+          branch?: { id?: unknown } | null;
+        }> | null;
+      }>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user_ids' },
+        {
+          user_ids: userIds,
+          requester: {
+            id: primitiveText(requester.id).trim(),
+            roles: requester.roles ?? [],
+          },
+        },
+        { attachRequestId: false, retries: 0, timeoutMs: 5000 },
+      );
+      if (!Array.isArray(response?.data)) {
+        return null;
+      }
+      return response.data
+        .map((row) => ({
+          user_id: primitiveText(row?.user_id).trim(),
+          branch_id: primitiveText(row?.branch?.id).trim(),
+        }))
+        .filter((row) => row.user_id && row.branch_id);
+    } catch (error) {
+      this.logger.warn(
+        `branch.user.find_by_user_ids failed (${describeSagaError(error)}) — manager scope denied`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -1538,9 +1644,9 @@ export class UserServiceService implements OnModuleInit {
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.ADMIN,
       status: Status.ACTIVE,
-      // fix #3: yaratuvchini yozamiz — manager keyinchalik FAQAT o'zi yaratgan
-      // (created_by) userlarni tahrirlay oladi. requester bo'lmasa (ishonchli
-      // ichki chaqiruv) null qoladi.
+      // Yaratuvchini yozamiz (ma'lumot va audit; KQINMdeQ dan menejer
+      // huquqiga ta'sir qilmaydi). requester bo'lmasa (ishonchli ichki
+      // chaqiruv) null qoladi.
       created_by: this.createdByOf(requester),
       isDeleted: false,
     });
@@ -1593,7 +1699,8 @@ export class UserServiceService implements OnModuleInit {
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.REGISTRATOR,
       status: Status.ACTIVE,
-      // fix #3: created_by — manager egaligi uchun.
+      // created_by — kim yaratgan (ma'lumot va audit). KQINMdeQ: menejer
+      // huquqini bermaydi va cheklamaydi (huquq — hozirgi filial bo'yicha).
       created_by: this.createdByOf(requester),
       isDeleted: false,
     });
@@ -1804,10 +1911,11 @@ export class UserServiceService implements OnModuleInit {
   /**
    * (aidsxJ2H) Parol SMS'ini qayta yuborish / holatini ko'rish huquqi:
    * superadmin — hammasi; admin — admin/superadmin'dan boshqasi; menejer —
-   * faqat O'Z kuryeri (`created_by` — tahrirlash huquqi bilan bir xil
-   * qoida; 2026-11-04 dan gateway qo'shimcha ravishda kuryer hozir menejer
-   * filialida ekanini tekshiradi). O'ziga — yo'q (o'z paroli profil orqali
-   * almashtiriladi).
+   * KQINMdeQ (2026-11-17) dan tahrirlash huquqi bilan BIR XIL qoida: HOZIR
+   * o'z filialidagi kuryer va ro'yxatchi (`assertManagerCanManageTarget`;
+   * `created_by` ahamiyatsiz, ilgari «faqat o'zi yaratgan kuryer» edi;
+   * gateway ham filialni tekshiradi). O'ziga — yo'q (o'z paroli profil
+   * orqali almashtiriladi).
    */
   private async findTempPasswordTarget(
     id: string,
@@ -1832,12 +1940,12 @@ export class UserServiceService implements OnModuleInit {
       return user;
     }
     if (this.hasRole(requester, Roles.MANAGER)) {
-      if (
-        user.role !== Roles.COURIER ||
-        String(user.created_by ?? '') !== String(requester.id ?? '')
-      ) {
-        this.forbidden("Menejer faqat o'z kuryeriga parol yubora oladi");
+      if (!UserServiceService.MANAGER_MANAGEABLE_ROLES.has(user.role)) {
+        this.forbidden(
+          "Menejer faqat o'z filialidagi kuryer va ro'yxatchiga parol yubora oladi",
+        );
       }
+      await this.assertManagerCanManageTarget(requester, user);
       return user;
     }
     this.forbidden('Bu amal uchun ruxsat yoq');
@@ -1957,11 +2065,13 @@ export class UserServiceService implements OnModuleInit {
     }
     this.assertRequesterCanMutateUser(requester, id, admin.role, {
       allowSelf: true,
-      // fix #3: UPDATE oqimi — manager faqat o'zi yaratgan userni tahrirlay
-      // oladi; egalik nishon userning created_by'si bo'yicha aniqlanadi.
-      allowManagerOwnership: true,
-      targetCreatedBy: admin.created_by,
+      // KQINMdeQ: UPDATE oqimi — manager boshqa userni tahrirlay oladi, lekin
+      // faqat nishon HOZIR o'z filialidagi kuryer/ro'yxatchi bo'lsa (pastda).
+      allowManagerBranchScope: true,
     });
+    // KQINMdeQ: filial qoidasi (branch_users, so'rov paytida; fail-closed).
+    // `created_by` ahamiyatsiz. Gateway ham tekshiradi — bu ikkinchi qavat.
+    await this.assertManagerCanManageTarget(requester, admin);
 
     const auditBefore = {
       name: admin.name,
@@ -3671,7 +3781,8 @@ export class UserServiceService implements OnModuleInit {
       avatar_id: null,
       role: Roles.MARKET,
       status: Status.ACTIVE,
-      // fix #3: created_by — manager egaligi uchun.
+      // created_by — kim yaratgan (ma'lumot va audit). 2026-11-12: menejer
+      // o'zi yaratgan marketni ro'yxatda va tafsilotda KO'RADI (tahrir yo'q).
       created_by: this.createdByOf(requester),
       // KmWO9gTA: tariflar LEGACY va ixtiyoriy — berilmasa NULL (0 emas:
       // 0 "bepul yetkazish" kelishuvi degani bo'lardi).
@@ -3769,7 +3880,8 @@ export class UserServiceService implements OnModuleInit {
       district_id: districtId,
       role: Roles.COURIER,
       status: Status.ACTIVE,
-      // fix #3: created_by — manager egaligi uchun.
+      // created_by — kim yaratgan (ma'lumot va audit). KQINMdeQ: menejer
+      // huquqini bermaydi va cheklamaydi (huquq — hozirgi filial bo'yicha).
       created_by: this.createdByOf(requester),
       tariff_home: dto.tariff_home ?? 0,
       tariff_center: dto.tariff_center ?? 0,
@@ -3904,7 +4016,8 @@ export class UserServiceService implements OnModuleInit {
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.MANAGER,
       status: Status.ACTIVE,
-      // fix #3: created_by — manager egaligi uchun.
+      // created_by — kim yaratgan (ma'lumot va audit). KQINMdeQ: menejer
+      // huquqini bermaydi va cheklamaydi (huquq — hozirgi filial bo'yicha).
       created_by: this.createdByOf(requester),
       tariff_home: dto.tariff_home ?? null,
       tariff_center: dto.tariff_center ?? null,

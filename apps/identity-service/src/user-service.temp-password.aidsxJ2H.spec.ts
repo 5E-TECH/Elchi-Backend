@@ -38,6 +38,11 @@ function makeHarness(
     lastSend?: Row | null;
     resendsToday?: number;
     config?: Record<string, string>;
+    /**
+     * KQINMdeQ — `branch.user.find_by_user_ids`: user_id → hozirgi filial id
+     * (yo'q — biriktirilmagan). `Error` — branch-service xatosi.
+     */
+    branches?: Record<string, string> | Error;
   } = {},
 ) {
   const saves: Row[] = [];
@@ -100,6 +105,24 @@ function makeHarness(
     send: jest.fn(() => of({ statusCode: 200, data: { id: '3' } })),
     emit: jest.fn(),
   };
+  const branch = {
+    send: jest.fn((pattern: { cmd: string }, payload: Row) => {
+      if (pattern.cmd !== 'branch.user.find_by_user_ids') {
+        return of({ statusCode: 200, data: { id: '3' } });
+      }
+      const branches = options.branches;
+      if (branches instanceof Error) return throwError(() => branches);
+      const ids = (payload.user_ids as string[] | undefined) ?? [];
+      return of({
+        statusCode: 200,
+        data: ids.map((id) => ({
+          user_id: id,
+          branch: branches?.[id] ? { id: branches[id], name: 'F' } : null,
+        })),
+      });
+    }),
+    emit: jest.fn(),
+  };
   const encrypt = jest.fn(() => Promise.resolve(HASH));
   const compare = jest.fn((plain: string, hash: string) =>
     Promise.resolve(hash === `hash-of:${plain}`),
@@ -126,7 +149,7 @@ function makeHarness(
     ok as never, // order
     ok as never, // logistics
     ok as never, // finance
-    ok as never, // branch
+    branch as never, // branch
     { encrypt, compare } as never,
     { get: jest.fn((key: string) => options.config?.[key]) } as never,
     activityLog as never,
@@ -141,6 +164,7 @@ function makeHarness(
     sendsRepo,
     sendRows,
     notifyCalls,
+    branch,
     encrypt,
     compare,
     activityLog,
@@ -501,16 +525,38 @@ describe('aidsxJ2H — POST /users/:id/password/resend-sms', () => {
     expect(t.saves).toEqual([]);
   });
 
-  it('huquq: menejer — faqat o‘z kuryeri; begona kuryer / admin / o‘zi — 403; mijoz roli — 400', async () => {
-    const own = makeHarness({ existing: courier });
-    await expect(
-      own.service.resendTempPasswordSms('26', {
-        id: '25',
-        roles: ['manager'],
-      }),
-    ).resolves.toMatchObject({ statusCode: 200 });
+  it('huquq (KQINMdeQ): menejer — HOZIR o‘z filialidagi kuryer (kim yaratganidan qat‘i nazar); boshqa filial / admin / o‘zi — 403; mijoz roli — 400', async () => {
+    const manager = { id: '25', roles: ['manager'] };
 
-    const foreign = makeHarness({ existing: courier });
+    // Admin yaratgan (created_by = 1), lekin menejer filialida (3) — 200.
+    const adminCreated = makeHarness({
+      existing: { ...courier, created_by: '1' },
+      branches: { '25': '3', '26': '3' },
+    });
+    await expect(
+      adminCreated.service.resendTempPasswordSms('26', manager),
+    ).resolves.toMatchObject({ statusCode: 200 });
+    expect(adminCreated.branch.send).toHaveBeenCalledWith(
+      { cmd: 'branch.user.find_by_user_ids' },
+      expect.objectContaining({ user_ids: ['25', '26'] }),
+    );
+
+    // Menejer o'zi yaratgan, lekin kuryer boshqa filialga (4) o'tkazilgan — 403.
+    const moved = makeHarness({
+      existing: courier,
+      branches: { '25': '3', '26': '4' },
+    });
+    expect(
+      await rpcErrorOf(moved.service.resendTempPasswordSms('26', manager)),
+    ).toMatchObject({ statusCode: 403 });
+    expect(moved.saves).toEqual([]);
+    expect(moved.notifyCalls).toHaveLength(0);
+
+    // Boshqa filial menejeri (IDOR) — 403.
+    const foreign = makeHarness({
+      existing: courier,
+      branches: { '99': '7', '26': '3' },
+    });
     expect(
       await rpcErrorOf(
         foreign.service.resendTempPasswordSms('26', {
@@ -519,6 +565,16 @@ describe('aidsxJ2H — POST /users/:id/password/resend-sms', () => {
         }),
       ),
     ).toMatchObject({ statusCode: 403 });
+
+    // Branch-service xatosi — fail-closed 403 (parol o'zgarmaydi).
+    const branchDown = makeHarness({
+      existing: courier,
+      branches: new Error('timeout'),
+    });
+    expect(
+      await rpcErrorOf(branchDown.service.resendTempPasswordSms('26', manager)),
+    ).toMatchObject({ statusCode: 403 });
+    expect(branchDown.saves).toEqual([]);
 
     const adminTarget = makeHarness({
       existing: { ...courier, id: '30', role: Roles.ADMIN },
