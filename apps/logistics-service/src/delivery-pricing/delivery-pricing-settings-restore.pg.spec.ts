@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
+import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { DeliveryPricingEngine1716000000142 } from '../../../../migrations/1716000000142-DeliveryPricingEngine';
 import { DeliveryPricingVolumetricFromKg1716000000154 } from '../../../../migrations/1716000000154-DeliveryPricingVolumetricFromKg';
@@ -135,7 +136,14 @@ describePg('Migratsiya 231 — yetkazish narxi sozlamasini tiklash', () => {
     await db.query(
       `DELETE FROM "logistics_schema"."delivery_pricing_settings"`,
     );
-    await expect(service.getSettings()).rejects.toBeDefined();
+    const failure = await service
+      .getSettings()
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(RpcException);
+    expect((failure as RpcException).getError()).toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('sozlamalari topilmadi'),
+    });
 
     await runRestore();
 
@@ -182,9 +190,19 @@ describePg('Migratsiya 231 — yetkazish narxi sozlamasini tiklash', () => {
       `UPDATE "logistics_schema"."delivery_pricing_settings"
           SET "is_active" = false`,
     );
+    // Eng katta id — o'chirilgan (is_deleted) qator: manba bo'lmasligi kerak.
+    await db.query(
+      `INSERT INTO "logistics_schema"."delivery_pricing_settings"
+         ("volumetric_divisor", "first_kg_included", "min_billable_kg",
+          "billable_step_kg", "round_to", "pickup_fee", "express_multiplier",
+          "is_active", "is_deleted", "createdAt")
+       VALUES (6000, 9, 0.1, 0.1, 500, 1000, 1.2, false, true,
+               now() - interval '1 day')`,
+    );
     const history = await rows();
-    const latest = history[history.length - 1];
+    const latest = history.filter((r) => !r.is_deleted).pop()!;
     expect(history.every((r) => !r.is_active)).toBe(true);
+    expect(history[history.length - 1].first_kg).toBe(9);
 
     await runRestore();
 
@@ -199,6 +217,19 @@ describePg('Migratsiya 231 — yetkazish narxi sozlamasini tiklash', () => {
       created_by: null,
     });
     expect(restored.first_kg).toBe(3);
+
+    // Yangi versiya — hozirgi vaqt bilan (eski sana nusxalanmaydi).
+    const [stamps] = await db.query<
+      Array<{ restored_fresh: boolean; updated_fresh: boolean }>
+    >(
+      `SELECT r."createdAt" > l."createdAt" AS restored_fresh,
+              r."updatedAt" > l."updatedAt" AS updated_fresh
+         FROM "logistics_schema"."delivery_pricing_settings" r,
+              "logistics_schema"."delivery_pricing_settings" l
+        WHERE r."id" = $1 AND l."id" = $2`,
+      [restored.id, latest.id],
+    );
+    expect(stamps).toEqual({ restored_fresh: true, updated_fresh: true });
   });
 
   it("o'chirilgan (is_deleted) qatorlar hisobga olinmaydi — seed qaytadi", async () => {
