@@ -389,6 +389,15 @@ function setup(options: { orders: Row[]; posts: Row[] }) {
     ),
     create: jest.fn((payload: Row) => ({ ...payload })),
     save: jest.fn((entity: Row) => Promise.resolve(savePost(entity))),
+    // Shartli yozuv (`where` — id + holat): faqat berilgan ustunlar.
+    update: jest.fn((where: Row, patch: Row) => {
+      const row = posts.get(String(where.id));
+      if (!row || !matches(row, where)) {
+        return Promise.resolve({ affected: 0 });
+      }
+      Object.assign(row, patch);
+      return Promise.resolve({ affected: 1 });
+    }),
     createQueryBuilder: jest.fn(() => counterQb()),
     manager: { transaction },
   };
@@ -906,6 +915,49 @@ describe('COURIER-SCAN — skan = qabul (yakuniy holat WAITING)', () => {
       status: Post_status.RECEIVED,
       branch_id: '10',
       order_quantity: 1,
+    });
+  });
+
+  it('pochta yopilishi parallel skanning atomik hisobini ustidan yozmaydi (shartli update, save emas)', async () => {
+    const ctx = setup({
+      orders: [branchOrder('332')],
+      posts: [
+        transferPost({ status: Post_status.RECEIVED }),
+        {
+          id: '52',
+          courier_id: '44',
+          branch_id: null,
+          status: Post_status.SENT,
+          order_quantity: 0,
+          post_total_price: 0,
+          createdAt: new Date(),
+        },
+      ],
+    });
+    const service = ctx.service as unknown as {
+      syncCourierPostBranch: (post: Row) => Promise<void>;
+    };
+    const original = service.syncCourierPostBranch.bind(ctx.service);
+    jest
+      .spyOn(service, 'syncCourierPostBranch')
+      .mockImplementation(async (post: Row) => {
+        await original(post);
+        if (String(post.id) === '52' && post.status === Post_status.RECEIVED) {
+          // Yopish surati o'qilgandan keyin shu kuryerning boshqa skani
+          // hisobni atomik oshirdi (`order_quantity + 1`).
+          const row = ctx.posts.get('52')!;
+          row.order_quantity += 1;
+          row.post_total_price += 50_000;
+        }
+      });
+
+    await scan(ctx, COURIER_44, '332');
+
+    expect(ctx.posts.get('52')).toMatchObject({
+      status: Post_status.RECEIVED,
+      branch_id: '10',
+      order_quantity: 2,
+      post_total_price: 150_000,
     });
   });
 

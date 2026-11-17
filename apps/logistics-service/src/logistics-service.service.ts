@@ -8608,6 +8608,11 @@ export class LogisticsServiceService implements OnModuleInit {
    * buyurtma qolmagan bo'lsa, u yopiladi (RECEIVED, kuryer filialida — ega
    * qarori 4). Qayta tekshiruv yiqilsa — pochta o'zgarmaydi (xavfsiz tomon).
    * Natija: pochta yopildimi. Xato skan natijasini buzmaydi.
+   *
+   * Yozuv — faqat `status` / `branch_id` ustunlari, shartli (`status = sent`)
+   * `update` (`save` EMAS): shu kuryerning parallel skani `order_quantity` /
+   * `post_total_price` ni atomik oshirgan bo'lsa, eski surat uning ustidan
+   * yozilmaydi (`updateScanReceivedPost` bilan bir qoida).
    */
   private async closeCourierPostWithoutOnTheRoad(post: Post): Promise<boolean> {
     try {
@@ -8623,8 +8628,20 @@ export class LogisticsServiceService implements OnModuleInit {
       }
       fresh.status = Post_status.RECEIVED;
       await this.syncCourierPostBranch(fresh);
-      const saved = await this.postRepo.save(fresh);
-      void this.syncPostToSearch(saved);
+      const result = await this.postRepo.update(
+        { id: String(post.id), status: Post_status.SENT },
+        {
+          status: Post_status.RECEIVED,
+          branch_id: String(fresh.branch_id ?? '').trim() || null,
+        },
+      );
+      if (!result?.affected) {
+        return false;
+      }
+      const saved = await this.postRepo.findOne({
+        where: { id: String(post.id) },
+      });
+      void this.syncPostToSearch(saved ?? fresh);
       return true;
     } catch (error) {
       this.logger.warn(
