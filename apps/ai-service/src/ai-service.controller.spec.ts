@@ -320,6 +320,15 @@ describe('AiServiceController', () => {
         },
         cap: CAP,
         usage_persist_failures: 2,
+        // «AI kalit va modellar»: QO'SHIMCHA maydon (eski maydonlar o'zgarmagan).
+        models_all: {
+          order: 'claude-sonnet-5',
+          vision: 'claude-sonnet-5',
+          district: 'claude-sonnet-5',
+          classify: 'claude-haiku-4-5',
+          finance_vision: 'claude-sonnet-5',
+          assistant: 'claude-sonnet-5',
+        },
       });
       expect(ack).toHaveBeenCalledWith(ctx);
     });

@@ -102,6 +102,29 @@ function rmqRequesterSecret(): string | undefined {
 }
 
 /**
+ * AI kalit/model sozlamasi buyruqlari (`ai.config.*`, be-brief D1).
+ *
+ * Ular uchun imzo `RMQ_REQUESTER_SIG_MODE` dan QAT'I NAZAR qo'yiladi (sir
+ * bo'lsa) va qabul tomonida ai-service handler'ining o'zi QAT'IY tekshiradi
+ * (`verifyRmqRequester`, kind `gateway`). Global interceptor bu buyruqlarni
+ * o'tkazib yuboradi: rad etish `{ok:false}` + ack bo'lishi kerak (throw/nack
+ * emas), ya'ni qaror handler'da.
+ */
+export const AI_CONFIG_CMD_PREFIX = 'ai.config.';
+
+export function isAiConfigCmd(cmd: string): boolean {
+  return cmd.startsWith(AI_CONFIG_CMD_PREFIX);
+}
+
+/**
+ * Qat'iy tekshiruv uchun sir (yo'q yoki 32 belgidan qisqa → `undefined`).
+ * Qiymat hech qayerga chiqarilmaydi.
+ */
+export function rmqRequesterSigSecret(): string | undefined {
+  return rmqRequesterSecret();
+}
+
+/**
  * `enforce` sirsiz yoqilsa servis YIQILADI: aks holda u jimgina hamma
  * foydalanuvchi so'rovini rad etardi. Deploy healthcheck'i shuni ushlaydi.
  */
@@ -224,12 +247,15 @@ export function buildRmqRequesterSigHeaders(
   pattern: unknown,
   data: unknown,
 ): Record<string, string> {
-  if (rmqRequesterSigMode() === 'off' || !hasRequesterClaim(data)) return {};
+  if (!hasRequesterClaim(data)) return {};
+  const cmd = rmqCmdOf(pattern);
+  // ai.config.* — rejimdan qat'i nazar imzolanadi (D1).
+  if (rmqRequesterSigMode() === 'off' && !isAiConfigCmd(cmd)) return {};
   const secret = rmqRequesterSecret();
   if (!secret) return {};
   return {
     [RMQ_REQUESTER_SIG_HEADER]: signRmqRequester({
-      cmd: rmqCmdOf(pattern),
+      cmd,
       data,
       secret,
       kind: signerKind,
@@ -282,6 +308,8 @@ export function checkRmqRequester(
 
   const rpc = (rpcContext ?? {}) as RmqRequesterRpcContext;
   const cmd = rmqCmdOf(rpc.getPattern?.());
+  // ai.config.*: qat'iy tekshiruv handler'da ({ok:false} + ack).
+  if (isAiConfigCmd(cmd)) return null;
   const verdict = verifyRmqRequester({
     cmd,
     data,

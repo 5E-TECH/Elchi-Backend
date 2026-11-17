@@ -192,6 +192,63 @@ Deploy: logistics-service + api-gateway, migratsiya **227** (`logistics_schema.d
 - 🔧 «Hududlar»: `review_required` bo'sh bo'lmasa banner + ro'yxat (tuman, xizmat viloyati, filial(lar) — `region_branches`, sabab); «Tasdiqlash» → confirm-assignment; «O'zgartirish» → `PATCH /district/:id` (viloyat). `no_branch_found` — «Filial yo'q · Faqat Toshkent HQ ko'radi», qizil. 503 — xato holati, «filial yo'q» EMAS.
 - 🔧 Tuman ro'yxatida `assignment_review_required` — sariq belgi (faqat admin; boshqa rollarda maydon yo'q — `undefined` ni `false` deb oling).
 
+### 2026-11-15 — AI kalit va modellar (BE-1c): UI kaliti haqiqatan ishlatiladi; `ai.status` qo'shimchalari
+
+Deploy: ai-service. Migratsiya yo'q (228 ustunlari endi yoziladi). `AI_CONFIG_UI_ENABLED=false` (prod sukuti) — xulq bayt-aniq o'zgarmagan (golden test).
+
+- ✏️ UI'dan qo'shilgan kalit qayta ishga tushirishsiz keyingi AI so'rovida ishlatiladi (15 s yangilanish, yozuvdan keyin darhol). Ustuvorlik: UI kaliti > server kaliti > yo'q. UI kaliti rad etilsa / pul tugasa / ruxsat bo'lmasa / ochilmasa — AI **to'xtaydi** (server kalitiga avtomatik o'tmaydi), ops xabari va inbox; «Kalitni o'chirish» → server kaliti darhol.
+- ✏️ `GET /ai/config` `runtime`: `config_stale`, `config_loaded_at`, `disabled_reason` endi ishlayotgan (xotiradagi) holatdan; `key.effective_source` ham. Haqiqiy so'rovdagi xato: `verify.origin: "runtime"`.
+- 🟢 `ai.status` / gateway AI holati (qo'shimcha, eski maydonlar o'zgarmagan): `key_source`, `key_verify_state`, `disabled_reason`, `unavailable_slots`, `models_all`. Buyurtma/rasm modeli mavjud bo'lmasa (`model_unavailable`) AI buyurtma uchun o'chiq.
+
+**Frontend action items:** yo'q (fragment v0.2 dagi shakllar).
+
+### 2026-11-15 — AI kalit va modellar (BE-1e): inbox xabarlari, ops alert, deploy
+
+Deploy: ai-service. Migratsiya yo'q. Ops: `scripts/ai-config-alert.sh` (host cron), `docs/ops/ai-config.md`.
+
+- 🆕 Bildirishnoma turlari (superadmin + admin, `category: system`, o'chirib bo'lmaydi): `ai.key_alert` (kalit qo'shildi / almashtirildi / qaytarildi / o'chirildi / ishlamay qoldi / ochilmadi — runtime nosozligi `critical`, qolgani `high`) va `ai.model_alert` (BE-2/BE-4 dan). `data`: `{action, audit_id, hint}` — kalit qiymati yo'q. Matn (title/body) o'zbekcha, ai-service'dan.
+- 🟢 Kalitni tekshirish (`verify`) va rad etilgan urinish inbox'ga KETMAYDI (rad etilgan urinishlar faqat ops chatga, soatiga yig'ma).
+
+**Frontend action items:**
+- 🔧 Inbox: `ai.key_alert` / `ai.model_alert` qatoridan «Ops → AI kalit va modellar» sahifasiga havola (`data.audit_id` — tarixdagi qator id'si).
+
+### 2026-11-15 — AI kalit va modellar (BE-1d): `/ai/config*` endpointlari (gateway)
+
+Deploy: **ai-service OLDIN** (BE-1b), keyin api-gateway. Yangi navbat `ai_config_queue` (env `RABBITMQ_AI_CONFIG_QUEUE`, sukut). Shakllar — openapi-fragment v0.2 (`openapi.json` yangilandi). Hammasi **faqat SUPERADMIN** (ADMIN — 403 kodsiz).
+
+- 🆕 `GET /ai/config` → `{statusCode, message, data: AiConfigView}`. Flag o'chiq bo'lsa ham ishlaydi (faqat ko'rish).
+- 🆕 `PUT /ai/config/key` `{key_envelope, label?, version}` — kalit FAQAT muhrlangan konvertda (`AiKeyEnvelope`: `v:1, kid, alg:"RSA-OAEP-256+A256GCM", ek (400–700), iv (16), ct (40–1024)`, base64url). Tanada `api_key` bo'lsa — 400 (noma'lum maydon).
+- 🆕 `POST /ai/config/key/verify` (tanasiz), `POST /ai/config/key/restore-previous` `{version}`, `POST /ai/config/key/deactivate` `{version, reason?}`, `DELETE /ai/config/key/previous?version=N`, `GET /ai/config/history?limit=&cursor=`.
+- ✏️ Muvaffaqiyatli yozuv javobi — yangilangan `AiConfigView` (`data`), qayta GET shart emas.
+- ✏️ Xatolar: `{statusCode, message, code, …}` — maydonlar faqat oq ro'yxatdan (`version`, `field`, `retry_after_seconds`, `slot`, `model`, `reason`). **Hech biri 401 emas.** 504 — kodsiz: hech narsa o'zgarmagan (ai-service 6,5 s dan keyin COMMIT qilmaydi) → `GET /ai/config` ni qayta o'qing (va kerak bo'lsa izni solishtiring).
+- 🟢 Gateway cheklovi: `/ai/config/key*` — bitta foydalanuvchiga daqiqasiga 10, bitta IP'ga 30 (umumiy hisob) → 429 (kodsiz, `Retry-After`). ai-service cheklovi (`AI_KEY_ATTEMPTS_EXCEEDED`, 5/daqiqa) alohida.
+- 🟢 CORS: `X-Step-Up-Token` ruxsat etildi (step-up BE-5 da; hozircha gateway `step_up: false` yuboradi — `AI_CONFIG_STEP_UP_REQUIRED=true` muhitda kalit amallari `403 AI_STEP_UP_REQUIRED` oladi).
+- 🟢 Yozuvdan keyin gateway AI holatini darhol yangilaydi (`/orders/ai-availability`, `/health`).
+
+**Frontend action items:**
+- 🔧 Mock'larni real endpointga ulash (shakllar fragment bilan bir xil). Swagger DTO nomlari: `AiKeySetDto`, `AiKeyEnvelopeDto`, `AiVersionedDto`, `AiDeactivateDto`.
+
+### 2026-11-15 — AI kalit va modellar (BE-1b): ai-service kalit saqlash va `ai.config.*` RMQ handler'lari
+
+Deploy: ai-service (gateway'dan OLDIN), migratsiya **228** (`ai_schema.ai_provider_keys`, `ai_runtime_settings`, `ai_config_attempts`; `ai_usage_log` + `key_id`, `key_source`, `key_fingerprint`, `config_version`). HTTP endpointlar hali YO'Q — BE-1d (gateway) da. `AI_CONFIG_UI_ENABLED` sukut `false`: prod'da xulq o'zgarmaydi.
+
+- 🟢 Javob shakllari fragment v0.2 bo'yicha: har yozuv (`PUT /ai/config/key`, `POST …/verify`, `…/restore-previous`, `…/deactivate`, `DELETE …/previous`) muvaffaqiyatda yangilangan `AiConfigView` qaytaradi; `GET /ai/config/history` — `{items, next_cursor}` (limit 1–50, sukut 10).
+- 🟢 `POST /ai/config/key/verify`: aniq rad (401/402/403/400) ham **200** — natija `key.active.verify.state` (yoki UI kaliti yo'q bo'lsa `key.env.verify`) da; Anthropic javob bermasa/429 — `state: "unavailable"` + `error_code`. Versiya (`version.key`) oshmaydi.
+- 🟢 Kalit nomi berilmasa view'da `label: "Anthropic kaliti"`.
+- 🟢 BE-1 da `models.slots` faqat o'qish uchun (env/sukut; `ui_model: null`, `health` nol); `permissions.models: false`. Sonnet 5 qatorida `warnings: ["price_unconfirmed"]` (narx o'zgarmagan). To'liq katalog/PATCH/taxmin — BE-2.
+- 🟢 Kutilmagan ichki xato — 500, `code` yo'q (qolgan hamma xatoda `code` bor).
+
+**Frontend action items:** yo'q (endpointlar BE-1d bilan keladi; mock'lar fragment bo'yicha).
+
+### 2026-11-15 — AI kalit va modellar (BE-1a): umumiy asos, API o'zgarishi YO'Q
+
+Spec «AI kalit va modellar» v0.2 (`openapi-fragment.json` v0.2). Bu PR faqat `libs/common` (endpoint, migratsiya, deploy o'zgarishi yo'q); endpointlar BE-1b/BE-1d da.
+
+- 🟢 Xato kodlari (`AI_CONFIG_*`, `AI_KEY_*`, `AI_MODEL_*`, `AI_STEP_UP_REQUIRED`) gateway oq ro'yxatiga qo'shildi: `version` (409 `AI_CONFIG_CONFLICT`), `field` (400 `AI_CONFIG_INVALID`), `retry_after_seconds` (429), `slot/model/reason` (400 `AI_MODEL_NOT_ALLOWED`). Hech biri 401 emas.
+- 🟢 Kalit formati va erkin matn qoidalari (`libs/common/src/ai/ai-key-format.ts`) — FE `src/entities/ai-config/validation.ts` bilan bir xil bo'lishi kerak: trim, `^sk-ant-[A-Za-z0-9_-]+$`, 40–256; `sk-ant-admin…` → `AI_KEY_ADMIN_KEY`; `sk-ant-oat…`/`sk-ant-ort…` → `AI_KEY_OAUTH_TOKEN`; iz = SHA-256 ning 12 hex belgisi, 4 tadan bo'sh joy bilan (`fingerprintOf('abc') === 'ba78 16bf 8f01'`); `label`/`reason` da `sk-ant-` yoki 40+ belgilik `[A-Za-z0-9_-]` ketma-ketlik → `AI_CONFIG_INVALID {field}`. Jadvalli test: `ai-key-format.spec.ts` (`AI_KEY_FORMAT_TABLE`) — FE testiga shu qatorlarni ko'chiring.
+
+**Frontend action items:** yo'q (FE mock'lar fragment v0.2 bo'yicha qoladi).
+
 ### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
 
 Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.

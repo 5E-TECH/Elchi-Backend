@@ -58,4 +58,42 @@ describe('migration timestamps are collision-free', () => {
     );
     expect(staleAllowlistEntries).toEqual([]);
   });
+
+  /**
+   * (be-brief §4) Parallel sessiyalar bir xil migratsiya raqami yoki klass
+   * nomini olib qo'yishi mumkin: TypeORM ikki xil migratsiyani bir xil `name`
+   * bilan BITTA deb hisoblaydi (ikkinchisi jimgina yurmaydi). Klass nomi va
+   * `name` maydoni noyob bo'lishi va fayl timestamp'iga mos kelishi SHART.
+   */
+  it('migratsiya klass nomlari noyob va timestamp bilan tugaydi', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { readFileSync } = require('fs') as typeof import('fs');
+    const byClass = new Map<string, string[]>();
+    const mismatched: string[] = [];
+    for (const file of readdirSync(migrationsDir)) {
+      const match = /^(\d+)-.+\.ts$/.exec(file);
+      if (!match) continue;
+      const src = readFileSync(join(migrationsDir, file), 'utf8');
+      const cls = /export class (\w+)/.exec(src)?.[1];
+      if (!cls) {
+        mismatched.push(`${file}: klass yo'q`);
+        continue;
+      }
+      byClass.set(cls, [...(byClass.get(cls) ?? []), file]);
+      const name = /\bname\s*=\s*'([^']+)'/.exec(src)?.[1];
+      if (name !== undefined && name !== cls) {
+        mismatched.push(`${file}: name='${name}' ≠ ${cls}`);
+      }
+      if (!GRANDFATHERED_COLLISIONS.has(match[1]) && !cls.endsWith(match[1])) {
+        mismatched.push(
+          `${file}: klass ${cls} timestamp ${match[1]} bilan tugamaydi`,
+        );
+      }
+    }
+    const dupes = [...byClass.entries()]
+      .filter(([, files]) => files.length > 1)
+      .map(([c, files]) => `${c}: ${files.join(', ')}`);
+    expect(dupes).toEqual([]);
+    expect(mismatched).toEqual([]);
+  });
 });

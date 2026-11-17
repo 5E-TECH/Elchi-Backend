@@ -747,6 +747,13 @@ describe('ClaudeService', () => {
         imageCount: 0,
         // WHMAIqyo #5: chaqiruv davomiyligi (ms) — soxta mijozda ~0.
         latencyMs: expect.any(Number),
+        // «AI kalit va modellar» BE-1c: lease — env kaliti (qiymat emas, iz).
+        keyId: null,
+        keySource: 'env',
+        keyFingerprint: expect.stringMatching(
+          /^[0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4}$/,
+        ),
+        configVersion: 0,
       });
       expect(usage.record.mock.calls[0][0].latencyMs).toBeGreaterThanOrEqual(0);
     });

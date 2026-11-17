@@ -14,13 +14,19 @@ import Anthropic, {
   RateLimitError,
 } from '@anthropic-ai/sdk';
 import { createHash } from 'node:crypto';
-import { inspectAnthropicEnv } from './ai-key-check';
+import {
+  ANTHROPIC_CLIENT_PROVIDER,
+  EnvAnthropicClientProvider,
+  type AiCallOutcome,
+  type AnthropicClientLease,
+  type AnthropicClientProvider,
+} from './anthropic-client.provider';
 import { isAiAllowedInEnv } from '../staging/outbound-guard';
 import {
   AI_MODEL_DEFAULTS,
+  ANTHROPIC_API_BASE_URL,
   ANTHROPIC_API_KEY_ENV,
   ANTHROPIC_CLIENT_FACTORY,
-  ANTHROPIC_MAX_RETRIES,
   ANTHROPIC_TIMEOUT_MS,
   CLAUDE_BUDGET_GUARD,
   CLAUDE_DEFAULT_MAX_TOKENS,
@@ -31,7 +37,6 @@ import {
 } from './claude.constants';
 import type {
   AnthropicClientFactory,
-  AnthropicClientLike,
   AnthropicKeyInspection,
   ClaudeBudgetGuard,
   ClaudeFailureReason,
@@ -61,6 +66,11 @@ import type {
 export const defaultAnthropicClientFactory: AnthropicClientFactory = (o) =>
   new Anthropic({
     apiKey: o.apiKey,
+    // be-brief §7: manzil MAHKAM — SDK `ANTHROPIC_BASE_URL` env'ini o'qimasin
+    // (kalit boshqa hostga ketmasin). Joi ham bu env'ni taqiqlaydi.
+    baseURL: ANTHROPIC_API_BASE_URL,
+    // SDK debug logi so'rov sarlavhalarini (kalit) yozishi mumkin — faqat warn.
+    logLevel: 'warn',
     timeout: o.timeout,
     maxRetries: o.maxRetries,
   });
@@ -150,9 +160,13 @@ function parseFirstTextBlock(
 @Injectable()
 export class ClaudeService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ClaudeService.name);
-  private readonly client: AnthropicClientLike | null;
+  /**
+   * «AI kalit va modellar» (BE-1c): kalit/mijoz manbai. Sukut — env
+   * provayderi (bugungi xulq); ai-service runtime provayderini beradi.
+   * Har chaqiruv/sikl boshida BITTA lease olinadi.
+   */
+  private readonly provider: AnthropicClientProvider;
   private readonly defaultModel: string;
-  private readonly keyInfo: AnthropicKeyInspection;
   /** (staging-safe) APP_ENV=staging va STAGING_AI_ENABLED≠true — AI o'chiq. */
   private readonly stagingDisabled: boolean;
 
@@ -170,6 +184,9 @@ export class ClaudeService implements OnApplicationBootstrap {
     @Optional()
     @Inject(CLAUDE_BUDGET_GUARD)
     private readonly budget?: ClaudeBudgetGuard,
+    @Optional()
+    @Inject(ANTHROPIC_CLIENT_PROVIDER)
+    provider?: AnthropicClientProvider,
   ) {
     const rawKey = config.get<unknown>(ANTHROPIC_API_KEY_ENV);
     const apiKey = typeof rawKey === 'string' ? rawKey.trim() : '';
@@ -182,36 +199,61 @@ export class ClaudeService implements OnApplicationBootstrap {
     // (staging-safe) Staging'da AI sukut bo'yicha O'CHIQ (prod nusxasidagi
     // matnlar Anthropic'ga ketmasin, pul sarflanmasin) — STAGING_AI_ENABLED.
     this.stagingDisabled = !isAiAllowedInEnv();
-    this.client =
-      apiKey && !this.stagingDisabled
-        ? this.buildClient(factory, apiKey)
-        : null;
-
-    // Faqat NOMLAR — qiymat o'qilmaydi va logga chiqmaydi.
-    const scan = inspectAnthropicEnv(process.env);
-    this.keyInfo = apiKey
-      ? { state: 'ok', misnamedKeys: scan.misnamedKeys }
-      : {
-          state: scan.misnamedKeys.length > 0 ? 'misnamed' : 'missing',
-          misnamedKeys: scan.misnamedKeys,
-        };
+    // Mijoz qurilmasa ham servis ko'tariladi — AI o'chiq qoladi. Staging
+    // o'chiq bo'lsa env mijozi UMUMAN qurilmaydi (bugungi xulq).
+    this.provider =
+      provider ??
+      new EnvAnthropicClientProvider(
+        apiKey,
+        factory ?? defaultAnthropicClientFactory,
+        !this.stagingDisabled,
+        this.logger,
+      );
   }
 
-  private buildClient(
-    factory: AnthropicClientFactory | undefined,
-    apiKey: string,
-  ): AnthropicClientLike | null {
+  /** Joriy lease (staging o'chiq bo'lsa — yo'q). */
+  private acquireLease(): AnthropicClientLease | null {
+    if (this.stagingDisabled) return null;
     try {
-      return (factory ?? defaultAnthropicClientFactory)({
-        apiKey,
-        timeout: ANTHROPIC_TIMEOUT_MS,
-        maxRetries: ANTHROPIC_MAX_RETRIES,
-      });
-    } catch (err) {
-      // Mijoz qurilmasa ham servis ko'tariladi — AI o'chiq qoladi.
-      this.logger.error(`Anthropic mijozi qurilmadi: ${describeError(err)}`);
+      return this.provider.acquire();
+    } catch {
       return null;
     }
+  }
+
+  /** Provayderga xabar — hech qachon throw qilmaydi, kutdirmaydi. */
+  private reportFailure(
+    lease: AnthropicClientLease,
+    feature: string,
+    err: unknown,
+  ): void {
+    try {
+      this.provider.reportCallFailure(lease, feature, err);
+    } catch {
+      /* provayder xatosi AI natijasiga ta'sir qilmaydi */
+    }
+  }
+
+  private reportOutcome(
+    lease: AnthropicClientLease,
+    feature: string,
+    outcome: AiCallOutcome,
+  ): void {
+    try {
+      this.provider.reportCallOutcome(lease, feature, outcome);
+    } catch {
+      /* provayder xatosi AI natijasiga ta'sir qilmaydi */
+    }
+  }
+
+  /** Lease maydonlari xarajat yozuviga (`ai_usage_log`). */
+  private leaseFields(lease: AnthropicClientLease) {
+    return {
+      keyId: lease.keyId,
+      keySource: lease.source,
+      keyFingerprint: lease.fingerprint,
+      configVersion: lease.configVersion,
+    };
   }
 
   /**
@@ -220,7 +262,8 @@ export class ClaudeService implements OnApplicationBootstrap {
    * shuning uchun o'xshash nomlar alohida WARN bilan NOMMA-NOM ko'rsatiladi.
    */
   onApplicationBootstrap(): void {
-    if (this.client) {
+    const keyInfo = this.provider.keyState();
+    if (this.acquireLease()) {
       this.logger.log(`AI yoqiq — sukut model: ${this.defaultModel}`);
       return;
     }
@@ -230,26 +273,23 @@ export class ClaudeService implements OnApplicationBootstrap {
       );
       return;
     }
-    if (this.keyInfo.state === 'ok') return; // kalit bor, mijoz xatosi yuqorida loglangan
+    if (keyInfo.state === 'ok') return; // kalit bor, mijoz xatosi yuqorida loglangan
     this.logger.warn(`AI o'chiq — ${ANTHROPIC_API_KEY_ENV} yo'q`);
-    if (this.keyInfo.state === 'misnamed') {
+    if (keyInfo.state === 'misnamed') {
       this.logger.warn(
-        `AI kaliti xato nom bilan berilgan: ${this.keyInfo.misnamedKeys.join(', ')} — ` +
+        `AI kaliti xato nom bilan berilgan: ${keyInfo.misnamedKeys.join(', ')} — ` +
           `kutilgan nom: ${ANTHROPIC_API_KEY_ENV}`,
       );
     }
   }
 
   isEnabled(): boolean {
-    return this.client !== null;
+    return this.acquireLease() !== null;
   }
 
   /** Kalit holati — FAQAT env nomlari (ai.status javobi uchun). */
   keyState(): AnthropicKeyInspection {
-    return {
-      state: this.keyInfo.state,
-      misnamedKeys: [...this.keyInfo.misnamedKeys],
-    };
+    return this.provider.keyState();
   }
 
   /**
@@ -324,8 +364,9 @@ export class ClaudeService implements OnApplicationBootstrap {
   async extractJson<T = unknown>(
     opts: ExtractJsonOptions,
   ): Promise<ClaudeResult<T>> {
-    const client = this.client;
-    if (!client) return { ok: false, reason: 'disabled', attempts: 0 };
+    const lease = this.acquireLease();
+    if (!lease) return { ok: false, reason: 'disabled', attempts: 0 };
+    const client = lease.client;
 
     let calls = 0;
     try {
@@ -385,6 +426,7 @@ export class ClaudeService implements OnApplicationBootstrap {
         try {
           raw = await client.messages.create(body, { timeout });
         } catch (err) {
+          this.reportFailure(lease, opts.meta.feature, err);
           return {
             ok: false,
             reason: this.classifyError(err, opts.meta, attempt),
@@ -440,7 +482,9 @@ export class ClaudeService implements OnApplicationBootstrap {
           inputSha256,
           imageCount: images.length,
           latencyMs,
+          ...this.leaseFields(lease),
         };
+        this.reportOutcome(lease, opts.meta.feature, outcome);
         this.emitUsage(record);
         await this.reportSpend(record);
         this.logger.log(
@@ -553,8 +597,10 @@ export class ClaudeService implements OnApplicationBootstrap {
       ...extra,
     });
 
-    const client = this.client;
-    if (!client) return finish('disabled', '');
+    // Sikl davomida BITTA lease: o'rtada kalit almashsa ham sikl o'z kalitida tugaydi.
+    const lease = this.acquireLease();
+    if (!lease) return finish('disabled', '');
+    const client = lease.client;
 
     try {
       const deadline = Math.min(
@@ -628,6 +674,7 @@ export class ClaudeService implements OnApplicationBootstrap {
             );
             continue;
           }
+          this.reportFailure(lease, opts.meta.feature, err);
           const reason = this.classifyError(err, opts.meta, step);
           return finish(reason, '');
         }
@@ -687,7 +734,9 @@ export class ClaudeService implements OnApplicationBootstrap {
           inputChars: (opts.inputText ?? '').length,
           inputSha256,
           imageCount: 0,
+          ...this.leaseFields(lease),
         };
+        this.reportOutcome(lease, opts.meta.feature, outcome);
         this.emitUsage(record);
         await this.reportSpend(record);
         this.logger.log(

@@ -5,6 +5,8 @@ import {
   invalidAllowlistEntries,
   type StagingChannel,
 } from '../staging/outbound-guard';
+import { readFileSync } from 'node:fs';
+import { checkAiKeyFormat } from '../ai/ai-key-format';
 
 /**
  * Reject obviously low-entropy / placeholder secrets at boot. A 32+ char random
@@ -285,6 +287,8 @@ export const gatewayValidationSchema = Joi.object({
    * yiqitmasin — bo'sh qiymat sukutga tushadi (AI_ORDER_ENABLED uchun `false`).
    */
   RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  // «AI kalit va modellar»: ai.config.* va ai.status (DLX'siz navbat).
+  RABBITMQ_AI_CONFIG_QUEUE: Joi.string().empty('').default('ai_config_queue'),
   /**
    * (AI ack B1) ai-service'ning TEZ navbati — faqat arzon DB amallari
    * (`ai.draft.confirm_context`, `ai.draft.attach_preview`,
@@ -911,6 +915,68 @@ export const searchValidationSchema = Joi.object({
   RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
 });
 
+/** D8: env kaliti ham UI bilan bir xil format qoidasida. Qiymat xabarga tushmaydi. */
+const aiEnvKeyFormat: Joi.CustomValidator<string> = (value, helpers) => {
+  if (value === '') return value;
+  const r = checkAiKeyFormat(value);
+  if (r.ok) return r.key;
+  if (r.code === 'AI_KEY_ADMIN_KEY') return helpers.error('aiKey.admin');
+  if (r.code === 'AI_KEY_OAUTH_TOKEN') return helpers.error('aiKey.oauth');
+  return helpers.error('aiKey.format');
+};
+
+const AI_MASTER_SECRET_MIN = 32;
+
+/**
+ * Master sir fayli: o'qiladi, ≥ 32 belgi, kuchsiz emas. Xabarda FAQAT env
+ * nomi (yo'l yoki mazmun emas — `{#label}`).
+ */
+function aiMasterSecretFile(): Joi.StringSchema {
+  return Joi.string()
+    .trim()
+    .empty('')
+    .optional()
+    .custom((path: string, helpers) => {
+      let content: string;
+      try {
+        content = readFileSync(path, 'utf8').trim();
+      } catch {
+        return helpers.error('aiSecret.unreadable');
+      }
+      if (content.length < AI_MASTER_SECRET_MIN)
+        return helpers.error('aiSecret.short');
+      const weak = rejectWeakSecret(content, helpers);
+      if (weak !== content) return helpers.error('aiSecret.weak');
+      return path;
+    }, 'ai master secret file')
+    .messages({
+      'aiSecret.unreadable': "{#label}: faylni o'qib bo'lmadi",
+      'aiSecret.short': `{#label}: fayldagi sir juda qisqa (kamida ${AI_MASTER_SECRET_MIN} belgi)`,
+      'aiSecret.weak':
+        '{#label}: fayldagi sir kuchsiz (tasodifiy qiymat yarating)',
+    });
+}
+
+/** Oddiy env master sir — faqat development (D4). */
+function aiMasterSecretEnv(name: string): Joi.Schema {
+  return Joi.when('APP_ENV', {
+    is: 'development',
+    then: Joi.string()
+      .trim()
+      .empty('')
+      .min(AI_MASTER_SECRET_MIN)
+      .optional()
+      .messages({
+        'string.min': `${name}: kamida ${AI_MASTER_SECRET_MIN} belgi`,
+      }),
+    otherwise: Joi.any()
+      .forbidden()
+      .messages({
+        'any.unknown': `${name} faqat APP_ENV=development da; boshqa muhitda ${name}_FILE ishlating`,
+      }),
+  });
+}
+
 /**
  * ai-service — Anthropic'ni chaqiradigan va `ANTHROPIC_API_KEY` ni ushlaydigan
  * YAGONA jarayon. Xarajat jurnali (`ai_usage_log`) va kunlik shift hisoblagichi
@@ -952,12 +1018,91 @@ export const aiValidationSchema = Joi.object({
   ANTHROPIC_API_KEY: Joi.string()
     .trim()
     .allow('')
-    .pattern(/^sk-ant-/)
     .optional()
+    .custom(aiEnvKeyFormat, 'anthropic key format (D8)')
+    .messages({
+      'aiKey.format':
+        "ANTHROPIC_API_KEY noto'g'ri formatda: 'sk-ant-' bilan boshlanishi, faqat lotin harf/raqam, '-' va '_' dan iborat, 40–256 belgi bo'lishi kerak (qiymat xavfsizlik uchun ko'rsatilmaydi). AI'ni o'chirish uchun kalitni bo'sh qoldiring.",
+      'aiKey.admin':
+        "ANTHROPIC_API_KEY — Admin API kaliti (sk-ant-admin…): AI uchun oddiy API kaliti kerak (qiymat ko'rsatilmaydi).",
+      'aiKey.oauth':
+        "ANTHROPIC_API_KEY — Claude obunasi tokeni (sk-ant-oat/ort…): Console'dagi API kaliti kerak (qiymat ko'rsatilmaydi).",
+    }),
+  /**
+   * be-brief §7: Anthropic manzili kodda MAHKAM (`https://api.anthropic.com`).
+   * Env orqali almashtirish (kalitni boshqa hostga yuborish) taqiqlangan —
+   * berilsa boot yiqiladi.
+   */
+  ANTHROPIC_BASE_URL: Joi.any().forbidden().messages({
+    'any.unknown':
+      'ANTHROPIC_BASE_URL taqiqlangan: Anthropic manzili kodda mahkamlangan (be-brief §7).',
+  }),
+  /**
+   * «AI kalit va modellar» UI (be-brief §7, D4/D12–D14).
+   *
+   * - `AI_KEY_ENCRYPTION_SECRET_FILE` / `_PREVIOUS_FILE` — master sir fayli
+   *   (0400 bind mount). Fayl mavjud, ≥ 32 belgi va kuchsiz emas bo'lishi
+   *   kerak; xabarda mazmun hech qachon yo'q.
+   * - Oddiy `AI_KEY_ENCRYPTION_SECRET(_PREVIOUS)` env — FAQAT
+   *   `APP_ENV=development` (boshqa muhitda boot yiqiladi).
+   */
+  AI_KEY_ENCRYPTION_SECRET_FILE: aiMasterSecretFile(),
+  AI_KEY_ENCRYPTION_SECRET_PREVIOUS_FILE: aiMasterSecretFile(),
+  AI_KEY_ENCRYPTION_SECRET: aiMasterSecretEnv('AI_KEY_ENCRYPTION_SECRET'),
+  AI_KEY_ENCRYPTION_SECRET_PREVIOUS: aiMasterSecretEnv(
+    'AI_KEY_ENCRYPTION_SECRET_PREVIOUS',
+  ),
+  /** D12: UI'dan yozish. Sukut O'CHIQ (prod); staging'da true. */
+  AI_CONFIG_UI_ENABLED: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .empty('')
+    .default(false),
+  /** D13: qat'iy model siyosati (tasdiqlangan ro'yxat, narx shifti). */
+  AI_MODEL_POLICY_STRICT: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .empty('')
+    .default(true),
+  /**
+   * D14: kalit amallari step-up (parol) talab qiladi. Prod + UI yoqiq
+   * bo'lsa MAJBURIY true.
+   */
+  AI_CONFIG_STEP_UP_REQUIRED: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .empty('')
+    .default(true)
+    .when('APP_ENV', {
+      is: 'production',
+      then: Joi.when('AI_CONFIG_UI_ENABLED', {
+        is: true,
+        then: Joi.valid(true).messages({
+          'any.only':
+            'AI_CONFIG_STEP_UP_REQUIRED=true majburiy: APP_ENV=production va AI_CONFIG_UI_ENABLED=true (be-brief D14).',
+        }),
+      }),
+    }),
+  /**
+   * D1: yozishga ruxsat etilgan foydalanuvchi id'lari (vergul bilan).
+   * Bo'sh — staging'da yozish o'chiq (`writer_list_empty`), prod'da faqat
+   * superadmin roli.
+   */
+  AI_CONFIG_WRITER_IDS: Joi.string()
+    .trim()
+    .allow('')
+    .pattern(/^[A-Za-z0-9_-]+(\s*,\s*[A-Za-z0-9_-]+)*$/)
+    .default('')
     .messages({
       'string.pattern.base':
-        "ANTHROPIC_API_KEY noto'g'ri formatda: 'sk-ant-' bilan boshlanishi kerak (qiymat xavfsizlik uchun ko'rsatilmaydi). AI'ni o'chirish uchun kalitni bo'sh qoldiring.",
+        "AI_CONFIG_WRITER_IDS — vergul bilan ajratilgan foydalanuvchi id'lari bo'lishi kerak",
     }),
+  /** D10: UI'dan tanlanadigan modelning chiqish narxi shifti (USD / 1M token). */
+  AI_UI_MAX_OUTPUT_PRICE_USD: Joi.number().positive().empty('').default(25),
+  /** Moliya rasmlari (balans skrinshoti, chek) modeli; bo'sh — kod sukuti. */
+  AI_FINANCE_VISION_MODEL: Joi.string().empty('').optional(),
+  /** be-brief §6.1: kalit/model sozlamasi navbati (DLX'siz, saqlanmaydi). */
+  RABBITMQ_AI_CONFIG_QUEUE: Joi.string().empty('').default('ai_config_queue'),
   // Modellar. ⚠️ AI_ORDER_VISION_MODEL = AI_ORDER_MODEL — matn va rasm
   // chaqiruvlari bitta prompt keshini bo'lishadi (model almashsa kesh yo'qoladi).
   AI_ORDER_MODEL: Joi.string().empty('').default('claude-sonnet-5'),

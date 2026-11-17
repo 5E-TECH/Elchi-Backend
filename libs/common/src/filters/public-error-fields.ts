@@ -13,6 +13,7 @@ import {
 } from '../order/order-intake';
 import { CARRIER_ERROR_CODES as CARRIER } from '../integration/carrier-error-codes';
 import { AI_ADVISOR_PUBLIC_ERROR_FIELDS } from '../ai/advisor.contract';
+import { AI_CONFIG_PUBLIC_ERROR_FIELDS } from '../ai/ai-config.contract';
 import {
   AI_CHECKS_NOT_ACKNOWLEDGED,
   AI_CHECKS_UNAVAILABLE,
@@ -200,6 +201,10 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // 429 BUDGET_EXCEEDED `scope/period/reset_at/retry_after_seconds`,
   // 503 AI_DISABLED `reason`.
   ...AI_ADVISOR_PUBLIC_ERROR_FIELDS,
+  // «AI kalit va modellar» (be-brief §6.2, spec §5.3): 409 CONFLICT
+  // `version`, 400 INVALID `field`, 429 `retry_after_seconds`, 400
+  // MODEL_NOT_ALLOWED `slot/model/reason`. Hech biri 401 emas.
+  ...AI_CONFIG_PUBLIC_ERROR_FIELDS,
 };
 
 /**

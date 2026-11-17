@@ -34,6 +34,8 @@ import { AssistantService } from './assistant/assistant.service';
 import { AssistantStore } from './assistant/assistant-store.service';
 import { AiUsageService } from './usage/ai-usage.service';
 import { AdvisorModule } from './advisor/advisor.module';
+import { AiConfigModule } from './ai-config/ai-config.module';
+import { AiRuntimeProvider } from './ai-config/ai-runtime.provider';
 
 /**
  * ai-service — Anthropic'ni chaqiradigan YAGONA jarayon (ANTHROPIC_API_KEY
@@ -70,12 +72,17 @@ import { AdvisorModule } from './advisor/advisor.module';
     RmqModule.register({ name: 'BRANCH' }),
     // Xarajat jurnali (sink) va global kunlik shift (budget guard) portlari.
     ClaudeModule.forRoot({
-      imports: [AiUsageModule],
+      imports: [AiUsageModule, AiConfigModule],
       usageSink: AiUsageService,
       budgetGuard: AiBudgetService,
+      // «AI kalit va modellar»: kalit manbai UI > env > yo'q (flag o'chiq —
+      // faqat env, DB o'qilmaydi).
+      clientProvider: AiRuntimeProvider,
     }),
     // BE-5 (LhTIno57) — AI maslahatchi: ogohlantirishlar R1–R8.
     AdvisorModule,
+    // «AI kalit va modellar» — ai.config.* (ai_config_queue, DLX'siz).
+    AiConfigModule,
   ],
   controllers: [AiServiceController],
   providers: [

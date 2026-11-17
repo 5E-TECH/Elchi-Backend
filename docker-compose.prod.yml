@@ -766,7 +766,24 @@ services:
     build:
       context: .
       dockerfile: apps/ai-service/Dockerfile
-    env_file: .env.production
+    # «AI kalit va modellar» (be-brief §9): ANTHROPIC_API_KEY — FAQAT shu servis
+    # o'qiydigan `.env.ai-secrets` da (umumiy .env.production dan ko'chiriladi;
+    # o'tish davrida u yerda ham ishlaydi, preflight WARN beradi). Fayl ixtiyoriy.
+    env_file:
+      - .env.production
+      - path: .env.ai-secrets
+        required: false
+    # AI kalit master siri — fayl sifatida (0400, konteyner uid 1000):
+    # ./secrets/ai/ai_key_master → AI_KEY_ENCRYPTION_SECRET_FILE=/run/secrets/ai/ai_key_master
+    # (`.env.ai-secrets` da). Papka yo'q bo'lsa bo'sh yaratiladi — kalit saqlash
+    # o'chiq qoladi (AI_KEY_STORAGE_UNAVAILABLE), servis normal ko'tariladi.
+    volumes:
+      - type: bind
+        source: ./secrets/ai
+        target: /run/secrets/ai
+        read_only: true
+        bind:
+          create_host_path: true
     # Pool budget: ai-service faqat usage log + kunlik spend counter yozadi (kam
     # trafik), shuning uchun default 10 emas, 5 — max_connections=200 ichida
     # order(20) + finance(20) + qolganlar(~10) bilan birga bosh joy qoladi.

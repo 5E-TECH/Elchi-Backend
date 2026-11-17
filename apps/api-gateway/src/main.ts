@@ -192,6 +192,21 @@ async function bootstrap() {
       );
   }
 
+  // «AI kalit va modellar» (be-brief §6.1): `ai_config_queue` publisher
+  // tomonida ham e'lon qilinadi (ayni argumentlar: DLX'siz, TTL 8 s).
+  // ⚠️ Deploy tartibi: ai-service OLDIN.
+  try {
+    await app.get(RmqService).ensureQueue('AI_CONFIG');
+  } catch (error) {
+    app
+      .get(Logger)
+      .warn(
+        { err: error },
+        "AI_CONFIG navbati e'lon qilinmadi — ai-service yaratadi",
+        'AiConfigQueue',
+      );
+  }
+
   // Prometheus metrics: /metrics + request histogram + process/GC defaults.
   // (oFfOWGuo) /metrics faqat `Authorization: Bearer <METRICS_TOKEN>` bilan;
   // production'da token yo'q bo'lsa 404 (tunnel orqali ochiq edi).
