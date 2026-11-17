@@ -11,3 +11,4 @@ export * from './geo-norm';
 export * from './similarity';
 export * from './product-norm';
 export * from './phone';
+export * from './money-mentions';

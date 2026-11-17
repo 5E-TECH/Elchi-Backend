@@ -3,6 +3,8 @@
  * ikki snapshotda: SEED (regions-districts.data.ts — prod'dagi hozirgi
  * qatorlar) va FULL (seed + rasmiy SOATO ro'yxatidagi yetishmayotgan
  * qatorlar, D1 bajarilgandan keyingi holat).
+ * D1 (#656) dan keyin seed'da 25 ta qator bor — SEED = FULL, shuning uchun
+ * fixture'da `seed` ustuni `full` bilan bir xil.
  *
  * Kutilgan qiymat o'zgarsa — fixture'ni ataylab yangilang va PR'da sababini
  * yozing. Sweep testlari esa invariant: hech qachon BOSHQA tumanni
@@ -170,6 +172,31 @@ describe('district resolver — sweep invariants', () => {
         }
       }
       expect(wrong).toEqual([]);
+    });
+
+    it(`${label}: region_inferred switch is never less careful than no region`, () => {
+      const bypass: string[] = [];
+      for (const d of snap.districts) {
+        const own = snap.regions.find((x) => x.id === d.region_id)?.sato_code;
+        const bare = run(snap, { district_name: d.name });
+        if (bare.sato) continue;
+        for (const [sato, name] of Object.entries(REGION_CANON)) {
+          if (sato === own) continue;
+          const res = run(snap, {
+            region_name: name,
+            district_name: d.name,
+            region_inferred: true,
+          });
+          // Toshkent 1726/1727 umumiy hovuzi — #646 dan beri ataylab.
+          const tashkentPool =
+            (sato === '1726' || sato === '1727') &&
+            (res.regionSato === '1726' || res.regionSato === '1727');
+          if (res.sato && res.regionSato !== sato && !tashkentPool) {
+            bypass.push(`${d.name} via ${name} -> ${res.sato}`);
+          }
+        }
+      }
+      expect(bypass).toEqual([]);
     });
 
     it(`${label}: locked region never auto-picks outside it`, () => {

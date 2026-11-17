@@ -380,6 +380,54 @@ describe('OrderExtractService', () => {
     });
   });
 
+  describe('P1-7 deterministik belgilar (#649 review)', () => {
+    it('faqat matn, bitta buyurtma → region_inferred va money_mentions qo‘yiladi', async () => {
+      extractJson.mockResolvedValue(
+        okResult({ orders: [rawOrder({ region_name: 'Samarqand' })] }),
+      );
+      const res = await service.extract(baseReq());
+      expect(res.ok).toBe(true);
+      const [o] = (res as { orders: Record<string, unknown>[] }).orders;
+      // Matnda "Andijon" bor, "Samarqand" yo'q — AI taxmin qilgan.
+      expect(o.region_inferred).toBe(true);
+      expect(o.money_mentions).toEqual([
+        expect.objectContaining({ value: 250000, kind: 'unit' }),
+      ]);
+    });
+
+    it('viloyat matnda aytilgan → region_inferred=false', async () => {
+      extractJson.mockResolvedValue(okResult({ orders: [rawOrder()] }));
+      const res = await service.extract(baseReq());
+      const [o] = (res as { orders: Record<string, unknown>[] }).orders;
+      expect(o.region_inferred).toBe(false);
+    });
+
+    it('rasm bor → ikkala belgi ham YO‘Q', async () => {
+      extractJson.mockResolvedValue(okResult({ orders: [rawOrder()] }));
+      const res = await service.extract(
+        baseReq({
+          images: [{ media_type: 'image/jpeg', data_base64: 'QUJD' }],
+        }),
+      );
+      const [o] = (res as { orders: Record<string, unknown>[] }).orders;
+      expect(o).not.toHaveProperty('region_inferred');
+      expect(o).not.toHaveProperty('money_mentions');
+    });
+
+    it('bir nechta buyurtma → money_mentions YO‘Q (bog‘lab bo‘lmaydi)', async () => {
+      extractJson.mockResolvedValue(
+        okResult({ orders: [rawOrder(), rawOrder({ customer_name: 'Vali' })] }),
+      );
+      const res = await service.extract(baseReq());
+      const orders = (res as { orders: Record<string, unknown>[] }).orders;
+      expect(orders).toHaveLength(2);
+      for (const o of orders) {
+        expect(o).not.toHaveProperty('money_mentions');
+        expect(o.region_inferred).toBe(false);
+      }
+    });
+  });
+
   it('natija sanitize’dan o‘tadi (begona kalit, #, narx, enum)', async () => {
     extractJson.mockResolvedValue(
       okResult({

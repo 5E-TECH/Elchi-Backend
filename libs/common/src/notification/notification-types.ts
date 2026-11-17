@@ -579,6 +579,27 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
     }),
+    // «AI kalit va modellar» (be-brief §10): kalit/model o'zgarishi va runtime
+    // nosozligi — superadmin + admin inbox'iga (ops Telegram xabaridan tashqari).
+    // Matn (title/body) ai-service'da; kalit qiymati hech qachon yo'q (faqat hint).
+    def({
+      key: 'ai.key_alert',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.CRITICAL,
+      group_key_pattern: 'ai.key_alert:{{audit_id}}',
+      label_uz: "AI kaliti o'zgardi yoki ishlamay qoldi",
+      default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
+      user_can_mute: false,
+    }),
+    def({
+      key: 'ai.model_alert',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'ai.model_alert:{{audit_id}}',
+      label_uz: "AI modeli o'zgardi yoki mavjud emas",
+      default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
+      user_can_mute: false,
+    }),
     // (DuST9k8j / 1tnpaIqd) Qo'shimcha xarajat — market EGASIGA (DM tugmalar
     // bilan); eslatma va avtomatik tasdiq ham shu guruhda (bitta qator).
     def({

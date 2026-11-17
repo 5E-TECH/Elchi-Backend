@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder } from 'typeorm';
+import { EntityManager, Repository, SelectQueryBuilder } from 'typeorm';
 import {
   AuditContext,
   RequestContextStore,
@@ -165,29 +165,7 @@ export class ActivityLogService {
    */
   async log(input: ActivityLogInput): Promise<void> {
     try {
-      const ctx = requestContext.get();
-      const traceId = input.trace_id ?? ctx?.traceId ?? null;
-      const actor = resolveRowActor(input, ctx);
-      const entity = this.repo.create({
-        entity_type: input.entity_type,
-        entity_id: String(input.entity_id),
-        action: input.action,
-        old_value: normaliseJsonb(input.old_value),
-        new_value: normaliseJsonb(input.new_value),
-        user_id: actor.user_id,
-        user_name: actor.user_name,
-        user_role: actor.user_role,
-        service: this.serviceName,
-        // Mijoz `x-request-id` sarlavhasi ustundan (VARCHAR 64) uzun bo'lsa
-        // INSERT yiqilib, log JIMGINA yo'qolardi (f2Ud5tju: trace endi RMQ
-        // sarlavhasi orqali HAR chaqiruvda keladi).
-        trace_id: traceId ? String(traceId).slice(0, TRACE_ID_MAX) : null,
-        metadata: mergeAuditMetadata(
-          pickAuditContext(ctx),
-          normaliseJsonb(input.metadata),
-        ),
-        description: normaliseDescription(input.description),
-      });
+      const entity = this.buildRow(this.repo, input);
       await this.repo.save(entity);
     } catch (err) {
       this.logger.error(
@@ -195,6 +173,58 @@ export class ActivityLogService {
         (err as Error).stack,
       );
     }
+  }
+
+  /**
+   * Qatorni yozuvga tayyorlaydi (`log` va `logWithin` uchun bitta manba):
+   * trace, aktyor, IP/qurilma konteksti, tavsif normallashuvi.
+   */
+  private buildRow(
+    repo: Repository<ActivityLog>,
+    input: ActivityLogInput,
+  ): ActivityLog {
+    const ctx = requestContext.get();
+    const traceId = input.trace_id ?? ctx?.traceId ?? null;
+    const actor = resolveRowActor(input, ctx);
+    return repo.create({
+      entity_type: input.entity_type,
+      entity_id: String(input.entity_id),
+      action: input.action,
+      old_value: normaliseJsonb(input.old_value),
+      new_value: normaliseJsonb(input.new_value),
+      user_id: actor.user_id,
+      user_name: actor.user_name,
+      user_role: actor.user_role,
+      service: this.serviceName,
+      // Mijoz `x-request-id` sarlavhasi ustundan (VARCHAR 64) uzun bo'lsa
+      // INSERT yiqilib, log JIMGINA yo'qolardi (f2Ud5tju: trace endi RMQ
+      // sarlavhasi orqali HAR chaqiruvda keladi).
+      trace_id: traceId ? String(traceId).slice(0, TRACE_ID_MAX) : null,
+      metadata: mergeAuditMetadata(
+        pickAuditContext(ctx),
+        normaliseJsonb(input.metadata),
+      ),
+      description: normaliseDescription(input.description),
+    });
+  }
+
+  /**
+   * TRANZAKSIYA ICHIDA audit (be-brief D15): berilgan `EntityManager` orqali
+   * yoziladi va xato bo'lsa THROW qiladi — chaqiruvchining tranzaksiyasi
+   * orqaga qaytadi (audit yozilmasa o'zgarish ham yo'q). `log()` dan farqi
+   * shu: u xatoni yutadi.
+   *
+   * ⚠️ Maxfiy maydonli entity (masalan AI kalit qatori) uchun `logChange()`
+   * ISHLATILMAYDI (`computeDiff` butun qatorni, shu jumladan shifrmatnni
+   * nusxalaydi) — `old_value`/`new_value`/`metadata` ni chaqiruvchi faqat
+   * xavfsiz maydonlardan quradi.
+   */
+  async logWithin(
+    manager: EntityManager,
+    input: ActivityLogInput,
+  ): Promise<ActivityLog> {
+    const repo = manager.getRepository(ActivityLog);
+    return repo.save(this.buildRow(repo, input));
   }
 
   /**
@@ -301,9 +331,7 @@ export class ActivityLogService {
   private readRepo(q: ActivityLogQuery): Repository<ActivityLog> {
     const archive = q.archive === true || `${q.archive}` === 'true';
     if (!archive) return this.repo;
-    return this.repo.manager.getRepository(
-      ActivityLogArchive,
-    ) as unknown as Repository<ActivityLog>;
+    return this.repo.manager.getRepository(ActivityLogArchive);
   }
 
   /** `query()` filtrlari (har ikki yo'l uchun bitta manba). */

@@ -159,6 +159,15 @@ export interface ClaudeUsageRecord extends ClaudeUsageMeta {
    * yuborilgandan javob kelguncha (`ai_usage_log.latency_ms`, p50/p95).
    */
   latencyMs?: number | null;
+  /**
+   * «AI kalit va modellar»: chaqiruv qaysi kalit bilan ketgani (lease).
+   * Kalit QIYMATI emas — id (UI kaliti), manba va iz. Env kalitida `keyId`
+   * null. Ixtiyoriy — eski chaqiruvchilar va testlar o'zgarmaydi.
+   */
+  keyId?: string | null;
+  keySource?: 'ui' | 'env' | null;
+  keyFingerprint?: string | null;
+  configVersion?: number | null;
 }
 
 /**

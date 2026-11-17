@@ -3279,6 +3279,7 @@
     },
     "/orders/ai-parse": {
       "post": {
+        "description": "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: `district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), `region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), `checks: [{ code, … }]` — AI tekshiruvlari, `ready`/`issues` ga ta'sir qilmaydi. BLOKLOVCHI (yaratishdan oldin operator tasdig'i shart): `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }` — ai-confirm'da `orders[].ack_checks` da bo'lmasa 409 `CHECKS_NOT_ACKNOWLEDGED` (`AI_ACK_CHECKS_ENFORCE=on`). YUMSHOQ (faqat ogohlantirish, tasdiq so'ralmaydi): `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. ⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
         "operationId": "OrderGatewayController_aiParse",
         "parameters": [],
         "requestBody": {
@@ -3468,7 +3469,16 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija"
+          },
+          "400": {
+            "description": "(`AI_ACK_CHECKS_ENFORCE=on`) AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', indexes: number[] }` (so'rovdagi `orders[]` o'rinlari). AI_DRAFT_NOT_FOUND — `draft_id` shu market uchun ai-service'da topilmadi; AI_DRAFT_ITEM_NOT_FOUND — draft bor, lekin saqlangan preview'da bunday `ai_item_index` yo'q. Ikkalasida ham tana xuddi shunday `indexes: number[]`; AI'ni qayta yurgizing yoki qo'lda yarating. Boshqa 400 — DTO validatsiyasi."
+          },
+          "409": {
+            "description": "CHECKS_NOT_ACKNOWLEDGED (`AI_ACK_CHECKS_ENFORCE=on`) — saqlangan AI preview'da BLOKLOVCHI tekshiruv (district_low_confidence, price_check) bor, lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi (idempotent takror ham). Tana: `{ statusCode: 409, message, code: 'CHECKS_NOT_ACKNOWLEDGED', missing: string[], orders: [{ index, missing: string[] }] }` (`index` — so‘rovdagi `orders[]` o‘rni)."
+          },
+          "503": {
+            "description": "(`AI_ACK_CHECKS_ENFORCE=on`) AI_CHECKS_UNAVAILABLE — saqlangan AI tekshiruvlarini o'qib bo'lmadi (ai-service timeout/xato) yoki yosh draft'ning (< 2 daqiqa) preview snapshot'i hali saqlanmagan. FAIL-CLOSED: hech narsa yaratilmaydi. Tana: `{ statusCode: 503, message, code: 'AI_CHECKS_UNAVAILABLE', retryable: true, retry_after_seconds: 5 }`, sarlavha `Retry-After: 5`."
           }
         },
         "security": [
@@ -7688,6 +7698,7 @@
     },
     "/region": {
       "get": {
+        "description": "Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.",
         "operationId": "LogisticsGatewayController_getAllRegions",
         "parameters": [],
         "responses": {
@@ -7975,8 +7986,69 @@
         ]
       }
     },
+    "/region/district-coverage": {
+      "get": {
+        "description": "«Hududlar» sahifasi ogohlantirishi. Javob `data`: `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city'|'tuman'|null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1'|'no_branch_found', flagged_at }], checked_at }`. `missing_official` — rasmiy SOATO ro‘yxatida bor, bazada (o‘chirilmagan) qatori yo‘q birliklar. `review_required` — seed qo‘shib viloyatga AVTOMATIK biriktirgan va ops hali tasdiqlamagan tumanlar. `region` — geografik viloyat (`region_id`), `service_region` — buyurtmani yo‘naltiradigan XIZMAT viloyati (`assigned_region ?? region_id`). `serving_branch` VILOYAT qoidasidan (district-coverage.ts, `isOrderServedByBranch`) CHAQIRUV paytida hisoblanadi: `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o‘sish tartibida; ularning HAR BIRI tuman buyurtmalarini ko‘radi), `serving_branch` — ulardan biri (eski `serving_branch_id` ro‘yxatda bo‘lsa o‘sha, aks holda eng kichik id). `reason: no_branch_found` va `serving_branch: null` — FAQAT xizmat viloyatida faol filial yo‘q bo‘lsa (buyurtmani faqat HQ ko‘radi). Filial xizmati javob bermasa — 503 (qamrov tekshiruvlari bilan bir xil; «filial yo‘q» deb ko‘rsatilmaydi). Belgini `POST /region/district/:id/confirm-assignment`, `PATCH /district/:id` (viloyat o‘zgarsa) yoki `PUT /branches/:id/districts` tushiradi; filial o‘chirilishi/nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI. Faqat SUPERADMIN/ADMIN.",
+        "operationId": "LogisticsGatewayController_getDistrictCoverageReview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Coverage review"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tuman qamrovi ogohlantirishi (D1)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/region/district/{id}/confirm-assignment": {
+      "post": {
+        "description": "Tumanning `assignment_review_required` belgisini tushiradi (audit yoziladi). IDEMPOTENT: belgi yo‘q bo‘lsa ham 200; parallel tasdiq yoki qayta biriktirish bilan poygada faqat yutgan so‘rov audit yozadi, qolgani saqlangan `confirmed_by`/`confirmed_at` ni qaytaradi. Javob `data`: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }` (hech qachon tasdiqlanmagan va belgisiz tuman — `confirmed_by`/`confirmed_at` `null`). Tuman yo‘q — 404. Faqat SUPERADMIN/ADMIN.",
+        "operationId": "LogisticsGatewayController_confirmDistrictAssignment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "District ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assignment confirmed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Avtomatik filial biriktirishini tasdiqlash (D1)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/region/{id}": {
       "get": {
+        "description": "Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.",
         "operationId": "LogisticsGatewayController_getRegionById",
         "parameters": [
           {
@@ -8134,6 +8206,7 @@
     },
     "/district": {
       "get": {
+        "description": "`assignment_review_required`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` (D1) — faqat SUPERADMIN/ADMIN ga; boshqa rollarga bu maydonlar qaytmaydi.",
         "operationId": "LogisticsGatewayController_getAll",
         "parameters": [
           {
@@ -8240,6 +8313,7 @@
     },
     "/district/sato/{satoCode}": {
       "get": {
+        "description": "`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.",
         "operationId": "LogisticsGatewayController_getDistrictBySato",
         "parameters": [
           {
@@ -8278,6 +8352,7 @@
     },
     "/district/{id}": {
       "get": {
+        "description": "`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.",
         "operationId": "LogisticsGatewayController_getById",
         "parameters": [
           {
@@ -8315,7 +8390,7 @@
         ]
       },
       "patch": {
-        "description": "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi.",
+        "description": "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi. D1: tuman «tekshirilmagan» (`assignment_review_required: true`) bo'lsa, viloyat o'zgarishi bilan belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).",
         "operationId": "LogisticsGatewayController_update",
         "parameters": [
           {
@@ -23326,6 +23401,230 @@
         ]
       }
     },
+    "/ai/config": {
+      "get": {
+        "description": "`data` = AiConfigView (openapi-fragment v0.2). Kalit qiymati yoki shifrmatni HECH QACHON qaytmaydi. `AI_CONFIG_UI_ENABLED=false` da ham ishlaydi (faqat ko‘rish; `key_locked_reason: feature_off`). `key_wrap` — brauzer kalitni muhrlaydigan ai-service ochiq kaliti (yozish mumkin bo‘lmasa null).",
+        "operationId": "AiConfigGatewayController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI kalit va modellar: sozlama ko‘rinishi (faqat superadmin)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key": {
+      "put": {
+        "description": "Brauzer `{api_key, uid, nonce}` ni `key_wrap` bilan muhrlaydi (AiKeyEnvelope). Bepul tekshiruv (`GET /v1/models`) → shifrlab saqlash; audit `ai.key.add|replace`. Xatolar: 400 AI_KEY_FORMAT / AI_KEY_ADMIN_KEY / AI_KEY_OAUTH_TOKEN / AI_KEY_WRAP_INVALID / AI_CONFIG_INVALID {field}; 403 AI_CONFIG_UI_DISABLED / AI_CONFIG_NOT_ALLOWED / AI_CONFIG_UNSIGNED / AI_STEP_UP_REQUIRED; 409 AI_CONFIG_CONFLICT {version} / AI_KEY_SAME / AI_KEY_WRAP_STALE; 422 AI_KEY_REJECTED / AI_KEY_FORBIDDEN / AI_KEY_BAD_REQUEST / AI_KEY_BILLING; 429 AI_KEY_ATTEMPTS_EXCEEDED / AI_KEY_UPSTREAM_RATE_LIMITED {retry_after_seconds}; 502 AI_KEY_VERIFY_UNAVAILABLE; 503 AI_KEY_STORAGE_UNAVAILABLE / AI_CONFIG_EXPIRED; 504 (kodsiz) — hech narsa o‘zgarmagan. Javob — yangilangan AiConfigView.",
+        "operationId": "AiConfigGatewayController_setKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiKeySetDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Anthropic kalitini qo‘shish yoki almashtirish (muhrlangan)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/verify": {
+      "post": {
+        "description": "UI kaliti (yoki u yo‘q bo‘lsa server kaliti) `GET /v1/models` bilan tekshiriladi; aniq rad ham 200 — natija `verify.state` da. Audit `ai.key.verify`. Step-up talab qilinmaydi. 404 AI_KEY_NONE; 429 AI_KEY_ATTEMPTS_EXCEEDED.",
+        "operationId": "AiConfigGatewayController_verifyKey",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ishlatilayotgan kalitni qayta tekshirish (bepul)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/restore-previous": {
+      "post": {
+        "description": "Faol ↔ oldingi almashadi. 404 AI_KEY_NO_PREVIOUS; 409 AI_CONFIG_CONFLICT; 422/429/502 — tekshiruv natijasi; 503 AI_KEY_STORAGE_UNAVAILABLE / AI_CONFIG_EXPIRED. Audit `ai.key.restore`.",
+        "operationId": "AiConfigGatewayController_restoreKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiVersionedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Oldingi kalitga qaytarish (qayta tekshiruv bilan)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/deactivate": {
+      "post": {
+        "description": "Faol → oldingi; eski oldingisi o‘chiriladi (shifrmatn yo‘q qilinadi). Shifr kalitisiz ham ishlaydi — bir bosishda tiklash. Anthropic’da kalitni bekor QILMAYDI. 404 AI_KEY_NONE; 409 AI_CONFIG_CONFLICT; 400 AI_CONFIG_INVALID {field:\"reason\"}. Audit `ai.key.deactivate`.",
+        "operationId": "AiConfigGatewayController_deactivateKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiDeactivateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Faol UI kalitini o‘chirish (server kaliti ishlaydi yoki AI o‘chadi)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/previous": {
+      "delete": {
+        "description": "Faqat jonli bazadan (WAL/zaxiralarda muddati tugaguncha qoladi). Anthropic’da bekor QILMAYDI. 404 AI_KEY_NO_PREVIOUS; 409 AI_CONFIG_CONFLICT. Audit `ai.key.forget`.",
+        "operationId": "AiConfigGatewayController_forgetPrevious",
+        "parameters": [
+          {
+            "name": "version",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Oldingi kalit shifrmatnini o‘chirish",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/history": {
+      "get": {
+        "description": "`data` = `{items[{id, action, created_at, actor, details, reason, context{ip, device}}], next_cursor}`. Eng yangisi tepada; tizim qatorlari (rad etilgan urinish, runtime xatosi) ham.",
+        "operationId": "AiConfigGatewayController_history",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kalit va model o‘zgarishlari tarixi",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/ai-usage/dashboard": {
       "get": {
         "operationId": "AiUsageGatewayController_dashboard",
@@ -28695,14 +28994,26 @@
           "draft_id": {
             "type": "string",
             "example": "3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c",
-            "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun."
+            "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED` (`indexes`). Shu market uchun topilmasa — 400 `AI_DRAFT_NOT_FOUND`."
           },
           "ai_item_index": {
             "type": "number",
             "example": 0,
             "minimum": 0,
             "maximum": 29,
-            "description": "Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG."
+            "description": "Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`; saqlangan preview’da bunday `index` bo‘lmasa 400 `AI_DRAFT_ITEM_NOT_FOUND` (`indexes`). Qayta yuborishda O‘ZGARTIRMANG."
+          },
+          "ack_checks": {
+            "example": [
+              "district_low_confidence",
+              "price_check"
+            ],
+            "maxItems": 10,
+            "description": "Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `CHECKS_NOT_ACKNOWLEDGED` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "items": {
             "maxItems": 50,
@@ -28785,6 +29096,8 @@
         "required": [
           "customer",
           "district_id",
+          "draft_id",
+          "ai_item_index",
           "items",
           "where_deliver"
         ]
@@ -36930,6 +37243,109 @@
         "required": [
           "extra_usd",
           "reason"
+        ]
+      },
+      "AiKeyEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "v": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "kid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "description": "key_wrap.kid"
+          },
+          "alg": {
+            "type": "string",
+            "enum": [
+              "RSA-OAEP-256+A256GCM"
+            ]
+          },
+          "ek": {
+            "type": "string",
+            "minLength": 400,
+            "maxLength": 700,
+            "description": "base64url"
+          },
+          "iv": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{16}$"
+          },
+          "ct": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 1024,
+            "description": "base64url"
+          }
+        },
+        "required": [
+          "v",
+          "kid",
+          "alg",
+          "ek",
+          "iv",
+          "ct"
+        ]
+      },
+      "AiKeySetDto": {
+        "type": "object",
+        "properties": {
+          "key_envelope": {
+            "description": "Brauzerda (WebCrypto) ai-service ochiq kaliti bilan muhrlangan kalit. Ochiq kalit HECH QACHON yuborilmaydi.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiKeyEnvelopeDto"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "Ixtiyoriy; sukut «Anthropic kaliti». Harf, raqam, bo'sh joy va . , _ ( ) ' ʻ ʼ -. Kalit o'xshash qiymat → 400 AI_CONFIG_INVALID {field:'label'}."
+          },
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          }
+        },
+        "required": [
+          "key_envelope",
+          "version"
+        ]
+      },
+      "AiVersionedDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          }
+        },
+        "required": [
+          "version"
+        ]
+      },
+      "AiDeactivateDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "version"
         ]
       },
       "AiAssistantMessageDto": {

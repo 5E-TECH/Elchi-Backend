@@ -11,6 +11,7 @@ import {
   CLAUDE_USAGE_SINK,
 } from './claude.constants';
 import { ClaudeService, defaultAnthropicClientFactory } from './claude.service';
+import { ANTHROPIC_CLIENT_PROVIDER } from './anthropic-client.provider';
 
 export interface ClaudeModuleOptions {
   /** usageSink / budgetGuard provayderlarini eksport qiladigan modullar. */
@@ -19,6 +20,11 @@ export interface ClaudeModuleOptions {
   usageSink?: InjectionToken;
   /** `ClaudeBudgetGuard` ni amalga oshiruvchi provayder tokeni. */
   budgetGuard?: InjectionToken;
+  /**
+   * «AI kalit va modellar»: `AnthropicClientProvider` (UI > env > yo'q).
+   * Berilmasa — env provayderi (bugungi xulq).
+   */
+  clientProvider?: InjectionToken;
 }
 
 /**
@@ -57,6 +63,12 @@ export class ClaudeModule {
       providers.push({
         provide: CLAUDE_BUDGET_GUARD,
         useExisting: opts.budgetGuard,
+      });
+    }
+    if (opts.clientProvider) {
+      providers.push({
+        provide: ANTHROPIC_CLIENT_PROVIDER,
+        useExisting: opts.clientProvider,
       });
     }
     return {

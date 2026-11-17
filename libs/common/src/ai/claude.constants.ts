@@ -63,3 +63,9 @@ export const AI_MODEL_DEFAULTS = {
   classify: 'claude-haiku-4-5',
   district: 'claude-sonnet-5',
 } as const;
+
+/**
+ * Anthropic API manzili — kodda mahkamlangan (be-brief §7). Hech qachon env
+ * yoki UI'dan olinmaydi: kalit faqat shu hostga yuboriladi.
+ */
+export const ANTHROPIC_API_BASE_URL = 'https://api.anthropic.com';

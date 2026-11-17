@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
+  Optional,
 } from '@nestjs/common';
 import { Observable, of } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
@@ -38,6 +39,7 @@ import {
   type AiAssistantRequester,
   type AiRequester,
   type AiStatusResponse,
+  isAiAllowedInEnv,
 } from '@app/common';
 import { errorRes } from '../../../libs/common/helpers/response';
 import { AiBudgetService } from './budget/ai-budget.service';
@@ -53,6 +55,8 @@ import {
 import { OrderExtractService } from './order-extract/order-extract.service';
 import { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
 import { runAiHandler } from './rpc/run-ai-handler';
+import { AiRuntimeProvider } from './ai-config/ai-runtime.provider';
+import { AI_SLOT_DEFS } from './ai-config/ai-model-slots';
 import { AiMarginService } from './usage/ai-margin.service';
 import { AiUsageService } from './usage/ai-usage.service';
 import { nextTashkentMidnight, tashkentDay } from './usage/tashkent-day';
@@ -93,6 +97,8 @@ export class AiServiceController implements OnApplicationBootstrap {
     private readonly assistant?: AssistantService,
     // T3 — kassa cheki tahlili. Ixtiyoriy: eski spec'lar usiz quradi.
     private readonly receiptExtract?: ReceiptExtractService,
+    // «AI kalit va modellar» — kalit manbai/holati (ixtiyoriy: eski spec'lar).
+    @Optional() private readonly runtime?: AiRuntimeProvider,
   ) {}
 
   /**
@@ -501,7 +507,7 @@ export class AiServiceController implements OnApplicationBootstrap {
    */
   private async buildStatus(): Promise<AiStatusResponse> {
     const models = this.currentModels();
-    return {
+    const base: AiStatusResponse = {
       enabled: this.claude.isEnabled(),
       key_state: this.claude.keyState().state,
       models,
@@ -509,6 +515,40 @@ export class AiServiceController implements OnApplicationBootstrap {
       cap: await this.readCap(),
       usage_persist_failures: this.readPersistFailures(),
     };
+    return { ...base, ...this.statusAdditions(base.enabled) };
+  }
+
+  /**
+   * «AI kalit va modellar» qo'shimcha maydonlari (QO'SHIMCHA — eski
+   * maydonlar o'zgarmaydi). Buyurtma/rasm modeli mavjud bo'lmasa
+   * (`model_unavailable`) AI buyurtma uchun o'chiq hisoblanadi.
+   */
+  private statusAdditions(
+    enabled: boolean,
+  ): Partial<AiStatusResponse> & { enabled?: boolean } {
+    const models_all = Object.fromEntries(
+      AI_SLOT_DEFS.map((d) => [d.slot, this.modelName(d.env, d.defaultModel)]),
+    ) as AiStatusResponse['models_all'];
+    if (!this.runtime) return { models_all };
+    try {
+      const st = this.runtime.status();
+      const orderDown =
+        st.unavailableSlots.includes('order') ||
+        st.unavailableSlots.includes('vision');
+      const disabled_reason = !isAiAllowedInEnv()
+        ? 'staging_disabled'
+        : (st.disabledReason ?? (orderDown ? 'model_unavailable' : null));
+      return {
+        enabled: enabled && !orderDown,
+        key_source: st.source,
+        key_verify_state: st.verifyState,
+        disabled_reason,
+        unavailable_slots: st.unavailableSlots,
+        models_all,
+      };
+    } catch {
+      return { models_all };
+    }
   }
 
   private async readCap(): Promise<AiStatusResponse['cap']> {

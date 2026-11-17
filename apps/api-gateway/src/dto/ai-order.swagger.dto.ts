@@ -252,21 +252,26 @@ export class AiConfirmOrderDto {
   @IsString({ message: "region_id matn bo'lishi kerak" })
   region_id?: string;
 
-  @ApiPropertyOptional({
+  // (AI ack S5) Swagger'da MAJBURIY; runtime tekshiruvi kontrollerda (400
+  // `AI_DRAFT_REQUIRED` + `indexes` shakli saqlanishi uchun class-validator
+  // `@IsOptional` qoladi).
+  @ApiProperty({
+    required: true,
     example: '3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c',
     description:
-      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun.',
+      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED` (`indexes`). Shu market uchun topilmasa — 400 `AI_DRAFT_NOT_FOUND`.',
   })
   @IsOptional()
   @IsUUID('all', { message: "draft_id UUID bo'lishi kerak" })
   draft_id?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
+    required: true,
     example: 0,
     minimum: 0,
     maximum: AI_MAX_ORDERS_PER_PARSE - 1,
     description:
-      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG.',
+      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`; saqlangan preview’da bunday `index` bo‘lmasa 400 `AI_DRAFT_ITEM_NOT_FOUND` (`indexes`). Qayta yuborishda O‘ZGARTIRMANG.',
   })
   @IsOptional()
   @IsInt({ message: "ai_item_index butun son bo'lishi kerak" })
@@ -275,6 +280,37 @@ export class AiConfirmOrderDto {
     message: `ai_item_index ${AI_MAX_ORDERS_PER_PARSE - 1} dan oshmasligi kerak`,
   })
   ai_item_index?: number;
+
+  /**
+   * AI ack (ega qarori 2026-11-14): operator ko'rib, «baribir yaratish»ni
+   * tasdiqlagan BLOKLOVCHI tekshiruv kodlari. Qaysi kod kerakligini server
+   * o'zi saqlangan snapshot'dan biladi — bu ro'yxat faqat tasdiq.
+   */
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['district_low_confidence', 'price_check'],
+    maxItems: 10,
+    description:
+      'Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). ' +
+      'Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). ' +
+      'Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `CHECKS_NOT_ACKNOWLEDGED` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. ' +
+      'Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. ' +
+      'Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.',
+  })
+  @IsOptional()
+  @IsArray({ message: "ack_checks massiv bo'lishi kerak" })
+  @ArrayMaxSize(10, {
+    message: "ack_checks 10 tadan ortiq bo'lmasligi kerak",
+  })
+  @IsString({
+    each: true,
+    message: "ack_checks elementlari matn bo'lishi kerak",
+  })
+  @Matches(/^[a-z][a-z_]{0,31}$/, {
+    each: true,
+    message: "ack_checks elementi tekshiruv kodi bo'lishi kerak",
+  })
+  ack_checks?: string[];
 
   @ApiProperty({
     type: () => [AiConfirmItemDto],

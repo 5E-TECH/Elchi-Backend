@@ -3,6 +3,7 @@ import {
   normalizeUzPhone,
   type AiExtractWarning,
   type RawOrderExtraction,
+  type RawOrderModelKey,
 } from '@app/common';
 
 /**
@@ -39,7 +40,7 @@ export function mergeExtractedOrders(
   return out;
 }
 
-type ScalarKey = Exclude<keyof RawOrderExtraction, 'items' | 'warnings'>;
+type ScalarKey = Exclude<RawOrderModelKey, 'items' | 'warnings'>;
 
 const SCALAR_KEYS: readonly ScalarKey[] = [
   'customer_name',

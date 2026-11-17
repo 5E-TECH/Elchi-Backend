@@ -171,6 +171,84 @@ Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_
 - ✏️ R3 `scope: category` dalilida har qatorning `cashbox_name` va `href` — o'sha qator kassasidan (ilgari trigger kassasi). R6: `subject.name = "Butun tizim"`, `first_fact_at` = davr boshi.
 - 🟢 R6: 02:30 ishi o'tkazib yuborilsa keyingi ishda o'tgan kunlar (≤ 7) va hafta ham tekshiriladi.
 
+### 2026-11-14 — «Hududlar»: yetishmagan 25 tuman qo'shildi, avtomatik biriktirish ogohlantirishi (D1)
+
+Ega qarori (2026-11-14): rasmiy SOATO'dagi yetishmagan 25 tuman/shahar («Farg'ona shahri», «Zomin tumani», «Xiva shahri» …) prod'ga qo'shiladi va viloyat filialiga AVTOMATIK biriktiriladi; ops tasdiqlaguncha superadmin/admin ogohlantirish ko'radi.
+Biriktirish — VILOYAT qoidasi (district-coverage.ts, anKpzwxk): tuman buyurtmasini xizmat viloyati (`assigned_region ?? region_id`) dagi HAR QANDAY faol REGIONAL/HYBRID filial ko'radi. Eski `districts.serving_branch_id` qamrovga ta'sir qilmaydi — ogohlantirishdagi filial undan EMAS, viloyat qoidasidan CHAQIRUV paytida hisoblanadi.
+Deploy: logistics-service + api-gateway, migratsiya **227** (`logistics_schema.districts`: `assignment_review_required` sukut `false`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at`). ⚠️ Migratsiya logistics-service qayta ishga tushishidan OLDIN — qatorlar servis ishga tushganda seed bilan qo'shiladi.
+
+- 🆕 `GET /region/district-coverage` (SUPERADMIN, ADMIN) → `data`:
+  `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city' | 'tuman' | null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1' | 'no_branch_found', flagged_at }], checked_at }`.
+  `missing_official` — rasmiy ro'yxatda bor, bazada yo'q birliklar (deploy'dan keyin odatda bo'sh); `region.id` — bazada viloyat bo'lmasa `null`.
+  `region` — geografik viloyat; `service_region` — buyurtmani yo'naltiradigan xizmat viloyati (tuman boshqa viloyatga o'tkazilgan bo'lsa farq qiladi).
+  `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o'sish tartibida) — ularning HAR BIRI tuman buyurtmalarini ko'radi; `serving_branch` — ulardan biri (ko'rsatish uchun). `serving_branch: null` + `reason: 'no_branch_found'` — FAQAT xizmat viloyatida faol filial yo'q bo'lsa (buyurtmani faqat HQ ko'radi).
+  Filial xizmati javob bermasa — **503** (boshqa qamrov tekshiruvlari bilan bir xil): «filial yo'q» deb ko'rsatmang, «qayta urinish» bering.
+- 🆕 `POST /region/district/:id/confirm-assignment` (SUPERADMIN, ADMIN) — idempotent 200: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }`; audit yoziladi. Ikki admin bir vaqtda bossa — ikkalasi 200, audit bitta, ikkalasi yutgan tasdiqning `confirmed_by/at` ni oladi. Tuman yo'q — 404.
+- ✏️ `PATCH /district/:id` (`assigned_region`) — «O'zgartirish» shu yerga: viloyat o'zgarsa belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).
+- ✏️ `PUT /branches/:id/districts` (eskirgan) — tanlangan (yoki filialdan olingan) tumanlarning belgisi ham tushadi (audit: `cleared_by_reassign`). Filial o'chirilishi / nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI — tekshiruv baribir kerak; ogohlantirishdagi filial viloyat qoidasidan qayta hisoblanadi.
+- ✏️ `GET /district`, `GET /district/:id`, `GET /district/sato/:code`, `GET /region`, `GET /region/:id` (tumanlar) — har tumanda yangi maydonlar `assignment_review_required: boolean`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` — **faqat SUPERADMIN/ADMIN** javobida; MARKET, COURIER, MARKET_OPERATOR, MANAGER, REGISTRATOR javobida bu maydonlar YO'Q.
+
+**Frontend action items:**
+- 🔧 «Hududlar»: `review_required` bo'sh bo'lmasa banner + ro'yxat (tuman, xizmat viloyati, filial(lar) — `region_branches`, sabab); «Tasdiqlash» → confirm-assignment; «O'zgartirish» → `PATCH /district/:id` (viloyat). `no_branch_found` — «Filial yo'q · Faqat Toshkent HQ ko'radi», qizil. 503 — xato holati, «filial yo'q» EMAS.
+- 🔧 Tuman ro'yxatida `assignment_review_required` — sariq belgi (faqat admin; boshqa rollarda maydon yo'q — `undefined` ni `false` deb oling).
+
+### 2026-11-15 — AI kalit va modellar (BE-1c): UI kaliti haqiqatan ishlatiladi; `ai.status` qo'shimchalari
+
+Deploy: ai-service. Migratsiya yo'q (228 ustunlari endi yoziladi). `AI_CONFIG_UI_ENABLED=false` (prod sukuti) — xulq bayt-aniq o'zgarmagan (golden test).
+
+- ✏️ UI'dan qo'shilgan kalit qayta ishga tushirishsiz keyingi AI so'rovida ishlatiladi (15 s yangilanish, yozuvdan keyin darhol). Ustuvorlik: UI kaliti > server kaliti > yo'q. UI kaliti rad etilsa / pul tugasa / ruxsat bo'lmasa / ochilmasa — AI **to'xtaydi** (server kalitiga avtomatik o'tmaydi), ops xabari va inbox; «Kalitni o'chirish» → server kaliti darhol.
+- ✏️ `GET /ai/config` `runtime`: `config_stale`, `config_loaded_at`, `disabled_reason` endi ishlayotgan (xotiradagi) holatdan; `key.effective_source` ham. Haqiqiy so'rovdagi xato: `verify.origin: "runtime"`.
+- 🟢 `ai.status` / gateway AI holati (qo'shimcha, eski maydonlar o'zgarmagan): `key_source`, `key_verify_state`, `disabled_reason`, `unavailable_slots`, `models_all`. Buyurtma/rasm modeli mavjud bo'lmasa (`model_unavailable`) AI buyurtma uchun o'chiq.
+
+**Frontend action items:** yo'q (fragment v0.2 dagi shakllar).
+
+### 2026-11-15 — AI kalit va modellar (BE-1e): inbox xabarlari, ops alert, deploy
+
+Deploy: ai-service. Migratsiya yo'q. Ops: `scripts/ai-config-alert.sh` (host cron), `docs/ops/ai-config.md`.
+
+- 🆕 Bildirishnoma turlari (superadmin + admin, `category: system`, o'chirib bo'lmaydi): `ai.key_alert` (kalit qo'shildi / almashtirildi / qaytarildi / o'chirildi / ishlamay qoldi / ochilmadi — runtime nosozligi `critical`, qolgani `high`) va `ai.model_alert` (BE-2/BE-4 dan). `data`: `{action, audit_id, hint}` — kalit qiymati yo'q. Matn (title/body) o'zbekcha, ai-service'dan.
+- 🟢 Kalitni tekshirish (`verify`) va rad etilgan urinish inbox'ga KETMAYDI (rad etilgan urinishlar faqat ops chatga, soatiga yig'ma).
+
+**Frontend action items:**
+- 🔧 Inbox: `ai.key_alert` / `ai.model_alert` qatoridan «Ops → AI kalit va modellar» sahifasiga havola (`data.audit_id` — tarixdagi qator id'si).
+
+### 2026-11-15 — AI kalit va modellar (BE-1d): `/ai/config*` endpointlari (gateway)
+
+Deploy: **ai-service OLDIN** (BE-1b), keyin api-gateway. Yangi navbat `ai_config_queue` (env `RABBITMQ_AI_CONFIG_QUEUE`, sukut). Shakllar — openapi-fragment v0.2 (`openapi.json` yangilandi). Hammasi **faqat SUPERADMIN** (ADMIN — 403 kodsiz).
+
+- 🆕 `GET /ai/config` → `{statusCode, message, data: AiConfigView}`. Flag o'chiq bo'lsa ham ishlaydi (faqat ko'rish).
+- 🆕 `PUT /ai/config/key` `{key_envelope, label?, version}` — kalit FAQAT muhrlangan konvertda (`AiKeyEnvelope`: `v:1, kid, alg:"RSA-OAEP-256+A256GCM", ek (400–700), iv (16), ct (40–1024)`, base64url). Tanada `api_key` bo'lsa — 400 (noma'lum maydon).
+- 🆕 `POST /ai/config/key/verify` (tanasiz), `POST /ai/config/key/restore-previous` `{version}`, `POST /ai/config/key/deactivate` `{version, reason?}`, `DELETE /ai/config/key/previous?version=N`, `GET /ai/config/history?limit=&cursor=`.
+- ✏️ Muvaffaqiyatli yozuv javobi — yangilangan `AiConfigView` (`data`), qayta GET shart emas.
+- ✏️ Xatolar: `{statusCode, message, code, …}` — maydonlar faqat oq ro'yxatdan (`version`, `field`, `retry_after_seconds`, `slot`, `model`, `reason`). **Hech biri 401 emas.** 504 — kodsiz: hech narsa o'zgarmagan (ai-service 6,5 s dan keyin COMMIT qilmaydi) → `GET /ai/config` ni qayta o'qing (va kerak bo'lsa izni solishtiring).
+- 🟢 Gateway cheklovi: `/ai/config/key*` — bitta foydalanuvchiga daqiqasiga 10, bitta IP'ga 30 (umumiy hisob) → 429 (kodsiz, `Retry-After`). ai-service cheklovi (`AI_KEY_ATTEMPTS_EXCEEDED`, 5/daqiqa) alohida.
+- 🟢 CORS: `X-Step-Up-Token` ruxsat etildi (step-up BE-5 da; hozircha gateway `step_up: false` yuboradi — `AI_CONFIG_STEP_UP_REQUIRED=true` muhitda kalit amallari `403 AI_STEP_UP_REQUIRED` oladi).
+- 🟢 Yozuvdan keyin gateway AI holatini darhol yangilaydi (`/orders/ai-availability`, `/health`).
+
+**Frontend action items:**
+- 🔧 Mock'larni real endpointga ulash (shakllar fragment bilan bir xil). Swagger DTO nomlari: `AiKeySetDto`, `AiKeyEnvelopeDto`, `AiVersionedDto`, `AiDeactivateDto`.
+
+### 2026-11-15 — AI kalit va modellar (BE-1b): ai-service kalit saqlash va `ai.config.*` RMQ handler'lari
+
+Deploy: ai-service (gateway'dan OLDIN), migratsiya **228** (`ai_schema.ai_provider_keys`, `ai_runtime_settings`, `ai_config_attempts`; `ai_usage_log` + `key_id`, `key_source`, `key_fingerprint`, `config_version`). HTTP endpointlar hali YO'Q — BE-1d (gateway) da. `AI_CONFIG_UI_ENABLED` sukut `false`: prod'da xulq o'zgarmaydi.
+
+- 🟢 Javob shakllari fragment v0.2 bo'yicha: har yozuv (`PUT /ai/config/key`, `POST …/verify`, `…/restore-previous`, `…/deactivate`, `DELETE …/previous`) muvaffaqiyatda yangilangan `AiConfigView` qaytaradi; `GET /ai/config/history` — `{items, next_cursor}` (limit 1–50, sukut 10).
+- 🟢 `POST /ai/config/key/verify`: aniq rad (401/402/403/400) ham **200** — natija `key.active.verify.state` (yoki UI kaliti yo'q bo'lsa `key.env.verify`) da; Anthropic javob bermasa/429 — `state: "unavailable"` + `error_code`. Versiya (`version.key`) oshmaydi.
+- 🟢 Kalit nomi berilmasa view'da `label: "Anthropic kaliti"`.
+- 🟢 BE-1 da `models.slots` faqat o'qish uchun (env/sukut; `ui_model: null`, `health` nol); `permissions.models: false`. Sonnet 5 qatorida `warnings: ["price_unconfirmed"]` (narx o'zgarmagan). To'liq katalog/PATCH/taxmin — BE-2.
+- 🟢 Kutilmagan ichki xato — 500, `code` yo'q (qolgan hamma xatoda `code` bor).
+
+**Frontend action items:** yo'q (endpointlar BE-1d bilan keladi; mock'lar fragment bo'yicha).
+
+### 2026-11-15 — AI kalit va modellar (BE-1a): umumiy asos, API o'zgarishi YO'Q
+
+Spec «AI kalit va modellar» v0.2 (`openapi-fragment.json` v0.2). Bu PR faqat `libs/common` (endpoint, migratsiya, deploy o'zgarishi yo'q); endpointlar BE-1b/BE-1d da.
+
+- 🟢 Xato kodlari (`AI_CONFIG_*`, `AI_KEY_*`, `AI_MODEL_*`, `AI_STEP_UP_REQUIRED`) gateway oq ro'yxatiga qo'shildi: `version` (409 `AI_CONFIG_CONFLICT`), `field` (400 `AI_CONFIG_INVALID`), `retry_after_seconds` (429), `slot/model/reason` (400 `AI_MODEL_NOT_ALLOWED`). Hech biri 401 emas.
+- 🟢 Kalit formati va erkin matn qoidalari (`libs/common/src/ai/ai-key-format.ts`) — FE `src/entities/ai-config/validation.ts` bilan bir xil bo'lishi kerak: trim, `^sk-ant-[A-Za-z0-9_-]+$`, 40–256; `sk-ant-admin…` → `AI_KEY_ADMIN_KEY`; `sk-ant-oat…`/`sk-ant-ort…` → `AI_KEY_OAUTH_TOKEN`; iz = SHA-256 ning 12 hex belgisi, 4 tadan bo'sh joy bilan (`fingerprintOf('abc') === 'ba78 16bf 8f01'`); `label`/`reason` da `sk-ant-` yoki 40+ belgilik `[A-Za-z0-9_-]` ketma-ketlik → `AI_CONFIG_INVALID {field}`. Jadvalli test: `ai-key-format.spec.ts` (`AI_KEY_FORMAT_TABLE`) — FE testiga shu qatorlarni ko'chiring.
+
+**Frontend action items:** yo'q (FE mock'lar fragment v0.2 bo'yicha qoladi).
+
 ### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
 
 Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.
@@ -199,6 +277,68 @@ API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7
 
 **Frontend action items:**
 - 🔧 Qoidalar oynasi: forma chegaralari `limits.rules` dan; 400 `field` bo'yicha xato maydon ostida; 409 → sozlamalarni qayta o'qish. `severity` PATCH'da yuborilmasin.
+
+### 2026-11-14 — AI buyurtma: `district_low_confidence` va `price_check` endi tasdiq talab qiladi (`ack_checks`, 409 `CHECKS_NOT_ACKNOWLEDGED`)
+
+Ega qarori (2026-11-14): AI ogohlantirishlaridan FAQAT ikkitasi BLOKLOVCHI — tuman aniq emas (`district_low_confidence`) va summa matndagidan farq qiladi / juda katta (`price_check`). Qolganlari (`qty_check`, `duplicate_items`, `phone_is_market`, `same_phone_multi`) — avvalgidek yumshoq ogohlantirish, tasdiq so'ralmaydi.
+Migratsiya YO'Q. `openapi.json` yangilandi.
+
+**Deploy tartibi (MUHIM):**
+1. **ai-service** (yangi TEZ navbat iste'molchisi `ai_fast_queue` ni ochadi; `confirm_context` endi `created_at` / `snapshot_state` ham qaytaradi) + **order-service** (#649).
+2. **notification-service** (bot: ko'rsatilgan ogohlantirishgagina ack, 409/503/400 ishlovi).
+3. **api-gateway** — `AI_ACK_CHECKS_ENFORCE=off` (sukut) bilan: darvozalar faqat WARN `ai_ack would_409/would_400/would_503` + `ai_confirm_ack_total` hisoblagichi, buyurtmalar avvalgidek yaratiladi.
+4. FE (quyidagi action item'lar) prod'da bo'lgach — `AI_ACK_CHECKS_ENFORCE=on` (faqat api-gateway qayta yaratiladi).
+
+Yangi env: `RABBITMQ_AI_FAST_QUEUE` (sukut `ai_fast_queue`; gateway + ai-service), `AI_FAST_PREFETCH` (ai-service, sukut 32), `AI_ACK_CHECKS_ENFORCE` (gateway, `on`/`off`, sukut `off`).
+⚠️ Gateway ai-service'dan OLDIN chiqsa: ai-confirm'ning `confirm_context` so'rovi tez navbatda javobsiz qoladi → `off` rejimda faqat WARN `would_503` (yaratish davom etadi), `on` rejimda 503. Shuning uchun avval ai-service.
+
+- ✏️ `POST /orders/ai-confirm` → `orders[]` ga ixtiyoriy `ack_checks: string[]` (≤10 ta, kod satrlari): operator ko'rib «Baribir yaratish»ni tasdiqlagan bloklovchi kodlar. Ortiqcha / yumshoq kodlar e'tiborsiz.
+- ⚠️ Qaysi kod kerakligini server O'ZI biladi — ai-parse paytida saqlangan preview snapshot'idan (`check_codes`); FE yuborgan `checks` ga ishonilmaydi. Snapshot'da bloklovchi kod bo'lsa va u `ack_checks` da yo'q bo'lsa — **butun so'rov 409**, HECH QAYSI buyurtma yaratilmaydi:
+  ```json
+  { "statusCode": 409, "code": "CHECKS_NOT_ACKNOWLEDGED",
+    "message": "AI ogohlantirishlari tasdiqlanmagan: tuman yoki summani tekshirib, «Baribir yaratish»ni bosing",
+    "missing": ["district_low_confidence", "price_check"],
+    "orders": [{ "index": 0, "missing": ["district_low_confidence"] },
+               { "index": 2, "missing": ["price_check"] }] }
+  ```
+  `missing` — barcha tasdiqlanmagan kodlar (takrorsiz); `orders[].index` — so'rovdagi `orders[]` o'rni (preview `index` emas).
+- ⚠️ Idempotent takror (ayni `draft_id` + `ai_item_index` qayta yuborilsa) ham ack darvozasidan O'TADI — `ack_checks` siz takror ham 409 oladi (avval yaratilgan buyurtma natijasi faqat darvozadan keyin qaytadi).
+- 🟢 Tahrir istisnosi: operator tegishli maydonni O'ZI o'zgartirgan bo'lsa (server hisoblagan `edited_fields`), tasdiq shart emas — tuman (`district_id`) almashtirilsa `district_low_confidence`, summa (`total_price`) o'zgartirilsa `price_check` talab qilinmaydi. Viloyat / manzil tahriri tuman tekshiruvini olib tashlamaydi.
+- ⚠️ `draft_id` va `ai_item_index` endi MAJBURIY (Swagger'da `required`) — bo'lmasa **400** `{ code: "AI_DRAFT_REQUIRED", indexes: number[] }` (so'rovdagi `orders[]` o'rinlari), hech narsa yaratilmaydi.
+- ⚠️ `draft_id` shu market uchun ai-service'da topilmasa (soxta yoki saqlanmagan) — **400** `{ code: "AI_DRAFT_NOT_FOUND", indexes: number[] }`.
+- ⚠️ YANGI: draft topildi, lekin saqlangan preview'da bunday `ai_item_index` yo'q (masalan 29) — **400** `{ code: "AI_DRAFT_ITEM_NOT_FOUND", indexes: number[] }`. Uchala 400 da ham hech narsa yaratilmaydi; FE matni: «AI natijasi topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating».
+- ⚠️ Maydon nomi o'zgardi (round-3): 400 xatolarida ro'yxat — `indexes` (avval `orders`). `orders` faqat 409 `CHECKS_NOT_ACKNOWLEDGED` da (`[{ index, missing }]`).
+- ⚠️ ai-confirm ai-service ishlab turishini talab qiladi: saqlangan tekshiruvlarni o'qib bo'lmasa (timeout / xato) yoki draft YOSH (< 2 daqiqa) bo'lib, preview snapshot'i hali saqlanmagan bo'lsa — **FAIL-CLOSED 503** `{ code: "AI_CHECKS_UNAVAILABLE", retryable: true, retry_after_seconds: 5 }` + sarlavha `Retry-After: 5`, hech narsa yaratilmaydi; FE `retry_after_seconds` dan keyin qayta yuboradi.
+- 🟢 Orqaga moslik (fail-open, audit'da `checks_unverified: true`, WARN log + `ai_confirm_ack_total{outcome="fail_open_*"}`): feature'dan oldingi snapshot (`check_codes` yo'q), retention tozalagan snapshot, yoki snapshot yo'q va draft 2 daqiqadan eski.
+- 🟢 Telegram bot: preview'da tekshiruvlar oddiy tilda «⚠️» qatorlari. Bloklovchi bo'lsa «✅ Yaratish» avval «Baribir yaratamanmi?» oynasini ko'rsatadi — unda tasdiqlanadigan HAR buyurtma aniq ro'yxatda («12) ⚠️ ism, telefon» + «⚠️ …» qatorlari, ≤10 ta); ack FAQAT shu ro'yxatdagilarga yuboriladi. Ro'yxat sig'masa «Ha» yo'q — kabinetga yo'naltiradi. 409 da server `missing` bilan oyna qayta; 503 — «birozdan so'ng qayta urinib ko'ring»; 400 `AI_DRAFT_*` — «AI natijasi topilmadi — matnni qayta yuboring yoki kabinetda yarating».
+
+**Frontend action items:**
+- 🔧 Kartada `district_low_confidence` yoki `price_check` bo'lsa (va operator tuman / summani o'zgartirmagan bo'lsa) «Yaratish»dan oldin tasdiq oynasi (yoki kartadagi «Tekshirdim» belgisi) ko'rsating va shu buyurtmaning `ack_checks` ga AYNAN o'sha kodlarni yuboring. Faqat operatorga KO'RSATILGAN ogohlantirishni tasdiqlang.
+- 🔧 409 `CHECKS_NOT_ACKNOWLEDGED` ni ishlang: `orders[].index` bo'yicha kartalarni belgilang, `missing` kodlari uchun tasdiq so'rang va so'rovni (`ack_checks` bilan) qayta yuboring — so'rovdagi boshqa buyurtmalar ham yaratilmagan.
+- 🔧 503 `AI_CHECKS_UNAVAILABLE` — «Qayta urinish» (`retry_after_seconds` / `Retry-After`); 400 `AI_DRAFT_REQUIRED` — FE xatosi (har buyurtmaga `draft_id` + `ai_item_index` yuboring); 400 `AI_DRAFT_NOT_FOUND` / `AI_DRAFT_ITEM_NOT_FOUND` — yuqoridagi matn, `indexes[]` bo'yicha kartalarni belgilang.
+- 🔧 400 xatolarida `orders` emas, `indexes` o'qing.
+
+### 2026-11-14 — AI preview: tuman qanday aniqlangani, viloyat taxmini, yumshoq tekshiruvlar (`checks[]`)
+
+Deploy: ai-service + order-service + logistics-service + api-gateway. Migratsiya YO'Q. Yangi maydonlar QO'SHIMCHA; `ready`/`issues` qoidasi o'zgarmadi. ⚠️ Lekin `region_inferred` yo'li ilgari tumansiz (`district_missing`) qoladigan ayrim buyurtmalarni endi tuman bilan qaytaradi (`ready=true`) — bunday buyurtmada `district_low_confidence` bor. Telegram bot `checks[]` ni bu yozuvda o'qimaydi — bot ogohlantirishi va qayta tasdiq alohida PR'da (#658). Prompt versiyasi `2026-11-14.1` (dostavka qoidasi).
+
+- ✏️ `POST /orders/ai-parse` → `data.orders[]` ga:
+  - `district_match: { method, ai_text, score } | null` — tuman avto-tanlanganda: `method` = `exact` | `alias` | `address` | `fuzzy` | `llm` (`partial` turida ham bor, lekin hozir chiqmaydi — unga tayanmang); `ai_text` — AI o'qigan tuman matni (≤ 80 belgi, `exact` da ham); `score` 0..1 faqat `fuzzy`/`address`, aks holda `null`. Tuman tanlanmagan bo'lsa `null`.
+  - `region_inferred: boolean` — viloyat matnda aytilmagan, AI uni tumandan chiqargan (qisqartmalar — «Sam. vil.», «Sam. Xonobod», «Nam.», «QR», «РК», «Т.обл», «T.sh», «Qashqa», «Qoraqalpoq» — aytilgan hisoblanadi). Faqat shunda logistics qulflangan viloyatdan tashqaridagi ANIQ moslikka o'ta oladi (boshqa holatda «Toshkent shahri Xonobod» — avvalgidek tuman yo'q); boshqa viloyatlarda o'xshash nom bo'lsa («Mirobod»/«Mirzaobod») — avto-tanlov YO'Q, nomzodlar. Viloyat almashtirilganda (tuman topilmay nomzodlar qaytsa ham) `region_given: false`.
+  - `checks: AiCheck[]` — YUMSHOQ tekshiruvlar (tasdiqni bloklamaydi):
+    - `{ code: 'district_low_confidence' }` — tuman `address`/`fuzzy`/`llm` bilan yoki `region_inferred` sababli viloyat almashtirilib tanlangan (Toshkent shahri ↔ viloyati umumiy hovuzidagi tanlov bu belgini BERMAYDI);
+    - `{ code: 'price_check', kind: 'mismatch' | 'too_high', mentions: number[] }` — matndagi summa eslatmalari (so'm, takrorsiz) `total_price` bilan mos emas (faqat bitta buyurtmali matn) yoki summa > 100 mln va matndan kelib chiqmaydi. Qoida: summa = mahsulot + dostavka, oldindan to'lov/zaklad/«click orqali o'tkazdi»/«оплачено» ayirilmaydi; «donasi X» faqat miqdorga ko'paytirilgan holda, «jami X» faqat o'zi; dostavka jami ichida bo'lsa («Jami 170 000 (dostavka 20 000 bilan)», «shundan dostavka», «включая доставку») — jamiga qo'shilmaydi; dostavka tarifi ro'yxati («Toshkent 20 000, viloyatlarga 35 000») — har tarif alohida (yig'indisi emas); ko'p mahsulotda har biri o'z miqdori bilan; «X emas» — X hisobga olinmaydi; telefon raqami summa emas. Narx noaniq bo'lsa (oraliq, «...dan ...gacha», «yoki», summaga yaqin chegirma/aksiya so'zi yoki ikki xil summa bilan, eski/yangi narx) `mismatch` chiqmaydi — shablon pastidagi alohida «Aksiya!» qatori noaniq qilmaydi;
+    - `{ code: 'qty_check', item_index }` — miqdor > 10 yoki narxning ming/mln qismiga teng («150 ming» → miqdor 150; dona narxi — «2 ta televizor 2 mln dan» — va matnda aniq aytilgan miqdor — «2 ta» — belgilanmaydi);
+    - `{ code: 'duplicate_items', item_indexes }` — bir xil mahsulot qatorlari (birlashtirilmaydi);
+    - `{ code: 'phone_is_market' }` — mijoz telefoni market akkauntining raqamlari (asosiy, qo'shimcha, `default_operator_phone`, «muammo» raqami) bilan bir xil; market operatorlarining shaxsiy raqamlari tekshirilmaydi;
+    - `{ code: 'same_phone_multi', other_index }` — shu parse'da shu telefon boshqa buyurtmada ham.
+- ⚠️ **Noma'lum `code` e'tiborsiz qoldirilsin** — ro'yxat kengayadi.
+
+**Frontend action items:**
+- 🔧 Tuman maydoni yonida «AI o'qigan: {ai_text}»; `district_low_confidence` — sariq belgi.
+- 🔧 «Viloyat matnda yo'q — AI taxmin qildi» ishorasi: `region_inferred || !region_given` (faqat `!region_given` emas).
+- 🔧 `price_check` — summa yonida sariq ogohlantirish (`mentions` bilan: «Matnda: 150 000»); `too_high` — «Summa juda katta».
+- 🔧 Qolgan kodlar — tegishli maydon yonida ogohlantirish matni.
 
 ### 2026-11-14 — Carrier akkaunt: «Rollback» toggle (sukut o'chiq, kompaniyadan yashirin)
 

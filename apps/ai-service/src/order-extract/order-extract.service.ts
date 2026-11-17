@@ -14,6 +14,8 @@ import {
   type ClaudeImageInput,
   type ClaudeResult,
   type RawOrderExtraction,
+  extractMoneyMentionsDetailed,
+  regionMentionedInText,
 } from '@app/common';
 import {
   AI_IMAGE_STORE,
@@ -316,6 +318,20 @@ export class OrderExtractService {
           `items_over_limit=${tooManyItems} — 'truncated' qaytarildi`,
       );
       return { ok: false, reason: 'truncated' };
+    }
+
+    // P1-7: deterministik belgilar (LLM emas) — faqat rasmsiz matnda.
+    if (!hasImages && text) {
+      for (const o of orders) {
+        if (o.region_name) {
+          o.region_inferred = !regionMentionedInText(text, o.region_name);
+        }
+      }
+      // A1(a): pul eslatmalari faqat bitta buyurtmada (bog'lash aniq).
+      if (orders.length === 1) {
+        const mentions = extractMoneyMentionsDetailed(masked);
+        if (mentions.length) orders[0].money_mentions = mentions.slice(0, 20);
+      }
     }
 
     return { ok: true, orders };

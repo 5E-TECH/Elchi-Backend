@@ -494,6 +494,25 @@ export class AiUsageService implements ClaudeUsageSink {
         typeof r.latencyMs === 'number' && Number.isFinite(r.latencyMs)
           ? Math.max(0, Math.round(r.latencyMs))
           : null,
+      // «AI kalit va modellar»: lease (kalit qiymati yo'q).
+      key_id:
+        typeof r.keyId === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          r.keyId,
+        )
+          ? r.keyId
+          : null,
+      key_source:
+        r.keySource === 'ui' || r.keySource === 'env' ? r.keySource : null,
+      key_fingerprint:
+        typeof r.keyFingerprint === 'string' &&
+        /^[0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4}$/.test(r.keyFingerprint)
+          ? r.keyFingerprint
+          : null,
+      config_version:
+        typeof r.configVersion === 'number' && Number.isInteger(r.configVersion)
+          ? r.configVersion
+          : null,
     };
   }
 

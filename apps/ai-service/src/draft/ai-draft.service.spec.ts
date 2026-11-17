@@ -260,6 +260,53 @@ describe('AiDraftService (vncdmXOy)', () => {
     expect(res.drafts[0].previews).toHaveLength(1);
   });
 
+  it('confirmContext (AI ack S1): created_at va snapshot_state present|pending|purged', async () => {
+    const D2 = DRAFT.replace(/.$/, 'b');
+    const D3 = DRAFT.replace(/.$/, 'c');
+    draftsRepo.query
+      .mockResolvedValueOnce([
+        {
+          id: DRAFT,
+          model: 'm',
+          prompt_version: 'v1',
+          preview_count: 1,
+          resolved_preview: [snapshot()],
+          created_at: new Date('2026-11-15T10:00:00Z'),
+          text_purged_at: null,
+        },
+        {
+          id: D2,
+          model: 'm',
+          prompt_version: 'v1',
+          preview_count: 0,
+          resolved_preview: null,
+          created_at: '2026-11-15T10:01:00.000Z',
+          text_purged_at: null,
+        },
+        {
+          id: D3,
+          model: 'm',
+          prompt_version: 'v1',
+          preview_count: 1,
+          resolved_preview: null,
+          created_at: new Date('2026-10-01T10:00:00Z'),
+          text_purged_at: new Date('2026-10-31T10:00:00Z'),
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const res = await service.confirmContext('121', [DRAFT, D2, D3]);
+    expect(String(draftsRepo.query.mock.calls[0][0])).toContain(
+      'text_purged_at',
+    );
+    expect(
+      res.drafts.map((d) => [d.draft_id, d.created_at, d.snapshot_state]),
+    ).toEqual([
+      [DRAFT, '2026-11-15T10:00:00.000Z', 'present'],
+      [D2, '2026-11-15T10:01:00.000Z', 'pending'],
+      [D3, '2026-10-01T10:00:00.000Z', 'purged'],
+    ]);
+  });
+
   it('linkItems: har buyurtma alohida, edited_fields oq ro‘yxat bo‘yicha', async () => {
     const res = await service.linkItems(
       DRAFT,
@@ -484,5 +531,38 @@ describe('AiDraftService (vncdmXOy)', () => {
   it('retention xatosi throw bo‘lmaydi', async () => {
     draftsRepo.query.mockRejectedValue(new Error('db'));
     await expect(service.purgeExpiredText()).resolves.toBe(0);
+  });
+});
+
+describe('sanitizeSnapshot — P1-7', () => {
+  it('ixtiyoriy maydonlar: berilsa tozalanadi, berilmasa kalit yo‘q', () => {
+    const base = { index: 0, items: [] };
+    expect(sanitizeSnapshot(base)).not.toHaveProperty('district_match');
+    const s = sanitizeSnapshot({
+      ...base,
+      district_match: { method: 'alias', ai_text: 'x'.repeat(200), score: 7 },
+      region_inferred: true,
+      check_codes: ['price_check', 5, 'qty_check'],
+    });
+    expect(s?.district_match).toEqual({
+      method: 'alias',
+      ai_text: 'x'.repeat(80),
+      score: 1,
+    });
+    expect(s?.region_inferred).toBe(true);
+    expect(s?.check_codes).toEqual(['price_check', 'qty_check']);
+  });
+
+  it('#649 review: ai_text dagi telefon log-maskasi bilan saqlanadi', () => {
+    const s = sanitizeSnapshot({
+      index: 0,
+      items: [],
+      district_match: {
+        method: 'llm',
+        ai_text: 'Asaka +998901234567',
+        score: null,
+      },
+    });
+    expect(s?.district_match?.ai_text).toBe('Asaka +99890*****67');
   });
 });

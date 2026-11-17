@@ -9,10 +9,12 @@ import { createHash } from 'node:crypto';
 import { Repository } from 'typeorm';
 import {
   AI_AUDITED_FIELDS,
+  maskPhonesForLog,
   type AiAuditedField,
   type AiDraftConfirmContext,
   type AiDraftLinkItem,
   type AiDraftPreviewSnapshot,
+  type AiDraftSnapshotState,
   type AiDraftTrace,
   type AiFieldCorrections,
   type AiParseTimings,
@@ -231,6 +233,47 @@ export function aiSourceHash(text: string, imagesBase64: string[]): string {
   return h.digest('hex');
 }
 
+/** P1-7 ixtiyoriy maydonlari — faqat berilganda (eski snapshot o'zgarmaydi). */
+function p17Of(
+  v: Row,
+): Pick<
+  AiDraftPreviewSnapshot,
+  'district_match' | 'region_inferred' | 'check_codes'
+> {
+  const out: Pick<
+    AiDraftPreviewSnapshot,
+    'district_match' | 'region_inferred' | 'check_codes'
+  > = {};
+  if ('district_match' in v) {
+    const m = v.district_match;
+    if (m && typeof m === 'object' && !Array.isArray(m)) {
+      const r = m as Row;
+      const score = Number(r.score);
+      out.district_match = {
+        method: str(r.method, 16) ?? '',
+        ai_text: (() => {
+          const t = str(r.ai_text, 80);
+          return t ? maskPhonesForLog(t).slice(0, 80) : null;
+        })(),
+        score:
+          r.score !== null && Number.isFinite(score)
+            ? Math.min(1, Math.max(0, score))
+            : null,
+      };
+    } else {
+      out.district_match = null;
+    }
+  }
+  if ('region_inferred' in v) out.region_inferred = v.region_inferred === true;
+  if (Array.isArray(v.check_codes)) {
+    out.check_codes = v.check_codes
+      .filter((c): c is string => typeof c === 'string')
+      .map((c) => c.slice(0, 32))
+      .slice(0, 10);
+  }
+  return out;
+}
+
 /** Gateway snapshot'ini runtime'da tekshiradi — oq ro'yxat bo'yicha qayta yig'iladi. */
 export function sanitizeSnapshot(
   value: unknown,
@@ -260,6 +303,7 @@ export function sanitizeSnapshot(
     comment: str(v.comment, 1000),
     operator: str(v.operator, 100),
     is_replacement: v.is_replacement === true,
+    ...p17Of(v),
     items: items
       .filter((it): it is Row => !!it && typeof it === 'object')
       .map((it) => ({
@@ -315,6 +359,33 @@ function timingsOf(value: unknown): Partial<AiOrderDraft> {
     preview_ms: stageMs(t.preview_ms),
     total_ms: stageMs(t.total_ms),
   };
+}
+
+/** (AI ack S1) timestamptz → ISO satr (pg Date yoki satr qaytaradi). */
+function isoOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const date =
+    value instanceof Date
+      ? value
+      : typeof value === 'string' || typeof value === 'number'
+        ? new Date(value)
+        : null;
+  return date && Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+/**
+ * (AI ack S1) `confirm_context.snapshot_state`: snapshot bor → `present`;
+ * retention tozalagan (`text_purged_at`) → `purged`; aks holda hali yetib
+ * kelmagan → `pending`.
+ */
+function snapshotStateOf(
+  previews: AiDraftPreviewSnapshot[] | null,
+  textPurgedAt: unknown,
+): AiDraftSnapshotState {
+  if (previews !== null) return 'present';
+  return textPurgedAt !== null && textPurgedAt !== undefined
+    ? 'purged'
+    : 'pending';
 }
 
 function snapshotsOf(value: unknown): AiDraftPreviewSnapshot[] | null {
@@ -488,7 +559,8 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
     if (!market || ids.length === 0) return { drafts: [] };
 
     const rows: Row[] = await this.drafts.query(
-      `SELECT id::text AS id, model, prompt_version, preview_count, resolved_preview
+      `SELECT id::text AS id, model, prompt_version, preview_count, resolved_preview,
+              created_at, text_purged_at
        FROM ai_schema.ai_order_draft
        WHERE id = ANY($1::uuid[]) AND market_id = $2::bigint`,
       [ids, market],
@@ -498,6 +570,7 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
     return {
       drafts: rows.map((r) => {
         const cost = costs.get(String(r.id));
+        const previews = snapshotsOf(r.resolved_preview);
         return {
           draft_id: String(r.id),
           model: str(r.model, 64) ?? '',
@@ -505,7 +578,11 @@ export class AiDraftService implements OnModuleInit, OnModuleDestroy {
           preview_count: num(r.preview_count),
           cost_usd: round6(cost?.cost_usd ?? 0),
           cost_uzs: round2(cost?.cost_uzs ?? 0),
-          previews: snapshotsOf(r.resolved_preview),
+          previews,
+          // (AI ack S1) gateway yosh draft'da snapshot yo'qligini (poyga)
+          // eski/tozalangan draft'dan ajratadi: 503 yoki fail-open.
+          created_at: isoOrNull(r.created_at),
+          snapshot_state: snapshotStateOf(previews, r.text_purged_at),
         };
       }),
     };

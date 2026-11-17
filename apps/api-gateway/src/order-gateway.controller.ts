@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   ForbiddenException,
@@ -9,6 +10,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  HttpException,
   Inject,
   Logger,
   NotFoundException,
@@ -33,7 +35,9 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiBadRequestResponse,
   ApiConflictResponse,
+  ApiServiceUnavailableResponse,
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
@@ -97,6 +101,8 @@ import {
   computeEditedFields,
   computeFieldCorrections,
 } from './ai-order/ai-edited-fields';
+import { missingAckChecks, requiredAckChecks } from './ai-order/ai-ack-checks';
+import { recordAiAck, type AiAckOutcome } from './ai-order/ai-ack-metrics';
 import {
   AiConfirmOrderDto,
   AiConfirmRequestDto,
@@ -150,6 +156,12 @@ import {
   parseUzPhoneSearch,
   recordReceiveByScanOutcome,
   requestContext,
+  AI_CHECKS_NOT_ACKNOWLEDGED,
+  AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_ITEM_NOT_FOUND,
+  AI_DRAFT_NOT_FOUND,
+  AI_DRAFT_REQUIRED,
+  AI_FAST_RMQ_NAME,
   type AiAuditedField,
   type AiFieldCorrections,
   type AiImageMediaType,
@@ -417,6 +429,12 @@ type EligibleAiOrder = {
   editedFields: AiAuditedField[] | null;
   /** J3hEDtFN #4: o'zgargan maydonlarning AI / yakuniy qiymati. */
   fieldCorrections?: AiFieldCorrections | null;
+  /**
+   * AI ack: SAQLANGAN snapshot bo'yicha tasdiq talab qiladigan bloklovchi
+   * kodlar (tahrir istisnosidan keyin; `requiredAckChecks`). Snapshot
+   * topilmasa — bo'sh.
+   */
+  requiredAcks?: string[];
 };
 
 /**
@@ -457,8 +475,32 @@ const createAiImageMemoryStorage = memoryStorage as () => unknown;
 const AI_MIN_PREVIEW_BUDGET_MS = 5_000;
 /** ai-confirm'dagi find_by_ids tekshiruvlari (partiyaga BITTADAN). */
 const AI_CONFIRM_LOOKUP_TIMEOUT_MS = 8_000;
-/** vncdmXOy: `ai.draft.confirm_context` — audit uchun, yaratishni kechiktirmasin. */
+/**
+ * vncdmXOy: `ai.draft.confirm_context` — yaratishni kechiktirmasin. (AI ack
+ * B1) TEZ navbat orqali (`AI_FAST`) — Claude chaqiruvlari ortida kutmaydi.
+ */
 const AI_DRAFT_CONTEXT_TIMEOUT_MS = 3_000;
+/** AI ack: 503 `AI_CHECKS_UNAVAILABLE` dan keyin qayta urinish (s). */
+const AI_CHECKS_RETRY_AFTER_SECONDS = 5;
+/**
+ * (AI ack S1) Snapshot (`attach_preview`, fire-and-forget) hali yetib
+ * kelmagan YOSH draft — 503 (qayta urinish). Shundan eski draft'da snapshot
+ * yo'q bo'lsa — yo'qolgan deb fail-open (`checks_unverified`, WARN).
+ */
+const AI_SNAPSHOT_PENDING_MAX_AGE_MS = 2 * 60_000;
+/** (AI ack S2) Log-only rejimda WARN'dagi kod → HTTP holati. */
+const AI_ACK_GATE_STATUS: Record<string, 400 | 409 | 503> = {
+  [AI_CHECKS_NOT_ACKNOWLEDGED]: 409,
+  [AI_DRAFT_REQUIRED]: 400,
+  [AI_DRAFT_NOT_FOUND]: 400,
+  [AI_DRAFT_ITEM_NOT_FOUND]: 400,
+  [AI_CHECKS_UNAVAILABLE]: 503,
+};
+/** (AI ack S4) 409 matni. */
+const AI_CHECKS_NOT_ACKNOWLEDGED_MESSAGE =
+  'AI ogohlantirishlari tasdiqlanmagan: tuman yoki summani tekshirib, «Baribir yaratish»ni bosing';
+const AI_CHECKS_UNAVAILABLE_MESSAGE =
+  "AI tekshiruvlarini hozir o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring";
 /** vncdmXOy: `GET /orders/:id/ai-trace` → `ai.draft.trace_by_order`. */
 const AI_DRAFT_TRACE_TIMEOUT_MS = 8_000;
 
@@ -604,6 +646,11 @@ export class OrderGatewayController {
     // T7 (QPq2C1co, B2): buyurtma javoblariga `problem_contacts`. Yo'q
     // (eski spec'lar) — maydon qo'shilmaydi.
     @Optional() private readonly problemContacts?: ProblemContactsService,
+    // (AI ack B1) ai-service TEZ navbati: confirm_context / attach_preview /
+    // link_orders. Yo'q bo'lsa (eski spec'lar) — umumiy `aiClient`.
+    @Optional()
+    @Inject(AI_FAST_RMQ_NAME)
+    private readonly aiFastClient?: ClientProxy,
   ) {}
 
   private readonly logger = new Logger(OrderGatewayController.name);
@@ -1543,6 +1590,48 @@ export class OrderGatewayController {
   }
 
   /**
+   * (AI ack S2) `AI_ACK_CHECKS_ENFORCE`: `on` — ack darvozasi 409/400/503
+   * qaytaradi; `off` (sukut, config yo'q) — faqat WARN `ai_ack would_<status>`
+   * va hisoblagich, buyurtmalar avvalgidek yaratiladi (gateway FE/botdan
+   * oldin chiqa olsin).
+   */
+  private isAiAckEnforced(): boolean {
+    const raw: unknown = this.config?.get<unknown>('AI_ACK_CHECKS_ENFORCE');
+    if (typeof raw === 'boolean') return raw;
+    return ['on', 'true', '1', 'yes'].includes(
+      this.asStr(raw).trim().toLowerCase(),
+    );
+  }
+
+  /**
+   * (AI ack S2/S7) Darvoza: hisoblagich + WARN (`ai_ack rejected_<status>`
+   * yoki log-only'da `ai_ack would_<status>`, buyurtmalar soni bilan).
+   * Majburiy rejimda xatoni tashlaydi; log-only'da qaytadi (yaratish davom
+   * etadi).
+   */
+  private aiAckGate(
+    outcome: AiAckOutcome,
+    count: number,
+    error: HttpException,
+  ): void {
+    const enforced = this.isAiAckEnforced();
+    recordAiAck(outcome, enforced, count);
+    const body = error.getResponse() as { code?: string };
+    const code = this.asStr(body?.code);
+    const status = AI_ACK_GATE_STATUS[code] ?? error.getStatus();
+    this.logger.warn(
+      `ai_ack ${enforced ? 'rejected' : 'would'}_${status} code=${code} outcome=${outcome} orders=${count}` +
+        (enforced ? '' : ' — AI_ACK_CHECKS_ENFORCE=off, yaratish davom etadi'),
+    );
+    if (enforced) throw error;
+  }
+
+  /** (AI ack B1) confirm yo'lidagi arzon ai-service RPC'lari uchun mijoz. */
+  private aiDraftClient(): ClientProxy | undefined {
+    return this.aiFastClient ?? this.aiClient;
+  }
+
+  /**
    * AI oqimi uchun market SERVER tomonda aniqlanadi (mijozga ishonilmaydi):
    *  - MARKET — token `sub`; tanadagi market_id E'TIBORSIZ;
    *  - MARKET_OPERATOR — identity `user.market_id`; bo'lmasa `{noMarket}`
@@ -2245,7 +2334,9 @@ export class OrderGatewayController {
     confirmedBy?: string,
     aiPricePerOrder: number | null = null,
   ): void {
-    if (!this.aiClient) return;
+    // (AI ack B1) TEZ navbat — Claude chaqiruvlari ortida kutmaydi.
+    const aiDraftClient = this.aiDraftClient();
+    if (!aiDraftClient) return;
     const editedByIndex = new Map(
       eligible.map((item) => [item.index, item.editedFields]),
     );
@@ -2275,7 +2366,7 @@ export class OrderGatewayController {
     const confirmer = this.asStr(confirmedBy).trim();
     for (const [draftId, entry] of byDraft) {
       void firstValueFrom(
-        this.aiClient
+        aiDraftClient
           .send(
             { cmd: 'ai.usage.link_orders' },
             {
@@ -2304,12 +2395,18 @@ export class OrderGatewayController {
   private async loadAiDraftContexts(
     marketId: string,
     draftIds: string[],
-  ): Promise<Map<string, AiDraftConfirmContext>> {
+  ): Promise<Map<string, AiDraftConfirmContext> | null> {
     const out = new Map<string, AiDraftConfirmContext>();
-    if (!this.aiClient || draftIds.length === 0) return out;
+    if (draftIds.length === 0) return out;
+    // AI ack: ai-service bo'lmasa tekshiruvlarni o'qib bo'lmaydi — `null`
+    // (chaqiruvchi FAIL-CLOSED 503 qaytaradi).
+    // (AI ack B1) TEZ navbat (`AI_FAST`): umumiy `ai_queue` da 8 ta
+    // ekstraksiya ochiq turganda 3 s ichida javob kelmasdi.
+    const aiDraftClient = this.aiDraftClient();
+    if (!aiDraftClient) return null;
     try {
       const response: unknown = await firstValueFrom(
-        this.aiClient
+        aiDraftClient
           .send<unknown>(
             { cmd: 'ai.draft.confirm_context' },
             { market_id: marketId, draft_ids: draftIds },
@@ -2323,8 +2420,9 @@ export class OrderGatewayController {
       }
     } catch (error: unknown) {
       this.logger.warn(
-        `ai.draft.confirm_context ishlamadi (${this.errorName(error)}) — audit metadata qisqartirilgan`,
+        `ai.draft.confirm_context ishlamadi (${this.errorName(error)}) — AI tekshiruvlarini o'qib bo'lmadi`,
       );
+      return null;
     }
     return out;
   }
@@ -2332,7 +2430,21 @@ export class OrderGatewayController {
   /**
    * vncdmXOy #2: har eligible buyurtmaga `aiAudit` (activity_log metadata) va
    * SERVER tomonda hisoblangan `editedFields`. draft_id bo'lmasa — audit yo'q
-   * (oddiy qo'lda kiritilgan buyurtma kabi).
+   * (oddiy qo'lda kiritilgan buyurtma kabi; majburiy rejimda bunga
+   * `AI_DRAFT_REQUIRED` yo'l qo'ymaydi).
+   *
+   * AI ack darvozalari (`aiAckGate`; `AI_ACK_CHECKS_ENFORCE=off` da faqat
+   * WARN, yaratish davom etadi):
+   *  - ai-service javob bermadi → 503 `AI_CHECKS_UNAVAILABLE`;
+   *  - draft shu market uchun yo'q → 400 `AI_DRAFT_NOT_FOUND`;
+   *  - snapshot bor, lekin `index === ai_item_index` yozuv yo'q → 400
+   *    `AI_DRAFT_ITEM_NOT_FOUND` (B2);
+   *  - snapshot yo'q, draft YOSH (< 2 daqiqa) va tozalanmagan → 503
+   *    `AI_CHECKS_UNAVAILABLE` (S1: fire-and-forget `attach_preview` bilan
+   *    poyga — qayta urinishda snapshot bo'ladi).
+   * Fail-open (`checks_unverified`, WARN + hisoblagich) faqat: eski snapshot
+   * (`check_codes` yo'q), retention tozalagan, yoki snapshot yo'q va draft
+   * eski / eski ai-service holat bermadi.
    */
   private async attachAiAudit(
     eligible: EligibleAiOrder[],
@@ -2342,19 +2454,90 @@ export class OrderGatewayController {
       eligible.map((item) => item.order.draft_id),
     );
     if (draftIds.length === 0) return;
-    const contexts = await this.loadAiDraftContexts(marketId, draftIds);
-    for (const item of eligible) {
+    const draftItems = eligible.filter(
+      (item) => this.asStr(item.order.draft_id).trim() !== '',
+    );
+    const loaded = await this.loadAiDraftContexts(marketId, draftIds);
+    if (!loaded) {
+      // AI ack (FE sessiya / ega, 2026-11-15): FAIL-CLOSED — saqlangan
+      // tekshiruvlarni o'qib bo'lmasa hech narsa yaratilmaydi.
+      this.aiAckGate(
+        'checks_unavailable',
+        draftItems.length,
+        this.aiChecksUnavailable(),
+      );
+    }
+    const contexts = loaded ?? new Map<string, AiDraftConfirmContext>();
+    // AI ack (FE sessiya / ega, 2026-11-15): ai-service javob berdi, lekin
+    // draft shu market uchun yo'q (soxta UUID yoki saqlanmagan) — tasdiqni
+    // tekshirib bo'lmaydi, 400. (Log-only'da ai-service javob bermagan
+    // bo'lsa bu tekshiruv o'tkazib yuboriladi — yuqorida would_503.)
+    const unknownDraft = loaded
+      ? draftItems
+          .filter(
+            (item) => !contexts.has(this.asStr(item.order.draft_id).trim()),
+          )
+          .map((item) => item.index)
+      : [];
+    if (unknownDraft.length > 0) {
+      this.aiAckGate(
+        'draft_not_found',
+        unknownDraft.length,
+        new BadRequestException({
+          statusCode: 400,
+          code: AI_DRAFT_NOT_FOUND,
+          message:
+            "AI natijasi topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating",
+          indexes: unknownDraft,
+        }),
+      );
+    }
+    const itemNotFound: number[] = [];
+    const snapshotPending: number[] = [];
+    const failOpen: Record<
+      'fail_open_legacy' | 'fail_open_purged' | 'fail_open_snapshot_missing',
+      number[]
+    > = {
+      fail_open_legacy: [],
+      fail_open_purged: [],
+      fail_open_snapshot_missing: [],
+    };
+    const now = Date.now();
+    for (const item of draftItems) {
       const draftId = this.asStr(item.order.draft_id).trim();
-      if (!draftId) continue;
       const ctx = contexts.get(draftId) ?? null;
       const itemIndex =
         typeof item.order.ai_item_index === 'number'
           ? item.order.ai_item_index
           : null;
+      const snapshots = Array.isArray(ctx?.previews) ? ctx.previews : null;
       const preview =
-        ctx?.previews && itemIndex !== null
-          ? (ctx.previews.find((p) => p.index === itemIndex) ?? null)
+        snapshots && itemIndex !== null
+          ? (snapshots.find((p) => p.index === itemIndex) ?? null)
           : null;
+      if (ctx) {
+        if (snapshots && !preview) {
+          // B2: snapshot haqiqiy, lekin bunday buyurtma yo'q (soxta indeks).
+          itemNotFound.push(item.index);
+        } else if (!snapshots) {
+          const state = ctx.snapshot_state;
+          const createdMs = Date.parse(this.asStr(ctx.created_at));
+          if (state === 'purged') {
+            failOpen.fail_open_purged.push(item.index);
+          } else if (
+            state === 'pending' &&
+            (!Number.isFinite(createdMs) ||
+              now - createdMs < AI_SNAPSHOT_PENDING_MAX_AGE_MS)
+          ) {
+            // S1: attach_preview hali yetib kelmagan (poyga) — qayta urinish.
+            snapshotPending.push(item.index);
+          } else {
+            failOpen.fail_open_snapshot_missing.push(item.index);
+          }
+        } else if (!Array.isArray(preview?.check_codes)) {
+          failOpen.fail_open_legacy.push(item.index);
+        }
+      }
       const confirmedForAudit = {
         customer: item.order.customer,
         district_id: item.districtId,
@@ -2369,6 +2552,9 @@ export class OrderGatewayController {
       item.editedFields = preview
         ? computeEditedFields(preview, confirmedForAudit)
         : null;
+      // AI ack: talab — faqat saqlangan snapshot'dagi kodlardan (mijozga
+      // ishonilmaydi), operator tuzatgan maydon tekshiruvi tushib qoladi.
+      item.requiredAcks = requiredAckChecks(preview, item.editedFields);
       // J3hEDtFN #4: eval manbai — faqat ai_order_draft_item'ga (activity_log
       // metadata'siga EMAS: u yerda ism/manzil qiymati kerak emas).
       item.fieldCorrections =
@@ -2398,8 +2584,87 @@ export class OrderGatewayController {
                   100,
               ) / 100,
         edited_fields: item.editedFields,
+        // AI ack: tekshiruvlar tasdiqlanmadi — eski (feature'dan oldingi)
+        // draft: snapshot yoki undagi `check_codes` yo'q (fail-open), yoki
+        // log-only rejimda darvoza o'tkazib yuborgan.
+        checks_unverified:
+          !preview || !Array.isArray(preview.check_codes) || undefined,
       };
     }
+    if (itemNotFound.length > 0) {
+      this.aiAckGate(
+        'item_not_found',
+        itemNotFound.length,
+        new BadRequestException({
+          statusCode: 400,
+          code: AI_DRAFT_ITEM_NOT_FOUND,
+          message:
+            "AI natijasida bu buyurtma topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating",
+          indexes: itemNotFound,
+        }),
+      );
+    }
+    if (snapshotPending.length > 0) {
+      this.aiAckGate(
+        'snapshot_pending',
+        snapshotPending.length,
+        this.aiChecksUnavailable(),
+      );
+    }
+    // S7: fail-open — WARN + hisoblagich (darvoza emas, rejimdan qat'i nazar).
+    const enforced = this.isAiAckEnforced();
+    for (const [outcome, indexes] of Object.entries(failOpen) as [
+      keyof typeof failOpen,
+      number[],
+    ][]) {
+      if (indexes.length === 0) continue;
+      recordAiAck(outcome, enforced, indexes.length);
+      this.logger.warn(
+        `ai_ack ${outcome} orders=${indexes.length} indexes=${indexes.join(',')} — AI tekshiruvlari tasdiqlanmadi (checks_unverified)`,
+      );
+    }
+  }
+
+  /** AI ack: 503 `AI_CHECKS_UNAVAILABLE` (retryable). */
+  private aiChecksUnavailable(): ServiceUnavailableException {
+    return new ServiceUnavailableException({
+      statusCode: 503,
+      code: AI_CHECKS_UNAVAILABLE,
+      message: AI_CHECKS_UNAVAILABLE_MESSAGE,
+      retryable: true,
+      retry_after_seconds: AI_CHECKS_RETRY_AFTER_SECONDS,
+    });
+  }
+
+  /**
+   * AI ack: har eligible buyurtmaning `requiredAcks` i (`attachAiAudit`)
+   * `ack_checks` da bo'lishi shart. Bo'lmasa — 409
+   * `CHECKS_NOT_ACKNOWLEDGED`: `missing` — barcha tasdiqlanmagan kodlar
+   * (takrorsiz), `orders` — `[{ index, missing }]` (`index` — so'rovdagi
+   * `orders[]` o'rni). Log-only rejimda — faqat WARN `would_409`.
+   */
+  private assertAiChecksAcknowledged(eligible: EligibleAiOrder[]): void {
+    const unacked = eligible
+      .map((item) => ({
+        index: item.index,
+        missing: missingAckChecks(
+          item.requiredAcks ?? [],
+          item.order.ack_checks,
+        ),
+      }))
+      .filter((entry) => entry.missing.length > 0);
+    if (unacked.length === 0) return;
+    this.aiAckGate(
+      'checks_not_acknowledged',
+      unacked.length,
+      new ConflictException({
+        statusCode: 409,
+        code: AI_CHECKS_NOT_ACKNOWLEDGED,
+        message: AI_CHECKS_NOT_ACKNOWLEDGED_MESSAGE,
+        missing: [...new Set(unacked.flatMap((entry) => entry.missing))],
+        orders: unacked,
+      }),
+    );
   }
 
   /**
@@ -2413,10 +2678,12 @@ export class OrderGatewayController {
     previews: unknown[],
     timings?: AiParseTimings,
   ): void {
-    if (!this.aiClient || previews.length === 0) return;
+    // (AI ack B1) TEZ navbat — snapshot ai-confirm'dan oldin yetib kelsin.
+    const aiDraftClient = this.aiDraftClient();
+    if (!aiDraftClient || previews.length === 0) return;
     try {
       void firstValueFrom(
-        this.aiClient
+        aiDraftClient
           .send(
             { cmd: 'ai.draft.attach_preview' },
             {
@@ -3172,6 +3439,13 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'AI: matn/rasmdan buyurtma preview (hech narsa yaratmaydi)',
+    description:
+      "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: " +
+      "`district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), " +
+      '`region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), ' +
+      "`checks: [{ code, … }]` — AI tekshiruvlari, `ready`/`issues` ga ta'sir qilmaydi. BLOKLOVCHI (yaratishdan oldin operator tasdig'i shart): `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }` — ai-confirm'da `orders[].ack_checks` da bo'lmasa 409 `CHECKS_NOT_ACKNOWLEDGED` (`AI_ACK_CHECKS_ENFORCE=on`). " +
+      "YUMSHOQ (faqat ogohlantirish, tasdiq so'ralmaydi): `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. " +
+      "⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -3561,6 +3835,16 @@ export class OrderGatewayController {
    * ⚠️ AI_ORDER_ENABLED ga BOG'LANMAGAN — AI o'chiq bo'lsa ham qo'lda
    * tahrirlangan buyurtmalarni qabul qilish to'xtamasligi kerak.
    *
+   * ⚠️ AI ack (`AI_ACK_CHECKS_ENFORCE=on`): ai-confirm ai-service ISHLAB
+   * TURISHINI talab qiladi — saqlangan AI tekshiruvlari
+   * (`ai.draft.confirm_context`, TEZ navbat `AI_FAST`, 3 s) o'qilmasa 503
+   * `AI_CHECKS_UNAVAILABLE` (fail-closed, hech narsa yaratilmaydi). Darvozalar
+   * (hammasi yaratishdan OLDIN, idempotent takror ham o'tadi): 400
+   * `AI_DRAFT_REQUIRED` / `AI_DRAFT_NOT_FOUND` / `AI_DRAFT_ITEM_NOT_FOUND`
+   * (`indexes`), 503 `AI_CHECKS_UNAVAILABLE` (ai-service yoki yosh draft
+   * snapshot'i hali yo'q), 409 `CHECKS_NOT_ACKNOWLEDGED`. `off` (sukut) —
+   * faqat WARN `ai_ack would_<status>`, yaratish avvalgidek.
+   *
    * Tartib:
    *  1) Partiya darajasi (HECH NARSA yaratilishidan OLDIN, xato → 4xx):
    *     market (`resolveAiMarket`) va filial BIR MARTA aniqlanadi.
@@ -3597,6 +3881,26 @@ export class OrderGatewayController {
       'AI: tasdiqlangan buyurtmalarni yaratish (har buyurtmaga alohida natija)',
   })
   @ApiBody({ type: AiConfirmRequestDto })
+  @ApiOkResponse({
+    description:
+      '{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija',
+  })
+  @ApiConflictResponse({
+    description:
+      "CHECKS_NOT_ACKNOWLEDGED (`AI_ACK_CHECKS_ENFORCE=on`) — saqlangan AI preview'da BLOKLOVCHI tekshiruv (district_low_confidence, price_check) bor, " +
+      'lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi (idempotent takror ham). Tana: ' +
+      "`{ statusCode: 409, message, code: 'CHECKS_NOT_ACKNOWLEDGED', missing: string[], orders: [{ index, missing: string[] }] }` " +
+      '(`index` — so‘rovdagi `orders[]` o‘rni).',
+  })
+  @ApiBadRequestResponse({
+    description:
+      "(`AI_ACK_CHECKS_ENFORCE=on`) AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', indexes: number[] }` (so'rovdagi `orders[]` o'rinlari). " +
+      "AI_DRAFT_NOT_FOUND — `draft_id` shu market uchun ai-service'da topilmadi; AI_DRAFT_ITEM_NOT_FOUND — draft bor, lekin saqlangan preview'da bunday `ai_item_index` yo'q. Ikkalasida ham tana xuddi shunday `indexes: number[]`; AI'ni qayta yurgizing yoki qo'lda yarating. Boshqa 400 — DTO validatsiyasi.",
+  })
+  @ApiServiceUnavailableResponse({
+    description:
+      "(`AI_ACK_CHECKS_ENFORCE=on`) AI_CHECKS_UNAVAILABLE — saqlangan AI tekshiruvlarini o'qib bo'lmadi (ai-service timeout/xato) yoki yosh draft'ning (< 2 daqiqa) preview snapshot'i hali saqlanmagan. FAIL-CLOSED: hech narsa yaratilmaydi. Tana: `{ statusCode: 503, message, code: 'AI_CHECKS_UNAVAILABLE', retryable: true, retry_after_seconds: 5 }`, sarlavha `Retry-After: 5`.",
+  })
   async aiConfirm(
     @Body() dto: AiConfirmRequestDto,
     @Req() req: { user: JwtUser },
@@ -3605,6 +3909,31 @@ export class OrderGatewayController {
     const orders: AiConfirmOrderDto[] = Array.isArray(dto?.orders)
       ? dto.orders
       : [];
+
+    // AI ack (FE sessiya / ega, 2026-11-15): har buyurtma ai-parse
+    // draft'iga bog'langan bo'lishi SHART — `draft_id`/`ai_item_index`siz
+    // tasdiq talabini chetlab o'tish yo'li bo'lmasin.
+    const unlinked = orders
+      .map((order, index) =>
+        this.asStr(order?.draft_id).trim() &&
+        typeof order?.ai_item_index === 'number'
+          ? -1
+          : index,
+      )
+      .filter((index) => index >= 0);
+    if (unlinked.length > 0) {
+      this.aiAckGate(
+        'draft_required',
+        unlinked.length,
+        new BadRequestException({
+          statusCode: 400,
+          code: AI_DRAFT_REQUIRED,
+          message:
+            "AI buyurtmasi ai-parse natijasiga bog'lanmagan (draft_id va ai_item_index majburiy)",
+          indexes: unlinked,
+        }),
+      );
+    }
 
     // 1) Partiya darajasi — market va filial BIR MARTA.
     const market = await this.resolveAiMarket(req.user, dto?.market_id);
@@ -3706,9 +4035,15 @@ export class OrderGatewayController {
     });
 
     // vncdmXOy: audit metadata (model, prompt versiyasi, xarajat, server
-    // hisoblagan edited_fields). ai-service ishlamasa ham yaratish TO'XTAMAYDI
-    // — metadata faqat draft_id/ai_item_index bilan qoladi.
+    // hisoblagan edited_fields) va AI ack darvozalari (400/503 —
+    // `AI_ACK_CHECKS_ENFORCE=on`; `off` da faqat WARN, yaratish davom etadi).
     await this.attachAiAudit(eligible, marketId);
+
+    // AI ack (ega qarori 2026-11-14): bloklovchi tekshiruv (tuman noaniq,
+    // summa matndagidan farq qiladi) operator tomonidan tasdiqlanmagan
+    // bo'lsa — BUTUN so'rov 409, hech narsa yaratilmaydi (FE oynani
+    // ko'rsatib `ack_checks` bilan qayta yuboradi).
+    this.assertAiChecksAcknowledged(eligible);
 
     // 4) Yaratish — cheklangan parallellik, telefon bo'yicha yo'laklar.
     // VRyloH62: registrator/market operatori ismi — partiyaga BIR MARTA

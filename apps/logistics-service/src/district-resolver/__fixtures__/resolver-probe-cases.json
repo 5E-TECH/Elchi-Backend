@@ -34,8 +34,8 @@
    "full_address": "Jizzax viloyati Zomin tumani Paxtakor MFY 5-uy"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1708218",
+   "reason": null
   },
   "full": {
    "sato": "1708218",
@@ -49,8 +49,8 @@
    "full_address": "Jizzax viloyati Zomin tumani Paxtakor MFY 5-uy"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1708218",
+   "reason": null
   },
   "full": {
    "sato": "1708218",
@@ -63,8 +63,8 @@
    "full_address": "Farg'ona shahri, Furqat ko'chasi 7-uy"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1730401",
+   "reason": null
   },
   "full": {
    "sato": "1730401",
@@ -190,8 +190,8 @@
    "full_address": "Toshkent viloyati, O'rta Chirchiq tumani, 5-uy"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1727253",
+   "reason": null
   },
   "full": {
    "sato": "1727253",
@@ -358,8 +358,8 @@
    "district_name": "Gulistan"
   },
   "seed": {
-   "sato": "1724220",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
    "sato": null,
@@ -372,8 +372,8 @@
    "district_name": "Guliston"
   },
   "seed": {
-   "sato": "1724220",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
    "sato": null,
@@ -386,8 +386,8 @@
    "district_name": "Гулистан"
   },
   "seed": {
-   "sato": "1724220",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
    "sato": null,
@@ -960,8 +960,8 @@
    "district_name": "Urganch shahri"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1733401",
+   "reason": null
   },
   "full": {
    "sato": "1733401",
@@ -974,8 +974,8 @@
    "district_name": "Xiva shahri"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1733406",
+   "reason": null
   },
   "full": {
    "sato": "1733406",
@@ -1058,8 +1058,8 @@
    "district_name": "Yangiyo'l"
   },
   "seed": {
-   "sato": "1727259",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
    "sato": null,
@@ -1142,8 +1142,8 @@
    "district_name": "Yangi Yo'l"
   },
   "seed": {
-   "sato": "1727259",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
    "sato": null,
@@ -1184,8 +1184,8 @@
    "district_name": "Shahrisabz tumani"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1710245",
+   "reason": null
   },
   "full": {
    "sato": "1710245",
@@ -1366,8 +1366,8 @@
    "district_name": "Farg'ona shahri"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1730401",
+   "reason": null
   },
   "full": {
    "sato": "1730401",
@@ -1380,8 +1380,8 @@
    "district_name": "Guliston"
   },
   "seed": {
-   "sato": "1724220",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
    "sato": null,
@@ -1548,8 +1548,8 @@
    "full_address": "Quvasoy sh., Mustaqillik 12-uy"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1730408",
+   "reason": null
   },
   "full": {
    "sato": "1730408",
@@ -1562,8 +1562,8 @@
    "full_address": "Quvasoy sh."
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1730408",
+   "reason": null
   },
   "full": {
    "sato": "1730408",
@@ -1576,8 +1576,8 @@
    "full_address": "Farg'ona viloyati, Quvasoy shahri, Mustaqillik 5"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1730408",
+   "reason": null
   },
   "full": {
    "sato": "1730408",
@@ -1618,8 +1618,8 @@
    "full_address": "Farg'ona viloyati, Quvasoy shahri, Navoiy ko'chasi 5-uy"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1730408",
+   "reason": null
   },
   "full": {
    "sato": "1730408",
@@ -1646,8 +1646,8 @@
    "full_address": "Кашкадарьинская обл., Шахрисабзский р-н, 5"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1710245",
+   "reason": null
   },
   "full": {
    "sato": "1710245",
@@ -1660,8 +1660,8 @@
    "full_address": "Qashqadaryo viloyati, Shaxrisabz tumani, 5-uy"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1710245",
+   "reason": null
   },
   "full": {
    "sato": "1710245",
@@ -1674,8 +1674,8 @@
    "full_address": "г. Ургенч, ул. Навои 5"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1733401",
+   "reason": null
   },
   "full": {
    "sato": "1733401",

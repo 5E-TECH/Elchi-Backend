@@ -1,0 +1,27 @@
+{
+  "id": "price-plus-delivery",
+  "category": [
+    "price_words"
+  ],
+  "source": "synthetic",
+  "input": {
+    "text": "Dilnoza 90 000 23 45 Navoiy Karmana, atir 150 ming, dostavka 20 ming"
+  },
+  "expected": {
+    "orders": [
+      {
+        "customer_name": "Dilnoza",
+        "phone_number": "+998900002345",
+        "region_name": "Navoiy",
+        "district_name": "Karmana",
+        "items": [
+          {
+            "name": "atir",
+            "quantity": 1
+          }
+        ],
+        "total_price": 170000
+      }
+    ]
+  }
+}

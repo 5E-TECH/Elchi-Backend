@@ -46,6 +46,11 @@ lerna-debug.log*
 .env.staging
 .env.staging.*
 !.env.staging.example
+# «AI kalit va modellar»: ai-service'ning alohida sir fayli va AI master sir papkasi.
+.env.ai-secrets
+.env.ai-secrets.*
+!.env.ai-secrets.example
+/secrets/
 # Secret-rotation temp files (never commit): .env.production.new, .env.production.bak.*
 .env.production.*
 .env.*.bak

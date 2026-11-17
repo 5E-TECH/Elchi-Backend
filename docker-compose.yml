@@ -202,7 +202,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # AI buyurtma servisi (port 3024, ai_queue, ai_schema). .env da
+  # AI buyurtma servisi (port 3024, ai_queue + ai_fast_queue, ai_schema). .env da
   # ANTHROPIC_API_KEY bo'sh bo'lsa AI o'chiq holda ko'tariladi.
   ai-service:
     build:

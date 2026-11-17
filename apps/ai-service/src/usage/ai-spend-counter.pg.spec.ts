@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { CreateAiSchema1716000000047 } from '../../../../migrations/1716000000047-CreateAiSchema';
 import { AiUsageCache1h1716000000225 } from '../../../../migrations/1716000000225-AiUsageCache1h';
+import { AiProviderKeysAndRuntimeSettings1716000000228 } from '../../../../migrations/1716000000228-AiProviderKeysAndRuntimeSettings';
 import { AiOrderLatency1716000000170 } from '../../../../migrations/1716000000170-AiOrderLatency';
 import { AiSpendCounter } from '../entities/ai-spend-counter.entity';
 import { AiUsageLog } from '../entities/ai-usage-log.entity';
@@ -85,6 +86,8 @@ describePg('ai_spend_counter / ai_usage_log — real Postgres', () => {
       // C1: cache_creation_1h_tokens — up() ikki marta (IF NOT EXISTS).
       await new AiUsageCache1h1716000000225().up(qrLatency);
       await new AiUsageCache1h1716000000225().up(qrLatency);
+      // «AI kalit va modellar»: key_id/key_source/key_fingerprint/config_version.
+      await new AiProviderKeysAndRuntimeSettings1716000000228().up(qrLatency);
     } finally {
       await qrLatency.release();
     }

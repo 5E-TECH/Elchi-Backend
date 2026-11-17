@@ -48,6 +48,8 @@ export const CORS_ALLOWED_HEADERS: readonly string[] = [
   'X-Device-Id',
   'X-Device-Name',
   'X-Request-Source',
+  // «AI kalit va modellar» (BE-5 step-up): kalit amallarida parol tasdig'i.
+  'X-Step-Up-Token',
 ];
 
 /** `CORS_ORIGINS` (vergul bilan) → ro'yxat. */

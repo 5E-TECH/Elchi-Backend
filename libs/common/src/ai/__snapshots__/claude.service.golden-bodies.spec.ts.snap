@@ -1,0 +1,603 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) extractJson: cacheTtl 1h 1`] = `
+{
+  "calls": [
+    {
+      "body": {
+        "max_tokens": 4000,
+        "messages": [
+          {
+            "content": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+            "role": "user",
+          },
+        ],
+        "model": "claude-sonnet-5",
+        "output_config": {
+          "format": {
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "orders": {
+                  "items": {
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+              "required": [
+                "orders",
+              ],
+              "type": "object",
+            },
+            "type": "json_schema",
+          },
+        },
+        "system": [
+          {
+            "cache_control": {
+              "ttl": "1h",
+              "type": "ephemeral",
+            },
+            "text": "SYS",
+            "type": "text",
+          },
+        ],
+      },
+      "kind": "create",
+      "opts": {
+        "timeout": 55000,
+      },
+    },
+  ],
+  "factory": [
+    {
+      "apiKey": "len:53",
+      "maxRetries": 0,
+      "timeout": 55000,
+    },
+  ],
+}
+`;
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) extractJson: deadline 1`] = `
+{
+  "calls": [
+    {
+      "body": {
+        "max_tokens": 4000,
+        "messages": [
+          {
+            "content": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+            "role": "user",
+          },
+        ],
+        "model": "claude-sonnet-5",
+        "output_config": {
+          "format": {
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "orders": {
+                  "items": {
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+              "required": [
+                "orders",
+              ],
+              "type": "object",
+            },
+            "type": "json_schema",
+          },
+        },
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral",
+            },
+            "text": "SYS",
+            "type": "text",
+          },
+        ],
+      },
+      "kind": "create",
+      "opts": {
+        "timeout": 12000,
+      },
+    },
+  ],
+  "factory": [
+    {
+      "apiKey": "len:53",
+      "maxRetries": 0,
+      "timeout": 55000,
+    },
+  ],
+}
+`;
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) extractJson: kesilgan → retry tanasi 1`] = `
+[
+  {
+    "body": {
+      "max_tokens": 4000,
+      "messages": [
+        {
+          "content": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+          "role": "user",
+        },
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "format": {
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "orders": {
+                "items": {
+                  "type": "object",
+                },
+                "type": "array",
+              },
+            },
+            "required": [
+              "orders",
+            ],
+            "type": "object",
+          },
+          "type": "json_schema",
+        },
+      },
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral",
+          },
+          "text": "SYS",
+          "type": "text",
+        },
+      ],
+    },
+    "kind": "create",
+    "opts": {
+      "timeout": 55000,
+    },
+  },
+  {
+    "body": {
+      "max_tokens": 8000,
+      "messages": [
+        {
+          "content": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+          "role": "user",
+        },
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "format": {
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "orders": {
+                "items": {
+                  "type": "object",
+                },
+                "type": "array",
+              },
+            },
+            "required": [
+              "orders",
+            ],
+            "type": "object",
+          },
+          "type": "json_schema",
+        },
+      },
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral",
+          },
+          "text": "SYS",
+          "type": "text",
+        },
+      ],
+    },
+    "kind": "create",
+    "opts": {
+      "timeout": 55000,
+    },
+  },
+]
+`;
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) extractJson: maxTokens 32000 1`] = `
+{
+  "calls": [
+    {
+      "body": {
+        "max_tokens": 32000,
+        "messages": [
+          {
+            "content": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+            "role": "user",
+          },
+        ],
+        "model": "claude-sonnet-5",
+        "output_config": {
+          "format": {
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "orders": {
+                  "items": {
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+              "required": [
+                "orders",
+              ],
+              "type": "object",
+            },
+            "type": "json_schema",
+          },
+        },
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral",
+            },
+            "text": "SYS",
+            "type": "text",
+          },
+        ],
+      },
+      "kind": "create",
+      "opts": {
+        "timeout": 55000,
+      },
+    },
+  ],
+  "factory": [
+    {
+      "apiKey": "len:53",
+      "maxRetries": 0,
+      "timeout": 55000,
+    },
+  ],
+}
+`;
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) extractJson: model + effort low 1`] = `
+{
+  "calls": [
+    {
+      "body": {
+        "max_tokens": 4000,
+        "messages": [
+          {
+            "content": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+            "role": "user",
+          },
+        ],
+        "model": "claude-sonnet-5-5",
+        "output_config": {
+          "effort": "low",
+          "format": {
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "orders": {
+                  "items": {
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+              "required": [
+                "orders",
+              ],
+              "type": "object",
+            },
+            "type": "json_schema",
+          },
+        },
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral",
+            },
+            "text": "SYS",
+            "type": "text",
+          },
+        ],
+      },
+      "kind": "create",
+      "opts": {
+        "timeout": 55000,
+      },
+    },
+  ],
+  "factory": [
+    {
+      "apiKey": "len:53",
+      "maxRetries": 0,
+      "timeout": 55000,
+    },
+  ],
+}
+`;
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) extractJson: rasm 1`] = `
+{
+  "calls": [
+    {
+      "body": {
+        "max_tokens": 4000,
+        "messages": [
+          {
+            "content": [
+              {
+                "source": {
+                  "data": "QUJD",
+                  "media_type": "image/jpeg",
+                  "type": "base64",
+                },
+                "type": "image",
+              },
+              {
+                "text": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+                "type": "text",
+              },
+            ],
+            "role": "user",
+          },
+        ],
+        "model": "claude-sonnet-5",
+        "output_config": {
+          "format": {
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "orders": {
+                  "items": {
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+              "required": [
+                "orders",
+              ],
+              "type": "object",
+            },
+            "type": "json_schema",
+          },
+        },
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral",
+            },
+            "text": "SYS",
+            "type": "text",
+          },
+        ],
+      },
+      "kind": "create",
+      "opts": {
+        "timeout": 55000,
+      },
+    },
+  ],
+  "factory": [
+    {
+      "apiKey": "len:53",
+      "maxRetries": 0,
+      "timeout": 55000,
+    },
+  ],
+}
+`;
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) extractJson: sukut 1`] = `
+{
+  "calls": [
+    {
+      "body": {
+        "max_tokens": 4000,
+        "messages": [
+          {
+            "content": "<user_message>
+Ali, 3 ta atir
+</user_message>",
+            "role": "user",
+          },
+        ],
+        "model": "claude-sonnet-5",
+        "output_config": {
+          "format": {
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "orders": {
+                  "items": {
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+              "required": [
+                "orders",
+              ],
+              "type": "object",
+            },
+            "type": "json_schema",
+          },
+        },
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral",
+            },
+            "text": "SYS",
+            "type": "text",
+          },
+        ],
+      },
+      "kind": "create",
+      "opts": {
+        "timeout": 55000,
+      },
+    },
+  ],
+  "factory": [
+    {
+      "apiKey": "len:53",
+      "maxRetries": 0,
+      "timeout": 55000,
+    },
+  ],
+}
+`;
+
+exports[`ClaudeService golden bodies (flag o‘chiq — bugungi xulq) runToolLoop: tool → javob (stream) 1`] = `
+[
+  {
+    "body": {
+      "cache_control": {
+        "type": "ephemeral",
+      },
+      "max_tokens": 8000,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "savol",
+              "type": "text",
+            },
+          ],
+          "role": "user",
+        },
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "medium",
+      },
+      "system": [
+        {
+          "cache_control": {
+            "ttl": "1h",
+            "type": "ephemeral",
+          },
+          "text": "SYS",
+          "type": "text",
+        },
+      ],
+      "tools": [
+        {
+          "description": "d",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "properties": {},
+            "type": "object",
+          },
+          "name": "get_cash_position",
+        },
+      ],
+    },
+    "kind": "stream",
+    "opts": {
+      "timeout": 55000,
+    },
+  },
+  {
+    "body": {
+      "cache_control": {
+        "type": "ephemeral",
+      },
+      "max_tokens": 8000,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "savol",
+              "type": "text",
+            },
+          ],
+          "role": "user",
+        },
+        {
+          "content": [
+            {
+              "id": "t1",
+              "input": {},
+              "name": "get_cash_position",
+              "type": "tool_use",
+            },
+          ],
+          "role": "assistant",
+        },
+        {
+          "content": [
+            {
+              "content": "{"ok":1}",
+              "tool_use_id": "t1",
+              "type": "tool_result",
+            },
+          ],
+          "role": "user",
+        },
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "medium",
+      },
+      "system": [
+        {
+          "cache_control": {
+            "ttl": "1h",
+            "type": "ephemeral",
+          },
+          "text": "SYS",
+          "type": "text",
+        },
+      ],
+      "tools": [
+        {
+          "description": "d",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "properties": {},
+            "type": "object",
+          },
+          "name": "get_cash_position",
+        },
+      ],
+    },
+    "kind": "stream",
+    "opts": {
+      "timeout": 55000,
+    },
+  },
+]
+`;
