@@ -65,6 +65,26 @@ updates:
       - dependency-name: '@types/node'
         update-types:
           - version-update:semver-major
+      # 2026-11-17 (#687, #688, #689): CI yashil bo'lsa ham ish vaqtidagi xulq
+      # o'zgaradi — CI buni ko'rmaydi (Sentry DSN'siz init qilinmaydi, Anthropic
+      # mijozi testlarda mock). Har biri rejali PR'da, staging'da qo'lda sinab.
+      # @sentry/node 11 (#687) — `dataCollection` sukuti kengaygan: so'rov/javob
+      # tanasi, cookie, AI kirish/chiqishi, SQL yig'iladi (v10 da yig'ilmagan).
+      # Migratsiyada v10 ga teng cheklovchi `dataCollection` + scrub-pii.ts ko'rigi.
+      # @anthropic-ai/sdk 1.x (#688) — API versiyasi 2026-10-21 (0.x: 2023-06-01),
+      # kalit `Authorization: Bearer` bilan ketadi (X-Api-Key emas). Migratsiyada
+      # claude.service.ts, ai-key-verifier, AiRuntimeProvider staging'da tekshiriladi.
+      # undici major (#689) — Node ichidagi undici bilan teng turadi (Node 22 →
+      # 6.x, ssrf.ts izohi); 8.x da ssrf-pinning spec'i yiqiladi. Node bilan birga.
+      - dependency-name: '@sentry/node'
+        update-types:
+          - version-update:semver-major
+      - dependency-name: '@anthropic-ai/sdk'
+        update-types:
+          - version-update:semver-major
+      - dependency-name: undici
+        update-types:
+          - version-update:semver-major
     groups:
       nestjs:
         patterns:
