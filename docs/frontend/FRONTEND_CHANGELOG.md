@@ -49,6 +49,14 @@ Deploy: notification-service, keyin api-gateway. Migratsiya **yo'q**. Ochiq `GET
   - `healthy: null`, `enabled: true` — «Hali tekshirilmagan»; `enabled: false` — «Bot o'chiq» (`reason`).
 - 🔧 «Qayta tekshirish» tugmasi → `POST /health/notification-bot/recheck`, javobdagi holat bilan blok yangilanadi (readiness ham qayta so'raladi). `restart_required: true` bo'lsa tugma o'rniga izoh: «Qayta tekshirish yordam bermaydi — yangi token bilan xizmatni qayta ishga tushiring.» 503 — `message` ni `notify.error` bilan.
 
+### 2026-11-17 — «Hisob qoidalari» faol qatori tiklandi (migratsiya 231)
+
+Muammo (prod, 2026-11-17): «Hududlar → Yetkazish tariflari»da «Hisob qoidalarini yuklab bo'lmadi — Yetkazish narxi sozlamalari topilmadi (migratsiya 1716000000142 yurgizilmagan?)». Shu bo'lim yuklanmagani uchun «necha kg dan keyin qo'shimcha haq» (`first_kg_included`) va boshqa qoidalarni kiritib ham, o'zgartirib ham bo'lmaydi. Sabab — migratsiya 230 dagi holat: baza tozalanganda `logistics_schema.delivery_pricing_settings` qatorlari ketgan, 142 esa «bajarilgan» bo'lib qolgan. Faol sozlamasiz `GET` / `PATCH /delivery/pricing-settings` va narx hisobi (`quote`, `quote/by-tariff`, sotuvdagi `sale_quote`) 409 qaytaradi.
+Deploy: migration-runner (logistics-service kodi o'zgarmagan). API va javob shakli **o'zgarmadi**.
+
+- 🟢 [logistics] Migratsiya 231 faqat faol qator UMUMAN bo'lmagan bazada ishlaydi: nofaol versiyalar bo'lsa — eng so'nggisi qiymatlari bilan yangi faol qator; umuman qator bo'lmasa — 142 seed'i (birinchi **1 kg** bazada, hajm bo'luvchisi 5000, 0.1 kg qadam, 500 ga yaxlitlash, PICKUP 20 000 / 10+ tekin, express × 1.4; `volumetric_from_kg` 0, `min_delivery_price` / `extra_cost_limit_amount` bo'sh). `created_by` bo'sh — «O'zgarishlar tarixi»da muallifsiz versiya. Faol qator bor bazada hech narsa o'zgarmaydi; tariflarga tegilmaydi.
+- 🟢 Deploy'dan keyin superadmin «Hisob qoidalari»ni tekshirib, kerakli qiymatlarni (masalan, «necha kg dan keyin qo'shimcha haq») ekrandan qo'yadi — har o'zgarish yangi versiya.
+
 ### 2026-11-17 — Yo'ldagi paketni bekor qilish taqiqlandi (oP02jE2P)
 
 Maqsad: jo'natilgan paket bekor qilinib, posilkalar tizimda manba filialda «yangi» bo'lib qolmasin (aslida ular yo'lda yoki manzil filialda).
