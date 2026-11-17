@@ -146,9 +146,22 @@ describe('YEThmZBn — GET /users filial bilan boyitiladi', () => {
     const res = await listUsers();
 
     expect(branchClient.send).not.toHaveBeenCalled();
+    // KQINMdeQ: + `can_manage` (superadmin — hammasi true).
     expect(res.data.items).toEqual([
-      { id: '37', role: 'market', branch_id: null, branch: null },
-      { id: '40', role: 'admin', branch_id: null, branch: null },
+      {
+        id: '37',
+        role: 'market',
+        branch_id: null,
+        branch: null,
+        can_manage: true,
+      },
+      {
+        id: '40',
+        role: 'admin',
+        branch_id: null,
+        branch: null,
+        can_manage: true,
+      },
     ]);
   });
 

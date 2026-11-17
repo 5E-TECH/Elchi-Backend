@@ -48,7 +48,27 @@ Deploy: order-service, logistics-service, notification-service, api-gateway + mi
 - 🔧 Kuryer ro'yxati: «Qabul qilish» tugmasi (`PATCH /post/receive/:id` `scan:true`) olib tashlanadi — faol qatorda faqat «Sotish» + «Bekor qilish».
 - 🔧 `/scan/:token`: o'z buyurtmasi (`waiting` / `on the road` / `waiting_customer`) — «Sotish / Bekor qilish»; «O'zimga olish»dan keyin shu sahifada qoladi. `/scan` dagi kuryer «Qabul qilish» rejimi olib tashlanadi; «O'zimga olish» rejimida o'z yo'ldagi buyurtmasi — `accepted: true` («sizga biriktirildi»).
 - 🔧 `/courier-bulk`: «Pochta hali qabul qilinmagan» to'sig'i olib tashlanadi.
-- 🔧 Yorliq: `waiting` + kuryer — «Kuryerda»; yangi tarix amallari va `order_taken_by_courier` / `order_marked_not_arrived` matnlari (uz/ru/en).
+- 🔧 Yorliq: `waiting` + kuryer — «Kuryerda»; yangi tarix amallari (uz/ru/en). `order_taken_by_courier` / `order_marked_not_arrived` — boshqa skan xatolari kabi backend `message` matni ko'rsatiladi.
+
+### 2026-11-17 — Menejer o'z filiali xodimlarini boshqaradi: huquq hozirgi filial bo'yicha, `created_by` emas (KQINMdeQ)
+
+Ega (2026-11-17): menejer **o'z filialidagi barcha** xodimlarni tahrirlay olishi kerak (boshqa menejerlardan tashqari), kim yaratganidan qat'i nazar; boshqa filialga o'tkazilgan xodim bilan esa hech narsa qila olmaydi.
+Deploy: api-gateway va identity-service. Migratsiya **yo'q**.
+
+- ✏️ [gateway + identity] `PATCH /users/:id`, `POST /users/:id/password/resend-sms`, `GET /users/:id/password/sms-status` — MANAGER: o'zi yoki **hozir** o'z filialining faol a'zosi (`branch_users`, har so'rovda bazadan, JWT'dan emas) bo'lgan **kuryer yoki ro'yxatchi**. `created_by` ruxsat ham bermaydi, cheklamaydi ham:
+  - admin yaratgan kuryer va `created_by = NULL` eski xodim o'z filialida — endi **200** (ilgari identity 403 «Manager faqat o'zi yaratgan userlarni yangilay oladi»);
+  - parol SMS — kuryer **va ro'yxatchi** (ilgari faqat o'zi yaratgan kuryer, «Menejer faqat o'z kuryeriga parol yubora oladi»);
+  - shu filialdagi boshqa menejer, admin, superadmin, market (o'zi yaratgani ham), operator, investor, logist — **403**;
+  - boshqa filialga o'tkazilgan xodim (o'zi yaratgan bo'lsa ham), boshqa filial foydalanuvchisi (IDOR), filialga biriktirilmagan menejer, branch-service xatosi — **403** (500 emas, fail-closed). Tekshiruv gateway'da (identity'ga so'rov ketmaydi) va identity'da (ikkinchi qavat).
+  - Tahrir oynasidagi maydonlar to'plami o'zgarmagan (maosh, to'lov kuni, tarif, `add_order`, holat — avvalgidek). Alohida amallar menejerga avvalgidek yopiq: `DELETE /users/:id`, `PATCH /users/:id/status`, `PATCH /users/:id/role`, `couriers/:id/regions`, `couriers/:id/branch`, `branches/:id/users`.
+- ✏️ `GET /users/:id` — MANAGER: filial turi cheklovi (faqat REGIONAL/HYBRID) **olib tashlandi** — har filial turida o'z filiali a'zosi ochiladi (filialdagi boshqa menejerlar ham, faqat ko'rish). O'zi yaratgan market — avvalgidek ochiladi (faqat ko'rish). Boshqa filial foydalanuvchisi / branch-service xatosi — 403.
+- 🆕 `can_manage: boolean` — `GET /users/:id` javobida va `GET /users` ning har qatorida: so'rovchi shu foydalanuvchini `PATCH /users/:id` orqali boshqara oladimi. Superadmin — hammasi `true`; admin — o'zi va admin/superadmin bo'lmaganlar; menejer — o'zi va hozir o'z filialidagi kuryer/ro'yxatchi (boshqa menejer va o'zi yaratgan market — `false`). Faqat ko'rsatish uchun: haqiqiy ruxsat har so'rovda qayta tekshiriladi.
+- 🟢 `GET /users` ro'yxat ko'lami **o'zgarmagan** (filial a'zolari + o'zi yaratgan marketlar). Bola filiallar «o'z filiali»ga kirmaydi.
+
+**Frontend action items:**
+- 🔧 `User` turiga `can_manage?: boolean`. Foydalanuvchi tafsilotida «Tahrirlash» va «Parolni tiklash va SMS yuborish» — `can_manage` bo'yicha (maydon kelmasa — zaxira: menejer ko'ruvchiga market va boshqa menejerda yashirin).
+- 🔧 Parol SMS menejerda: kuryer **va ro'yxatchi**.
+- 🔧 Saqlashda 403 (oyna ochiq turganda xodim boshqa filialga o'tkazilgan) — xabar + tafsilot so'rovini yangilash (sahifa 403 xato holatini ko'rsatadi).
 
 ### 2026-11-17 — Baza tozalanishidan keyin yo'qolgan seed'lar tiklandi (migratsiyalar 232–234)
 

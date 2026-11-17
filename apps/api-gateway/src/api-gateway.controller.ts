@@ -113,6 +113,13 @@ const USER_BRANCH_LOOKUP_TIMEOUT_MS = 3000;
  */
 const UserGatewayMarketCreatorBranchTypes = new Set(['PICKUP', 'HYBRID']);
 
+/** string / number qiymat matni (trim); boshqasi (obyekt, null) — ''. */
+function scalarText(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : '';
+}
+
 interface BranchAssignment {
   branch_id?: string | null;
   role?: string | null;
@@ -210,16 +217,70 @@ export class ApiGatewayController {
   }
 
   /**
-   * 2026-11-04: menejer faqat O'Z FILIALINING faol a'zosini (`branch_users`)
-   * boshqaradi — PATCH /users/:id, parol SMS'ini qayta yuborish va SMS holati.
-   * identity'dagi `created_by` (o'zi yaratgan) — QO'SHIMCHA shart, yolg'iz
-   * yetarli emas: boshqa filialga o'tkazilgan kuryer/registrator (yoki
-   * menejerning o'zi boshqa filialga o'tkazilsa — eski filial xodimlari)
-   * yaratgan menejerga endi yopiq. Ilgari GET /users/:id 403 berardi, lekin
-   * PATCH (parol, telefon, maosh, to'liq qator) o'tardi.
+   * KQINMdeQ — menejerning HOZIRGI filiali va uning faol a'zolari
+   * (`branch_users`: user_id → rol, katta harfda). Har so'rovda bazadan
+   * (`branch.user.find_by_user` + `branch.user.find_by_branch`), JWT'dan
+   * emas — boshqa filialga o'tkazilgan xodim (yoki menejerning o'zi) darhol
+   * hisobga olinadi. Bola filiallar kirmaydi (faqat aynan o'z filiali).
+   * Filialga biriktirilmagan menejer — `branchId: ''`, a'zolar bo'sh.
+   * Branch-service xatosi / kutilmagan javob — ForbiddenException
+   * (fail-closed: 403, 500 emas).
+   */
+  private async resolveManagerBranchMembers(user: JwtUser): Promise<{
+    branchId: string;
+    members: Map<string, string>;
+  }> {
+    try {
+      const assignment = await this.resolveBranchAssignment(user);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      const members = new Map<string, string>();
+      if (!branchId) {
+        return { branchId, members };
+      }
+      const branchUsersResponse = await firstValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            { branch_id: branchId, requester: this.toRequester({ user }) },
+          )
+          .pipe(timeout(8000)),
+      );
+      const rows: unknown = branchUsersResponse?.data;
+      if (!Array.isArray(rows)) {
+        throw new Error('branch.user.find_by_branch: data massiv emas');
+      }
+      for (const row of rows as Array<Record<string, unknown>>) {
+        const userId = scalarText(row?.user_id);
+        if (userId) {
+          members.set(userId, scalarText(row?.role).toUpperCase());
+        }
+      }
+      return { branchId, members };
+    } catch (error) {
+      this.logger.warn(
+        `manager branch scope: branch-service failed (${
+          error instanceof Error ? error.message : 'unknown error'
+        }) — denied`,
+      );
+      throw new ForbiddenException(
+        "Filialni aniqlab bo'lmadi — amal rad etildi",
+      );
+    }
+  }
+
+  /**
+   * KQINMdeQ (ega, 2026-11-17): menejer boshqa foydalanuvchini — PATCH
+   * /users/:id, parol SMS'ini qayta yuborish va SMS holati — FAQAT u HOZIR
+   * menejerning o'z filialining faol a'zosi (`branch_users`) bo'lsa va
+   * menejer bo'lmasa boshqaradi (amalda kuryer va ro'yxatchi; shu filialdagi
+   * boshqa menejer — 403, identity'ga so'rov ketmaydi). `created_by` (kim
+   * yaratgan) ruxsat ham bermaydi, cheklamaydi ham («fix #3» va 2026-11-04
+   * dagi «qo'shimcha shart» bekor). Boshqa filialga o'tkazilgan xodim —
+   * darhol 403. identity `assertManagerCanManageTarget` xuddi shu qoidani
+   * yana tekshiradi (ikki qavat) va nishon rolini (admin, market …) ham.
    * SUPERADMIN/ADMIN va boshqa rollar — tekshiruvsiz (ularning qoidasi
    * identity'da). O'zini (`:id` = o'zi) — tekshiruvsiz (identity allowSelf).
-   * Filialga biriktirilmagan menejer — 403.
+   * Filialga biriktirilmagan menejer yoki branch-service xatosi — 403.
    */
   private async assertManagerTargetInOwnBranch(
     req: { user?: JwtUser } | undefined,
@@ -242,31 +303,61 @@ export class ApiGatewayController {
       return;
     }
 
-    const assignment = await this.resolveBranchAssignment(user);
-    const branchId = String(assignment?.branch_id ?? '').trim();
+    const { branchId, members } = await this.resolveManagerBranchMembers(user);
     if (!branchId) {
       throw new ForbiddenException(
         'Manager hech qaysi branchga biriktirilmagan',
       );
     }
-
-    const branchUsersResponse = await firstValueFrom(
-      this.branchClient
-        .send(
-          { cmd: 'branch.user.find_by_branch' },
-          { branch_id: branchId, requester: this.toRequester({ user }) },
-        )
-        .pipe(timeout(8000)),
-    );
-    const branchUsers = Array.isArray(branchUsersResponse?.data)
-      ? branchUsersResponse.data
-      : [];
-    const inBranch = branchUsers.some(
-      (row: any) => String(row?.user_id ?? '').trim() === target,
-    );
-    if (!inBranch) {
+    const memberRole = members.get(target);
+    if (memberRole === undefined) {
       throw new ForbiddenException('Siz bu foydalanuvchini boshqara olmaysiz');
     }
+    if (memberRole === 'MANAGER') {
+      throw new ForbiddenException('Manager boshqa managerni boshqara olmaydi');
+    }
+  }
+
+  /**
+   * KQINMdeQ — `can_manage`: so'rovchi shu foydalanuvchini PATCH
+   * /users/:id (tahrir oynasi) orqali boshqara oladimi — backend qoidasi
+   * bilan bir xil (identity `assertRequesterCanMutateUser` +
+   * `assertManagerCanManageTarget`, gateway `assertManagerTargetInOwnBranch`):
+   *  - superadmin — har kim;
+   *  - admin — o'zi va admin/superadmin bo'lmagan har kim;
+   *  - menejer — o'zi; boshqasi faqat kuryer yoki ro'yxatchi bo'lsa VA HOZIR
+   *    menejer filialining faol a'zosi bo'lsa (`members`, branch_users roli
+   *    MANAGER emas). O'zi yaratgan market — false (faqat ko'rish).
+   * Faqat ko'rsatish uchun: haqiqiy ruxsat har so'rovda qayta tekshiriladi.
+   */
+  private computeCanManage(
+    reqUser: JwtUser | undefined,
+    row: Record<string, unknown>,
+    managerMembers?: Map<string, string>,
+  ): boolean {
+    const roles = (reqUser?.roles ?? []).map((r) => String(r).toLowerCase());
+    const requesterId = String(reqUser?.sub ?? '').trim();
+    const targetId = scalarText(row?.id);
+    const targetRole = scalarText(row?.role).toLowerCase();
+    if (!targetId) return false;
+    if (roles.includes(RoleEnum.SUPERADMIN)) return true;
+    const isSelf = Boolean(requesterId) && requesterId === targetId;
+    if (roles.includes(RoleEnum.ADMIN)) {
+      return (
+        isSelf ||
+        (targetRole !== RoleEnum.SUPERADMIN && targetRole !== RoleEnum.ADMIN)
+      );
+    }
+    if (!roles.includes(RoleEnum.MANAGER)) return false;
+    if (isSelf) return true;
+    if (
+      targetRole !== RoleEnum.COURIER &&
+      targetRole !== RoleEnum.REGISTRATOR
+    ) {
+      return false;
+    }
+    const memberRole = managerMembers?.get(targetId);
+    return memberRole !== undefined && memberRole !== 'MANAGER';
   }
 
   private async findUserCashbox(userId: string, cashboxType: Cashbox_type) {
@@ -1318,7 +1409,12 @@ export class ApiGatewayController {
       'filial xodimining filiali (boshqa rollar va filial xizmati javob ' +
       'bermasa — null). x6IO746K: `role = market_operator` qatorlarida ' +
       '`market: { id, name } | null` (market o`chirilgan / topilmagan — null; ' +
-      'boshqa rollarda kalit yo`q).',
+      'boshqa rollarda kalit yo`q). KQINMdeQ: har qatorda `can_manage: ' +
+      'boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali ' +
+      'boshqara oladimi (superadmin — hammasi; admin — o`zi va ' +
+      'admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi ' +
+      'kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa ' +
+      'menejer va o`zi yaratgan market — false).',
   })
   async getUsers(
     @Query('search') search?: string,
@@ -1355,6 +1451,8 @@ export class ApiGatewayController {
       requesterRoles.includes(RoleEnum.MANAGER) && !isSystemPrivileged;
 
     let branchBoundUserIds: string[] | undefined;
+    // KQINMdeQ — `can_manage` uchun: filial a'zosi → `branch_users` roli.
+    const managerMembers = new Map<string, string>();
     if (requesterHasBranchScope) {
       const assignment = req?.user?.sub
         ? await this.resolveBranchAssignment(req.user)
@@ -1386,6 +1484,12 @@ export class ApiGatewayController {
               .filter(Boolean),
           ),
         );
+        for (const row of branchUsers as Array<Record<string, unknown>>) {
+          const memberId = scalarText(row?.user_id);
+          if (memberId && !managerMembers.has(memberId)) {
+            managerMembers.set(memberId, scalarText(row?.role).toUpperCase());
+          }
+        }
       }
     }
 
@@ -1426,8 +1530,10 @@ export class ApiGatewayController {
     );
 
     // Sahifadan keyingi filtr yo'q — ko'lam identity so'rovida (yuqorida).
-    // Menejerning tahrirlash huquqi: filial a'zoligi (gateway,
-    // assertManagerTargetInOwnBranch) VA created_by (identity).
+    // KQINMdeQ: menejerning tahrirlash huquqi — faqat HOZIRGI filial
+    // (gateway `assertManagerTargetInOwnBranch` + identity
+    // `assertManagerCanManageTarget`), `created_by` emas; har qatorda
+    // `can_manage` (pastda). Ro'yxat ko'lami o'zgarmagan.
 
     // YEThmZBn: «Filial» ustuni — har qatorga `branch: { id, name } | null`.
     const pageItems = (response as { data?: { items?: unknown } } | undefined)
@@ -1437,6 +1543,16 @@ export class ApiGatewayController {
         pageItems as Array<Record<string, unknown>>,
         req,
       );
+      // KQINMdeQ — har qatorga `can_manage` (so'rovchi uchun PATCH o'tadimi).
+      for (const item of pageItems as Array<Record<string, unknown>>) {
+        if (item && typeof item === 'object') {
+          item.can_manage = this.computeCanManage(
+            req?.user,
+            item,
+            managerMembers,
+          );
+        }
+      }
       // T7 (B3): market / operator qatorlari — menejerga telefonlarsiz,
       // Elchi mas'uli faqat SUPERADMIN/ADMIN ga.
       (response as { data: { items: unknown[] } }).data.items = pageItems.map(
@@ -1544,14 +1660,22 @@ export class ApiGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get user by id (admin/superadmin)' })
+  @ApiOperation({
+    summary: 'Get user by id (admin/superadmin/manager)',
+    description:
+      "SUPERADMIN/ADMIN — har qanday foydalanuvchi. MANAGER — HOZIR o'z filialining faol a'zosi (`branch_users`, so'rov paytida; " +
+      "filial turidan qat'i nazar — KQINMdeQ, ilgari faqat REGIONAL/HYBRID) yoki o'zi yaratgan market (2026-11-12, faqat ko'rish); " +
+      'boshqa filial foydalanuvchisi, filialga biriktirilmagan menejer yoki filial xizmati xatosi — 403.',
+  })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiOkResponse({
     description:
       'User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, ' +
       'name } | null` (kuryer / menejer / registrator / filial xodimi; ' +
       'boshqa rollar — null). x6IO746K: market operatorida `market: { id, ' +
-      'name } | null`.',
+      'name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu ' +
+      'foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users ' +
+      'qatoridagi bilan bir xil qoida).',
   })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
@@ -1573,54 +1697,34 @@ export class ApiGatewayController {
       throw new ForbiddenException('Market faqat o‘z profilini ko‘ra oladi');
     }
 
+    // KQINMdeQ — menejer uchun `can_manage` shu a'zolar bo'yicha (pastda).
+    let managerMembers: Map<string, string> | undefined;
     if (
       !requesterIsPrivileged &&
       requesterRoles.includes(RoleEnum.MANAGER) &&
       req?.user?.sub &&
       // 2026-11-12: o'zi yaratgan market — ro'yxatda ko'rinadi, tafsiloti ham
-      // ochiladi (filial a'zoligi va filial turi talab qilinmaydi).
+      // ochiladi (filial a'zoligi talab qilinmaydi; tahrir yo'q).
       !(await this.isManagerOwnMarket(req.user, id))
     ) {
-      const assignment = await this.resolveBranchAssignment(req.user);
-      const branchId = String(assignment?.branch_id ?? '').trim();
-      const branchType = String(assignment?.branch?.type ?? '')
-        .trim()
-        .toUpperCase();
-
+      // KQINMdeQ: HOZIRGI filial (branch_users, so'rov paytida; xato — 403).
+      // Filialdagi boshqa menejerlar ham KO'RINADI (faqat tahrirlanmaydi —
+      // `can_manage: false`). Ilgari bu yerda faqat REGIONAL/HYBRID filial
+      // menejeriga ruxsat bor edi (PICKUP menejeri ro'yxatda ko'rgan
+      // xodimining tafsilotini ocha olmasdi) — endi qoida filial turidan
+      // qat'i nazar bir xil (ro'yxat va PATCH bilan mos).
+      const { branchId, members } = await this.resolveManagerBranchMembers(
+        req.user,
+      );
       if (!branchId) {
         throw new ForbiddenException(
           'Manager hech qaysi branchga biriktirilmagan',
         );
       }
-      if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
-        throw new ForbiddenException(
-          'Bu branch type uchun userlarni ko‘rish ruxsati yo‘q',
-        );
-      }
-
-      const branchUsersResponse = await firstValueFrom(
-        this.branchClient
-          .send(
-            { cmd: 'branch.user.find_by_branch' },
-            {
-              branch_id: branchId,
-              requester: this.toRequester(req as { user: JwtUser }),
-            },
-          )
-          .pipe(timeout(8000)),
-      );
-      const branchUsers = Array.isArray(branchUsersResponse?.data)
-        ? branchUsersResponse.data
-        : [];
-      const branchUserIds = new Set(
-        branchUsers
-          .map((row: any) => String(row?.user_id ?? '').trim())
-          .filter(Boolean),
-      );
-
-      if (!branchUserIds.has(String(id).trim())) {
+      if (!members.has(String(id).trim())) {
         throw new ForbiddenException('Siz bu user ma’lumotini ko‘ra olmaysiz');
       }
+      managerMembers = members;
     }
 
     // (GvL6ZFAd) market_tg_token bu javobda HECH bir rol uchun (SUPERADMIN
@@ -1636,7 +1740,19 @@ export class ApiGatewayController {
     // T7 (B3): market / operator yozuvi — menejer/filial/kuryerga
     // telefonlarsiz; `responsible` (Elchi mas'uli) faqat SUPERADMIN/ADMIN ga.
     const data: unknown = response?.data;
-    const row = projectUserRowContactsForRoles(req?.user?.roles, data);
+    const projected = projectUserRowContactsForRoles(req?.user?.roles, data);
+    // KQINMdeQ — `can_manage`: so'rovchi uchun PATCH /users/:id o'tadimi.
+    const row =
+      projected && typeof projected === 'object' && !Array.isArray(projected)
+        ? {
+            ...(projected as Record<string, unknown>),
+            can_manage: this.computeCanManage(
+              req?.user,
+              projected as Record<string, unknown>,
+              managerMembers,
+            ),
+          }
+        : projected;
     return row === data ? response : { ...response, data: row };
   }
 
@@ -1676,7 +1792,7 @@ export class ApiGatewayController {
     summary: 'Update user (all roles)',
     description:
       "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi. " +
-      "MANAGER: faqat o'z filialining faol a'zosi (`branch_users`) VA o'zi yaratgan foydalanuvchi; boshqa filialga o'tkazilgan xodim yoki filialga biriktirilmagan menejer — 403.",
+      "MANAGER (KQINMdeQ): o'zi yoki HOZIR o'z filialining faol a'zosi (`branch_users`, so'rov paytida) bo'lgan kuryer / ro'yxatchi — kim yaratganidan (`created_by`) qat'i nazar. Boshqa menejer (shu filialdagisi ham), admin, superadmin, market (o'zi yaratgani ham), operator, investor, logist, boshqa filialga o'tkazilgan xodim, filialga biriktirilmagan menejer yoki filial xizmati xatosi — 403. Tekshiruv gateway va identity'da.",
   })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiBody({ type: UpdateAdminRequestDto })
@@ -1688,13 +1804,12 @@ export class ApiGatewayController {
     @Body() dto: UpdateAdminRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    // 2026-11-04: menejer — IKKI shart: nishon menejer filialining faol
-    // a'zosi (`branch_users`, shu yerda gateway'da — GET /users/:id bilan bir
-    // xil) VA identity'da o'zi yaratgan (created_by === requester.id). Ilgari
-    // («fix #3») faqat created_by: boshqa filialga o'tkazilgan kuryerni
-    // yaratgan menejer GET /users/:id da 403 olsa-da, PATCH bilan parolini
-    // almashtirib, maosh/telefonini o'zgartira va to'liq qatorini o'qiy olardi.
-    // Delete/status esa ushbu route'larda admin/superadmin-only (@Roles).
+    // KQINMdeQ (2026-11-17): menejer — nishon HOZIR menejer filialining faol
+    // a'zosi (`branch_users`) va menejer emas (shu yerda gateway'da), identity
+    // esa xuddi shu filial qoidasini va nishon rolini (kuryer/ro'yxatchi)
+    // yana tekshiradi. `created_by` ahamiyatsiz (ilgari «fix #3» — faqat
+    // o'zi yaratgan; 2026-11-04 dan filial + created_by). Delete/status esa
+    // ushbu route'larda admin/superadmin-only (@Roles).
     // (Elchi Pochta #3) `current_session_id` — o'z parolini almashtirsa
     // joriy sessiya qolsin; parol tiklansa yopilgan sessiyalar shu gateway
     // keshida darhol «yopilgan» (`applyRevokedSessionIds`), (2026-10-24)
@@ -1733,7 +1848,7 @@ export class ApiGatewayController {
   @ApiOperation({
     summary: 'Resend temporary password via SMS (aidsxJ2H)',
     description:
-      "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan va hozir o'z filialida (`branch_users`) bo'lgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
+      "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — HOZIR o'z filialida (`branch_users`) bo'lgan kuryer yoki ro'yxatchi, kim yaratganidan qat'i nazar (KQINMdeQ; ilgari faqat o'zi yaratgan kuryer). Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
   })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiOkResponse({ description: 'New temporary password queued via SMS' })
@@ -1744,8 +1859,8 @@ export class ApiGatewayController {
     @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user: JwtUser },
   ) {
-    // 2026-11-04: menejer — faqat o'z filiali a'zosi (+ identity: o'zi
-    // yaratgan kuryer).
+    // KQINMdeQ: menejer — faqat HOZIR o'z filialidagi a'zo (menejer emas);
+    // identity: kuryer yoki ro'yxatchi, filial yana tekshiriladi.
     await this.assertManagerTargetInOwnBranch(req, id);
     const response = await firstValueFrom(
       this.identityClient
