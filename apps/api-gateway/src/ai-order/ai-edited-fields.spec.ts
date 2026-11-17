@@ -201,3 +201,52 @@ describe('aiStableRequestId (Cp2v3ZJ7)', () => {
     expect(aiStableRequestId(m, d, i)).toBeNull();
   });
 });
+
+describe('buildPreviewSnapshots — P1-7', () => {
+  it('district_match, region_inferred, check_codes (faqat kodlar, takrorsiz)', () => {
+    const [s] = buildPreviewSnapshots([
+      {
+        index: 0,
+        district_match: {
+          method: 'fuzzy',
+          ai_text: 'Asakka',
+          score: 0.83,
+          x: 1,
+        },
+        region_inferred: true,
+        checks: [
+          { code: 'district_low_confidence' },
+          { code: 'qty_check', item_index: 0 },
+          { code: 'qty_check', item_index: 1 },
+        ],
+        items: [],
+      },
+    ]);
+    expect(s.district_match).toEqual({
+      method: 'fuzzy',
+      ai_text: 'Asakka',
+      score: 0.83,
+    });
+    expect(s.region_inferred).toBe(true);
+    expect(s.check_codes).toEqual(['district_low_confidence', 'qty_check']);
+  });
+
+  it('#649 review: score [0,1] ga qisiladi, ai_text telefoni maskalanadi', () => {
+    const [s] = buildPreviewSnapshots([
+      {
+        index: 0,
+        district_match: {
+          method: 'fuzzy',
+          ai_text: 'Asaka 90 123 45 67',
+          score: 7,
+        },
+        items: [],
+      },
+    ]);
+    expect(s.district_match).toEqual({
+      method: 'fuzzy',
+      ai_text: 'Asaka +99890*****67',
+      score: 1,
+    });
+  });
+});

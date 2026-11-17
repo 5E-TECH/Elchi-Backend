@@ -17,6 +17,13 @@ export interface DistrictTextQuery {
   district_name?: string | null;
   address?: string | null;
   full_address?: string | null;
+  /**
+   * P1-7: viloyat matnda aytilmagan, AI uni tumandan chiqargan. true bo'lsa
+   * qulflangan viloyatda topilmagan tuman boshqa viloyatdan ANIQ/alias
+   * moslik bilan olinadi (`match.region_switched`). Berilmagan/false —
+   * qulf avvalgidek (checklist #1).
+   */
+  region_inferred?: boolean | null;
 }
 
 /** RMQ yuki: `{ items }` — ko'pi bilan `DISTRICT_RESOLVE_MAX_ITEMS` ta. */
@@ -82,6 +89,21 @@ export interface DistrictTextResolution {
   /** Ko'pi bilan `AI_MAX_CANDIDATES` ta. */
   candidates: DistrictCandidate[];
   reason?: DistrictResolutionReason;
+  /**
+   * P1-7 (D6): tuman avto-tanlanganda — qaysi usul bilan. `score` faqat
+   * fuzzy/address (0..1), aks holda null. `region_switched` — AI taxmin
+   * qilgan viloyat almashtirildi.
+   */
+  match?: DistrictMatchInfo;
+}
+
+export type DistrictMatchMethod =
+  'exact' | 'alias' | 'partial' | 'address' | 'fuzzy';
+
+export interface DistrictMatchInfo {
+  method: DistrictMatchMethod;
+  score: number | null;
+  region_switched?: boolean;
 }
 
 /** Snapshot qatori: `regions` jadvali. */

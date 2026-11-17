@@ -758,6 +758,9 @@ services:
   # o'chiq holda normal ko'tariladi.
   # ⚠️ RMQ navbat TTL'i (rmq.service.ts) bu servis uchun ham O'ZGARTIRILMAYDI —
   # uzoq AI chaqiruvi AI_RPC_TIMEOUT_MS bilan boshqariladi, TTL bilan emas.
+  # (AI ack B1) Ikkinchi iste'molchi — `ai_fast_queue` (RABBITMQ_AI_FAST_QUEUE,
+  # AI_FAST_PREFETCH=32): confirm_context / attach_preview / link_orders Claude
+  # chaqiruvlari ortida kutmaydi. Deploy: avval ai-service, keyin gateway.
   ai-service:
     <<: *svc-limits
     build:

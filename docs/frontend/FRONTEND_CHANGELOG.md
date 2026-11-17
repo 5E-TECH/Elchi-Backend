@@ -221,6 +221,68 @@ API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7
 **Frontend action items:**
 - 🔧 Qoidalar oynasi: forma chegaralari `limits.rules` dan; 400 `field` bo'yicha xato maydon ostida; 409 → sozlamalarni qayta o'qish. `severity` PATCH'da yuborilmasin.
 
+### 2026-11-14 — AI buyurtma: `district_low_confidence` va `price_check` endi tasdiq talab qiladi (`ack_checks`, 409 `CHECKS_NOT_ACKNOWLEDGED`)
+
+Ega qarori (2026-11-14): AI ogohlantirishlaridan FAQAT ikkitasi BLOKLOVCHI — tuman aniq emas (`district_low_confidence`) va summa matndagidan farq qiladi / juda katta (`price_check`). Qolganlari (`qty_check`, `duplicate_items`, `phone_is_market`, `same_phone_multi`) — avvalgidek yumshoq ogohlantirish, tasdiq so'ralmaydi.
+Migratsiya YO'Q. `openapi.json` yangilandi.
+
+**Deploy tartibi (MUHIM):**
+1. **ai-service** (yangi TEZ navbat iste'molchisi `ai_fast_queue` ni ochadi; `confirm_context` endi `created_at` / `snapshot_state` ham qaytaradi) + **order-service** (#649).
+2. **notification-service** (bot: ko'rsatilgan ogohlantirishgagina ack, 409/503/400 ishlovi).
+3. **api-gateway** — `AI_ACK_CHECKS_ENFORCE=off` (sukut) bilan: darvozalar faqat WARN `ai_ack would_409/would_400/would_503` + `ai_confirm_ack_total` hisoblagichi, buyurtmalar avvalgidek yaratiladi.
+4. FE (quyidagi action item'lar) prod'da bo'lgach — `AI_ACK_CHECKS_ENFORCE=on` (faqat api-gateway qayta yaratiladi).
+
+Yangi env: `RABBITMQ_AI_FAST_QUEUE` (sukut `ai_fast_queue`; gateway + ai-service), `AI_FAST_PREFETCH` (ai-service, sukut 32), `AI_ACK_CHECKS_ENFORCE` (gateway, `on`/`off`, sukut `off`).
+⚠️ Gateway ai-service'dan OLDIN chiqsa: ai-confirm'ning `confirm_context` so'rovi tez navbatda javobsiz qoladi → `off` rejimda faqat WARN `would_503` (yaratish davom etadi), `on` rejimda 503. Shuning uchun avval ai-service.
+
+- ✏️ `POST /orders/ai-confirm` → `orders[]` ga ixtiyoriy `ack_checks: string[]` (≤10 ta, kod satrlari): operator ko'rib «Baribir yaratish»ni tasdiqlagan bloklovchi kodlar. Ortiqcha / yumshoq kodlar e'tiborsiz.
+- ⚠️ Qaysi kod kerakligini server O'ZI biladi — ai-parse paytida saqlangan preview snapshot'idan (`check_codes`); FE yuborgan `checks` ga ishonilmaydi. Snapshot'da bloklovchi kod bo'lsa va u `ack_checks` da yo'q bo'lsa — **butun so'rov 409**, HECH QAYSI buyurtma yaratilmaydi:
+  ```json
+  { "statusCode": 409, "code": "CHECKS_NOT_ACKNOWLEDGED",
+    "message": "AI ogohlantirishlari tasdiqlanmagan: tuman yoki summani tekshirib, «Baribir yaratish»ni bosing",
+    "missing": ["district_low_confidence", "price_check"],
+    "orders": [{ "index": 0, "missing": ["district_low_confidence"] },
+               { "index": 2, "missing": ["price_check"] }] }
+  ```
+  `missing` — barcha tasdiqlanmagan kodlar (takrorsiz); `orders[].index` — so'rovdagi `orders[]` o'rni (preview `index` emas).
+- ⚠️ Idempotent takror (ayni `draft_id` + `ai_item_index` qayta yuborilsa) ham ack darvozasidan O'TADI — `ack_checks` siz takror ham 409 oladi (avval yaratilgan buyurtma natijasi faqat darvozadan keyin qaytadi).
+- 🟢 Tahrir istisnosi: operator tegishli maydonni O'ZI o'zgartirgan bo'lsa (server hisoblagan `edited_fields`), tasdiq shart emas — tuman (`district_id`) almashtirilsa `district_low_confidence`, summa (`total_price`) o'zgartirilsa `price_check` talab qilinmaydi. Viloyat / manzil tahriri tuman tekshiruvini olib tashlamaydi.
+- ⚠️ `draft_id` va `ai_item_index` endi MAJBURIY (Swagger'da `required`) — bo'lmasa **400** `{ code: "AI_DRAFT_REQUIRED", indexes: number[] }` (so'rovdagi `orders[]` o'rinlari), hech narsa yaratilmaydi.
+- ⚠️ `draft_id` shu market uchun ai-service'da topilmasa (soxta yoki saqlanmagan) — **400** `{ code: "AI_DRAFT_NOT_FOUND", indexes: number[] }`.
+- ⚠️ YANGI: draft topildi, lekin saqlangan preview'da bunday `ai_item_index` yo'q (masalan 29) — **400** `{ code: "AI_DRAFT_ITEM_NOT_FOUND", indexes: number[] }`. Uchala 400 da ham hech narsa yaratilmaydi; FE matni: «AI natijasi topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating».
+- ⚠️ Maydon nomi o'zgardi (round-3): 400 xatolarida ro'yxat — `indexes` (avval `orders`). `orders` faqat 409 `CHECKS_NOT_ACKNOWLEDGED` da (`[{ index, missing }]`).
+- ⚠️ ai-confirm ai-service ishlab turishini talab qiladi: saqlangan tekshiruvlarni o'qib bo'lmasa (timeout / xato) yoki draft YOSH (< 2 daqiqa) bo'lib, preview snapshot'i hali saqlanmagan bo'lsa — **FAIL-CLOSED 503** `{ code: "AI_CHECKS_UNAVAILABLE", retryable: true, retry_after_seconds: 5 }` + sarlavha `Retry-After: 5`, hech narsa yaratilmaydi; FE `retry_after_seconds` dan keyin qayta yuboradi.
+- 🟢 Orqaga moslik (fail-open, audit'da `checks_unverified: true`, WARN log + `ai_confirm_ack_total{outcome="fail_open_*"}`): feature'dan oldingi snapshot (`check_codes` yo'q), retention tozalagan snapshot, yoki snapshot yo'q va draft 2 daqiqadan eski.
+- 🟢 Telegram bot: preview'da tekshiruvlar oddiy tilda «⚠️» qatorlari. Bloklovchi bo'lsa «✅ Yaratish» avval «Baribir yaratamanmi?» oynasini ko'rsatadi — unda tasdiqlanadigan HAR buyurtma aniq ro'yxatda («12) ⚠️ ism, telefon» + «⚠️ …» qatorlari, ≤10 ta); ack FAQAT shu ro'yxatdagilarga yuboriladi. Ro'yxat sig'masa «Ha» yo'q — kabinetga yo'naltiradi. 409 da server `missing` bilan oyna qayta; 503 — «birozdan so'ng qayta urinib ko'ring»; 400 `AI_DRAFT_*` — «AI natijasi topilmadi — matnni qayta yuboring yoki kabinetda yarating».
+
+**Frontend action items:**
+- 🔧 Kartada `district_low_confidence` yoki `price_check` bo'lsa (va operator tuman / summani o'zgartirmagan bo'lsa) «Yaratish»dan oldin tasdiq oynasi (yoki kartadagi «Tekshirdim» belgisi) ko'rsating va shu buyurtmaning `ack_checks` ga AYNAN o'sha kodlarni yuboring. Faqat operatorga KO'RSATILGAN ogohlantirishni tasdiqlang.
+- 🔧 409 `CHECKS_NOT_ACKNOWLEDGED` ni ishlang: `orders[].index` bo'yicha kartalarni belgilang, `missing` kodlari uchun tasdiq so'rang va so'rovni (`ack_checks` bilan) qayta yuboring — so'rovdagi boshqa buyurtmalar ham yaratilmagan.
+- 🔧 503 `AI_CHECKS_UNAVAILABLE` — «Qayta urinish» (`retry_after_seconds` / `Retry-After`); 400 `AI_DRAFT_REQUIRED` — FE xatosi (har buyurtmaga `draft_id` + `ai_item_index` yuboring); 400 `AI_DRAFT_NOT_FOUND` / `AI_DRAFT_ITEM_NOT_FOUND` — yuqoridagi matn, `indexes[]` bo'yicha kartalarni belgilang.
+- 🔧 400 xatolarida `orders` emas, `indexes` o'qing.
+
+### 2026-11-14 — AI preview: tuman qanday aniqlangani, viloyat taxmini, yumshoq tekshiruvlar (`checks[]`)
+
+Deploy: ai-service + order-service + logistics-service + api-gateway. Migratsiya YO'Q. Yangi maydonlar QO'SHIMCHA; `ready`/`issues` qoidasi o'zgarmadi. ⚠️ Lekin `region_inferred` yo'li ilgari tumansiz (`district_missing`) qoladigan ayrim buyurtmalarni endi tuman bilan qaytaradi (`ready=true`) — bunday buyurtmada `district_low_confidence` bor. Telegram bot `checks[]` ni bu yozuvda o'qimaydi — bot ogohlantirishi va qayta tasdiq alohida PR'da (#658). Prompt versiyasi `2026-11-14.1` (dostavka qoidasi).
+
+- ✏️ `POST /orders/ai-parse` → `data.orders[]` ga:
+  - `district_match: { method, ai_text, score } | null` — tuman avto-tanlanganda: `method` = `exact` | `alias` | `address` | `fuzzy` | `llm` (`partial` turida ham bor, lekin hozir chiqmaydi — unga tayanmang); `ai_text` — AI o'qigan tuman matni (≤ 80 belgi, `exact` da ham); `score` 0..1 faqat `fuzzy`/`address`, aks holda `null`. Tuman tanlanmagan bo'lsa `null`.
+  - `region_inferred: boolean` — viloyat matnda aytilmagan, AI uni tumandan chiqargan (qisqartmalar — «Sam. vil.», «Sam. Xonobod», «Nam.», «QR», «РК», «Т.обл», «T.sh», «Qashqa», «Qoraqalpoq» — aytilgan hisoblanadi). Faqat shunda logistics qulflangan viloyatdan tashqaridagi ANIQ moslikka o'ta oladi (boshqa holatda «Toshkent shahri Xonobod» — avvalgidek tuman yo'q); boshqa viloyatlarda o'xshash nom bo'lsa («Mirobod»/«Mirzaobod») — avto-tanlov YO'Q, nomzodlar. Viloyat almashtirilganda (tuman topilmay nomzodlar qaytsa ham) `region_given: false`.
+  - `checks: AiCheck[]` — YUMSHOQ tekshiruvlar (tasdiqni bloklamaydi):
+    - `{ code: 'district_low_confidence' }` — tuman `address`/`fuzzy`/`llm` bilan yoki `region_inferred` sababli viloyat almashtirilib tanlangan (Toshkent shahri ↔ viloyati umumiy hovuzidagi tanlov bu belgini BERMAYDI);
+    - `{ code: 'price_check', kind: 'mismatch' | 'too_high', mentions: number[] }` — matndagi summa eslatmalari (so'm, takrorsiz) `total_price` bilan mos emas (faqat bitta buyurtmali matn) yoki summa > 100 mln va matndan kelib chiqmaydi. Qoida: summa = mahsulot + dostavka, oldindan to'lov/zaklad/«click orqali o'tkazdi»/«оплачено» ayirilmaydi; «donasi X» faqat miqdorga ko'paytirilgan holda, «jami X» faqat o'zi; dostavka jami ichida bo'lsa («Jami 170 000 (dostavka 20 000 bilan)», «shundan dostavka», «включая доставку») — jamiga qo'shilmaydi; dostavka tarifi ro'yxati («Toshkent 20 000, viloyatlarga 35 000») — har tarif alohida (yig'indisi emas); ko'p mahsulotda har biri o'z miqdori bilan; «X emas» — X hisobga olinmaydi; telefon raqami summa emas. Narx noaniq bo'lsa (oraliq, «...dan ...gacha», «yoki», summaga yaqin chegirma/aksiya so'zi yoki ikki xil summa bilan, eski/yangi narx) `mismatch` chiqmaydi — shablon pastidagi alohida «Aksiya!» qatori noaniq qilmaydi;
+    - `{ code: 'qty_check', item_index }` — miqdor > 10 yoki narxning ming/mln qismiga teng («150 ming» → miqdor 150; dona narxi — «2 ta televizor 2 mln dan» — va matnda aniq aytilgan miqdor — «2 ta» — belgilanmaydi);
+    - `{ code: 'duplicate_items', item_indexes }` — bir xil mahsulot qatorlari (birlashtirilmaydi);
+    - `{ code: 'phone_is_market' }` — mijoz telefoni market akkauntining raqamlari (asosiy, qo'shimcha, `default_operator_phone`, «muammo» raqami) bilan bir xil; market operatorlarining shaxsiy raqamlari tekshirilmaydi;
+    - `{ code: 'same_phone_multi', other_index }` — shu parse'da shu telefon boshqa buyurtmada ham.
+- ⚠️ **Noma'lum `code` e'tiborsiz qoldirilsin** — ro'yxat kengayadi.
+
+**Frontend action items:**
+- 🔧 Tuman maydoni yonida «AI o'qigan: {ai_text}»; `district_low_confidence` — sariq belgi.
+- 🔧 «Viloyat matnda yo'q — AI taxmin qildi» ishorasi: `region_inferred || !region_given` (faqat `!region_given` emas).
+- 🔧 `price_check` — summa yonida sariq ogohlantirish (`mentions` bilan: «Matnda: 150 000»); `too_high` — «Summa juda katta».
+- 🔧 Qolgan kodlar — tegishli maydon yonida ogohlantirish matni.
+
 ### 2026-11-14 — Carrier akkaunt: «Rollback» toggle (sukut o'chiq, kompaniyadan yashirin)
 
 Egasi (2026-11-14): rollback'ni admin akkaunt bo'yicha bitta toggle bilan yoqib/o'chira olsin, sukut — o'chiq (kompaniya bilan endi ishlay boshladik, ishonch paydo bo'lguncha); Swagger va hujjatdan yashirilsin — kompaniyaga hozircha aytilmaydi.
