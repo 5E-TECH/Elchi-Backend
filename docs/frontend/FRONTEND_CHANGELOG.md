@@ -22,6 +22,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-17 — Baza tozalanishidan keyin yo'qolgan seed'lar tiklandi (migratsiyalar 232–234)
+
+Muammo: prod bazasi 2026-11-11..14 da tozalanganda migratsiyalar «bajarilgan» bo'lib qolgan, ular yozgan yoki foydalanuvchi yaratishda bir marta yoziladigan qatorlar esa qaytmagan (230 — xarajat kategoriyalari, 231 — «Hisob qoidalari» davomi). Uchta joy:
+- Toshkent shahri «shahar zonasi» belgisi (`logistics_schema.regions.is_city_zone`) — viloyatlarni seed qayta yaratadi, belgini emas: Toshkent ichidagi yetkazish jimgina «center» / «address» bilan hisoblanadi (`city` 35 000 o'rniga 40 000 / 60 000), `city_route: false`, `GET /public/delivery-tariffs` da hamma viloyat `is_city_zone: false`.
+- HQ filiali viloyati (`branch_schema.branches.region_id`) — qayta yaratilgan HQ viloyatsiz yoki eski (o'chgan) viloyat id'siga ishora qiladi: HQ kuryeriga biriktirish / skan 400 «HQ filialiga viloyat biriktirilmagan …» (`branch_region_missing`) yoki 403 `hq_courier_region_only`.
+- Kuryer, market va menejerli filial kassalari (`finance_schema.cashboxes`) — sotuv, qisman sotuv, rollback 404 «Market kassasi topilmadi» / «Kuryer kassasi topilmadi», kuryerdan pul qabul qilish, marketga to'lov, admin kassa tafsiloti 404.
+
+Deploy: migration-runner (servis kodi o'zgarmagan). API va javob shakli **o'zgarmadi**.
+
+- 🟢 [logistics] Migratsiya 232: birorta viloyatda shahar zonasi bo'lmasa (o'chirilgani ham hisob) — belgi faqat o'chirilmagan Toshkent SHAHRI (SOATO 1726) qatoriga qo'yiladi; Toshkent viloyati (`Toshkent`, 1727) — yo'q. Zona bor bazada hech narsa o'zgarmaydi.
+- 🟢 [branch] Migratsiya 233: o'chirilmagan HQ viloyati bo'sh yoki mavjud bo'lmagan viloyatga ishora qilsa — Toshkent shahri yoziladi. Qo'lda qo'yilgan tirik viloyatga, o'chirilgan HQ qatoriga va boshqa filiallarga tegilmaydi.
+- 🟢 [finance] Migratsiya 234: o'chirilmagan har kuryer / market uchun va menejeri bor har HQ bo'lmagan filial uchun shu turdagi kassa umuman bo'lmasa — **0 balans** bilan kassa qo'shiladi. Qo'lda o'chirilgan kassa tiriltirilmaydi, mavjud kassa va balanslarga tegilmaydi, tarix qatori yozilmaydi; MAIN kassani finance-service o'zi yaratadi.
+- 🟢 Deploy'dan keyin (qo'lda, superadmin): «Yetkazish tariflari» kalkulyatorida Toshkent → Toshkent `city` bo'lishini, `/dispatch` / `/scan` da HQ kuryeriga biriktirish ishlashini tekshiring. Tiklangan kassalar 0 dan boshlanadi — haqiqiy qarz / naqd pul qo'lda solishtiriladi. Logist biriktiruvi (`/regions/logist-assignment`) va tuman qayta biriktiruvlari tiklanmaydi (admin qarori) — kerak bo'lsa ekrandan qayta qiling.
+
 ### 2026-11-17 — «Tizim holati»: Telegram bot nosozligi sababi va «Qayta tekshirish» (BOT-DIAG-BE)
 
 Ega (2026-11-17): «Tizim holati»da NOTIFICATION «Ishlamayapti — Xizmat o'zini nosoz deb bildirdi» — sababini ko'rmoqchi; faqat superadminga.
