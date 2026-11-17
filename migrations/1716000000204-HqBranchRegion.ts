@@ -1,4 +1,11 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
+import { CITY_ZONE_SATO_CODE } from './1716000000142-DeliveryPricingEngine';
+
+/**
+ * HQ joylashgan viloyat — Toshkent shahri (ega, 2026-11-04), SOATO bo'yicha.
+ * Migratsiya 233 (bazadan yo'qolgan HQ viloyatini tiklash) shuni qayta ishlatadi.
+ */
+export const HQ_BRANCH_REGION_SATO_CODE = CITY_ZONE_SATO_CODE;
 
 /**
  * anKpzwxk (ega qarori 4, 2026-11-03): «HQ kuryerlari faqat HQ joylashgan
@@ -37,7 +44,7 @@ export class HqBranchRegion1716000000204 implements MigrationInterface {
           FROM (
             SELECT "id"
               FROM "logistics_schema"."regions"
-             WHERE "sato_code" = '1726'
+             WHERE "sato_code" = '${HQ_BRANCH_REGION_SATO_CODE}'
                AND "is_deleted" = false
              ORDER BY "id"
              LIMIT 1
