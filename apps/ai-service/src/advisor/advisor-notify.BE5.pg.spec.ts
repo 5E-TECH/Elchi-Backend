@@ -68,6 +68,10 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
 
   beforeEach(async () => {
     dispatch.mockReset();
+    // id'lar RESTART IDENTITY bilan qayta ishlatiladi — urinish hisoblagichi ham.
+    (
+      notifier as unknown as { attempts: Map<string, unknown> }
+    ).attempts.clear();
     await ds.query(
       'TRUNCATE ai_schema.ai_advisor_alerts RESTART IDENTITY CASCADE',
     );
@@ -143,7 +147,11 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
     dispatch.mockReturnValueOnce(
       of({ statusCode: 201, data: { duplicate: true } }),
     );
-    expect(await notifier.dispatchPending()).toEqual({ sent: 1, failed: 0 });
+    // round-4 S2: oraliq (30 daq) tugaguncha qayta urinilmaydi.
+    expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 0 });
+    expect(
+      await notifier.dispatchPending(new Date(Date.now() + 31 * 60_000)),
+    ).toEqual({ sent: 1, failed: 0 });
     const ids = dispatch.mock.calls.map(
       (c: unknown[]) =>
         (c[1] as { client_request_id: string }).client_request_id,
@@ -208,6 +216,42 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       [bad],
     );
     expect(row.fresh).toBe(true);
+  });
+
+  it('round-4 S2: doimiy xato — oraliq o‘sadi, 5 urinishdan keyin notify_skipped=failed, boshqa yuborilmaydi', async () => {
+    const [{ id }] = await insert('critical');
+    dispatch.mockImplementation(() => throwError(() => new Error('400')));
+    let t = Date.now();
+    const calls: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      await notifier.dispatchPending(new Date(t));
+      calls.push(dispatch.mock.calls.length);
+      t += 30 * 60_000; // har tick 30 daq
+    }
+    // 1, 2 (+30m), 3 (+1s), 4 (+2s), 5 (+4s) — jami 5 urinish.
+    expect(dispatch).toHaveBeenCalledTimes(5);
+    expect(calls.slice(0, 2)).toEqual([1, 2]);
+    expect(calls[2]).toBe(2); // 1 soat oraliq — 3-tick o'tkaziladi
+    const [row] = await ds.query<Array<{ notify_skipped: string | null }>>(
+      `SELECT notify_skipped FROM ai_schema.ai_advisor_alerts WHERE id = $1`,
+      [id],
+    );
+    expect(row.notify_skipped).toBe('failed');
+  });
+
+  it('round-4 S2: oraliqdagi qatorlar partiya joyini olmaydi — yangi critical shu tick yuboriladi', async () => {
+    for (let i = 0; i < 20; i++) await insert('critical');
+    dispatch.mockImplementation(() => throwError(() => new Error('400')));
+    await notifier.dispatchPending();
+    expect(dispatch).toHaveBeenCalledTimes(20);
+    const [{ id: fresh }] = await insert('critical');
+    dispatch.mockReset();
+    dispatch.mockImplementation(() => of({ statusCode: 201 }));
+    expect(await notifier.dispatchPending()).toEqual({ sent: 1, failed: 0 });
+    expect(
+      (dispatch.mock.calls[0][1] as { data: { alert_id: string } }).data
+        .alert_id,
+    ).toBe(fresh);
   });
 
   it('round-2 S3: 24 soatdan eski ogohlantirish — stale, yuborilmaydi; yangisi yuboriladi', async () => {
