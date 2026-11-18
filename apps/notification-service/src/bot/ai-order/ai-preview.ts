@@ -6,6 +6,13 @@ import {
 } from '@app/common';
 import { createHash } from 'node:crypto';
 import { formatSum } from '../courier/courier-cards';
+import { validOperatorId } from './ai-order-operator';
+
+/** ai-confirm'ga odam yo'lidan qo'shiladigan maydonlar (preview'dan EMAS). */
+export interface ConfirmExtra {
+  operator_id?: string | null;
+  operator_phone?: string | null;
+}
 
 /** Almashtirishda eski buyurtma nomzodi (gateway `AiReplacementCandidate`). */
 export interface AiReplacementCandidate {
@@ -111,6 +118,12 @@ export interface AiPreviewOrder {
   confirm_attempted_at?: number;
   /** BOT ICHKI maydoni: o'sha urinishda yuborilgan buyurtma izi (sha256). */
   confirm_fp?: string;
+  /**
+   * BOT ICHKI maydoni: urinishga JAVOB keldi va shu buyurtma YARATILGAN
+   * (qolganlari qayta urinishli) — buyurtma id'si. `confirm_attempted_at`
+   * bilan birga: tuzatish yopiq, lekin «Javob kelmadi» emas.
+   */
+  confirm_order_id?: string;
 }
 
 /** order-service `AiDistrictCandidate`: `label` = "<viloyat>, <tuman>". */
@@ -289,14 +302,12 @@ export function toConfirmOrder(
   aiDraftId: string | null,
   /**
    * ODAM tanlovi / aktor profili (preview'dan EMAS): `operator_id` — market
-   * «👤 Operator» da tanlagan; `operator_phone` — profil raqami (kerak
+   * «🎧 Operator» da tanlagan; `operator_phone` — profil raqami (kerak
    * bo'lsa). Model chiqishi bu maydonlarni hech qachon bera olmaydi.
    */
-  extra: { operator_id?: string | null; operator_phone?: string | null } = {},
+  extra: ConfirmExtra = {},
 ) {
-  const operatorId = /^\d{1,19}$/.test(String(extra.operator_id ?? ''))
-    ? String(extra.operator_id)
-    : null;
+  const operatorId = validOperatorId(extra.operator_id);
   const operatorPhone = /^\+998\d{9}$/.test(String(extra.operator_phone ?? ''))
     ? String(extra.operator_phone)
     : null;
@@ -366,8 +377,15 @@ export const confirmAttempted = (order: AiPreviewOrder | undefined): boolean =>
  * ai-confirm'ga ketadigan buyurtma izi (`ack_checks` siz — tasdiq har
  * bosishda yangilanadi, ma'lumot emas). Takroriy javobda solishtiriladi.
  */
-export function confirmFingerprint(order: AiPreviewOrder): string {
-  const payload: Record<string, unknown> = toConfirmOrder(order, null);
+export function confirmFingerprint(
+  order: AiPreviewOrder,
+  extra: ConfirmExtra = {},
+): string {
+  // Odam tanlovi (operator) ham izga kiradi — tanlov o'zgarsa takroriy
+  // javobda «tuzatishlar qo'llanmadi» ko'rinadi.
+  const payload: Record<string, unknown> = toConfirmOrder(order, null, {
+    operator_id: extra.operator_id,
+  });
   delete payload.ack_checks;
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
@@ -385,23 +403,35 @@ export function markConfirmAttempted(
   orders: AiPreviewOrder[],
   sent: AiPreviewOrder[],
   at: number,
+  /** Urinishdagi odam tanlovi — izga kiradi (S1). */
+  extra: ConfirmExtra = {},
+  /** Javob kelgan va YARATILGAN buyurtmalar: preview `index` → order_id. */
+  created: ReadonlyMap<number, string> = new Map(),
 ): AiPreviewOrder[] {
   const indexes = new Set(sent.map((order) => order.index));
-  return orders.map((order) =>
-    indexes.has(order.index)
-      ? {
-          ...order,
-          confirm_attempted_at: order.confirm_attempted_at ?? at,
-          confirm_fp: order.confirm_fp ?? confirmFingerprint(order),
-        }
-      : order,
-  );
+  return orders.map((order) => {
+    if (!indexes.has(order.index)) return order;
+    const orderId = created.get(order.index);
+    return {
+      ...order,
+      confirm_attempted_at: order.confirm_attempted_at ?? at,
+      confirm_fp: order.confirm_fp ?? confirmFingerprint(order, extra),
+      ...(orderId ? { confirm_order_id: orderId } : {}),
+    };
+  });
 }
 
+/** Belgi bor, lekin natija NOMA'LUM (javob kelmagan) — yaratilgani aniq emas. */
+export const outcomeUnknown = (order: AiPreviewOrder | undefined): boolean =>
+  confirmAttempted(order) && !order?.confirm_order_id;
+
 /** Takroriy javob, lekin yuborilgan ma'lumot birinchi urinishdagidan farq qiladi. */
-export const editedAfterAttempt = (order: AiPreviewOrder): boolean =>
+export const editedAfterAttempt = (
+  order: AiPreviewOrder,
+  extra: ConfirmExtra = {},
+): boolean =>
   typeof order.confirm_fp === 'string' &&
-  order.confirm_fp !== confirmFingerprint(order);
+  order.confirm_fp !== confirmFingerprint(order, extra);
 
 /** Kartada ko‘rsatiladigan buyurtmalar (qolgani — «… yana N ta»). */
 export const PREVIEW_MAX_ORDERS = 10;
@@ -718,7 +748,13 @@ function previewBlock(order: AiPreviewOrder): string[] {
       ...(replacement ? [replacement] : []),
       ...(issues ? [`⚠️ ${escapeTelegramHtml(issues)}`] : []),
       ...aiCheckLines(order),
-      ...(confirmAttempted(order) ? [AI_CONFIRM_UNKNOWN_LINE] : []),
+      ...(order.confirm_order_id
+        ? [
+            `✅ Yaratilgan: ${escapeTelegramHtml(formatOrderNumber(order.confirm_order_id) ?? `#${clip(order.confirm_order_id, 20)}`)} — tuzatish faqat kabinetda`,
+          ]
+        : confirmAttempted(order)
+          ? [AI_CONFIRM_UNKNOWN_LINE]
+          : []),
     );
   }
   return lines;

@@ -586,6 +586,7 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
           id: string;
           worker_token?: string;
           status?: string | { value?: unknown };
+          updated_at?: Date;
         },
         patch: Record<string, any>,
       ) => {
@@ -602,7 +603,11 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
           !row ||
           (where.worker_token !== undefined &&
             row.worker_token !== where.worker_token) ||
-          (allowed !== null && !allowed.includes(row.status))
+          (allowed !== null && !allowed.includes(row.status)) ||
+          // Versiya sharti (`updated_at`) — optimistik yozuv.
+          ('updated_at' in where &&
+            new Date(row.updated_at ?? 0).getTime() !==
+              new Date(where.updated_at ?? 0).getTime())
         ) {
           return Promise.resolve({ affected: 0 });
         }

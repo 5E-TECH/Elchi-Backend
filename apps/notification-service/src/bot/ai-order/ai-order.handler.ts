@@ -204,7 +204,7 @@ export class AiOrderActions {
         expiredText: AI_EXPIRED_TEXT,
         handle: withPayload((ctx, id, p) => this.ai.pickDistrict(ctx, id, p)),
       },
-      // «👤 Operator» (faqat market): payload — `{k, oid}` / `{k: -1}`.
+      // «🎧 Operator» (faqat market): payload — `{k, oid}` / `{k: -1}`.
       {
         action: AI_ORDER_ACTIONS.operator,
         expiredText: AI_EXPIRED_TEXT,

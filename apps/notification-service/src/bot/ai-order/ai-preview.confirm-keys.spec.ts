@@ -8,7 +8,7 @@ import { toConfirmOrder, type AiPreviewOrder } from './ai-preview';
  * `operator_phone`, `verified_operator_id` (va boshqa formaga xos
  * maydonlar) ni HECH QACHON bera olmaydi — preview'da (injection,
  * kelajakdagi maydon) bo'lsa ham. `operator_id` / `operator_phone` faqat
- * ODAM yo'lidan — `toConfirmOrder` ning `extra` argumenti («👤 Operator»
+ * ODAM yo'lidan — `toConfirmOrder` ning `extra` argumenti («🎧 Operator»
  * tanlovi, aktor profil raqami); `customer_id` bot hech qachon yubormaydi.
  */
 const ALLOWED_ORDER_KEYS = new Set([

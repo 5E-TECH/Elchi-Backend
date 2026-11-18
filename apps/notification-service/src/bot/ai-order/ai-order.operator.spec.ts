@@ -7,12 +7,24 @@ import {
 } from '../testing/bot-kit-spec';
 import {
   AI_OPERATOR_PHONE_RETRY_TEXT,
+  AI_OPERATOR_REJECTED_TEXT,
+  AI_RETRY_ALL_HINT_TEXT,
   AI_RETRY_HINT_TEXT,
+  userReason,
+  validOperatorId,
 } from './ai-order-operator';
-import type { AiPreviewOrder } from './ai-preview';
+import {
+  AI_CANCELLED_PARTIAL_TEXT,
+  AI_CANCELLED_TEXT,
+} from './ai-order.service';
+import {
+  AI_EDITS_NOT_APPLIED_TEXT,
+  toConfirmOrder,
+  type AiPreviewOrder,
+} from './ai-preview';
 
 /**
- * Bot AI preview: «👤 Operator» tanlovi (faqat market) va operator raqami
+ * Bot AI preview: «🎧 Operator» tanlovi (faqat market) va operator raqami
  * (#715/#716 ai-confirm `operator_id` / `operator_phone`), qayta
  * urinishli natijalar. Barcha ma'lumot soxta.
  */
@@ -26,6 +38,7 @@ const ORDER_TEXT =
 const DRAFT_ID = '11111111-2222-4333-8444-5555555555a7';
 const PHONE_REQUIRED =
   'Operator telefon raqami majburiy. Market profilida doimiy operator raqamini kiriting yoki buyurtmada raqam yuboring (operator_phone)';
+const PHONE_REQUIRED_SHOWN = userReason(PHONE_REQUIRED);
 
 const preview = (extra: Partial<AiPreviewOrder> = {}): AiPreviewOrder => ({
   index: 0,
@@ -197,7 +210,7 @@ const payloadOf = (ctx: Ctx, data: string) =>
   [...ctx.actions.rows.values()].find((r) => `a:${r.action_id}` === data)!
     .payload;
 
-describe('«👤 Operator» tanlovi', () => {
+describe('«🎧 Operator» tanlovi', () => {
   it('⭐ market: ro‘yxat (selectable, aktor JWT) → tanlash → ai-confirm operator_id', async () => {
     const { ctx, calls } = setup();
     await send(ctx, ORDER_TEXT);
@@ -212,11 +225,11 @@ describe('«👤 Operator» tanlovi', () => {
     ]);
     expect(Object.keys(buttons(ctx))).toEqual([
       '✅ Yaratish',
-      '👤 Operator: tanlanmagan',
+      '🎧 Operator: tanlanmagan',
       '✏️ Tuzatish',
       '❌ Bekor',
     ]);
-    await press(ctx, buttons(ctx)['👤 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     const picker = buttons(ctx);
     expect(Object.keys(picker)).toEqual([
       'Operator 01',
@@ -237,7 +250,7 @@ describe('«👤 Operator» tanlovi', () => {
         operator_name: 'Operator 02',
       }),
     );
-    expect(Object.keys(buttons(ctx))).toContain('👤 Operator: Operator 02');
+    expect(Object.keys(buttons(ctx))).toContain('🎧 Operator: Operator 02');
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(sentOrder(calls).operator_id).toBe('301');
   });
@@ -245,11 +258,11 @@ describe('«👤 Operator» tanlovi', () => {
   it('«🚫 Tanlamaslik» — operator_id yuborilmaydi', async () => {
     const { ctx, calls } = setup();
     await send(ctx, ORDER_TEXT);
-    await press(ctx, buttons(ctx)['👤 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     await press(ctx, buttons(ctx)['Operator 01']);
-    await press(ctx, buttons(ctx)['👤 Operator: Operator 01']);
+    await press(ctx, buttons(ctx)['🎧 Operator: Operator 01']);
     await press(ctx, buttons(ctx)['🚫 Tanlamaslik']);
-    expect(Object.keys(buttons(ctx))).toContain('👤 Operator: tanlanmagan');
+    expect(Object.keys(buttons(ctx))).toContain('🎧 Operator: tanlanmagan');
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(sentOrder(calls)).not.toHaveProperty('operator_id');
   });
@@ -258,7 +271,7 @@ describe('«👤 Operator» tanlovi', () => {
     const { ctx, calls } = setup({ role: 'market_operator' });
     await send(ctx, ORDER_TEXT);
     expect(calls.map((c) => c.path)).toEqual(['/orders/ai-parse']);
-    expect(Object.keys(buttons(ctx)).some((k) => k.startsWith('👤'))).toBe(
+    expect(Object.keys(buttons(ctx)).some((k) => k.startsWith('🎧'))).toBe(
       false,
     );
     // Qoralamaga qo'lda yozilgan tanlov ham (rol market emas) yuborilmaydi.
@@ -271,7 +284,7 @@ describe('«👤 Operator» tanlovi', () => {
   it('eski tugma (ro‘yxat almashgan) boshqa operatorni qo‘ymaydi — oyna qayta', async () => {
     const { ctx } = setup();
     await send(ctx, ORDER_TEXT);
-    await press(ctx, buttons(ctx)['👤 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     const old = buttons(ctx);
     row(ctx).input.meta.operators = [
       { id: '305', name: 'Operator Yangi' },
@@ -285,7 +298,7 @@ describe('«👤 Operator» tanlovi', () => {
   it('25 ta operator — 20 ta tugma va «… yana 5 ta»', async () => {
     const { ctx } = setup({ selectable: () => operators(25) });
     await send(ctx, ORDER_TEXT);
-    await press(ctx, buttons(ctx)['👤 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     expect(
       Object.keys(buttons(ctx)).filter((k) => k.startsWith('Operator ')),
     ).toHaveLength(20);
@@ -310,12 +323,12 @@ describe('«👤 Operator» tanlovi', () => {
   it('natijasi noma‘lum urinishdan keyin operator o‘zgartirilmaydi', async () => {
     const { ctx } = setup({ confirm: [() => new Error('timeout')] });
     await send(ctx, ORDER_TEXT);
-    await press(ctx, buttons(ctx)['👤 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     const picker = buttons(ctx);
     await press(ctx, picker['↩️ Orqaga']);
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(typeof row(ctx).orders[0].confirm_attempted_at).toBe('number');
-    expect(Object.keys(buttons(ctx)).some((k) => k.startsWith('👤'))).toBe(
+    expect(Object.keys(buttons(ctx)).some((k) => k.startsWith('🎧'))).toBe(
       false,
     );
     await press(ctx, picker['Operator 02']);
@@ -363,9 +376,21 @@ describe('operator raqami (operator_phone)', () => {
     expect(sentOrder(calls)).not.toHaveProperty('operator_phone');
   });
 
-  it('market: profil so‘rovi yiqilsa — raqamsiz yuboriladi (server sababi ko‘rsatiladi)', async () => {
+  it('S3: market — profil so‘rovi vaqtincha yiqildi, server «majburiy» dedi → bir marta qayta; ikkinchi «✅» profil raqami bilan', async () => {
+    let profileCalls = 0;
     const { ctx, calls } = setup({
-      profile: () => ({ status: 500, body: null }),
+      profile: () =>
+        (profileCalls += 1) === 1
+          ? { status: 500, body: null }
+          : {
+              status: 200,
+              body: {
+                data: {
+                  phone_number: '+998900000099',
+                  require_operator_phone: false,
+                },
+              },
+            },
       confirm: [
         () => ({
           status: 200,
@@ -387,7 +412,41 @@ describe('operator raqami (operator_phone)', () => {
     await send(ctx, ORDER_TEXT);
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(sentOrder(calls)).not.toHaveProperty('operator_phone');
-    expect(lastShown(ctx)).toContain(`❌ 1) ${PHONE_REQUIRED}`);
+    // Foydalanuvchiga API maydon nomi («(operator_phone)») ko'rinmaydi.
+    expect(lastShown(ctx)).toContain(`❌ 1) ${PHONE_REQUIRED_SHOWN}`);
+    expect(lastShown(ctx)).not.toContain('(operator_phone)');
+    expect(lastShown(ctx)).toContain(AI_RETRY_ALL_HINT_TEXT);
+    expect(row(ctx).status).toBe('preview');
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(sentOrder(calls, 1).operator_phone).toBe('+998900000099');
+    expect(row(ctx).status).toBe('created');
+  });
+
+  it('market: profil raqami qoralama bo‘yicha keshlanadi (har «✅» da so‘ralmaydi)', async () => {
+    const { ctx, calls } = setup({
+      confirm: [
+        () => ({
+          status: 200,
+          body: {
+            data: {
+              results: [
+                {
+                  index: 0,
+                  ok: false,
+                  code: 'validation_unavailable',
+                  reason: 'tekshirib bo‘lmadi',
+                },
+              ],
+            },
+          },
+        }),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(confirms(calls)).toHaveLength(2);
+    expect(calls.filter((c) => c.path === '/auth/my-profile')).toHaveLength(1);
   });
 
   it('⭐ market operatori: server «majburiy» dedi → qayta urinish mumkin; qayta «✅» o‘z profil raqami bilan', async () => {
@@ -417,9 +476,10 @@ describe('operator raqami (operator_phone)', () => {
     expect(sentOrder(calls)).not.toHaveProperty('operator_phone');
     expect(row(ctx).status).toBe('preview');
     expect(row(ctx).input.meta.operator_phone_needed).toBe(true);
-    expect(lastShown(ctx)).toContain(PHONE_REQUIRED);
+    expect(lastShown(ctx)).toContain(PHONE_REQUIRED_SHOWN);
     expect(lastShown(ctx)).toContain(AI_OPERATOR_PHONE_RETRY_TEXT);
-    expect(lastShown(ctx)).toContain(AI_RETRY_HINT_TEXT);
+    // Hammasi yaratilmagan — «ba'zi» emas.
+    expect(lastShown(ctx)).toContain(AI_RETRY_ALL_HINT_TEXT);
 
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(calls.filter((c) => c.path === '/auth/my-profile')).toHaveLength(1);
@@ -429,8 +489,8 @@ describe('operator raqami (operator_phone)', () => {
 });
 
 describe('natija xatolari', () => {
-  it('noto‘g‘ri operator — create_failed, server sababi ko‘rsatiladi (qayta urinish yo‘q)', async () => {
-    const reason = 'Operator topilmadi yoki faol emas';
+  it('operatorga oid bo‘lmagan create_failed — server sababi, qayta urinish yo‘q', async () => {
+    const reason = 'Mahsulot topilmadi';
     const { ctx } = setup({
       confirm: [
         () => ({
@@ -444,7 +504,7 @@ describe('natija xatolari', () => {
       ],
     });
     await send(ctx, ORDER_TEXT);
-    await press(ctx, buttons(ctx)['👤 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     await press(ctx, buttons(ctx)['Operator 01']);
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(row(ctx).status).toBe('created');
@@ -493,20 +553,253 @@ describe('natija xatolari', () => {
     expect(lastShown(ctx)).toContain('✅ 1) Buyurtma');
     expect(lastShown(ctx)).toContain(`❌ 2) ${reason}`);
     expect(lastShown(ctx)).toContain(AI_RETRY_HINT_TEXT);
-    // Yuborilganlar belgilangan — tuzatish yopiq (yaratilgani takrorlanadi).
-    expect(
-      row(ctx).orders.every(
-        (o: AiPreviewOrder) => typeof o.confirm_attempted_at === 'number',
-      ),
-    ).toBe(true);
+    // S6: faqat YARATILGANI belgilanadi («✅ Yaratilgan», «Javob kelmadi»
+    // emas); yaratilmagani belgisiz — tuzatsa bo'ladi.
+    expect(row(ctx).orders[0]).toEqual(
+      expect.objectContaining({ confirm_order_id: '81' }),
+    );
+    expect(row(ctx).orders[1].confirm_attempted_at).toBeUndefined();
+    expect(lastShown(ctx)).not.toContain('Javob kelmadi');
     expect(Object.keys(buttons(ctx))).toEqual([
       '✅ Yaratish',
+      '🎧 Operator: tanlanmagan',
+      '✏️ Tuzatish',
       '❌ Bekor',
       '🌐 Kabinetda yaratish',
     ]);
+    // Karta: 1-buyurtma «✅ Yaratilgan», ✏️ — darhol 2-buyurtma menyusi.
+    await press(ctx, buttons(ctx)['✏️ Tuzatish']);
+    expect(lastShown(ctx)).toContain('2-buyurtma</b> — nimani tuzatamiz?');
+    await press(ctx, buttons(ctx)['↩️ Orqaga']);
+    expect(lastShown(ctx)).toContain('✅ Yaratilgan: EL-100081');
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(confirms(calls)).toHaveLength(2);
     expect(row(ctx).status).toBe('created');
     expect(lastShown(ctx)).toContain('avval yaratilgan');
+  });
+});
+
+describe('#721 review', () => {
+  type ResultRow = Record<string, unknown>;
+  const results =
+    (...rows: ResultRow[]) =>
+    (): Reply => ({ status: 200, body: { data: { results: rows } } });
+  const two = () => [
+    preview(),
+    preview({
+      index: 1,
+      customer_name: 'Ikkinchi',
+      phone_number: '+998900000002',
+    }),
+  ];
+
+  it('⭐ B1: qisman yaratilgandan keyin «❌ Bekor» — «hech narsa yaratilmadi» EMAS, yaratilgani ro‘yxatda', async () => {
+    const { ctx } = setup({
+      orders: two(),
+      confirm: [
+        results(
+          { index: 0, ok: true, order_id: '81' },
+          {
+            index: 1,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: 'tekshirib bo‘lmadi',
+          },
+        ),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    await press(ctx, buttons(ctx)['❌ Bekor']);
+    expect(row(ctx).status).toBe('cancelled');
+    expect(lastShown(ctx)).not.toContain(AI_CANCELLED_TEXT);
+    expect(lastShown(ctx)).toContain(AI_CANCELLED_PARTIAL_TEXT);
+    expect(lastShown(ctx)).toContain('✅ 1) Buyurtma EL-100081 yaratilgan');
+    expect(Object.keys(buttons(ctx))).toEqual(['🌐 Kabinetda yaratish']);
+  });
+
+  it('B1: natijasi noma‘lum urinishdan keyin «❌ Bekor» ham ogohlantiradi', async () => {
+    const { ctx } = setup({ confirm: [() => new Error('timeout')] });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    await press(ctx, buttons(ctx)['❌ Bekor']);
+    expect(lastShown(ctx)).toContain(AI_CANCELLED_PARTIAL_TEXT);
+    expect(lastShown(ctx)).not.toContain(AI_CANCELLED_TEXT);
+  });
+
+  it('S1: operator tanlovi izga kiradi — yaratilgandan keyin almashtirilsa takroriy javobda «qo‘llanmadi»', async () => {
+    const { ctx } = setup({
+      orders: two(),
+      confirm: [
+        results(
+          { index: 0, ok: true, order_id: '81' },
+          {
+            index: 1,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: 'tekshirib bo‘lmadi',
+          },
+        ),
+        results(
+          { index: 0, ok: true, order_id: '81', idempotent_replay: true },
+          { index: 1, ok: true, order_id: '82' },
+        ),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['Operator 01']);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    await press(ctx, buttons(ctx)['🎧 Operator: Operator 01']);
+    await press(ctx, buttons(ctx)['Operator 02']);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(lastShown(ctx)).toContain(`⚠️ 1) ${AI_EDITS_NOT_APPLIED_TEXT}`);
+    expect(lastShown(ctx)).not.toContain(`⚠️ 2) ${AI_EDITS_NOT_APPLIED_TEXT}`);
+  });
+
+  it('S1: tanlov o‘qilgandan keyin qoralama o‘zgarsa (versiya) — yozilmaydi', async () => {
+    const { ctx } = setup();
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+    const picker = buttons(ctx);
+    // Orada boshqa yozuv (masalan «✅» → noma'lum natija belgisi).
+    const original = ctx.aiDrafts.findOne.getMockImplementation()!;
+    ctx.aiDrafts.findOne.mockImplementationOnce((args) =>
+      original(args).then((draft) => {
+        row(ctx).updated_at = new Date(Date.now() + 1000);
+        return draft;
+      }),
+    );
+    await press(ctx, picker['Operator 02']);
+    expect(row(ctx).input.meta.operator_id).toBeUndefined();
+  });
+
+  it('⭐ S2: tanlangan operator rad etildi — qayta urinishli: tanlov olib tashlanadi, ro‘yxat yangilanadi', async () => {
+    let lists = 0;
+    const { ctx, calls } = setup({
+      selectable: () => ((lists += 1) === 1 ? operators(2) : operators(1)),
+      confirm: [
+        results({
+          index: 0,
+          ok: false,
+          code: 'create_failed',
+          reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas',
+        }),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['Operator 02']);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('preview');
+    expect(row(ctx).orders[0].confirm_attempted_at).toBeUndefined();
+    expect(row(ctx).input.meta.operator_id).toBeUndefined();
+    expect(row(ctx).input.meta.operators).toEqual([
+      { id: '300', name: 'Operator 01' },
+    ]);
+    expect(lastShown(ctx)).toContain(AI_OPERATOR_REJECTED_TEXT);
+    expect(Object.keys(buttons(ctx))).toContain('🎧 Operator: tanlanmagan');
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(sentOrder(calls, 1)).not.toHaveProperty('operator_id');
+    expect(row(ctx).status).toBe('created');
+  });
+
+  it('S4: not_started — qayta urinishli', async () => {
+    const { ctx } = setup({
+      confirm: [
+        results({
+          index: 0,
+          ok: false,
+          code: 'not_started',
+          reason: 'Vaqt yetmadi — bu buyurtma yaratilmadi, uni qayta yuboring',
+        }),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('preview');
+    expect(lastShown(ctx)).toContain(AI_RETRY_ALL_HINT_TEXT);
+  });
+
+  it('S5: operator id shartnomasi — ^[1-9]\\d{0,18}$ va ≤ INT8_MAX', () => {
+    expect(validOperatorId('0')).toBeNull();
+    expect(validOperatorId('007')).toBeNull();
+    expect(validOperatorId('9223372036854775808')).toBeNull();
+    expect(validOperatorId('9223372036854775807')).toBe('9223372036854775807');
+    expect(validOperatorId('301')).toBe('301');
+    expect(
+      toConfirmOrder(preview(), null, { operator_id: '007' }),
+    ).not.toHaveProperty('operator_id');
+  });
+
+  it('⭐ S7a: egasi tanlamagan, preview ifloslangan — himoyalangan maydon yuborilmaydi', async () => {
+    const polluted = {
+      ...preview(),
+      operator_id: '301',
+      customer_id: '120',
+      operator_phone: '+998900000077',
+      verified_operator_id: '301',
+      market_id: '77',
+      items: [
+        {
+          name: 'Namuna atir',
+          quantity: 2,
+          product_id: '15',
+          operator_id: '301',
+        },
+      ],
+    } as unknown as AiPreviewOrder;
+    const { ctx, calls } = setup({ orders: [polluted] });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    const body = JSON.stringify(confirms(calls)[0].body);
+    for (const key of [
+      'operator_id',
+      'customer_id',
+      'operator_phone',
+      'verified_operator_id',
+      'market_id',
+    ]) {
+      expect(body).not.toContain(`"${key}"`);
+    }
+  });
+
+  it.each([
+    ['begona oid', { k: 0, oid: '999' }],
+    ['k satr', { k: '0', oid: '300' }],
+    ['k chegaradan tashqari', { k: 5, oid: '300' }],
+  ])('S7b: soxta ai.opick (%s) — e’tiborsiz', async (_n, payload) => {
+    const { ctx, calls } = setup();
+    await send(ctx, ORDER_TEXT);
+    const data = await ctx.actions.create({
+      chatId: '40',
+      action: 'ai.opick',
+      actorUserId: '40',
+      payload: { ...payload, draft_id: row(ctx).id },
+      oneShot: false,
+    });
+    await press(ctx, data);
+    expect(row(ctx).input.meta.operator_id).toBeUndefined();
+    // Tanlov yozilmadi — joriy ro'yxat qayta ko'rsatildi.
+    expect(Object.keys(buttons(ctx))).toContain('🚫 Tanlamaslik');
+    await press(ctx, buttons(ctx)['↩️ Orqaga']);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(sentOrder(calls)).not.toHaveProperty('operator_id');
+  });
+
+  it('rol «✅» paytida qayta o‘qiladi — market operatoriga aylangan aktor operator_id yubormaydi', async () => {
+    const { ctx, calls } = setup();
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+    await press(ctx, buttons(ctx)['Operator 01']);
+    ctx.actors.resolve.mockResolvedValue({
+      user_id: '40',
+      role: 'market_operator',
+      status: 'active',
+      market_id: '40',
+      region_id: null,
+    });
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(sentOrder(calls)).not.toHaveProperty('operator_id');
   });
 });
