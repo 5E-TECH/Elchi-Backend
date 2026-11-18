@@ -402,12 +402,23 @@ describe('AiConfirmRequestDto — qat’iy ai-confirm DTO (C10)', () => {
       }
     });
 
-    it("(e) operator '#admin' + operator_id → operator_id RAD etiladi, operator faqat matn", async () => {
+    // 2026-11-18: `operator_id` endi formadagi «Operator» tanlovi sifatida
+    // QABUL qilinadi (POST /orders bilan ayni DTO tekshiruvi; server uni
+    // shu marketning faol operatori ekanini `createOrderInternal` da
+    // tekshiradi). Model chiqishidan u baribir o'tmaydi (ai-service
+    // `sanitize-extraction`, order-service preview oq ro'yxati) — faqat
+    // operator select'da tanlagan raqamli id.
+    it("(e) operator '#admin' — faqat matn; operator_id faqat raqam (aks holda RAD)", async () => {
       const paths = await errorPaths(
-        body(baseOrder({ operator: '#admin', operator_id: '1' })),
+        body(baseOrder({ operator: '#admin', operator_id: '#admin' })),
       );
       expect(paths).toContain('orders.0.operator_id');
       expect(paths).not.toContain('orders.0.operator');
+      expect(
+        await errorPaths(
+          body(baseOrder({ operator: '#admin', operator_id: '1' })),
+        ),
+      ).toEqual([]);
       // Mijoz obyektida ham begona id'lar o'tmaydi.
       expect(
         await errorPaths(body(withCustomer({ operator_id: '1' }))),

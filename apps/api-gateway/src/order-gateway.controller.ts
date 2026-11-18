@@ -2191,9 +2191,11 @@ export class OrderGatewayController {
    * ("Yangi buyurtmalar" ekranida ko'rinadi — bot yo'lidagi CREATED tuzog'i
    * takrorlanmaydi), filial esa rol bo'yicha `createOrderInternal` da
    * qo'yiladi. `region_id` — DB'dagi tuman yozuvidan. `operator` — FAQAT
-   * matn; `operator_id` `createOrderInternal` da faqat ROLDAN qo'yiladi
-   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null),
-   * matndan HECH QACHON.
+   * matn, undan `operator_id` HECH QACHON aniqlanmaydi. `operator_id` —
+   * formadagi tanlov (`order.operator_id`) bo'lsa `createOrderInternal` uni
+   * POST /orders kabi tekshiradi (shu marketning faol operatori, aks holda
+   * 400 → shu buyurtma `create_failed`) va ismini yozadi; bo'lmasa ROLDAN
+   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null).
    */
   private async createAiOrder(
     item: EligibleAiOrder,
@@ -2243,6 +2245,10 @@ export class OrderGatewayController {
       total_price: order.total_price ?? 0,
       comment: order.comment ?? null,
       operator: order.operator ?? null,
+      // «Operator» tanlovi — POST /orders bilan AYNI tekshiruv
+      // (`createOrderInternal` → `resolveChosenOrderOperator`); berilmasa
+      // maydon umuman yuborilmaydi (avvalgi xulq).
+      ...(order.operator_id ? { operator_id: order.operator_id } : {}),
       // Almashtirish: order-service eski buyurtmani shu market (ctx.marketId —
       // server aniqlagan) bo'yicha tekshiradi; begona buyurtma — 400.
       ...(order.replaced_order_id
@@ -3034,7 +3040,9 @@ export class OrderGatewayController {
     });
     // Formadagi «Operator» tanlovi (`operator_id`) — yakuniy market
     // aniqlangach, mijoz yaratilishidan OLDIN: shu marketning faol operatori
-    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). Bot va AI yo'llari uni yubormaydi.
+    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). ai-confirm `orders[].operator_id`
+    // ni shu yerga uzatadi (400 → shu buyurtma `create_failed`); bot yo'li
+    // (`botOrderCreate`) va Telegram AI (hozircha) uni yubormaydi.
     const chosenOperator = await resolveChosenOrderOperator({
       operatorId: dto.operator_id,
       roles,

@@ -22,6 +22,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI tasdiq: «Operator» tanlovi (`orders[].operator_id`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_id` (string, 1–19 raqam; son ham qabul qilinadi, bo'sh satr — tanlanmagan). Qoida `POST /orders` `operator_id` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveChosenOrderOperator`): buyurtma marketining faol, o'chirilmagan operatori (`GET /market-operators/selectable` ro'yxati); market operatori faqat o'zini; superadmin/admin ham tekshiriladi. To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (yuborilgan `operator` matni e'tiborsiz) — komissiya shu operatorga.
+  - Xato: `POST /orders` dagi 400 matni ai-confirm'da **shu buyurtma natijasi** bo'ladi — `{ index, ok: false, code: 'create_failed', reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' }` (market operatori boshqasini tanlasa — `reason: "Market operatori faqat o'zini operator qilib tanlay oladi"`). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi. Raqam bo'lmagan qiymat — butun so'rov 400 (DTO).
+  - Berilmasa — avvalgi xulq o'zgarmagan (`operator` matni; market operatori — o'zi; qolganlar — operatorsiz).
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`operator_id` yubormaydi).
+
+**Frontend action items:**
+- 🔧 AI panelida har buyurtma kartasiga «Operator» select (`GET /market-operators/selectable`, qo'lda forma bilan bir xil) → `orders[i].operator_id`.
+
 ### 2026-11-18 — Bildirishnomalar: o'chirish / o'qildi belgisi yetkazish holatini bosib ketmaydi (#699 follow-up)
 
 Deploy: notification-service, migratsiyasiz.

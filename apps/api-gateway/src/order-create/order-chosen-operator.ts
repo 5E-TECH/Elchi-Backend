@@ -1,8 +1,12 @@
-import { BadRequestException } from '@nestjs/common';
+import { applyDecorators, BadRequestException } from '@nestjs/common';
+import { Transform } from 'class-transformer';
+import { IsOptional, IsString, Matches } from 'class-validator';
 import { Roles as RoleEnum } from '@app/common';
 
 /**
- * Buyurtma formasidagi «Operator» tanlovi — `POST /orders` `operator_id`.
+ * Buyurtma formasidagi «Operator» tanlovi — `POST /orders` `operator_id`
+ * (va AI panelidagi `POST /orders/ai-confirm` `orders[].operator_id` —
+ * ayni `createOrderInternal` orqali, ayni qoida).
  *
  * Ilgari Elchi formasida operator faqat erkin matn edi: market o'z
  * operatorini tanlay olmasdi, buyurtmaga `operator_id` yozilmasdi va
@@ -35,6 +39,31 @@ export const MARKET_OPERATOR_SELECTABLE_CMD =
   'identity.market_operator.selectable';
 
 export type ChosenOrderOperator = { id: string; name: string };
+
+export const CHOSEN_OPERATOR_ID_FORMAT_MESSAGE =
+  "operator_id operator ID si (raqam) bo'lishi kerak";
+
+/**
+ * `operator_id` maydonining DTO tekshiruvi — `POST /orders`
+ * (`CreateOrderRequestDto`) va `POST /orders/ai-confirm`
+ * (`AiConfirmOrderDto`) uchun AYNI qoida (bir joyda — ikki DTO ajralib
+ * ketmasin). Swagger tavsifi har DTO'ning o'zida (xato shakli farq qiladi).
+ *  • son → satr; bo'sh satr — «tanlanmagan» (forma select'ining bo'sh
+ *    qiymati) → `undefined`;
+ *  • aks holda 1–19 xonali raqam, bo'lmasa 400.
+ */
+export function OptionalChosenOperatorId(): PropertyDecorator {
+  return applyDecorators(
+    IsOptional(),
+    Transform(({ value }: { value: unknown }) => {
+      if (typeof value === 'number') return String(value);
+      if (typeof value === 'string' && value.trim() === '') return undefined;
+      return value;
+    }),
+    IsString(),
+    Matches(/^\d{1,19}$/, { message: CHOSEN_OPERATOR_ID_FORMAT_MESSAGE }),
+  );
+}
 
 const BIGINT_ID_RE = /^[0-9]{1,19}$/;
 
