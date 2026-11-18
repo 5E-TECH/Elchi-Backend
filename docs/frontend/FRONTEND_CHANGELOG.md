@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI maslahatchi (BE-5): review round-4 tuzatishlari
+
+Deploy: api-gateway + ai-service + finance-service, migratsiyasiz.
+
+- 🔧 **R1:** yopilgandan keyin ochilgan yangi «smena kamomadi» ogohlantirishi endi faqat YANGI smenalarni hisoblaydi (`facts.shifts_count`, `total_difference`, `evidence.rows`, `closed_by`). Ilgari yopilgan ogohlantirishdagi smena yangisida qayta sanalardi (masalan `occurrences: 1`, lekin `shifts_count: 2`). Ketma-ketlik konteksti — `facts.streak_length` / `streak_total`.
+- 🔧 Qoidalar tekshiruvi: sekin yoki osilgan xizmat (filial/foydalanuvchi nomlari, R2/R4/R5/R7 so'rovlari) endi faqat o'sha qoidani `error` qiladi; nomlar null bo'lib qolishi mumkin (FE allaqachon `#id` ko'rsatadi).
+- 🔒 **`/activity-logs`:** `ai` xizmati yozuvlari (`ai.advisor.*`, `ai.cap.raise`) endi FAQAT SUPERADMIN ga. ADMIN so'rovida bu yozuvlar yo'q, `?service=ai` — bo'sh ro'yxat (403 emas). Ega qarori 2026-11-18.
+- 🟢 openapi: `/ai/advisor/*` javob sxemalari (`200` endi bo'sh emas), `from`/`to` — `format: date`.
+
+**Frontend action items:** yo'q (ADMIN faoliyat jurnalida `ai` xizmati filtrini yashirish mumkin).
+
 ### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizodlari — shartnoma v0.4
 
 Ega qarori 2026-11-18. Deploy: ai-service + finance-service, migratsiyasiz.
