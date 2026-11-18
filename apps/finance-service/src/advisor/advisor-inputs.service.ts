@@ -66,6 +66,12 @@ const USER_BRANCH_CHUNK = 500;
  * faqat o'sha qoidaga tegadi (`errors`).
  */
 export const ADVISOR_STATEMENT_TIMEOUT_MS = 15_000;
+/**
+ * R2/R4/R5 «hisoblanadigan topshirish» va T6 qaytarish (P4) qidiruvi oynasi
+ * (#702 review B1): butun tarix emas, oxirgi 90 kun (chegaralar ≤ 60 kun).
+ * Oynada hisoblanadigan kun bo'lmasa — chegara musbat qator boshi (P2).
+ */
+export const ADVISOR_EPISODE_LOOKBACK_DAYS = 90;
 /** R3: bitta tekshiruvdagi vaqt byudjeti — oshsa, ishlangan qismgacha kursor. */
 export const R3_TIME_BUDGET_MS = 12_000;
 /** R3: yangi qatorlar shu bo'laklarda ishlanadi (progress kafolati). */
@@ -1054,12 +1060,9 @@ export class AdvisorInputsService {
     source: 'courier_payment' | 'market_payment' | 'branch_to_main',
     minBalance: number,
     minPct: number,
+    today: string,
   ): Promise<EpisodeRow[]> {
     const t = this.tables();
-    const notReversed = (a: string) => `NOT EXISTS (
-                SELECT 1 FROM ${t.history} rr
-                 WHERE rr."source_type" = 'payment_reversal'
-                   AND rr."reverses_history_id" = ${a}."id" AND rr."is_deleted" = false)`;
     // P5 (v0.4): T6 tahririning almashtiruvchi oyog'i — vaqti va id'si
     // zanjirning BIRINCHI (root) oyog'idan (ayni kassa): tahrir «oxirgi
     // topshirish»ni oldinga surmaydi, kunlar sanog'ini nolga tushirmaydi.
@@ -1074,85 +1077,144 @@ export class AdvisorInputsService {
                    AND pc."is_deleted" = false
                  ORDER BY ro."createdAt" ASC, ro."id" ASC LIMIT 1
               ) ${a}e ON true`;
-    const balanceBefore = (at: string, id: string) => `(
-                SELECT b."balance_after" FROM ${t.history} b
-                 WHERE b."cashbox_id" = c."id" AND b."is_deleted" = false
-                   AND (b."createdAt", b."id") < (${at}, ${id})
-                 ORDER BY b."createdAt" DESC, b."id" DESC LIMIT 1)`;
-    return this.ds.query<EpisodeRow[]>(
-      `SELECT c."id"::text AS cashbox_id, c."user_id"::text AS owner, c."balance",
-              lh.id AS last_id, lh."createdAt" AS last_at, lh.amount AS last_amount,
+    const day = (at: string) => `(${at} AT TIME ZONE 'Asia/Tashkent')::date`;
+    // Oyna: [today − N kun] dan (bir kun oldingi qatorlar — kun boshi qoldig'i uchun).
+    const since = `($5::date::timestamp AT TIME ZONE 'Asia/Tashkent')`;
+    // #702 review B1: kun boshidagi qoldiq har (kassa, kun) uchun alohida
+    // korrelyatsion so'rov EMAS — bitta oyna o'tishi (LAG) bilan; `qh`/`rv`
+    // ham kunlik agregatdan (kassalar soni × tarix uzunligiga chiziqli).
+    // JIT o'chiq: rejalashtiruvchi lateral'lar narxini katta baholab JIT
+    // kompilyatsiyasiga (~1.4 s) kiradi, so'rovning o'zi ~0.5 s (#702 B1).
+    return this.ds.transaction(async (m) => {
+      await m.query('SET LOCAL jit = off');
+      return m.query<EpisodeRow[]>(
+        `WITH cb AS (
+         SELECT c."id", c."user_id", c."balance" FROM ${t.cashboxes} c
+          WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
+            AND c."balance" > $3::numeric
+       ),
+       -- Kun boshidagi qoldiq: kunning birinchi qatoridan oldingi balance_after
+       -- (tor qatorlar — saralash xotirada).
+       starts AS (
+         SELECT x.cashbox_id, x.day, x.start_balance FROM (
+           SELECT y.cashbox_id, y.d AS day,
+                  LAG(y.balance_after) OVER w AS start_balance,
+                  y.d IS DISTINCT FROM LAG(y.d) OVER w AS first_of_day
+             FROM (
+               SELECT h."cashbox_id" AS cashbox_id, h."createdAt" AS at, h."id" AS id,
+                      h."balance_after" AS balance_after, ${day('h."createdAt"')} AS d
+                 FROM ${t.history} h JOIN cb ON cb."id" = h."cashbox_id"
+                WHERE h."is_deleted" = false AND h."createdAt" >= ${since}
+             ) y
+           WINDOW w AS (PARTITION BY y.cashbox_id ORDER BY y.at, y.id)
+         ) x WHERE x.first_of_day
+       ),
+       -- Chiqish oyoqlari: samarali vaqt/id (P5) va T6 qaytarilishi (turi bilan).
+       legs AS (
+         SELECT o."cashbox_id", o."id", COALESCE(oe.rid, o."id") AS kid,
+                COALESCE(oe.rat, o."createdAt") AS at, ABS(o."amount") AS amount,
+                rv.rid, rv.rat, rv.kind
+           FROM ${t.history} o JOIN cb ON cb."id" = o."cashbox_id"
+           ${effective('o')}
+           LEFT JOIN LATERAL (
+             SELECT r."id" AS rid, r."createdAt" AS rat,
+                    CASE WHEN EXISTS (
+                      SELECT 1 FROM ${t.corrections} pe
+                       WHERE pe."reversal_transfer_id" = r."transfer_id"
+                         AND pe."action" = 'edit' AND pe."is_deleted" = false)
+                    THEN 'edit' ELSE 'reverse' END AS kind
+               FROM ${t.history} r
+              WHERE r."reverses_history_id" = o."id"
+                AND r."source_type" = 'payment_reversal' AND r."is_deleted" = false
+              ORDER BY r."createdAt" DESC, r."id" DESC LIMIT 1
+           ) rv ON true
+          WHERE o."operation_type" = 'expense' AND o."source_type" = $2
+            AND o."is_deleted" = false AND o."createdAt" >= ${since}
+       ),
+       -- Kun yig'indilari: \`live\` — amaldagi oyoqlar; \`with_rev\` — T6
+       -- «qaytarish» bilan bekor qilinganlari ham (tahrir — almashtiruvchi
+       -- oyoq allaqachon \`live\` da, root kunida).
+       days AS (
+         SELECT l."cashbox_id" AS cashbox_id, ${day('l.at')} AS day,
+                SUM(l.amount) FILTER (WHERE l.rid IS NULL) AS live,
+                SUM(l.amount) FILTER (WHERE l.rid IS NULL OR l.kind = 'reverse') AS with_rev,
+                MAX(l.at) FILTER (WHERE l.rid IS NULL) AS last_at,
+                (array_agg(l.kid::text ORDER BY l.at DESC, l.kid DESC)
+                   FILTER (WHERE l.rid IS NULL))[1] AS last_id
+           FROM legs l GROUP BY 1, 2
+       ),
+       dq AS (
+         SELECT d.*, GREATEST(COALESCE(s.start_balance, 0), 0) AS sb
+           FROM days d
+           LEFT JOIN starts s ON s.cashbox_id = d.cashbox_id AND s.day = d.day
+          -- Oyna birinchi kunining boshlang'ich qoldig'i oynadan tashqarida.
+          WHERE d.day > $5::date
+       ),
+       qh AS (
+         SELECT DISTINCT ON (dq.cashbox_id) dq.cashbox_id, dq.day, dq.last_id, dq.last_at
+           FROM dq
+          WHERE dq.live IS NOT NULL AND dq.live * 100 >= $4::numeric * dq.sb
+          ORDER BY dq.cashbox_id, dq.day DESC
+       ),
+       -- P4 (#702 review B3): T6 «qaytarish» — chegara faqat qaytarilgan
+       -- oyoq kuni oxirgi hisoblanadigan kundan KEYIN va o'sha kun qaytarilgan
+       -- oyoqlari bilan birga hisoblanadigan bo'lgan bo'lsa (kun yig'indisi).
+       rv AS (
+         SELECT DISTINCT ON (l."cashbox_id") l."cashbox_id" AS cashbox_id,
+                l.rid::text AS rid, l."id"::text AS oid, l.rat
+           FROM legs l
+           JOIN dq ON dq.cashbox_id = l."cashbox_id" AND dq.day = ${day('l.at')}
+           LEFT JOIN qh ON qh.cashbox_id = l."cashbox_id"
+          WHERE l.kind = 'reverse'
+            AND dq.with_rev * 100 >= $4::numeric * dq.sb
+            AND (qh.day IS NULL OR dq.day > qh.day)
+          ORDER BY l."cashbox_id", l.rat DESC, l.rid DESC
+       )
+       SELECT cb."id"::text AS cashbox_id, cb."user_id"::text AS owner, cb."balance",
+              lh.id AS last_id, lh.at AS last_at, lh.amount AS last_amount,
               qh.last_id AS qual_id, qh.last_at AS qual_at,
               rs.id AS run_id, rs."createdAt" AS run_at,
               rv.rid AS rev_id, rv.oid AS rev_orig_id, rv.rat AS rev_at
-         FROM ${t.cashboxes} c
+         FROM cb
+         -- Oxirgi (T6 qaytarilmagan) chiqish — dalil; butun tarix bo'yicha.
          LEFT JOIN LATERAL (
-           SELECT h."id"::text AS id, COALESCE(he.rat, h."createdAt") AS "createdAt",
+           SELECT h."id"::text AS id, COALESCE(he.rat, h."createdAt") AS at,
                   ABS(h."amount") AS amount
              FROM ${t.history} h
              ${effective('h')}
-            WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
+            WHERE h."cashbox_id" = cb."id" AND h."operation_type" = 'expense'
               AND h."source_type" = $2 AND h."is_deleted" = false
-              AND ${notReversed('h')}
+              AND NOT EXISTS (
+                SELECT 1 FROM ${t.history} rr
+                 WHERE rr."source_type" = 'payment_reversal'
+                   AND rr."reverses_history_id" = h."id" AND rr."is_deleted" = false)
             ORDER BY COALESCE(he.rat, h."createdAt") DESC, h."id" DESC
             LIMIT 1
          ) lh ON true
-         LEFT JOIN LATERAL (
-           SELECT d.last_id, d.last_at FROM (
-             SELECT (COALESCE(he.rat, h."createdAt") AT TIME ZONE 'Asia/Tashkent')::date AS day,
-                    SUM(ABS(h."amount")) AS total,
-                    MAX(COALESCE(he.rat, h."createdAt")) AS last_at,
-                    (array_agg(COALESCE(he.rid, h."id")::text
-                       ORDER BY COALESCE(he.rat, h."createdAt") DESC, COALESCE(he.rid, h."id") DESC))[1] AS last_id
-               FROM ${t.history} h
-               ${effective('h')}
-              WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
-                AND h."source_type" = $2 AND h."is_deleted" = false
-                AND ${notReversed('h')}
-              GROUP BY 1
-           ) d
-           LEFT JOIN LATERAL (
-             SELECT b."balance_after" AS start_balance FROM ${t.history} b
-              WHERE b."cashbox_id" = c."id" AND b."is_deleted" = false
-                AND b."createdAt" < (d.day::timestamp AT TIME ZONE 'Asia/Tashkent')
-              ORDER BY b."createdAt" DESC, b."id" DESC LIMIT 1
-           ) sb ON true
-           WHERE d.total * 100 >= $4::numeric * GREATEST(COALESCE(sb.start_balance, 0), 0)
-           ORDER BY d.day DESC LIMIT 1
-         ) qh ON true
+         LEFT JOIN qh ON qh.cashbox_id = cb."id"
+         LEFT JOIN rv ON rv.cashbox_id = cb."id"
          LEFT JOIN LATERAL (
            SELECT z."createdAt", z."id" FROM ${t.history} z
-            WHERE z."cashbox_id" = c."id" AND z."is_deleted" = false AND z."balance_after" <= 0
+            WHERE z."cashbox_id" = cb."id" AND z."is_deleted" = false
+              AND z."balance_after" <= 0
             ORDER BY z."createdAt" DESC, z."id" DESC LIMIT 1
          ) zr ON true
          LEFT JOIN LATERAL (
            SELECT s."id"::text AS id, s."createdAt" FROM ${t.history} s
-            WHERE s."cashbox_id" = c."id" AND s."is_deleted" = false
+            WHERE s."cashbox_id" = cb."id" AND s."is_deleted" = false
               AND (zr."id" IS NULL OR (s."createdAt", s."id") > (zr."createdAt", zr."id"))
             ORDER BY s."createdAt" ASC, s."id" ASC LIMIT 1
          ) rs ON true
-         LEFT JOIN LATERAL (
-           SELECT r."id"::text AS rid, o."id"::text AS oid, r."createdAt" AS rat
-             FROM ${t.history} o
-             JOIN ${t.history} r ON r."reverses_history_id" = o."id"
-              AND r."source_type" = 'payment_reversal' AND r."is_deleted" = false
-              -- T6 TAHRIRI qaytarishi — topshirish bekor emas, almashtirilgan (P5).
-              AND NOT EXISTS (
-                SELECT 1 FROM ${t.corrections} pe
-                 WHERE pe."reversal_transfer_id" = r."transfer_id"
-                   AND pe."action" = 'edit' AND pe."is_deleted" = false)
-            WHERE o."cashbox_id" = c."id" AND o."operation_type" = 'expense'
-              AND o."source_type" = $2 AND o."is_deleted" = false
-              AND (qh.last_at IS NULL OR o."createdAt" > qh.last_at)
-              AND ABS(o."amount") * 100 >= $4::numeric
-                  * GREATEST(COALESCE(${balanceBefore('o."createdAt"', 'o."id"')}, 0), 0)
-            ORDER BY r."createdAt" DESC, r."id" DESC LIMIT 1
-         ) rv ON true
-        WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
-          AND c."balance" > $3::numeric
-        ORDER BY c."id"`,
-      [type, source, minBalance, minPct],
-    );
+        ORDER BY cb."id"`,
+        [
+          type,
+          source,
+          minBalance,
+          minPct,
+          addDaysKey(today, -ADVISOR_EPISODE_LOOKBACK_DAYS - 1),
+        ],
+      );
+    });
   }
 
   /** Kassa kunlik yopilishlari (`finance_cashbox_daily`) — oxirgi kunlar. */
@@ -1245,7 +1307,13 @@ export class AdvisorInputsService {
     const growthDays = Math.floor(positive(t.growth_days, 3));
     const noHandover = Math.floor(positive(t.no_handover_days, 3));
     const minPct = clampPct(t.min_handover_pct, 80);
-    const rows = await this.episodes('couriers', 'courier_payment', 0, minPct);
+    const rows = await this.episodes(
+      'couriers',
+      'courier_payment',
+      0,
+      minPct,
+      today,
+    );
     if (!rows.length) return [];
     const ids = rows.map((r) => r.cashbox_id);
     const window = Math.max(growthDays + 1, ADVISOR_EVIDENCE_LIMIT);
@@ -1351,7 +1419,7 @@ export class AdvisorInputsService {
   ): Promise<AiAdvisorCandidate[]> {
     const limitDays = Math.floor(positive(t.days_without_payout, 7));
     // R4 o'zgarmaydi (ega, 2026-11-18): har qanday to'lov — minPct 0.
-    const rows = await this.episodes('markets', 'market_payment', 0, 0);
+    const rows = await this.episodes('markets', 'market_payment', 0, 0, today);
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
       .filter(
@@ -1418,6 +1486,7 @@ export class AdvisorInputsService {
       'branch_to_main',
       balanceUzs,
       minPct,
+      today,
     );
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
