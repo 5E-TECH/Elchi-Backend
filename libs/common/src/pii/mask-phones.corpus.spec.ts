@@ -995,6 +995,70 @@ const PRIVACY_CASES: C[] = [
     phones: [P('912345678')],
     keep: ['90 000  20-11'],
   },
+  // #710 review: himoyalangan oraliq ichida boshlangan YOLG'IZ nomzod —
+  // dev'dagidek telefon (faqat keyingi telefonni yutsa tashlanadi).
+  {
+    id: 'R5l lone guarded-alt (price + 3-2-2-3)',
+    text: 'Atir 75 000 \u2013 20 12 34 567',
+    phones: [P('201234567')],
+    keep: ['75 000'],
+  },
+  {
+    id: 'R5m price+ISO date then phone (en dashes)',
+    text: 'Atir 90 000 2025-07-20. 696\u201328\u201306\u201301 kuni',
+    phones: [P('696280601')],
+    keep: ['90 000 2025-07-20'],
+  },
+  {
+    id: 'R5n house no + phone',
+    text: 'Mijoz uy 20 - 901 25 06 45',
+    phones: [P('901250645')],
+  },
+  {
+    id: 'R5o ISO date + phone',
+    text: 'Yetkazish 2025-11-20 - 901 25 06 45',
+    phones: [P('901250645')],
+    keep: ['2025-11-20'],
+  },
+  {
+    id: 'R5p kv + dashed phone',
+    text: 'Kv 77 - 901-25-06-45',
+    phones: [P('901250645')],
+  },
+  {
+    id: 'R5q ISO date / phone',
+    text: 'Jami: 2025-11-20 / 789 10 01 55',
+    phones: [P('789100155')],
+    keep: ['2025-11-20'],
+  },
+  {
+    id: 'R5r bare 998 after slash',
+    text: 'Narxi 50 / 998 20\u201304\u201307\u2013965',
+    phones: [P('200407965')],
+  },
+  {
+    id: 'R5s F: price (2 spaces) + 2-2-2-3',
+    text: 'Aziza 90 000  20 11 23 456',
+    phones: [P('201123456')],
+    keep: ['90 000'],
+  },
+  {
+    id: 'R5t F: price + dashed date-like',
+    text: 'Narxi 90 000  20-11 23 456',
+    phones: [P('201123456')],
+    keep: ['90 000'],
+  },
+  {
+    id: 'R5u F: contiguous price + en dash',
+    text: 'Aziza 75000 \u2013 20-11 23 456',
+    phones: [P('201123456')],
+    keep: ['75000'],
+  },
+  {
+    id: 'R5v strict start > s0 (locked)',
+    text: 'Trek 998880002 /204',
+    phones: [P('880002204')],
+  },
 ];
 
 const amountsOnly: { id: string; text: string; keep: string }[] = [
@@ -1962,6 +2026,14 @@ const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([
   'Narxi 875 500  2026-11-14',
 ]);
 
+/** KNOWN_AMOUNT_GAPS: aniq maskalangan matn (#710 review S3). */
+const KNOWN_AMOUNT_GAP_MASKED: ReadonlyMap<string, string> = new Map([
+  ['Narxi 875 500 14/11', 'Narxi [TEL_1]'],
+  ['Jami 75500 14/11', 'Jami [TEL_1]'],
+  ['Atir 875 500 14/11/2026 gacha', 'Atir [TEL_1]/2026 gacha'],
+  ['Narxi 875 500  2026-11-14', 'Narxi [TEL_1]-11-14'],
+]);
+
 /** Log matnida milliy 9 raqam (ajratgichlarsiz ham) qolmaganmi. */
 const logLeaks = (log: string, phones: string[]) =>
   phones.filter((p) => log.replace(/\D/g, '').includes(p.slice(4)));
@@ -2019,6 +2091,8 @@ describe('maskPhones — summa korpusi (#647)', () => {
           lost: c.keep ?? [],
         });
         expect(result.extra).toHaveLength(1);
+        const want = KNOWN_AMOUNT_GAP_MASKED.get(c.text);
+        if (want !== undefined) expect(masked).toBe(want);
         return;
       }
       expect(result).toEqual({ extra: [], missed: [], lost: [] });

@@ -493,11 +493,17 @@ function replacePhoneCandidates(
     ...UZ_ALT_PHONE_SOURCES,
     ...(opts.moneyGuard && !opts.model ? [] : UZ_LOG_ONLY_SOURCES),
   ];
-  const found: { start: number; end: number; e164: string; raw: string }[] = [];
-  // Narx + sana sifatida saqlangan asosiy moslik oralig'i: uning ICHIDA
-  // boshlanadigan boshqa manba nomzodi (`Atir 75000 – 20-11 91 234 56 78`
-  // dagi `20-11 91 234`) tashlanadi — aks holda u keyingi telefonning asosiy
-  // mosligini yutib, 4 raqamini ochiq qoldirardi (#703 round 5).
+  const found: {
+    start: number;
+    end: number;
+    e164: string;
+    raw: string;
+    guardEnd?: number;
+  }[] = [];
+  // Himoyalangan (narx/sana/summa/id deb saqlangan) asosiy moslik oralig'i:
+  // uning ICHIDA boshlanadigan boshqa manba nomzodi (`Atir 75000 – 20-11 91
+  // 234 56 78` dagi `20-11 91 234`) keyingi telefonni yutsa tashlanadi — aks
+  // holda telefonning 4 raqami ochiq qolardi (#703 round 5).
   const guardedMain: [number, number][] = [];
   for (const { source, kind } of sources) {
     for (const m of text.matchAll(new RegExp(source, 'giu'))) {
@@ -506,12 +512,12 @@ function replacePhoneCandidates(
       const end = start + raw.length;
       const e164 = toUzE164(raw);
       if (!e164 || /^0{7}$/.test(e164.slice(-7))) continue;
-      if (
-        kind !== 'main' &&
-        guardedMain.some(([s0, e0]) => start > s0 && start < e0)
-      ) {
-        continue;
-      }
+      // Qat'iy `start > s0`: oraliq bilan bir joyda boshlangan nomzod
+      // (`Trek 998880002 /204`) tegilmaydi.
+      const guard =
+        kind === 'main'
+          ? undefined
+          : guardedMain.find(([s0, e0]) => start > s0 && start < e0);
       const before = text.slice(Math.max(0, start - 32), start);
       const after = text.slice(end);
       if (opts.model) {
@@ -523,9 +529,27 @@ function replacePhoneCandidates(
         if (kind === 'main') guardedMain.push([start, end]);
         continue;
       }
-      found.push({ start, end, e164, raw });
+      found.push({ start, end, e164, raw, guardEnd: guard?.[1] });
     }
   }
+  // Himoyalangan oraliq ichida boshlangan nomzod faqat oraliqdan KEYIN
+  // boshlanadigan boshqa (himoyasiz) nomzod bilan kesishsa tashlanadi
+  // (keyingi telefonni yutmasin); yolg'iz bo'lsa (`75 000 – 20 12 34 567`,
+  // `Mijoz uy 20 - 901 25 06 45`) — dev'dagidek telefon (#710 review).
+  const guardedOut = new Set(
+    found.filter(
+      (f) =>
+        f.guardEnd !== undefined &&
+        found.some(
+          (g) =>
+            g !== f &&
+            g.guardEnd === undefined &&
+            g.start >= (f.guardEnd as number) &&
+            g.start < f.end,
+        ),
+    ),
+  );
+  found.splice(0, found.length, ...found.filter((f) => !guardedOut.has(f)));
   found.sort((a, b) => a.start - b.start || b.end - a.end);
   let out = '';
   let pos = 0;
