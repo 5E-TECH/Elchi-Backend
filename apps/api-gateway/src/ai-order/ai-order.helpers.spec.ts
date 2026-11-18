@@ -2,9 +2,11 @@ import {
   type ArgumentsHost,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   GatewayTimeoutException,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import {
   BaseRpcExceptionFilter,
@@ -225,6 +227,34 @@ describe('ai-order.helpers', () => {
         code: 'timeout_unknown',
         reason:
           'Natija noma’lum — buyurtma yaratilgan bo‘lishi mumkin. “Yangi buyurtmalar”ni tekshiring, qayta yubormang',
+      });
+    });
+
+    it('gateway o`zi tashlagan 403 (ForbiddenException) — matni bilan; RMQ 403 — umumiy matn', () => {
+      expect(
+        toConfirmFailure(
+          new ForbiddenException('customer_id qabul qilinmadi: sabab'),
+        ),
+      ).toEqual({
+        code: 'create_failed',
+        reason: 'customer_id qabul qilinmadi: sabab',
+      });
+      expect(
+        toConfirmFailure({ statusCode: 403, message: 'ichki matn' }),
+      ).toEqual({
+        code: 'create_failed',
+        reason: AI_CONFIRM_REASON_TEXT.create_failed,
+      });
+    });
+
+    it('gateway o`zi tashlagan 503 (ServiceUnavailableException) — validation_unavailable, matni bilan', () => {
+      expect(
+        toConfirmFailure(
+          new ServiceUnavailableException("Mijozni tekshirib bo'lmadi"),
+        ),
+      ).toEqual({
+        code: 'validation_unavailable',
+        reason: "Mijozni tekshirib bo'lmadi",
       });
     });
 

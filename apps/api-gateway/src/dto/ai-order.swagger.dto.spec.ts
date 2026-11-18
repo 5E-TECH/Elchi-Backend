@@ -402,12 +402,36 @@ describe('AiConfirmRequestDto — qat’iy ai-confirm DTO (C10)', () => {
       }
     });
 
-    it("(e) operator '#admin' + operator_id → operator_id RAD etiladi, operator faqat matn", async () => {
+    // 2026-11-18: `operator_id` endi formadagi «Operator» tanlovi sifatida
+    // DTO'da QABUL qilinadi (POST /orders bilan ayni tekshiruv; server uni
+    // shu marketning faol operatori ekanini partiya boshida tekshiradi).
+    // «Model chiqishidan operator_id o'tmaydi» kafolati endi bu DTO'da EMAS,
+    // quyidagi qatlamlarda (ega qarori, #715):
+    //  1. model chiqishi: ai-service `prompts/order-extract.schema.ts`
+    //     (json_schema, `additionalProperties: false`) — model `operator_id`
+    //     maydonini qaytara olmaydi;
+    //  2. ai-service `order-extract/sanitize-extraction.ts`
+    //     (`sanitizeExtraction` oq ro'yxati) — to'qilgan `operator_id`
+    //     tashlanadi; `order-extract/injection-regression.spec.ts` (a), (e);
+    //  3. order-service `ai/ai-preview.service.spec.ts` #8 — preview oq
+    //     ro'yxati (`operator` faqat matn, `operator_id` yo'q);
+    //  4. payload quruvchilar: bot `toConfirmOrder` (notification-service
+    //     `ai-preview.confirm-keys.spec.ts` — ifloslangan preview bilan ham
+    //     operator_id, verified_operator_id, customer_id, operator_phone,
+    //     secondary_operator_phone, market_id chiqmaydi) va FE `mappers.ts`
+    //     `toConfirmOrder` oq ro'yxati (operator_id faqat odam select'da
+    //     tanlasa).
+    it("(e) operator '#admin' — faqat matn; operator_id faqat raqam (aks holda RAD)", async () => {
       const paths = await errorPaths(
-        body(baseOrder({ operator: '#admin', operator_id: '1' })),
+        body(baseOrder({ operator: '#admin', operator_id: '#admin' })),
       );
       expect(paths).toContain('orders.0.operator_id');
       expect(paths).not.toContain('orders.0.operator');
+      expect(
+        await errorPaths(
+          body(baseOrder({ operator: '#admin', operator_id: '1' })),
+        ),
+      ).toEqual([]);
       // Mijoz obyektida ham begona id'lar o'tmaydi.
       expect(
         await errorPaths(body(withCustomer({ operator_id: '1' }))),

@@ -22,6 +22,58 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI tasdiq: mavjud mijozni tanlash (`orders[].customer_id`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `customer_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — berilmagan; boshqa qiymat — butun so'rov 400). Egalik `POST /orders` `customer_id` bilan **AYNI** (`resolveScopedCustomerId`, `GET /customers/suggest` qoidasi): superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa.
+  - ⚠️ Farq: `POST /orders` da tasdiqlanmagan id `customer` obyekti bo'lsa jimgina e'tiborsiz qoladi (telefon yo'li). ai-confirm'da `customer` doim bor, shu sabab tasdiqlanmagan id (boshqa rollar uchun: begona yoki mavjud bo'lmagan mijoz) **shu buyurtmani rad etadi**: `{ index, ok: false, code: 'create_failed', reason: 'customer_id qabul qilinmadi: …' }` (POST /orders 403 matni). Superadmin/admin — id tekshirilmaydi, POST /orders kabi (mavjudligi ham). Tekshiruv xizmati (order yoki identity) javob bermasa — `{ code: 'validation_unavailable', reason: "Mijozni tekshirib bo'lmadi — …" }` (fail-closed; buyurtma ANIQ yaratilmagan, qayta yuborish mumkin). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
+  - Qabul qilinsa buyurtma o'sha kartaga yoziladi, yangi karta ochilmaydi; `customer.name`/`phone_number` kartaga yozilmaydi — **AI o'qigan telefon saqlanmaydi**, buyurtmada kartadagi telefon bo'ladi; `customer.address`, `customer.extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi, market tomoni faqat o'z marketidagi mijozni). `customer` obyekti baribir majburiy.
+  - Berilmasa — avvalgi xulq (telefon bo'yicha).
+- ⚠️ [gateway] **`POST /orders` va `POST /orders/external` `customer_id` formati qat'iylashdi** (external DTO uni `OmitType` orqali meros oladi; ilgari faqat «satr» edi). Endi **400**: raqam bo'lmagan qiymatlar (`'abc'`, `'EXT-77'`, UUID, `'-1'`, `'1.5'`, `'1e3'`, `'+120'`), boshida nolli `'0120'`, `'0'`, int8 maksimumidan (`9223372036854775807`) kattasi, xavfsiz bo'lmagan JSON son (> 2^53). Ruxsat: musbat int8 satr, JSON xavfsiz butun son (`120` → `'120'`), chetida bo'shliqli `' 120 '` (trim qilinadi), bo'sh satr — berilmagan. Market roli JWT bilan `POST /orders/external` ga o'z (raqam bo'lmagan) mijoz identifikatorini `customer_id` da yuborayotgan tashqi mijoz endi 400 oladi — `customer` obyektini yuborsin.
+- 🟢 ai-confirm natijasida gateway'ning o'z 403 xatolari (shu jumladan «Mijoz kartasini yangilab bo'lmaydi…») endi `reason` da asl matni bilan (ilgari umumiy «Buyurtma yaratilmadi»); gateway'ning o'z 503 xatosi (yaratishdan oldingi tekshiruv) — `validation_unavailable` + matn.
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`customer_id` yubormaydi).
+
+**Frontend action items:**
+- 🔧 AI panelida mijoz telefoni bo'yicha `GET /customers/suggest` taklifini tanlash → `orders[i].customer_id` (va `customer.phone_number` — taklifdagi to'liq telefon).
+- 🔧 `customer_id` tanlangan kartada AI o'qigan telefonni emas, **kartadagi telefonni** ko'rsating (buyurtmaga o'sha yoziladi); AI telefoni boshqacha bo'lsa operator buni ko'rsin (kerak bo'lsa tanlovni bekor qilib, yangi mijoz sifatida yuborsin).
+- 🔧 `customer_id` tanlanganda `orders[i].customer.phone_number` ga **kartadagi telefonni** (va ismni) qo'ying: buyurtma kartaning ism/telefonini oladi, AI auditi (`edited_fields`, `field_corrections`) esa so'rovdagi `customer` ni AI taklifi bilan solishtiradi — so'rovda kartadan boshqa qiymat qolsa audit buyurtmaga yozilmagan qiymatni ko'rsatadi (soxta tuzatish yoki yashirin farq). Kartadagisi qo'yilsa audit buyurtmadagi haqiqiy qiymatni aks ettiradi. (Boshqa market mijozi uchun bu baribir shart — telefon kartaga TO'LIQ mos kelishi kerak.)
+
+### 2026-11-18 — AI tasdiq: operator raqami (`orders[].operator_phone`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- 🔧 [gateway] **Xato tuzatildi:** market profilida `require_operator_phone=true` va `default_operator_phone` bo'sh bo'lsa, `POST /orders/ai-confirm` dagi HAR buyurtma `{ ok: false, code: 'create_failed', reason: 'Operator telefon raqami majburiy…' }` bo'lardi — AI DTO'sida raqam maydoni yo'q edi (yuborilsa 400 «should not exist»).
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_phone` (string). Qoida `POST /orders` `operator_phone` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveOrderOperatorPhones`): `"90 123 45 67"`, `"0901234567"` → `+998XXXXXXXXX`; noto'g'ri shakl — butun so'rov 400; bo'sh satr — yuborilmagan. Market doimiy raqami bo'lsa u 1-raqam, bu — 2-raqam (bir xil bo'lsa takrorlanmaydi); majburiy va doimiy raqam yo'q bo'lsa bu raqam MAJBURIY va 1-raqam — yuborilmasa shu buyurtma `create_failed` (yuqoridagi matn), qolganlari yaratiladi. `secondary_operator_phone` AI'da yo'q.
+- ⚠️ Telegram bot AI yo'li ham `ai-confirm` orqali yaratadi va `operator_phone` yubormaydi — bunday marketlarda bot AI buyurtmalari hozircha ham `create_failed` (alohida ish; bot `POST /orders/telegram/bot/create` yo'li 400 bermaydi).
+- 🟢 openapi.json: `operator_phone` (`AiConfirmOrderDto`, `CreateOrderRequestDto`) va `secondary_operator_phone` endi `"type": "string", "nullable": true` (ilgari xato `"object"` — TS `string | null` metadata'si). Kontrakt o'zgarmagan; kod generatori ishlatilsa tiplarni qayta yarating.
+
+**Frontend action items:**
+- 🔧 AI panelida operator raqami maydoni (qo'lda forma kabi; market `require_operator_phone && !default_operator_phone` bo'lsa majburiy) → `orders[i].operator_phone`.
+
+### 2026-11-18 — AI tasdiq: «Operator» tanlovi (`orders[].operator_id`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — tanlanmagan; boshqa qiymat — butun so'rov 400). ⚠️ Shu format `POST /orders` `operator_id` ga ham qo'llanadi: ilgari `'0120'` muvaffaqiyatli o'tardi (120 ga normallashtirilib) — endi **400** (avval ishlagan va endi rad etiladigan yagona sinf); `'0'` avvaldan 400; int8 dan katta qiymat ilgari DB'gacha yetib 22003 xato berardi — endi DTO'da 400; `' 31 '` (chetida bo'shliq) endi qabul qilinadi (trim). Qoida `POST /orders` `operator_id` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveChosenOrderOperator`): buyurtma marketining faol, o'chirilmagan operatori (`GET /market-operators/selectable` ro'yxati); market operatori faqat o'zini; superadmin/admin ham tekshiriladi. To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (yuborilgan `operator` matni e'tiborsiz) — komissiya shu operatorga.
+  - Xato: `POST /orders` dagi 400 matni ai-confirm'da **shu buyurtma natijasi** bo'ladi — `{ index, ok: false, code: 'create_failed', reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' }` (market operatori boshqasini tanlasa — `reason: "Market operatori faqat o'zini operator qilib tanlay oladi"`). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
+  - Operatorni tekshirib bo'lmasa (identity xatosi/timeout) — `{ ok: false, code: 'validation_unavailable', reason: 'Tanlangan operatorni tekshirib bo‘lmadi — …' }`: buyurtma ANIQ yaratilmagan (operatorsiz ham saqlanmaydi), qayta yuborish mumkin.
+  - Tekshiruv partiya boshida, bir xil `operator_id` uchun bir marta. AI auditida (`edited_fields`, `field_corrections`) `operator` — buyurtmaga yozilgan tanlangan operator ismi.
+  - Berilmasa — avvalgi xulq o'zgarmagan (`operator` matni; market operatori — o'zi; qolganlar — operatorsiz).
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`operator_id`, `customer_id`, `operator_phone` yubormaydi — kalitlar oq ro'yxati testi bilan qotirilgan).
+
+**Frontend action items:**
+- 🔧 AI panelida har buyurtma kartasiga «Operator» select (`GET /market-operators/selectable`, qo'lda forma bilan bir xil) → `orders[i].operator_id`.
+- ⚠️ `operator_id` ni AI `operator` matnidan HECH QACHON avtomatik tanlamang (matn model chiqishi — ishonchsiz); faqat odam select'da tanlasin. Market operatori rolida select ko'rsatmang va `operator_id` yubormang (u baribir o'zi bo'ladi; boshqasi — `create_failed`).
+
+### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizod so'rovi tezlashtirildi
+
+Deploy: finance-service + **migratsiya 1716000000244** (`cashbox_history (cashbox_id, createdAt, id) WHERE balance_after <= 0 AND is_deleted = false` — qisman indeks). Relizda 240–244 bitta tranzaksiyada, 244 eng oxirida (qurilish vaqtida yozish kutadi, o'qish kutmaydi; kam yuklamali vaqtda).
+
+- 🟢 Natijalar o'zgarmaydi, faqat tezlik.
+
+**Frontend action items:** yo'q.
+
 ### 2026-11-18 — AI maslahatchi (BE-5): bildirishnoma urinishlari va SMS eskalatsiyasi (review round-4)
 
 Deploy: ai-service + notification-service, migratsiyasiz.
@@ -47,7 +99,7 @@ Deploy: api-gateway + ai-service + finance-service, migratsiyasiz.
 
 ### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizodlari — shartnoma v0.4
 
-Ega qarori 2026-11-18. Deploy: ai-service + finance-service + **migratsiya 1716000000243** (`cashbox_history (cashbox_id, createdAt, id)` indeksi). Relizda 241 bilan BITTA tranzaksiyada yuradi — ikkala SHARE qulf partiya commit bo'lguncha turadi (`cashbox_history` ga yozish kutadi, o'qish kutmaydi): kam yuklamali vaqtda, 243 eng oxirida.
+Ega qarori 2026-11-18. Deploy: ai-service + finance-service + **migratsiya 1716000000243** (`cashbox_history (cashbox_id, createdAt, id)` indeksi). Relizda 240–244 BITTA tranzaksiyada yuradi — SHARE qulflar partiya commit bo'lguncha turadi (`cashbox_history` ga yozish kutadi, o'qish kutmaydi): kam yuklamali vaqtda, 243/244 eng oxirida.
 
 - ✏️ **Topshirish chegarasi (R2, R5):** «topshirilmagan kunlar» faqat o'sha kun boshidagi qoldiqning kamida **80%** i topshirilganda (bir kundagi topshirishlar yig'indisi) nolga tushadi; kichikroq topshirishlar epizodni yangilamaydi, kunlar sanalishda davom etadi. Yangi sozlamalar: `rules.R2.min_handover_pct`, `rules.R5.min_transfer_pct` (sukut 80, 1–100, `limits` da `unit: "percent"` — **yangi birlik**). UI'da hozircha KO'RSATILMAYDI (FE sozlamalar dialogida yashiring). `rule.thresholds` va `evidence.min_handover_pct` / `evidence.min_transfer_pct` da snapshot. R4 (market to'lovi) o'zgarmaydi — har qanday to'lov.
 - ✏️ **R2 o'sish:** faqat o'sish triggeri — epizod o'sish qatorining boshlangan kuni; kuniga qisman topshirish «N marta» ni ko'paytirmaydi va yopilgandan keyin har kuni yangi ogohlantirish ochmaydi. Sarlavha: «{kuryer}: {qoldiq} so'm — qarz N kun ketma-ket o'sgan»; o'sish bo'lmasa `facts.growth_days = 0`.

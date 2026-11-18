@@ -7,6 +7,10 @@ import { Cashbox } from './cashbox.entity';
 @Index('IDX_CASHBOX_HISTORY_CASHBOX', ['cashbox_id'])
 // Migratsiya 243 — kassa ichida vaqt tartibi (AI maslahatchi epizodlari, #702).
 @Index('IDX_CASHBOX_HISTORY_CASHBOX_CREATED', ['cashbox_id', 'createdAt', 'id'])
+// Migratsiya 244 — kassaning oxirgi `balance_after <= 0` qatori (qisman, #702).
+@Index('IDX_CASHBOX_HISTORY_ZERO_BAL', ['cashbox_id', 'createdAt', 'id'], {
+  where: 'balance_after <= 0 AND is_deleted = false',
+})
 @Index('IDX_CASHBOX_HISTORY_CREATED_AT', ['createdAt'])
 @Index('IDX_CASHBOX_HISTORY_OP_TYPE', ['operation_type'])
 @Index('IDX_CASHBOX_HISTORY_SOURCE', ['source_type'])

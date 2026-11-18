@@ -1,4 +1,6 @@
-import { BadRequestException } from '@nestjs/common';
+import { applyDecorators, BadRequestException } from '@nestjs/common';
+import { Transform } from 'class-transformer';
+import { IsOptional, IsString, Matches } from 'class-validator';
 import { normalizeUzPhone } from '@app/common';
 
 /**
@@ -38,6 +40,32 @@ export type OrderOperatorPhones = {
 
 export const OPERATOR_PHONE_REQUIRED_MESSAGE =
   'Operator telefon raqami majburiy. Market profilida doimiy operator raqamini kiriting yoki buyurtmada raqam yuboring (operator_phone)';
+
+export const OPERATOR_PHONE_FORMAT_MESSAGE =
+  "Telefon raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak";
+
+/**
+ * Formadagi operator raqami maydonining DTO tekshiruvi — `POST /orders`
+ * (`operator_phone`, `secondary_operator_phone`) va `POST /orders/ai-confirm`
+ * (`orders[].operator_phone`) uchun AYNI qoida (bir joyda — DTO'lar ajralib
+ * ketmasin). Swagger tavsifi har DTO'ning o'zida.
+ *  • bo'sh satr/bo'shliq — yuborilmagan (`undefined`);
+ *  • aks holda umumiy `normalizeUzPhone` bilan kanonik `+998XXXXXXXXX`
+ *    ("90 123 45 67", "0901234567", "+998 90 …"); keltirib bo'lmasa qiymat
+ *    o'zgarmaydi va 400.
+ */
+export function OptionalOperatorPhone(): PropertyDecorator {
+  return applyDecorators(
+    Transform(({ value }: { value: unknown }): unknown =>
+      typeof value === 'string' && value.trim() === ''
+        ? undefined
+        : (normalizeUzPhone(value) ?? value),
+    ),
+    IsOptional(),
+    IsString(),
+    Matches(/^\+998\d{9}$/, { message: OPERATOR_PHONE_FORMAT_MESSAGE }),
+  );
+}
 
 function canonical(value: unknown): string {
   return normalizeUzPhone(value) ?? '';

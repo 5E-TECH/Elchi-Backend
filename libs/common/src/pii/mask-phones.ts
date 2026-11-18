@@ -41,6 +41,8 @@
  *   telefon (narx 3 talab guruhlanadi). Istisno: `75 000 14/11`,
  *   `50 000 25.11`, `70 000  12 11`, `jami: 90 500 12 11` — narx + sana
  *   (`looksLikePriceAndDate`); telefon so'zi oldida bo'lsa baribir telefon.
+ *   `8` prefiksli / yaxlit `CCNNN` shakl faqat o'rta `000` bilan narx
+ *   (`850 000 25/11`, `75000 14/11`); `Aziza 890 123 14/11` — telefon.
  * - NOANIQ shakllar (prefikssiz yaxlit 9 raqam, 3-3-3, `8 901 234 567`) —
  *   summa so'zi yonida (`narxi …`, `… so'm`, `… ming`), id belgisi/so'zi
  *   (`#`, `№`, `Buyurtma raqami`, `STIR`, `ID`, `Trek`, `Pasport AA`)
@@ -269,7 +271,8 @@ function isDayMonth(dd: string, mm: string): boolean {
  * #647 N2/N3: asosiy 2-3-2-2 / 2-3-4 dagi narx + sana (`75 000 14/11`,
  * `50 000 25.11 kuni`, `70 000  12 11`, `75 000 14.11.2026`,
  * `90 500 2026-11-14`). `8` + kod bilan boshlanadigan narx (`850 000 25/11`
- * — `8` prefiks deb olinadi) va yaxlit `CC000` (`75000 14/11`) ham.
+ * — `8` prefiks deb olinadi) va yaxlit `CC000` (`75000 14/11`) ham — faqat
+ * o'rta guruh `000` bilan (#703 round 5).
  * +998/998/0 prefiksli yoki qavsli shakl — doim telefon (million narxning
  * o'rta guruhi `1 090 000 14/11` dan tashqari).
  */
@@ -301,10 +304,14 @@ function looksLikePriceAndDate(
     return false;
   }
   const nat = digits.slice(-9);
+  // O'rta guruh `000` (`CC 000 DD MM`) — yaxlit narx belgisi.
+  const roundThousands = nat.slice(2, 5) === '000';
   // Narx + ISO sana: `90 500 2026-11-14`, `20 000  2026-11-14`,
   // `75 000 - 2026-11-14`, `850 000  2026-11-14` (#647 round 4 A2: GROUP_SEP
-  // 2 bo'shliq va ` - ` ni ham qabul qiladi). Prefikssiz 2-3-4 yoki dev
-  // tanimagan ajratgich bilan; `90 123 2026` (davomsiz) — telefon.
+  // 2 bo'shliq va ` - ` ni ham qabul qiladi). Prefikssiz 2-3-4; `8`
+  // prefiksli / yaxlit shakl faqat dev tanimagan ajratgich VA o'rta `000`
+  // bilan (#703 round 5: `890 123  2026-11-14` — dev'dagidek telefon);
+  // `90 123 2026` (davomsiz) — telefon.
   if (/\D(?:19|20)\d{2}$/.test(raw)) {
     const iso = /^([./-])(\d{2})\1(\d{2})(?!\d)/.exec(after);
     if (!iso || !(isDayMonth(iso[2], iso[3]) || isDayMonth(iso[3], iso[2]))) {
@@ -312,7 +319,8 @@ function looksLikePriceAndDate(
     }
     return (
       /^\d{2}\D+\d{3}\D+\d{4}$/.test(raw) ||
-      (raw.match(/\D+/g) ?? []).some((x) => !/^[ .-]$/.test(x))
+      (roundThousands &&
+        (raw.match(/\D+/g) ?? []).some((x) => !/^[ .-]$/.test(x)))
     );
   }
   // Oxirgi ikki juftlik — sana (`DD MM`); oldidagi ajratgich tail[2].
@@ -322,12 +330,17 @@ function looksLikePriceAndDate(
   // Dev (21190eef) tanimagan ajratgich (`/`, `–`, NBSP, 2 bo'shliq, ` - `)
   // — dev bunday shaklni umuman telefon deb olmasdi.
   const devUnknownSep = rawSeps.some((x) => !/^[ .-]$/.test(x));
-  // Asosiy N2 shakli — prefikssiz `CC NNN DD MM`. Boshqasi (`8` prefiksli
-  // `850 000 25/11` yoki yaxlit `75000 14/11`) faqat dev tanimagan ajratgich
-  // bilan — dev ularni telefon deb olmasdi. `90000 14.11`, `850 000 14 11`,
-  // `890 123 14.11` — dev'dagidek telefon (maxfiylik dev'dan pasaymaydi).
-  if (!/^\d{2}\D+\d{3}\D/.test(raw) && !devUnknownSep) return false;
-  const roundThousands = nat.slice(2, 5) === '000';
+  // Asosiy N2 shakli — prefikssiz `CC NNN DD MM` (dev 194296bb faqat shuni
+  // narx + sana deb tekshiradi). Boshqasi — `8` prefiksli (`850 000 25/11`),
+  // yaxlit `CCNNN` (`75000 14/11`) yoki million o'rta guruhi
+  // (`1 090 000 14/11`) — faqat dev (21190eef) tanimagan ajratgich VA o'rta
+  // `000` bilan narx (194296bb `90 000 14/11` ni ham narx deb oladi). `000`
+  // siz (`Aziza 890 123 14/11`, `Aziza 90123 14/11`, `8-90-123-14/11`) —
+  // 194296bb dagidek telefon (#703 round 5); `90000 14.11`,
+  // `850 000 14 11` — 21190eef dagidek telefon.
+  if (!/^\d{2}\D+\d{3}\D/.test(raw) && !(devUnknownSep && roundThousands)) {
+    return false;
+  }
   // Sana yil bilan davom etadi: `14.11.2026`, `14/11/26`. Lekin
   // `…/91 234 56 78`, `…/93-765-43-21`, `….93.765.43.21`, `…/97 76 54 321`
   // — ikkinchi telefon, sana emas (#647 round 3 N4: aks holda birinchi
@@ -480,7 +493,20 @@ function replacePhoneCandidates(
     ...UZ_ALT_PHONE_SOURCES,
     ...(opts.moneyGuard && !opts.model ? [] : UZ_LOG_ONLY_SOURCES),
   ];
-  const found: { start: number; end: number; e164: string; raw: string }[] = [];
+  const found: {
+    start: number;
+    end: number;
+    e164: string;
+    raw: string;
+    guardEnd?: number;
+    /** Himoyalangan oraliqda nomzoddan OLDINGI raqamlar soni. */
+    guardLead?: number;
+  }[] = [];
+  // Himoyalangan (narx/sana/summa/id deb saqlangan) asosiy moslik oralig'i:
+  // uning ICHIDA boshlanadigan boshqa manba nomzodi (`Atir 75000 – 20-11 91
+  // 234 56 78` dagi `20-11 91 234`) keyingi telefonni yutsa tashlanadi — aks
+  // holda telefonning 4 raqami ochiq qolardi (#703 round 5).
+  const guardedMain: [number, number][] = [];
   for (const { source, kind } of sources) {
     for (const m of text.matchAll(new RegExp(source, 'giu'))) {
       const raw = m[0];
@@ -488,18 +514,63 @@ function replacePhoneCandidates(
       const end = start + raw.length;
       const e164 = toUzE164(raw);
       if (!e164 || /^0{7}$/.test(e164.slice(-7))) continue;
+      // `start >= s0`: oraliq bilan bir joyda boshlangan nomzod ham
+      // himoyalangan — yolg'iz bo'lsa (`Trek 998880002 /204`) telefon bo'lib
+      // qoladi, keyingi telefonni yutsa (`Buyurtma raqami 998335797 - 998 98
+      // 180 64 87`) tashlanadi (#710 review r2).
+      const guard =
+        kind === 'main'
+          ? undefined
+          : guardedMain.find(([s0, e0]) => start >= s0 && start < e0);
       const before = text.slice(Math.max(0, start - 32), start);
       const after = text.slice(end);
-      if (
-        opts.model
-          ? isAmountOrIdForModel(raw, before, after)
-          : opts.moneyGuard && isGuardedNonPhone(kind, raw, before, after)
+      if (opts.model) {
+        if (isAmountOrIdForModel(raw, before, after)) continue;
+      } else if (
+        opts.moneyGuard &&
+        isGuardedNonPhone(kind, raw, before, after)
       ) {
+        if (kind === 'main') guardedMain.push([start, end]);
         continue;
       }
-      found.push({ start, end, e164, raw });
+      found.push({
+        start,
+        end,
+        e164,
+        raw,
+        guardEnd: guard?.[1],
+        guardLead: guard
+          ? text.slice(guard[0], start).replace(/\D/g, '').length
+          : undefined,
+      });
     }
   }
+  // Himoyalangan oraliqda boshlangan nomzod faqat (1) oraliq bilan BIR
+  // JOYDA boshlangan (`Buyurtma raqami 998335797 - 998 98 180 64 87` — id
+  // bilan ustma-ust) yoki oraliqda undan OLDIN to'liq narx (≥ 5 raqam)
+  // turgan — ya'ni nomzod sana qismidan boshlangan (`Atir 75000 – 20-11 91
+  // 234 56 78`) — va (2) oraliqdan KEYIN boshlanadigan boshqa (himoyasiz)
+  // nomzod bilan kesishgan bo'lsa tashlanadi (keyingi telefonni yutmasin).
+  // Yolg'iz (`75 000 – 20 12 34 567`, `Trek 998880002 /204`) yoki oraliq
+  // boshidagi 1-4 raqamdan keyin boshlangan nomzod (`uy 20 - 901 25 06 75
+  // 1500000 so'm` — telefonning o'zi, keyingi son narx/id; `95 / 998
+  // 20-05-22-894 …` — qisqa `998 20-05-22` qoldig'i soxta raqam bo'lardi) —
+  // dev'dagidek telefon (#710 review round 2).
+  const guardedOut = new Set(
+    found.filter(
+      (f) =>
+        f.guardEnd !== undefined &&
+        ((f.guardLead as number) === 0 || (f.guardLead as number) >= 5) &&
+        found.some(
+          (g) =>
+            g !== f &&
+            g.guardEnd === undefined &&
+            g.start >= (f.guardEnd as number) &&
+            g.start < f.end,
+        ),
+    ),
+  );
+  found.splice(0, found.length, ...found.filter((f) => !guardedOut.has(f)));
   found.sort((a, b) => a.start - b.start || b.end - a.end);
   let out = '';
   let pos = 0;

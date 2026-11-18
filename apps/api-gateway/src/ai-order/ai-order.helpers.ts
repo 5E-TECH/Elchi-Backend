@@ -1,5 +1,10 @@
 import { createHash } from 'crypto';
-import { GatewayTimeoutException, HttpException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  GatewayTimeoutException,
+  HttpException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { TimeoutError } from 'rxjs';
 import { readOrderIntakeClosed } from '@app/common';
 import {
@@ -275,7 +280,9 @@ function clip(text: string): string {
  * mumkin — "Buyurtma yaratilmadi" deyish operatorni qo'lda qayta kiritishga
  * (haqiqiy dublikatga) undaydi.
  * ⚠️ Xom payload (mijoz ma'lumoti, dto) HECH QACHON javobga chiqmaydi — faqat
- * 400 xabari va identity'ning telefon-boshqa-rolda (409) matni o'tkaziladi.
+ * 400 xabari, gateway'ning o'z 403 (`ForbiddenException`) va 503
+ * (`ServiceUnavailableException` → `validation_unavailable`) matni va
+ * identity'ning telefon-boshqa-rolda (409) matni o'tkaziladi.
  */
 export function toConfirmFailure(error: unknown): {
   code: AiConfirmFailureCode;
@@ -327,6 +334,24 @@ export function toConfirmFailure(error: unknown): {
   }
   if (status === 400 && message) {
     return { code: 'create_failed', reason: clip(message) };
+  }
+  // Gateway O'ZI tashlagan 403 (`createOrderInternal`: tasdiqlanmagan
+  // `customer_id`, begona mijoz kartasini yangilash) — matn serverniki,
+  // payload yo'q; operator sababni ko'rsin. RMQ'dan kelgan 403 (oddiy
+  // obyekt, `ForbiddenException` nusxasi emas) — avvalgidek umumiy matn.
+  if (error instanceof ForbiddenException && message) {
+    return { code: 'create_failed', reason: clip(message) };
+  }
+  // Gateway O'ZI tashlagan 503 — yaratishdan OLDINGI tekshiruv ishlamadi
+  // (masalan `customer_id` doirasi, fail-closed): buyurtma ANIQ
+  // yaratilmagan, qayta yuborish mumkin.
+  if (error instanceof ServiceUnavailableException) {
+    return {
+      code: 'validation_unavailable',
+      reason: message
+        ? clip(message)
+        : AI_CONFIRM_REASON_TEXT.validation_unavailable,
+    };
   }
 
   return {

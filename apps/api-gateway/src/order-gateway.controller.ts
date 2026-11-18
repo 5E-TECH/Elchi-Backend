@@ -220,6 +220,7 @@ import {
   type OrderMarketPhonePolicy,
 } from './order-create/order-operator-phone';
 import {
+  type ChosenOrderOperator,
   MARKET_OPERATOR_SELECTABLE_CMD,
   resolveChosenOrderOperator,
 } from './order-create/order-chosen-operator';
@@ -410,6 +411,10 @@ type AiParseResponseData = {
   reset_at?: string;
 };
 
+/** ai-confirm: tanlangan operatorni identity'da tekshirib bo'lmadi. */
+const AI_OPERATOR_CHECK_UNAVAILABLE_REASON =
+  'Tanlangan operatorni tekshirib bo‘lmadi — buyurtma yaratilmadi, birozdan so‘ng qayta yuboring';
+
 /** Tekshiruvdan o'tgan, yaratishga navbatdagi AI buyurtma. */
 type EligibleAiOrder = {
   index: number;
@@ -435,6 +440,12 @@ type EligibleAiOrder = {
    * topilmasa — bo'sh.
    */
   requiredAcks?: string[];
+  /**
+   * Formadagi «Operator» tanlovi (`order.operator_id`) — partiya boshida
+   * BIR MARTA tekshirilgan (`resolveAiChosenOperators`); auditda `operator`
+   * shu ism bilan yoziladi, `createOrderInternal` uni qayta so'ramaydi.
+   */
+  chosenOperator?: ChosenOrderOperator;
 };
 
 /**
@@ -2191,9 +2202,11 @@ export class OrderGatewayController {
    * ("Yangi buyurtmalar" ekranida ko'rinadi — bot yo'lidagi CREATED tuzog'i
    * takrorlanmaydi), filial esa rol bo'yicha `createOrderInternal` da
    * qo'yiladi. `region_id` — DB'dagi tuman yozuvidan. `operator` — FAQAT
-   * matn; `operator_id` `createOrderInternal` da faqat ROLDAN qo'yiladi
-   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null),
-   * matndan HECH QACHON.
+   * matn, undan `operator_id` HECH QACHON aniqlanmaydi. `operator_id` —
+   * formadagi tanlov (`order.operator_id`) bo'lsa `createOrderInternal` uni
+   * POST /orders kabi tekshiradi (shu marketning faol operatori, aks holda
+   * 400 → shu buyurtma `create_failed`) va ismini yozadi; bo'lmasa ROLDAN
+   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null).
    */
   private async createAiOrder(
     item: EligibleAiOrder,
@@ -2226,6 +2239,10 @@ export class OrderGatewayController {
         ...(order.customer.address ? { address: order.customer.address } : {}),
       },
       ...(ctx.includeMarketId ? { market_id: ctx.marketId } : {}),
+      // Mavjud mijoz tanlovi — POST /orders egalik qoidasi
+      // (`resolveScopedCustomerId`); tasdiqlanmasa shu buyurtma rad
+      // (`strictCustomerId`, pastda). Berilmasa — avvalgidek telefon yo'li.
+      ...(order.customer_id ? { customer_id: order.customer_id } : {}),
       // txmkXVBa: «Kartani ham yangilash» (berilmasa — karta o'zgarmaydi).
       ...(order.update_customer_card === true
         ? { update_customer_card: true }
@@ -2243,6 +2260,15 @@ export class OrderGatewayController {
       total_price: order.total_price ?? 0,
       comment: order.comment ?? null,
       operator: order.operator ?? null,
+      // «Operator» tanlovi — POST /orders bilan AYNI tekshiruv
+      // (`createOrderInternal` → `resolveChosenOrderOperator`); berilmasa
+      // maydon umuman yuborilmaydi (avvalgi xulq).
+      ...(order.operator_id ? { operator_id: order.operator_id } : {}),
+      // VRyloH62: formadagi operator raqami — 1-/2-raqam qarori
+      // `createOrderInternal` da (`resolveOrderOperatorPhones`, POST /orders
+      // bilan AYNI). Ilgari uzatilmasdi: raqam majburiy, doimiy raqamsiz
+      // marketda veb AI buyurtmasi DOIM 400 (`create_failed`) bo'lardi.
+      ...(order.operator_phone ? { operator_phone: order.operator_phone } : {}),
       // Almashtirish: order-service eski buyurtmani shu market (ctx.marketId —
       // server aniqlagan) bo'yicha tekshiradi; begona buyurtma — 400.
       ...(order.replaced_order_id
@@ -2274,6 +2300,9 @@ export class OrderGatewayController {
       marketProfile: ctx.marketProfile ?? null,
       operatorName: ctx.operatorName ?? null,
       branchAssignment: ctx.branchAssignment,
+      strictCustomerId: true,
+      // Partiya boshida tekshirilgan (`resolveAiChosenOperators`).
+      ...(item.chosenOperator ? { chosenOperator: item.chosenOperator } : {}),
     });
     const body = (response ?? {}) as {
       id?: unknown;
@@ -2430,6 +2459,97 @@ export class OrderGatewayController {
   }
 
   /**
+   * ai-confirm «Operator» tanlovi (`orders[].operator_id`) — POST /orders
+   * bilan AYNI tekshiruv (`resolveChosenOrderOperator`), lekin yaratishdan
+   * OLDIN va partiyaga bir marta:
+   *  - bir xil `operator_id` uchun identity bir marta so'raladi (market
+   *    partiyada bitta), turli id'lar — PARALLEL;
+   *  - 400 (begona/nofaol operator, market operatori boshqasini tanlagan) →
+   *    shu buyurtma `create_failed`, sababi — POST /orders matni;
+   *  - identity javob bermasa/xato → `validation_unavailable` (buyurtma ANIQ
+   *    yaratilmagan — `timeout_unknown` «yaratilgan bo'lishi mumkin» EMAS);
+   *    operatorsiz buyurtma saqlanmaydi (fail-closed).
+   * Qaytaradi: yaratishga qolgan buyurtmalar (`chosenOperator` bilan).
+   */
+  private async resolveAiChosenOperators(
+    eligible: EligibleAiOrder[],
+    req: { user: JwtUser },
+    marketId: string,
+    roles: string[],
+    results: Map<number, AiConfirmResult>,
+  ): Promise<EligibleAiOrder[]> {
+    const operatorIdOf = (item: EligibleAiOrder) =>
+      this.asStr(item.order.operator_id).trim();
+    // Avval HAMMA noyob operator_id so'rovi bir vaqtda boshlanadi (har biri
+    // 8 s gacha — ketma-ket kutilsa 75 s partiya muddatini yerdi), keyin
+    // natijalar bandlarga taqsimlanadi.
+    type Settled =
+      | { ok: true; value: ChosenOrderOperator | null }
+      | { ok: false; error: unknown };
+    const lookups = new Map<string, Promise<Settled>>();
+    for (const item of eligible) {
+      const operatorId = operatorIdOf(item);
+      if (!operatorId || lookups.has(operatorId)) continue;
+      lookups.set(
+        operatorId,
+        resolveChosenOrderOperator({
+          operatorId,
+          roles,
+          requesterId: req.user.sub,
+          marketId,
+          loadSelectable: (payload) =>
+            this.sendIdentityWithTimeout(
+              { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+              payload,
+            ),
+        }).then(
+          (value): Settled => ({ ok: true, value }),
+          (error: unknown): Settled => ({ ok: false, error }),
+        ),
+      );
+    }
+    const settled = new Map<string, Settled>();
+    await Promise.all(
+      [...lookups].map(async ([operatorId, lookup]) => {
+        settled.set(operatorId, await lookup);
+      }),
+    );
+
+    const kept: EligibleAiOrder[] = [];
+    for (const item of eligible) {
+      const outcome = settled.get(operatorIdOf(item));
+      if (!outcome) {
+        kept.push(item);
+        continue;
+      }
+      if (outcome.ok) {
+        if (outcome.value) item.chosenOperator = outcome.value;
+        kept.push(item);
+      } else {
+        const { error } = outcome;
+        if (error instanceof BadRequestException) {
+          results.set(item.index, {
+            index: item.index,
+            ok: false,
+            ...toConfirmFailure(error),
+          });
+        } else {
+          this.logger.warn(
+            `ai-confirm: operator tekshiruvi ishlamadi (${this.errorName(error)}) — validation_unavailable`,
+          );
+          results.set(item.index, {
+            index: item.index,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: AI_OPERATOR_CHECK_UNAVAILABLE_REASON,
+          });
+        }
+      }
+    }
+    return kept;
+  }
+
+  /**
    * vncdmXOy #2: har eligible buyurtmaga `aiAudit` (activity_log metadata) va
    * SERVER tomonda hisoblangan `editedFields`. draft_id bo'lmasa — audit yo'q
    * (oddiy qo'lda kiritilgan buyurtma kabi; majburiy rejimda bunga
@@ -2548,7 +2668,11 @@ export class OrderGatewayController {
         total_price: item.order.total_price,
         where_deliver: item.order.where_deliver,
         comment: item.order.comment,
-        operator: item.order.operator,
+        // Operator tanlangan bo'lsa buyurtmaga UNING ismi yoziladi (matn
+        // e'tiborsiz) — audit ham saqlanadigan qiymatni ko'rsin.
+        operator: item.chosenOperator
+          ? item.chosenOperator.name || null
+          : item.order.operator,
         items: item.order.items,
       };
       item.editedFields = preview
@@ -2789,12 +2913,15 @@ export class OrderGatewayController {
    *
    * Qaytaradi: qabul qilingan id yoki `null`. Xulosa olinmasa (timeout/xato)
    * va `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
-   * yo'q bo'lsa xato yuqoriga otiladi (fail-closed).
+   * yo'q bo'lsa xato yuqoriga otiladi (fail-closed). `failClosed`
+   * (ai-confirm) — obyekt bo'lsa ham 503: tanlangan mijoz tekshirilmay
+   * qolib ketmasin va 403 «begona mijoz» deb noto'g'ri aytilmasin.
    */
   private async resolveScopedCustomerId(
     marketId: string | undefined,
     rawCustomerId: unknown,
     customer: { phone_number?: unknown } | undefined,
+    failClosed = false,
   ): Promise<{ id: string; inMarket: boolean } | null> {
     const customerId = this.asStr(rawCustomerId).trim();
     const market = String(marketId ?? '').trim();
@@ -2808,6 +2935,11 @@ export class OrderGatewayController {
         { market_id: market, customer_ids: [customerId] },
       );
     } catch (error) {
+      if (failClosed) {
+        throw new ServiceUnavailableException(
+          "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        );
+      }
       if (customer) {
         return null;
       }
@@ -2834,7 +2966,20 @@ export class OrderGatewayController {
     const card: unknown = await this.sendIdentityWithTimeout(
       { cmd: 'identity.customer.find_by_id' },
       { id: customerId },
-    ).catch(() => null);
+    ).catch((error: unknown) => {
+      // Mijoz yo'q (identity 404) — oddiy rad (403). `failClosed`
+      // (ai-confirm) da boshqa xato/timeout — 503: identity uzilishi
+      // «begona mijoz» deb noto'g'ri aytilmasin.
+      const status = Number(
+        (error as { statusCode?: unknown } | null)?.statusCode,
+      );
+      if (failClosed && status !== 404) {
+        throw new ServiceUnavailableException(
+          "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        );
+      }
+      return null;
+    });
     const cardPhone = normalizeUzPhone(
       (card as { data?: { phone_number?: unknown } } | null)?.data
         ?.phone_number,
@@ -2897,6 +3042,19 @@ export class OrderGatewayController {
       branchAssignment?: BranchAssignment | null;
       /** Celz3rKJ: yaratish kanali (hozir faqat bot). */
       createdVia?: 'bot';
+      /**
+       * ai-confirm: tasdiqlanmagan `customer_id` `customer` obyekti bo'lsa
+       * ham 403 (POST /orders da obyekt bo'lsa jimgina telefon yo'li —
+       * AI'da obyekt DOIM bor, operator tanlagan mijoz yo'qolmasin);
+       * doira tekshiruvi ishlamasa — 503 (fail-closed).
+       */
+      strictCustomerId?: boolean;
+      /**
+       * ai-confirm: `dto.operator_id` partiya boshida AYNI
+       * `resolveChosenOrderOperator` bilan (shu market, shu so'rovchi)
+       * tekshirilgan — identity qayta so'ralmaydi.
+       */
+      chosenOperator?: ChosenOrderOperator;
     },
   ): Promise<unknown> {
     // IR2OHIiN: mahsulotsiz / tumansiz buyurtma — hech narsa (mijoz ham)
@@ -3026,6 +3184,8 @@ export class OrderGatewayController {
     // VRyloH62: operator raqamlari va ismi — mijoz yaratilishidan OLDIN
     // (raqam majburiy bo'lsa 400 yetim mijoz qoldirmaydi). Bot formasida
     // raqam maydoni yo'q — u yerda 400 berilmaydi (BeePost bot yo'li kabi).
+    // ai-confirm (veb AI VA Telegram AI — ikkalasi ham shu yo'l) qat'iy:
+    // raqam `orders[].operator_phone` dan.
     const operatorPhones = resolveOrderOperatorPhones({
       market: marketProfile,
       operatorPhone: dto.operator_phone,
@@ -3034,18 +3194,22 @@ export class OrderGatewayController {
     });
     // Formadagi «Operator» tanlovi (`operator_id`) — yakuniy market
     // aniqlangach, mijoz yaratilishidan OLDIN: shu marketning faol operatori
-    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). Bot va AI yo'llari uni yubormaydi.
-    const chosenOperator = await resolveChosenOrderOperator({
-      operatorId: dto.operator_id,
-      roles,
-      requesterId: req.user.sub,
-      marketId: resolvedMarketId,
-      loadSelectable: (payload) =>
-        this.sendIdentityWithTimeout(
-          { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
-          payload,
-        ),
-    });
+    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). ai-confirm `orders[].operator_id`
+    // ni shu yerga uzatadi (400 → shu buyurtma `create_failed`); bot yo'li
+    // (`botOrderCreate`) va Telegram AI (hozircha) uni yubormaydi.
+    const chosenOperator =
+      opts?.chosenOperator ??
+      (await resolveChosenOrderOperator({
+        operatorId: dto.operator_id,
+        roles,
+        requesterId: req.user.sub,
+        marketId: resolvedMarketId,
+        loadSelectable: (payload) =>
+          this.sendIdentityWithTimeout(
+            { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+            payload,
+          ),
+      }));
     // Operator tanlangan bo'lsa ism — uniki (yozilgan matn ham, so'rovchi
     // ismi ham ishlatilmaydi).
     const filledOperatorName = chosenOperator
@@ -3074,17 +3238,20 @@ export class OrderGatewayController {
     let customerInMarket: boolean | null = null;
     let customerCreatedNow = false;
     if (!isSystemPrivileged && this.hasCustomerIdValue(dto.customer_id)) {
+      const strictCustomerId = opts?.strictCustomerId === true;
       const scoped = await this.resolveScopedCustomerId(
         resolvedMarketId,
         dto.customer_id,
         customer,
+        strictCustomerId,
       );
       if (scoped) {
         customerId = scoped.id;
         customerInMarket = scoped.inMarket;
-      } else if (!customer) {
+      } else if (!customer || strictCustomerId) {
         // Tasdiqlanmagan id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
-        // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi.
+        // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi
+        // (ai-confirm'da — rad, `strictCustomerId`).
         throw new ForbiddenException(
           "customer_id qabul qilinmadi: boshqa market mijozi uchun customer.phone_number mijoz telefoniga to'liq mos kelishi kerak (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring",
         );
@@ -4035,6 +4202,21 @@ export class OrderGatewayController {
         editedFields: null,
       });
     });
+
+    // «Operator» tanlovi (`operator_id`) — yaratishdan va auditdan OLDIN,
+    // partiyaga (market, operator_id) bo'yicha BIR MARTA. Rad etilgan
+    // buyurtma navbatdan chiqadi (hech narsa yaratilmaydi).
+    eligible.splice(
+      0,
+      eligible.length,
+      ...(await this.resolveAiChosenOperators(
+        eligible,
+        req,
+        marketId,
+        roles,
+        results,
+      )),
+    );
 
     // vncdmXOy: audit metadata (model, prompt versiyasi, xarajat, server
     // hisoblagan edited_fields) va AI ack darvozalari (400/503 —

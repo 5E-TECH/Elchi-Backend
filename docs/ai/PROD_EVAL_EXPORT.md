@@ -240,7 +240,7 @@ maxfiylik orasidagi murosa, keyingi PR'larda o'lchanadi:
   qo'shilib ketadi ("wa.me/AbC12390 742 90 47 150 000" — telefon va
   narx birga `[RAQAM]`).
 - **Google Maps `!4d<uzunlik>` dumi** faqat uzunlik 3 kasr xonali va
-  keyin "dd dd" kelsa telefon boshi deb olinadi: "…!4d66.164  25 50" →
+  keyin "dd dd" kelsa telefon boshi deb olinadi: `…!4d66.164  25 50` →
   "[LINK][RAQAM]" (30k korpusda 5 ta); odatiy "…!4d69.240562 45 000" →
   "[LINK] 45 000".
 

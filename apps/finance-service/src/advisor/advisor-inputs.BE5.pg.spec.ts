@@ -1273,6 +1273,95 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         });
       });
 
+      it('#702 perf: oxirgi topshirish (lh) ikki qadamda — tahrirdan keyingi oddiy topshirish va root’idan OLDIN yozilgan almashtiruvchi oyoq', async () => {
+        const cb = await cashbox('couriers', 88, 1000000);
+        const leg = (
+          amount: number,
+          after: number,
+          at: string,
+          transfer: string,
+          source = 'courier_payment',
+          op = 'expense',
+          reverses: string | null = null,
+        ) =>
+          db
+            .query<Array<{ id: string }>>(
+              `INSERT INTO "finance_schema"."cashbox_history"
+                 ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "createdAt", "transfer_id", "reverses_history_id")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING "id"::text AS id`,
+              [op, cb, source, amount, after, at, transfer, reverses],
+            )
+            .then((r) => r[0].id);
+        const correction = (orig: string, rev: string, repl: string) =>
+          db.query(
+            `INSERT INTO "finance_schema"."payment_corrections"
+               ("action", "payment_kind", "original_transfer_id", "root_transfer_id", "reversal_transfer_id",
+                "replacement_transfer_id", "original_amount", "new_amount", "payment_method",
+                "counterparty_user_id", "receiver_cashbox_id", "reason", "created_by", "idempotency_key", "root_created_at")
+             VALUES ('edit', 'courier_payment', $1, $1, $2, $3, 1, 1, 'cash', 88, 1, 'xato summa', 1, $4, '2026-10-01T00:00:00Z')`,
+            [orig, rev, repl, `k-${repl}`],
+          );
+        const T1 = '77777777-7777-4777-8777-777777777771';
+        const TR1 = '77777777-7777-4777-8777-777777777772';
+        const T2 = '77777777-7777-4777-8777-777777777773';
+        const TB = '77777777-7777-4777-8777-777777777774';
+        await hist(
+          cb,
+          'income',
+          'sell',
+          3000000,
+          3000000,
+          '2026-10-10T08:00:00Z',
+        );
+        // 15.10 — h1 (100k); 18.10 — oddiy topshirish B (100k); 21.10 — h1
+        // tahriri: almashtiruvchi oyoq createdAt 21.10, samarali vaqti 15.10.
+        const h1 = await leg(-100000, 2900000, '2026-10-15T10:00:00Z', T1);
+        const b = await leg(-100000, 2800000, '2026-10-18T10:00:00Z', TB);
+        await leg(
+          100000,
+          2900000,
+          '2026-10-21T09:00:00Z',
+          TR1,
+          'payment_reversal',
+          'income',
+          h1,
+        );
+        await leg(-90000, 2810000, '2026-10-21T09:00:00Z', T2);
+        await correction(T1, TR1, T2);
+        const lastOf = async () =>
+          (await runWith(['R2'], { R2: R2T })).candidates[0].evidence as {
+            last_handover: { at: string; history_id: string };
+          };
+        // createdAt bo'yicha oxirgisi — almashtiruvchi oyoq, lekin samarali
+        // vaqt bo'yicha oxirgisi — B (18.10 > 15.10).
+        expect((await lastOf()).last_handover).toMatchObject({
+          at: '2026-10-18T10:00:00.000Z',
+          history_id: b,
+        });
+        // Ilova yaratmaydigan holat (qo'lda tuzatilgan ma'lumot): almashtiruvchi
+        // oyoq (createdAt 12.10) root'idan (19.10) OLDIN yozilgan — samarali
+        // vaqti 19.10, B dan keyin; createdAt bo'yicha chegara uni yo'qotmaydi.
+        const T3 = '77777777-7777-4777-8777-777777777775';
+        const TR3 = '77777777-7777-4777-8777-777777777776';
+        const T4 = '77777777-7777-4777-8777-777777777777';
+        const h3 = await leg(-50000, 2760000, '2026-10-19T10:00:00Z', T3);
+        await leg(
+          50000,
+          2810000,
+          '2026-10-20T09:00:00Z',
+          TR3,
+          'payment_reversal',
+          'income',
+          h3,
+        );
+        const h4 = await leg(-40000, 2770000, '2026-10-12T09:00:00Z', T4);
+        await correction(T3, TR3, T4);
+        expect((await lastOf()).last_handover).toMatchObject({
+          at: '2026-10-19T10:00:00.000Z',
+          history_id: h4,
+        });
+      });
+
       it('#702 should-fix: R5 dalilidagi o‘tkazmalar ham samarali (root) vaqt bilan', async () => {
         const cb = await cashbox('branch', 87, 3000000);
         const leg = (
