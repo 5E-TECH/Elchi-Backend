@@ -403,11 +403,18 @@ describe('AiConfirmRequestDto — qat’iy ai-confirm DTO (C10)', () => {
     });
 
     // 2026-11-18: `operator_id` endi formadagi «Operator» tanlovi sifatida
-    // QABUL qilinadi (POST /orders bilan ayni DTO tekshiruvi; server uni
-    // shu marketning faol operatori ekanini `createOrderInternal` da
-    // tekshiradi). Model chiqishidan u baribir o'tmaydi (ai-service
-    // `sanitize-extraction`, order-service preview oq ro'yxati) — faqat
-    // operator select'da tanlagan raqamli id.
+    // DTO'da QABUL qilinadi (POST /orders bilan ayni tekshiruv; server uni
+    // shu marketning faol operatori ekanini partiya boshida tekshiradi).
+    // «Model chiqishidan operator_id o'tmaydi» kafolati endi bu DTO'da EMAS,
+    // quyidagilarda:
+    //  - ai-service `order-extract/injection-regression.spec.ts` (a) va (e)
+    //    — sanitize to'qilgan `operator_id` kalitini tashlaydi;
+    //  - order-service `ai/ai-preview.service.spec.ts` #8 — preview oq
+    //    ro'yxati (`operator` faqat matn, `operator_id` yo'q);
+    //  - payload quruvchilar: bot `toConfirmOrder`
+    //    (notification-service `ai-preview.confirm-keys.spec.ts` — kalitlar
+    //    oq ro'yxati) va FE `buildAiConfirmPayload` (operator_id faqat odam
+    //    select'da tanlasa).
     it("(e) operator '#admin' — faqat matn; operator_id faqat raqam (aks holda RAD)", async () => {
       const paths = await errorPaths(
         body(baseOrder({ operator: '#admin', operator_id: '#admin' })),

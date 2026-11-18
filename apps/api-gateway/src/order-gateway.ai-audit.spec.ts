@@ -103,6 +103,18 @@ function setup(
     if (pattern.cmd === 'identity.customer.create') {
       return of({ data: { id: `c${payload.dto?.phone_number}` } });
     }
+    if (pattern.cmd === 'identity.market_operator.selectable') {
+      // «Operator» tanlovi: MARKET_ID ning yagona faol operatori (sintetik).
+      const rows = [{ id: '31', name: 'Operator Bir' }];
+      return of({
+        data: {
+          items:
+            payload.market_id === MARKET_ID
+              ? rows.filter((row) => row.id === payload.operator_id)
+              : [],
+        },
+      });
+    }
     if (pattern.cmd === 'identity.market.find_by_id') {
       return of({
         data: {
@@ -583,5 +595,65 @@ describe('GET /orders/:id/ai-trace (vncdmXOy TC7/TC8)', () => {
     await expect(fx.controller.aiTrace('abc')).rejects.toBeInstanceOf(
       BadRequestException,
     );
+  });
+});
+
+describe('ai-confirm audit — «Operator» tanlovi (operator_id)', () => {
+  /** AI preview'da operator matni bor (sintetik). */
+  const contextsWithOperator = (text: string | null) => ({
+    drafts: [
+      {
+        draft_id: DRAFT,
+        model: 'claude-sonnet-5',
+        prompt_version: '2026-09-27.1',
+        preview_count: 10,
+        cost_uzs: 1280,
+        previews: Array.from({ length: 10 }, (_, i) => ({
+          ...snapshotFor(i),
+          operator: text,
+        })),
+      },
+    ],
+  });
+  const linkItems = (ai: Fake) =>
+    ai.send.mock.calls.find(([p]) => p.cmd === 'ai.usage.link_orders')?.[1]
+      ?.items as Array<Record<string, unknown>>;
+
+  it('operator_id berilsa audit saqlanadigan ismni ko‘radi (e’tiborsiz matnni emas)', async () => {
+    const fx = setup({ contexts: contextsWithOperator('operator x') });
+    // Matn AI taklifi bilan bir xil, lekin buyurtmaga tanlangan operator ismi yoziladi.
+    await fx.controller.aiConfirm(
+      { orders: [order(0, { operator_id: '31', operator: 'operator x' })] },
+      marketReq,
+    );
+
+    const [, payload] = fx.creates()[0];
+    expect(payload.dto.operator).toBe('Operator Bir');
+    expect(payload.ai_audit.edited_fields).toEqual(['operator']);
+    expect(linkItems(fx.ai)[0].field_corrections).toEqual({
+      operator: { ai: 'operator x', final: 'Operator Bir' },
+    });
+  });
+
+  it('matn tozalanib operator tanlansa final — tanlangan ism (null EMAS)', async () => {
+    const fx = setup({ contexts: contextsWithOperator('operator x') });
+    await fx.controller.aiConfirm(
+      { orders: [order(0, { operator_id: '31' })] },
+      marketReq,
+    );
+
+    expect(linkItems(fx.ai)[0].field_corrections).toEqual({
+      operator: { ai: 'operator x', final: 'Operator Bir' },
+    });
+  });
+
+  it('AI matni tanlangan operator ismiga teng bo‘lsa — tahrir emas', async () => {
+    const fx = setup({ contexts: contextsWithOperator('Operator Bir') });
+    await fx.controller.aiConfirm(
+      { orders: [order(0, { operator_id: '31', operator: 'boshqa' })] },
+      marketReq,
+    );
+
+    expect(fx.creates()[0][1].ai_audit.edited_fields).toEqual([]);
   });
 });
