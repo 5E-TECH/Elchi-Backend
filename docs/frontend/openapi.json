@@ -29010,12 +29010,14 @@
             "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan). Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» (superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa), aks holda 400."
           },
           "operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234567",
             "description": "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; `require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi."
           },
           "secondary_operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234568",
             "description": "`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi."
           },
@@ -29347,7 +29349,8 @@
             "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan) — POST /orders `operator_id` bilan AYNI qoida. Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART (superadmin/admin ham tekshiriladi); market operatori faqat o'zini tanlay oladi. Aks holda SHU buyurtma yaratilmaydi: natijada `ok: false, code: \"create_failed\"`, `reason` — POST /orders 400 matni («Tanlangan operator bu marketga tegishli emas yoki faol emas» yoki «Market operatori faqat o‘zini operator qilib tanlay oladi»); partiyadagi boshqa buyurtmalar yaratiladi. Operatorni tekshirib bo‘lmasa (identity javob bermadi) — `code: \"validation_unavailable\"`, buyurtma ANIQ yaratilmagan, qayta yuboring. To‘g‘ri bo‘lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e’tiborsiz; AI auditida ham shu ism). Musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa) — aks holda 400 (DTO). Bo‘sh satr — tanlanmagan. Berilmasa — avvalgi xulq (`operator` matni; market operatori — o‘zi; qolganlar — operatorsiz). ⚠️ Faqat odam select’da tanlaydi: AI `operator` matnidan operator_id ni AVTOMATIK tanlamang; market operatori roli uni yubormasin (u baribir o‘zi)."
           },
           "operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234567",
             "description": "Operator raqami — POST /orders `operator_phone` bilan AYNI qoida (normallashtiriladi: \"90 123 45 67\", \"0901234567\" → +998XXXXXXXXX; noto‘g‘ri shakl — 400, bo‘sh satr — yuborilmagan). Market `default_operator_phone` bo‘lsa u 1-raqam, bu esa 2-raqam (bir xil bo‘lsa takrorlanmaydi); `require_operator_phone=true` va default yo‘q bo‘lsa MAJBURIY va 1-raqam bo‘ladi — yuborilmasa SHU buyurtma `ok: false, code: \"create_failed\"`, `reason` — POST /orders 400 matni («Operator telefon raqami majburiy…»)."
           },
@@ -29549,12 +29552,14 @@
             "description": "Bo'sh bo'lsa market operatori uchun server uning ismini yozadi (VRyloH62); registrator — yozilmaydi (2026-11-11)"
           },
           "operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234567",
             "description": "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; `require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi."
           },
           "secondary_operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234568",
             "description": "`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi."
           },

@@ -432,6 +432,8 @@ export class AiConfirmOrderDto {
    * marketda veb AI buyurtmasi DOIM `create_failed` bo'lardi.
    */
   @ApiPropertyOptional({
+    type: String,
+    nullable: true,
     example: '+998901234567',
     description:
       'Operator raqami — POST /orders `operator_phone` bilan AYNI qoida (normallashtiriladi: "90 123 45 67", "0901234567" → +998XXXXXXXXX; noto‘g‘ri shakl — 400, bo‘sh satr — yuborilmagan). ' +

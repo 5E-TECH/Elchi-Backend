@@ -397,6 +397,8 @@ export class CreateOrderRequestDto {
    * 2-raqam qiladi; bo'sh satr — yuborilmagan.
    */
   @ApiPropertyOptional({
+    type: String,
+    nullable: true,
     example: '+998901234567',
     description:
       "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; " +
@@ -407,6 +409,8 @@ export class CreateOrderRequestDto {
   operator_phone?: string | null;
 
   @ApiPropertyOptional({
+    type: String,
+    nullable: true,
     example: '+998901234568',
     description:
       '`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi.',

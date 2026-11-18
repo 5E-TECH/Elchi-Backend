@@ -7,9 +7,13 @@ import { Where_deliver } from '@app/common';
 import { OrderGatewayController } from './order-gateway.controller';
 import type { AiStatusPoller } from './ai/ai-status.poller';
 import {
+  AiConfirmOrderDto,
   AiConfirmRequestDto,
-  type AiConfirmOrderDto,
 } from './dto/ai-order.swagger.dto';
+import { CreateOrderRequestDto } from './dto/order.swagger.dto';
+
+/** @nestjs/swagger `DECORATORS.API_MODEL_PROPERTIES` (chuqur import yo'q). */
+const API_MODEL_PROPERTIES = 'swagger/apiModelProperties';
 import {
   CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
   CHOSEN_OPERATOR_SELF_ONLY_MESSAGE,
@@ -528,6 +532,23 @@ describe('POST /orders/ai-confirm — orders[].operator_phone (VRyloH62)', () =>
   afterEach(() => jest.restoreAllMocks());
 
   describe('DTO (POST /orders bilan ayni tekshiruv)', () => {
+    it.each([
+      [AiConfirmOrderDto, 'operator_phone'],
+      [CreateOrderRequestDto, 'operator_phone'],
+      [CreateOrderRequestDto, 'secondary_operator_phone'],
+    ] as const)(
+      'swagger: %p.%s — string, nullable (`string | null` → "object" bo`lmasin)',
+      (cls, key) => {
+        const meta = Reflect.getMetadata(
+          API_MODEL_PROPERTIES,
+          cls.prototype,
+          key,
+        ) as { type?: unknown; nullable?: boolean };
+        expect(meta.type).toBe(String);
+        expect(meta.nullable).toBe(true);
+      },
+    );
+
     it('qabul qilinadi va normallashtiriladi; bo`sh satr — yuborilmagan', async () => {
       const dto = await validateBody({
         orders: [
