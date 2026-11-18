@@ -4,6 +4,7 @@ import {
   formatOrderNumber,
   TASHKENT_OFFSET_MINUTES,
 } from '@app/common';
+import { createHash } from 'node:crypto';
 import { formatSum } from '../courier/courier-cards';
 
 /** Almashtirishda eski buyurtma nomzodi (gateway `AiReplacementCandidate`). */
@@ -13,6 +14,30 @@ export interface AiReplacementCandidate {
   created_at?: string | number | null;
   items?: string | null;
   total_price?: number | null;
+}
+
+/** Katalog mahsuloti (AI nomzodi yoki «🔎 Qidirish» natijasi). */
+export interface AiProductOption {
+  id: string;
+  name: string;
+}
+
+/** Preview'dagi bitta mahsulot (order-service `AiPreviewItem`). */
+export interface AiPreviewItem {
+  name?: string | null;
+  quantity?: number | null;
+  product_id?: string | null;
+  resolved_name?: string | null;
+  unresolved?: boolean;
+  /** Katalogdan mos kelishi mumkin bo'lganlar (≤5) — operator tanlaydi. */
+  candidates?: AiProductOption[] | null;
+  /**
+   * BOT ICHKI maydoni: operator «📝 Nomi bilan qoldirish» ni bosdi —
+   * katalogsiz (`allow_unlisted_product`) yaratiladi, tanlash so'ralmaydi.
+   */
+  keep_name?: boolean;
+  /** BOT ICHKI maydoni: oxirgi «🔎 Qidirish» natijalari (≤5). */
+  search_results?: AiProductOption[] | null;
 }
 
 /**
@@ -31,13 +56,7 @@ export interface AiPreviewOrder {
   district_id?: string | null;
   district_name?: string | null;
   address?: string | null;
-  items?: Array<{
-    name?: string | null;
-    quantity?: number | null;
-    product_id?: string | null;
-    resolved_name?: string | null;
-    unresolved?: boolean;
-  }>;
+  items?: AiPreviewItem[];
   total_price?: number | null;
   where_deliver?: 'center' | 'address';
   comment?: string | null;
@@ -69,6 +88,16 @@ export interface AiPreviewOrder {
    * ko'rsatilmagan ogohlantirish hech qachon avtomatik tasdiqlanmaydi.
    */
   acked_checks?: string[];
+  /**
+   * BOT ICHKI maydoni: shu buyurtma ai-confirm'ga YUBORILDI, lekin natija
+   * noma'lum (timeout / tarmoq / 5xx / tushunarsiz javob, qotgan
+   * `creating`) — epoch ms. Server kaliti `ai:<market>:<draft>:<index>`
+   * muddatsiz va yukni solishtirmaydi: keyingi «✅» birinchi urinish
+   * natijasini qaytaradi, shuning uchun botda tuzatish YOPILADI.
+   */
+  confirm_attempted_at?: number;
+  /** BOT ICHKI maydoni: o'sha urinishda yuborilgan buyurtma izi (sha256). */
+  confirm_fp?: string;
 }
 
 /** order-service `AiCheck` — bot o'qiydigan maydonlar. */
@@ -256,6 +285,58 @@ export function toConfirmOrder(
       : {}),
   };
 }
+
+/** Javobi noma'lum ai-confirm urinishi — kartadagi ogohlantirish. */
+export const AI_CONFIRM_UNKNOWN_LINE =
+  '⚠️ Javob kelmadi — avval «✅ Yaratish» bilan natijani tekshiring; tuzatish faqat kabinetda';
+/** Takroriy javob (`idempotent_replay`) — buyurtma eski ma'lumot bilan. */
+export const AI_EDITS_NOT_APPLIED_TEXT =
+  "⚠️ Tuzatishlar qo'llanmadi — buyurtma avvalgi ma'lumot bilan yaratilgan, kabinetda tahrirlang";
+
+/** Buyurtma natijasi noma'lum ai-confirm'ga yuborilganmi (botda tuzatish yopiq). */
+export const confirmAttempted = (order: AiPreviewOrder | undefined): boolean =>
+  typeof order?.confirm_attempted_at === 'number';
+
+/**
+ * ai-confirm'ga ketadigan buyurtma izi (`ack_checks` siz — tasdiq har
+ * bosishda yangilanadi, ma'lumot emas). Takroriy javobda solishtiriladi.
+ */
+export function confirmFingerprint(order: AiPreviewOrder): string {
+  const payload: Record<string, unknown> = toConfirmOrder(order, null);
+  delete payload.ack_checks;
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+/** ai-confirm'ga AYNAN yuboriladiganlar: tayyor (🟢) va to'liq tasdiqlangan. */
+export const confirmSendable = (orders: AiPreviewOrder[]): AiPreviewOrder[] =>
+  orders.filter((order) => isCreatable(order) && isFullyAcked(order));
+
+/**
+ * Natijasi noma'lum urinish: YUBORILGAN buyurtmalarga belgi va iz
+ * qo'yiladi (yuborilmaganlariga tegilmaydi). Birinchi urinish izi saqlanadi
+ * — server shu birinchi yukni eslab qoladi.
+ */
+export function markConfirmAttempted(
+  orders: AiPreviewOrder[],
+  sent: AiPreviewOrder[],
+  at: number,
+): AiPreviewOrder[] {
+  const indexes = new Set(sent.map((order) => order.index));
+  return orders.map((order) =>
+    indexes.has(order.index)
+      ? {
+          ...order,
+          confirm_attempted_at: order.confirm_attempted_at ?? at,
+          confirm_fp: order.confirm_fp ?? confirmFingerprint(order),
+        }
+      : order,
+  );
+}
+
+/** Takroriy javob, lekin yuborilgan ma'lumot birinchi urinishdagidan farq qiladi. */
+export const editedAfterAttempt = (order: AiPreviewOrder): boolean =>
+  typeof order.confirm_fp === 'string' &&
+  order.confirm_fp !== confirmFingerprint(order);
 
 const PREVIEW_MAX_ORDERS = 10;
 
@@ -525,6 +606,7 @@ export function aiPreviewText(orders: AiPreviewOrder[]): string {
       ...(replacement ? [replacement] : []),
       ...(issues ? [`⚠️ ${escapeTelegramHtml(issues)}`] : []),
       ...aiCheckLines(order),
+      ...(confirmAttempted(order) ? [AI_CONFIRM_UNKNOWN_LINE] : []),
     );
   }
   if (orders.length > PREVIEW_MAX_ORDERS) {

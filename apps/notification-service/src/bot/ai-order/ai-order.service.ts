@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -22,12 +22,18 @@ import {
   BotPasswordChangeRequiredError,
 } from '../bot-gateway.client';
 import { BotOutboxService } from '../bot-outbox.service';
+import { BotSessionService } from '../bot-session.service';
 import { BotTransportService } from '../bot-transport.service';
 import type { BotContext } from '../handlers/bot-context';
 import type { InlineKeyboardButton } from '../telegram.types';
 import {
   AI_ACK_SERVER_ASKED_TEXT,
+  AI_EDITS_NOT_APPLIED_TEXT,
   AiAckEntry,
+  confirmAttempted,
+  confirmSendable,
+  editedAfterAttempt,
+  markConfirmAttempted,
   AiPreviewOrder,
   ackPromptText,
   ackTargets,
@@ -36,6 +42,25 @@ import {
   isFullyAcked,
   toConfirmOrder,
 } from './ai-preview';
+import {
+  AI_SEARCH_BAD_QUERY_TEXT,
+  AI_SEARCH_FAILED_TEXT,
+  AI_SEARCH_MAX_CHARS,
+  AI_SEARCH_MIN_CHARS,
+  AI_SEARCH_PROMPT_TEXT,
+  type AiPickSource,
+  applyKeepName,
+  applyProductPick,
+  applySearchResults,
+  findItem,
+  needsPick,
+  optionLabel,
+  pickEntries,
+  pickEntryLabel,
+  pickerText,
+  productOptions,
+  productsFromSearch,
+} from './ai-product-pick';
 
 export const AI_ORDER_ACTIONS = {
   confirm: 'ai.ok',
@@ -46,7 +71,58 @@ export const AI_ORDER_ACTIONS = {
   fix: 'ai.fix',
   cancel: 'ai.no',
   retry: 'ai.retry',
+  /** Katalogda topilmagan mahsulot: tanlash oynasini ochish. */
+  item: 'ai.item',
+  /** Tanlash oynasi: nomzod / qidiruv natijasini tanlash. */
+  pick: 'ai.pick',
+  /** Tanlash oynasi: «🔎 Qidirish» — keyingi matn qidiruv so'rovi. */
+  find: 'ai.find',
+  /** Tanlash oynasi: «📝 Nomi bilan qoldirish». */
+  keep: 'ai.keep',
 } as const;
+
+/**
+ * Operator matn kiritishini kutish (`telegram_sessions.state.ai_input`):
+ * faqat id/indekslar (PII yo'q). Shundan eski kutish e'tiborsiz.
+ */
+export const AI_INPUT_TTL_MS = 15 * 60_000;
+
+interface AiInputState {
+  draft_id: string;
+  kind: 'search';
+  o: number;
+  i: number;
+  at: number;
+}
+
+const inputStateOf = (value: unknown): AiInputState | null => {
+  const v = value as Partial<AiInputState> | null;
+  if (
+    !v ||
+    typeof v.draft_id !== 'string' ||
+    v.kind !== 'search' ||
+    !Number.isInteger(v.o) ||
+    !Number.isInteger(v.i) ||
+    typeof v.at !== 'number'
+  ) {
+    return null;
+  }
+  return v as AiInputState;
+};
+
+/**
+ * Qidiruv kutilayotganda yangi buyurtma matni: ko'p qatorli yoki harf VA
+ * 7+ raqam (ism + telefon). Shtrix-kod (8–14 raqam) va Elchi kodi
+ * (`ELC-P-<n>`) — qidiruv so'rovi (pullik ai-parse emas).
+ */
+export function endsSearch(text: string): boolean {
+  const trimmed = text.trim();
+  if (/^(?:\d{8,14}|ELC-P-\d+)$/i.test(trimmed)) return false;
+  return (
+    /\n/.test(trimmed) ||
+    (/\p{L}/u.test(trimmed) && (trimmed.match(/\d/g) ?? []).length >= 7)
+  );
+}
 
 export const AI_WORKING_TEXT = '⏳ AI buyurtmani o‘qiyapti… (1 daqiqagacha)';
 export const AI_EXPIRED_TEXT =
@@ -185,6 +261,8 @@ export class AiOrderService implements OnModuleDestroy {
     private readonly transport: BotTransportService,
     private readonly config: ConfigService,
     private readonly outbox: BotOutboxService,
+    // Ixtiyoriy: matn kiritishini kutish (🔎 Qidirish). Eski spec'lar usiz quradi.
+    @Optional() private readonly sessions?: BotSessionService,
   ) {}
 
   onModuleDestroy() {
@@ -305,7 +383,8 @@ export class AiOrderService implements OnModuleDestroy {
         `ai draft ${draft.id}: ${draft.status} — ${this.transport.describe(error)}`,
       );
       if (draft.status === 'creating') {
-        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
+        // ai-confirm ketgan bo'lishi mumkin — natija noma'lum.
+        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT, true);
       } else {
         await this.fail(ctx, draft, AI_NETWORK_TEXT, true);
       }
@@ -404,7 +483,8 @@ export class AiOrderService implements OnModuleDestroy {
       const ctx = this.workerContext(row);
       try {
         if (row.old_status === 'creating') {
-          await this.backToPreview(ctx, row, AI_CONFIRM_FAILED_TEXT);
+          // Qotgan ai-confirm — server yaratgan bo'lishi mumkin.
+          await this.backToPreview(ctx, row, AI_CONFIRM_FAILED_TEXT, true);
         } else {
           await this.fail(ctx, row, AI_STALE_TEXT, true);
         }
@@ -521,18 +601,8 @@ export class AiOrderService implements OnModuleDestroy {
     ) {
       return;
     }
-    const rows: InlineKeyboardButton[][] = [];
-    const creatable = orders.filter(isCreatable).length;
-    if (creatable) {
-      rows.push([
-        await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm),
-      ]);
-    }
-    rows.push([
-      await this.button(ctx, draft, '✏️ Tuzatish', AI_ORDER_ACTIONS.fix),
-      await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel),
-    ]);
-    await this.show(ctx, draft, aiPreviewText(orders), rows, 'HTML');
+    draft.orders = orders;
+    await this.showPreview(ctx, draft);
   }
 
   /**
@@ -568,8 +638,12 @@ export class AiOrderService implements OnModuleDestroy {
     await this.startCreating(ctx, draftId, entries);
   }
 
-  /** AI ack: «↩️ Yo‘q, orqaga» — preview tugmalari bilan qaytadi. */
+  /**
+   * AI ack: «↩️ Yo‘q, orqaga» — preview tugmalari bilan qaytadi. Mahsulot
+   * tanlash / qidiruv oynasidagi «↩️ Orqaga» ham shu (kutilgan matn bekor).
+   */
   async backFromAck(ctx: BotContext, draftId: string): Promise<void> {
+    await this.clearInput(ctx);
     const draft = await this.previewDraft(draftId);
     if (!draft) {
       await this.explainState(ctx, draftId);
@@ -725,7 +799,8 @@ export class AiOrderService implements OnModuleDestroy {
       this.logger.warn(
         `ai draft ${draft.id}: ai-confirm — ${error instanceof Error ? error.message : 'error'}`,
       );
-      await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
+      // Timeout / tarmoq — server yaratgan bo'lishi mumkin.
+      await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT, true);
       return;
     }
     const body = res.body as
@@ -737,12 +812,15 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     if (res.status >= 400 || !Array.isArray(body?.data?.results)) {
+      // 5xx / tushunarsiz 2xx — natija noma'lum; 4xx — server rad etdi.
+      const unknown = res.status >= 500 || res.status < 400;
       await this.backToPreview(
         ctx,
         draft,
-        res.status >= 500 || res.status < 400
+        unknown
           ? AI_CONFIRM_FAILED_TEXT
           : `❌ ${str(body?.message) || 'So‘rov qabul qilinmadi'}`,
+        unknown,
       );
       return;
     }
@@ -755,12 +833,17 @@ export class AiOrderService implements OnModuleDestroy {
     ) {
       return;
     }
-    const lines = results.map((result) => {
+    const lines = results.flatMap((result) => {
       const order = ready[result.index];
       const n = (order?.index ?? result.index) + 1;
-      return result.ok
-        ? `✅ ${n}) Buyurtma ${orderNumber(result.order_id)} ${result.idempotent_replay ? 'avval yaratilgan' : 'yaratildi'}`
-        : `❌ ${n}) ${str(result.reason) || 'yaratilmadi'}`;
+      if (!result.ok)
+        return [`❌ ${n}) ${str(result.reason) || 'yaratilmadi'}`];
+      const line = `✅ ${n}) Buyurtma ${orderNumber(result.order_id)} ${result.idempotent_replay ? 'avval yaratilgan' : 'yaratildi'}`;
+      // Takroriy javob — server birinchi urinish yukini qaytardi; undan
+      // keyin qoralama o'zgargan bo'lsa tuzatishlar buyurtmada YO'Q.
+      return result.idempotent_replay && order && editedAfterAttempt(order)
+        ? [line, `⚠️ ${n}) ${AI_EDITS_NOT_APPLIED_TEXT}`]
+        : [line];
     });
     for (const order of unacked) {
       lines.push(`⚠️ ${order.index + 1}) ${AI_UNACKED_SKIPPED_TEXT}`);
@@ -848,12 +931,405 @@ export class AiOrderService implements OnModuleDestroy {
     );
   }
 
+  /** «❓ … — tanlash»: shu item uchun nomzodlar oynasi. */
+  async openItem(
+    ctx: BotContext,
+    draftId: string,
+    orderIndex: unknown,
+    itemIndex: unknown,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
+    const found = findItem(
+      (draft.orders ?? []) as AiPreviewOrder[],
+      orderIndex,
+      itemIndex,
+    );
+    if (!found || !needsPick(found.item)) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    await this.showPicker(ctx, draft, found.order, itemIndex as number, 'c');
+  }
+
+  /**
+   * Nomzod / qidiruv natijasi tanlandi → `product_id`, preview qayta.
+   * Payload'dagi `pid` ro'yxatdagi o'rin bilan mos kelmasa (eski qidiruv
+   * xabarining tugmasi) — hech narsa yozilmaydi, joriy ro'yxat qayta.
+   */
+  async pickProduct(
+    ctx: BotContext,
+    draftId: string,
+    payload: Record<string, unknown> | null | undefined,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.editableDraft(ctx, draftId, payload?.o);
+    if (!draft) return;
+    const previews = (draft.orders ?? []) as AiPreviewOrder[];
+    const orders = applyProductPick(
+      previews,
+      payload?.o,
+      payload?.i,
+      payload?.s,
+      payload?.k,
+      payload?.pid,
+    );
+    const found = findItem(previews, payload?.o, payload?.i);
+    if (!orders && found && needsPick(found.item)) {
+      await this.showPicker(
+        ctx,
+        draft,
+        found.order,
+        payload?.i as number,
+        payload?.s === 's' ? 's' : 'c',
+      );
+      return;
+    }
+    await this.saveAndShow(ctx, draft, orders);
+  }
+
+  /**
+   * Botda tuzatish mumkin bo'lgan qoralama: `preview` va buyurtma natijasi
+   * noma'lum ai-confirm urinishida emas (aks holda karta qayta). `null` —
+   * javob berildi.
+   */
+  private async editableDraft(
+    ctx: BotContext,
+    draftId: string,
+    orderIndex: unknown,
+  ): Promise<TelegramAiDraft | null> {
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.clearInput(ctx);
+      await this.explainState(ctx, draftId);
+      return null;
+    }
+    const order = ((draft.orders ?? []) as AiPreviewOrder[]).find(
+      (o) => o.index === orderIndex,
+    );
+    if (confirmAttempted(order)) {
+      await this.clearInput(ctx);
+      await this.showPreview(ctx, draft);
+      return null;
+    }
+    return draft;
+  }
+
+  /** «📝 Nomi bilan qoldirish» — katalogsiz yaratiladi, preview qayta. */
+  async keepName(
+    ctx: BotContext,
+    draftId: string,
+    orderIndex: unknown,
+    itemIndex: unknown,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
+    const orders = applyKeepName(
+      (draft.orders ?? []) as AiPreviewOrder[],
+      orderIndex,
+      itemIndex,
+    );
+    await this.saveAndShow(ctx, draft, orders);
+  }
+
+  /** «🔎 Qidirish» — keyingi oddiy matn shu item uchun qidiruv so'rovi. */
+  async startSearch(
+    ctx: BotContext,
+    draftId: string,
+    orderIndex: unknown,
+    itemIndex: unknown,
+  ): Promise<void> {
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
+    const found = findItem(
+      (draft.orders ?? []) as AiPreviewOrder[],
+      orderIndex,
+      itemIndex,
+    );
+    if (!found || !needsPick(found.item) || !this.sessions) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    const state: AiInputState = {
+      draft_id: draft.id,
+      kind: 'search',
+      o: found.order.index,
+      i: itemIndex as number,
+      at: Date.now(),
+    };
+    await this.sessions.update(ctx.chatId, ctx.slug, (s) => ({
+      state: { ...s.state, ai_input: state },
+    }));
+    await this.show(ctx, draft, AI_SEARCH_PROMPT_TEXT, [
+      [await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back)],
+    ]);
+  }
+
+  /**
+   * Kutilgan matn (🔎 qidiruv so'rovi). `false` — kutish yo'q / eskirgan /
+   * matn yangi buyurtmaga o'xshaydi: handler odatdagidek (AI) ishlaydi.
+   */
+  async handleInput(
+    ctx: BotContext,
+    actorUserId: string,
+    text: string,
+  ): Promise<boolean> {
+    if (!this.sessions) return false;
+    const session = await this.sessions.load(ctx.chatId, ctx.slug);
+    const input = inputStateOf(session.state?.ai_input);
+    if (!input) return false;
+    if (Date.now() - input.at > AI_INPUT_TTL_MS || endsSearch(text)) {
+      await this.clearInput(ctx);
+      return false;
+    }
+    const draft = await this.previewDraft(input.draft_id);
+    // Qoralama shu aktor va shu chatniki bo'lishi shart (masalan chatga
+    // boshqa akkaunt ulangan) — aks holda kutish bekor, matn odatdagidek.
+    if (
+      draft &&
+      (String(draft.actor_user_id) !== String(actorUserId) ||
+        String(draft.chat_id) !== String(ctx.chatId))
+    ) {
+      await this.clearInput(ctx);
+      return false;
+    }
+    if (!draft) {
+      // Eskirgan qoralama — tugmalardagi kabi aniq javob; boshqa holat
+      // (yaratilgan / bekor) — matn odatdagidek ishlanadi.
+      await this.clearInput(ctx);
+      const row = await this.drafts.findOne({ where: { id: input.draft_id } });
+      if (row && new Date(row.expires_at).getTime() > Date.now()) return false;
+      await ctx.reply(AI_EXPIRED_TEXT);
+      return true;
+    }
+    // Natijasi noma'lum urinishdagi buyurtma — tuzatish yopiq.
+    if (
+      confirmAttempted(
+        ((draft.orders ?? []) as AiPreviewOrder[]).find(
+          (o) => o.index === input.o,
+        ),
+      )
+    ) {
+      await this.clearInput(ctx);
+      await this.dropCard(ctx, draft);
+      await this.showPreview(ctx, draft);
+      return true;
+    }
+    const found = findItem(
+      (draft.orders ?? []) as AiPreviewOrder[],
+      input.o,
+      input.i,
+    );
+    if (!found || !needsPick(found.item)) {
+      await this.clearInput(ctx);
+      return false;
+    }
+    const query = text.replace(/\s+/g, ' ').trim();
+    if (
+      query.length < AI_SEARCH_MIN_CHARS ||
+      query.length > AI_SEARCH_MAX_CHARS
+    ) {
+      await ctx.reply(AI_SEARCH_BAD_QUERY_TEXT);
+      return true;
+    }
+    let res: { status: number; body: unknown };
+    try {
+      res = await this.gateway.request(
+        ctx.fromId ?? ctx.chatId,
+        'GET',
+        `/product/my-products?search=${encodeURIComponent(query)}&page=1&limit=5`,
+      );
+    } catch (error) {
+      // Parol almashtirish — router aniq ko'rsatma beradi.
+      if (error instanceof BotPasswordChangeRequiredError) throw error;
+      this.logger.warn(
+        `ai draft ${draft.id}: mahsulot qidiruvi — ${error instanceof Error ? error.message : 'error'}`,
+      );
+      await ctx.reply(AI_SEARCH_FAILED_TEXT);
+      return true;
+    }
+    if (res.status >= 400) {
+      await ctx.reply(AI_SEARCH_FAILED_TEXT);
+      return true;
+    }
+    const results = productsFromSearch(res.body);
+    const orders = applySearchResults(
+      (draft.orders ?? []) as AiPreviewOrder[],
+      input.o,
+      input.i,
+      results,
+    );
+    if (!(await this.saveOrders(draft, orders))) {
+      await this.clearInput(ctx);
+      await this.explainState(ctx, draft.id);
+      return true;
+    }
+    // Natija bor — kutish tugaydi (yana — «🔎 Qayta qidirish»); topilmasa
+    // operator darhol boshqa nom yozishi mumkin.
+    if (results.length) await this.clearInput(ctx);
+    const order = orders.find((o) => o.index === input.o)!;
+    // Operator matn yozdi — karta pastga (yangi xabar) ko'chadi.
+    await this.dropCard(ctx, draft);
+    await this.showPicker(ctx, draft, order, input.i, 's', query);
+    return true;
+  }
+
+  /** Tanlash oynasi: ro'yxat (≤5) + 🔎 Qidirish + 📝 Nomi bilan + ↩️ Orqaga. */
+  private async showPicker(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    order: AiPreviewOrder,
+    itemIndex: number,
+    source: AiPickSource,
+    query?: string,
+  ): Promise<void> {
+    const item = order.items![itemIndex];
+    const options = productOptions(
+      source === 's' ? item.search_results : item.candidates,
+    );
+    const ref = { o: order.index, i: itemIndex };
+    const rows: InlineKeyboardButton[][] = [];
+    for (const [k, option] of options.entries()) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          optionLabel(option),
+          AI_ORDER_ACTIONS.pick,
+          // `pid` — eski xabardagi tugma boshqa ro'yxatdan tanlamasin.
+          { ...ref, s: source, k, pid: option.id },
+        ),
+      ]);
+    }
+    rows.push(
+      [
+        await this.button(
+          ctx,
+          draft,
+          source === 's' ? '🔎 Qayta qidirish' : '🔎 Qidirish',
+          AI_ORDER_ACTIONS.find,
+          ref,
+        ),
+        await this.button(
+          ctx,
+          draft,
+          '📝 Nomi bilan qoldirish',
+          AI_ORDER_ACTIONS.keep,
+          ref,
+        ),
+      ],
+      [await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back)],
+    );
+    await this.show(
+      ctx,
+      draft,
+      pickerText(order, item, source, options, query),
+      rows,
+      'HTML',
+    );
+  }
+
+  /** Preview kartasi (joriy `orders` bilan) va tugmalari. */
+  private async showPreview(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+  ): Promise<void> {
+    await this.show(
+      ctx,
+      draft,
+      aiPreviewText((draft.orders ?? []) as AiPreviewOrder[]),
+      await this.previewRows(ctx, draft),
+      'HTML',
+    );
+  }
+
+  /** O'zgargan `orders` → saqlash → preview. `null` — o'zgarish yo'q. */
+  private async saveAndShow(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    orders: AiPreviewOrder[] | null,
+  ): Promise<void> {
+    if (orders && !(await this.saveOrders(draft, orders))) {
+      await this.explainState(ctx, draft.id);
+      return;
+    }
+    await this.showPreview(ctx, draft);
+  }
+
+  /**
+   * Faqat hali `preview` dagi qoralamaga yoziladi: parallel «✅ Yaratish»
+   * (`creating`) dan keyin tanlash yaratilayotgan ro'yxatni o'zgartirmaydi.
+   */
+  private async saveOrders(
+    draft: TelegramAiDraft,
+    orders: AiPreviewOrder[],
+  ): Promise<boolean> {
+    const res = await this.drafts.update(
+      { id: draft.id, status: 'preview' },
+      { orders, updated_at: new Date() },
+    );
+    if (!res?.affected) return false;
+    draft.orders = orders;
+    return true;
+  }
+
+  /**
+   * Operator matn yozgach karta pastga (yangi xabar) ko'chadi: eski
+   * xabarning tugmalari olib tashlanadi, `show` yangi xabar yuboradi.
+   */
+  private async dropCard(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+  ): Promise<void> {
+    if (!draft.message_id) return;
+    await this.transport
+      .editMessage(ctx.chatId, String(draft.message_id), {
+        reply_markup: { inline_keyboard: [] },
+      })
+      .catch(() => false);
+    draft.message_id = null;
+  }
+
+  /** Kutilgan matn holatini tozalaydi (bo'lsa). */
+  private async clearInput(ctx: BotContext): Promise<void> {
+    if (!this.sessions) return;
+    const session = await this.sessions.load(ctx.chatId, ctx.slug);
+    if (!session.state?.ai_input) return;
+    await this.sessions.update(ctx.chatId, ctx.slug, (s) => {
+      const state = { ...s.state };
+      delete state.ai_input;
+      return { state };
+    });
+  }
+
+  /**
+   * Preview'ga qaytadi. `unknownOutcome` — ai-confirm natijasi noma'lum
+   * (yuborilgan bo'lishi mumkin): yuborilgan buyurtmalar belgilanadi va
+   * botda tuzatish yopiladi (server kaliti birinchi yukni qaytaradi).
+   * Server aniq hech narsa yaratmagan holatlarda (409 / 503 / 4xx / parol)
+   * belgi QO'YILMAYDI.
+   */
   private async backToPreview(
     ctx: BotContext,
     draft: TelegramAiDraft,
     text: string,
+    unknownOutcome = false,
   ) {
-    if (!(await this.finish(draft, { status: 'preview' }))) return;
+    const patch: Partial<Pick<TelegramAiDraft, 'status' | 'orders'>> = {
+      status: 'preview',
+    };
+    if (unknownOutcome) {
+      const previews = (draft.orders ?? []) as AiPreviewOrder[];
+      patch.orders = markConfirmAttempted(
+        previews,
+        confirmSendable(previews),
+        Date.now(),
+      );
+    }
+    if (!(await this.finish(draft, patch))) return;
+    if (patch.orders) draft.orders = patch.orders;
     const rows = await this.previewRows(ctx, draft);
     const previews = (draft.orders ?? []) as AiPreviewOrder[];
     await this.show(
@@ -865,13 +1341,44 @@ export class AiOrderService implements OnModuleDestroy {
     );
   }
 
-  /** Preview tugmalari: ✅ Yaratish / ✏️ Tuzatish / ❌ Bekor. */
+  /**
+   * Preview tugmalari: ✅ Yaratish (tayyor buyurtma bo'lsa) / «❓ … —
+   * tanlash» (katalogda topilmagan mahsulotlar) / ✏️ Tuzatish / ❌ Bekor.
+   */
   private async previewRows(
     ctx: BotContext,
     draft: TelegramAiDraft,
   ): Promise<InlineKeyboardButton[][]> {
+    const orders = (draft.orders ?? []) as AiPreviewOrder[];
+    const rows: InlineKeyboardButton[][] = [];
+    if (orders.some(isCreatable)) {
+      rows.push([
+        await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm),
+      ]);
+    }
+    // Natijasi noma'lum urinish — faqat qayta tekshirish, bekor, kabinet:
+    // tuzatish keyingi «✅» da baribir qo'llanmaydi (server birinchi yuk).
+    if (orders.some(confirmAttempted)) {
+      return [
+        ...rows,
+        [await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel)],
+        [this.cabinetCreateButton()],
+      ];
+    }
+    const multi = orders.length > 1;
+    for (const { order, itemIndex, item } of pickEntries(orders)) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          pickEntryLabel(order, item, multi),
+          AI_ORDER_ACTIONS.item,
+          { o: order.index, i: itemIndex },
+        ),
+      ]);
+    }
     return [
-      [await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm)],
+      ...rows,
       [
         await this.button(ctx, draft, '✏️ Tuzatish', AI_ORDER_ACTIONS.fix),
         await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel),
