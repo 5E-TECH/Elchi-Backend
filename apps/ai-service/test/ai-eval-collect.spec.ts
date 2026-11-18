@@ -4,6 +4,7 @@ import {
   hasUnnamedOrder,
   maskCandidateText,
   maskDeep,
+  nameVariants,
   namesOf,
   parseIntFlag,
   scrubCorrections,
@@ -307,5 +308,36 @@ describe('ai-eval-collect: PII (review round-3)', () => {
     expect(masked('дом 12 и кв 5, 1 x uy, uyiga 2 ta, uyi bor', [])).toBe(
       'дом [N] и кв [N], 1 x uy, uyiga 2 ta, uyi bor',
     );
+  });
+
+  it('N3: ismga yopishgan murojaat — yalang‘och ism ham maskalanadi', () => {
+    expect(
+      masked(
+        'Dilnozaxon [TEL_1] Toshkent. Dilnoza opaga bering, Dilnozaning uyi',
+        ['Dilnozaxon'],
+      ),
+    ).toBe('[ISM] [TEL_1] Toshkent. [ISM] opaga bering, [ISM]ning uyi');
+    expect(masked('Феруза опага, Ферузанинг', ['Ферузажон'])).toBe(
+      '[ISM] опага, [ISM]нинг',
+    );
+    expect(masked('Rustam aka, Rustamjonga', ['Rustamjon Karimov'])).toBe(
+      '[ISM] aka, [ISM]ga',
+    );
+    expect(nameVariants(['Dilnozaxonim', 'Ферузажон', 'Alijon'])).toEqual(
+      expect.arrayContaining(['Dilnoza', 'Феруза', 'Ali']),
+    );
+    // O'zak < 3 harf yoki murojaatning o'zi — alohida variant emas.
+    expect(nameVariants(['Gojon', 'Opaxon'])).toEqual(['Opaxon', 'Gojon']);
+    // Boshqa ism (Dilnozabonu) tegilmaydi.
+    expect(masked('Dilnozabonu keldi', ['Dilnozaxon'])).toBe(
+      'Dilnozabonu keldi',
+    );
+  });
+
+  it('N3: kichraytuvchi -cha/-ча qo‘shimchasi', () => {
+    expect(masked('Dilnozachaga bering', ['Dilnoza'])).toBe(
+      '[ISM]chaga bering',
+    );
+    expect(masked('Ферузачага', ['Феруза'])).toBe('[ISM]чага');
   });
 });

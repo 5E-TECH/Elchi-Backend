@@ -150,7 +150,7 @@ const APOS_RE = /['ʻʼ‘’`´]/g;
 
 /**
  * Ismga qo'shiladigan BITTA qo'shimcha; ketma-ket 3 tagacha
- * ("Dilnoza|xon|ga", "Dilnoza|jon|ning", "Dilnoza|opa|ga").
+ * ("Dilnoza|xon|ga", "Dilnoza|jon|ning", "Dilnoza|opa|ga", "Dilnoza|cha|ga").
  * Lotin o'zbek, kirill o'zbek va rus kelishik qo'shimchalari.
  */
 const NAME_SUFFIX_ONE = [
@@ -185,6 +185,7 @@ const NAME_SUFFIX_ONE = [
   'jon',
   'oy',
   'bek',
+  'cha',
   // kirill o'zbek
   'гача',
   'ларнинг',
@@ -215,6 +216,7 @@ const NAME_SUFFIX_ONE = [
   'жон',
   'ой',
   'бек',
+  'ча',
   // rus
   'ою',
   'ом',
@@ -256,6 +258,12 @@ const NAME_PART_STOP = new Set([
   'клиент',
 ]);
 
+/**
+ * Ismga yopishgan murojaat ("Dilnozaxon", "Ферузажон") — olib tashlanadi,
+ * qolgan o'zak (3+ harf) alohida variant: matnda "Dilnoza" ham maskalanadi.
+ */
+const GLUED_HONORIFIC_RE = /(?:xonim|xon|jon|opa|aka|хоним|хон|жон|опа|ака)$/iu;
+
 /** Regex maxsus belgilarini qochiradi. */
 function escapeRe(x: string): string {
   return x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -279,12 +287,15 @@ function skeletonRe(skeleton: string): string {
 }
 
 /**
- * Ism ro'yxatidan maskalanadigan shakllar: to'liq ism va (ko'p so'zli
- * bo'lsa) har 3+ harfli so'z alohida ("Abdullayev Jasur" → "Jasur" ham).
+ * Ism ro'yxatidan maskalanadigan shakllar: to'liq ism, (ko'p so'zli
+ * bo'lsa) har 3+ harfli so'z alohida ("Abdullayev Jasur" → "Jasur" ham)
+ * va har so'zning yopishgan murojaatsiz o'zagi, o'zak 3+ harf bo'lsa
+ * ("Dilnozaxon" → "Dilnoza", "Ферузажон" → "Феруза").
  * Boshidagi #/@ olib tashlanadi ("#sevinch" → "#[ISM]").
  */
 export function nameVariants(names: readonly string[]): string[] {
   const out = new Set<string>();
+  const letterCount = (w: string): number => w.replace(/[^\p{L}]/gu, '').length;
   for (const raw of names) {
     const n = raw
       .trim()
@@ -293,11 +304,21 @@ export function nameVariants(names: readonly string[]): string[] {
     if (n.length < 2) continue;
     out.add(n);
     const words = n.split(/[\s,;()]+/).filter(Boolean);
-    if (words.length < 2) continue;
     for (const w of words) {
-      const letters = w.replace(/[^\p{L}]/gu, '');
-      if (letters.length >= 3 && !NAME_PART_STOP.has(w.toLowerCase())) {
+      if (
+        words.length >= 2 &&
+        letterCount(w) >= 3 &&
+        !NAME_PART_STOP.has(w.toLowerCase())
+      ) {
         out.add(w);
+      }
+      const stem = w.replace(GLUED_HONORIFIC_RE, '');
+      if (
+        stem !== w &&
+        letterCount(stem) >= 3 &&
+        !NAME_PART_STOP.has(stem.toLowerCase())
+      ) {
+        out.add(stem);
       }
     }
   }
