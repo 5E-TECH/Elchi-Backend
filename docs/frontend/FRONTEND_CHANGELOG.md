@@ -22,6 +22,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI maslahatchi (BE-5): review round-4 tuzatishlari
+
+Deploy: api-gateway + ai-service + finance-service, migratsiyasiz.
+
+- 🔧 **R1:** yopilgandan keyin ochilgan yangi «smena kamomadi» ogohlantirishi endi faqat YANGI smenalarni hisoblaydi (`facts.shifts_count`, `total_difference`, `evidence.rows`, `closed_by`). Ilgari yopilgan ogohlantirishdagi smena yangisida qayta sanalardi (masalan `occurrences: 1`, lekin `shifts_count: 2`). Ketma-ketlik konteksti — `facts.streak_length` / `streak_total`; `consecutive_negative` da `headline_amount = streak_total` (sarlavha bilan bir xil, yopilgan smenalar ham kiradi), `total_difference`/`shifts_count`/`evidence` esa faqat yangi smenalar.
+- 🔧 Qoidalar tekshiruvi: butun tekshiruvning umumiy vaqt byudjeti bor (SQL ≤ 22 s, nomlar bilan ≤ 28 s; har SQL ifoda qolgan byudjet bilan cheklanadi, qulf kutish ≤ 2 s; istisno — kunlik R6 hisoboti hali byudjetdan tashqarida, faqat byudjet tugagan bo'lsa boshlanmaydi). Sekin/qulflangan jadval yoki osilgan xizmat (filial/foydalanuvchi nomlari) faqat ta'sirlangan qoidalarni `error` qiladi — byudjet tugasa keyingi qoidalar shu tick o'tkaziladi; muvaffaqiyatli qoidalar (masalan R1) kursori saqlanadi. Nomlar null bo'lib qolishi mumkin (FE allaqachon `#id` ko'rsatadi).
+- 🔒 **`/activity-logs`:** `ai` xizmati yozuvlari (`ai.advisor.*`, `ai.cap.raise`) endi FAQAT SUPERADMIN ga. ADMIN so'rovida bu yozuvlar yo'q, `?service=ai` — bo'sh ro'yxat (403 emas). Ega qarori 2026-11-18.
+- 🔧 R6 (kunlik): bitta o'tkazib yuborilgan tungi tekshiruv (xizmat vaqtincha javob bermasa) o'sha kunning R6 bildirishnomasini endi yo'qotmaydi — keyingi kunda ikkala kun ham xabar qilinadi (7 kunlik oynada).
+- 🟢 openapi: `/ai/advisor/*` javob sxemalari (`200` endi bo'sh emas), `from`/`to` — `format: date`.
+
+**Frontend action items:** yo'q (ADMIN faoliyat jurnalida `ai` xizmati filtrini yashirish mumkin).
+
 ### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizodlari — shartnoma v0.4
 
 Ega qarori 2026-11-18. Deploy: ai-service + finance-service + **migratsiya 1716000000243** (`cashbox_history (cashbox_id, createdAt, id)` indeksi). Relizda 241 bilan BITTA tranzaksiyada yuradi — ikkala SHARE qulf partiya commit bo'lguncha turadi (`cashbox_history` ga yozish kutadi, o'qish kutmaydi): kam yuklamali vaqtda, 243 eng oxirida.
@@ -303,7 +315,11 @@ Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migrat
 - 🆕 `GET /ai/advisor/alerts?status&severity&rule_key&from&to&q&sort_by&sort_dir&page&limit` — `{items, meta{page, limit, total, totalPages}, counts{by_status}}`. Holatni o'zgartirmaydi. `counts.by_status` — `status` filtrisiz. Saralash oxirida doim `id DESC`. Noto'g'ri query — kodsiz 400.
 - 🆕 `GET /ai/advisor/alerts/:id[?include=history]` — tafsilot; `new` bo'lsa atomik `new → seen` (`seen_at`, `seen_by`), audit yo'q. ⚠️ prefetch/hover'da yubormang. 3 daqiqadan eski `pending` izoh — `failed` + `explanation_error: "error"`; `pending` da `explanation_poll_after_ms: 2000`. 404 `AI_ADVISOR_ALERT_NOT_FOUND`.
 - 🆕 `PATCH /ai/advisor/alerts/:id {status: resolved|dismissed, note?}` — `resolved` uchun izoh 3–500 (trim) majburiy → 400 `AI_ADVISOR_NOTE_INVALID {reason, min_length, max_length}`; `dismissed` — ixtiyoriy ≤ 500. Ayni foydalanuvchi ayni holatni qayta yuborsa — 200 (idempotent). Boshqa holat / boshqa superadmin yopgan — 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Javob — yangilangan tafsilot. Audit `ai.advisor.alert.resolve|dismiss` (`/activity-logs` da `ai` xizmati — 4-qism).
+- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\t`, `\n`, `\r` dan tashqari) → 400; `page` ≤ 1 000 000.
+- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
+- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
 - 🟢 `explain` (AI izohi) — 5-qism; hozircha `explanation_status` doim `none`.
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 2c review tuzatishlari): R7/R8 semantikasi — shartnoma v0.4 uchun
 
 #653 mustaqil review (FE sessiya) va ega qarori asosida. Deploy: ai-service + finance-service, migratsiyasiz.
@@ -431,9 +447,6 @@ Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir m
 - 🟢 Chek tekshiruvi xulosasi (`GET /finance/receipts/summary` → `mismatch_total`, `top`): bunday cheklar summaga va top-15 ga kirmaydi; `counts.mismatch` da qoladi. AI yordamchining `get_receipt_checks` vositasi ham xuddi shunday.
 - 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
 
-- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\n`, `\t` dan tashqari) → 400; `page` ≤ 1 000 000.
-- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
-- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
 **Frontend action items:**
 - 🔧 `ai_status === "mismatch"` va `ai.difference === null` bo'lishi mumkin — farq ustunida «—», `error_reason === "currency_not_uzs"` uchun matn tavsiya: «Chek so'mda emas ({currency}) — summani qo'lda tekshiring».
 

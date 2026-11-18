@@ -18,24 +18,19 @@ import {
   AI_ADVISOR_LIST_STATUSES,
   AI_ADVISOR_RULE_KEYS,
   AI_ADVISOR_SEVERITIES,
+  AI_ADVISOR_CONTROL_CHARS,
   AI_ADVISOR_SORT_FIELDS,
+  isAiAdvisorDay,
 } from '@app/common';
 
 /**
  * Aniq kalendar kuni (`YYYY-MM-DD`, aylanmaydi: 2026-02-30 → 400, yil ≥ 2000)
- * — ai-service `isDay` bilan bir xil (round-2 #654 S1).
+ * — `@app/common` `isAiAdvisorDay` (ai-service bilan bitta qoida).
  */
 @ValidatorConstraint({ name: 'calendarDay', async: false })
 export class CalendarDayConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
-    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
-      return false;
-    const d = new Date(`${value}T00:00:00Z`);
-    return (
-      !Number.isNaN(d.getTime()) &&
-      d.getUTCFullYear() >= 2000 &&
-      d.toISOString().slice(0, 10) === value
-    );
+    return isAiAdvisorDay(value);
   }
 
   defaultMessage(): string {
@@ -43,9 +38,10 @@ export class CalendarDayConstraint implements ValidatorConstraintInterface {
   }
 }
 
-/** C0 boshqaruv belgilari (\n, \t dan tashqari) va DEL yo'q. */
-// eslint-disable-next-line no-control-regex -- ataylab: boshqaruv belgilarini rad etish
-const NO_CONTROL_CHARS = /^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]*$/;
+/** C0 boshqaruv belgilari (\t, \n, \r dan tashqari) va DEL yo'q — `@app/common`. */
+const NO_CONTROL_CHARS = new RegExp(
+  `^[^${AI_ADVISOR_CONTROL_CHARS.source.slice(1, -1)}]*$`,
+);
 
 /**
  * BE-5 (LhTIno57) — `/ai/advisor/*` DTO'lari.
@@ -136,7 +132,8 @@ export class AiAdvisorAlertsQueryDto {
 
   @ApiPropertyOptional({
     description:
-      '`last_at` Toshkent kuni ≥ from (YYYY-MM-DD); from–to ≤ 366 kun',
+      '`last_at` Toshkent kuni ≥ from (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000); from–to ≤ 366 kun',
+    format: 'date',
     example: '2026-10-01',
   })
   @IsOptional()
@@ -145,7 +142,9 @@ export class AiAdvisorAlertsQueryDto {
   from?: string;
 
   @ApiPropertyOptional({
-    description: '`last_at` Toshkent kuni ≤ to (YYYY-MM-DD)',
+    description:
+      '`last_at` Toshkent kuni ≤ to (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000)',
+    format: 'date',
     example: '2026-10-31',
   })
   @IsOptional()
@@ -154,7 +153,8 @@ export class AiAdvisorAlertsQueryDto {
   to?: string;
 
   @ApiPropertyOptional({
-    description: 'Sarlavha / obyekt nomi (ILIKE), ≤ 100',
+    description:
+      'Sarlavha / obyekt nomi (ILIKE), ≤ 100. Boshqaruv belgilari (\\t, \\n, \\r dan tashqari) → 400.',
     maxLength: 100,
   })
   @IsOptional()

@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, type QueryRunner } from 'typeorm';
+import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import {
   AI_ADVISOR_INPUT_MAX_PERIODS,
   AI_ADVISOR_INPUT_MAX_SINCE_DAYS,
@@ -66,6 +66,23 @@ const USER_BRANCH_CHUNK = 500;
  * faqat o'sha qoidaga tegadi (`errors`).
  */
 export const ADVISOR_STATEMENT_TIMEOUT_MS = 15_000;
+/**
+ * Qoidalar SQL qismining UMUMIY byudjeti (#704 review B1): statement_timeout
+ * har ifodaga — qoidalar ketma-ket, bitta qulflangan jadval 5 × 15 s = 75 s
+ * bo'lardi. 30 s AdvisorReader − 5 s nomlar − zaxira = 22 s; har qoida
+ * qolgan vaqt bilan cheklanadi, tugasa — keyingi qoidalar `errors` ga.
+ */
+export const ADVISOR_RULES_BUDGET_MS = 22_000;
+/** Butun `rule_inputs` (nomlar bilan) — AdvisorReader 30 s dan past. */
+export const ADVISOR_TOTAL_BUDGET_MS = 28_000;
+/** Qulflangan jadval butun byudjetni yemasin — har tranzaksiyada. */
+const ADVISOR_LOCK_TIMEOUT = '2s';
+/**
+ * Ism/filial qidiruvining UMUMIY chegarasi (round-4 #651-2 / #652): osilgan
+ * identity/branch-service bilan ham `rule_inputs` AdvisorReader 30 s
+ * budjetidan oshmaydi — chegarada nomlar null, `names_degraded` (P6).
+ */
+export const ADVISOR_NAMES_DEADLINE_MS = 5_000;
 /**
  * R2/R4/R5 «hisoblanadigan topshirish» va T6 qaytarish (P4) qidiruvi oynasi
  * (#702 review B1): butun tarix emas, oxirgi 90 kun (chegaralar ≤ 60 kun).
@@ -410,6 +427,12 @@ interface R3Row {
 @Injectable()
 export class AdvisorInputsService {
   private readonly logger = new Logger(AdvisorInputsService.name);
+  /** Ism qidiruvi umumiy chegarasi (testlarda qisqartiriladi). */
+  namesDeadlineMs = ADVISOR_NAMES_DEADLINE_MS;
+  /** Har SQL ifoda chegarasi (testlarda qisqartiriladi). */
+  statementTimeoutMs = ADVISOR_STATEMENT_TIMEOUT_MS;
+  /** Qoidalar SQL byudjeti (testlarda qisqartiriladi). */
+  rulesBudgetMs = ADVISOR_RULES_BUDGET_MS;
 
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
@@ -446,9 +469,18 @@ export class AdvisorInputsService {
     const now = new Date(input?.now ?? Date.now());
     if (Number.isNaN(now.getTime())) throw new Error('now noto‘g‘ri');
     const started = Date.now();
+    const deadline = started + this.rulesBudgetMs;
     const rules = new Set(Array.isArray(input?.rules) ? input.rules : []);
     const out: AiAdvisorRuleInputsResponse = { candidates: [], cursors: {} };
-    const names = new NameCache(this);
+    const names = new NameCache(this, () =>
+      Math.max(
+        0,
+        Math.min(
+          this.namesDeadlineMs,
+          started + ADVISOR_TOTAL_BUDGET_MS - Date.now(),
+        ),
+      ),
+    );
     // Har qoida alohida: biri yiqilsa (timeout) — boshqalari odatdagidek,
     // yiqilgan qoida `errors` da, kursorsiz (round-2 #651 ops-B1).
     const guard = async (rule: AiAdvisorRuleKey, fn: () => Promise<void>) => {
@@ -464,7 +496,7 @@ export class AdvisorInputsService {
       await guard('R1', async () => {
         const t = input.thresholds?.R1 ?? {};
         const since = parseSince(input.since?.R1, now);
-        const r = await this.withTimeout((q) =>
+        const r = await this.withTimeout(deadline, (q) =>
           this.r1(q, since, now, t, names),
         );
         out.candidates.push(...r.candidates);
@@ -475,7 +507,7 @@ export class AdvisorInputsService {
       await guard('R3', async () => {
         const t = input.thresholds?.R3 ?? {};
         const since = parseSince(input.since?.R3, now);
-        const r = await this.withTimeout((q) =>
+        const r = await this.withTimeout(deadline, (q) =>
           this.r3(q, since, now, t, names, started + R3_TIME_BUDGET_MS),
         );
         out.candidates.push(...r.candidates);
@@ -486,45 +518,64 @@ export class AdvisorInputsService {
     if (rules.has('R2')) {
       await guard('R2', async () => {
         out.candidates.push(
-          ...(await this.r2(input.thresholds?.R2 ?? {}, today, names)),
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r2(q, input.thresholds?.R2 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R4')) {
       await guard('R4', async () => {
         out.candidates.push(
-          ...(await this.r4(input.thresholds?.R4 ?? {}, today, names)),
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r4(q, input.thresholds?.R4 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R5')) {
       await guard('R5', async () => {
         out.candidates.push(
-          ...(await this.r5(input.thresholds?.R5 ?? {}, today, names)),
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r5(q, input.thresholds?.R5 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R7')) {
       await guard('R7', async () => {
         const since = parseSince(input.since?.R7, now);
-        const r = await this.r7(since, now, names);
+        const r = await this.withTimeout(deadline, (q) =>
+          this.r7(q, since, now, names, deadline),
+        );
         out.candidates.push(...r.candidates);
         out.cursors.R7 = r.cursor;
       });
     }
+    // R8/R6 (kunlik guruh) o'z so'rovlari bilan — byudjet tugagan bo'lsa
+    // boshlanmaydi (kursorsiz `errors`).
+    const budgetLeft = () => {
+      if (deadline - Date.now() < 250)
+        throw new Error('advisor budget exhausted');
+    };
     if (rules.has('R8')) {
       await guard('R8', async () => {
+        budgetLeft();
         out.candidates.push(
-          ...(await this.r8(
-            input.thresholds?.R8 ?? {},
-            (input.periods?.weeks ?? []).slice(-AI_ADVISOR_INPUT_MAX_PERIODS),
-            now,
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r8(
+              q,
+              input.thresholds?.R8 ?? {},
+              (input.periods?.weeks ?? []).slice(-AI_ADVISOR_INPUT_MAX_PERIODS),
+              now,
+            ),
           )),
         );
       });
     }
     if (rules.has('R6')) {
       await guard('R6', async () => {
+        budgetLeft();
         out.candidates.push(...(await this.r6(input.periods ?? {}, now)));
       });
     }
@@ -539,18 +590,43 @@ export class AdvisorInputsService {
    * O'qish so'rovlari alohida ulanishda, `statement_timeout` bilan (SET
    * LOCAL — faqat shu tranzaksiya). Hech narsa yozilmaydi.
    */
-  private async withTimeout<T>(fn: (q: SqlQuery) => Promise<T>): Promise<T> {
+  private async withTimeout<T>(
+    deadline: number,
+    fn: (q: SqlQuery, manager: EntityManager) => Promise<T>,
+    /**
+     * `manager` orqali (q dan tashqari) KETMA-KET yuboriladigan ifodalar
+     * soni: ular uchun chegara qayta qo'yilmaydi, shuning uchun boshlang'ich
+     * chegara qolgan byudjetning 1/N qismi (jami ≤ qolgan byudjet).
+     */
+    managerStatements = 1,
+  ): Promise<T> {
+    if (deadline - Date.now() < 250)
+      throw new Error('advisor budget exhausted');
     const runner: QueryRunner = this.ds.createQueryRunner();
     await runner.connect();
     try {
+      // Pool kutish vaqti ham hisobga olinadi — qolgan byudjet ulanishdan keyin.
+      const remaining = deadline - Date.now();
+      if (remaining < 250) throw new Error('advisor budget exhausted');
       await runner.startTransaction();
-      await runner.query(
-        `SET LOCAL statement_timeout = ${ADVISOR_STATEMENT_TIMEOUT_MS}`,
+      // statement_timeout har IFODAGA (#704 review B1): qoida ichidagi har
+      // so'rov oldidan qolgan byudjet bilan qayta qo'yiladi — ko'p ifodali
+      // qoida (R3: chunk + har anomaliya uchun r3Sample) chegaradan oshmaydi.
+      let applied = Math.floor(
+        Math.min(this.statementTimeoutMs, remaining / managerStatements),
       );
-      const result = await fn(
-        <R>(sql: string, params?: unknown[]) =>
-          runner.query(sql, params) as Promise<R>,
-      );
+      await runner.query(`SET LOCAL statement_timeout = ${applied}`);
+      await runner.query(`SET LOCAL lock_timeout = '${ADVISOR_LOCK_TIMEOUT}'`);
+      const result = await fn(async <R>(sql: string, params?: unknown[]) => {
+        const left = deadline - Date.now();
+        if (left < 250) throw new Error('advisor budget exhausted');
+        const next = Math.floor(Math.min(this.statementTimeoutMs, left));
+        if (next < applied) {
+          await runner.query(`SET LOCAL statement_timeout = ${next}`);
+          applied = next;
+        }
+        return runner.query(sql, params) as Promise<R>;
+      }, runner.manager);
       await runner.commitTransaction();
       return result;
     } catch (error) {
@@ -1056,6 +1132,7 @@ export class AdvisorInputsService {
    *   bilan qaytarilgan topshirish (qaytarish lahzasi — chegara, P4).
    */
   private async episodes(
+    q: SqlQuery,
     type: 'couriers' | 'markets' | 'branch',
     source: 'courier_payment' | 'market_payment' | 'branch_to_main',
     minBalance: number,
@@ -1075,15 +1152,10 @@ export class AdvisorInputsService {
     // ham kunlik agregatdan (kassalar soni × tarix uzunligiga chiziqli).
     // JIT o'chiq: rejalashtiruvchi lateral'lar narxini katta baholab JIT
     // kompilyatsiyasiga (~1.4 s) kiradi, so'rovning o'zi ~0.5 s (#702 B1).
-    // `statement_timeout` — boshqa o'qish so'rovlari kabi (`withTimeout`):
-    // kutilmagan reja ulanishni va RPC'ni uzoq ushlab turmasin.
-    return this.ds.transaction(async (m) => {
-      await m.query('SET LOCAL jit = off');
-      await m.query(
-        `SET LOCAL statement_timeout = ${ADVISOR_STATEMENT_TIMEOUT_MS}`,
-      );
-      return m.query<EpisodeRow[]>(
-        `WITH cb AS (
+    // withTimeout tranzaksiyasi ichida (SET LOCAL).
+    await q('SET LOCAL jit = off');
+    return q<EpisodeRow[]>(
+      `WITH cb AS (
          SELECT c."id", c."user_id", c."balance" FROM ${t.cashboxes} c
           WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
             AND c."balance" > $3::numeric
@@ -1222,15 +1294,14 @@ export class AdvisorInputsService {
             ORDER BY s."createdAt" ASC, s."id" ASC LIMIT 1
          ) rs ON true
         ORDER BY cb."id"`,
-        [
-          type,
-          source,
-          minBalance,
-          minPct,
-          addDaysKey(today, -ADVISOR_EPISODE_LOOKBACK_DAYS - 1),
-        ],
-      );
-    });
+      [
+        type,
+        source,
+        minBalance,
+        minPct,
+        addDaysKey(today, -ADVISOR_EPISODE_LOOKBACK_DAYS - 1),
+      ],
+    );
   }
 
   /**
@@ -1255,6 +1326,7 @@ export class AdvisorInputsService {
 
   /** Kassa kunlik yopilishlari (`finance_cashbox_daily`) — oxirgi kunlar. */
   private async dailyClosings(
+    q: SqlQuery,
     cashboxIds: string[],
     fromDay: string,
     toDay: string,
@@ -1269,7 +1341,7 @@ export class AdvisorInputsService {
       Array<{ date: string; opening: number; income: number; closing: number }>
     >();
     if (!cashboxIds.length) return out;
-    const rows = await this.ds.query<
+    const rows = await q<
       Array<{
         cashbox_id: string;
         date: string;
@@ -1306,14 +1378,13 @@ export class AdvisorInputsService {
    * `ep:g:<kun>` har kuni bir kun oldinga siljirdi).
    */
   private async growthRunStarts(
+    q: SqlQuery,
     cashboxIds: string[],
     yesterday: string,
   ): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     if (!cashboxIds.length) return out;
-    const rows = await this.ds.query<
-      Array<{ cashbox_id: string; start: string | null }>
-    >(
+    const rows = await q<Array<{ cashbox_id: string; start: string | null }>>(
       `SELECT x.cashbox_id::text AS cashbox_id,
               to_char(MAX(x.snapshot_date) FILTER (WHERE x.brk), 'YYYY-MM-DD') AS start
          FROM (
@@ -1336,6 +1407,7 @@ export class AdvisorInputsService {
 
   /** Kun bo'yicha «chiqish» yig'indisi (T6 qaytarilganlarsiz). */
   private async dailyOutflows(
+    q: SqlQuery,
     cashboxIds: string[],
     source: string,
     fromDay: string,
@@ -1343,7 +1415,7 @@ export class AdvisorInputsService {
     const out = new Map<string, Map<string, number>>();
     if (!cashboxIds.length) return out;
     const t = this.tables();
-    const rows = await this.ds.query<
+    const rows = await q<
       Array<{ cashbox_id: string; day: string; total: string }>
     >(
       `SELECT h."cashbox_id"::text AS cashbox_id,
@@ -1370,6 +1442,7 @@ export class AdvisorInputsService {
 
   /** R2 Kuryer qarzi o'smoqda: (o'sish VA > balance_uzs) YOKI (> N kun topshirilmagan). */
   private async r2(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
@@ -1379,6 +1452,7 @@ export class AdvisorInputsService {
     const noHandover = Math.floor(positive(t.no_handover_days, 3));
     const minPct = clampPct(t.min_handover_pct, 80);
     const rows = await this.episodes(
+      q,
       'couriers',
       'courier_payment',
       0,
@@ -1389,11 +1463,13 @@ export class AdvisorInputsService {
     const ids = rows.map((r) => r.cashbox_id);
     const window = Math.max(growthDays + 1, ADVISOR_EVIDENCE_LIMIT);
     const closings = await this.dailyClosings(
+      q,
       ids,
       addDaysKey(today, -window),
       addDaysKey(today, -1),
     );
     const outflows = await this.dailyOutflows(
+      q,
       ids,
       'courier_payment',
       addDaysKey(today, -window),
@@ -1415,6 +1491,7 @@ export class AdvisorInputsService {
       );
     };
     const runStarts = await this.growthRunStarts(
+      q,
       rows.filter(isGrowth).map((r) => r.cashbox_id),
       addDaysKey(today, -1),
     );
@@ -1494,13 +1571,21 @@ export class AdvisorInputsService {
 
   /** R4 Market to'lovi kechikmoqda: qarz > 0 VA > N kun to'lov yo'q. */
   private async r4(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
   ): Promise<AiAdvisorCandidate[]> {
     const limitDays = Math.floor(positive(t.days_without_payout, 7));
     // R4 o'zgarmaydi (ega, 2026-11-18): har qanday to'lov — minPct 0.
-    const rows = await this.episodes('markets', 'market_payment', 0, 0, today);
+    const rows = await this.episodes(
+      q,
+      'markets',
+      'market_payment',
+      0,
+      0,
+      today,
+    );
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
       .filter(
@@ -1510,8 +1595,13 @@ export class AdvisorInputsService {
     if (!hits.length) return [];
     const ids = hits.map((x) => x.r.cashbox_id);
     const from = addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT);
-    const closings = await this.dailyClosings(ids, from, addDaysKey(today, -1));
-    const paid = await this.dailyOutflows(ids, 'market_payment', from);
+    const closings = await this.dailyClosings(
+      q,
+      ids,
+      from,
+      addDaysKey(today, -1),
+    );
+    const paid = await this.dailyOutflows(q, ids, 'market_payment', from);
     return hits.map(({ r, ep }) => {
       names.wantUser(r.owner);
       const debt = money(r.balance);
@@ -1554,6 +1644,7 @@ export class AdvisorInputsService {
 
   /** R5 HQ'ga o'tkazma kechikmoqda: qoldiq > balance_uzs VA > N kun o'tkazma yo'q (Q17). */
   private async r5(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
@@ -1563,6 +1654,7 @@ export class AdvisorInputsService {
     const minPct = clampPct(t.min_transfer_pct, 80);
     // P3: epizod boshi chegaraga (balance_uzs) bog'liq emas — musbat qator.
     const rows = await this.episodes(
+      q,
       'branch',
       'branch_to_main',
       balanceUzs,
@@ -1578,12 +1670,13 @@ export class AdvisorInputsService {
     if (!hits.length) return [];
     const ids = hits.map((x) => x.r.cashbox_id);
     const closings = await this.dailyClosings(
+      q,
       ids,
       addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT),
       addDaysKey(today, -1),
     );
     const t2 = this.tables();
-    const transfers = await this.ds.query<
+    const transfers = await q<
       Array<{
         cashbox_id: string;
         id: string;
@@ -1652,9 +1745,11 @@ export class AdvisorInputsService {
   // ─── R7 Chek yoki karta farqi (§4.2, BE-rev B4; #653 review) ──────────
 
   private async r7(
+    q: SqlQuery,
     since: Date,
     now: Date,
     names: NameCache,
+    deadline: number,
   ): Promise<{ candidates: AiAdvisorCandidate[]; cursor: string | null }> {
     const t = this.tables();
     // (a) karta qoldig'i: faqat TASDIQLANGAN (smena yopilgan) tekshiruvlar.
@@ -1664,7 +1759,7 @@ export class AdvisorInputsService {
     // GREATEST(ai_checked_at, confirmed_at): yopishdan oldingi tick qatorni
     // ko'rmasa ham, yopishdan keyingisi ko'radi (`attachLatePhoto` ham).
     const cardSeen = `GREATEST(k."ai_checked_at", k."confirmed_at")`;
-    const cards = await this.ds.query<CardCheckRow[]>(
+    const cards = await q<CardCheckRow[]>(
       `SELECT k."id"::text AS id, k."shift_id"::text AS shift_id, k."cashbox_card_id"::text AS card_id,
               k."entered_balance", k."ai_read_balance", k."expected_balance", k."ai_entered_ok",
               k."ai_last4_detected", cc."last4" AS card_last4, k."ai_confidence",
@@ -1687,7 +1782,7 @@ export class AdvisorInputsService {
     // bilan bir xil). Kursor GREATEST(ai_checked_at, updatedAt): T6 tahriri
     // (`carryOverForCorrection`) holat/farqni qayta hisoblaydi.
     const receiptSeen = `GREATEST(r."ai_checked_at", r."updatedAt")`;
-    const receipts = await this.ds.query<ReceiptRow[]>(
+    const receipts = await q<ReceiptRow[]>(
       `SELECT r."id"::text AS id, r."kind"::text AS kind, r."ai_status"::text AS ai_status, r."ai_flags",
               r."entered_amount", r."ai_amount", r."ai_difference", r."ai_currency", r."ai_error_reason",
               r."ai_date", r."ai_recipient_last4", r."ai_payer_last4",
@@ -1731,11 +1826,10 @@ export class AdvisorInputsService {
     }
     if (!cards.length && !receipts.length) return { candidates: [], cursor };
 
-    const receiptAi = await this.receiptAiEnabled();
-    const types = await this.cashboxTypes(
-      (sql, params) => this.ds.query(sql, params),
-      [...new Set(cards.map((r) => r.owner))],
-    );
+    const receiptAi = await this.receiptAiEnabled(deadline);
+    const types = await this.cashboxTypes(q, [
+      ...new Set(cards.map((r) => r.owner)),
+    ]);
     const candidates: AiAdvisorCandidate[] = [];
 
     for (const r of cards) {
@@ -1817,7 +1911,9 @@ export class AdvisorInputsService {
       });
     }
 
-    const week = receipts.length ? await this.receiptWeekSummary(now) : null;
+    const week = receipts.length
+      ? await this.receiptWeekSummary(now, deadline)
+      : null;
     for (const r of receipts) {
       const transfer = r.kind === 'courier_to_hq' || r.kind === 'branch_to_hq';
       // O'tkazma chekida `history_id` — MAIN kirim oyog'i; jo'natuvchi —
@@ -1935,10 +2031,14 @@ export class AdvisorInputsService {
   }
 
   /** Chek AI yoqiqmi (manual_expense YOKI hq_transfer). O'qilmasa — null. */
-  private async receiptAiEnabled(): Promise<boolean | null> {
-    if (!this.receiptService) return null;
+  private async receiptAiEnabled(deadline: number): Promise<boolean | null> {
+    const svc = this.receiptService;
+    if (!svc) return null;
     try {
-      const s = await this.receiptService.loadSettings();
+      // O'z tranzaksiyasi, byudjet ichida (#704 review S3).
+      const s = await this.withTimeout(deadline, (_q, m) =>
+        svc.loadSettings(m),
+      );
       return Boolean(s.manual_expense.ai_enabled || s.hq_transfer.ai_enabled);
     } catch {
       return null;
@@ -1948,25 +2048,33 @@ export class AdvisorInputsService {
   /** Joriy Toshkent haftasi chek tekshiruvi sanoqlari (`checked = match + mismatch + unreadable`). */
   private async receiptWeekSummary(
     now: Date,
+    deadline: number,
   ): Promise<Record<string, unknown> | null> {
     try {
       const today = tashkentDateKey(now);
       const weekday = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = dushanba
       const from = addDaysKey(today, -weekday);
       const to = addDaysKey(from, 6);
-      const summary = await loadReceiptChecksSummary(
-        this.ds.manager,
-        {
-          receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
-          history: this.ds.getMetadata(CashboxHistory).tablePath,
-          cashbox: this.ds.getMetadata(Cashbox).tablePath,
-        },
-        {
-          start: new Date(`${from}T00:00:00.000+05:00`),
-          end: new Date(
-            new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
+      // loadReceiptChecksSummary — `m` orqali 2 ta ifoda (Promise.all,
+      // bitta ulanishda ketma-ket): har biriga qolgan byudjetning yarmi.
+      const summary = await this.withTimeout(
+        deadline,
+        (_q, m) =>
+          loadReceiptChecksSummary(
+            m,
+            {
+              receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
+              history: this.ds.getMetadata(CashboxHistory).tablePath,
+              cashbox: this.ds.getMetadata(Cashbox).tablePath,
+            },
+            {
+              start: new Date(`${from}T00:00:00.000+05:00`),
+              end: new Date(
+                new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
+              ),
+            },
           ),
-        },
+        2,
       );
       const c = summary.counts as Record<string, number>;
       const match = Number(c.match ?? 0);
@@ -1991,6 +2099,7 @@ export class AdvisorInputsService {
   // ─── R8 Tuzatishlar ko'paydi (§4.2, BE-rev B2, Q4) ────────────────────
 
   private async r8(
+    q: SqlQuery,
     t: Record<string, number>,
     weeks: string[],
     now: Date,
@@ -2013,8 +2122,8 @@ export class AdvisorInputsService {
       const baseStart = new Date(
         start.getTime() - R8_BASELINE_DAYS * 86_400_000,
       );
-      const week = await this.correctionCounts(start, end);
-      const base = await this.correctionCounts(baseStart, start);
+      const week = await this.correctionCounts(q, start, end);
+      const base = await this.correctionCounts(q, baseStart, start);
       const counted = (k: CorrectionCounts) =>
         k.manual_correction + k.payment_reverse + k.payment_edit;
       const count = counted(week);
@@ -2030,7 +2139,7 @@ export class AdvisorInputsService {
         Math.round(ratio * 10) * baselineTotal * 7
       )
         continue;
-      const days = await this.correctionDays(start, end);
+      const days = await this.correctionDays(q, start, end);
       const key = `R8:week:${monday}`;
       out.push({
         rule_key: 'R8',
@@ -2085,11 +2194,12 @@ export class AdvisorInputsService {
    * tahrir (`payment_corrections.action`). `payment_reversal` — hech qachon.
    */
   private async correctionCounts(
+    q: SqlQuery,
     start: Date,
     end: Date,
   ): Promise<CorrectionCounts> {
     const t = this.tables();
-    const [h] = await this.ds.query<Array<{ manual: string; orders: string }>>(
+    const [h] = await q<Array<{ manual: string; orders: string }>>(
       `SELECT COUNT(*) FILTER (WHERE "source_id" IS NULL) AS manual,
               COUNT(DISTINCT "source_id") FILTER (WHERE "source_id" IS NOT NULL) AS orders
          FROM ${t.history}
@@ -2097,7 +2207,7 @@ export class AdvisorInputsService {
           AND "createdAt" >= $1 AND "createdAt" < $2`,
       [start, end],
     );
-    const pc = await this.ds.query<Array<{ action: string; n: string }>>(
+    const pc = await q<Array<{ action: string; n: string }>>(
       `SELECT "action", COUNT(*) AS n FROM ${t.corrections}
         WHERE "is_deleted" = false AND "createdAt" >= $1 AND "createdAt" < $2
         GROUP BY "action"`,
@@ -2114,11 +2224,12 @@ export class AdvisorInputsService {
 
   /** Hafta kunlari bo'yicha sanalgan tuzatishlar (counted_kinds). */
   private async correctionDays(
+    q: SqlQuery,
     start: Date,
     end: Date,
   ): Promise<Array<{ date: string; count: number }>> {
     const t = this.tables();
-    const rows = await this.ds.query<Array<{ day: string; n: string }>>(
+    const rows = await q<Array<{ day: string; n: string }>>(
       `SELECT day, SUM(n) AS n FROM (
          SELECT to_char("createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day, COUNT(*) AS n
            FROM ${t.history}
@@ -2303,7 +2414,11 @@ class NameCache {
   private readonly branches = new Set<string>();
   private readonly userBranches = new Set<string>();
 
-  constructor(private readonly svc: AdvisorInputsService) {}
+  constructor(
+    private readonly svc: AdvisorInputsService,
+    /** Chegara `fill()` paytida hisoblanadi (umumiy byudjetdan qolgani). */
+    private readonly deadlineMs: () => number = () => ADVISOR_NAMES_DEADLINE_MS,
+  ) {}
 
   wantUser(id: string): void {
     this.users.add(id);
@@ -2332,11 +2447,21 @@ class NameCache {
     const fail = () => {
       this.degraded = true;
     };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'deadline'>((resolve) => {
+      timer = setTimeout(() => resolve('deadline'), this.deadlineMs());
+    });
+    const within = async <T>(p: Promise<Map<string, T>>) => {
+      const r = await Promise.race([p, deadline]);
+      if (r !== 'deadline') return r;
+      fail();
+      return new Map<string, T>();
+    };
     const [users, branches, userBranch] = await Promise.all([
-      this.svc.userNames([...this.users], fail),
-      this.svc.branchNames([...this.branches], fail),
-      this.svc.userBranches([...this.userBranches], fail),
-    ]);
+      within(this.svc.userNames([...this.users], fail)),
+      within(this.svc.branchNames([...this.branches], fail)),
+      within(this.svc.userBranches([...this.userBranches], fail)),
+    ]).finally(() => clearTimeout(timer));
     const branchRef = (ref: unknown) => {
       const r = ref as AiAdvisorRef | null;
       if (r && r.name === null) r.name = branches.get(r.id) ?? null;

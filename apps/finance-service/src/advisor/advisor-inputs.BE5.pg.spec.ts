@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { of } from 'rxjs';
+import { NEVER, of } from 'rxjs';
 import { FinanceDailyService } from '../aggregates/finance-daily.service';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.entity';
@@ -1050,6 +1050,160 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(ok.names_degraded).toBeUndefined();
       });
 
+      it('round-4 #652: R2/R4/R5 so‘rovlari statement_timeout ostida — qulflangan jadval faqat shu qoidani errors ga tushiradi', async () => {
+        const locker = db.createQueryRunner();
+        await locker.connect();
+        await locker.startTransaction();
+        svc.statementTimeoutMs = 300;
+        try {
+          await locker.query(
+            'LOCK TABLE "finance_schema"."cashbox_history" IN ACCESS EXCLUSIVE MODE',
+          );
+          const t0 = Date.now();
+          const out = await runWith(['R2', 'R4', 'R5'], {
+            R2: R2T,
+            R4: { days_without_payout: 7 },
+            R5: { balance_uzs: 5000000, days_without_transfer: 3 },
+          });
+          expect(Date.now() - t0).toBeLessThan(5000);
+          for (const k of ['R2', 'R4', 'R5'] as const)
+            expect(out.errors?.[k]).toMatch(/statement timeout/);
+        } finally {
+          svc.statementTimeoutMs = 15000;
+          await locker.rollbackTransaction();
+          await locker.release();
+        }
+      });
+
+      it('#704 B1: PROD chegaralari — qulflangan cashbox_history bilan butun frequent guruh 30 s AdvisorReader budjetidan past; R1 kursori saqlanadi', async () => {
+        expect(svc.statementTimeoutMs).toBe(15000);
+        expect(svc.rulesBudgetMs).toBe(22000);
+        await shift('7', '2026-10-22T07:00:00Z', -60000, null);
+        const locker = db.createQueryRunner();
+        await locker.connect();
+        await locker.startTransaction();
+        try {
+          await locker.query(
+            'LOCK TABLE "finance_schema"."cashbox_history" IN ACCESS EXCLUSIVE MODE',
+          );
+          const t0 = Date.now();
+          const out = await svc.ruleInputs({
+            rules: ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'],
+            now: NOW.toISOString(),
+            thresholds: {
+              R2: R2T,
+              R4: { days_without_payout: 7 },
+              R5: { balance_uzs: 5000000, days_without_transfer: 3 },
+            },
+            since: {},
+          });
+          const took = Date.now() - t0;
+          // Eski: har qoida 15 s statement_timeout — ~75 s.
+          expect(took).toBeLessThan(25_000);
+          expect(Object.keys(out.errors ?? {}).sort()).toEqual([
+            'R2',
+            'R3',
+            'R4',
+            'R5',
+            'R7',
+          ]);
+          expect(out.errors?.R1).toBeUndefined();
+          expect(out.cursors.R1).toBeTruthy();
+        } finally {
+          await locker.rollbackTransaction();
+          await locker.release();
+        }
+      }, 120_000);
+
+      it('#704 B1 (sekin ifodalar): har so‘rov qolgan byudjet bilan — jami 30 s dan past, R1 kursori saqlanadi', async () => {
+        expect(svc.statementTimeoutMs).toBe(15000);
+        expect(svc.rulesBudgetMs).toBe(22000);
+        await shift('7', '2026-10-22T07:00:00Z', -60000, null);
+        for (const [type, owner] of [
+          ['couriers', 71],
+          ['markets', 72],
+          ['branch', 73],
+        ] as const) {
+          const cb = await cashbox(type, owner, 9000000);
+          await hist(
+            cb,
+            'income',
+            'sell',
+            9000000,
+            9000000,
+            '2026-10-01T08:00:00Z',
+          );
+        }
+        // cashbox_history o'rniga har ifodada 8 s uxlaydigan view.
+        await db.query(`
+          ALTER TABLE "finance_schema"."cashbox_history" RENAME TO "cashbox_history_t";
+          CREATE VIEW "finance_schema"."cashbox_history" AS
+            SELECT h.* FROM "finance_schema"."cashbox_history_t" h
+            CROSS JOIN (SELECT pg_sleep(8)) gate;
+        `);
+        try {
+          const t0 = Date.now();
+          const out = await svc.ruleInputs({
+            rules: ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'],
+            now: NOW.toISOString(),
+            thresholds: {
+              R2: R2T,
+              R4: { days_without_payout: 7 },
+              R5: { balance_uzs: 5000000, days_without_transfer: 3 },
+            },
+            since: {},
+          });
+          const took = Date.now() - t0;
+          expect(took).toBeLessThan(30_000);
+          expect(out.cursors.R1).toBeTruthy();
+          expect(out.errors?.R1).toBeUndefined();
+          expect(Object.keys(out.errors ?? {}).length).toBeGreaterThan(0);
+        } finally {
+          await db.query(`
+            DROP VIEW "finance_schema"."cashbox_history";
+            ALTER TABLE "finance_schema"."cashbox_history_t" RENAME TO "cashbox_history";
+          `);
+        }
+      }, 120_000);
+
+      it('#704 B1: byudjet tugagan — keyingi qoidalar so‘rov yubormay errors ga tushadi', async () => {
+        svc.rulesBudgetMs = 0;
+        try {
+          const out = await runWith(['R2', 'R4'], {
+            R2: R2T,
+            R4: { days_without_payout: 7 },
+          });
+          expect(out.errors?.R2).toMatch(/budget exhausted/);
+          expect(out.errors?.R4).toMatch(/budget exhausted/);
+        } finally {
+          svc.rulesBudgetMs = 22000;
+        }
+      });
+
+      it('round-4 #651-2: osilgan identity — umumiy chegarada nomlar null, names_degraded (RPC kutilmaydi)', async () => {
+        const cb = await cashbox('couriers', 85, 900000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          900000,
+          900000,
+          '2026-10-10T08:00:00Z',
+        );
+        identitySend.mockImplementationOnce(() => NEVER);
+        svc.namesDeadlineMs = 300;
+        try {
+          const t0 = Date.now();
+          const out = await runWith(['R2'], { R2: R2T });
+          expect(Date.now() - t0).toBeLessThan(3000);
+          expect(out.names_degraded).toBe(true);
+          expect(out.candidates).toHaveLength(1);
+          expect(out.candidates[0].subject.name).toBeNull();
+        } finally {
+          svc.namesDeadlineMs = 5000;
+        }
+      });
+
       it('P5: T6 tahriri — almashtiruvchi oyoq asl topshirish vaqti/kaliti bilan (kunlar nolga tushmaydi)', async () => {
         const cb = await cashbox('couriers', 86, 1000000);
         const leg = (
@@ -1644,6 +1798,31 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(out.candidates.map((c) => c.facts.mismatch)).toEqual([['card']]);
       });
 
+      it('#704 (S3 regressiya F1): haftalik chek xulosasi (manager orqali 2 ifoda) byudjetni 2 baravar oshirmaydi', async () => {
+        await receipt({});
+        // cashbox_receipts o'rniga har ifodada 10.5 s uxlaydigan view.
+        await db.query(`
+          ALTER TABLE "finance_schema"."cashbox_receipts" RENAME TO "cashbox_receipts_t";
+          CREATE VIEW "finance_schema"."cashbox_receipts" AS
+            SELECT r.* FROM "finance_schema"."cashbox_receipts_t" r
+            CROSS JOIN (SELECT pg_sleep(10.5)) gate;
+        `);
+        try {
+          const t0 = Date.now();
+          const out = await runR7('2026-10-22T08:00:00Z');
+          const took = Date.now() - t0;
+          // Eski: 10.5 + 2 × 10.5 = 31.5 s (30 s reader chegarasidan oshadi).
+          expect(took).toBeLessThan(25_000);
+          expect(out.errors?.R7).toBeUndefined();
+          expect(out.candidates).toHaveLength(1);
+        } finally {
+          await db.query(`
+            DROP VIEW "finance_schema"."cashbox_receipts";
+            ALTER TABLE "finance_schema"."cashbox_receipts_t" RENAME TO "cashbox_receipts";
+          `);
+        }
+      }, 120_000);
+
       it('S5: receipt_ai_enabled — chek sozlamasidan (stub)', async () => {
         await receipt({});
         const withSettings = new AdvisorInputsService(
@@ -1705,6 +1884,24 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           since: {},
           periods: { weeks },
         });
+
+      it('#704 S3: R8 byudjet va lock_timeout ichida — qulflangan payment_corrections osiltirmaydi', async () => {
+        const locker = db.createQueryRunner();
+        await locker.connect();
+        await locker.startTransaction();
+        try {
+          await locker.query(
+            'LOCK TABLE "finance_schema"."payment_corrections" IN ACCESS EXCLUSIVE MODE',
+          );
+          const t0 = Date.now();
+          const out = await run({ ratio: 2, min_count: 3 });
+          expect(Date.now() - t0).toBeLessThan(10_000);
+          expect(out.errors?.R8).toMatch(/lock timeout/);
+        } finally {
+          await locker.rollbackTransaction();
+          await locker.release();
+        }
+      }, 60_000);
 
       it('qo‘lda + T6 sanaladi, buyurtma qaytarilishi va payment_reversal yo‘q; ≥ max(min_count, 2× bazaviy)', async () => {
         await corr('2026-09-20T05:00:00Z', null);

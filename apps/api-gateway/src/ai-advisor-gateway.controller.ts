@@ -17,6 +17,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -39,6 +40,183 @@ import {
   AiAdvisorAlertsQueryDto,
   AiAdvisorSettingsPatchDto,
 } from './dto/ai-advisor.dto';
+
+/** `successRes` konverti: `{statusCode, message, data}` (round-4 #654 openapi). */
+const envelope = (description: string, data: Record<string, unknown>) => ({
+  description,
+  schema: {
+    type: 'object',
+    required: ['statusCode', 'message', 'data'],
+    properties: {
+      statusCode: { type: 'integer', example: 200 },
+      message: { type: 'string' },
+      data,
+    },
+  },
+});
+const nullableString = { type: 'string', nullable: true };
+const ref = {
+  type: 'object',
+  nullable: true,
+  properties: { id: { type: 'string' }, name: nullableString },
+};
+const ruleKey = {
+  type: 'string',
+  enum: ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8'],
+};
+const nullableTime = { type: 'string', format: 'date-time', nullable: true };
+const userRef = ref;
+/** `AiAdvisorAlertListItem` (shartnoma §7.2). */
+const listItem = {
+  type: 'object',
+  required: [
+    'id',
+    'rule_key',
+    'severity',
+    'status',
+    'title',
+    'branch',
+    'subject',
+    'headline_amount',
+    'facts',
+    'occurrences',
+    'first_at',
+    'last_at',
+    'first_fact_at',
+    'last_fact_at',
+    'explanation_status',
+    'reopened_from_id',
+  ],
+  properties: {
+    id: { type: 'string' },
+    rule_key: ruleKey,
+    severity: { type: 'string', enum: ['critical', 'warning'] },
+    status: { type: 'string', enum: ['new', 'seen', 'resolved', 'dismissed'] },
+    title: { type: 'string' },
+    branch: ref,
+    subject: {
+      type: 'object',
+      required: ['kind', 'id', 'name'],
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['branch', 'courier', 'market', 'cashbox', 'system'],
+        },
+        id: nullableString,
+        name: nullableString,
+      },
+    },
+    headline_amount: { type: 'number', nullable: true },
+    facts: { type: 'object', additionalProperties: true },
+    occurrences: { type: 'integer' },
+    first_at: { type: 'string', format: 'date-time' },
+    last_at: { type: 'string', format: 'date-time' },
+    first_fact_at: nullableTime,
+    last_fact_at: nullableTime,
+    explanation_status: {
+      type: 'string',
+      enum: ['none', 'pending', 'ready', 'failed'],
+    },
+    reopened_from_id: nullableString,
+  },
+};
+/** `AiAdvisorAlertDetail` (shartnoma §7.3). */
+const detail = {
+  type: 'object',
+  required: listItem.required,
+  properties: {
+    ...listItem.properties,
+    rule: {
+      type: 'object',
+      properties: {
+        key: ruleKey,
+        severity: { type: 'string', enum: ['critical', 'warning'] },
+        thresholds: {
+          type: 'object',
+          additionalProperties: { type: 'number' },
+        },
+      },
+    },
+    evidence: { type: 'object', additionalProperties: true },
+    links: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string' },
+          href: { type: 'string' },
+          entity_id: nullableString,
+          primary: { type: 'boolean' },
+        },
+      },
+    },
+    explanation_md: nullableString,
+    explanation_error: {
+      type: 'string',
+      nullable: true,
+      enum: ['budget_exceeded', 'ai_disabled', 'error', null],
+    },
+    explanation_error_scope: {
+      type: 'string',
+      nullable: true,
+      enum: ['advisor', 'global', null],
+    },
+    explanation_retry_at: nullableTime,
+    explanation_requested_at: nullableTime,
+    explanation_poll_after_ms: { type: 'integer', nullable: true },
+    explained_at: nullableTime,
+    seen_at: nullableTime,
+    seen_by: userRef,
+    resolved_at: nullableTime,
+    resolved_by: userRef,
+    resolution_note: nullableString,
+    reopened_from: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        id: { type: 'string' },
+        status: { type: 'string' },
+        resolved_at: nullableTime,
+      },
+    },
+    history: {
+      type: 'array',
+      description: 'Faqat `?include=history` (≤ 50)',
+      items: {
+        type: 'object',
+        properties: {
+          at: { type: 'string', format: 'date-time' },
+          event: {
+            type: 'string',
+            enum: [
+              'opened',
+              'occurred',
+              'seen',
+              'explained',
+              'resolved',
+              'dismissed',
+            ],
+          },
+          by: userRef,
+          note: nullableString,
+        },
+      },
+    },
+  },
+};
+const settings = {
+  type: 'object',
+  properties: {
+    version: { type: 'integer' },
+    rules: { type: 'object', additionalProperties: true },
+    limits: { type: 'object', additionalProperties: true },
+    telegram: { type: 'object', nullable: true },
+    budget: { type: 'object', nullable: true },
+    schedule: { type: 'object', nullable: true },
+    updated_at: { type: 'string', format: 'date-time', nullable: true },
+    updated_by: ref,
+  },
+};
 
 interface AuthedRequest {
   user?: { sub?: string | number; roles?: unknown[] };
@@ -69,6 +247,28 @@ export class AiAdvisorGatewayController {
       '`critical` = jiddiy VA `new`; `critical_rule_keys` — ayni to‘plam, `MAX(last_at) DESC`. `open` — filtrsiz new+seen. ' +
       '`recommendations`, `budget`, `usd_uzs_rate` — BE-4/BE-1, hozircha null.',
   })
+  @ApiOkResponse(
+    envelope('Nishonlar va banner', {
+      type: 'object',
+      properties: {
+        alerts: {
+          type: 'object',
+          properties: {
+            new: { type: 'integer' },
+            open: { type: 'integer' },
+            critical: { type: 'integer' },
+            critical_open: { type: 'integer' },
+            critical_rule_keys: { type: 'array', items: ruleKey },
+            critical_open_rule_keys: { type: 'array', items: ruleKey },
+          },
+        },
+        recommendations: { type: 'object', nullable: true },
+        budget: { type: 'object', nullable: true },
+        usd_uzs_rate: { type: 'number', nullable: true },
+        generated_at: { type: 'string', format: 'date-time' },
+      },
+    }),
+  )
   overview(@Req() req: AuthedRequest): Promise<unknown> {
     return this.call(AI_ADVISOR_PATTERNS.OVERVIEW, {
       requester: this.requester(req),
@@ -84,6 +284,37 @@ export class AiAdvisorGatewayController {
       '`counts.by_status` — `status` filtrisiz, qolgan filtrlar bilan. Saralash oxirida doim `id DESC`. ' +
       'Noto‘g‘ri query — kodsiz 400.',
   })
+  @ApiOkResponse(
+    envelope('Ro‘yxat', {
+      type: 'object',
+      properties: {
+        items: { type: 'array', items: listItem },
+        meta: {
+          type: 'object',
+          properties: {
+            page: { type: 'integer' },
+            limit: { type: 'integer' },
+            total: { type: 'integer' },
+            totalPages: { type: 'integer' },
+          },
+        },
+        counts: {
+          type: 'object',
+          properties: {
+            by_status: {
+              type: 'object',
+              properties: {
+                new: { type: 'integer' },
+                seen: { type: 'integer' },
+                resolved: { type: 'integer' },
+                dismissed: { type: 'integer' },
+              },
+            },
+          },
+        },
+      },
+    }),
+  )
   listAlerts(
     @Query() query: AiAdvisorAlertsQueryDto,
     @Req() req: AuthedRequest,
@@ -110,6 +341,7 @@ export class AiAdvisorGatewayController {
       '`explanation_status=pending` bo‘lsa `explanation_poll_after_ms` oralig‘ida qayta so‘rang; 3 daqiqadan eski `pending` — `failed` + `error`. ' +
       'Xatolar: 404 `AI_ADVISOR_ALERT_NOT_FOUND`, 400 (ID, kodsiz).',
   })
+  @ApiOkResponse(envelope('Tafsilot', detail))
   getAlert(
     @Param('id') id: string,
     @Query() query: AiAdvisorAlertGetQueryDto,
@@ -140,6 +372,7 @@ export class AiAdvisorGatewayController {
       '404 `AI_ADVISOR_ALERT_NOT_FOUND`; 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Audit `ai.advisor.alert.resolve|dismiss`. Pul amali yo‘q.',
   })
   @ApiBody({ type: AiAdvisorAlertPatchDto })
+  @ApiOkResponse(envelope('Yangilangan tafsilot', detail))
   updateAlert(
     @Param('id') id: string,
     @Body() dto: AiAdvisorAlertPatchDto,
@@ -196,6 +429,7 @@ export class AiAdvisorGatewayController {
       'telegram, budget, schedule, updated_at, updated_by{id, name}}`. `severity` — qotirilgan (R2, R6, R7 critical; qolgani warning). ' +
       '`telegram`/`budget`/`schedule` — BE-1, hozircha null. Qator yo‘q — `version: 1` va sukutlar.',
   })
+  @ApiOkResponse(envelope('Sozlamalar', settings))
   getSettings(@Req() req: AuthedRequest): Promise<unknown> {
     return this.call(AI_ADVISOR_PATTERNS.SETTINGS_GET, {
       requester: this.requester(req),
@@ -214,6 +448,7 @@ export class AiAdvisorGatewayController {
       'Audit `ai.advisor.settings.update` (eski → yangi). O‘zgarishsiz PATCH — `version` oshmaydi.',
   })
   @ApiBody({ type: AiAdvisorSettingsPatchDto })
+  @ApiOkResponse(envelope('To‘liq sozlamalar', settings))
   updateSettings(
     @Body() dto: AiAdvisorSettingsPatchDto,
     @Req() req: AuthedRequest,

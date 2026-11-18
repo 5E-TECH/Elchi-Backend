@@ -7,6 +7,8 @@ import {
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import {
+  AI_ADVISOR_CONTROL_CHARS,
+  isAiAdvisorDay,
   AI_ADVISOR_ALERT_STATUSES,
   AI_ADVISOR_ERROR_CODES,
   AI_ADVISOR_EXPLANATION_POLL_MS,
@@ -91,22 +93,8 @@ const userRef = (
   id: string | null,
   name: string | null,
 ): AiAdvisorUserRef | null => (id ? { id, name: name ?? null } : null);
-/**
- * Aniq kalendar kuni: `YYYY-MM-DD`, aylanib o'tmaydi (2026-02-30 → yo'q) va
- * yil ≥ 2000 — Postgres 22008 → 500 bo'lmasin (round-2 #654 S1).
- */
-export const isDay = (v: unknown): v is string => {
-  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
-  const d = new Date(`${v}T00:00:00Z`);
-  return (
-    !Number.isNaN(d.getTime()) &&
-    d.getUTCFullYear() >= 2000 &&
-    d.toISOString().slice(0, 10) === v
-  );
-};
-/** C0 boshqaruv belgilari (\n, \t dan tashqari) va DEL — Postgres U+0000 ni rad etadi. */
-// eslint-disable-next-line no-control-regex -- ataylab: boshqaruv belgilarini rad etish
-const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+export const isDay = isAiAdvisorDay;
+const CONTROL_CHARS = AI_ADVISOR_CONTROL_CHARS;
 /** Ro'yxat ustunlari — `toListItem` o'qiydiganlari (round-2 #654 S4). */
 const LIST_SELECT = `
   "id"::text AS id, "rule_key", "severity", "status", "title", "branch", "subject",
