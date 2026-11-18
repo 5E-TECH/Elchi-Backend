@@ -19,7 +19,10 @@ import {
   AiConfirmOrderDto,
   AiConfirmRequestDto,
 } from './dto/ai-order.swagger.dto';
-import { CreateOrderRequestDto } from './dto/order.swagger.dto';
+import {
+  CreateExternalOrderRequestDto,
+  CreateOrderRequestDto,
+} from './dto/order.swagger.dto';
 
 /** @nestjs/swagger `DECORATORS.API_MODEL_PROPERTIES` (chuqur import yo'q). */
 const API_MODEL_PROPERTIES = 'swagger/apiModelProperties';
@@ -766,7 +769,13 @@ describe('POST /orders/ai-confirm — orders[].customer_id (mavjud mijoz)', () =
       },
     );
 
-    it('POST /orders customer_id — ayni format', async () => {
+    it.each([
+      ['POST /orders', CreateOrderRequestDto],
+      [
+        'POST /orders/external (OmitType merosi)',
+        CreateExternalOrderRequestDto,
+      ],
+    ])('%s customer_id — ayni format', async (_label, metatype) => {
       const validateCreate = (customer_id: unknown) =>
         pipe.transform(
           {
@@ -775,15 +784,33 @@ describe('POST /orders/ai-confirm — orders[].customer_id (mavjud mijoz)', () =
             total_price: 1000,
             items: [{ product_id: '15', quantity: 1 }],
           },
-          { type: 'body', metatype: CreateOrderRequestDto },
-        );
-      await expect(validateCreate('0120')).rejects.toThrow(BadRequestException);
-      await expect(validateCreate('9999999999999999999')).rejects.toThrow(
-        BadRequestException,
-      );
-      await expect(validateCreate('120')).resolves.toMatchObject({
-        customer_id: '120',
-      });
+          { type: 'body', metatype },
+        ) as Promise<{ customer_id?: string }>;
+      for (const bad of [
+        'abc',
+        'EXT-77',
+        '3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c',
+        '-1',
+        '1.5',
+        '1e3',
+        '+120',
+        '0120',
+        '0',
+        '9223372036854775808',
+        2 ** 53 + 2,
+      ]) {
+        await expect(validateCreate(bad)).rejects.toThrow(BadRequestException);
+      }
+      for (const [good, expected] of [
+        ['120', '120'],
+        [' 120 ', '120'],
+        [120, '120'],
+        ['9223372036854775807', '9223372036854775807'],
+      ] as const) {
+        await expect(validateCreate(good)).resolves.toMatchObject({
+          customer_id: expected,
+        });
+      }
     });
   });
 
@@ -1019,12 +1046,15 @@ describe('POST /orders/ai-confirm — orders[].customer_id (mavjud mijoz)', () =
     order.customer.phone_number = '+998901110130';
     const res = await fx.controller.aiConfirm({ orders: [order] }, marketReq);
 
+    const cardUpdateDenied: unknown = expect.stringContaining(
+      "Mijoz kartasini yangilab bo'lmaydi",
+    );
     expect(res.data.results).toEqual([
       {
         index: 0,
         ok: false,
         code: 'create_failed',
-        reason: expect.stringContaining("Mijoz kartasini yangilab bo'lmaydi"),
+        reason: cardUpdateDenied,
       },
     ]);
     expect(createdPayloads(fx.order)).toHaveLength(0);
