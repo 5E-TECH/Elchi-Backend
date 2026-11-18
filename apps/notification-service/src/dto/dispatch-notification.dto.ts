@@ -184,4 +184,16 @@ export class DispatchNotificationDto {
   @IsString()
   @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
   client_request_id?: string;
+
+  /**
+   * Faqat yetkazish (ichki xizmatlar uchun): ayni `group_key` qatori bo'lsa —
+   * u QAYTA KO'TARILMAYDI (o'qilgan holati, inbox tartibi, `data.count`,
+   * matn o'zgarmaydi); faqat yangi kanallar qatorga qo'shiladi va ularning
+   * `delivery` holati yoziladi. Masalan: ilova ichida allaqachon ko'rsatilgan
+   * ogohlantirishning kechiktirilgan Telegram'i (BE-5 R6, 09:00). Qator yo'q
+   * bo'lsa — odatdagidek yangi qator.
+   */
+  @IsOptional()
+  @IsBoolean()
+  delivery_only?: boolean;
 }

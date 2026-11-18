@@ -1092,6 +1092,7 @@ export class NotificationInboxService {
     let toInsert = recipients;
 
     // Dedupe by group_key: refresh the existing row instead of stacking dupes.
+    const existingById = new Map<string, Notification>();
     if (dto.group_key) {
       const existing = await repo.find({
         where: {
@@ -1105,8 +1106,45 @@ export class NotificationInboxService {
         if (!rowIdByRecipient.has(key)) {
           rowIdByRecipient.set(key, row.id);
           countByRecipient.set(key, eventCount(row.data));
+          existingById.set(row.id, row);
         }
       }
+    }
+
+    // `delivery_only`: mavjud qator qayta ko'tarilmaydi — faqat yangi
+    // kanallar va ularning `delivery` holati qo'shiladi (BE-5 R6 09:00
+    // Telegram; o'qilgan, tartib, count, matn — o'zgarishsiz).
+    if (dto.delivery_only && rowIdByRecipient.size) {
+      const kept: string[] = [];
+      for (const recipient of recipients) {
+        const rowId = rowIdByRecipient.get(recipient.id);
+        const row = rowId ? existingById.get(rowId) : undefined;
+        if (!rowId || !row) continue;
+        const added = Object.fromEntries(
+          Object.entries(deliveryFor(recipient.id)).filter(
+            ([channel]) => channel !== NotificationChannel.IN_APP,
+          ),
+        );
+        await repo.update({ id: rowId }, {
+          channels: [...new Set([...(row.channels ?? []), ...channels])],
+          delivery: { ...(row.delivery ?? {}), ...added },
+        } as QueryDeepPartialEntity<Notification>);
+        kept.push(rowId);
+      }
+      // Qatori yo'q qabul qiluvchilar — odatdagidek yangi qator.
+      const pending = recipients.filter((r) => !rowIdByRecipient.has(r.id));
+      const inserted = pending.length
+        ? await this.persistRows(
+            manager,
+            { ...dto, delivery_only: false },
+            pending,
+            channels,
+            deliveryFor,
+            dispatchId,
+            textFor,
+          )
+        : [];
+      return [...(await repo.find({ where: { id: In(kept) } })), ...inserted];
     }
 
     // (A1HzKEby #4) Bo'ron chegarasi: group_key bo'yicha qatori yo'q, lekin
