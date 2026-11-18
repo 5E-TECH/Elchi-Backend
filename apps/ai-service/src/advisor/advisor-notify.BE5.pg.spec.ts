@@ -367,6 +367,11 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       });
       const [first, tg] = payloads();
       expect(tg.channels).toEqual(['telegram']);
+      // N1: ilova ichidagi qator qayta ko'tarilmaydi; ilk dispatch'da bayroq yo'q.
+      expect((tg as { delivery_only?: boolean }).delivery_only).toBe(true);
+      expect(
+        (first as { delivery_only?: boolean }).delivery_only,
+      ).toBeUndefined();
       expect(tg.data.alert_id).toBe(id);
       expect(tg.client_request_id).not.toBe(first.client_request_id);
       expect((await due(id)).telegram_due_at).toBeNull();

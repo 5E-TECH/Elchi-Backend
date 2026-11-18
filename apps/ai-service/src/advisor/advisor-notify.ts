@@ -88,6 +88,11 @@ export interface AdvisorDispatchPayload {
   link: string;
   group_key: string;
   client_request_id: string;
+  /**
+   * Kechiktirilgan Telegram (R6 09:00): ilova ichidagi qator QAYTA
+   * ko'tarilmaydi (o'qilgan/tartib/count o'zgarmaydi) — faqat Telegram.
+   */
+  delivery_only?: boolean;
   data: Record<string, unknown>;
 }
 
@@ -223,6 +228,7 @@ export function buildAdvisorDispatch(
         ? `ai-advisor-alert:${row.id}:tg`
         : `ai-advisor-alert:${row.id}`,
     ),
+    ...(mode === 'telegram_only' ? { delivery_only: true } : {}),
     data: {
       alert_id: row.id,
       rule_key: row.rule_key,
