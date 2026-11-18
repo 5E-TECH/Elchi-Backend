@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI maslahatchi (BE-5): bildirishnoma urinishlari va SMS eskalatsiyasi (review round-4)
+
+Deploy: ai-service + notification-service, migratsiyasiz.
+
+- 🔧 Jiddiy ogohlantirish bildirishnomasi notification-service tomonidan RAD ETILSA (4xx javobi) — qayta urinish oralig'i o'sadi (30 daqiqa, 1 soat, 2 soat, 4 soat); 5 urinishdan keyin to'xtatiladi (log'da `ai_advisor_notify_gave_up`). Xizmat vaqtincha YETIB BO'LMASA yoki nosoz bo'lsa (timeout / RabbitMQ uzilishi / 5xx) — urinish sanalmaydi, har 30 daqiqada qayta uriniladi (24 soatgacha): uzilishdan keyin xabar baribir yetadi. Bitta ogohlantirishga xos 5xx boshqalarini to'smaydi (navbat oxiriga, partiya davom etadi). R6 Telegram'i tunda (Toshkent 22:00–09:00) yuborilmaydi — qayta urinishlar ham: 09:00 gacha — o'sha kuni 09:00 da, 22:00 dan keyin — ertasi kuni 09:00 da; 09:00–22:00 — darhol. 09:00 Telegram'i ko'pi bilan bir marta yuboriladi; yetkazilmasa, qayta urinishlar due + 35 soatgacha (ertasi kuni 20:00 gacha) davom etadi, keyin tashlanadi. Ogohlantirishning o'zi ro'yxatda qoladi. Xatoli ogohlantirishlar yangi jiddiy ogohlantirishlar bildirishnomasini kechiktirmaydi. R6 09:00 Telegram'i uchun ham xuddi shu qoida.
+- 🔧 Tunda ochilgan R6 ning birinchi yuborishi yiqilib, 09:00 dan keyin qayta urinilsa — Telegram ham yetadi (ilgari yo'qolishi mumkin edi).
+- 🔒 `ai.advisor_alert` turi uchun SMS eskalatsiyasi navbatda qolib ketgan eski hodisalarda ham ishlamaydi (`delivery.escalation: "skipped"`, `escalation_reason: "type_opt_out"`).
+- 🟢 `GET /notifications/types` javobida `ai.advisor_alert` uchun `escalation: false` maydoni bor (qo'shimcha, ixtiyoriy): «bu tur SMS eskalatsiyasiz». FE turlarini generatsiya qilishda `escalation?: boolean` deb qo'shing.
+
+**Frontend action items:** yo'q (ixtiyoriy: `escalation?: boolean` turga).
+
 ### 2026-11-18 — AI maslahatchi (BE-5): review round-4 tuzatishlari
 
 Deploy: api-gateway + ai-service + finance-service, migratsiyasiz.
