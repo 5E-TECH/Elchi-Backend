@@ -2399,5 +2399,61 @@
    "sato": "1726266",
    "reason": null
   }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent shahri, Chilonzor ul. Bunyodkor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli yo'li 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
  }
 ]

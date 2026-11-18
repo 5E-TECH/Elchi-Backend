@@ -131,7 +131,11 @@ const STREET_AFTER_WORDS: ReadonlySet<string> = new Set([
   'ulica',
   'proyezd',
   'pereulok',
+  // Faqat keyin raqam yoki matn oxiri bo'lsa (2b'da tekshiriladi).
   'ul',
+  // "Sergeli yo'li" — yo'l (translit apostrofni olib tashlaydi), r4 S2.
+  'yoli',
+  'yuli',
   'maxalla',
   'maxallasi',
   'qishlogi',
@@ -924,8 +928,14 @@ export function resolveDistrictText(
             (next && allSkels.has(d.skel + next))
           )
             continue;
+          // "Sergeli ul. 12" — ko'cha; "Chilonzor ul. Bunyodkor 5" — "ul."
+          // keyingi nomga tegishli, Chilonzor tuman (r4 S1).
+          const afterUl = tokens[i + len + 1];
+          const streetAfter =
+            STREET_AFTER_WORDS.has(next) &&
+            (next !== 'ul' || afterUl === undefined || /^\d/.test(afterUl));
           if (
-            STREET_AFTER_WORDS.has(next) ||
+            streetAfter ||
             STREET_BEFORE_WORDS.has(prev) ||
             // "Andijon viloyati ..." — bu VILOYAT, tuman emas.
             REGION_AFTER_WORDS.has(next)
