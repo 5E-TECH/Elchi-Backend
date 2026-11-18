@@ -322,6 +322,28 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
     expect(rows.every((r) => r.notified_at !== null)).toBe(true);
   });
 
+  it('#705 S1: javobsiz (timeout) qator engine yangilasa ham keyingi tick’da navbat oxiriga — boshqalar ketadi', async () => {
+    const [{ id: slow }] = await insert('critical');
+    const goods: string[] = [];
+    for (let i = 0; i < 2; i++) goods.push((await insert('critical'))[0].id);
+    dispatch.mockImplementation((_p: unknown, body: unknown) =>
+      (body as { data: { alert_id: string } }).data.alert_id === slow
+        ? throwError(() => new TimeoutError())
+        : of({ statusCode: 201 }),
+    );
+    const bump = () =>
+      ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() - INTERVAL '1 day' WHERE id = $1`,
+        [slow],
+      );
+    await bump();
+    // 1-tick: javobsiz qator birinchi — partiya to'xtaydi.
+    expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 1 });
+    // Engine uni yana «eng eski» qiladi — baribir oxirida, yaxshilar ketadi.
+    await bump();
+    expect(await notifier.dispatchPending()).toEqual({ sent: 2, failed: 1 });
+  });
+
   it('#705 S3: superadminlar ro‘yxati bo‘sh — urinish sanalmaydi, «failed» bo‘lmaydi', async () => {
     const [{ id }] = await insert('critical');
     (notifier as unknown as { recipientsCache: unknown }).recipientsCache =
@@ -606,6 +628,34 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
         );
       }
       await notifier.dispatchPending(new Date(nine.getTime() + 11 * 3600_000));
+      expect(payloads().map((p) => p.channels)).toEqual([['telegram']]);
+      expect((await due(id)).telegram_due_at).toBeNull();
+    });
+
+    it('#705 rr11: 09:00 Telegram uzilishi 22:00 dan o‘tsa — qayta urinish ham tunda yuborilmaydi, ertasi 09:00 da bir marta', async () => {
+      const [{ id }] = await insert('critical', 'new', null, 'R6');
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      await notifier.dispatchPending(night);
+      expect((await due(id)).telegram_due_at?.toISOString()).toBe(
+        nine.toISOString(),
+      );
+      dispatch.mockReset();
+      // 09:00–22:00 notification-service nosoz (5xx) — Telegram ketmadi.
+      dispatch.mockImplementation(() =>
+        throwError(() => ({ statusCode: 503, message: 'x' })),
+      );
+      let t = nine.getTime();
+      const tenPm = nine.getTime() + 13 * 3600_000;
+      for (; t < tenPm; t += 30 * 60_000)
+        await notifier.dispatchPending(new Date(t));
+      // 22:00 dan tiklandi — 22:00..08:30 tunda Telegram yo'q.
+      dispatch.mockReset();
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      for (; t < nine.getTime() + 24 * 3600_000; t += 30 * 60_000)
+        await notifier.dispatchPending(new Date(t));
+      expect(dispatch).not.toHaveBeenCalled();
+      // Ertasi 09:00 — bir marta.
+      await notifier.dispatchPending(new Date(nine.getTime() + 24 * 3600_000));
       expect(payloads().map((p) => p.channels)).toEqual([['telegram']]);
       expect((await due(id)).telegram_due_at).toBeNull();
     });
