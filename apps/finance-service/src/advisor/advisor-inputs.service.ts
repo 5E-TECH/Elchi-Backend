@@ -1066,17 +1066,7 @@ export class AdvisorInputsService {
     // P5 (v0.4): T6 tahririning almashtiruvchi oyog'i — vaqti va id'si
     // zanjirning BIRINCHI (root) oyog'idan (ayni kassa): tahrir «oxirgi
     // topshirish»ni oldinga surmaydi, kunlar sanog'ini nolga tushirmaydi.
-    const effective = (a: string) => `LEFT JOIN LATERAL (
-                SELECT ro."id" AS rid, ro."createdAt" AS rat
-                  FROM ${t.corrections} pc
-                  JOIN ${t.history} ro ON ro."transfer_id" = pc."root_transfer_id"
-                   AND ro."cashbox_id" = ${a}."cashbox_id" AND ro."operation_type" = 'expense'
-                   AND ro."source_type" = ${a}."source_type"
-                 WHERE ${a}."transfer_id" IS NOT NULL
-                   AND pc."replacement_transfer_id" = ${a}."transfer_id"
-                   AND pc."is_deleted" = false
-                 ORDER BY ro."createdAt" ASC, ro."id" ASC LIMIT 1
-              ) ${a}e ON true`;
+    const effective = (a: string) => this.effectiveJoin(a);
     const day = (at: string) => `(${at} AT TIME ZONE 'Asia/Tashkent')::date`;
     // Oyna: [today − N kun] dan (bir kun oldingi qatorlar — kun boshi qoldig'i uchun).
     const since = `($5::date::timestamp AT TIME ZONE 'Asia/Tashkent')`;
@@ -1215,6 +1205,26 @@ export class AdvisorInputsService {
         ],
       );
     });
+  }
+
+  /**
+   * P5 (v0.4): T6 tahririning almashtiruvchi oyog'i uchun samarali vaqt/id —
+   * zanjirning BIRINCHI (root) oyog'idan (ayni kassa). Natija: `<a>e.rid`,
+   * `<a>e.rat` (tahrir bo'lmasa — NULL).
+   */
+  private effectiveJoin(a: string): string {
+    const t = this.tables();
+    return `LEFT JOIN LATERAL (
+                SELECT ro."id" AS rid, ro."createdAt" AS rat
+                  FROM ${t.corrections} pc
+                  JOIN ${t.history} ro ON ro."transfer_id" = pc."root_transfer_id"
+                   AND ro."cashbox_id" = ${a}."cashbox_id" AND ro."operation_type" = 'expense'
+                   AND ro."source_type" = ${a}."source_type"
+                 WHERE ${a}."transfer_id" IS NOT NULL
+                   AND pc."replacement_transfer_id" = ${a}."transfer_id"
+                   AND pc."is_deleted" = false
+                 ORDER BY ro."createdAt" ASC, ro."id" ASC LIMIT 1
+              ) ${a}e ON true`;
   }
 
   /** Kassa kunlik yopilishlari (`finance_cashbox_daily`) — oxirgi kunlar. */
@@ -1557,9 +1567,12 @@ export class AdvisorInputsService {
       }>
     >(
       `SELECT * FROM (
-         SELECT h."cashbox_id"::text AS cashbox_id, h."id"::text AS id, h."createdAt", ABS(h."amount") AS amount,
-                ROW_NUMBER() OVER (PARTITION BY h."cashbox_id" ORDER BY h."createdAt" DESC, h."id" DESC) AS rn
+         SELECT h."cashbox_id"::text AS cashbox_id, h."id"::text AS id,
+                COALESCE(he.rat, h."createdAt") AS "createdAt", ABS(h."amount") AS amount,
+                ROW_NUMBER() OVER (PARTITION BY h."cashbox_id"
+                  ORDER BY COALESCE(he.rat, h."createdAt") DESC, h."id" DESC) AS rn
            FROM ${t2.history} h
+           ${this.effectiveJoin('h')}
           WHERE h."cashbox_id" = ANY($1::bigint[]) AND h."operation_type" = 'expense'
             AND h."source_type" = 'branch_to_main' AND h."is_deleted" = false
             AND NOT EXISTS (

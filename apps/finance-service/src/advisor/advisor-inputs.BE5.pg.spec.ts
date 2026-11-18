@@ -1119,6 +1119,78 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         });
       });
 
+      it('#702 should-fix: R5 dalilidagi o‘tkazmalar ham samarali (root) vaqt bilan', async () => {
+        const cb = await cashbox('branch', 87, 3000000);
+        const leg = (
+          amount: number,
+          after: number,
+          at: string,
+          transfer: string,
+          source = 'branch_to_main',
+          op = 'expense',
+          reverses: string | null = null,
+        ) =>
+          db
+            .query<Array<{ id: string }>>(
+              `INSERT INTO "finance_schema"."cashbox_history"
+                 ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "createdAt", "transfer_id", "reverses_history_id")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING "id"::text AS id`,
+              [op, cb, source, amount, after, at, transfer, reverses],
+            )
+            .then((r) => r[0].id);
+        const T1 = '44444444-4444-4444-8444-444444444444';
+        const TR = '55555555-5555-4555-8555-555555555555';
+        const T2 = '66666666-6666-4666-8666-666666666666';
+        await hist(
+          cb,
+          'income',
+          'sell',
+          1000000,
+          1000000,
+          '2026-10-10T08:00:00Z',
+        );
+        const h1 = await leg(-900000, 100000, '2026-10-15T10:00:00Z', T1);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          2900000,
+          3000000,
+          '2026-10-16T08:00:00Z',
+        );
+        await leg(
+          900000,
+          3900000,
+          '2026-10-21T09:00:00Z',
+          TR,
+          'payment_reversal',
+          'income',
+          h1,
+        );
+        await leg(-850000, 3050000, '2026-10-21T09:00:00Z', T2);
+        await db.query(
+          `INSERT INTO "finance_schema"."payment_corrections"
+             ("action", "payment_kind", "original_transfer_id", "root_transfer_id", "reversal_transfer_id",
+              "replacement_transfer_id", "original_amount", "new_amount", "payment_method",
+              "counterparty_user_id", "receiver_cashbox_id", "reason", "created_by", "idempotency_key", "root_created_at")
+           VALUES ('edit', 'branch_to_main', $1, $1, $2, $3, 900000, 850000, 'cash', 87, 1, 'xato summa', 1, 'k-r5', '2026-10-15T10:00:00Z')`,
+          [T1, TR, T2],
+        );
+        const out = await runWith(['R5'], {
+          R5: {
+            balance_uzs: 500000,
+            days_without_transfer: 3,
+            min_transfer_pct: 80,
+          },
+        });
+        expect(out.candidates[0]).toMatchObject({
+          facts: { last_transfer_at: '2026-10-15T10:00:00.000Z' },
+          evidence: {
+            transfers: [{ at: '2026-10-15T10:00:00.000Z', amount: 850000 }],
+          },
+        });
+      });
+
       it('R4 o‘zgarmaydi: har qanday to‘lov kunlarni nolga tushiradi', async () => {
         const m = await cashbox('markets', 84, 3000000);
         await hist(
