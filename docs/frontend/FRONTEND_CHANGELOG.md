@@ -24,7 +24,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizodlari — shartnoma v0.4
 
-Ega qarori 2026-11-18. Deploy: ai-service + finance-service, migratsiyasiz.
+Ega qarori 2026-11-18. Deploy: ai-service + finance-service + **migratsiya 1716000000243** (`cashbox_history (cashbox_id, createdAt, id)` indeksi). Relizda 241 bilan BITTA tranzaksiyada yuradi — ikkala SHARE qulf partiya commit bo'lguncha turadi (`cashbox_history` ga yozish kutadi, o'qish kutmaydi): kam yuklamali vaqtda, 243 eng oxirida.
 
 - ✏️ **Topshirish chegarasi (R2, R5):** «topshirilmagan kunlar» faqat o'sha kun boshidagi qoldiqning kamida **80%** i topshirilganda (bir kundagi topshirishlar yig'indisi) nolga tushadi; kichikroq topshirishlar epizodni yangilamaydi, kunlar sanalishda davom etadi. Yangi sozlamalar: `rules.R2.min_handover_pct`, `rules.R5.min_transfer_pct` (sukut 80, 1–100, `limits` da `unit: "percent"` — **yangi birlik**). UI'da hozircha KO'RSATILMAYDI (FE sozlamalar dialogida yashiring). `rule.thresholds` va `evidence.min_handover_pct` / `evidence.min_transfer_pct` da snapshot. R4 (market to'lovi) o'zgarmaydi — har qanday to'lov.
 - ✏️ **R2 o'sish:** faqat o'sish triggeri — epizod o'sish qatorining boshlangan kuni; kuniga qisman topshirish «N marta» ni ko'paytirmaydi va yopilgandan keyin har kuni yangi ogohlantirish ochmaydi. Sarlavha: «{kuryer}: {qoldiq} so'm — qarz N kun ketma-ket o'sgan»; o'sish bo'lmasa `facts.growth_days = 0`.

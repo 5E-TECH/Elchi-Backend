@@ -1075,8 +1075,13 @@ export class AdvisorInputsService {
     // ham kunlik agregatdan (kassalar soni × tarix uzunligiga chiziqli).
     // JIT o'chiq: rejalashtiruvchi lateral'lar narxini katta baholab JIT
     // kompilyatsiyasiga (~1.4 s) kiradi, so'rovning o'zi ~0.5 s (#702 B1).
+    // `statement_timeout` — boshqa o'qish so'rovlari kabi (`withTimeout`):
+    // kutilmagan reja ulanishni va RPC'ni uzoq ushlab turmasin.
     return this.ds.transaction(async (m) => {
       await m.query('SET LOCAL jit = off');
+      await m.query(
+        `SET LOCAL statement_timeout = ${ADVISOR_STATEMENT_TIMEOUT_MS}`,
+      );
       return m.query<EpisodeRow[]>(
         `WITH cb AS (
          SELECT c."id", c."user_id", c."balance" FROM ${t.cashboxes} c
@@ -1088,11 +1093,15 @@ export class AdvisorInputsService {
        starts AS (
          SELECT x.cashbox_id, x.day, x.start_balance FROM (
            SELECT y.cashbox_id, y.d AS day,
-                  LAG(y.balance_after) OVER w AS start_balance,
+                  COALESCE(LAG(y.balance_after) OVER w,
+                    -- oynadagi birinchi qator: qoldiq shu qatordan OLDIN
+                    y.balance_after + CASE WHEN y.op = 'expense'
+                      THEN ABS(y.amount) ELSE -ABS(y.amount) END) AS start_balance,
                   y.d IS DISTINCT FROM LAG(y.d) OVER w AS first_of_day
              FROM (
                SELECT h."cashbox_id" AS cashbox_id, h."createdAt" AS at, h."id" AS id,
-                      h."balance_after" AS balance_after, ${day('h."createdAt"')} AS d
+                      h."balance_after" AS balance_after, h."operation_type"::text AS op,
+                      h."amount" AS amount, ${day('h."createdAt"')} AS d
                  FROM ${t.history} h JOIN cb ON cb."id" = h."cashbox_id"
                 WHERE h."is_deleted" = false AND h."createdAt" >= ${since}
              ) y
@@ -1149,16 +1158,28 @@ export class AdvisorInputsService {
        -- P4 (#702 review B3): T6 «qaytarish» — chegara faqat qaytarilgan
        -- oyoq kuni oxirgi hisoblanadigan kundan KEYIN va o'sha kun qaytarilgan
        -- oyoqlari bilan birga hisoblanadigan bo'lgan bo'lsa (kun yig'indisi).
+       -- Har kun uchun: kun 80% dan PASTGA tushgan BIRINCHI qaytarish
+       -- (qolgan = with_rev − shu paytgacha qaytarilganlar).
+       rvd AS (
+         SELECT DISTINCT ON (x.cashbox_id, x.day) x.cashbox_id, x.rid, x.oid, x.rat
+           FROM (
+             SELECT l."cashbox_id" AS cashbox_id, dq.day, dq.sb, l.rid, l."id" AS oid, l.rat,
+                    dq.with_rev - SUM(l.amount) OVER (
+                      PARTITION BY l."cashbox_id", dq.day ORDER BY l.rat, l.rid) AS remaining
+               FROM legs l
+               JOIN dq ON dq.cashbox_id = l."cashbox_id" AND dq.day = ${day('l.at')}
+               LEFT JOIN qh ON qh.cashbox_id = l."cashbox_id"
+              WHERE l.kind = 'reverse'
+                AND dq.with_rev * 100 >= $4::numeric * dq.sb
+                AND (qh.day IS NULL OR dq.day > qh.day)
+           ) x
+          WHERE x.remaining <= 0 OR x.remaining * 100 < $4::numeric * x.sb
+          ORDER BY x.cashbox_id, x.day, x.rat ASC, x.rid ASC
+       ),
        rv AS (
-         SELECT DISTINCT ON (l."cashbox_id") l."cashbox_id" AS cashbox_id,
-                l.rid::text AS rid, l."id"::text AS oid, l.rat
-           FROM legs l
-           JOIN dq ON dq.cashbox_id = l."cashbox_id" AND dq.day = ${day('l.at')}
-           LEFT JOIN qh ON qh.cashbox_id = l."cashbox_id"
-          WHERE l.kind = 'reverse'
-            AND dq.with_rev * 100 >= $4::numeric * dq.sb
-            AND (qh.day IS NULL OR dq.day > qh.day)
-          ORDER BY l."cashbox_id", l.rat DESC, l.rid DESC
+         SELECT DISTINCT ON (r.cashbox_id) r.cashbox_id, r.rid::text AS rid,
+                r.oid::text AS oid, r.rat
+           FROM rvd r ORDER BY r.cashbox_id, r.rat DESC, r.rid DESC
        )
        SELECT cb."id"::text AS cashbox_id, cb."user_id"::text AS owner, cb."balance",
               lh.id AS last_id, lh.at AS last_at, lh.amount AS last_amount,
@@ -1189,10 +1210,15 @@ export class AdvisorInputsService {
               AND z."balance_after" <= 0
             ORDER BY z."createdAt" DESC, z."id" DESC LIMIT 1
          ) zr ON true
+         -- Bitta qator taqqoslashi (OR emas): IDX_CASHBOX_HISTORY_CASHBOX_CREATED
+         -- (migratsiya 243) bo'yicha kassa ichida zr dan keyingi birinchi qator.
+         -- OR bilan rejalashtiruvchi "createdAt" indeksini jadval boshidan
+         -- o'qib, har kassa uchun cashbox_id bo'yicha filtrlardi (kvadratik).
          LEFT JOIN LATERAL (
            SELECT s."id"::text AS id, s."createdAt" FROM ${t.history} s
             WHERE s."cashbox_id" = cb."id" AND s."is_deleted" = false
-              AND (zr."id" IS NULL OR (s."createdAt", s."id") > (zr."createdAt", zr."id"))
+              AND (s."createdAt", s."id") >
+                  (COALESCE(zr."createdAt", '-infinity'::timestamptz), COALESCE(zr."id", 0))
             ORDER BY s."createdAt" ASC, s."id" ASC LIMIT 1
          ) rs ON true
         ORDER BY cb."id"`,

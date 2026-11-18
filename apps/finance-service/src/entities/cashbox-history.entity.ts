@@ -5,6 +5,8 @@ import { Cashbox } from './cashbox.entity';
 
 @Entity({ name: 'cashbox_history' })
 @Index('IDX_CASHBOX_HISTORY_CASHBOX', ['cashbox_id'])
+// Migratsiya 243 — kassa ichida vaqt tartibi (AI maslahatchi epizodlari, #702).
+@Index('IDX_CASHBOX_HISTORY_CASHBOX_CREATED', ['cashbox_id', 'createdAt', 'id'])
 @Index('IDX_CASHBOX_HISTORY_CREATED_AT', ['createdAt'])
 @Index('IDX_CASHBOX_HISTORY_OP_TYPE', ['operation_type'])
 @Index('IDX_CASHBOX_HISTORY_SOURCE', ['source_type'])
