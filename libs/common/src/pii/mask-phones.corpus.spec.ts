@@ -1804,6 +1804,31 @@ const AMOUNT_CASES: Case[] = [
     phones: [P('901232026')],
     tag: 'round 4',
   },
+  // #647 round 4: dev (21190eef) bilan teng narx gap'lari — KNOWN_AMOUNT_GAPS da.
+  {
+    text: 'Narxi 90000 14.11',
+    phones: [],
+    keep: ['90000 14.11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 850 000 14 11',
+    phones: [],
+    keep: ['850 000 14 11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 1 090 000 14.11',
+    phones: [],
+    keep: ['1 090 000 14.11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Atir 75.500 14.11',
+    phones: [],
+    keep: ['75.500 14.11'],
+    tag: 'round 4',
+  },
 ];
 
 /**
@@ -1824,8 +1849,18 @@ const KNOWN_PRIVACY_GAPS: ReadonlySet<string> = new Set<string>([
   'S4c name …000 (no phone word)',
   'N4s NNBSP-grouped date-like phone (no word)',
 ]);
-/** Hozircha bo'sh (STIR/Trek/ID #647 round 2 da tuzatildi). */
-const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([]);
+/**
+ * Narx + sana, dev (21190eef) ham telefon deb maskalagan — dev tanigan
+ * ajratgich bilan telefondan farqlab bo'lmaydi (`Aziza 90000 14.11`,
+ * `Aziza 90.123 14.11` telefon bo'lishi mumkin). Summa so'zi bu shakllarda
+ * ataylab hisobga olinmaydi.
+ */
+const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([
+  'Narxi 90000 14.11',
+  'Narxi 850 000 14 11',
+  'Narxi 1 090 000 14.11',
+  'Atir 75.500 14.11',
+]);
 
 /** Log matnida milliy 9 raqam (ajratgichlarsiz ham) qolmaganmi. */
 const logLeaks = (log: string, phones: string[]) =>
