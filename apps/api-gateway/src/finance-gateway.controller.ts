@@ -79,7 +79,6 @@ import {
   ShiftSettingsQueryDto,
   UpdateShiftSettingsRequestDto,
   CreateCashboxRequestDto,
-  CreateOperatorPaymentRequestDto,
   CreateSalaryRequestDto,
   CurrentShiftQueryDto,
   RecordFinancialBalanceRequestDto,
@@ -6002,36 +6001,10 @@ export class FinanceGatewayController {
   }
 
   // --- Operator earnings & payments ---
-
-  @Post('operator-payments')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Record a payout to an operator' })
-  @ApiBody({ type: CreateOperatorPaymentRequestDto })
-  @ApiHeader({
-    name: 'idempotency-key',
-    required: false,
-    description:
-      "Har to'lov uchun bitta kalit (retry'da ayni kalit). Takroriy so'rov 200 va data.idempotent: true qaytaradi (FJVqcUTv).",
-  })
-  createOperatorPayment(
-    @Body() dto: CreateOperatorPaymentRequestDto,
-    @Req() req: { user?: JwtUser },
-    @Headers('idempotency-key') idempotencyKey?: string,
-  ) {
-    // (FJVqcUTv) Kalit ixtiyoriy (FE hali yubormaydi); bo'lsa ikki marta
-    // bosilgan "To'lovni saqlash" operatorga ikki marta to'lamaydi.
-    const key = this.readIdempotencyKey(idempotencyKey);
-    return this.send(
-      { cmd: 'finance.operator.payment.create' },
-      {
-        ...dto,
-        paid_by_id: req.user?.sub ?? null,
-        ...(key ? { idempotency_key: key } : {}),
-      },
-    );
-  }
+  // F2qp6FtE: `POST operator-payments` (superadmin, Asosiy kassadan naqd) olib
+  // tashlandi — market o'z operatoriga o'zi to'laydi va buni kassasiz yozadi:
+  // `OperatorPaymentGatewayController` (`/finance/operator-payments`, MARKET).
+  // Quyidagi o'qish yo'llari (SA/ADMIN/MANAGER va operatorning `me`) qoladi.
 
   // ───────── E6iEOAVs — market operatori O'Z daromadi (MO-S2 «Daromadim») ─────────
   // ⚠️ `operators/:operator_id/*` dan OLDIN e'lon qilinadi: aks holda 'me'

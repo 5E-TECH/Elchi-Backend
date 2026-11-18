@@ -1,5 +1,11 @@
 import { of } from 'rxjs';
-import { DataSource, type FindOneOptions } from 'typeorm';
+import {
+  DataSource,
+  type FindOneOptions,
+  type FindOptionsWhere,
+  type UpdateResult,
+} from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { CreateNotifications1716000000008 } from '../../../migrations/1716000000008-CreateNotifications';
 import { CreateNotificationDispatches1716000000084 } from '../../../migrations/1716000000084-CreateNotificationDispatches';
 import { DispatchNotificationDto } from './dto/dispatch-notification.dto';
@@ -313,20 +319,30 @@ const USER = '778000000001';
               SET delivery = COALESCE(delivery, '{}'::jsonb) || '{"telegram":"queued"}'::jsonb
             WHERE recipient_id = ${USER}`,
         );
-      const save = repo.save.bind(repo);
-      const update = repo.update.bind(repo);
+      const realSave = (entity: Notification): Promise<Notification> =>
+        repo.manager.save(Notification, entity);
+      const realUpdate = (
+        criteria: FindOptionsWhere<Notification>,
+        patch: QueryDeepPartialEntity<Notification>,
+      ): Promise<UpdateResult> =>
+        repo.manager.update(Notification, criteria, patch);
       const saveSpy = jest
         .spyOn(repo, 'save')
-        .mockImplementation(async (...args: Parameters<typeof save>) => {
+        .mockImplementation(async (entity: Notification) => {
           await inject();
-          return save(...args);
+          return realSave(entity);
         });
       const updateSpy = jest
         .spyOn(repo, 'update')
-        .mockImplementation(async (...args: Parameters<typeof update>) => {
-          await inject();
-          return update(...args);
-        });
+        .mockImplementation(
+          async (
+            criteria: FindOptionsWhere<Notification>,
+            patch: QueryDeepPartialEntity<Notification>,
+          ) => {
+            await inject();
+            return realUpdate(criteria, patch);
+          },
+        );
       try {
         await service.remove(USER, row.id);
       } finally {

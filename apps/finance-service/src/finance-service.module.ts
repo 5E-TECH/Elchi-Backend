@@ -66,6 +66,8 @@ import { PickupFifoService } from './pickup-visit/pickup-fifo.service';
 import { PICKUP_FIFO } from './pickup-visit/pickup-fifo.token';
 import { PickupVisitService } from './pickup-visit/pickup-visit.service';
 import { PickupVisitController } from './pickup-visit/pickup-visit.controller';
+import { OperatorPaymentService } from './operator-payment/operator-payment.service';
+import { OperatorPaymentController } from './operator-payment/operator-payment.controller';
 
 @Module({
   imports: [
@@ -161,6 +163,8 @@ import { PickupVisitController } from './pickup-visit/pickup-visit.controller';
     CashboxReceiptController,
     // B824gOu5 — pickup tashrifi yozuvi, ro'yxat, daromad yig'indisi.
     PickupVisitController,
+    // F2qp6FtE — market o'z operatoriga to'lov yozuvi (kassasiz).
+    OperatorPaymentController,
     // BE-5 LhTIno57 — AI maslahatchi qoida ma'lumotlari (FAQAT o'qish).
     AdvisorInputsController,
   ],
@@ -189,6 +193,7 @@ import { PickupVisitController } from './pickup-visit/pickup-visit.controller';
     PickupFifoService,
     { provide: PICKUP_FIFO, useExisting: PickupFifoService },
     PickupVisitService,
+    OperatorPaymentService,
   ],
 })
 export class FinanceServiceModule {}

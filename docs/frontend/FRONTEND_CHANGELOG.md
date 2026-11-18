@@ -31,6 +31,29 @@ Deploy: notification-service, migratsiyasiz.
 
 **Frontend action items:** yo'q.
 
+### 2026-11-18 — Operatorga to'lov: market o'zi yozadi, Elchi kassasiga ta'sir qilmaydi (F2qp6FtE)
+
+Ega qarori (2026-11-16): har market o'z operatoriga O'ZI, istagan vaqtida to'laydi. Bu Elchi Asosiy kassasiga ta'sir qilmaydi — kassa faqat market bilan Elchi o'rtasidagi oldi-berdi. Tizim faqat ma'lumot saqlaydi: operator qancha ishlab topgani va qanchasi to'lab berilgani.
+Deploy tartibi: migration-runner (**migratsiya 1716000000242**) → finance-service → api-gateway → frontend.
+
+- ⚠️ [gateway] `POST /finance/operator-payments` endi **faqat MARKET** (ilgari SUPERADMIN/ADMIN, pul Asosiy kassadan naqd chiqib «Maosh» xarajati bo'lib yozilardi). Superadmin/admin — 403; operator ID yozib to'lash yo'li yo'q. Eski RMQ `finance.operator.payment.create` — **410**, hech narsa yozmaydi (deploy oynasidagi eski gateway uchun).
+  - Tana: `{ operator_id, amount, paid_at?, note? }` — `amount` > 0, ko'pi bilan 2 kasr; `paid_at` `YYYY-MM-DD` (Toshkent kuni, sukut — bugun, kelajak — 400); `note` ≤ 500. `market_id` YUBORILMAYDI (JWT `sub`; tanada — 400). Operator — shu marketning o'chirilmagan operatori (faol yoki nofaol), aks holda **404**.
+  - `Idempotency-Key` sarlavhasi **majburiy** (1–255): ayni kalit bilan takror — **200**, o'sha yozuv, `data.idempotent: true`; ayni kalit boshqa summa yoki operator bilan (yoki takrorda `paid_at` berilib, boshqa sana bilan) — **409**; izoh solishtirilmaydi. Yangi yozuv — **201**.
+  - Qoldiqdan oshsa ham yoziladi (avans) — «Qoldiq» manfiy bo'ladi.
+  - Javob `data` (`OperatorPaymentViewDto`): `id, operator_id, operator_name, market_id, amount, paid_at, note, source ('market' | 'elchi'), affects_cashbox, recorded_by_role, created_at, status ('active' | 'cancelled'), cancelled_at, cancelled_by_role, cancel_reason, can_cancel, idempotent`.
+  - Kassa, kassa tarixi, P&L daftari, xarajat va smenaga **tegmaydi** (DB CHECK: `source = 'market'` yozuvi `affects_cashbox = false`).
+- 🆕 [gateway] `POST /finance/operator-payments/:id/cancel` `{ reason }` (MARKET, **200**) — xato yozuvni bekor qilish: qator qoladi (`status: cancelled`, `cancelled_at`, `cancel_reason`), «To'landi» ga kirmaydi. Sabab majburiy (3–500 belgi). Faqat shu market yozgan yozuv (begona yoki yo'q — 404); eski Elchi yozuvi (`source: elchi`) — **409**. Takror — 200, `idempotent: true`.
+- 🆕 [gateway] `GET /finance/operator-payments/balances` (MARKET) → `{ items: [{ operator_id, operator_name, status, earned, paid, balance, payments_count, last_paid_at }], totals: { earned, paid, balance } }` — marketning barcha o'chirilmagan operatorlari. `earned` — «Ishlab topdi» (`/me/balance` bilan AYNI qoida), `paid` — «To'landi» (bekor qilinmagan, eski Elchi to'lovlari ham), `balance` = earned − paid (manfiy — ortiqcha to'langan, xato emas).
+- 🆕 [gateway] `GET /finance/operator-payments?operator_id&page&limit` (MARKET; limit 1–100, sukut 20) → `{ items: OperatorPaymentViewDto[], pagination: { total, page, limit, totalPages } }` — to'lov sanasi bo'yicha yangisi tepada; shu market yozganlari + uning operatorlariga Elchi eski yo'lda yozganlari (`source: elchi`, `affects_cashbox` — Asosiy kassadan chiqqanmi). Bekor qilinganlar ham chiqadi. Begona `operator_id` — 404.
+- ✏️ [finance] `GET /finance/operators/me/balance` va `/operators/:id/balance`: `paid` bekor qilingan yozuvlarni chiqarib tashlaydi; summalar tiyin aniqligida. `/me/payments` va `/operators/:id/payments` qatorlari: tartib `paid_at DESC, id DESC`; eski maydonlar saqlangan + `paid_at`, `source`, `affects_cashbox`, `recorded_by_role`, `status`, `cancelled_at`, `cancelled_by_role`, `cancel_reason` (`idempotency_key`, `cancelled_by_id` qaytmaydi).
+- 🟢 [activity-log] Yangi fe'llar: `finance.operator_payment_recorded` «Operatorga to'lov yozildi», `finance.operator_payment_cancelled` «Operatorga to'lov bekor qilindi» (`entity_type: OperatorPayment`).
+- 🟢 Migratsiya 242: mavjud to'lovlar `source = 'elchi'`, `affects_cashbox` — ma'lumotdan (kassa tarixi yoki P&L qatori bor — true), `paid_at` — yozilgan kunning Toshkent sanasi. Eski to'lovlar, ularning kassa harakati va «Maosh» xarajatlari o'zgarmaydi.
+
+**Frontend action items:**
+- 🔧 Market «Operatorlar» (`/market-operators`): har operatorda «Ishlab topdi / To'landi / Qoldiq», «To'lov yozish» (tasdiq oynasi — Elchi kassasiga ta'sir qilmaydi), to'lovlar tarixi va «Bekor qilish» (sabab bilan). `Idempotency-Key` — bitta mantiqiy to'lov uchun bitta kalit.
+- 🔧 Operator «Daromadim»: `GET /finance/operators/me/balance` + `/me/payments` (faqat o'qish; bekor qilinganlar belgisi bilan).
+- 🔧 Ops «Moliya operatorlari» tabi va `/finance-operators` olib tashlanadi (yo'naltiriladi) — superadmin endi operatorga to'lamaydi.
+
 ### 2026-11-18 — AI maslahatchi (BE-5): R6 09:00 Telegram inbox qatorini qayta ko'tarmaydi
 
 - 🔧 (#655 N1 tuzatish) Tunda ochilgan R6 ning 09:00 dagi Telegram xabari ilova ichidagi `ai.advisor_alert` qatorini endi QAYTA KO'TARMAYDI: o'qilgan holati, inbox tartibi (`createdAt`), `data.count` va matn o'zgarmaydi — qatorga faqat `telegram` kanali qo'shiladi. Ilgari 09:00 da qator «o'qilmagan» bo'lib tepaga chiqardi (`count: 2`). Foydalanuvchi o'chirgan qator QAYTA PAYDO BO'LMAYDI (Telegram baribir yuboriladi).
