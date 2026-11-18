@@ -1703,6 +1703,71 @@ const AMOUNT_CASES: Case[] = [
     phones: [P('900001411')],
     tag: 'round 4',
   },
+  // #647 round 4 (A2): narx + ISO sana keng ajratgich bilan (2 bo'shliq, ` - `, NBSP).
+  {
+    text: 'Narxi 20 000  2026-11-14',
+    phones: [],
+    keep: ['20 000  2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 75 000 - 2026-11-14',
+    phones: [],
+    keep: ['75 000 - 2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Nike narxi 77  000 2026-11-13',
+    phones: [],
+    keep: ['77  000 2026-11-13'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi: 50 000 - 2026-11-20',
+    phones: [],
+    keep: ['50 000 - 2026-11-20'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 850 000  2026-11-14',
+    phones: [],
+    keep: ['850 000  2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 850${NB}000 2026-11-14`,
+    phones: [],
+    keep: [`850${NB}000 2026-11-14`],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 850${NNB}000 2026-11-14`,
+    phones: [],
+    keep: [`850${NNB}000 2026-11-14`],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 75${NNB}000 2026-11-14`,
+    phones: [],
+    keep: [`75${NNB}000 2026-11-14`],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 75000  2026-11-14',
+    phones: [],
+    keep: ['75000  2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 90 123 2026',
+    phones: [P('901232026')],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 90-123-2026, Chilonzor',
+    phones: [P('901232026')],
+    tag: 'round 4',
+  },
 ];
 
 /**

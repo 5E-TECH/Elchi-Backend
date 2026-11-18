@@ -293,13 +293,18 @@ function looksLikePriceAndDate(
   // (#647 round 3 N4).
   if (isPhoneWordBefore(before)) return false;
   const nat = digits.slice(-9);
-  // 2-3-4 + ISO sana davomi: `90 500 2026-11-14` (faqat prefikssiz).
-  if (/^\d{2}\D\d{3}\D\d{4}$/.test(raw)) {
+  // Narx + ISO sana: `90 500 2026-11-14`, `20 000  2026-11-14`,
+  // `75 000 - 2026-11-14`, `850 000  2026-11-14` (#647 round 4 A2: GROUP_SEP
+  // 2 bo'shliq va ` - ` ni ham qabul qiladi). Prefikssiz 2-3-4 yoki dev
+  // tanimagan ajratgich bilan; `90 123 2026` (davomsiz) — telefon.
+  if (/\D(?:19|20)\d{2}$/.test(raw)) {
     const iso = /^([./-])(\d{2})\1(\d{2})(?!\d)/.exec(after);
+    if (!iso || !(isDayMonth(iso[2], iso[3]) || isDayMonth(iso[3], iso[2]))) {
+      return false;
+    }
     return (
-      /^(?:19|20)\d{2}$/.test(nat.slice(5)) &&
-      !!iso &&
-      (isDayMonth(iso[2], iso[3]) || isDayMonth(iso[3], iso[2]))
+      /^\d{2}\D+\d{3}\D+\d{4}$/.test(raw) ||
+      (raw.match(/\D+/g) ?? []).some((x) => !/^[ .-]$/.test(x))
     );
   }
   // Oxirgi ikki juftlik — sana (`DD MM`); oldidagi ajratgich tail[2].
