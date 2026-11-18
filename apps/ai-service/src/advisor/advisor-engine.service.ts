@@ -411,7 +411,8 @@ export class AdvisorEngineService {
       const previous = await m.query<
         Array<{ id: string; last_fact_at: Date | null }>
       >(
-        `SELECT "id"::text AS id, "last_fact_at" FROM ${ALERTS}
+        `SELECT "id"::text AS id,
+                GREATEST("last_fact_at", "last_at") AS "last_fact_at" FROM ${ALERTS}
           WHERE "dedup_key" = $1 AND "status" IN ('resolved','dismissed') AND "is_deleted" = false
           ORDER BY "id" DESC LIMIT 1`,
         [c.dedup_key],

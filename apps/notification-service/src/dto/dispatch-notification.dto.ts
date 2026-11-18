@@ -193,7 +193,20 @@ export class DispatchNotificationDto {
    * ogohlantirishning kechiktirilgan Telegram'i (BE-5 R6, 09:00). Foydalanuvchi
    * qatorni o'chirgan bo'lsa — qator tiriltirilmaydi (o'chirilganligicha
    * qoladi), yetkazish holati unga yoziladi. Qatori umuman bo'lmagan qabul
-   * qiluvchiga — hech narsa (yangi in-app qator yaratilmaydi).
+   * qiluvchiga — hech narsa (yangi in-app qator yaratilmaydi; javobda
+   * `skipped_no_row`).
+   *
+   * Faqat TASHQI shaxsiy kanallar (Telegram DM, push): `in_app`, `realtime`,
+   * `sms` so'ralsa ham olib tashlanadi, eskalatsiya rejalashtirilmaydi —
+   * mavjud qatorning bu kanallar holati o'zgarmaydi.
+   *
+   * Eslatma (#699 follow-up S5/S6):
+   * - javob `delivery.in_app = 0` (yangi in-app qator yo'q), `by_channel`
+   *   esa mavjud qatorlar sonini ko'rsatishi mumkin;
+   * - qatorning `dispatch_id` i — birinchi (masalan 02:30) dispatch'niki,
+   *   o'zgarmaydi;
+   * - Telegram matni SAQLANGAN qatordan (`title`/`body`) olinadi — bu
+   *   chaqiruvdagi `title`/`body` qatorga yozilmaydi.
    */
   @IsOptional()
   @IsBoolean()

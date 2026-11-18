@@ -18,13 +18,16 @@
  * draft'ga tushmaydi — ular uchun gateway logi kerak (bu skript qamramaydi).
  *
  * ⚠️ MAXFIYLIK: `source_text` da telefonlar allaqachon `[TEL_n]`; skript
- * qo'shimcha ravishda email, ijtimoiy tarmoq havolasi, @foydalanuvchi,
- * ism (AI/operator customer_name va operator qiymatlari, qo'shimchalari
- * bilan), pasport seriyasi, 9+ raqamli ketma-ketliklar (100 mln dan katta
- * narx ham!), uy/xonadon raqamlarini maskalaydi. QOLADIGAN PII (odam
- * ko'radi): to'liq kenglikdagi raqamlar, 7 raqamli shahar telefoni,
- * vergul bilan ajratilgan raqamlar, koordinatalar, tug'ilgan sana, manzil
- * (ko'cha/mahalla), ro'yxatda yo'q ism. Natija
+ * qo'shimcha ravishda email, ijtimoiy tarmoq / xarita / WhatsApp havolasi,
+ * @foydalanuvchi, ism (AI/operator customer_name va operator qiymatlari,
+ * qo'shimchalari va murojaatsiz o'zagi bilan), pasport seriyasi, 9+
+ * raqamli ketma-ketliklar (100 mln dan katta narx ham!), kalit so'z
+ * yonidagi uy/xonadon raqamlarini maskalaydi. QOLADIGAN PII (odam
+ * ko'radi; to'liq ro'yxat — docs/ai/PROD_EVAL_EXPORT.md §2): ro'yxatda
+ * yo'q ism, @ siz foydalanuvchi nomi, boshqa domen havolasi, to'liq
+ * kenglikdagi raqamlar, 7 raqamli shahar telefoni, vergul bilan
+ * ajratilgan raqamlar, havoladan tashqari koordinata, tug'ilgan sana,
+ * manzil (ko'cha/mahalla), kalit so'zsiz uy raqami. Natija
  * FAQAT repo'dan TASHQARIDAGI katalogga (`--out`) yoziladi — odam
  * ko'rib chiqib, sintetik ko'rinishga keltirib, keyin
  * `apps/ai-service/test/fixtures/order-extract/` ga qo'shadi (source:
@@ -87,7 +90,11 @@ export const COLLECT_SQL = `
       OR EXISTS (
         SELECT 1 FROM ai_schema.ai_order_draft_item i
         WHERE i.draft_id = d.id
-          AND jsonb_array_length(COALESCE(i.edited_fields, '[]'::jsonb)) > 0
+          -- JSON 'null' / skalyar: jsonb_array_length xato bermasin
+          -- (CASE — AND tartibi Postgres'da kafolatlanmagan).
+          AND CASE WHEN jsonb_typeof(i.edited_fields) = 'array'
+                   THEN jsonb_array_length(i.edited_fields) > 0
+                   ELSE false END
       )
     )
   ORDER BY d.created_at DESC
@@ -135,7 +142,11 @@ export const UNEDITED_SAMPLE_SQL = `
       WHERE i.draft_id = d.id
         AND (i.edited_fields IS NULL
              OR i.item_index IS NULL
-             OR jsonb_array_length(i.edited_fields) > 0)
+             -- JSON 'null' / skalyar — "solishtirib bo'lmadi" (NULL kabi);
+             -- jsonb_array_length faqat massivda chaqiriladi.
+             OR CASE WHEN jsonb_typeof(i.edited_fields) = 'array'
+                     THEN jsonb_array_length(i.edited_fields) > 0
+                     ELSE true END)
     )
     -- Deterministik namuna ($4 = seed): bir xil seed — bir xil to'plam.
     AND ('x' || substr(md5($4::text || d.id::text), 1, 8))::bit(32)::bigint
@@ -150,7 +161,7 @@ const APOS_RE = /['ʻʼ‘’`´]/g;
 
 /**
  * Ismga qo'shiladigan BITTA qo'shimcha; ketma-ket 3 tagacha
- * ("Dilnoza|xon|ga", "Dilnoza|jon|ning", "Dilnoza|opa|ga").
+ * ("Dilnoza|xon|ga", "Dilnoza|jon|ning", "Dilnoza|opa|ga", "Dilnoza|cha|ga").
  * Lotin o'zbek, kirill o'zbek va rus kelishik qo'shimchalari.
  */
 const NAME_SUFFIX_ONE = [
@@ -182,9 +193,11 @@ const NAME_SUFFIX_ONE = [
   'opa',
   'aka',
   'xon',
+  'hon',
   'jon',
   'oy',
   'bek',
+  'cha',
   // kirill o'zbek
   'гача',
   'ларнинг',
@@ -215,6 +228,7 @@ const NAME_SUFFIX_ONE = [
   'жон',
   'ой',
   'бек',
+  'ча',
   // rus
   'ою',
   'ом',
@@ -243,6 +257,9 @@ const NAME_PART_STOP = new Set([
   'opa',
   'aka',
   'xon',
+  'hon',
+  'xonim',
+  'honim',
   'jon',
   'mijoz',
   'uka',
@@ -251,10 +268,19 @@ const NAME_PART_STOP = new Set([
   'опа',
   'ака',
   'хон',
+  'хоним',
   'жон',
   'мижоз',
   'клиент',
 ]);
+
+/**
+ * Ismga yopishgan murojaat ("Dilnozaxon", "Dilnozahon", "Dilnoza-xon",
+ * "Ферузажон") — tire bilan birga olib tashlanadi,
+ * qolgan o'zak (3+ harf) alohida variant: matnda "Dilnoza" ham maskalanadi.
+ */
+const GLUED_HONORIFIC_RE =
+  /[-‐–]?(?:xonim|honim|xon|hon|jon|opa|aka|хоним|хон|жон|опа|ака)$/iu;
 
 /** Regex maxsus belgilarini qochiradi. */
 function escapeRe(x: string): string {
@@ -279,12 +305,15 @@ function skeletonRe(skeleton: string): string {
 }
 
 /**
- * Ism ro'yxatidan maskalanadigan shakllar: to'liq ism va (ko'p so'zli
- * bo'lsa) har 3+ harfli so'z alohida ("Abdullayev Jasur" → "Jasur" ham).
+ * Ism ro'yxatidan maskalanadigan shakllar: to'liq ism, (ko'p so'zli
+ * bo'lsa) har 3+ harfli so'z alohida ("Abdullayev Jasur" → "Jasur" ham)
+ * va har so'zning yopishgan murojaatsiz o'zagi, o'zak 3+ harf bo'lsa
+ * ("Dilnozaxon" → "Dilnoza", "Ферузажон" → "Феруза").
  * Boshidagi #/@ olib tashlanadi ("#sevinch" → "#[ISM]").
  */
 export function nameVariants(names: readonly string[]): string[] {
   const out = new Set<string>();
+  const letterCount = (w: string): number => w.replace(/[^\p{L}]/gu, '').length;
   for (const raw of names) {
     const n = raw
       .trim()
@@ -293,11 +322,21 @@ export function nameVariants(names: readonly string[]): string[] {
     if (n.length < 2) continue;
     out.add(n);
     const words = n.split(/[\s,;()]+/).filter(Boolean);
-    if (words.length < 2) continue;
     for (const w of words) {
-      const letters = w.replace(/[^\p{L}]/gu, '');
-      if (letters.length >= 3 && !NAME_PART_STOP.has(w.toLowerCase())) {
+      if (
+        words.length >= 2 &&
+        letterCount(w) >= 3 &&
+        !NAME_PART_STOP.has(w.toLowerCase())
+      ) {
         out.add(w);
+      }
+      const stem = w.replace(GLUED_HONORIFIC_RE, '');
+      if (
+        stem !== w &&
+        letterCount(stem) >= 3 &&
+        !NAME_PART_STOP.has(stem.toLowerCase())
+      ) {
+        out.add(stem);
       }
     }
   }
@@ -328,26 +367,57 @@ function nameAlternatives(skeleton: string): string[] {
   return alts;
 }
 
-/** Ijtimoiy tarmoq / messenjer havolalari (profil = shaxs). */
+/**
+ * Ijtimoiy tarmoq / messenjer (profil = shaxs) va xarita havolalari
+ * (joylashuv = uy manzili): Google Maps (maps.app.goo.gl, goo.gl,
+ * google.<tld>/maps, maps.google.<tld>), Yandex Maps, 2GIS, WhatsApp (wa.me).
+ * Yo'lda vergul faqat koordinata/zoom oldidan ("?q=41.31,69.24",
+ * "@41.31,69.23,17z/"), shunda "[LINK], [LINK]" dagi tinish belgisi
+ * saqlanadi va "…/shop,90-742 90 47" dagi telefon havolaga yutilmaydi.
+ * Yo'l "[" da to'xtaydi ("wa.me/[TEL_1]" → "[LINK][TEL_1]").
+ */
 const LINK_RE =
-  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com)(?:\/[^\s,;)\]]*)?/giu;
+  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com|wa\.me|whatsapp\.com|goo\.gl|maps\.google\.[a-z]{2,3}(?:\.[a-z]{2})?|google\.[a-z]{2,3}(?:\.[a-z]{2})?\/maps|yandex\.[a-z]{2,3}\/maps|2gis\.[a-z]{2,3})(?![\p{L}\p{N}_-])(?:[/?#](?:[^\s,;)[\]]|,(?=-?\d{1,3}\.\d|\d{1,2}z))*)?/giu;
 const EMAIL_RE =
   /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
 /** Telegram/Instagram foydalanuvchi nomi (email maskalangandan keyin). */
 const USER_HANDLE_RE = /(?<![\p{L}\p{N}_.@])@[A-Za-z0-9_.]{3,32}/gu;
 
-/** Uy/xonadon kalit so'zlari (uzunidan boshlab). "д."/"d." — faqat nuqta bilan. */
-const HOUSE_KW = 'xonadon|kvartira|хонадон|квартира|dom|uy|kv|дом|уй|кв';
-/** Kalit so'zdan keyingi kelishik qo'shimchasi ("12-uyda", "kvartiraga 5"). */
+/**
+ * Uy/xonadon kalit so'zlari (uzunidan boshlab; "kv-ra" — "kv" dan oldin).
+ * Rus kelishiklari: "в доме 5", "квартире 7", "в квартиру 9".
+ * "д."/"d." — faqat nuqta bilan.
+ */
+const HOUSE_KW =
+  'xonadon|kvartira|хонадон|квартир[аеуы]|kv-ra|кв-ра|dom|uy|kv|дом[еау]?|уй|кв';
+/**
+ * Kalit so'zdan keyin: egalik ("12-uyi", "5-xonadoni", "kvartirasi 7",
+ * "12-уйи") va kelishik ("12-uyda", "kvartiraga 5", "12-uyida",
+ * "kvartirasiga 5") qo'shimchasi — ikkalasi ham ixtiyoriy.
+ */
 const HOUSE_KW_SUFFIX =
-  '(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
+  '(?:i|si|и|си)?(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
 /**
  * "uyga 2 ta", "kvartiraga 3 dona" — miqdor/narx, uy raqami EMAS.
+ * "uyiga 25 000", "uyigacha 20 000 so'm" — narxning birinchi guruhi
+ * (keyin bo'shliq/nuqta + "000"), uy raqami EMAS. Faqat "000": "kv 45
+ * 250 000", "uy 12\n250 000" dagi uy/xonadon raqami yopiq qoladi.
  */
 const NOT_QTY =
-  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}]))";
+  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]000(?!\\d))";
+/**
+ * "Narxi 1 586 000 uyiga" — narxning oxirgi "000" guruhi, uy raqami EMAS.
+ */
+const NOT_PRICE_TAIL = '(?!(?<=\\d[\\s.])000(?!\\d))';
 /** Uy raqami: 12, 12a, 12/3. */
 const HOUSE_NUM = '\\d{1,4}(?:\\/\\d{1,4}|\\p{L}(?![\\p{L}\\p{N}]))?';
+/**
+ * Kalit so'zdan OLDINGI uy raqami: yana "12-a uy" (tire + harf) va
+ * "12 A uy" (bo'shliq + FAQAT lotin harfi, x dan tashqari) — "дом 12 и кв 5"
+ * dagi "и" va "1 x uy" dagi "x" yutilmasin.
+ */
+const HOUSE_NUM_BEFORE_KW =
+  '\\d{1,4}(?:\\/\\d{1,4}|-?\\p{L}(?![\\p{L}\\p{N}])|\\s[a-wyz](?![\\p{L}\\p{N}]))?';
 
 /**
  * Telefon tokenlaridan tashqari PII: email, ijtimoiy tarmoq havolasi,
@@ -359,7 +429,55 @@ export function maskCandidateText(
 ): string {
   let out = text
     .replace(EMAIL_RE, '[EMAIL]')
-    .replace(LINK_RE, '[LINK]')
+    .replace(LINK_RE, (m0: string, offset: number, whole: string) => {
+      // Havola boshidagi faqat raqamli "label" ("…45 85.maps.app.goo.gl") —
+      // oldingi telefonning oxirgi guruhi: matnga qaytariladi.
+      let lead = /^(?:\d[\d-]*\.)+/.exec(m0)?.[0] ?? '';
+      if (lead) {
+        const run =
+          /\d[\d\s\-\u2010-\u2015\u2212()./_]{7,}\d$/.exec(
+            whole.slice(0, offset) + lead.slice(0, -1),
+          )?.[0] ?? '';
+        if (!(
+          run.length >= lead.length && run.replace(/\D/g, '').length >= 9
+        )) {
+          lead = '';
+        }
+      }
+      const m = m0.slice(lead.length);
+      const dots = /\.+$/.exec(m)?.[0] ?? '';
+      const core = m.slice(0, m.length - dots.length);
+      const rest = whole.slice(offset + m0.length).replace(LINK_RE, '[LINK]');
+      // Havola dumidagi raqam guruhlari ("…/AbC1-90-742", "…?phone=90",
+      // "wa.me/90", "…,90.742") keyingi matn bilan 9+ raqamli ketma-ketlik
+      // bo'lsa — matnga qaytariladi, 9+ raqam qoidasi telefonni
+      // butunligicha ko'radi.
+      const t = dots ? null : /(?:[^\p{L}\p{N}\s]\(?\d+\)?)+$/u.exec(core);
+      if (t) {
+        for (let i = 0; i < t[0].length; i++) {
+          if (!/[^\p{L}\p{N}(]/u.test(t[0][i])) continue;
+          const back = t[0].slice(i + 1);
+          const run =
+            /^\(?\d[\d\s\-\u2010-\u2015\u2212()./_]{7,}\d/.exec(
+              back + rest,
+            )?.[0] ?? '';
+          if (run.length > back.length && run.replace(/\D/g, '').length >= 9) {
+            return lead + '[LINK]' + t[0].slice(i);
+          }
+        }
+      }
+      // Ajratgichsiz yopishgan raqamlar ("…/AbC12390 742 90 47"): dumdagi
+      // raqamlar keyingi matn bilan 9+ raqam bo'lsa — ular ham qaytariladi.
+      const glued = dots ? '' : (/\d+$/.exec(core)?.[0] ?? '');
+      if (glued && glued.length < core.length) {
+        const run = /^\d[\d\s\-‐-―−()./_]{7,}\d/.exec(glued + rest)?.[0] ?? '';
+        if (run.length > glued.length && run.replace(/\D/g, '').length >= 9) {
+          return lead + '[LINK]' + glued;
+        }
+      }
+      // Gap oxiridagi nuqta havolaga kirmaydi.
+      return lead + '[LINK]' + dots;
+    })
     .replace(USER_HANDLE_RE, (m) => {
       // Gap oxiridagi nuqta handle'ga kirmaydi.
       const dots = /\.+$/.exec(m)?.[0] ?? '';
@@ -384,8 +502,16 @@ export function maskCandidateText(
   }
   return (
     out
-      // Pasport/ID: 2 harf + 7 raqam ("AA 1234567").
-      .replace(/(?<![\p{L}\p{N}])\p{L}{2}\s?\d{7}(?!\d)/gu, '[HUJJAT]')
+      // Pasport/ID: 2 harf + 7 raqam ("AA 1234567", "AA-1234567",
+      // "AA №1234567", "AA № 1234567").
+      // Oldida umumiy 2 harfli so'z yoki uy kalit so'zi ("1 ta - 1500000",
+      // "uy-1234567", "151-уй - 6356734") — seriya EMAS (raqami pastda,
+      // uy qoidalaridan keyin, [RAQAM] bo'ladi; kalit so'z uy qoidasiga
+      // qoladi).
+      .replace(
+        /(?<![\p{L}\p{N}])(?!(?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва|уй|кв)(?![\p{L}]))\p{L}{2}\s?(?:[-–№]\s?)?\d{7}(?!\d)/gu,
+        '[HUJJAT]',
+      )
       // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta, slash,
       // pastki chiziq, har xil tire ajratgichlar ham). ⚠️ 100 mln dan katta
       // narx ("150 000 000") ham [RAQAM] bo'ladi; narxlar odatda 7–8 raqam
@@ -393,21 +519,31 @@ export function maskCandidateText(
       .replace(/(?<!\[TEL_)\d[\d\s\-‐-―−()./_]{7,}\d/g, (m) =>
         m.replace(/\D/g, '').length >= 9 ? '[RAQAM]' : m,
       )
-      // "12-uy", "12a-uy", "12/3-uyda", "5-xonadonga", "12-уйда".
+      // "12-uy", "12a-uy", "12-a uy", "12/3-uyda", "5-xonadonga", "12-uyi",
+      // "45-xonadonida", "12-уйда", "5-хонадони".
       .replace(
         new RegExp(
-          `(?<![\\p{L}\\p{N}])([№#]?)${HOUSE_NUM}(\\s*-?\\s*)((?:${HOUSE_KW})${HOUSE_KW_SUFFIX})(?![\\p{L}\\p{N}])`,
+          `(?<![\\p{L}\\p{N}])([№#]?)${NOT_PRICE_TAIL}${HOUSE_NUM_BEFORE_KW}(\\s*-?\\s*)((?:${HOUSE_KW})${HOUSE_KW_SUFFIX})(?![\\p{L}\\p{N}])`,
           'giu',
         ),
         '$1[N]$2$3',
       )
-      // "uy 12/3", "kvartiraga 5", "kv №5", "дом №12", "д. 15", "d.15".
+      // "uy 12/3", "uyi 12", "kvartiraga 5", "kvartirasi 7", "kv-ra 5",
+      // "kv №5", "дом №12", "д. 15", "d.15".
       .replace(
         new RegExp(
           `(?<![\\p{L}\\p{N}])((?:(?:${HOUSE_KW})${HOUSE_KW_SUFFIX}\\.?|[дd]\\.)\\s*[-:]?\\s*(?:[№#]|N(?=\\s*\\d))?\\s*)${HOUSE_NUM}(?!\\d)${NOT_QTY}`,
           'giu',
         ),
         '$1[N]',
+      )
+      // Umumiy 2 harfli so'z / uy kalit so'zi + 7 raqam ("va 2345678",
+      // "uy 2345678", "uy2345678"): so'z qoladi, raqam yopiladi (dev bu
+      // shaklni [HUJJAT] qilardi). "1 ta - 1500000", "uy-1234567" — dev'dagidek
+      // ochiq.
+      .replace(
+        /(?<![\p{L}\p{N}])((?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва|уй|кв)\s?)\d{7}(?!\d)/gu,
+        '$1[RAQAM]',
       )
   );
 }
