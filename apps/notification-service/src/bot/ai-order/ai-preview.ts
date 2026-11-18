@@ -636,13 +636,57 @@ export function ackPromptText(
   return text.length > ACK_PROMPT_MAX_CHARS ? tooMany() : { text, fits: true };
 }
 
+/** Telegram 4096 chegarasidan zaxira bilan (preview kartasi). */
+const PREVIEW_MAX_CHARS = 3900;
+
 /** Preview kartasi (shaxsiy chat — operatorning o'z buyurtmalari, PII bor). */
 export function aiPreviewText(orders: AiPreviewOrder[]): string {
+  return aiPreviewCard(orders).text;
+}
+
+/**
+ * Preview kartasi va unda TO'LIQ ko'rsatilgan buyurtmalar soni (`shown`,
+ * `orders` boshidan). Buyurtma bloki butunligicha sig'masa — kesiladi
+ * (≤10 ta va ≤3900 belgi); pastki qator («✅ Yaratish — N ta…») doim
+ * qoladi. Tugmalar faqat `shown` ichidagi buyurtmalarga.
+ */
+export function aiPreviewCard(orders: AiPreviewOrder[]): {
+  text: string;
+  shown: number;
+} {
   const creatable = orders.filter(isCreatable).length;
-  const lines = [
-    `🤖 <b>AI ${orders.length} ta buyurtma topdi</b> — tekshiring:`,
-  ];
-  for (const order of orders.slice(0, PREVIEW_MAX_ORDERS)) {
+  const head = `🤖 <b>AI ${orders.length} ta buyurtma topdi</b> — tekshiring:`;
+  const footer = creatable
+    ? `✅ «Yaratish» — ${creatable} ta tayyor buyurtma yaratiladi. 🟠 belgilisini kabinetda tuzating.`
+    : '🟠 Tayyor buyurtma yo‘q — matnni tuzatib qayta yuboring yoki kabinetda yarating.';
+  // «Yana N ta» — ko'rsatilmaganlarning tayyorlari ham «✅» bilan
+  // yaratiladi (e7KhaeOO dan beri xatti-harakat) — matn shuni aytadi.
+  const moreLine = (hidden: number) =>
+    `… yana ${hidden} ta — tayyorlari ham «✅ Yaratish» bilan yaratiladi; ko‘rish va tuzatish — kabinetda.`;
+  const blocks = orders
+    .slice(0, PREVIEW_MAX_ORDERS)
+    .map((order) => previewBlock(order).join('\n'));
+  let shown = 0;
+  let body = head;
+  for (const block of blocks) {
+    const next = `${body}\n\n${block}`;
+    const hidden = orders.length - (shown + 1);
+    const tail = hidden > 0 ? `\n\n${moreLine(hidden)}` : '';
+    if (`${next}${tail}\n\n${footer}`.length > PREVIEW_MAX_CHARS) break;
+    body = next;
+    shown += 1;
+  }
+  const hidden = orders.length - shown;
+  const text = [body, ...(hidden > 0 ? [moreLine(hidden)] : []), footer].join(
+    '\n\n',
+  );
+  return { text, shown };
+}
+
+/** Bitta buyurtmaning kartadagi qatorlari. */
+function previewBlock(order: AiPreviewOrder): string[] {
+  const lines: string[] = [];
+  {
     const place = [order.region_name, order.district_name]
       .map((part) => clip(part, 60))
       .filter(Boolean)
@@ -667,7 +711,6 @@ export function aiPreviewText(orders: AiPreviewOrder[]): string {
           : '—';
     const replacement = replacementLine(order);
     lines.push(
-      '',
       `<b>${order.index + 1})</b> ${isCreatable(order) ? '🟢' : '🟠'} 👤 ${html(order.customer_name) || '—'}, 📞 ${html(order.phone_number, 40) || '—'}`,
       `📍 ${escapeTelegramHtml(place || '—')}${clip(order.address, 120) ? ` — ${html(order.address)}` : ''}`,
       `📦 ${items || '—'}`,
@@ -678,23 +721,5 @@ export function aiPreviewText(orders: AiPreviewOrder[]): string {
       ...(confirmAttempted(order) ? [AI_CONFIRM_UNKNOWN_LINE] : []),
     );
   }
-  if (orders.length > PREVIEW_MAX_ORDERS) {
-    lines.push(
-      '',
-      `… yana ${orders.length - PREVIEW_MAX_ORDERS} ta (kabinetda).`,
-    );
-  }
-  lines.push(
-    '',
-    creatable
-      ? `✅ «Yaratish» — ${creatable} ta tayyor buyurtma yaratiladi. 🟠 belgilisini kabinetda tuzating.`
-      : '🟠 Tayyor buyurtma yo‘q — matnni tuzatib qayta yuboring yoki kabinetda yarating.',
-  );
-  let text = '';
-  for (const line of lines) {
-    const next = text ? `${text}\n${line}` : line;
-    if (next.length > 3900) return `${text}\n…`;
-    text = next;
-  }
-  return text;
+  return lines;
 }

@@ -463,7 +463,13 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   dublikat yaratmasin. Da'vosi bo'shatilgan ishning yozuvi faqat qoralama
   hali o'sha holatda bo'lsa o'tadi (yangi «✅» da'vosi ustidan yozilmaydi);
   parse natijasi yozilib karta ko'rsatilmasa qoralama `failed` ga
-  aylanmaydi. Tugmalar faqat kartada ko'rinadigan (≤10) buyurtmalarga.
+  aylanmaydi. Tugmalar faqat kartada TO'LIQ ko'rsatilgan buyurtmalarga
+  (≤10 ta va ≤3900 belgi — blok sig'masa butunligicha tushadi, pastki
+  «✅ Yaratish — N ta» qatori doim qoladi). Ko'rsatilmaganlar: «… yana N ta
+  — tayyorlari ham «✅ Yaratish» bilan yaratiladi; ko'rish va tuzatish —
+  kabinetda» (xatti-harakat e7KhaeOO dan beri shu — matn moslandi). Natija
+  faqat SHU ish `created` ni yozgan bo'lsa tiklashda qayta yuboriladi;
+  `message_id` saqlanmasa ham xabar takrorlanmaydi.
 - **Reliz eslatmasi (#713/#714).** Eski kod bilan natijasi noma'lum
   urinishdan `preview` ga qaytgan qoralamalarda belgi YO'Q: ular muddati
   (24 soat) tugaguncha takroriy javob (`idempotent_replay`) muammosiga ochiq

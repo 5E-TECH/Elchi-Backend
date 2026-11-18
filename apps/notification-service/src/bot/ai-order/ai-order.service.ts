@@ -31,7 +31,7 @@ import {
   AI_ACK_SERVER_ASKED_TEXT,
   AI_EDITS_NOT_APPLIED_TEXT,
   AiAckEntry,
-  PREVIEW_MAX_ORDERS,
+  aiPreviewCard,
   confirmAttempted,
   confirmSendable,
   editedAfterAttempt,
@@ -328,6 +328,8 @@ interface ConfirmResult {
 export class AiOrderService implements OnModuleDestroy {
   private readonly logger = new Logger(AiOrderService.name);
   private readonly inflight = new Set<Promise<void>>();
+  /** Shu replikada `created` ni yozgan (yoki yozishda yiqilgan) ishlar. */
+  private readonly finishingCreated = new WeakSet<TelegramAiDraft>();
   private ticking = false;
   private stopped = false;
 
@@ -495,6 +497,10 @@ export class AiOrderService implements OnModuleDestroy {
         );
         if (shown) return;
       }
+      // Natija faqat SHU ish `created` ni yozgan (yoki yozish yiqilgan)
+      // bo'lsa qayta yuboriladi — boshqa replika yaratib, o'zi ko'rsatgan
+      // bo'lsa operator «✅ … yaratildi» ni ikki marta olmasin.
+      if (!this.finishingCreated.has(draft)) return;
       const row = await this.drafts.findOne({ where: { id: draft.id } });
       if (row?.status === 'created') await this.showCreated(ctx, row);
       return;
@@ -959,12 +965,15 @@ export class AiOrderService implements OnModuleDestroy {
       await this.retryableResults(ctx, draft, ready, results, meta);
       return;
     }
+    // `recover` uchun: `created` yozuvini SHU ish qildi (yoki yozish yiqildi).
+    this.finishingCreated.add(draft);
     if (
       !(await this.finish(draft, {
         status: 'created',
         results,
       }))
     ) {
+      this.finishingCreated.delete(draft);
       return;
     }
     const { text, skipped } = this.createdSummary(previews, results);
@@ -1335,12 +1344,12 @@ export class AiOrderService implements OnModuleDestroy {
       await this.explainState(ctx, draftId);
       return;
     }
-    // Kartada ko'rinadiganlar (avval kesish, keyin filtr — indekslar karta
-    // bilan mos). Natijasi noma'lum urinishdagi (belgili) buyurtma botda
+    // Kartada TO'LIQ ko'rinadiganlar (avval kesish, keyin filtr — indekslar
+    // karta bilan mos). Natijasi noma'lum urinishdagi (belgili) buyurtma botda
     // tuzatilmaydi; hammasi belgili — karta qayta; bitta qolsa — darhol
     // uning menyusi.
     const orders = ((draft.orders ?? []) as AiPreviewOrder[])
-      .slice(0, PREVIEW_MAX_ORDERS)
+      .slice(0, aiPreviewCard((draft.orders ?? []) as AiPreviewOrder[]).shown)
       .filter((o) => !confirmAttempted(o));
     if (!orders.length) {
       await this.showPreview(ctx, draft);
@@ -2083,9 +2092,9 @@ export class AiOrderService implements OnModuleDestroy {
     // Natijasi noma'lum urinishdagi (belgili) buyurtma — botda tuzatilmaydi
     // (keyingi «✅» da server birinchi yukni qaytaradi): uning 📍 / ❓
     // tugmalari yo'q. Yuborilmagan (belgisiz) buyurtmalar odatdagidek.
-    // Avval kartada ko'rinadiganlar (≤10), keyin belgisizlar — tugma kartada
-    // yo'q (11+) buyurtmaga ishora qilmasin.
-    const shown = orders.slice(0, PREVIEW_MAX_ORDERS);
+    // Avval kartada TO'LIQ ko'rinadiganlar (≤10 ta, ≤3900 belgi — aiPreviewCard),
+    // keyin belgisizlar — tugma kartada yo'q buyurtmaga ishora qilmasin.
+    const shown = orders.slice(0, aiPreviewCard(orders).shown);
     const editable = shown.filter((o) => !confirmAttempted(o));
     const locked = orders.some(confirmAttempted);
     const multi = orders.length > 1;
@@ -2334,7 +2343,15 @@ export class AiOrderService implements OnModuleDestroy {
       messageId = sent.result?.message_id ? String(sent.result.message_id) : '';
       if (messageId) {
         draft.message_id = messageId;
-        await this.drafts.update({ id: draft.id }, { message_id: messageId });
+        // Xabar YETKAZILDI — id ni saqlash yiqilsa ham `show` muvaffaqiyatli
+        // (aks holda ishchi tiklashda natijani ikkinchi marta yuborardi).
+        await this.drafts
+          .update({ id: draft.id }, { message_id: messageId })
+          .catch((error: unknown) =>
+            this.logger.warn(
+              `ai draft ${draft.id}: message_id saqlanmadi — ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
       }
     }
     const callbacks = rows
