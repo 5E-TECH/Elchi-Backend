@@ -132,7 +132,8 @@ export class AiAdvisorAlertsQueryDto {
 
   @ApiPropertyOptional({
     description:
-      '`last_at` Toshkent kuni ≥ from (YYYY-MM-DD); from–to ≤ 366 kun',
+      '`last_at` Toshkent kuni ≥ from (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000); from–to ≤ 366 kun',
+    format: 'date',
     example: '2026-10-01',
   })
   @IsOptional()
@@ -141,7 +142,9 @@ export class AiAdvisorAlertsQueryDto {
   from?: string;
 
   @ApiPropertyOptional({
-    description: '`last_at` Toshkent kuni ≤ to (YYYY-MM-DD)',
+    description:
+      '`last_at` Toshkent kuni ≤ to (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000)',
+    format: 'date',
     example: '2026-10-31',
   })
   @IsOptional()
@@ -150,7 +153,8 @@ export class AiAdvisorAlertsQueryDto {
   to?: string;
 
   @ApiPropertyOptional({
-    description: 'Sarlavha / obyekt nomi (ILIKE), ≤ 100',
+    description:
+      'Sarlavha / obyekt nomi (ILIKE), ≤ 100. Boshqaruv belgilari (\\t, \\n, \\r dan tashqari) → 400.',
     maxLength: 100,
   })
   @IsOptional()
