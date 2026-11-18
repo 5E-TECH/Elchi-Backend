@@ -53,7 +53,7 @@ export class AiOrderHandler implements BotMessageHandler {
     const actor = await this.marketActor(ctx);
     if (!actor) return false;
     // «🔎 Qidirish» dan keyin kutilgan matn (mahsulot nomi) — AI emas.
-    if (await this.ai.handleInput(ctx, text)) return true;
+    if (await this.ai.handleInput(ctx, actor.user_id, text)) return true;
     if (text.length > AI_TEXT_MAX_CHARS) {
       await ctx.reply(AI_TEXT_TOO_LONG_TEXT);
       return true;

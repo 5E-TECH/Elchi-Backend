@@ -97,11 +97,14 @@ export function pickerText(
   const quantity = Math.max(1, Math.trunc(Number(item.quantity ?? 1)));
   const head = `📦 <b>${order.index + 1}-buyurtma</b>: «${escapeTelegramHtml(clip(item.name, 80) || '—')}» ×${quantity} — katalogda aniq topilmadi.`;
   if (source === 's') {
+    const q = clip(query, 60);
     return [
       head,
       '',
       options.length
-        ? `🔎 «${escapeTelegramHtml(clip(query, 60))}» bo‘yicha topildi — mosini tanlang:`
+        ? q
+          ? `🔎 «${escapeTelegramHtml(q)}» bo‘yicha topildi — mosini tanlang:`
+          : '🔎 Oxirgi qidiruv natijalari — mosini tanlang:'
         : `🤷 «${escapeTelegramHtml(clip(query, 60))}» bo‘yicha mahsulot topilmadi — boshqa nom yozib yuboring yoki nomi bilan qoldiring.`,
     ].join('\n');
   }
@@ -163,7 +166,9 @@ function patchItem(
 
 /**
  * Ro'yxatdan (`c` / `s`) `k`-mahsulot tanlandi: `product_id` + ko'rsatish
- * nomi qo'yiladi. Ro'yxatda yo'q bo'lsa — null (o'zgarish yo'q).
+ * nomi qo'yiladi. Ro'yxatda yo'q bo'lsa yoki o'rindagi mahsulot tugmadagi
+ * `pid` emas (eski qidiruv xabari — ro'yxat almashgan) — null (o'zgarish
+ * yo'q).
  */
 export function applyProductPick(
   orders: AiPreviewOrder[],
@@ -171,6 +176,7 @@ export function applyProductPick(
   itemIndex: unknown,
   source: unknown,
   k: unknown,
+  pid: unknown,
 ): AiPreviewOrder[] | null {
   const found = findItem(orders, orderIndex, itemIndex);
   if (!found || !Number.isInteger(k)) return null;
@@ -178,7 +184,7 @@ export function applyProductPick(
     source === 's' ? found.item.search_results : found.item.candidates,
   );
   const option = list[k as number];
-  if (!option) return null;
+  if (!option || typeof pid !== 'string' || option.id !== pid) return null;
   return patchItem(
     orders,
     orderIndex as number,
