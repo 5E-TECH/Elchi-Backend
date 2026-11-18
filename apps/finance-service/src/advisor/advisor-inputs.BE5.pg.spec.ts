@@ -912,7 +912,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           900000,
           '2026-10-10T08:00:00Z',
         );
-        identitySend.mockImplementationOnce(() => NEVER as never);
+        identitySend.mockImplementationOnce(() => NEVER);
         svc.namesDeadlineMs = 300;
         try {
           const t0 = Date.now();
