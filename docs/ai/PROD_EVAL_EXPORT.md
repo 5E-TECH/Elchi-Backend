@@ -91,11 +91,18 @@ Matnda nima maskalanadi (shu tartibda) — faqat shu ro'yxat, boshqasi yo'q:
   `maps.google.<tld>`, `yandex.<tld>/maps`, `2gis.<tld>` (`go.2gis.com`
   ham). Havola ichidagi koordinata ham ketadi
   (`google.com/maps?q=41.31,69.24`, `…/@41.31,69.23,17z/…` — yo'lda
-  vergul faqat raqamlaridan keyin bo'shliqsiz belgi kelsa havolaga
-  kiradi, shuning uchun "[LINK], [LINK]" tinish belgisi saqlanadi).
-  Havoladan keyin vergul/tire bilan kelgan telefon havolaga yutilmaydi:
-  "instagram.com/shop,90 742 90 47" → "[LINK],[RAQAM]",
-  ".../AbC1-90 931 38 51" → "[LINK]-[RAQAM]";
+  vergul faqat koordinata (`,69.24`, `,-41.31`) yoki zoom (`,17z`)
+  oldidan havolaga kiradi, shuning uchun "[LINK], [LINK]" tinish
+  belgisi saqlanadi). Havola yo'li `[` da to'xtaydi
+  (`wa.me/[TEL_1]` → `[LINK][TEL_1]`). Havola chegarasidagi telefon
+  butunligicha `[RAQAM]`: havola dumidagi raqam guruhlari (ajratgich
+  bilan yoki ajratgichsiz) yoki boshidagi raqamli qism keyingi/oldingi
+  matn bilan 9+ raqam hosil qilsa, havoladan ajratiladi —
+  "instagram.com/shop,90-742 90 47" → "[LINK],[RAQAM]",
+  ".../AbC1-90 931 38 51" → "[LINK]-[RAQAM]", "wa.me/90 742 90 47" →
+  "[LINK]/[RAQAM]", "…send?phone=90 742 90 47" → "[LINK]=[RAQAM]",
+  ".../AbC12390 742 90 47" → "[LINK][RAQAM]",
+  "Tel 98 710 45 85.maps.app.goo.gl/AbC" → "Tel [RAQAM].[LINK]";
 - `@foydalanuvchi` (`@` + 3–32 lotin harf/raqam/`_`/`.`) → `@[USER]`;
 - mijoz va operator ismlari (AI va operator yozgan, `#sevinch` → `#[ISM]`)
   → `[ISM]`, qo'shimcha saqlanadi: butun so'z, katta-kichik harfsiz;
@@ -107,16 +114,22 @@ Matnda nima maskalanadi (shu tartibda) — faqat shu ro'yxat, boshqasi yo'q:
   "Gulomjon", "O'g'iloy" = "Ogiloy"; `'` `ʻ` `ʼ` `‘` `’` `´` va
   teskari tirnoq); ko'p so'zli ismning har
   3+ harfli so'zi alohida ham ("Abdullayev Jasur" → "Jasurga"; opa/aka/
-  xon/jon/mijoz bundan mustasno); ismga yopishgan murojaat
+  xon/hon/xonim/honim/jon/mijoz bundan mustasno); ismga yopishgan murojaat
   (xonim/honim/xon/hon/jon/opa/aka, хоним/хон/жон/опа/ака; oldidagi
-  tire bilan — "Dilnoza-xon") olib tashlangan o'zak ham, agar 3+ harf
+  tire yoki en-tire bilan — "Dilnoza-xon", "Dilnoza–xon") olib tashlangan o'zak ham, agar 3+ harf
   qolsa (AI "Dilnozaxon"/"Dilnozahon"/"Dilnoza-xon" desa, matndagi
   "Dilnoza", "Dilnozaning" ham → `[ISM]`; "Dilnozahonga" → `[ISM]honga`). Ismga o'xshab boshlanadigan boshqa so'z
   ("Dilnozabonu") tegilmaydi;
 - pasport seriyasi (2 harf + 7 raqam; "AA1234567", "AA 1234567",
-  "AA-1234567", "AA №1234567", "AA № 1234567") → `[HUJJAT]`. Oldida
-  umumiy 2 harfli so'z (ta, va, uy, kv, da, ga, ni, bu, to, та, ва)
-  bo'lsa seriya hisoblanmaydi ("1 ta - 1500000", "uy-1234567");
+  "AA-1234567", "AA №1234567", "AA № 1234567") → `[HUJJAT]`. Harflar
+  umumiy 2 harfli so'z yoki uy kalit so'zi bo'lsa (ta, va, uy, kv, da,
+  ga, ni, bu, to, та, ва, уй, кв) seriya hisoblanmaydi: bo'shliqsiz
+  yoki bitta bo'shliq bilan 7 raqam bo'lsa so'z qoladi, raqam
+  `[RAQAM]` ("va 2345678" → "va [RAQAM]", "uy2345678" →
+  "uy[RAQAM]"); tire/№ bilan — ochiq qoladi ("1 ta - 1500000",
+  "uy-1234567"; ular 7 raqam — pastdagi ro'yxatga qarang). Pasport
+  ajratgichi uy kalit so'zini yutmaydi ("151-уй - 6356734" →
+  "[N]-уй - 6356734");
 - 9+ raqam (bo'shliq, tire `-–—`, nuqta, slash, `_`, qavs bilan ham) →
   `[RAQAM]` (JShShIR, karta raqami ham). ⚠️ 100 mln so'mdan katta narx
   ham `[RAQAM]` bo'ladi;
@@ -132,8 +145,9 @@ Matnda nima maskalanadi (shu tartibda) — faqat shu ro'yxat, boshqasi yo'q:
     "квартире 7", "в квартиру 9";
   - tegilmaydi: "uyga 2 ta", "квартиры 2 шт" (miqdor); "uyiga 25 000",
     "uyigacha 20 000 so'm", "Narxi 1 586 000 uyiga" (narx — raqamdan
-    keyin bo'shliq/nuqta + 3 raqam kelsa yoki kalit so'z oldidagi "000"
-    narxning oxirgi guruhi bo'lsa); "19-kvartal", "4-мавзе" (mavze).
+    keyin bo'shliq/nuqta + "000" kelsa yoki kalit so'z oldidagi "000"
+    narxning oxirgi guruhi bo'lsa; "kv 45 250 000", "dom 7 123" dagi
+    45/7 esa `[N]`); "19-kvartal", "4-мавзе" (mavze).
 
 Tuzatishlardan izoh, operator va telefon maskasi tashlanadi.
 
@@ -169,8 +183,8 @@ chiqadi, `names_masked` qiymatidan qat'i nazar):
 - kalit so'z yonida bo'lmagan uy raqami ("Chilonzor 9-kvartal 12",
   "uy raqami 12"), podezd/qavat, 1-/2-shaxs egaligi ("uyimiz 12",
   "xonadonim 7"), harfi tirnoqda (`12-"a" uy`), uy raqamidan keyin
-  darhol 3 raqamli guruh kelsa ("kvartira 7 200 ming" — 7 ochiq, narx
-  deb hisoblanadi), boshqa tildagi kalit so'z;
+  darhol "000" kelsa ("uy 12 000" — narx deb hisoblanadi), boshqa
+  tildagi kalit so'z;
 - boshqa formatdagi hujjat raqami (2 harf + 7 raqamdan farqli);
 - to'liq kenglikdagi raqamlar (`９０１２３…`), 7 raqamli shahar telefoni,
   8 va undan kam raqamli ketma-ketlik, vergul bilan ajratilgan raqamlar,
@@ -181,7 +195,8 @@ chiqadi, `names_masked` qiymatidan qat'i nazar):
 
 Ortiqcha maskalash ham bo'ladi (maxfiylik uchun xavfsiz, lekin matn
 o'zgaradi): murojaatsiz o'zak umumiy so'z bo'lsa ("Gulxon" → "gul"
-so'zi ham `[ISM]`), ismga teng umumiy so'z, 100 mln dan katta narx.
+so'zi ham `[ISM]`), ismga teng umumiy so'z, 100 mln dan katta narx,
+rus "дома" oldidagi son ("2 дома", "12 дома" → "[N] дома").
 
 📝 **Belgilovchi uchun:** mahsulot/tovar o'rnidagi `[ISM]` mahsulot
 so'zi bo'lishi mumkin — ism o'zagi mahsulot nomiga teng: "Asaljon" →
