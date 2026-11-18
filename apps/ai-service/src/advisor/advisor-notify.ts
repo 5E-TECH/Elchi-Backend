@@ -726,10 +726,12 @@ function short(error: unknown): string {
   // RPC xatosi — `{statusCode, message}` obyekti ('[object Object]' emas).
   if (error && typeof error === 'object') {
     const e = error as { statusCode?: unknown; message?: unknown };
-    if (e.statusCode !== undefined || e.message !== undefined)
-      return `${String(e.statusCode ?? '')} ${String(e.message ?? '')}`
-        .trim()
-        .slice(0, 200);
+    const code =
+      typeof e.statusCode === 'number' || typeof e.statusCode === 'string'
+        ? String(e.statusCode)
+        : '';
+    const msg = typeof e.message === 'string' ? e.message : '';
+    if (code || msg) return `${code} ${msg}`.trim().slice(0, 200);
     try {
       return JSON.stringify(error).slice(0, 200);
     } catch {
