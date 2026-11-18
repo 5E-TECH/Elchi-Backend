@@ -419,6 +419,98 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     );
   });
 
+  it('round-4 #651-1 (H/F): yopilgandan keyin yangi ogohlantirish — faqat yangi faktlar (yopilgandagi smena qayta hisoblanmaydi)', async () => {
+    await warmUp();
+    const shift = (id: string, at: string, diff: number, by: string) => ({
+      shift_id: id,
+      closed_at: at,
+      difference: diff,
+      closed_by: { id: by, name: null },
+    });
+    const A = shift('1', '2026-10-21T08:10:00.000Z', -120000, '501');
+    const B = shift('3', '2026-10-22T08:10:00.000Z', -80000, '502');
+    reply = {
+      candidates: [
+        r1([['1', A.closed_at]], {
+          fact_keys: [{ fact_key: '1', fact_at: A.closed_at, amount: -120000 }],
+          evidence: {
+            kind: 'shifts',
+            total_rows: 1,
+            truncated: false,
+            rows: [A],
+            totals: { count: 1, difference: -120000 },
+          },
+        }),
+      ],
+      cursors: { R1: A.closed_at },
+    };
+    await engine.run('frequent', new Date('2026-10-21T08:30:00Z'));
+    await ds.query(
+      `UPDATE ai_schema.ai_advisor_alerts SET status = 'resolved' WHERE dedup_key = 'R1:cashbox:7'`,
+    );
+    // Kursor A da qolgan — finance A ni (oyna / qayta o'qish) B bilan birga qaytaradi.
+    const base = r1([
+      ['1', A.closed_at],
+      ['3', B.closed_at],
+    ]);
+    reply = {
+      candidates: [
+        {
+          ...base,
+          headline_amount: -80000,
+          fact_keys: [
+            { fact_key: '1', fact_at: A.closed_at, amount: -120000 },
+            { fact_key: '3', fact_at: B.closed_at, amount: -80000 },
+          ],
+          facts: {
+            ...base.facts,
+            shifts_count: 2,
+            total_difference: -200000,
+            last_difference: -80000,
+            closed_by: [
+              { id: '502', name: 'Bek' },
+              { id: '501', name: 'Ali' },
+            ],
+          },
+          evidence: {
+            kind: 'shifts',
+            total_rows: 2,
+            truncated: false,
+            rows: [A, B],
+            totals: { count: 2, difference: -200000 },
+          },
+        },
+      ],
+      cursors: { R1: B.closed_at },
+    };
+    await engine.run('frequent', new Date('2026-10-22T08:30:00Z'));
+    const [row] = await ds.query<
+      Array<{
+        occurrences: number;
+        facts: Record<string, unknown>;
+        evidence: Record<string, unknown>;
+        headline_amount: string;
+      }>
+    >(
+      `SELECT occurrences, facts, evidence, headline_amount FROM ai_schema.ai_advisor_alerts
+        WHERE dedup_key = 'R1:cashbox:7' AND status = 'new'`,
+    );
+    expect(row.occurrences).toBe(1);
+    expect(row.facts).toMatchObject({
+      shifts_count: 1,
+      total_difference: -80000,
+      closed_by: [{ id: '502', name: 'Bek' }],
+    });
+    expect(row.evidence).toMatchObject({
+      total_rows: 1,
+      totals: { count: 1, difference: -80000 },
+    });
+    expect(
+      (row.evidence.rows as Array<{ shift_id: string }>).map((r) => r.shift_id),
+    ).toEqual(['3']);
+    expect(Number(row.headline_amount)).toBe(-80000);
+  });
+
   it('round-2 B2: apply xatosi — kursor ushlanadi (partial), keyingi tick qayta o‘qiydi; 5 urinishdan keyin o‘tkaziladi', async () => {
     await warmUp();
     const a = r1([['10', '2026-10-22T08:00:00Z']]);
@@ -617,6 +709,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       facts: {
         trigger: 'no_handover',
         courier: { id: '55', name: 'Jasur Tursunov' },
+        branch: { id: '1', name: 'Toshkent HQ' },
         balance,
         days_without_handover: days,
       },
@@ -650,6 +743,45 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       '2026-10-23T09:00:00.000Z',
     );
 
+    // v0.4 P6: ism qidiruvi yiqilgan tick — saqlangan nom/filial/sarlavha qoladi.
+    const degraded = r2('ep:h:900', 3200000, 6);
+    degraded.branch = null;
+    degraded.subject = { kind: 'courier', id: '55', name: null };
+    degraded.facts = {
+      ...degraded.facts,
+      courier: { id: '55', name: null },
+      branch: null,
+    };
+    reply = { candidates: [degraded], cursors: {}, names_degraded: true };
+    expect(
+      await engine.run('frequent', new Date('2026-10-23T10:00:00Z')),
+    ).toMatchObject({ refreshed: 1 });
+    const [kept] = await ds.query<
+      Array<{
+        title: string;
+        subject: { name: string };
+        branch: { name: string } | null;
+        branch_id: string | null;
+        facts: {
+          courier: { name: string };
+          branch: { id: string } | null;
+          balance: number;
+        };
+      }>
+    >(
+      `SELECT title, subject, branch, branch_id::text AS branch_id, facts FROM ai_schema.ai_advisor_alerts`,
+    );
+    expect(kept.facts.branch).toEqual({ id: '1', name: 'Toshkent HQ' });
+    // Sarlavha qayta hisoblanadi: nom saqlangan, raqamlar yangi (#702 review).
+    expect(kept.title).toBe(
+      "Jasur Tursunov: 3 200 000 so'm, 6 kundan beri topshirilmagan",
+    );
+    expect(kept.subject.name).toBe('Jasur Tursunov');
+    expect(kept.branch?.name).toBe('Toshkent HQ');
+    expect(kept.branch_id).toBe('1');
+    expect(kept.facts.courier.name).toBe('Jasur Tursunov');
+    expect(kept.facts.balance).toBe(3200000); // raqamlar yangilanadi
+
     // «Ahamiyatsiz» — davom etayotgan holat qayta ochilmaydi.
     await ds.query(
       `UPDATE ai_schema.ai_advisor_alerts SET status = 'dismissed'`,
@@ -659,8 +791,20 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     ).toMatchObject({ opened: 0, refreshed: 0 });
     expect(await alerts()).toHaveLength(1);
 
-    // Topshirishdan keyin yana shart rost — yangi epizod, yangi ogohlantirish.
-    reply = { candidates: [r2('ep:h:950', 2500000, 4)], cursors: {} };
+    // #702 B4: kalit o'zgargan, lekin epizod yopilgan ogohlantirishning oxirgi
+    // aniqlanishidan OLDIN boshlangan (v0.3 → v0.4) — o'sha holat, yangi qator yo'q.
+    reply = { candidates: [r2('ep:p:880', 2500000, 9)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-25T09:00:00Z')),
+    ).toMatchObject({ opened: 0 });
+    expect(await alerts()).toHaveLength(1);
+
+    // Topshirishdan keyin (26.10) yana shart rost — yangi epizod, yangi ogohlantirish.
+    const fresh = r2('ep:h:950', 2500000, 4);
+    fresh.fact_keys = [
+      { fact_key: 'ep:h:950', fact_at: '2026-10-26T08:00:00.000Z' },
+    ];
+    reply = { candidates: [fresh], cursors: {} };
     expect(
       await engine.run('frequent', new Date('2026-10-30T09:00:00Z')),
     ).toMatchObject({ opened: 1 });

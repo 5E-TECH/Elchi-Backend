@@ -494,6 +494,7 @@ export function makeRouter(
         transport as never,
         config as never,
         outbox as never,
+        sessions as never,
       )
     : null;
   const aiHandler = aiService ? new AiOrderHandler(aiService) : undefined;

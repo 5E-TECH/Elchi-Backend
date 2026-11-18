@@ -98,7 +98,8 @@ export const AI_ADVISOR_PUBLIC_ERROR_FIELDS: Readonly<
 export const AI_ADVISOR_NOTE_MIN = 3;
 export const AI_ADVISOR_NOTE_MAX = 500;
 
-export type AiAdvisorLimitUnit = 'uzs' | 'days' | 'count' | 'multiplier';
+export type AiAdvisorLimitUnit =
+  'uzs' | 'days' | 'count' | 'multiplier' | 'percent';
 
 export interface AiAdvisorFieldLimit {
   min: number;
@@ -114,6 +115,18 @@ const uzs = (def: number): AiAdvisorFieldLimit => ({
   max: 1_000_000_000,
   step: 1,
   unit: 'uzs',
+  default: def,
+});
+/**
+ * Ega qarori 2026-11-18 (v0.4): topshirish «topshirilmagan kunlar»ni faqat
+ * o'sha kun boshidagi qoldiqning kamida N% i (kun yig'indisi) topshirilsa
+ * nolga tushiradi. UI'da hozircha ko'rsatilmaydi.
+ */
+const percent = (def: number): AiAdvisorFieldLimit => ({
+  min: 1,
+  max: 100,
+  step: 1,
+  unit: 'percent',
   default: def,
 });
 const days = (def: number): AiAdvisorFieldLimit => ({
@@ -145,6 +158,7 @@ export const AI_ADVISOR_RULE_LIMITS: Readonly<
     balance_uzs: uzs(2_000_000),
     growth_days: days(3),
     no_handover_days: days(3),
+    min_handover_pct: percent(80),
   },
   R3: {
     mad_multiplier: {
@@ -156,7 +170,11 @@ export const AI_ADVISOR_RULE_LIMITS: Readonly<
     },
   },
   R4: { days_without_payout: days(7) },
-  R5: { balance_uzs: uzs(5_000_000), days_without_transfer: days(3) },
+  R5: {
+    balance_uzs: uzs(5_000_000),
+    days_without_transfer: days(3),
+    min_transfer_pct: percent(80),
+  },
   R6: {},
   R7: {},
   R8: {
@@ -381,6 +399,11 @@ export interface AiAdvisorRuleInputsResponse {
    * kursori yo'q, boshqa qoidalar odatdagidek (round-2 #651 ops-B1).
    */
   errors?: Partial<Record<AiAdvisorRuleKey, string>>;
+  /**
+   * v0.4 P6: ism/filial qidiruvi (identity/branch) yiqildi — nomlar `null`.
+   * Dvigatel ochiq qatorda saqlangan `title`/`subject`/`branch` ni saqlaydi.
+   */
+  names_degraded?: boolean;
 }
 
 /** finance kirish chegaralari (round-2 #651 S10): davrlar va orqa oyna. */
@@ -408,6 +431,29 @@ export const AI_ADVISOR_SORT_FIELDS = [
   'severity',
 ] as const;
 export type AiAdvisorSortField = (typeof AI_ADVISOR_SORT_FIELDS)[number];
+
+/**
+ * Aniq kalendar kuni: `YYYY-MM-DD`, aylanib o'tmaydi (2026-02-30 → yo'q) va
+ * yil ≥ 2000 — Postgres 22008 → 500 bo'lmasin (round-2 #654 S1). Gateway
+ * DTO va ai-service bir xil qoidani ishlatadi (round-4 #654).
+ */
+export const isAiAdvisorDay = (v: unknown): v is string => {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return (
+    !Number.isNaN(d.getTime()) &&
+    d.getUTCFullYear() >= 2000 &&
+    d.toISOString().slice(0, 10) === v
+  );
+};
+
+/**
+ * C0 boshqaruv belgilari (`\t`, `\n`, `\r` dan tashqari) va DEL — `q` va
+ * `note` da rad etiladi (Postgres U+0000 ni qabul qilmaydi).
+ */
+export const AI_ADVISOR_CONTROL_CHARS =
+  // eslint-disable-next-line no-control-regex -- ataylab: boshqaruv belgilarini rad etish
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 export interface AiAdvisorAlertsQuery {
   status?: AiAdvisorAlertStatus | 'open';

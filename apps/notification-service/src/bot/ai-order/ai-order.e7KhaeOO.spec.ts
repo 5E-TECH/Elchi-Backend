@@ -473,10 +473,19 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
     );
   });
 
-  it('✏️ Tuzatish — preview yopiladi, kabinet havolasi; ❌ Bekor — hech narsa yaratilmaydi', async () => {
+  it('✏️ Tuzatish — qoralama ochiq qoladi (tuzatish menyusi); ❌ Bekor — hech narsa yaratilmaydi', async () => {
     const { ctx, calls } = setup();
     await send(ctx, ORDER_TEXT);
     await press(ctx, editButtons(ctx)['✏️ Tuzatish']);
+    expect([...ctx.aiDrafts.rows.values()][0].status).toBe('preview');
+    // Ikki buyurtma — avval qaysi birini tuzatish so'raladi.
+    expect(Object.keys(editButtons(ctx))).toEqual([
+      '1) Ali Valiyev',
+      '2) Ali Valiyev',
+      '↩️ Orqaga',
+    ]);
+    await press(ctx, editButtons(ctx)['↩️ Orqaga']);
+    await press(ctx, editButtons(ctx)['❌ Bekor']);
     expect([...ctx.aiDrafts.rows.values()][0].status).toBe('cancelled');
     expect(calls.filter((c) => c.path === '/orders/ai-confirm')).toHaveLength(
       0,

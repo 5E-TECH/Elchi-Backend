@@ -23943,7 +23943,98 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Nishonlar va banner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "alerts": {
+                          "type": "object",
+                          "properties": {
+                            "new": {
+                              "type": "integer"
+                            },
+                            "open": {
+                              "type": "integer"
+                            },
+                            "critical": {
+                              "type": "integer"
+                            },
+                            "critical_open": {
+                              "type": "integer"
+                            },
+                            "critical_rule_keys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "R1",
+                                  "R2",
+                                  "R3",
+                                  "R4",
+                                  "R5",
+                                  "R6",
+                                  "R7",
+                                  "R8"
+                                ]
+                              }
+                            },
+                            "critical_open_rule_keys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "R1",
+                                  "R2",
+                                  "R3",
+                                  "R4",
+                                  "R5",
+                                  "R6",
+                                  "R7",
+                                  "R8"
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        "recommendations": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "budget": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "usd_uzs_rate": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "generated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24015,8 +24106,9 @@
             "name": "from",
             "required": false,
             "in": "query",
-            "description": "`last_at` Toshkent kuni ≥ from (YYYY-MM-DD); from–to ≤ 366 kun",
+            "description": "`last_at` Toshkent kuni ≥ from (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000); from–to ≤ 366 kun",
             "schema": {
+              "format": "date",
               "example": "2026-10-01",
               "type": "string"
             }
@@ -24025,8 +24117,9 @@
             "name": "to",
             "required": false,
             "in": "query",
-            "description": "`last_at` Toshkent kuni ≤ to (YYYY-MM-DD)",
+            "description": "`last_at` Toshkent kuni ≤ to (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000)",
             "schema": {
+              "format": "date",
               "example": "2026-10-31",
               "type": "string"
             }
@@ -24035,7 +24128,7 @@
             "name": "q",
             "required": false,
             "in": "query",
-            "description": "Sarlavha / obyekt nomi (ILIKE), ≤ 100",
+            "description": "Sarlavha / obyekt nomi (ILIKE), ≤ 100. Boshqaruv belgilari (\\t, \\n, \\r dan tashqari) → 400.",
             "schema": {
               "maxLength": 100,
               "type": "string"
@@ -24094,7 +24187,216 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Ro‘yxat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "id",
+                              "rule_key",
+                              "severity",
+                              "status",
+                              "title",
+                              "branch",
+                              "subject",
+                              "headline_amount",
+                              "facts",
+                              "occurrences",
+                              "first_at",
+                              "last_at",
+                              "first_fact_at",
+                              "last_fact_at",
+                              "explanation_status",
+                              "reopened_from_id"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "rule_key": {
+                                "type": "string",
+                                "enum": [
+                                  "R1",
+                                  "R2",
+                                  "R3",
+                                  "R4",
+                                  "R5",
+                                  "R6",
+                                  "R7",
+                                  "R8"
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "critical",
+                                  "warning"
+                                ]
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "new",
+                                  "seen",
+                                  "resolved",
+                                  "dismissed"
+                                ]
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "branch": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "subject": {
+                                "type": "object",
+                                "required": [
+                                  "kind",
+                                  "id",
+                                  "name"
+                                ],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "branch",
+                                      "courier",
+                                      "market",
+                                      "cashbox",
+                                      "system"
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "headline_amount": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "facts": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "occurrences": {
+                                "type": "integer"
+                              },
+                              "first_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "last_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "first_fact_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "nullable": true
+                              },
+                              "last_fact_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "nullable": true
+                              },
+                              "explanation_status": {
+                                "type": "string",
+                                "enum": [
+                                  "none",
+                                  "pending",
+                                  "ready",
+                                  "failed"
+                                ]
+                              },
+                              "reopened_from_id": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        },
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "page": {
+                              "type": "integer"
+                            },
+                            "limit": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            },
+                            "totalPages": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "counts": {
+                          "type": "object",
+                          "properties": {
+                            "by_status": {
+                              "type": "object",
+                              "properties": {
+                                "new": {
+                                  "type": "integer"
+                                },
+                                "seen": {
+                                  "type": "integer"
+                                },
+                                "resolved": {
+                                  "type": "integer"
+                                },
+                                "dismissed": {
+                                  "type": "integer"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24141,7 +24443,365 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Tafsilot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "rule_key",
+                        "severity",
+                        "status",
+                        "title",
+                        "branch",
+                        "subject",
+                        "headline_amount",
+                        "facts",
+                        "occurrences",
+                        "first_at",
+                        "last_at",
+                        "first_fact_at",
+                        "last_fact_at",
+                        "explanation_status",
+                        "reopened_from_id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "rule_key": {
+                          "type": "string",
+                          "enum": [
+                            "R1",
+                            "R2",
+                            "R3",
+                            "R4",
+                            "R5",
+                            "R6",
+                            "R7",
+                            "R8"
+                          ]
+                        },
+                        "severity": {
+                          "type": "string",
+                          "enum": [
+                            "critical",
+                            "warning"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "new",
+                            "seen",
+                            "resolved",
+                            "dismissed"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "branch": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "subject": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "id",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "branch",
+                                "courier",
+                                "market",
+                                "cashbox",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "headline_amount": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "facts": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "occurrences": {
+                          "type": "integer"
+                        },
+                        "first_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "last_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "first_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "last_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_status": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "pending",
+                            "ready",
+                            "failed"
+                          ]
+                        },
+                        "reopened_from_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "rule": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string",
+                              "enum": [
+                                "R1",
+                                "R2",
+                                "R3",
+                                "R4",
+                                "R5",
+                                "R6",
+                                "R7",
+                                "R8"
+                              ]
+                            },
+                            "severity": {
+                              "type": "string",
+                              "enum": [
+                                "critical",
+                                "warning"
+                              ]
+                            },
+                            "thresholds": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        },
+                        "evidence": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "links": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "entity_id": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "primary": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        },
+                        "explanation_md": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "explanation_error": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "budget_exceeded",
+                            "ai_disabled",
+                            "error",
+                            null
+                          ]
+                        },
+                        "explanation_error_scope": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "advisor",
+                            "global",
+                            null
+                          ]
+                        },
+                        "explanation_retry_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_requested_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_poll_after_ms": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "explained_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolved_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "resolved_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolution_note": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reopened_from": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "resolved_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "history": {
+                          "type": "array",
+                          "description": "Faqat `?include=history` (≤ 50)",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "event": {
+                                "type": "string",
+                                "enum": [
+                                  "opened",
+                                  "occurred",
+                                  "seen",
+                                  "explained",
+                                  "resolved",
+                                  "dismissed"
+                                ]
+                              },
+                              "by": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "note": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24184,7 +24844,365 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "Yangilangan tafsilot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "rule_key",
+                        "severity",
+                        "status",
+                        "title",
+                        "branch",
+                        "subject",
+                        "headline_amount",
+                        "facts",
+                        "occurrences",
+                        "first_at",
+                        "last_at",
+                        "first_fact_at",
+                        "last_fact_at",
+                        "explanation_status",
+                        "reopened_from_id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "rule_key": {
+                          "type": "string",
+                          "enum": [
+                            "R1",
+                            "R2",
+                            "R3",
+                            "R4",
+                            "R5",
+                            "R6",
+                            "R7",
+                            "R8"
+                          ]
+                        },
+                        "severity": {
+                          "type": "string",
+                          "enum": [
+                            "critical",
+                            "warning"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "new",
+                            "seen",
+                            "resolved",
+                            "dismissed"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "branch": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "subject": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "id",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "branch",
+                                "courier",
+                                "market",
+                                "cashbox",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "headline_amount": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "facts": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "occurrences": {
+                          "type": "integer"
+                        },
+                        "first_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "last_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "first_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "last_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_status": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "pending",
+                            "ready",
+                            "failed"
+                          ]
+                        },
+                        "reopened_from_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "rule": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string",
+                              "enum": [
+                                "R1",
+                                "R2",
+                                "R3",
+                                "R4",
+                                "R5",
+                                "R6",
+                                "R7",
+                                "R8"
+                              ]
+                            },
+                            "severity": {
+                              "type": "string",
+                              "enum": [
+                                "critical",
+                                "warning"
+                              ]
+                            },
+                            "thresholds": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        },
+                        "evidence": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "links": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "entity_id": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "primary": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        },
+                        "explanation_md": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "explanation_error": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "budget_exceeded",
+                            "ai_disabled",
+                            "error",
+                            null
+                          ]
+                        },
+                        "explanation_error_scope": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "advisor",
+                            "global",
+                            null
+                          ]
+                        },
+                        "explanation_retry_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_requested_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_poll_after_ms": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "explained_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolved_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "resolved_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolution_note": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reopened_from": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "resolved_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "history": {
+                          "type": "array",
+                          "description": "Faqat `?include=history` (≤ 50)",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "event": {
+                                "type": "string",
+                                "enum": [
+                                  "opened",
+                                  "occurred",
+                                  "seen",
+                                  "explained",
+                                  "resolved",
+                                  "dismissed"
+                                ]
+                              },
+                              "by": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "note": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24243,7 +25261,74 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Sozlamalar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "integer"
+                        },
+                        "rules": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "limits": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "telegram": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "budget": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "schedule": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "updated_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24275,7 +25360,74 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "To‘liq sozlamalar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "integer"
+                        },
+                        "rules": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "limits": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "telegram": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "budget": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "schedule": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "updated_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
