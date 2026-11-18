@@ -66,6 +66,12 @@ const USER_BRANCH_CHUNK = 500;
  * faqat o'sha qoidaga tegadi (`errors`).
  */
 export const ADVISOR_STATEMENT_TIMEOUT_MS = 15_000;
+/**
+ * Ism/filial qidiruvining UMUMIY chegarasi (round-4 #651-2 / #652): osilgan
+ * identity/branch-service bilan ham `rule_inputs` AdvisorReader 30 s
+ * budjetidan oshmaydi — chegarada nomlar null, `names_degraded` (P6).
+ */
+export const ADVISOR_NAMES_DEADLINE_MS = 5_000;
 /** R3: bitta tekshiruvdagi vaqt byudjeti — oshsa, ishlangan qismgacha kursor. */
 export const R3_TIME_BUDGET_MS = 12_000;
 /** R3: yangi qatorlar shu bo'laklarda ishlanadi (progress kafolati). */
@@ -404,6 +410,10 @@ interface R3Row {
 @Injectable()
 export class AdvisorInputsService {
   private readonly logger = new Logger(AdvisorInputsService.name);
+  /** Ism qidiruvi umumiy chegarasi (testlarda qisqartiriladi). */
+  namesDeadlineMs = ADVISOR_NAMES_DEADLINE_MS;
+  /** Har SQL ifoda chegarasi (testlarda qisqartiriladi). */
+  statementTimeoutMs = ADVISOR_STATEMENT_TIMEOUT_MS;
 
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
@@ -442,7 +452,7 @@ export class AdvisorInputsService {
     const started = Date.now();
     const rules = new Set(Array.isArray(input?.rules) ? input.rules : []);
     const out: AiAdvisorRuleInputsResponse = { candidates: [], cursors: {} };
-    const names = new NameCache(this);
+    const names = new NameCache(this, this.namesDeadlineMs);
     // Har qoida alohida: biri yiqilsa (timeout) — boshqalari odatdagidek,
     // yiqilgan qoida `errors` da, kursorsiz (round-2 #651 ops-B1).
     const guard = async (rule: AiAdvisorRuleKey, fn: () => Promise<void>) => {
@@ -480,28 +490,34 @@ export class AdvisorInputsService {
     if (rules.has('R2')) {
       await guard('R2', async () => {
         out.candidates.push(
-          ...(await this.r2(input.thresholds?.R2 ?? {}, today, names)),
+          ...(await this.withTimeout((q) =>
+            this.r2(q, input.thresholds?.R2 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R4')) {
       await guard('R4', async () => {
         out.candidates.push(
-          ...(await this.r4(input.thresholds?.R4 ?? {}, today, names)),
+          ...(await this.withTimeout((q) =>
+            this.r4(q, input.thresholds?.R4 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R5')) {
       await guard('R5', async () => {
         out.candidates.push(
-          ...(await this.r5(input.thresholds?.R5 ?? {}, today, names)),
+          ...(await this.withTimeout((q) =>
+            this.r5(q, input.thresholds?.R5 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R7')) {
       await guard('R7', async () => {
         const since = parseSince(input.since?.R7, now);
-        const r = await this.r7(since, now, names);
+        const r = await this.withTimeout((q) => this.r7(q, since, now, names));
         out.candidates.push(...r.candidates);
         out.cursors.R7 = r.cursor;
       });
@@ -539,7 +555,7 @@ export class AdvisorInputsService {
     try {
       await runner.startTransaction();
       await runner.query(
-        `SET LOCAL statement_timeout = ${ADVISOR_STATEMENT_TIMEOUT_MS}`,
+        `SET LOCAL statement_timeout = ${Math.floor(this.statementTimeoutMs)}`,
       );
       const result = await fn(
         <R>(sql: string, params?: unknown[]) =>
@@ -1050,6 +1066,7 @@ export class AdvisorInputsService {
    *   bilan qaytarilgan topshirish (qaytarish lahzasi — chegara, P4).
    */
   private async episodes(
+    q: SqlQuery,
     type: 'couriers' | 'markets' | 'branch',
     source: 'courier_payment' | 'market_payment' | 'branch_to_main',
     minBalance: number,
@@ -1079,7 +1096,7 @@ export class AdvisorInputsService {
                  WHERE b."cashbox_id" = c."id" AND b."is_deleted" = false
                    AND (b."createdAt", b."id") < (${at}, ${id})
                  ORDER BY b."createdAt" DESC, b."id" DESC LIMIT 1)`;
-    return this.ds.query<EpisodeRow[]>(
+    return q<EpisodeRow[]>(
       `SELECT c."id"::text AS cashbox_id, c."user_id"::text AS owner, c."balance",
               lh.id AS last_id, lh."createdAt" AS last_at, lh.amount AS last_amount,
               qh.last_id AS qual_id, qh.last_at AS qual_at,
@@ -1157,6 +1174,7 @@ export class AdvisorInputsService {
 
   /** Kassa kunlik yopilishlari (`finance_cashbox_daily`) — oxirgi kunlar. */
   private async dailyClosings(
+    q: SqlQuery,
     cashboxIds: string[],
     fromDay: string,
     toDay: string,
@@ -1171,7 +1189,7 @@ export class AdvisorInputsService {
       Array<{ date: string; opening: number; income: number; closing: number }>
     >();
     if (!cashboxIds.length) return out;
-    const rows = await this.ds.query<
+    const rows = await q<
       Array<{
         cashbox_id: string;
         date: string;
@@ -1203,6 +1221,7 @@ export class AdvisorInputsService {
 
   /** Kun bo'yicha «chiqish» yig'indisi (T6 qaytarilganlarsiz). */
   private async dailyOutflows(
+    q: SqlQuery,
     cashboxIds: string[],
     source: string,
     fromDay: string,
@@ -1210,7 +1229,7 @@ export class AdvisorInputsService {
     const out = new Map<string, Map<string, number>>();
     if (!cashboxIds.length) return out;
     const t = this.tables();
-    const rows = await this.ds.query<
+    const rows = await q<
       Array<{ cashbox_id: string; day: string; total: string }>
     >(
       `SELECT h."cashbox_id"::text AS cashbox_id,
@@ -1237,6 +1256,7 @@ export class AdvisorInputsService {
 
   /** R2 Kuryer qarzi o'smoqda: (o'sish VA > balance_uzs) YOKI (> N kun topshirilmagan). */
   private async r2(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
@@ -1245,16 +1265,24 @@ export class AdvisorInputsService {
     const growthDays = Math.floor(positive(t.growth_days, 3));
     const noHandover = Math.floor(positive(t.no_handover_days, 3));
     const minPct = clampPct(t.min_handover_pct, 80);
-    const rows = await this.episodes('couriers', 'courier_payment', 0, minPct);
+    const rows = await this.episodes(
+      q,
+      'couriers',
+      'courier_payment',
+      0,
+      minPct,
+    );
     if (!rows.length) return [];
     const ids = rows.map((r) => r.cashbox_id);
     const window = Math.max(growthDays + 1, ADVISOR_EVIDENCE_LIMIT);
     const closings = await this.dailyClosings(
+      q,
       ids,
       addDaysKey(today, -window),
       addDaysKey(today, -1),
     );
     const outflows = await this.dailyOutflows(
+      q,
       ids,
       'courier_payment',
       addDaysKey(today, -window),
@@ -1345,13 +1373,14 @@ export class AdvisorInputsService {
 
   /** R4 Market to'lovi kechikmoqda: qarz > 0 VA > N kun to'lov yo'q. */
   private async r4(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
   ): Promise<AiAdvisorCandidate[]> {
     const limitDays = Math.floor(positive(t.days_without_payout, 7));
     // R4 o'zgarmaydi (ega, 2026-11-18): har qanday to'lov — minPct 0.
-    const rows = await this.episodes('markets', 'market_payment', 0, 0);
+    const rows = await this.episodes(q, 'markets', 'market_payment', 0, 0);
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
       .filter(
@@ -1361,8 +1390,13 @@ export class AdvisorInputsService {
     if (!hits.length) return [];
     const ids = hits.map((x) => x.r.cashbox_id);
     const from = addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT);
-    const closings = await this.dailyClosings(ids, from, addDaysKey(today, -1));
-    const paid = await this.dailyOutflows(ids, 'market_payment', from);
+    const closings = await this.dailyClosings(
+      q,
+      ids,
+      from,
+      addDaysKey(today, -1),
+    );
+    const paid = await this.dailyOutflows(q, ids, 'market_payment', from);
     return hits.map(({ r, ep }) => {
       names.wantUser(r.owner);
       const debt = money(r.balance);
@@ -1405,6 +1439,7 @@ export class AdvisorInputsService {
 
   /** R5 HQ'ga o'tkazma kechikmoqda: qoldiq > balance_uzs VA > N kun o'tkazma yo'q (Q17). */
   private async r5(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
@@ -1414,6 +1449,7 @@ export class AdvisorInputsService {
     const minPct = clampPct(t.min_transfer_pct, 80);
     // P3: epizod boshi chegaraga (balance_uzs) bog'liq emas — musbat qator.
     const rows = await this.episodes(
+      q,
       'branch',
       'branch_to_main',
       balanceUzs,
@@ -1428,12 +1464,13 @@ export class AdvisorInputsService {
     if (!hits.length) return [];
     const ids = hits.map((x) => x.r.cashbox_id);
     const closings = await this.dailyClosings(
+      q,
       ids,
       addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT),
       addDaysKey(today, -1),
     );
     const t2 = this.tables();
-    const transfers = await this.ds.query<
+    const transfers = await q<
       Array<{
         cashbox_id: string;
         id: string;
@@ -1499,6 +1536,7 @@ export class AdvisorInputsService {
   // ─── R7 Chek yoki karta farqi (§4.2, BE-rev B4; #653 review) ──────────
 
   private async r7(
+    q: SqlQuery,
     since: Date,
     now: Date,
     names: NameCache,
@@ -1511,7 +1549,7 @@ export class AdvisorInputsService {
     // GREATEST(ai_checked_at, confirmed_at): yopishdan oldingi tick qatorni
     // ko'rmasa ham, yopishdan keyingisi ko'radi (`attachLatePhoto` ham).
     const cardSeen = `GREATEST(k."ai_checked_at", k."confirmed_at")`;
-    const cards = await this.ds.query<CardCheckRow[]>(
+    const cards = await q<CardCheckRow[]>(
       `SELECT k."id"::text AS id, k."shift_id"::text AS shift_id, k."cashbox_card_id"::text AS card_id,
               k."entered_balance", k."ai_read_balance", k."expected_balance", k."ai_entered_ok",
               k."ai_last4_detected", cc."last4" AS card_last4, k."ai_confidence",
@@ -1534,7 +1572,7 @@ export class AdvisorInputsService {
     // bilan bir xil). Kursor GREATEST(ai_checked_at, updatedAt): T6 tahriri
     // (`carryOverForCorrection`) holat/farqni qayta hisoblaydi.
     const receiptSeen = `GREATEST(r."ai_checked_at", r."updatedAt")`;
-    const receipts = await this.ds.query<ReceiptRow[]>(
+    const receipts = await q<ReceiptRow[]>(
       `SELECT r."id"::text AS id, r."kind"::text AS kind, r."ai_status"::text AS ai_status, r."ai_flags",
               r."entered_amount", r."ai_amount", r."ai_difference", r."ai_currency", r."ai_error_reason",
               r."ai_date", r."ai_recipient_last4", r."ai_payer_last4",
@@ -1579,10 +1617,9 @@ export class AdvisorInputsService {
     if (!cards.length && !receipts.length) return { candidates: [], cursor };
 
     const receiptAi = await this.receiptAiEnabled();
-    const types = await this.cashboxTypes(
-      (sql, params) => this.ds.query(sql, params),
-      [...new Set(cards.map((r) => r.owner))],
-    );
+    const types = await this.cashboxTypes(q, [
+      ...new Set(cards.map((r) => r.owner)),
+    ]);
     const candidates: AiAdvisorCandidate[] = [];
 
     for (const r of cards) {
@@ -2150,7 +2187,10 @@ class NameCache {
   private readonly branches = new Set<string>();
   private readonly userBranches = new Set<string>();
 
-  constructor(private readonly svc: AdvisorInputsService) {}
+  constructor(
+    private readonly svc: AdvisorInputsService,
+    private readonly deadlineMs: number = ADVISOR_NAMES_DEADLINE_MS,
+  ) {}
 
   wantUser(id: string): void {
     this.users.add(id);
@@ -2179,11 +2219,21 @@ class NameCache {
     const fail = () => {
       this.degraded = true;
     };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'deadline'>((resolve) => {
+      timer = setTimeout(() => resolve('deadline'), this.deadlineMs);
+    });
+    const within = async <T>(p: Promise<Map<string, T>>) => {
+      const r = await Promise.race([p, deadline]);
+      if (r !== 'deadline') return r;
+      fail();
+      return new Map<string, T>();
+    };
     const [users, branches, userBranch] = await Promise.all([
-      this.svc.userNames([...this.users], fail),
-      this.svc.branchNames([...this.branches], fail),
-      this.svc.userBranches([...this.userBranches], fail),
-    ]);
+      within(this.svc.userNames([...this.users], fail)),
+      within(this.svc.branchNames([...this.branches], fail)),
+      within(this.svc.userBranches([...this.userBranches], fail)),
+    ]).finally(() => clearTimeout(timer));
     const branchRef = (ref: unknown) => {
       const r = ref as AiAdvisorRef | null;
       if (r && r.name === null) r.name = branches.get(r.id) ?? null;

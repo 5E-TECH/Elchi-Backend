@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { of } from 'rxjs';
+import { NEVER, of } from 'rxjs';
 import { FinanceDailyService } from '../aggregates/finance-daily.service';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxExpenseCategory } from '../entities/cashbox-expense-category.entity';
@@ -875,6 +875,55 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(out.candidates[0].subject.name).toBeNull();
         const ok = await runWith(['R2'], { R2: R2T });
         expect(ok.names_degraded).toBeUndefined();
+      });
+
+      it('round-4 #652: R2/R4/R5 so‘rovlari statement_timeout ostida — qulflangan jadval faqat shu qoidani errors ga tushiradi', async () => {
+        const locker = db.createQueryRunner();
+        await locker.connect();
+        await locker.startTransaction();
+        svc.statementTimeoutMs = 300;
+        try {
+          await locker.query(
+            'LOCK TABLE "finance_schema"."cashbox_history" IN ACCESS EXCLUSIVE MODE',
+          );
+          const t0 = Date.now();
+          const out = await runWith(['R2', 'R4', 'R5'], {
+            R2: R2T,
+            R4: { days_without_payout: 7 },
+            R5: { balance_uzs: 5000000, days_without_transfer: 3 },
+          });
+          expect(Date.now() - t0).toBeLessThan(5000);
+          for (const k of ['R2', 'R4', 'R5'] as const)
+            expect(out.errors?.[k]).toMatch(/statement timeout/);
+        } finally {
+          svc.statementTimeoutMs = 15000;
+          await locker.rollbackTransaction();
+          await locker.release();
+        }
+      });
+
+      it('round-4 #651-2: osilgan identity — umumiy chegarada nomlar null, names_degraded (RPC kutilmaydi)', async () => {
+        const cb = await cashbox('couriers', 85, 900000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          900000,
+          900000,
+          '2026-10-10T08:00:00Z',
+        );
+        identitySend.mockImplementationOnce(() => NEVER as never);
+        svc.namesDeadlineMs = 300;
+        try {
+          const t0 = Date.now();
+          const out = await runWith(['R2'], { R2: R2T });
+          expect(Date.now() - t0).toBeLessThan(3000);
+          expect(out.names_degraded).toBe(true);
+          expect(out.candidates).toHaveLength(1);
+          expect(out.candidates[0].subject.name).toBeNull();
+        } finally {
+          svc.namesDeadlineMs = 5000;
+        }
       });
 
       it('P5: T6 tahriri — almashtiruvchi oyoq asl topshirish vaqti/kaliti bilan (kunlar nolga tushmaydi)', async () => {
