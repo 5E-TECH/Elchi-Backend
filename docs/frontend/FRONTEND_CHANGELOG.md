@@ -22,6 +22,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI maslahatchi (BE-5): migratsiya 241 — holat ustunlari va qoida indekslari
+
+Deploy: **migratsiya 1716000000241** (finance-service/ai-service kodi o'zgarmaydi). Idempotent; `cashbox_history` va `shifts` da indeks qurilishi davomida yozish qisqa kutadi — kam yuklamali vaqtda.
+
+- 🔧 `ai_advisor_rule_state.last_failed` / `failures` — eski 226 ni yurgizgan bazalarda yetishmasdi (qoidalar holati saqlanmasdi).
+- ⚡ R3 (g'ayrioddiy xarajat) va R1 (smena kamomadi) tekshiruvlari indeks bilan (o'lchov: R3 8.7 s → 0.6 s, R1 0.29 s → 0.4 ms).
+
+**Frontend action items:** yo'q.
+
 ### 2026-11-17 — Kuryer skani = qabul: yo'ldagi pochtadan olish, «Yo'lda» va «Qabul qilish» qadami yo'q (COURIER-SCAN)
 
 Ega (2026-11-17): HQ pochtani filialga jo'natdi — menejer hali qabul qilmagan bo'lsa ham filial kuryeri buyurtmani skanerlab oladi; skan = qabul; olgandan keyin holat «Yo'lda» ga qaytmaydi, «Qabul qilish» chiqmaydi, darhol «Sotish» / «Bekor qilish».
