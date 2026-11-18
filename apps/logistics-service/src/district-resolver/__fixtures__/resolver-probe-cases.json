@@ -1751,5 +1751,1956 @@
    "sato": null,
    "reason": "district_not_found"
   }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent shahrida, Mirobod tumani 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent shahridagi Chilonzor tumani 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "gorod Toshkent, Yunusobod 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "g. Toshkent, Yunusobod t., 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "gorod Toshkent, Chilonzorskiy rayon, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent, Mirobod tumani, 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tumani, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent r-n, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent tumani, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent r-n, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi, Mustaqillik 5, t. 90 123 45 67"
+  },
+  "seed": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710401",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": "Samarqand",
+   "full_address": "Samarqand, Registon ko'ch. 5, t.: 901234567"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": "Samarqand",
+   "full_address": "Samarqand, T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": "Samarqand",
+   "full_address": "Самарканд, ул. Т. Малика 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "full_address": "Farg'ona, Mustaqillik 5, t.y. bekati yonida"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent t., Navoiy ko'chasi 5-uy"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent t., Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qarshi t., Mustaqillik 5"
+  },
+  "seed": {
+   "sato": "1710224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710224",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Shahrisabz t."
+  },
+  "seed": {
+   "sato": "1710245",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710245",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Shahrisabz t., Navoiy 5"
+  },
+  "seed": {
+   "sato": "1710245",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710245",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Yunusobod t., 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Yunusobod t., 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent shahri, Chilonzor ul. Bunyodkor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli yo'li 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent T.Shevchenko, Mirobod 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "Toshkent T. Malik ko'chasi, Yunusobod"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent T.Shevchenko 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Ташкент Т.Шевченко 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent t. y. vokzali"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "Toshkent T.Shevchenko 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "Ташкент Т.Шевченко 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "Toshkent t. y. vokzali"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent T.Shevchenko 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Ташкент Т.Шевченко 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent t. y. vokzali"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": null,
+   "full_address": "Samarqand T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": null,
+   "full_address": "Qarshi T.Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Namangan",
+   "district_name": null,
+   "full_address": "Namangan T. Malik 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Andijon",
+   "district_name": null,
+   "full_address": "Andijon T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "district_name": null,
+   "full_address": "Farg'ona T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Xorazm",
+   "district_name": null,
+   "full_address": "Urganch T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Surxondaryo",
+   "district_name": null,
+   "full_address": "Termiz T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "district_name": null,
+   "full_address": "Buxoro T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Sirdaryo",
+   "district_name": null,
+   "full_address": "Guliston T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qoraqalpog'iston",
+   "district_name": null,
+   "full_address": "Nukus T.Qayipbergenov ko'chasi 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": null,
+   "full_address": "Kattaqo'rg'on T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Xorazm",
+   "district_name": null,
+   "full_address": "Xiva T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "district_name": null,
+   "full_address": "Kogon T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "district_name": null,
+   "full_address": "Yangiyo'l T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": null,
+   "full_address": "Shahrisabz T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "district_name": null,
+   "full_address": "Bekobod T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "district_name": null,
+   "full_address": "Ohangaron T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand, Navoiy ko'chasi T. Malik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand t. y. vokzali yonida"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand shahar T. Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": "1718401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718401",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent t. Keles 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent t. Keles 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qarshi t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qarshi t. 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi t.",
+   "full_address": "Qarshi, Mustaqillik 5"
+  },
+  "seed": {
+   "sato": "1710224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710224",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent t.; Keles 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Olmazor ul. d. 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Olmazor ul. d. 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Olmazor ul., d.5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Olmazor ul., d.5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. dom 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Sergeli ul. dom 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Chilonzor ul. uy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Chilonzor ul. uy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Yunusobod ul. kv 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Yunusobod ul. kv 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "г. Ташкент, Сергели ул. д. 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "г. Ташкент, Сергели ул. д. 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tum., Keles 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tumanida, Keles 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tumanidagi Keles 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. №12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. № 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "г. Ташкент, Сергели ул. № 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Mirobod ul. №5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Mirobod ul. no5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Mirobod ul. n5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. N12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. No12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. №12, kv 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": null,
+   "full_address": "Samarqand, Navoiy ko'chasi 5, Karimov T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Namangan",
+   "district_name": null,
+   "full_address": "Namangan, Navoiy ko'chasi 5, Karimov T., [TEL_1]"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "district_name": null,
+   "full_address": "Farg'ona, Navoiy ko'chasi 5; oluvchi: Rahimova T.; [TEL_1]"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "district_name": null,
+   "full_address": "Buxoro viloyati, Buxoro, Mustaqillik 12, Ivanov T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": null,
+   "full_address": "Samarqand sh., Navoiy ko'chasi 5, Karimov T."
+  },
+  "seed": {
+   "sato": "1718401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718401",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand, Navoiy ko'chasi 5, oluvchi Furqat T."
+  },
+  "seed": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "note": "r7 S2 accepted residual: a district name that is also a person name before an initial (Furqat T.) is still a tuman marker"
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "full_address": "Farg'ona, Navoiy ko'chasi 5, oluvchi Furqat T."
+  },
+  "seed": {
+   "sato": "1730238",
+   "reason": null
+  },
+  "full": {
+   "sato": "1730238",
+   "reason": null
+  },
+  "note": "r7 S2 accepted residual: a district name that is also a person name before an initial (Furqat T.) is still a tuman marker"
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand T.",
+   "address": "Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "note": "r7 S2 accepted residual: initial split across fields (full_address ends with \"Samarqand T.\")"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Do'stlik qishlog'i 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. markaz 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Bog'ishamol MFY 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t.Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Navoiy ko'chasi 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "address": "Qarshi t. Do'stlik qishlog'i 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Do'stlik qishlog'i 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "address": "Qarshi t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": "Samarqand",
+   "full_address": "Samarqand t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "district_name": "Buxoro",
+   "full_address": "Buxoro t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Namangan",
+   "district_name": "Namangan",
+   "full_address": "Namangan t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "note": "r7 S1 documented: split fields — no name before \"t.\", bare \"Qarshi\" → city (dev: 1710224)"
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Yunusobod, Chilonzor tumanidan kelgan"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Yunusobod 5, Chilonzor tumanidan kelgan"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
  }
 ]
