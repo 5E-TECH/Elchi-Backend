@@ -553,14 +553,34 @@ export class DeliveryTariffRowDto {
   @ApiProperty({ type: String, format: 'date-time' }) valid_from!: string;
   @ApiPropertyOptional() is_active?: boolean;
   @ApiPropertyOptional({ nullable: true, type: String }) created_by?:
-    | string
-    | null;
+    string | null;
   @ApiPropertyOptional({
     nullable: true,
     type: String,
     description: 'Kim yaratgan (ism; GET /delivery/tariffs da)',
   })
   created_by_name?: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    format: 'date-time',
+    description:
+      '(B0ILd7YI) Rejalashtirilgan versiya bekor qilingan vaqt; null — bekor qilinmagan',
+  })
+  cancelled_at?: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description: '(B0ILd7YI) Kim bekor qilgan (foydalanuvchi ID)',
+  })
+  cancelled_by?: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description:
+      '(B0ILd7YI) Kim bekor qilgan (ism; GET /delivery/tariffs va bekor qilish javobida)',
+  })
+  cancelled_by_name?: string | null;
 }
 
 /** `POST /delivery/quote` → `data`. Pul — so'm, vazn — kg. */
@@ -662,8 +682,7 @@ export class DeliveryPricingSettingsRowDto {
   @ApiProperty({ example: 500 }) round_to!: number;
   @ApiProperty({ example: 20000 }) pickup_fee!: number;
   @ApiProperty({ example: 10, nullable: true }) pickup_free_from_count!:
-    | number
-    | null;
+    number | null;
   @ApiProperty({ example: 1.4 }) express_multiplier!: number;
   @ApiProperty({
     example: null,
@@ -701,6 +720,28 @@ export class DeliveryTariffVersionDto extends DeliveryTariffRowDto {
   @ApiProperty({ description: 'Hozir amaldagi versiya' }) is_current!: boolean;
   @ApiProperty({ description: 'Kelajakda kuchga kiradi' })
   is_scheduled!: boolean;
+  @ApiProperty({
+    description:
+      '(B0ILd7YI) Bekor qilingan rejalashtirilgan versiya — hech qachon kuchga kirmaydi (`is_active: false`)',
+  })
+  is_cancelled!: boolean;
+}
+
+/** (B0ILd7YI) `POST /delivery/tariffs/:id/cancel` → `data`. */
+export class DeliveryTariffCancelledDto extends DeliveryTariffVersionDto {
+  @ApiProperty({
+    description:
+      'true — versiya avvalroq bekor qilingan edi (takror so`rov; jurnal ikkinchi marta yozilmaydi)',
+  })
+  already_cancelled!: boolean;
+}
+
+export class DeliveryTariffCancelResponseDto {
+  @ApiProperty({ example: 200 }) statusCode!: number;
+  @ApiProperty({ example: 'Rejalashtirilgan tarif versiyasi bekor qilindi' })
+  message!: string;
+  @ApiProperty({ type: DeliveryTariffCancelledDto })
+  data!: DeliveryTariffCancelledDto;
 }
 
 export class DeliveryTariffsListDataDto {

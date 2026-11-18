@@ -22,6 +22,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-17 — Yetkazish tariflari: rejalashtirilgan tarif versiyasini bekor qilish (B0ILd7YI)
+
+Maqsad: «Hududlar → Yetkazish tariflari» (`/delivery-tariffs`)da kelajak sanaga rejalashtirilgan tarif xato kiritilsa, uni kuchga kirishidan oldin bekor qilish (hozir faqat ustidan yangi versiya yozish mumkin edi).
+Deploy: migration-runner (migratsiya **235**), logistics-service, keyin api-gateway.
+
+- 🆕 [gateway → logistics] `POST /delivery/tariffs/:id/cancel` (SUPERADMIN, ADMIN — tarif tahrirlash bilan bir xil; tanasiz, **200**). Faqat hali kuchga kirmagan versiya (`is_scheduled: true` — `valid_from` kelajakda, faol) bekor qilinadi; shart DB soati bilan bitta `UPDATE` ichida — kuchga kirgan versiya hech qachon bekor qilinmaydi. Qator **o'chirilmaydi**: `is_active: false`, `cancelled_at`, `cancelled_by`; hozirgi tarif va narx hisobi o'zgarmaydi.
+  - Javob `data` — versiya qatori + `is_current: false`, `is_scheduled: false`, `is_cancelled: true`, `already_cancelled`, `created_by_name`, `cancelled_by_name`.
+  - **Takror so'rov** (vaqt tugagach qayta bosish, ikki admin bir vaqtda) — xato emas: 200, o'sha qator, `already_cancelled: true`, jurnal ikkinchi marta yozilmaydi.
+  - Xatolar: 400 (`id` musbat butun son emas), 404 (versiya yo'q), **409** — versiya allaqachon kuchga kirgan (`message`: «… bekor qilib bo'lmaydi. Narxni o'zgartirish uchun yangi versiya yarating») yoki boshqa sabab bilan nofaol.
+  - Jurnal: `logistics.delivery_tariff_cancelled` («Rejalashtirilgan yetkazish tarifi bekor qilindi»), eski/yangi qiymat bilan.
+- ✏️ `GET /delivery/tariffs` — `data.versions[]` ga `is_cancelled` (bool), har qatorda `cancelled_at` / `cancelled_by` (bekor qilinmagan — `null`) va `cancelled_by_name` (gateway, identity'dan; topilmasa `null`). Bekor qilingan versiya ro'yxatda qoladi (`is_current: false`, `is_scheduled: false`).
+- 🟢 `PATCH /delivery/pricing-settings` («Qoidalarni saqlash») takror so'rovga allaqachon chidamli — o'zgartirilmadi: qiymatlar mutlaq (delta emas), so'rovlar advisory qulf bilan ketma-ket, hech narsa o'zgarmasa versiya ham, jurnal ham yo'q (`message`: «Sozlamalar o'zgarmadi»). Ya'ni vaqt tugagach o'sha qiymatlar bilan qayta yuborish ikkinchi bir xil versiya yaratmaydi — `Idempotency-Key` kerak emas. `min_delivery_price` va `extra_cost_limit_amount` (migratsiya 183) shu PATCH / GET'da allaqachon bor.
+
+**Frontend action items** (`/delivery-tariffs`, superadmin va admin):
+- 🔧 «Rejalashtirilgan: …» qatori (va tarixdagi «Rejalashtirilgan» belgili versiya) yonida «Bekor qilish» — `useConfirm` (`tone: "danger"`) → `POST /delivery/tariffs/:id/cancel`; muvaffaqiyatda tariflar keshini yangilash. `already_cancelled: true` ham muvaffaqiyat. 409 — `message` ni `notify.error` bilan (ro'yxatni qayta o'qish — versiya kuchga kirgan).
+- 🔧 Tarixda `is_cancelled: true` versiyasi — «Bekor qilingan» belgisi (+ `cancelled_by_name`, `cancelled_at`).
+
 ### 2026-11-17 — Menejer o'z filiali xodimlarini boshqaradi: huquq hozirgi filial bo'yicha, `created_by` emas (KQINMdeQ)
 
 Ega (2026-11-17): menejer **o'z filialidagi barcha** xodimlarni tahrirlay olishi kerak (boshqa menejerlardan tashqari), kim yaratganidan qat'i nazar; boshqa filialga o'tkazilgan xodim bilan esa hech narsa qila olmaydi.

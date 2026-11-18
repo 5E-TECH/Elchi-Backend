@@ -362,6 +362,18 @@ export const ActivityDescribeUz = {
     return `Yetkazish tarifi «${String(tariffId)}» — yangi versiya: ${moneyUz(basePrice)} + ${moneyUz(extraPerKg)}/kg`;
   },
 
+  /**
+   * (B0ILd7YI) "Yetkazish tarifi «center» — rejalashtirilgan versiya bekor
+   * qilindi: 45 000 so'm + 4 500 so'm/kg". Faqat tarif kodi va summalar.
+   */
+  deliveryTariffVersionCancelled(
+    tariffId: string,
+    basePrice: unknown,
+    extraPerKg: unknown,
+  ): string {
+    return `Yetkazish tarifi «${String(tariffId)}» — rejalashtirilgan versiya bekor qilindi: ${moneyUz(basePrice)} + ${moneyUz(extraPerKg)}/kg`;
+  },
+
   /** (DAqXPeSy) "Yetkazish narxi sozlamalari o'zgartirildi: 2 ta maydon". */
   deliveryPricingSettingsUpdated(changedCount: number): string {
     const n = Math.max(0, Math.trunc(Number(changedCount) || 0));

@@ -4,6 +4,7 @@
  *   logistics.delivery.quote             — hisob (hech narsa yozmaydi)
  *   logistics.delivery.tariffs.find_all  — hozirgi tariflar + versiyalar tarixi
  *   logistics.delivery.tariffs.create    — yangi tarif versiyasi
+ *   logistics.delivery.tariffs.cancel    — rejalashtirilgan versiyani bekor qilish (B0ILd7YI)
  *   logistics.delivery.settings.get      — faol sozlama
  *   logistics.delivery.settings.update   — sozlama (yangi versiya)
  *   logistics.delivery.settings.history  — sozlama versiyalari (yangisi tepada)
@@ -13,6 +14,8 @@ export const DELIVERY_PRICING_PATTERNS = {
   QUOTE_BY_TARIFF: 'logistics.delivery.quote_by_tariff',
   TARIFFS_FIND_ALL: 'logistics.delivery.tariffs.find_all',
   TARIFFS_CREATE: 'logistics.delivery.tariffs.create',
+  /** B0ILd7YI — faqat kelajakda kuchga kiradigan versiya. */
+  TARIFFS_CANCEL: 'logistics.delivery.tariffs.cancel',
   SETTINGS_GET: 'logistics.delivery.settings.get',
   SETTINGS_UPDATE: 'logistics.delivery.settings.update',
   SETTINGS_HISTORY: 'logistics.delivery.settings.history',
@@ -134,6 +137,11 @@ export interface CreateDeliveryTariffPayload {
   days_max: number;
   /** ISO sana-vaqt; berilmasa — hozir. O'tmish — 400. */
   valid_from?: string | null;
+}
+
+/** `logistics.delivery.tariffs.cancel` — bekor qilinadigan versiya ID'si. */
+export interface CancelDeliveryTariffPayload {
+  id: string;
 }
 
 export type UpdateDeliveryPricingSettingsPayload = Partial<

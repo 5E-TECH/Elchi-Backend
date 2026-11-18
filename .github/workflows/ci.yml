@@ -317,6 +317,7 @@ jobs:
           apps/logistics-service/src/delivery-pricing/city-zone-restore.pg.spec.ts
           apps/branch-service/src/hq-branch-region-restore.pg.spec.ts
           apps/finance-service/src/user-cashboxes-restore.pg.spec.ts
+          apps/logistics-service/src/delivery-pricing/delivery-pricing.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
@@ -349,6 +350,9 @@ jobs:
           # Migratsiya 231 (prod 2026-11-17): «Hisob qoidalari» faol qatorini tiklash —
           # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
           # Migratsiya 232 (Toshkent shahri `is_city_zone`) ham shu o'zgaruvchi bilan.
+          # B0ILd7YI: delivery-pricing.pg.spec.ts (142/154/183/235, tarif versiyasi,
+          # rejalashtirilganini bekor qilish) — elchi_e_test ichida logistics_schema
+          # ni o'zi yaratadi va o'chiradi (bu jobda boshqa spec unga tegmaydi).
           DELIVERY_PRICING_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # Migratsiya 233 (HQ filiali viloyati) — o'z vaqtinchalik bazasi,
           # elchi_e_test faqat ulanish uchun. Migratsiya 234 (kuryer / market /
