@@ -297,6 +297,59 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
     expect(row.notify_skipped).toBeNull();
   });
 
+  it('#705 B1 (S-d regressiya): doim 5xx olayotgan qator (engine har tick yangilaydi) boshqa kritiklarni to‘smaydi', async () => {
+    const [{ id: bad }] = await insert('critical');
+    const goods = [];
+    for (let i = 0; i < 3; i++) goods.push((await insert('critical'))[0].id);
+    dispatch.mockImplementation((_p: unknown, body: unknown) =>
+      (body as { data: { alert_id: string } }).data.alert_id === bad
+        ? throwError(() => ({ statusCode: 500, message: 'x' }))
+        : of({ statusCode: 201 }),
+    );
+    // Engine R2 epizodini har tick yangilaydi (updatedAt = hozir) — yomon
+    // qator saralashda birinchi bo'lib qoladi.
+    await ds.query(
+      `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() - INTERVAL '1 day' WHERE id = $1`,
+      [bad],
+    );
+    expect(await notifier.dispatchPending()).toEqual({ sent: 3, failed: 1 });
+    const rows = await ds.query<
+      Array<{ id: string; notified_at: Date | null }>
+    >(
+      `SELECT id::text AS id, notified_at FROM ai_schema.ai_advisor_alerts WHERE id = ANY($1::bigint[])`,
+      [goods],
+    );
+    expect(rows.every((r) => r.notified_at !== null)).toBe(true);
+  });
+
+  it('#705 S3: superadminlar ro‘yxati bo‘sh — urinish sanalmaydi, «failed» bo‘lmaydi', async () => {
+    const [{ id }] = await insert('critical');
+    (notifier as unknown as { recipientsCache: unknown }).recipientsCache =
+      null;
+    identity.mockImplementation(() => of({ data: { items: [] } }));
+    try {
+      let t = Date.now();
+      for (let i = 0; i < 12; i++) {
+        (notifier as unknown as { recipientsCache: unknown }).recipientsCache =
+          null;
+        await notifier.dispatchPending(new Date(t));
+        t += 60 * 60_000;
+      }
+      expect(dispatch).not.toHaveBeenCalled();
+      const [row] = await ds.query<Array<{ notify_skipped: string | null }>>(
+        `SELECT notify_skipped FROM ai_schema.ai_advisor_alerts WHERE id = $1`,
+        [id],
+      );
+      expect(row.notify_skipped).toBeNull();
+    } finally {
+      identity.mockImplementation(() =>
+        of({ data: { items: [{ id: '1' }, { id: 5 }] } }),
+      );
+      (notifier as unknown as { recipientsCache: unknown }).recipientsCache =
+        null;
+    }
+  });
+
   it('round-4 S2: oraliqdagi qatorlar partiya joyini olmaydi — yangi critical shu tick yuboriladi', async () => {
     for (let i = 0; i < 20; i++) await insert('critical');
     dispatch.mockImplementation(() =>

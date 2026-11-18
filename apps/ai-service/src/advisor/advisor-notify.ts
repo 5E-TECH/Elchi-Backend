@@ -67,10 +67,14 @@ const NOTIFY_BACKOFF_SLACK_MS = 2 * 60_000;
  * Hisoblanmaydi (§9.2; 24 soatlik `stale` baribir chegaralaydi). Faqat 4xx
  * (qator/payload rad etildi) urinish sifatida sanaladi.
  */
+/** Javob yo'q (timeout / transport) — partiya to'xtaydi (tick'ka bitta 8 s kutish). */
+export const isDispatchNoReply = (error: unknown): boolean =>
+  error instanceof TimeoutError ||
+  typeof (error as { statusCode?: unknown } | null)?.statusCode !== 'number';
 export const isDispatchUnreachable = (error: unknown): boolean => {
-  if (error instanceof TimeoutError) return true;
-  const code = (error as { statusCode?: unknown } | null)?.statusCode;
-  return typeof code !== 'number' || code >= 500;
+  if (isDispatchNoReply(error)) return true;
+  const code = (error as { statusCode: number }).statusCode;
+  return code >= 500 || code === 429 || code === 408;
 };
 export const ADVISOR_RECIPIENTS_TTL_MS = 5 * 60_000;
 const BODY_MAX = 600;
@@ -264,19 +268,25 @@ export function advisorTelegramAllowed(
   return input.telegramEnabled && input.rules[rule]?.telegram !== false;
 }
 
+/** Shu soatdan (Toshkent) keyin ham tun — R6 Telegram ertasi kuni 09:00 da. */
+export const ADVISOR_R6_NIGHT_START_HOUR = 22;
+
 /**
- * R6 (ega, 2026-11-15): tunda ochilgan zarar ogohlantirishi — Telegram
- * Toshkent 09:00 da (o'sha kun). 09:00 dan keyin — darhol (`null`).
+ * R6 (ega, 2026-11-15): Telegram tunda yo'q — Toshkent 22:00–09:00 oralig'ida
+ * kechiktiriladi: 09:00 gacha — o'sha kuni 09:00; 22:00 dan keyin — ertasi
+ * kuni 09:00 (#705 S4). 09:00 dan keyin, 22:00 gacha — darhol (`null`).
  */
 export function r6TelegramDueAt(
   rule: AiAdvisorRuleKey,
   now: Date,
 ): Date | null {
   if (rule !== 'R6') return null;
-  const nine = new Date(
-    startOfTashkentDay(now).getTime() + ADVISOR_R6_TELEGRAM_HOUR * 3600_000,
-  );
-  return now < nine ? nine : null;
+  const dayStart = startOfTashkentDay(now).getTime();
+  const nine = new Date(dayStart + ADVISOR_R6_TELEGRAM_HOUR * 3600_000);
+  if (now < nine) return nine;
+  if (now.getTime() >= dayStart + ADVISOR_R6_NIGHT_START_HOUR * 3600_000)
+    return new Date(nine.getTime() + 86_400_000);
+  return null;
 }
 
 @Injectable()
@@ -411,6 +421,11 @@ export class AdvisorNotifier {
       );
       return { sent: 0, failed: rows.length };
     }
+    // Bo'sh ro'yxat — identity xatosi kabi (#705 S3): urinish yozilmaydi.
+    if (!recipients.length) {
+      this.logger.warn(`ai_advisor_notify: superadminlar ro'yxati bo'sh`);
+      return { sent: 0, failed: rows.length };
+    }
     const rules = await this.settings.getRules();
     const telegramEnabled = await this.settings.telegramEnabled();
     const cabinetUrl = this.config?.get<string>('ELCHI_CABINET_URL') ?? null;
@@ -472,7 +487,9 @@ export class AdvisorNotifier {
           this.logger.warn(
             `ai_advisor_notify_unreachable alert=${row.id}: ${short(error)}`,
           );
-          break;
+          // 5xx tez javob — qatorga xos xato boshqalarni to'smasin (davom).
+          if (isDispatchNoReply(error)) break;
+          continue;
         }
         await this.attemptFailed(row.id, now, short(error));
       }
@@ -605,6 +622,12 @@ export class AdvisorNotifier {
           );
           return { sent: out.sent, failed: out.failed + 1 };
         }
+        if (!recipients.length) {
+          this.logger.warn(
+            `ai_advisor_notify_telegram: superadminlar ro'yxati bo'sh`,
+          );
+          return { sent: out.sent, failed: out.failed + 1 };
+        }
       }
       try {
         const payload = buildAdvisorDispatch(row, {
@@ -640,7 +663,8 @@ export class AdvisorNotifier {
           this.logger.warn(
             `ai_advisor_notify_telegram_unreachable alert=${row.id}: ${short(error)}`,
           );
-          break;
+          if (isDispatchNoReply(error)) break;
+          continue;
         }
         await this.attemptFailed(row.id, now, short(error), ':tg', () =>
           clear(row.id),

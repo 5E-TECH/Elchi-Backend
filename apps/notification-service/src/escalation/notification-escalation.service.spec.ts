@@ -169,8 +169,9 @@ describe('NotificationEscalationService', () => {
       store.set('2', row('2'));
 
       const res = await service.handle({ notification_ids: ['1', '2'] });
+      const escalate = (smsDispatch as { escalate: jest.Mock }).escalate;
 
-      expect(smsDispatch.escalate).toHaveBeenCalledWith(['2']);
+      expect(escalate).toHaveBeenCalledWith(['2']);
       expect(res).toEqual({ checked: 2, escalated: 1 });
       expect(patches).toEqual([
         {
