@@ -1,7 +1,7 @@
 import { applyDecorators, BadRequestException } from '@nestjs/common';
 import { Transform } from 'class-transformer';
 import { IsOptional, IsString, Matches } from 'class-validator';
-import { normalizeUzPhone } from '@app/common';
+import { normalizeUzPhone, ORDER_CREATE_ERROR_CODES } from '@app/common';
 
 /**
  * VRyloH62 — buyurtmadagi operator raqamlari (yorliq/chekdagi "Muammo
@@ -84,7 +84,11 @@ export function resolveOrderOperatorPhones(params: {
   if (params.market?.require_operator_phone === true && !marketDefault) {
     if (!formInput) {
       if (params.strict) {
-        throw new BadRequestException(OPERATOR_PHONE_REQUIRED_MESSAGE);
+        throw new BadRequestException({
+          statusCode: 400,
+          message: OPERATOR_PHONE_REQUIRED_MESSAGE,
+          code: ORDER_CREATE_ERROR_CODES.OPERATOR_PHONE_REQUIRED,
+        });
       }
       return { operator_phone: null, secondary_operator_phone: null };
     }

@@ -284,10 +284,33 @@ function clip(text: string): string {
  * (`ServiceUnavailableException` → `validation_unavailable`) matni va
  * identity'ning telefon-boshqa-rolda (409) matni o'tkaziladi.
  */
+/** #658 xato kontrakti: UPPER_CASE mashina kodi. */
+const PUBLIC_REASON_CODE_RE = /^[A-Z][A-Z0-9_]{2,63}$/;
+
+/**
+ * Gateway O'ZI tashlagan xato (`HttpException` nusxasi) tanasidagi
+ * UPPER_CASE `code` → natijadagi `reason_code` (masalan
+ * `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`). Mijozlar
+ * (Telegram bot, FE) o'zbekcha `reason` matnini tahlil qilmasin. RMQ'dan
+ * kelgan oddiy obyekt kodlari (servis ichki tafsiloti) o'tkazilmaydi.
+ */
+function reasonCodeOf(error: unknown): { reason_code?: string } {
+  if (!(error instanceof HttpException)) return {};
+  const response = error.getResponse();
+  const code =
+    response && typeof response === 'object'
+      ? (response as { code?: unknown }).code
+      : undefined;
+  return typeof code === 'string' && PUBLIC_REASON_CODE_RE.test(code)
+    ? { reason_code: code }
+    : {};
+}
+
 export function toConfirmFailure(error: unknown): {
   code: AiConfirmFailureCode;
   reason: string;
   order_id?: string;
+  reason_code?: string;
 } {
   // Cp2v3ZJ7: barqaror kalit + mazmun imzosi — order-service
   // `RpcException({statusCode:409, code:'duplicate_recent', order_id})`.
@@ -333,14 +356,22 @@ export function toConfirmFailure(error: unknown): {
     return { code: 'create_failed', reason: clip(message) };
   }
   if (status === 400 && message) {
-    return { code: 'create_failed', reason: clip(message) };
+    return {
+      code: 'create_failed',
+      reason: clip(message),
+      ...reasonCodeOf(error),
+    };
   }
   // Gateway O'ZI tashlagan 403 (`createOrderInternal`: tasdiqlanmagan
   // `customer_id`, begona mijoz kartasini yangilash) — matn serverniki,
   // payload yo'q; operator sababni ko'rsin. RMQ'dan kelgan 403 (oddiy
   // obyekt, `ForbiddenException` nusxasi emas) — avvalgidek umumiy matn.
   if (error instanceof ForbiddenException && message) {
-    return { code: 'create_failed', reason: clip(message) };
+    return {
+      code: 'create_failed',
+      reason: clip(message),
+      ...reasonCodeOf(error),
+    };
   }
   // Gateway O'ZI tashlagan 503 — yaratishdan OLDINGI tekshiruv ishlamadi
   // (masalan `customer_id` doirasi, fail-closed): buyurtma ANIQ
@@ -351,6 +382,7 @@ export function toConfirmFailure(error: unknown): {
       reason: message
         ? clip(message)
         : AI_CONFIRM_REASON_TEXT.validation_unavailable,
+      ...reasonCodeOf(error),
     };
   }
 

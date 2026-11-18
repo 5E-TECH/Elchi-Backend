@@ -62,6 +62,57 @@ function orderIdOf(response: unknown): string | null {
   return typeof id === 'string' || typeof id === 'number' ? String(id) : null;
 }
 
+/** Bir so'rovda ko'pi bilan shuncha kalit (ai-confirm partiyasi ≤ 10). */
+const COMPLETED_LOOKUP_MAX = 50;
+
+/**
+ * ai-confirm TAKRORI — qayta tekshiruvlardan OLDIN (`order.ai_confirm.completed`).
+ *
+ * Gateway operator/raqam/mijoz tekshiruvini `order.create` dan OLDIN qiladi;
+ * natijasi noma'lum birinchi urinishdan keyin operator o'chirilsa, ikkinchi
+ * «✅» mavjud buyurtma uchun `create_failed` olardi. Gateway shu funksiya
+ * bilan barqaror kalit (`ai:<market>:<draft>:<idx>`) allaqachon `completed`
+ * ekanini so'raydi va bo'lsa tekshiruvsiz `idempotent_replay` qaytaradi.
+ *
+ *  - FAQAT o'qish (kalit egallanmaydi; yangi yaratish tekshiruvi
+ *    o'zgarmaydi);
+ *  - faqat barqaror kalit shakli VA kalitdagi market = `market_id` (gateway
+ *    server aniqlagan market) — boshqa market natijasi qaytmaydi;
+ *  - javobda faqat `request_id` va `order_id` (keshlangan buyurtma tanasi
+ *    EMAS).
+ */
+export async function findCompletedAiCreates(
+  idempotency: Pick<IdempotencyService, 'findCompleted'>,
+  marketId: unknown,
+  requestIds: unknown,
+): Promise<Array<{ request_id: string; order_id: string }>> {
+  const market =
+    typeof marketId === 'string' || typeof marketId === 'number'
+      ? String(marketId).trim()
+      : '';
+  if (!/^\d{1,19}$/.test(market) || !Array.isArray(requestIds)) return [];
+  const wanted = [
+    ...new Set(
+      requestIds.filter(
+        (id): id is string =>
+          typeof id === 'string' &&
+          isAiStableRequestId(id) &&
+          id.split(':')[1] === market,
+      ),
+    ),
+  ].slice(0, COMPLETED_LOOKUP_MAX);
+  if (wanted.length === 0) return [];
+  const keyOf = (id: string) => `${ORDER_CREATE_PATTERN}:${id}`;
+  const completed = await idempotency.findCompleted(wanted.map(keyOf));
+  const out: Array<{ request_id: string; order_id: string }> = [];
+  for (const id of wanted) {
+    if (!completed.has(keyOf(id))) continue;
+    const orderId = orderIdOf(completed.get(keyOf(id)));
+    if (orderId) out.push({ request_id: id, order_id: orderId });
+  }
+  return out;
+}
+
 /**
  * 2-qatlam: mazmun imzosi. `signature` yaroqsiz bo'lsa — qatlamsiz `create`.
  * Ack/nack QILMAYDI (tashqi `executeIdempotent` ishi).

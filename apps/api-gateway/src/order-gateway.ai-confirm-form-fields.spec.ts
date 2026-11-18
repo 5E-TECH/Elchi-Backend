@@ -12,7 +12,7 @@ import {
   timer,
   TimeoutError,
 } from 'rxjs';
-import { Where_deliver } from '@app/common';
+import { publicErrorFields, Where_deliver } from '@app/common';
 import { OrderGatewayController } from './order-gateway.controller';
 import type { AiStatusPoller } from './ai/ai-status.poller';
 import {
@@ -29,8 +29,12 @@ const API_MODEL_PROPERTIES = 'swagger/apiModelProperties';
 import {
   CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
   CHOSEN_OPERATOR_SELF_ONLY_MESSAGE,
+  resolveChosenOrderOperator,
 } from './order-create/order-chosen-operator';
-import { OPERATOR_PHONE_REQUIRED_MESSAGE } from './order-create/order-operator-phone';
+import {
+  OPERATOR_PHONE_REQUIRED_MESSAGE,
+  resolveOrderOperatorPhones,
+} from './order-create/order-operator-phone';
 import { UzValidationPipe } from './validation/uz-validation.pipe';
 
 /**
@@ -192,6 +196,8 @@ const makeController = (
     }
   });
   let nextOrderId = 1000;
+  /** Tugagan barqaror kalitlar (`ai:<market>:<draft>:<idx>` → order_id). */
+  const completed = new Map<string, string>();
   order.send.mockImplementation((pattern, payload) => {
     if (pattern.cmd === 'order.customer.market_summary') {
       // Mijozning shu marketda buyurtmasi bormi (`GET /customers/suggest` ham shu).
@@ -205,7 +211,28 @@ const makeController = (
         },
       });
     }
-    return of({ id: String(nextOrderId++) });
+    if (pattern.cmd === 'order.ai_confirm.completed') {
+      // order-service `findCompletedAiCreates`: faqat shu market kalitlari.
+      const ids = (payload.request_ids as string[] | undefined) ?? [];
+      return of({
+        data: {
+          items: ids
+            .filter(
+              (id) =>
+                completed.has(id) && id.split(':')[1] === payload.market_id,
+            )
+            .map((id) => ({ request_id: id, order_id: completed.get(id) })),
+        },
+      });
+    }
+    // order.create: barqaror kalit (`executeIdempotent`) emulyatsiyasi.
+    const requestId =
+      typeof payload.request_id === 'string' ? payload.request_id : '';
+    const existing = completed.get(requestId);
+    if (existing) return of({ id: existing, idempotent_replay: true });
+    const id = String(nextOrderId++);
+    if (requestId.startsWith('ai:')) completed.set(requestId, id);
+    return of({ id });
   });
   ai.send.mockImplementation((pattern, payload) =>
     pattern.cmd === 'ai.draft.confirm_context'
@@ -226,7 +253,7 @@ const makeController = (
     config as unknown as ConfigService,
     poller as unknown as AiStatusPoller,
   );
-  return { controller, order, identity };
+  return { controller, order, identity, completed };
 };
 
 const marketReq = {
@@ -347,6 +374,7 @@ describe('POST /orders/ai-confirm — orders[].operator_id («Operator» tanlovi
           ok: false,
           code: 'create_failed',
           reason: CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
+          reason_code: 'CHOSEN_OPERATOR_NOT_SELECTABLE',
         },
         expect.objectContaining({ index: 1, ok: true }),
       ]);
@@ -376,6 +404,7 @@ describe('POST /orders/ai-confirm — orders[].operator_id («Operator» tanlovi
         ok: false,
         code: 'create_failed',
         reason: CHOSEN_OPERATOR_SELF_ONLY_MESSAGE,
+        reason_code: 'CHOSEN_OPERATOR_SELF_ONLY',
       },
       expect.objectContaining({ index: 1, ok: true }),
     ]);
@@ -435,6 +464,7 @@ describe('POST /orders/ai-confirm — orders[].operator_id («Operator» tanlovi
           ok: false,
           code: 'create_failed',
           reason: CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
+          reason_code: 'CHOSEN_OPERATOR_NOT_SELECTABLE',
         },
       ]);
       const sent = createdPayloads(fx.order);
@@ -665,6 +695,7 @@ describe('POST /orders/ai-confirm — orders[].operator_phone (VRyloH62)', () =>
         ok: false,
         code: 'create_failed',
         reason: OPERATOR_PHONE_REQUIRED_MESSAGE,
+        reason_code: 'OPERATOR_PHONE_REQUIRED',
       },
     ]);
     expect(sendsOf(fx.identity, 'identity.customer.create')).toHaveLength(0);
@@ -1088,5 +1119,205 @@ describe('POST /orders/ai-confirm — orders[].customer_id (mavjud mijoz)', () =
     expect(createdPayloads(fx.order)[0].dto).toMatchObject({
       customer_id: `c${phoneFor(1)}`,
     });
+  });
+});
+
+describe('POST /orders 400 — `code` (#658) javobga chiqadi', () => {
+  it.each([
+    [
+      'OPERATOR_PHONE_REQUIRED',
+      () =>
+        resolveOrderOperatorPhones({
+          market: { require_operator_phone: true },
+          strict: true,
+        }),
+    ],
+    [
+      'CHOSEN_OPERATOR_NOT_SELECTABLE',
+      () =>
+        resolveChosenOrderOperator({
+          operatorId: '41',
+          roles: ['market'],
+          requesterId: MARKET_ID,
+          marketId: MARKET_ID,
+          loadSelectable: () => Promise.resolve({ data: { items: [] } }),
+        }),
+    ],
+    [
+      'CHOSEN_OPERATOR_SELF_ONLY',
+      () =>
+        resolveChosenOrderOperator({
+          operatorId: '31',
+          roles: ['market_operator'],
+          requesterId: OPERATOR_SELF,
+          marketId: MARKET_ID,
+          loadSelectable: () => Promise.resolve({ data: { items: [] } }),
+        }),
+    ],
+  ])('%s — 400 tanasida, filtr javobida ham', async (code, run) => {
+    let error: unknown;
+    try {
+      await run();
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(BadRequestException);
+    expect((error as BadRequestException).getResponse()).toMatchObject({
+      statusCode: 400,
+      code,
+    });
+    // Gateway filtri (`PUBLIC_ERROR_CODES`) kodni o'tkazadi.
+    expect(
+      publicErrorFields((error as BadRequestException).getResponse()),
+    ).toEqual({ code });
+  });
+});
+
+describe('POST /orders/ai-confirm — takror (barqaror kalit) tekshiruvlardan OLDIN', () => {
+  beforeEach(() => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  /** Operatorni "o'chiradi": selectable ro'yxati bo'sh qaytadi. */
+  const deactivateOperators = (fx: ReturnType<typeof makeController>) => {
+    const base = fx.identity.send.getMockImplementation()!;
+    fx.identity.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'identity.market_operator.selectable'
+        ? of({ data: { items: [] } })
+        : base(pattern, payload),
+    );
+  };
+
+  it('⭐ 1-urinish yaratdi, operator o`chirildi, takror → ok:true idempotent_replay:true (create_failed EMAS)', async () => {
+    const fx = makeController();
+    const first = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1, { operator_id: '31' })] },
+      marketReq,
+    );
+    expect(first.data.results[0]).toMatchObject({
+      ok: true,
+      order_id: '1000',
+      idempotent_replay: false,
+    });
+
+    deactivateOperators(fx);
+    fx.identity.send.mockClear();
+    fx.order.send.mockClear();
+    const replay = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1, { operator_id: '31' })] },
+      marketReq,
+    );
+
+    expect(replay.data.results).toEqual([
+      { index: 0, ok: true, order_id: '1000', idempotent_replay: true },
+    ]);
+    // Takrorda operator ham, mijoz ham qayta so'ralmaydi, order.create yo'q.
+    expect(
+      sendsOf(fx.identity, 'identity.market_operator.selectable'),
+    ).toHaveLength(0);
+    expect(sendsOf(fx.identity, 'identity.customer.create')).toHaveLength(0);
+    expect(createdPayloads(fx.order)).toHaveLength(0);
+    // So'rov — server aniqlagan market kaliti bilan.
+    expect(
+      sendsOf(fx.order, 'order.ai_confirm.completed').map(([, p]) => p),
+    ).toEqual([
+      {
+        market_id: MARKET_ID,
+        request_ids: [`ai:${MARKET_ID}:${DRAFT_ID}:1`],
+      },
+    ]);
+  });
+
+  it('takror — raqam majburiy bo`lib qolgan marketda ham ok; yangi band esa tekshiriladi', async () => {
+    const fx = makeController();
+    await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
+    // Market sozlamasi o'zgardi: raqam majburiy, doimiy raqam yo'q.
+    const base = fx.identity.send.getMockImplementation()!;
+    fx.identity.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'identity.market.find_by_id'
+        ? of({
+            data: {
+              id: payload.id,
+              status: 'active',
+              add_order: true,
+              require_operator_phone: true,
+              default_operator_phone: null,
+            },
+          })
+        : base(pattern, payload),
+    );
+    const replay = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1), confirmOrder(2)] },
+      marketReq,
+    );
+
+    expect(replay.data.results).toEqual([
+      { index: 0, ok: true, order_id: '1000', idempotent_replay: true },
+      {
+        index: 1,
+        ok: false,
+        code: 'create_failed',
+        reason: OPERATOR_PHONE_REQUIRED_MESSAGE,
+        reason_code: 'OPERATOR_PHONE_REQUIRED',
+      },
+    ]);
+  });
+
+  it('yangi band (boshqa ai_item_index) o`chirilgan operator bilan — avvalgidek create_failed', async () => {
+    const fx = makeController();
+    await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1, { operator_id: '31' })] },
+      marketReq,
+    );
+    deactivateOperators(fx);
+    const res = await fx.controller.aiConfirm(
+      {
+        orders: [
+          confirmOrder(1, { operator_id: '31' }),
+          confirmOrder(2, { operator_id: '31' }),
+        ],
+      },
+      marketReq,
+    );
+
+    expect(res.data.results).toEqual([
+      { index: 0, ok: true, order_id: '1000', idempotent_replay: true },
+      {
+        index: 1,
+        ok: false,
+        code: 'create_failed',
+        reason: CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
+        reason_code: 'CHOSEN_OPERATOR_NOT_SELECTABLE',
+      },
+    ]);
+  });
+
+  it('takror so`rovi ishlamasa — avvalgi yo`l (tekshiruvlar + order.create idempotentligi)', async () => {
+    const fx = makeController();
+    await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1, { operator_id: '31' })] },
+      marketReq,
+    );
+    const base = fx.order.send.getMockImplementation()!;
+    fx.order.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'order.ai_confirm.completed'
+        ? throwError(() => new Error('no handler'))
+        : base(pattern, payload),
+    );
+    const res = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1, { operator_id: '31' })] },
+      marketReq,
+    );
+
+    expect(res.data.results[0]).toMatchObject({
+      ok: true,
+      order_id: '1000',
+      idempotent_replay: true,
+    });
+    expect(
+      sendsOf(fx.identity, 'identity.market_operator.selectable'),
+    ).toHaveLength(2);
   });
 });
