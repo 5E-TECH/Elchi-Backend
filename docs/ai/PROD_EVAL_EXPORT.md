@@ -79,30 +79,49 @@ draft_id>.json`). `--out` katalogi **bo'sh** bo'lishi kerak (aks holda
 2-kod; mavjud fayl hech qachon qayta yozilmaydi). `--days` (1–90) va
 `--limit` (1–2000) butun son bo'lmasa ham 2-kod — jim sukut yo'q.
 
-Matnda nima maskalanadi (shu tartibda):
+Matnda nima maskalanadi (shu tartibda) — faqat shu ro'yxat, boshqasi yo'q:
 
 - telefonlar — allaqachon `[TEL_n]`;
-- email → `[EMAIL]`; `t.me`, `telegram.me`, `instagram.com`, `instagr.am`,
-  `facebook.com`, `vk.com`, `tiktok.com` havolalari → `[LINK]`;
-  `@foydalanuvchi` → `@[USER]`;
+- email → `[EMAIL]`;
+- havolalar → `[LINK]` (`https://` bilan ham, `www.` va boshqa
+  subdomen bilan ham): ijtimoiy tarmoq — `t.me`, `telegram.me`,
+  `instagram.com`, `instagr.am`, `facebook.com`, `fb.com`, `vk.com`,
+  `tiktok.com`; messenjer — `wa.me`, `whatsapp.com`; xarita —
+  `maps.app.goo.gl` va boshqa `goo.gl`, `google.<tld>/maps`,
+  `maps.google.<tld>`, `yandex.<tld>/maps`, `2gis.<tld>` (`go.2gis.com`
+  ham). Havola ichidagi koordinata ham ketadi
+  (`google.com/maps?q=41.31,69.24` — yo'lda vergul faqat raqamdan oldin
+  havolaga kiradi, shuning uchun "[LINK], [LINK]" tinish belgisi saqlanadi);
+- `@foydalanuvchi` (`@` + 3–32 lotin harf/raqam/`_`/`.`) → `@[USER]`;
 - mijoz va operator ismlari (AI va operator yozgan, `#sevinch` → `#[ISM]`)
   → `[ISM]`, qo'shimcha saqlanadi: butun so'z, katta-kichik harfsiz;
   o'zbek (lotin/kirill) va rus qo'shimchalari, 3 tagacha ketma-ket
-  ("Dilnozaxonga" → `[ISM]xonga`, "Дилнозанинг", "Ферузажон");
+  ("Dilnozaxonga" → `[ISM]xonga`, "Dilnozachaga" → `[ISM]chaga`,
+  "Дилнозанинг", "Ферузажон");
   -а/-я/-й/-ь bilan tugagan kirill ism rus kelishigida ("Малике",
   "Маликой", "Дмитрию"); apostrof ikki tomonga ixtiyoriy ("G'ulomjon" =
   "Gulomjon", "O'g'iloy" = "Ogiloy"; `'` `ʻ` `ʼ` `‘` `’` `´` va
   teskari tirnoq); ko'p so'zli ismning har
   3+ harfli so'zi alohida ham ("Abdullayev Jasur" → "Jasurga"; opa/aka/
-  xon/jon/mijoz bundan mustasno). Ismga o'xshab boshlanadigan boshqa so'z
+  xon/jon/mijoz bundan mustasno); ismga yopishgan murojaat
+  (xonim/xon/jon/opa/aka, хоним/хон/жон/опа/ака) olib tashlangan o'zak
+  ham, agar 3+ harf qolsa (AI "Dilnozaxon" desa, matndagi "Dilnoza",
+  "Dilnozaning" ham → `[ISM]`). Ismga o'xshab boshlanadigan boshqa so'z
   ("Dilnozabonu") tegilmaydi;
-- pasport seriyasi (2 harf + 7 raqam) → `[HUJJAT]`;
+- pasport seriyasi (2 harf + 7 raqam; "AA1234567", "AA 1234567",
+  "AA-1234567", "AA №1234567", "AA № 1234567") → `[HUJJAT]`;
 - 9+ raqam (bo'shliq, tire `-–—`, nuqta, slash, `_`, qavs bilan ham) →
-  `[RAQAM]`. ⚠️ 100 mln so'mdan katta narx ham `[RAQAM]` bo'ladi;
-- uy/xonadon raqami → `[N]`: "12-uy", "12a-uy", "12/3-uyda",
-  "5-xonadonga", "12-уйда", "uy 12/3", "kvartiraga 5", "kv №5",
-  "дом №12", "д. 15", "d.15" ("uyga 2 ta" — miqdor, tegilmaydi;
-  "19-kvartal" — mavze, tegilmaydi).
+  `[RAQAM]` (JShShIR, karta raqami ham). ⚠️ 100 mln so'mdan katta narx
+  ham `[RAQAM]` bo'ladi;
+- uy/xonadon raqami → `[N]` — FAQAT kalit so'z (uy, xonadon, kvartira,
+  kv, kv-ra, dom, д./d., уй, хонадон, квартира, кв, кв-ра, дом) yonida:
+  - raqam kalit so'zdan oldin: "12-uy", "12a-uy", "12-a uy", "12 A uy",
+    "12/3-uyda", "5-xonadonga", "12-uyi", "5-xonadoni", "12-uyida",
+    "45-xonadonida", "12-уйда", "12-уйи", "5-хонадони", "#7 uy";
+  - raqam kalit so'zdan keyin: "uy 12/3", "uyi 12", "xonadoni 45",
+    "kvartirasi 7", "kvartiraga 5", "kvartirasiga 5", "kv-ra 5",
+    "kv №5", "дом №12", "д. 15", "d.15", "uy N 4";
+  - tegilmaydi: "uyga 2 ta" (miqdor), "19-kvartal", "4-мавзе" (mavze).
 
 Tuzatishlardan izoh, operator va telefon maskasi tashlanadi.
 
@@ -114,16 +133,37 @@ false` (skript oxirida sanog'i chiqadi). Matnni ochiq olish faqat
 ⚠️ **Ismsiz buyurtma** (`raw_extraction` dagi biror buyurtmada
 `customer_name` bo'sh): boshqa ismlar maskalangan, o'sha mijozniki yo'q —
 `names_masked: 'partial'` (sanog'i skript oxirida chiqadi). Bunday
-faylni qo'lda tekshiring.
+faylni qo'lda tekshiring. `'partial'` FAQAT ismsiz buyurtmani bildiradi;
+`names_masked: true` matnda ism qolmaganini KAFOLATLAMAYDI (pastdagi
+ro'yxatga qarang).
 
-⚠️ Maskalanmay QOLADIGAN shaxsiy ma'lumot (belgilovchi ko'rib chiqadi):
+⚠️ Maskalanmay QOLADIGAN shaxsiy ma'lumot (har faylni belgilovchi ko'rib
+chiqadi, `names_masked` qiymatidan qat'i nazar):
 
-- AI/operator yozmagan ism yoki boshqa yozuvdagi ism (AI kirill ismni
-  lotinga o'girgan bo'lsa: "Дилноза" → "Dilnoza" — kirill yozuv qoladi);
+- ro'yxatda yo'q ism: AI/operator `customer_name`/`operator` maydoniga
+  yozmagan ism (qarindosh, qabul qiluvchi, ota ismi — "Ali Valiyevich"
+  dagi "Valiyevich"); operator FAQAT erkin matnda (izohda) yozgan ism;
+  boshqa yozuvdagi ism (AI kirill ismni lotinga o'girgan bo'lsa:
+  "Дилноза" → "Dilnoza" — kirill yozuv qoladi); 1 harfli ism;
+- `@` siz foydalanuvchi nomi ("Instagram: dilnoza92", "telegram
+  dilnoza_shop");
+- ro'yxatda yo'q domen havolasi (`ok.ru`, `youtube.com`, `bit.ly` va
+  boshqa qisqartiruvchilar, do'kon sayti); havoladan tashqaridagi
+  koordinata ("41.311081, 69.240562");
+- kalit so'z yonida bo'lmagan uy raqami ("Chilonzor 9-kvartal 12",
+  "uy raqami 12"), podezd/qavat, 1-/2-shaxs egaligi ("uyimiz 12",
+  "xonadonim 7"), boshqa tildagi kalit so'z;
+- boshqa formatdagi hujjat raqami (2 harf + 7 raqamdan farqli);
 - to'liq kenglikdagi raqamlar (`９０１２３…`), 7 raqamli shahar telefoni,
-  vergul bilan ajratilgan raqamlar, koordinatalar, tug'ilgan sana;
-- manzil (ko'cha, mahalla) — tuman xatolarini tahlil qilish uchun kerak
-  (fayllar faqat serverda). Buni ega alohida tasdiqlashi kerak.
+  8 va undan kam raqamli ketma-ketlik, vergul bilan ajratilgan raqamlar,
+  tug'ilgan sana;
+- manzil (ko'cha, mahalla, mo'ljal) — tuman xatolarini tahlil qilish
+  uchun kerak (fayllar faqat serverda). Buni ega alohida tasdiqlashi
+  kerak.
+
+Ortiqcha maskalash ham bo'ladi (maxfiylik uchun xavfsiz, lekin matn
+o'zgaradi): murojaatsiz o'zak umumiy so'z bo'lsa ("Gulxon" → "gul"
+so'zi ham `[ISM]`), ismga teng umumiy so'z, 100 mln dan katta narx.
 
 Repo'ga kiradigan fixture qo'lda sintetik qilinadi
 (`apps/ai-service/test/fixtures/order-extract/`, `source: 'prod-masked'`).
@@ -165,4 +205,4 @@ rm -rf /root/ai-eval/candidates /root/ai-eval/unedited
 | Fayl | Shaxsiy ma'lumot | Qayerga |
 |---|---|---|
 | `aggregates-*.txt` | yo'q | backend/FE sessiyaga, PR/Trello'ga |
-| `candidates/*.json`, `unedited/*.json` | ism, telefon, email, havola, @foydalanuvchi, pasport, uy raqami maskalangan; qoladi: manzil, ro'yxatda yo'q ism (`names_masked: 'partial'`), 7 raqamli/to'liq kenglikdagi/vergulli raqamlar, koordinata, tug'ilgan sana; `--include-unmasked-names` bilan — ochiq ismlar | **faqat serverda**; sintetik fixture'ga aylantiriladi |
+| `candidates/*.json`, `unedited/*.json` | maskalangan (2-bo'limdagi ro'yxat bo'yicha): ro'yxatdagi ism (AI/operator yozgan, qo'shimchalari va murojaatsiz o'zagi bilan), telefon, email, ro'yxatdagi ijtimoiy tarmoq/xarita/WhatsApp havolasi, `@foydalanuvchi`, pasport (2 harf + 7 raqam), 9+ raqam, kalit so'z yonidagi uy/xonadon raqami. Qoladi: ro'yxatda yo'q ism — `names_masked: true` bo'lsa ham bo'lishi mumkin; `'partial'` faqat ismsiz buyurtmani bildiradi; `@` siz foydalanuvchi nomi; operator faqat erkin matnda yozgan ism; boshqa domen havolasi; havoladan tashqari koordinata; kalit so'zsiz uy raqami; manzil; 7 raqamli/to'liq kenglikdagi/vergulli raqamlar; tug'ilgan sana; `--include-unmasked-names` bilan — ochiq ismlar | **faqat serverda**; sintetik fixture'ga aylantiriladi |

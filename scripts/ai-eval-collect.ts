@@ -18,13 +18,16 @@
  * draft'ga tushmaydi — ular uchun gateway logi kerak (bu skript qamramaydi).
  *
  * ⚠️ MAXFIYLIK: `source_text` da telefonlar allaqachon `[TEL_n]`; skript
- * qo'shimcha ravishda email, ijtimoiy tarmoq havolasi, @foydalanuvchi,
- * ism (AI/operator customer_name va operator qiymatlari, qo'shimchalari
- * bilan), pasport seriyasi, 9+ raqamli ketma-ketliklar (100 mln dan katta
- * narx ham!), uy/xonadon raqamlarini maskalaydi. QOLADIGAN PII (odam
- * ko'radi): to'liq kenglikdagi raqamlar, 7 raqamli shahar telefoni,
- * vergul bilan ajratilgan raqamlar, koordinatalar, tug'ilgan sana, manzil
- * (ko'cha/mahalla), ro'yxatda yo'q ism. Natija
+ * qo'shimcha ravishda email, ijtimoiy tarmoq / xarita / WhatsApp havolasi,
+ * @foydalanuvchi, ism (AI/operator customer_name va operator qiymatlari,
+ * qo'shimchalari va murojaatsiz o'zagi bilan), pasport seriyasi, 9+
+ * raqamli ketma-ketliklar (100 mln dan katta narx ham!), kalit so'z
+ * yonidagi uy/xonadon raqamlarini maskalaydi. QOLADIGAN PII (odam
+ * ko'radi; to'liq ro'yxat — docs/ai/PROD_EVAL_EXPORT.md §2): ro'yxatda
+ * yo'q ism, @ siz foydalanuvchi nomi, boshqa domen havolasi, to'liq
+ * kenglikdagi raqamlar, 7 raqamli shahar telefoni, vergul bilan
+ * ajratilgan raqamlar, havoladan tashqari koordinata, tug'ilgan sana,
+ * manzil (ko'cha/mahalla), kalit so'zsiz uy raqami. Natija
  * FAQAT repo'dan TASHQARIDAGI katalogga (`--out`) yoziladi — odam
  * ko'rib chiqib, sintetik ko'rinishga keltirib, keyin
  * `apps/ai-service/test/fixtures/order-extract/` ga qo'shadi (source:
