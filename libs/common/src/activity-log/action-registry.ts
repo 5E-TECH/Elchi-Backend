@@ -360,6 +360,20 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'wallet',
     'blue',
   ),
+  // F2qp6FtE: market o'z operatoriga to'lovni yozdi / yozuvni bekor qildi
+  // (Elchi kassasiga ta'sir qilmaydi — faqat hisob yozuvi).
+  'finance.operator_payment_recorded': entry(
+    "Operatorga to'lov yozildi",
+    'finance',
+    'wallet',
+    'blue',
+  ),
+  'finance.operator_payment_cancelled': entry(
+    "Operatorga to'lov bekor qilindi",
+    'finance',
+    'undo',
+    'rose',
+  ),
   'finance.balance_update': entry(
     "Balans o'zgartirildi",
     'finance',
