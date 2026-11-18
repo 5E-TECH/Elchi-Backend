@@ -119,6 +119,56 @@ export function parseEditValue(
   }
 }
 
+/** Maydon qiymatini kutish muddati (qidiruvdan qisqa). */
+export const AI_EDIT_INPUT_TTL_MS = 5 * 60_000;
+
+/**
+ * Matnda O'zbekiston telefon raqami bormi: raqam guruhlarining har
+ * ketma-ket bo'lagi repo'ning `normalizeUzPhone` bilan tekshiriladi
+ * («Chilonzor 5 90 111 22 33» — «5» qo'shilib ketmaydi).
+ */
+export function containsUzPhone(text: string): boolean {
+  for (const run of text.match(/\+?\d[\d\s\-()]*\d/g) ?? []) {
+    const groups = run.match(/\d+/g) ?? [];
+    for (let a = 0; a < groups.length; a += 1) {
+      let digits = '';
+      for (let b = a; b < groups.length; b += 1) {
+        digits += groups[b];
+        if (digits.length > 12) break;
+        if (digits.length >= 9 && normalizeUzPhone(digits)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Maydon qiymati kutilayotganda yangi buyurtma matni kelganmi (kutish
+ * tugaydi, matn AI ga ketadi):
+ *  - manzil / izoh: ko'p qatorli yoki ichida telefon raqami;
+ *  - telefon: harf VA 7+ raqam yoki 40 belgidan uzun;
+ *  - ism / soni: ko'p qatorli yoki 7+ raqam.
+ */
+export function endsEditInput(field: AiEditField, text: string): boolean {
+  const trimmed = text.trim();
+  const multiline = /\n/.test(trimmed);
+  const digits = (trimmed.match(/\d/g) ?? []).length;
+  switch (field) {
+    case 'address':
+    case 'comment':
+      return multiline || containsUzPhone(trimmed);
+    case 'phone':
+      return (
+        multiline ||
+        trimmed.length > 40 ||
+        (/\p{L}/u.test(trimmed) && digits >= 7)
+      );
+    case 'name':
+    case 'qty':
+      return multiline || digits >= 7;
+  }
+}
+
 const withoutIssues = (order: AiPreviewOrder, drop: string[]) =>
   Array.isArray(order.issues)
     ? order.issues.filter((issue) => !drop.includes(issue))
@@ -141,8 +191,27 @@ export function applyFieldEdit(
   if (!order) return null;
   if (field === 'qty' && !order.items?.[itemIndex]) return null;
   return orders.map((o) => {
-    if (o.index !== orderIndex) return o;
     const checks = Array.isArray(o.checks) ? o.checks : [];
+    if (o.index !== orderIndex) {
+      // Telefon o'zgardi — boshqa buyurtmadagi «shu telefon N-buyurtmada
+      // ham bor» ogohlantirishi (N = tahrirlangan) endi eskirgan.
+      return field === 'phone' &&
+        checks.some(
+          (c) =>
+            c?.code === 'same_phone_multi' && c?.other_index === orderIndex,
+        )
+        ? {
+            ...o,
+            checks: checks.filter(
+              (c) =>
+                !(
+                  c?.code === 'same_phone_multi' &&
+                  c?.other_index === orderIndex
+                ),
+            ),
+          }
+        : o;
+    }
     switch (field) {
       case 'name':
         return {
@@ -211,7 +280,10 @@ export function storedDistrictOptions(
 }
 
 /** `{ id, name }` ro'yxati — faqat to'g'ri shakldagilar, nom bo'yicha. */
-export function districtOptionsOf(value: unknown): AiDistrictOption[] {
+export function districtOptionsOf(
+  value: unknown,
+  max: number = AI_DISTRICT_MAX_OPTIONS,
+): AiDistrictOption[] {
   if (!Array.isArray(value)) return [];
   const out: AiDistrictOption[] = [];
   for (const raw of value) {
@@ -229,17 +301,17 @@ export function districtOptionsOf(value: unknown): AiDistrictOption[] {
       region_name: clip(entry?.region_name, 60) || null,
     });
   }
-  return out.slice(0, AI_DISTRICT_MAX_OPTIONS);
+  return out.slice(0, max);
 }
 
 /** `GET /district?region_id=` javobi (`successRes` — `data` massivi) → tumanlar. */
 export function districtsFromResponse(
   body: unknown,
   regionName: string | null,
-): AiDistrictOption[] {
+): { options: AiDistrictOption[]; total: number } {
   const data = (body as { data?: unknown } | null)?.data;
   const list = Array.isArray(data) ? data : [];
-  return districtOptionsOf(
+  const all = districtOptionsOf(
     list
       .map((d: { id?: unknown; name?: unknown }) => ({
         id: d?.id,
@@ -247,7 +319,9 @@ export function districtsFromResponse(
         region_name: regionName,
       }))
       .sort((a, b) => clip(a.name, 60).localeCompare(clip(b.name, 60))),
+    Number.POSITIVE_INFINITY,
   );
+  return { options: all.slice(0, AI_DISTRICT_MAX_OPTIONS), total: all.length };
 }
 
 /** Tuman kerakmi: id yo'q yoki AI ikkilangan (tahrirdan keyin — yo'q). */
@@ -319,12 +393,21 @@ export function districtPickerText(
   source: AiDistrictSource,
 ): string {
   const current = clip(order.district_name, 60);
+  // Ro'yxat chegarasidan (40) ortiq tumanlar — jim kesilmaydi.
+  const hidden =
+    source === 'r'
+      ? Math.trunc(Number(order.district_options_total) || 0) -
+        storedDistrictOptions(order).length
+      : 0;
   return [
     `📍 <b>${order.index + 1}-buyurtma</b> — tumanni tanlang.`,
     current ? `Hozir: ${escapeTelegramHtml(current)}` : 'Hozir: —',
     source === 'c'
       ? 'AI taklif qilgan tumanlar:'
       : `${escapeTelegramHtml(clip(order.region_name, 60) || 'Viloyat')} tumanlari:`,
+    ...(hidden > 0
+      ? [`… yana ${hidden} ta — kerakli tuman bo‘lmasa kabinetda yarating.`]
+      : []),
   ].join('\n');
 }
 

@@ -99,6 +99,8 @@ export interface AiPreviewOrder {
   ai_district_id?: string | null;
   /** BOT ICHKI maydoni: viloyat tumanlari ro'yxati (`GET /district`). */
   district_options?: AiDistrictOption[] | null;
+  /** BOT ICHKI maydoni: viloyatdagi tumanlar soni (ro'yxat 40 bilan cheklangan). */
+  district_options_total?: number;
   /**
    * BOT ICHKI maydoni: shu buyurtma ai-confirm'ga YUBORILDI, lekin natija
    * noma'lum (timeout / tarmoq / 5xx / tushunarsiz javob, qotgan

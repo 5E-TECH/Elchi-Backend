@@ -64,7 +64,9 @@ import {
 import {
   AI_DISTRICT_LOAD_FAILED_TEXT,
   AI_DISTRICT_MAX_ENTRIES,
+  AI_EDIT_INPUT_TTL_MS,
   AI_EDIT_MAX_ITEMS,
+  endsEditInput,
   AI_EDIT_NO_DISTRICT_TEXT,
   type AiDistrictSource,
   type AiEditField,
@@ -158,18 +160,13 @@ export function endsSearch(text: string): boolean {
   );
 }
 
-/**
- * Kutish turi bo'yicha: matn yangi buyurtma bo'lsa kutish tugaydi.
- * Telefon / manzil / izoh kutilayotganda raqamlar tabiiy.
- */
+/** Kutish turi bo'yicha: matn yangi buyurtma bo'lsa kutish tugaydi. */
 const endsInput = (input: AiInputState, text: string): boolean =>
-  input.kind === 'edit'
-    ? (input.f === 'name' || input.f === 'qty') &&
-      (text.match(/\d/g) ?? []).length >= 7
-    : endsSearch(text);
+  input.kind === 'edit' ? endsEditInput(input.f!, text) : endsSearch(text);
 
-/** Kutish muddati. */
-const inputTtl = (_input: AiInputState): number => AI_INPUT_TTL_MS;
+/** Kutish muddati: qidiruv 15 daqiqa, maydon qiymati 5 daqiqa. */
+const inputTtl = (input: AiInputState): number =>
+  input.kind === 'edit' ? AI_EDIT_INPUT_TTL_MS : AI_INPUT_TTL_MS;
 
 export const AI_WORKING_TEXT = '⏳ AI buyurtmani o‘qiyapti… (1 daqiqagacha)';
 export const AI_EXPIRED_TEXT =
@@ -987,6 +984,11 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     const orders = (draft.orders ?? []) as AiPreviewOrder[];
+    // Natijasi noma'lum urinish — botda tuzatish yopiq (faqat kabinet).
+    if (orders.some(confirmAttempted)) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
     if (orders.length === 1) {
       await this.showEditMenu(ctx, draft, orders[0]);
       return;
@@ -1016,11 +1018,8 @@ export class AiOrderService implements OnModuleDestroy {
     orderIndex: unknown,
   ): Promise<void> {
     await this.clearInput(ctx);
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
     const order = ((draft.orders ?? []) as AiPreviewOrder[]).find(
       (o) => o.index === orderIndex,
     );
@@ -1040,12 +1039,8 @@ export class AiOrderService implements OnModuleDestroy {
     draftId: string,
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.clearInput(ctx);
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, payload.o);
+    if (!draft) return;
     const order = ((draft.orders ?? []) as AiPreviewOrder[]).find(
       (o) => o.index === payload.o,
     );
@@ -1123,11 +1118,8 @@ export class AiOrderService implements OnModuleDestroy {
     orderIndex: unknown,
   ): Promise<void> {
     await this.clearInput(ctx);
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
     let orders = (draft.orders ?? []) as AiPreviewOrder[];
     let order = orders.find((o) => o.index === orderIndex);
     if (!order) {
@@ -1166,16 +1158,23 @@ export class AiOrderService implements OnModuleDestroy {
         );
         res = { status: 503, body: null };
       }
-      options =
+      const loaded =
         res.status < 400
           ? districtsFromResponse(res.body, order.region_name ?? null)
-          : [];
+          : { options: [], total: 0 };
+      options = loaded.options;
       if (!options.length) {
         await this.show(ctx, draft, AI_DISTRICT_LOAD_FAILED_TEXT, [[back]]);
         return;
       }
       orders = orders.map((o) =>
-        o.index === order!.index ? { ...o, district_options: options } : o,
+        o.index === order!.index
+          ? {
+              ...o,
+              district_options: options,
+              district_options_total: loaded.total,
+            }
+          : o,
       );
       if (!(await this.saveOrders(draft, orders))) {
         await this.explainState(ctx, draft.id);
@@ -1196,7 +1195,7 @@ export class AiOrderService implements OnModuleDestroy {
             draft,
             `${option.id === current ? '• ' : ''}${option.name}`,
             AI_ORDER_ACTIONS.districtPick,
-            { o: order.index, s: source, k: k + j },
+            { o: order.index, s: source, k: k + j, did: option.id },
           ),
         );
       }
@@ -1222,11 +1221,8 @@ export class AiOrderService implements OnModuleDestroy {
     payload: Record<string, unknown>,
   ): Promise<void> {
     await this.clearInput(ctx);
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, payload.o);
+    if (!draft) return;
     const orders = (draft.orders ?? []) as AiPreviewOrder[];
     const order = orders.find((o) => o.index === payload.o);
     const list = !order
@@ -1234,9 +1230,12 @@ export class AiOrderService implements OnModuleDestroy {
       : payload.s === 'r'
         ? storedDistrictOptions(order)
         : districtCandidates(order);
-    const option = Number.isInteger(payload.k)
+    // `did` — tugma ko'rsatgan tuman; ro'yxat almashgan bo'lsa yozilmaydi.
+    const candidate = Number.isInteger(payload.k)
       ? list[payload.k as number]
       : undefined;
+    const option =
+      candidate && candidate.id === payload.did ? candidate : undefined;
     await this.saveAndShow(
       ctx,
       draft,
