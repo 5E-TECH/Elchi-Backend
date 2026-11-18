@@ -316,9 +316,13 @@ function looksLikePriceAndDate(
   if (yearContinues) return true;
   const strip = (x: string) => x.replace(/[ \u00a0\u202f]/g, '');
   const lastSep = strip(tail[4]);
-  // Oxirgi ajratgich `.`/`/` va sanadan oldingisidan farqli: `75 000 14.11`,
-  // `75000 14/11`.
-  if ((lastSep === '.' || lastSep === '/') && lastSep !== strip(tail[2])) {
+  // Oxirgi ajratgich `.`/`/` va OLDINGI HAMMA ajratgichlardan farqli:
+  // `75 000 14.11`, `75000 14/11`. `90.123 14.11`, `91.734-13.12` — telefon
+  // (dev'dagidek; faqat sanadan oldingisi bilan solishtirilsa ochiq ketardi).
+  if (
+    (lastSep === '.' || lastSep === '/') &&
+    !rawSeps.slice(0, -1).some((x) => strip(x) === lastSep)
+  ) {
     return true;
   }
   // `CC 000 DD MM` — yaxlit narx + sana (`50 000 25 11 kuni`, `75000  14 11`,

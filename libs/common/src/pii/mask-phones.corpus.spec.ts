@@ -860,6 +860,42 @@ const PRIVACY_CASES: C[] = [
     text: '90 123 12 11/+998 93 765 43 21',
     phones: [P('901231211'), P('937654321')],
   },
+  // #647 round 4 (P1): birinchi va oxirgi ajratgich `.` — telefon (dev ham maskalagan).
+  {
+    id: 'R4P1a dot first+last, space middle',
+    text: 'Aziza 90.123 14.11',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R4P1b dot first+last, dash middle',
+    text: 'Aziza 90.123-14.11',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R4P1c Mijoz: dot/space/dot',
+    text: 'Mijoz: 91.734 13.12, Chilonzor',
+    phones: [P('917341312')],
+  },
+  {
+    id: 'R4P1d Cyrillic name dot/space/dot',
+    text: 'Азиза 93.765 31.12 kuni',
+    phones: [P('937653112')],
+  },
+  {
+    id: 'R4P1e bare Telefon dot/space/dot',
+    text: 'Telefon 93.765 31.12',
+    phones: [P('937653112')],
+  },
+  {
+    id: 'R4P1f tg: 8 dot/dash/dot',
+    text: 'tg: 8 93.635-31.07',
+    phones: [P('936353107')],
+  },
+  {
+    id: 'R4P1g dot/space/dot + sentence dot',
+    text: 'Mijoz Aziza 90.123 14.11. Chilonzor',
+    phones: [P('901231411')],
+  },
 ];
 
 const amountsOnly: { id: string; text: string; keep: string }[] = [
