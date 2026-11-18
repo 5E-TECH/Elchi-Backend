@@ -259,12 +259,17 @@ function tumanMarkerBefore(tokens: string[], i: number): boolean {
  * "t.y." yoki ism bosh harfidagi "t." esa oddiy "t" bo'lib qoladi.
  */
 function addressTokens(text: string): string[] {
-  return lightNorm(text)
-    .replace(TUMAN_T_ABBR_RE, '$1 tumani ')
-    .replace(RU_ADJ_SUFFIX_RE, '$1')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(' ')
-    .filter(Boolean);
+  return (
+    lightNorm(text)
+      // "№12": translit (kichik harf) dan keyin NFKC "№" → "No" (katta N) —
+      // `[^a-z0-9]` uni o'chirib "o12" qoldirardi (r7 B3).
+      .replace(/No(?=\s*\d)/g, ' no ')
+      .replace(TUMAN_T_ABBR_RE, '$1 tumani ')
+      .replace(RU_ADJ_SUFFIX_RE, '$1')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(' ')
+      .filter(Boolean)
+  );
 }
 
 type DistrictKind = 'city' | 'tuman';
@@ -972,7 +977,8 @@ export function resolveDistrictText(
             STREET_AFTER_WORDS.has(next) &&
             (next !== 'ul' ||
               afterUl === undefined ||
-              /^\d/.test(afterUl) ||
+              // "12", "no5", "n5", "№12" (→ "no 12")
+              /^(?:no?)?\d/.test(afterUl) ||
               UL_HOUSE_WORDS.has(afterUl));
           if (
             streetAfter ||
