@@ -29265,6 +29265,11 @@
           "customer": {
             "$ref": "#/components/schemas/AiConfirmCustomerDto"
           },
+          "customer_id": {
+            "type": "string",
+            "example": "120",
+            "description": "Mavjud mijoz ID si (GET /customers/suggest taklifidan). Egalik POST /orders `customer_id` bilan AYNI: superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa. Tasdiqlanmasa (begona mijoz, mavjud emas) SHU buyurtma yaratilmaydi: `ok: false, code: \"create_failed\"`, `reason` — POST /orders 403 matni («customer_id qabul qilinmadi: …»); tekshiruv xizmati javob bermasa — `create_failed` («Buyurtma yaratilmadi»). Partiyaning qolgani yaratiladi. Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (yangi karta ham ochilmaydi); `customer.address`/`extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi). `customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Raqam bo‘lmasa — 400 (DTO). Berilmasa — avvalgi xulq (telefon bo‘yicha)."
+          },
           "district_id": {
             "type": "string",
             "example": "12",

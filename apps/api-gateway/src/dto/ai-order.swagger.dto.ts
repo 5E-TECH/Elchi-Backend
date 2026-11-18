@@ -238,6 +238,39 @@ export class AiConfirmOrderDto {
   @Type(() => AiConfirmCustomerDto)
   customer!: AiConfirmCustomerDto;
 
+  /**
+   * Mavjud mijozni tanlash (`GET /customers/suggest`) — `POST /orders`
+   * `customer_id` bilan AYNI egalik qoidasi (`createOrderInternal` →
+   * `resolveScopedCustomerId`). FARQ: POST /orders da tasdiqlanmagan id
+   * `customer` obyekti bo'lsa jimgina e'tiborsiz qoladi (telefon yo'li);
+   * ai-confirm'da `customer` DOIM bor, shu sabab tasdiqlanmagan id shu
+   * buyurtmani RAD etadi — operator tanlagan mijoz o'rniga boshqasiga
+   * yozilmasin.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    example: '120',
+    description:
+      'Mavjud mijoz ID si (GET /customers/suggest taklifidan). Egalik POST /orders `customer_id` bilan AYNI: superadmin/admin — istalgan mijoz; ' +
+      "boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa. " +
+      'Tasdiqlanmasa (begona mijoz, mavjud emas) SHU buyurtma yaratilmaydi: `ok: false, code: "create_failed"`, `reason` — POST /orders 403 matni ' +
+      '(«customer_id qabul qilinmadi: …»); tekshiruv xizmati javob bermasa — `create_failed` («Buyurtma yaratilmadi»). Partiyaning qolgani yaratiladi. ' +
+      'Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (yangi karta ham ochilmaydi); ' +
+      "`customer.address`/`extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi). " +
+      '`customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Raqam bo‘lmasa — 400 (DTO). Berilmasa — avvalgi xulq (telefon bo‘yicha).',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): unknown => {
+    if (typeof value === 'number') return String(value);
+    if (typeof value === 'string' && value.trim() === '') return undefined;
+    return typeof value === 'string' ? value.trim() : value;
+  })
+  @IsString({ message: "customer_id matn bo'lishi kerak" })
+  @Matches(/^\d{1,19}$/, {
+    message: "customer_id mijoz ID si (raqam) bo'lishi kerak",
+  })
+  customer_id?: string;
+
   @ApiProperty({ example: '12', description: 'Tuman ID (raqam)' })
   @IsString({ message: "district_id matn bo'lishi kerak" })
   @Matches(DIGITS_RE, {

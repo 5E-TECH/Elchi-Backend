@@ -22,6 +22,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI tasdiq: mavjud mijozni tanlash (`orders[].customer_id`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `customer_id` (string, 1–19 raqam; son ham qabul qilinadi, bo'sh satr — berilmagan; boshqa qiymat — butun so'rov 400). Egalik `POST /orders` `customer_id` bilan **AYNI** (`resolveScopedCustomerId`, `GET /customers/suggest` qoidasi): superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa.
+  - ⚠️ Farq: `POST /orders` da tasdiqlanmagan id `customer` obyekti bo'lsa jimgina e'tiborsiz qoladi (telefon yo'li). ai-confirm'da `customer` doim bor, shu sabab tasdiqlanmagan id (begona yoki mavjud bo'lmagan mijoz) **shu buyurtmani rad etadi**: `{ index, ok: false, code: 'create_failed', reason: 'customer_id qabul qilinmadi: …' }` (POST /orders 403 matni). Tekshiruv xizmati javob bermasa — `create_failed` «Buyurtma yaratilmadi» (fail-closed). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
+  - Qabul qilinsa buyurtma o'sha kartaga yoziladi, yangi karta ochilmaydi; `customer.name`/`phone_number` kartaga yozilmaydi; `customer.address`, `customer.extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi, market tomoni faqat o'z marketidagi mijozni). `customer` obyekti baribir majburiy.
+  - Berilmasa — avvalgi xulq (telefon bo'yicha).
+- 🟢 ai-confirm natijasida gateway'ning o'z 403 xatolari (shu jumladan «Mijoz kartasini yangilab bo'lmaydi…») endi `reason` da asl matni bilan (ilgari umumiy «Buyurtma yaratilmadi»).
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`customer_id` yubormaydi).
+
+**Frontend action items:**
+- 🔧 AI panelida mijoz telefoni bo'yicha `GET /customers/suggest` taklifini tanlash → `orders[i].customer_id` (va `customer.phone_number` — taklifdagi to'liq telefon).
+
 ### 2026-11-18 — AI tasdiq: operator raqami (`orders[].operator_phone`)
 
 Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
