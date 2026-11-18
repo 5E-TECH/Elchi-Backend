@@ -449,6 +449,8 @@ const HOUSE_KW_SUFFIX =
  * "uyiga 25 000", "uyigacha 20 000 so'm" — narxning birinchi guruhi
  * (keyin bo'shliq/nuqta + "000"), uy raqami EMAS. Faqat "000": "kv 45
  * 250 000", "uy 12\n250 000" dagi uy/xonadon raqami yopiq qoladi.
+ * Birlik so'zi (ikkala NOT_QTY*) ham faqat shu qatorda ("kv 18" + yangi qator + "x2 sumka"
+ * — `[N]`); qator chegarasi: \n, \r, U+2028, U+2029.
  */
 const NOT_QTY =
   "(?![^\\S\\n\\r\\u2028\\u2029]*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]000(?!\\d))";
@@ -458,8 +460,6 @@ const NOT_QTY =
  * (bo'shliq/nuqta + istalgan 3 raqam): "uyigacha 19 900", "Dostavka do
  * doma 25 500" (kirillda) narxi dev'dagidek ochiq qoladi.
  * Faqat shu qatorda: "uyi 61" + keyingi qatordagi "120 000" — uy raqami.
- * Birlik so'zi ham faqat shu qatorda ("kv 18" + yangi qator + "x2 sumka"
- * — `[N]`); qator chegarasi: \n, \r, U+2028, U+2029.
  */
 const NOT_QTY_WIDE =
   "(?![^\\S\\n\\r\\u2028\\u2029]*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[^\\S\\n\\r\\u2028\\u2029]\\d{3}(?!\\d)|\\.\\d{3}(?!\\d))";

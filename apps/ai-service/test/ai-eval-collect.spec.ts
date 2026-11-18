@@ -702,6 +702,8 @@ describe('ai-eval-collect: miqdor/narx istisnolari (round-9)', () => {
     'uyigacha 19.900',
     'uyiga 25.000',
     'uyiga 25\u00A0000',
+    'kv 18\tx2 sumka',
+    'uyiga 2 ta',
   ])("o'zgarmaydi: %j", (text) => {
     expect(maskCandidateText(text, [])).toBe(text);
   });
@@ -712,6 +714,16 @@ describe('ai-eval-collect: miqdor/narx istisnolari (round-9)', () => {
     ['uyi 12\nMing rahmat', 'uyi [N]\nMing rahmat'],
     ['uyi 61\r120 000', 'uyi [N]\r120 000'],
     ['uyi 61\u2028120 000', 'uyi [N]\u2028120 000'],
+    ['uyi 61\u2029120 000', 'uyi [N]\u2029120 000'],
+    ['kv 18\rx2 sumka', 'kv [N]\rx2 sumka'],
+    ['kv 18\u2028x2 sumka', 'kv [N]\u2028x2 sumka'],
+    ['kv 18\u2029x2 sumka', 'kv [N]\u2029x2 sumka'],
+    ['uyi 12\rMing rahmat', 'uyi [N]\rMing rahmat'],
+    ['uyi 12\u2028Ming rahmat', 'uyi [N]\u2028Ming rahmat'],
+    ['uyi 12\u2029Ming rahmat', 'uyi [N]\u2029Ming rahmat'],
+    ['uyi 61.5000', 'uyi [N].5000'],
+    ['uyi 61-500', 'uyi [N]-500'],
+    ['uyi 61\r\n120 000', 'uyi [N]\r\n120 000'],
   ])('qator chegarasi / qisqa son: %j', (text, want) => {
     expect(maskCandidateText(text, [])).toBe(want);
   });
