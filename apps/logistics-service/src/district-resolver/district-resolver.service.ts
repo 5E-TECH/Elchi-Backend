@@ -86,7 +86,7 @@ export const DISTRICT_CORPUS_MAX_CHARS = 120;
  * va qisqa shakllar ham (shaxri, rayon, r-n, gorod, sh., g.).
  */
 const PLACE_WORD_RE =
-  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g)\.|[a-z]{2,}\s+t\.(?=\s*(?:[,;]|$))/;
+  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g|tum)\.|\btuman(ida|idagi|idan|iga)\b|[a-z]{2,}\s+t\.(?=\s*(?:[,;]|$))/;
 /** Shahar afzalligi belgisi — BeePost :1708-1709 (+ shaxri, gorod, sh., g.). */
 const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
 /**
@@ -99,7 +99,7 @@ const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
  */
 const TUMAN_T_ABBR_RE = /([a-z]{2,})\s+t\.(?=\s*(?:[,;]|$))/g;
 const TUMAN_WORD_RE =
-  /\b(tumani|tuman|rayon|rayoni|raion)\b|\br-n\b|[a-z]{2,}\s+t\.(?=\s*(?:[,;]|$))/;
+  /\b(tumani|tuman|tumanida|tumanidagi|tumanidan|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b|[a-z]{2,}\s+t\.(?=\s*(?:[,;]|$))/;
 
 /**
  * D2: manzilda tuman nomidan KEYIN kelsa — bu ko'cha/mahalla nomi, tuman
@@ -189,6 +189,11 @@ const REGION_AFTER_WORDS: ReadonlySet<string> = new Set([
 const PLACE_AFTER_WORDS: ReadonlySet<string> = new Set([
   'tumani',
   'tuman',
+  'tum',
+  'tumanida',
+  'tumanidagi',
+  'tumanidan',
+  'tumaniga',
   'shahri',
   'shaxri',
   'shahar',
@@ -221,6 +226,12 @@ const AREA_AFTER_WORDS: ReadonlySet<string> = new Set([
 const TUMAN_AFTER_WORDS: ReadonlySet<string> = new Set([
   'tumani',
   'tuman',
+  // "Toshkent tum., ...", "Toshkent tumanida, ..." (r6)
+  'tum',
+  'tumanida',
+  'tumanidagi',
+  'tumanidan',
+  'tumaniga',
   'rayon',
   'rayoni',
   'raion',

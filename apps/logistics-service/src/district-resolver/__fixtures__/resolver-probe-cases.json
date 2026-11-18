@@ -3159,5 +3159,47 @@
    "sato": null,
    "reason": "district_ambiguous"
   }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tum., Keles 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tumanida, Keles 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tumanidagi Keles 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
  }
 ]
