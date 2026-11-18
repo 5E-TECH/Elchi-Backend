@@ -877,6 +877,75 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(ok.names_degraded).toBeUndefined();
       });
 
+      it('P5: T6 tahriri — almashtiruvchi oyoq asl topshirish vaqti/kaliti bilan (kunlar nolga tushmaydi)', async () => {
+        const cb = await cashbox('couriers', 86, 1000000);
+        const leg = (
+          amount: number,
+          after: number,
+          at: string,
+          transfer: string,
+          source = 'courier_payment',
+          op = 'expense',
+          reverses: string | null = null,
+        ) =>
+          db
+            .query<Array<{ id: string }>>(
+              `INSERT INTO "finance_schema"."cashbox_history"
+                 ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "createdAt", "transfer_id", "reverses_history_id")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING "id"::text AS id`,
+              [op, cb, source, amount, after, at, transfer, reverses],
+            )
+            .then((r) => r[0].id);
+        const T1 = '11111111-1111-4111-8111-111111111111';
+        const TR = '22222222-2222-4222-8222-222222222222';
+        const T2 = '33333333-3333-4333-8333-333333333333';
+        await hist(
+          cb,
+          'income',
+          'sell',
+          1000000,
+          1000000,
+          '2026-10-10T08:00:00Z',
+        );
+        // 15.10: 900k (90% ≥ 80%) — hisoblanadigan topshirish, qoldiq 100k.
+        const h1 = await leg(-900000, 100000, '2026-10-15T10:00:00Z', T1);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          900000,
+          1000000,
+          '2026-10-16T08:00:00Z',
+        );
+        // 21.10: tahrir — asl oyoq qaytarildi (+900k), yangi summa (−850k).
+        await leg(
+          900000,
+          1900000,
+          '2026-10-21T09:00:00Z',
+          TR,
+          'payment_reversal',
+          'income',
+          h1,
+        );
+        await leg(-850000, 1050000, '2026-10-21T09:00:00Z', T2);
+        await db.query(
+          `INSERT INTO "finance_schema"."payment_corrections"
+             ("action", "payment_kind", "original_transfer_id", "root_transfer_id", "reversal_transfer_id",
+              "replacement_transfer_id", "original_amount", "new_amount", "payment_method",
+              "counterparty_user_id", "receiver_cashbox_id", "reason", "created_by", "idempotency_key", "root_created_at")
+           VALUES ('edit', 'courier_payment', $1, $1, $2, $3, 900000, 850000, 'cash', 86, 1, 'xato summa', 1, 'k-p5', '2026-10-15T10:00:00Z')`,
+          [T1, TR, T2],
+        );
+        const out = await runWith(['R2'], { R2: R2T });
+        expect(out.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: `ep:h:${h1}` }],
+          facts: { days_without_handover: 7 },
+          evidence: {
+            last_handover: { at: '2026-10-15T10:00:00.000Z', amount: 850000 },
+          },
+        });
+      });
+
       it('R4 o‘zgarmaydi: har qanday to‘lov kunlarni nolga tushiradi', async () => {
         const m = await cashbox('markets', 84, 3000000);
         await hist(

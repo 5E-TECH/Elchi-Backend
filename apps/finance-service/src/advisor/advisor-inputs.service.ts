@@ -1060,6 +1060,20 @@ export class AdvisorInputsService {
                 SELECT 1 FROM ${t.history} rr
                  WHERE rr."source_type" = 'payment_reversal'
                    AND rr."reverses_history_id" = ${a}."id" AND rr."is_deleted" = false)`;
+    // P5 (v0.4): T6 tahririning almashtiruvchi oyog'i — vaqti va id'si
+    // zanjirning BIRINCHI (root) oyog'idan (ayni kassa): tahrir «oxirgi
+    // topshirish»ni oldinga surmaydi, kunlar sanog'ini nolga tushirmaydi.
+    const effective = (a: string) => `LEFT JOIN LATERAL (
+                SELECT ro."id" AS rid, ro."createdAt" AS rat
+                  FROM ${t.corrections} pc
+                  JOIN ${t.history} ro ON ro."transfer_id" = pc."root_transfer_id"
+                   AND ro."cashbox_id" = ${a}."cashbox_id" AND ro."operation_type" = 'expense'
+                   AND ro."source_type" = ${a}."source_type"
+                 WHERE ${a}."transfer_id" IS NOT NULL
+                   AND pc."replacement_transfer_id" = ${a}."transfer_id"
+                   AND pc."is_deleted" = false
+                 ORDER BY ro."createdAt" ASC, ro."id" ASC LIMIT 1
+              ) ${a}e ON true`;
     const balanceBefore = (at: string, id: string) => `(
                 SELECT b."balance_after" FROM ${t.history} b
                  WHERE b."cashbox_id" = c."id" AND b."is_deleted" = false
@@ -1073,20 +1087,25 @@ export class AdvisorInputsService {
               rv.rid AS rev_id, rv.oid AS rev_orig_id, rv.rat AS rev_at
          FROM ${t.cashboxes} c
          LEFT JOIN LATERAL (
-           SELECT h."id"::text AS id, h."createdAt", ABS(h."amount") AS amount
+           SELECT h."id"::text AS id, COALESCE(he.rat, h."createdAt") AS "createdAt",
+                  ABS(h."amount") AS amount
              FROM ${t.history} h
+             ${effective('h')}
             WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
               AND h."source_type" = $2 AND h."is_deleted" = false
               AND ${notReversed('h')}
-            ORDER BY h."createdAt" DESC, h."id" DESC
+            ORDER BY COALESCE(he.rat, h."createdAt") DESC, h."id" DESC
             LIMIT 1
          ) lh ON true
          LEFT JOIN LATERAL (
            SELECT d.last_id, d.last_at FROM (
-             SELECT (h."createdAt" AT TIME ZONE 'Asia/Tashkent')::date AS day,
-                    SUM(ABS(h."amount")) AS total, MAX(h."createdAt") AS last_at,
-                    (array_agg(h."id"::text ORDER BY h."createdAt" DESC, h."id" DESC))[1] AS last_id
+             SELECT (COALESCE(he.rat, h."createdAt") AT TIME ZONE 'Asia/Tashkent')::date AS day,
+                    SUM(ABS(h."amount")) AS total,
+                    MAX(COALESCE(he.rat, h."createdAt")) AS last_at,
+                    (array_agg(COALESCE(he.rid, h."id")::text
+                       ORDER BY COALESCE(he.rat, h."createdAt") DESC, COALESCE(he.rid, h."id") DESC))[1] AS last_id
                FROM ${t.history} h
+               ${effective('h')}
               WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
                 AND h."source_type" = $2 AND h."is_deleted" = false
                 AND ${notReversed('h')}
@@ -1117,6 +1136,11 @@ export class AdvisorInputsService {
              FROM ${t.history} o
              JOIN ${t.history} r ON r."reverses_history_id" = o."id"
               AND r."source_type" = 'payment_reversal' AND r."is_deleted" = false
+              -- T6 TAHRIRI qaytarishi — topshirish bekor emas, almashtirilgan (P5).
+              AND NOT EXISTS (
+                SELECT 1 FROM ${t.corrections} pe
+                 WHERE pe."reversal_transfer_id" = r."transfer_id"
+                   AND pe."action" = 'edit' AND pe."is_deleted" = false)
             WHERE o."cashbox_id" = c."id" AND o."operation_type" = 'expense'
               AND o."source_type" = $2 AND o."is_deleted" = false
               AND (qh.last_at IS NULL OR o."createdAt" > qh.last_at)

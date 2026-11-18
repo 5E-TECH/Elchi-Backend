@@ -30,6 +30,7 @@ Ega qarori 2026-11-18. Deploy: ai-service + finance-service, migratsiyasiz.
 - ✏️ **R2 o'sish:** faqat o'sish triggeri — epizod o'sish qatorining boshlangan kuni; kuniga qisman topshirish «N marta» ni ko'paytirmaydi va yopilgandan keyin har kuni yangi ogohlantirish ochmaydi. Sarlavha: «{kuryer}: {qoldiq} so'm — qarz N kun ketma-ket o'sgan»; o'sish bo'lmasa `facts.growth_days = 0`.
 - ✏️ **Bekor turgan kassa (R2/R4/R5):** hammasi topshirilib (qoldiq 0) keyin yangi pul tushsa — kunlar o'sha paytdan sanaladi (darhol «12 kundan beri» emas). R5 epizodi `balance_uzs` chegarasiga bog'liq emas (chegara o'zgarsa yopilgan qayta ochilmaydi).
 - ✏️ **T6 qaytarish:** hisoblanadigan topshirish qaytarilsa — epizod qaytarish lahzasidan boshlanadi (ogohlantirish abadiy jim qolmaydi). `evidence.last_handover` — oxirgi amal qiluvchi (qaytarilmagan) topshirish, avvalgidek.
+- ✏️ **T6 tahriri (summa tuzatish):** almashtiruvchi to'lov «oxirgi topshirish» sanasini oldinga surmaydi — `evidence.last_handover.at` va epizod asl (birinchi) to'lov vaqtida qoladi (summa — yangi), kunlar nolga tushmaydi, «N marta» oshmaydi.
 - 🟢 Ism/filial qidiruvi vaqtincha yiqilsa — ochiq ogohlantirishdagi nom, filial (`branch_id` filtri) va sarlavha saqlanadi (`#90` ga almashmaydi).
 - 🟢 `finance_cashbox_daily` da yo'q kun — o'sish tekshiruvida o'tkazib yuboriladi (uzluksiz kunlar talab qilinadi), avvalgidek.
 
