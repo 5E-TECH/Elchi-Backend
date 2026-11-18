@@ -164,6 +164,23 @@ describe('NotificationEscalationService', () => {
       expect(res).toEqual({ checked: 2, escalated: 2 });
     });
 
+    it('BE-5 round-4: eskalatsiyasi o‘chirilgan tur (ai.advisor_alert) — navbatdagi eski hodisa ham SMS bermaydi', async () => {
+      store.set('1', row('1', { type: 'ai.advisor_alert' }));
+      store.set('2', row('2'));
+
+      const res = await service.handle({ notification_ids: ['1', '2'] });
+      const escalate = (smsDispatch as { escalate: jest.Mock }).escalate;
+
+      expect(escalate).toHaveBeenCalledWith(['2']);
+      expect(res).toEqual({ checked: 2, escalated: 1 });
+      expect(patches).toEqual([
+        {
+          ids: ['1'],
+          patch: { escalation: 'skipped', escalation_reason: 'type_opt_out' },
+        },
+      ]);
+    });
+
     it('TC10: xabar o‘qilgan bo‘lsa eskalatsiya ishlamaydi; push `sent` bo‘lsa ham', async () => {
       store.set('1', row('1', { is_read: true }));
       store.set('2', row('2', { delivery: { push: 'sent' } }));
