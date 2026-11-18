@@ -50,4 +50,16 @@ export class DeliveryTariff extends BaseEntity {
   /** Kim yaratdi — `identity_schema.admins.id` (FK yo'q, sxemalar alohida). */
   @Column({ type: 'bigint', nullable: true })
   created_by!: string | null;
+
+  /**
+   * B0ILd7YI — rejalashtirilgan versiya bekor qilingan vaqt (migratsiya
+   * 1716000000235). Bekor qilingan qator `is_active = false` (CHECK) va
+   * o'chirilmaydi — tarixda qoladi.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  cancelled_at!: Date | null;
+
+  /** Kim bekor qildi — `identity_schema.admins.id` (FK yo'q). */
+  @Column({ type: 'bigint', nullable: true })
+  cancelled_by!: string | null;
 }

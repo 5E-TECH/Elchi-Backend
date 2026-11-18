@@ -481,6 +481,151 @@ describe('DAqXPeSy — admin: yangi tarif versiyasi', () => {
   });
 });
 
+describe('B0ILd7YI — rejalashtirilgan tarif versiyasini bekor qilish', () => {
+  const FUTURE = new Date(Date.now() + 86_400_000);
+  const SCHEDULED = {
+    id: '12',
+    tariff_id: 'center',
+    base_price: 45000,
+    extra_per_kg: 4500,
+    days_min: 1,
+    days_max: 2,
+    valid_from: FUTURE,
+    is_active: true,
+    isDeleted: false,
+    created_by: '3',
+    cancelled_at: null as Date | null,
+    cancelled_by: null as string | null,
+  };
+
+  /**
+   * Soxta `UPDATE` quruvchi: shartlar yoziladi, `affected` — berilgan son;
+   * `findOne` — UPDATE'dan KEYINgi qator (`after`).
+   */
+  const setup = (
+    affected: number,
+    after: Record<string, unknown> | null = {
+      ...SCHEDULED,
+      is_active: false,
+      cancelled_at: new Date(),
+      cancelled_by: '1',
+    },
+  ) => {
+    const built = build();
+    const qb = {
+      set: jest.fn(),
+      where: jest.fn(),
+      andWhere: jest.fn(),
+      update: jest.fn(),
+      execute: jest.fn(() => Promise.resolve({ affected })),
+    };
+    for (const key of ['set', 'where', 'andWhere', 'update'] as const) {
+      qb[key].mockReturnValue(qb);
+    }
+    Object.assign(built.tariffRepo, {
+      createQueryBuilder: jest.fn(() => qb),
+      findOne: jest.fn(() => Promise.resolve(after)),
+    });
+    return { ...built, qb };
+  };
+
+  it('kelajakdagi versiya: bitta UPDATE (valid_from > now()), jurnal, javobda is_cancelled', async () => {
+    const { service, qb, activityLog } = setup(1);
+    const res = await service.cancelScheduledTariff('12', {
+      id: '1',
+      roles: ['admin'],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({
+      id: '12',
+      is_active: false,
+      is_current: false,
+      is_scheduled: false,
+      is_cancelled: true,
+      already_cancelled: false,
+      cancelled_by: '1',
+    });
+    expect(qb.set.mock.calls[0][0]).toMatchObject({
+      is_active: false,
+      cancelled_by: '1',
+    });
+    expect(qb.where).toHaveBeenCalledWith('id = :rowId', { rowId: '12' });
+    expect(qb.andWhere.mock.calls.map(([sql]) => sql)).toEqual([
+      'is_active = true',
+      'is_deleted = false',
+      'cancelled_at IS NULL',
+      'valid_from > now()',
+    ]);
+    expect(activityLog.log).toHaveBeenCalledTimes(1);
+    expect(activityLog.log.mock.calls[0][0]).toMatchObject({
+      entity_type: 'DeliveryTariff',
+      entity_id: '12',
+      action: 'logistics.delivery_tariff_cancelled',
+      old_value: { id: '12', base_price: 45000, is_active: true },
+      new_value: { id: '12', base_price: 45000, is_active: false },
+      user_id: '1',
+      user_role: 'admin',
+      description:
+        "Yetkazish tarifi «center» — rejalashtirilgan versiya bekor qilindi: 45 000 so'm + 4 500 so'm/kg",
+    });
+  });
+
+  it('takror so`rov (allaqachon bekor qilingan) — 200, already_cancelled, jurnal yo`q', async () => {
+    const { service, activityLog } = setup(0);
+    const res = (await service.cancelScheduledTariff('12', { id: '1' })) as {
+      statusCode: number;
+      data: Record<string, unknown>;
+    };
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({
+      is_cancelled: true,
+      already_cancelled: true,
+    });
+    expect(activityLog.log).not.toHaveBeenCalled();
+  });
+
+  it('kuchga kirgan versiya — 409, jurnal yo`q', async () => {
+    const { service, activityLog } = setup(0, {
+      ...SCHEDULED,
+      valid_from: new Date('2026-10-08'),
+    });
+    const err = await rpcError(
+      service.cancelScheduledTariff('12', { id: '1' }),
+    );
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toContain('kuchga kirgan');
+    expect(activityLog.log).not.toHaveBeenCalled();
+  });
+
+  it('bekor qilinmagan, lekin nofaol versiya — 409', async () => {
+    const { service } = setup(0, { ...SCHEDULED, is_active: false });
+    const err = await rpcError(
+      service.cancelScheduledTariff('12', { id: '1' }),
+    );
+    expect(err.statusCode).toBe(409);
+  });
+
+  it('versiya yo`q — 404', async () => {
+    const { service } = setup(0, null);
+    const err = await rpcError(
+      service.cancelScheduledTariff('404', { id: '1' }),
+    );
+    expect(err.statusCode).toBe(404);
+  });
+
+  it.each([['abc'], ['0'], ['-1'], ['1.5'], [''], [null]])(
+    'id %p — 400, UPDATE yo`q',
+    async (id) => {
+      const { service, qb } = setup(1);
+      const err = await rpcError(
+        service.cancelScheduledTariff(id, { id: '1' }),
+      );
+      expect(err.statusCode).toBe(400);
+      expect(qb.execute).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('DAqXPeSy — admin: sozlamalar validatsiyasi (tranzaksiyadan OLDIN)', () => {
   it.each<[string, Record<string, unknown>]>([
     ['bo`sh patch', {}],

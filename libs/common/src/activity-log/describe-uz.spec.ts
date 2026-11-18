@@ -176,6 +176,15 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
     ).toBe(
       "Yetkazish tarifi «center» — yangi versiya: 40 000 so'm + 4 000 so'm/kg",
     );
+    expect(
+      ActivityDescribeUz.deliveryTariffVersionCancelled(
+        'center',
+        '45000.00',
+        4500,
+      ),
+    ).toBe(
+      "Yetkazish tarifi «center» — rejalashtirilgan versiya bekor qilindi: 45 000 so'm + 4 500 so'm/kg",
+    );
     expect(ActivityDescribeUz.deliveryPricingSettingsUpdated(2)).toBe(
       "Yetkazish narxi sozlamalari o'zgartirildi: 2 ta maydon",
     );
@@ -272,6 +281,12 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
         ActivityDescribeUz.sessionsRevokedByPasswordChange('current', 3),
       deliveryTariffVersionCreated:
         ActivityDescribeUz.deliveryTariffVersionCreated('address', 60000, 5000),
+      deliveryTariffVersionCancelled:
+        ActivityDescribeUz.deliveryTariffVersionCancelled(
+          'address',
+          60000,
+          5000,
+        ),
       deliveryPricingSettingsUpdated:
         ActivityDescribeUz.deliveryPricingSettingsUpdated(2),
       marketOperatorWarehouseAccessChanged:

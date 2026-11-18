@@ -6,6 +6,7 @@ import { DeliveryPricingEngine1716000000142 } from '../../../../migrations/17160
 import { DeliveryPricingVolumetricFromKg1716000000154 } from '../../../../migrations/1716000000154-DeliveryPricingVolumetricFromKg';
 import { DeliveryPricingSaleGates1716000000183 } from '../../../../migrations/1716000000183-DeliveryPricingSaleGates';
 import { RestoreDeliveryPricingSettings1716000000231 } from '../../../../migrations/1716000000231-RestoreDeliveryPricingSettings';
+import { DeliveryTariffCancelScheduled1716000000235 } from '../../../../migrations/1716000000235-DeliveryTariffCancelScheduled';
 import { DeliveryPricingService } from './delivery-pricing.service';
 import { DeliveryTariff } from '../entities/delivery-tariff.entity';
 import { DeliveryPricingSettings } from '../entities/delivery-pricing-settings.entity';
@@ -100,6 +101,8 @@ describePg('Migratsiya 231 — yetkazish narxi sozlamasini tiklash', () => {
       await new DeliveryPricingEngine1716000000142().up(runner);
       await new DeliveryPricingVolumetricFromKg1716000000154().up(runner);
       await new DeliveryPricingSaleGates1716000000183().up(runner);
+      // B0ILd7YI: entity `cancelled_at` / `cancelled_by` ni o'qiydi.
+      await new DeliveryTariffCancelScheduled1716000000235().up(runner);
     } finally {
       await runner.release();
     }

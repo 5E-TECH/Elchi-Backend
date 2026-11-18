@@ -112,6 +112,7 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
     it.each([
       'listTariffs',
       'createTariff',
+      'cancelTariff',
       'getSettings',
       'updateSettings',
     ] as const)('%s — faqat superadmin va admin', (method) => {
@@ -253,6 +254,10 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
             request(http())
               .get('/delivery/pricing-settings/history')
               .set(as([role])),
+          () =>
+            request(http())
+              .post('/delivery/tariffs/12/cancel')
+              .set(as([role])),
         ];
         for (const call of calls) {
           expect((await call()).status).toBe(403);
@@ -384,6 +389,82 @@ describe('DAqXPeSy — /delivery/* gateway', () => {
         .send(body);
       expect(res.status).toBe(400);
       expect(logistics.send).not.toHaveBeenCalled();
+    });
+
+    it('POST /delivery/tariffs/:id/cancel (B0ILd7YI) — 200, so`rovchi bilan, ismlar qo`shiladi', async () => {
+      reply = () =>
+        of({
+          statusCode: 200,
+          message: 'Rejalashtirilgan tarif versiyasi bekor qilindi',
+          data: {
+            id: '12',
+            tariff_id: 'center',
+            created_by: '1',
+            cancelled_by: '1',
+            is_cancelled: true,
+            already_cancelled: false,
+          },
+        });
+      const res = await request(http())
+        .post('/delivery/tariffs/12/cancel')
+        .set(as(['admin'], '1'));
+      expect(res.status).toBe(200);
+      expect(logistics.send).toHaveBeenCalledWith(
+        { cmd: 'logistics.delivery.tariffs.cancel' },
+        { id: '12', requester: { id: '1', roles: ['admin'] } },
+      );
+      expect(res.body.data).toMatchObject({
+        id: '12',
+        is_cancelled: true,
+        created_by_name: 'Shodiyor Ergashev',
+        cancelled_by_name: 'Shodiyor Ergashev',
+      });
+    });
+
+    it.each(['abc', '-1', '1.5'])(
+      'POST /delivery/tariffs/%s/cancel — 400, logistics chaqirilmaydi',
+      async (id) => {
+        const res = await request(http())
+          .post(`/delivery/tariffs/${id}/cancel`)
+          .set(as(['superadmin']));
+        expect(res.status).toBe(400);
+        expect(logistics.send).not.toHaveBeenCalled();
+      },
+    );
+
+    it('GET /delivery/tariffs — bekor qilingan qatorga cancelled_by_name (B0ILd7YI)', async () => {
+      reply = () =>
+        of({
+          statusCode: 200,
+          data: {
+            current: {},
+            versions: [
+              { id: '12', created_by: '2', cancelled_by: '1' },
+              { id: '11', created_by: '1', cancelled_by: null },
+              { id: '10', created_by: '1' },
+            ],
+          },
+        });
+      const res = await request(http())
+        .get('/delivery/tariffs')
+        .set(as(['admin']));
+      expect(res.body.data.versions).toEqual([
+        {
+          id: '12',
+          created_by: '2',
+          cancelled_by: '1',
+          created_by_name: null,
+          cancelled_by_name: 'Shodiyor Ergashev',
+        },
+        {
+          id: '11',
+          created_by: '1',
+          cancelled_by: null,
+          created_by_name: 'Shodiyor Ergashev',
+          cancelled_by_name: null,
+        },
+        { id: '10', created_by: '1', created_by_name: 'Shodiyor Ergashev' },
+      ]);
     });
 
     it('GET /delivery/pricing-settings', async () => {
