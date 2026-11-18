@@ -617,6 +617,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       facts: {
         trigger: 'no_handover',
         courier: { id: '55', name: 'Jasur Tursunov' },
+        branch: { id: '1', name: 'Toshkent HQ' },
         balance,
         days_without_handover: days,
       },
@@ -650,6 +651,45 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       '2026-10-23T09:00:00.000Z',
     );
 
+    // v0.4 P6: ism qidiruvi yiqilgan tick — saqlangan nom/filial/sarlavha qoladi.
+    const degraded = r2('ep:h:900', 3200000, 6);
+    degraded.branch = null;
+    degraded.subject = { kind: 'courier', id: '55', name: null };
+    degraded.facts = {
+      ...degraded.facts,
+      courier: { id: '55', name: null },
+      branch: null,
+    };
+    reply = { candidates: [degraded], cursors: {}, names_degraded: true };
+    expect(
+      await engine.run('frequent', new Date('2026-10-23T10:00:00Z')),
+    ).toMatchObject({ refreshed: 1 });
+    const [kept] = await ds.query<
+      Array<{
+        title: string;
+        subject: { name: string };
+        branch: { name: string } | null;
+        branch_id: string | null;
+        facts: {
+          courier: { name: string };
+          branch: { id: string } | null;
+          balance: number;
+        };
+      }>
+    >(
+      `SELECT title, subject, branch, branch_id::text AS branch_id, facts FROM ai_schema.ai_advisor_alerts`,
+    );
+    expect(kept.facts.branch).toEqual({ id: '1', name: 'Toshkent HQ' });
+    // Sarlavha qayta hisoblanadi: nom saqlangan, raqamlar yangi (#702 review).
+    expect(kept.title).toBe(
+      "Jasur Tursunov: 3 200 000 so'm, 6 kundan beri topshirilmagan",
+    );
+    expect(kept.subject.name).toBe('Jasur Tursunov');
+    expect(kept.branch?.name).toBe('Toshkent HQ');
+    expect(kept.branch_id).toBe('1');
+    expect(kept.facts.courier.name).toBe('Jasur Tursunov');
+    expect(kept.facts.balance).toBe(3200000); // raqamlar yangilanadi
+
     // «Ahamiyatsiz» — davom etayotgan holat qayta ochilmaydi.
     await ds.query(
       `UPDATE ai_schema.ai_advisor_alerts SET status = 'dismissed'`,
@@ -659,8 +699,20 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     ).toMatchObject({ opened: 0, refreshed: 0 });
     expect(await alerts()).toHaveLength(1);
 
-    // Topshirishdan keyin yana shart rost — yangi epizod, yangi ogohlantirish.
-    reply = { candidates: [r2('ep:h:950', 2500000, 4)], cursors: {} };
+    // #702 B4: kalit o'zgargan, lekin epizod yopilgan ogohlantirishning oxirgi
+    // aniqlanishidan OLDIN boshlangan (v0.3 → v0.4) — o'sha holat, yangi qator yo'q.
+    reply = { candidates: [r2('ep:p:880', 2500000, 9)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-25T09:00:00Z')),
+    ).toMatchObject({ opened: 0 });
+    expect(await alerts()).toHaveLength(1);
+
+    // Topshirishdan keyin (26.10) yana shart rost — yangi epizod, yangi ogohlantirish.
+    const fresh = r2('ep:h:950', 2500000, 4);
+    fresh.fact_keys = [
+      { fact_key: 'ep:h:950', fact_at: '2026-10-26T08:00:00.000Z' },
+    ];
+    reply = { candidates: [fresh], cursors: {} };
     expect(
       await engine.run('frequent', new Date('2026-10-30T09:00:00Z')),
     ).toMatchObject({ opened: 1 });

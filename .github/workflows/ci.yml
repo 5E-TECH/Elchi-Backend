@@ -316,7 +316,9 @@ jobs:
           apps/ai-service/src/ai-config/ai-key-store.pg.spec.ts
           apps/ai-service/src/ai-config/ai-runtime.provider.pg.spec.ts
           apps/finance-service/src/advisor/advisor-inputs.BE5.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-inputs.volume.pg.spec.ts
           apps/finance-service/src/advisor/advisor-indexes.241.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-indexes.243.pg.spec.ts
           apps/logistics-service/src/delivery-pricing/delivery-pricing-settings-restore.pg.spec.ts
           apps/logistics-service/src/courier-scan-taken-to-waiting.migration.pg.spec.ts
           apps/logistics-service/src/delivery-pricing/city-zone-restore.pg.spec.ts

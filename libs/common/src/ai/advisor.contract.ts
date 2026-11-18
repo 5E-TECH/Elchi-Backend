@@ -98,7 +98,8 @@ export const AI_ADVISOR_PUBLIC_ERROR_FIELDS: Readonly<
 export const AI_ADVISOR_NOTE_MIN = 3;
 export const AI_ADVISOR_NOTE_MAX = 500;
 
-export type AiAdvisorLimitUnit = 'uzs' | 'days' | 'count' | 'multiplier';
+export type AiAdvisorLimitUnit =
+  'uzs' | 'days' | 'count' | 'multiplier' | 'percent';
 
 export interface AiAdvisorFieldLimit {
   min: number;
@@ -114,6 +115,18 @@ const uzs = (def: number): AiAdvisorFieldLimit => ({
   max: 1_000_000_000,
   step: 1,
   unit: 'uzs',
+  default: def,
+});
+/**
+ * Ega qarori 2026-11-18 (v0.4): topshirish «topshirilmagan kunlar»ni faqat
+ * o'sha kun boshidagi qoldiqning kamida N% i (kun yig'indisi) topshirilsa
+ * nolga tushiradi. UI'da hozircha ko'rsatilmaydi.
+ */
+const percent = (def: number): AiAdvisorFieldLimit => ({
+  min: 1,
+  max: 100,
+  step: 1,
+  unit: 'percent',
   default: def,
 });
 const days = (def: number): AiAdvisorFieldLimit => ({
@@ -145,6 +158,7 @@ export const AI_ADVISOR_RULE_LIMITS: Readonly<
     balance_uzs: uzs(2_000_000),
     growth_days: days(3),
     no_handover_days: days(3),
+    min_handover_pct: percent(80),
   },
   R3: {
     mad_multiplier: {
@@ -156,7 +170,11 @@ export const AI_ADVISOR_RULE_LIMITS: Readonly<
     },
   },
   R4: { days_without_payout: days(7) },
-  R5: { balance_uzs: uzs(5_000_000), days_without_transfer: days(3) },
+  R5: {
+    balance_uzs: uzs(5_000_000),
+    days_without_transfer: days(3),
+    min_transfer_pct: percent(80),
+  },
   R6: {},
   R7: {},
   R8: {
@@ -381,6 +399,11 @@ export interface AiAdvisorRuleInputsResponse {
    * kursori yo'q, boshqa qoidalar odatdagidek (round-2 #651 ops-B1).
    */
   errors?: Partial<Record<AiAdvisorRuleKey, string>>;
+  /**
+   * v0.4 P6: ism/filial qidiruvi (identity/branch) yiqildi — nomlar `null`.
+   * Dvigatel ochiq qatorda saqlangan `title`/`subject`/`branch` ni saqlaydi.
+   */
+  names_degraded?: boolean;
 }
 
 /** finance kirish chegaralari (round-2 #651 S10): davrlar va orqa oyna. */
