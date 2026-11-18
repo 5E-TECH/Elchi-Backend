@@ -86,11 +86,18 @@ export const DISTRICT_CORPUS_MAX_CHARS = 120;
  * va qisqa shakllar ham (shaxri, rayon, r-n, gorod, sh., g.).
  */
 const PLACE_WORD_RE =
-  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g)\./;
+  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g)\.|[a-z]{2,}\s+t\.(?!\s*[:\d+(]|y\b|y\.)/;
 /** Shahar afzalligi belgisi — BeePost :1708-1709 (+ shaxri, gorod, sh., g.). */
 const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
-/** Tuman afzalligi belgisi — BeePost :1708-1709 (+ rayon, r-n). */
-const TUMAN_WORD_RE = /\b(tumani|tuman|rayon|rayoni|raion)\b|\br-n\b|\bt\./;
+/**
+ * Tuman afzalligi belgisi — BeePost :1708-1709 (+ rayon, r-n, "X t.").
+ * r4 NEW-B3: "t." faqat nomdan keyin ("Qarshi t.", "Yunusobod t.,"), telefon
+ * ("t. 90 ...", "t.: 90..."), "t.y." (temir yo'l) va ism bosh harfi
+ * (", T. Malik") EMAS.
+ */
+const TUMAN_T_ABBR_RE = /([a-z]{2,})\s+t\.(?!\s*[:\d+(]|y\b|y\.)/g;
+const TUMAN_WORD_RE =
+  /\b(tumani|tuman|rayon|rayoni|raion)\b|\br-n\b|[a-z]{2,}\s+t\.(?!\s*[:\d+(]|y\b|y\.)/;
 
 /**
  * D2: manzilda tuman nomidan KEYIN kelsa — bu ko'cha/mahalla nomi, tuman
@@ -195,7 +202,6 @@ const TUMAN_AFTER_WORDS: ReadonlySet<string> = new Set([
   'rayon',
   'rayoni',
   'raion',
-  't',
 ]);
 
 /** `tokens[j]` dan aniq tuman belgisi boshlanadimi ("tumani", "t.", "r-n"). */
@@ -214,9 +220,14 @@ function tumanMarkerBefore(tokens: string[], i: number): boolean {
   );
 }
 
-/** Manzil tokenlari: `normGeo` qo'shimchalarini SAQLAB (tumani, shahri). */
+/**
+ * Manzil tokenlari: `normGeo` qo'shimchalarini SAQLAB (tumani, shahri).
+ * Nomdan keyingi "t." (`TUMAN_T_ABBR_RE`) — "tumani" tokeni; telefon,
+ * "t.y." yoki ism bosh harfidagi "t." esa oddiy "t" bo'lib qoladi.
+ */
 function addressTokens(text: string): string[] {
   return lightNorm(text)
+    .replace(TUMAN_T_ABBR_RE, '$1 tumani ')
     .replace(RU_ADJ_SUFFIX_RE, '$1')
     .replace(/[^a-z0-9]+/g, ' ')
     .split(' ')
