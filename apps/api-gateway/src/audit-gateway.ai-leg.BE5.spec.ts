@@ -1,4 +1,4 @@
-import { of } from 'rxjs';
+import { NEVER, of } from 'rxjs';
 import { AuditGatewayController } from './audit-gateway.controller';
 
 /**
@@ -82,6 +82,33 @@ describe('AuditGatewayController — ai oyog‘i (BE-5)', () => {
       expect.anything(),
     );
   });
+
+  it('round-4 S6: ai oyog‘i javob bermasa — 3 s da failed_services [ai], qolganlari qaytadi (12 s emas)', async () => {
+    const base = legs();
+    const ai = { send: jest.fn(() => NEVER) };
+    const controller = new AuditGatewayController(
+      ...(base as unknown as [
+        never,
+        never,
+        never,
+        never,
+        never,
+        never,
+        never,
+        never,
+        never,
+      ]),
+      { enrich: jest.fn((x: unknown) => Promise.resolve(x)) } as never,
+      ai as never,
+    );
+    const t0 = Date.now();
+    const res = await controller.list({}, { user: { roles: ['superadmin'] } });
+    const took = Date.now() - t0;
+    expect(ai.send).toHaveBeenCalled();
+    expect(res.data.meta).toMatchObject({ failed_services: ['ai'] });
+    expect(took).toBeGreaterThanOrEqual(2900);
+    expect(took).toBeLessThan(6000);
+  }, 15_000);
 
   it('AI mijozisiz (eski konstruktor) — oyoqlar avvalgidek 9 ta', () => {
     const controller = new AuditGatewayController(
