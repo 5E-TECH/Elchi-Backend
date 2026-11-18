@@ -547,3 +547,17 @@ export function maskPhonesForLog(text: string): string {
     moneyGuard: false,
   });
 }
+
+/**
+ * Modelga (Claude) ketadigan tool natijalari uchun: telefon `maskPhoneForLog`
+ * shaklida (qaytarib bo'lmaydi), lekin `maskPhones` kabi PUL QO'RIQCHISI
+ * bilan va log uchungina mo'ljallangan 3-3-3 manbasisiz. Aks holda
+ * formatlangan summa (`Ijara to'lovi 905 500 000`) soxta telefonga
+ * aylanib, modelga noto'g'ri raqam ketardi.
+ */
+export function maskPhonesForModel(text: string): string {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  return replacePhoneCandidates(text, (e164) => maskPhoneForLog(e164), {
+    moneyGuard: true,
+  });
+}
