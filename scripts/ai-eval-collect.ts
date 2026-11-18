@@ -274,6 +274,13 @@ const NAME_PART_STOP = new Set([
   'клиент',
 ]);
 
+/** Birinchi so'z bo'lsa - ism ham bo'lishi mumkin ("Xonim Karimova"). */
+const FIRST_NAME_TOO = new Set([
+  'xonim',
+  'honim',
+  '\u0445\u043E\u043D\u0438\u043C', // kirillda "xonim"
+]);
+
 /**
  * Ismga yopishgan murojaat ("Dilnozaxon", "Dilnozahon", "Dilnoza-xon",
  * "Ферузажон") — tire bilan birga olib tashlanadi,
@@ -322,11 +329,12 @@ export function nameVariants(names: readonly string[]): string[] {
     if (n.length < 2) continue;
     out.add(n);
     const words = n.split(/[\s,;()]+/).filter(Boolean);
-    for (const w of words) {
+    for (const [i, w] of words.entries()) {
+      const lw = w.toLowerCase();
       if (
         words.length >= 2 &&
         letterCount(w) >= 3 &&
-        !NAME_PART_STOP.has(w.toLowerCase())
+        (!NAME_PART_STOP.has(lw) || (i === 0 && FIRST_NAME_TOO.has(lw)))
       ) {
         out.add(w);
       }
@@ -378,10 +386,49 @@ function nameAlternatives(skeleton: string): string[] {
  */
 const LINK_RE =
   /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com|wa\.me|whatsapp\.com|goo\.gl|maps\.google\.[a-z]{2,3}(?:\.[a-z]{2})?|google\.[a-z]{2,3}(?:\.[a-z]{2})?\/maps|yandex\.[a-z]{2,3}\/maps|2gis\.[a-z]{2,3})(?![\p{L}\p{N}_-])(?:[/?#](?:[^\s,;)[\]]|,(?=-?\d{1,3}\.\d|\d{1,2}z))*)?/giu;
+/** Butun qism havola bo'lib boshlanadimi (yetakchi raqamni qaytarish uchun). */
+const LINK_START_RE = new RegExp(`^(?:${LINK_RE.source})$`, 'iu');
 const EMAIL_RE =
   /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
 /** Telegram/Instagram foydalanuvchi nomi (email maskalangandan keyin). */
 const USER_HANDLE_RE = /(?<![\p{L}\p{N}_.@])@[A-Za-z0-9_.]{3,32}/gu;
+
+/** UZ telefoni raqamlari: 9 ta (milliy kod bilan) yoki 998 + 9. */
+const UZ_PHONE_DIGITS_RE =
+  /^(?:998)?(?:20|33|5[05]|6[1-9]|7\d|88|9[013-57-9])\d{7}$/;
+/**
+ * Havola dumi koordinatami ("41.31", "69.240562"): narx oldidagi
+ * koordinata telefon boshi deb olinmasin. Istisno - "dd.ddd" va keyin
+ * "dd dd" ("...#55.578 64 01"): bu nuqtali telefon.
+ */
+function isCoordinate(back: string, rest: string): boolean {
+  if (!/^-?\d{1,3}\.\d{2,}$/.test(back)) return false;
+  return !(
+    /^\d{2}\.\d{3}$/.test(back) &&
+    /^[^\S\n]*\d{2}[ .\-\u2010-\u2015\u2212]?\d{2}(?!\d)/.test(rest)
+  );
+}
+
+/**
+ * `s` boshidagi bir qatorlik raqam guruhlari guruh chegarasida UZ telefonini
+ * hosil qiladimi ("90 742 90 47", "998 90 742 90 47" - ha; "1543 175 000",
+ * "245 85 000", "69.240562 150 000" - yo'q). Havola dumidagi raqam FAQAT
+ * telefon bo'lsa matnga qaytariladi: post raqami / koordinata + narx
+ * [RAQAM] bo'lib ketmasin.
+ */
+function startsWithPhone(s: string): boolean {
+  const run = /^\(?\d[\d \u00A0\-\u2010-\u2015\u2212()./_]*/.exec(s)?.[0] ?? '';
+  const groups = run.split(/\D+/).filter(Boolean);
+  let digits = '';
+  for (let i = 0; i < groups.length; i++) {
+    // Telefonda yolg'iz raqamli guruh yo'q ("1 250 000", "...&z=17 12 500").
+    if (groups[i].length === 1) return false;
+    digits += groups[i];
+    if (UZ_PHONE_DIGITS_RE.test(digits)) return true;
+    if (digits.length >= 12) return false;
+  }
+  return false;
+}
 
 /**
  * Uy/xonadon kalit so'zlari (uzunidan boshlab; "kv-ra" — "kv" dan oldin).
@@ -405,6 +452,18 @@ const HOUSE_KW_SUFFIX =
  */
 const NOT_QTY =
   "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]000(?!\\d))";
+/**
+ * Dev tanimagan egalik/kelishikli shakllar ("uyiga", "uyigacha",
+ * "xonadoniga", kirillda "do doma", "kvartire") - narx istisnosi keng
+ * (bo'shliq/nuqta + istalgan 3 raqam): "uyigacha 19 900", "Dostavka do
+ * doma 25 500" (kirillda) narxi dev'dagidek ochiq qoladi.
+ */
+const NOT_QTY_WIDE =
+  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]\\d{3}(?!\\d))";
+const HOUSE_CASE =
+  '(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
+/** Dev'da bo'lmagan shakllar: egalikli kalit so'z, kirill "dom[eau]", "kvartir[euy]". */
+const HOUSE_KW_INFLECTED = `(?:(?:${HOUSE_KW})(?:i|si|и|си)${HOUSE_CASE}|дом[еау]${HOUSE_CASE}|квартир[еуы]${HOUSE_CASE})`;
 /**
  * "Narxi 1 586 000 uyiga" — narxning oxirgi "000" guruhi, uy raqami EMAS.
  */
@@ -430,49 +489,78 @@ export function maskCandidateText(
   let out = text
     .replace(EMAIL_RE, '[EMAIL]')
     .replace(LINK_RE, (m0: string, offset: number, whole: string) => {
-      // Havola boshidagi faqat raqamli "label" ("…45 85.maps.app.goo.gl") —
-      // oldingi telefonning oxirgi guruhi: matnga qaytariladi.
-      let lead = /^(?:\d[\d-]*\.)+/.exec(m0)?.[0] ?? '';
-      if (lead) {
+      // Havola boshidagi raqamli "label" ("...45 85.maps.app.goo.gl") va
+      // havola xostiga yopishgan raqamlar ("...34 78_www.google.com/maps",
+      // "...08 30-maps.app.goo.gl", "...36-47www.google.com/maps") - oldingi
+      // telefonning oxirgi guruhi: matnga qaytariladi (eng uzun prefiks,
+      // qolgan qism o'zi havola bo'lsa).
+      let lead = '';
+      // Oldingi havolalar "[LINK]" bo'lgan matn: ularning raqamlari hisoblanmaydi.
+      const before = whole.slice(0, offset).replace(LINK_RE, '[LINK]');
+      const leadMax = /^[\d._-]+/.exec(m0)?.[0] ?? '';
+      for (let k = leadMax.length; k > 0 && !lead; k--) {
+        const cand = m0.slice(0, k);
+        const digits = cand.replace(/[._-]+$/, '');
+        if (!/\d$/.test(digits)) continue;
+        if (!LINK_START_RE.test(m0.slice(k))) continue;
         const run =
           /\d[\d\s\-\u2010-\u2015\u2212()./_]{7,}\d$/.exec(
-            whole.slice(0, offset) + lead.slice(0, -1),
+            before + digits,
           )?.[0] ?? '';
-        if (!(
-          run.length >= lead.length && run.replace(/\D/g, '').length >= 9
-        )) {
-          lead = '';
+        if (run.length >= digits.length && run.replace(/\D/g, '').length >= 9) {
+          lead = cand;
         }
       }
       const m = m0.slice(lead.length);
       const dots = /\.+$/.exec(m)?.[0] ?? '';
       const core = m.slice(0, m.length - dots.length);
       const rest = whole.slice(offset + m0.length).replace(LINK_RE, '[LINK]');
-      // Havola dumidagi raqam guruhlari ("…/AbC1-90-742", "…?phone=90",
-      // "wa.me/90", "…,90.742") keyingi matn bilan 9+ raqamli ketma-ketlik
-      // bo'lsa — matnga qaytariladi, 9+ raqam qoidasi telefonni
-      // butunligicha ko'radi.
+      // Havola dumidagi raqam guruhlari ("...AbC1-90-742", "...?phone=90",
+      // "wa.me/90", "...,90.742") keyingi matn bilan UZ telefonini boshlasa -
+      // matnga qaytariladi, 9+ raqam qoidasi telefonni butunligicha ko'radi.
       const t = dots ? null : /(?:[^\p{L}\p{N}\s]\(?\d+\)?)+$/u.exec(core);
       if (t) {
         for (let i = 0; i < t[0].length; i++) {
-          if (!/[^\p{L}\p{N}(]/u.test(t[0][i])) continue;
+          // "@" qaytarilsa "@90_742" @[USER] bo'lib raqamni bo'lib yuboradi
+          // (u yopishgan dum sifatida pastda qaytariladi).
+          if (!/[^\p{L}\p{N}(@]/u.test(t[0][i])) continue;
           const back = t[0].slice(i + 1);
+          // Koordinata ("?q=41.31,69.24") - telefon boshi emas.
+          if (isCoordinate(back, rest)) continue;
           const run =
             /^\(?\d[\d\s\-\u2010-\u2015\u2212()./_]{7,}\d/.exec(
               back + rest,
             )?.[0] ?? '';
-          if (run.length > back.length && run.replace(/\D/g, '').length >= 9) {
+          if (
+            run.length > back.length &&
+            run.replace(/\D/g, '').length >= 9 &&
+            startsWithPhone(back + rest)
+          ) {
             return lead + '[LINK]' + t[0].slice(i);
           }
         }
       }
-      // Ajratgichsiz yopishgan raqamlar ("…/AbC12390 742 90 47"): dumdagi
-      // raqamlar keyingi matn bilan 9+ raqam bo'lsa — ular ham qaytariladi.
-      const glued = dots ? '' : (/\d+$/.exec(core)?.[0] ?? '');
-      if (glued && glued.length < core.length) {
-        const run = /^\d[\d\s\-‐-―−()./_]{7,}\d/.exec(glued + rest)?.[0] ?? '';
-        if (run.length > glued.length && run.replace(/\D/g, '').length >= 9) {
-          return lead + '[LINK]' + glued;
+      // Harfga / "(" / "@" ga yopishgan, raqam bilan tugaydigan dum, ichida
+      // ajratgich ham bo'lishi mumkin ("...AbC12390" + " 742 90 47",
+      // "...(20" + ") 379 28 04", "...AbC12355_150" + " 50 15", ".../@90_742" +
+      // " 90 47"): shu qatordagi davomi bilan UZ telefonini boshlasa - eng
+      // qisqa dum qaytariladi ("/73903 559 900" - post raqami, ".../p/x333/
+      // 130000" - "/" bilan tugagan havola, narx qoladi).
+      const glued = dots
+        ? ''
+        : (/(?<=[\p{L}(@])\d(?:[\d\-\u2010-\u2015\u2212()./_]*\d)?$/u.exec(
+            core,
+          )?.[0] ?? '');
+      if (
+        glued &&
+        glued.length < core.length &&
+        // Butun dum koordinata ("...!4d69.240562", "...%2C41.311081") emas.
+        !isCoordinate(glued, rest) &&
+        /^[^\S\n]*[\d)]/.test(rest)
+      ) {
+        for (let k = 1; k <= glued.length; k++) {
+          const tail = glued.slice(-k);
+          if (startsWithPhone(tail + rest)) return lead + '[LINK]' + tail;
         }
       }
       // Gap oxiridagi nuqta havolaga kirmaydi.
@@ -509,7 +597,7 @@ export function maskCandidateText(
       // uy qoidalaridan keyin, [RAQAM] bo'ladi; kalit so'z uy qoidasiga
       // qoladi).
       .replace(
-        /(?<![\p{L}\p{N}])(?!(?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва|уй|кв)(?![\p{L}]))\p{L}{2}\s?(?:[-–№]\s?)?\d{7}(?!\d)/gu,
+        /(?<![\p{L}\p{N}])(?!(?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва|уй|кв|шт|по)(?![\p{L}]))\p{L}{2}\s?(?:[-\u2013\u2116]\s?)?\d{7}(?!\d)/gu,
         '[HUJJAT]',
       )
       // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta, slash,
@@ -530,9 +618,17 @@ export function maskCandidateText(
       )
       // "uy 12/3", "uyi 12", "kvartiraga 5", "kvartirasi 7", "kv-ra 5",
       // "kv №5", "дом №12", "д. 15", "d.15".
+      // Dev tanimagan egalik/kelishikli shakllar - keng narx istisnosi bilan.
       .replace(
         new RegExp(
-          `(?<![\\p{L}\\p{N}])((?:(?:${HOUSE_KW})${HOUSE_KW_SUFFIX}\\.?|[дd]\\.)\\s*[-:]?\\s*(?:[№#]|N(?=\\s*\\d))?\\s*)${HOUSE_NUM}(?!\\d)${NOT_QTY}`,
+          `(?<![\\p{L}\\p{N}])(${HOUSE_KW_INFLECTED}\\.?\\s*[-:]?\\s*(?:[\u2116#]|N(?=\\s*\\d))?\\s*)${HOUSE_NUM}(?!\\d)${NOT_QTY_WIDE}`,
+          'giu',
+        ),
+        '$1[N]',
+      )
+      .replace(
+        new RegExp(
+          `(?<![\\p{L}\\p{N}])(?!${HOUSE_KW_INFLECTED}(?![\\p{L}]))((?:(?:${HOUSE_KW})${HOUSE_KW_SUFFIX}\\.?|[дd]\\.)\\s*[-:]?\\s*(?:[\u2116#]|N(?=\\s*\\d))?\\s*)${HOUSE_NUM}(?!\\d)${NOT_QTY}`,
           'giu',
         ),
         '$1[N]',
@@ -542,7 +638,7 @@ export function maskCandidateText(
       // shaklni [HUJJAT] qilardi). "1 ta - 1500000", "uy-1234567" — dev'dagidek
       // ochiq.
       .replace(
-        /(?<![\p{L}\p{N}])((?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва|уй|кв)\s?)\d{7}(?!\d)/gu,
+        /(?<![\p{L}\p{N}])((?:va|uy|kv|da|ga|ni|bu|to|ва|уй|кв)\s?)\d{7}(?!\d)/gu,
         '$1[RAQAM]',
       )
   );
