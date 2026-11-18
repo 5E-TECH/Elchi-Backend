@@ -50,6 +50,30 @@ describe('mergeR1 (BE-5 round-2 #651 B1)', () => {
     ...over,
   });
 
+  it('#704 S1: ketma-ketlik — headline_amount sarlavhadagi streak_total bilan mos (yangi alertda ham)', () => {
+    const c = candidate({
+      facts: {
+        trigger: 'consecutive_negative',
+        shifts_count: 2,
+        total_difference: -130000,
+        last_difference: -10000,
+        closed_by: [],
+        last_shift_id: '3',
+        streak_length: 2,
+        streak_total: -130000,
+      },
+      fact_keys: [
+        { fact_key: '3', fact_at: '2026-10-22T08:10:00.000Z', amount: -10000 },
+      ],
+    });
+    const m = mergeR1({ facts: {}, evidence: {} }, c, new Set(['3']));
+    expect(m.facts).toMatchObject({
+      shifts_count: 1,
+      total_difference: -10000,
+    });
+    expect(m.headline_amount).toBe(-130000);
+  });
+
   it('ikki tick: faktlar va dalil birlashadi (shifts_count 2, jami −200 000)', () => {
     const m = mergeR1(stored, candidate(), new Set(['3']));
     expect(m.facts).toMatchObject({

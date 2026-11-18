@@ -105,8 +105,14 @@ export function mergeR1(
   };
   return {
     ...c,
+    // Sarlavha bilan mos (#704 review S1): ketma-ketlikda sarlavha
+    // `streak_total` ni (butun uzluksiz manfiy qator) ko'rsatadi.
     headline_amount:
-      facts.trigger === 'single_shortage' ? num(facts.last_difference) : total,
+      facts.trigger === 'single_shortage'
+        ? num(facts.last_difference)
+        : facts.trigger === 'consecutive_negative' && facts.streak_total != null
+          ? num(facts.streak_total)
+          : total,
     facts,
     evidence: {
       ...c.evidence,
