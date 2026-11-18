@@ -193,6 +193,15 @@ function eventCount(data: unknown): number {
   return Number.isInteger(count) && count >= 1 ? count : 1;
 }
 
+/** `delivery_only` — mavjud qatorda o'zgarmaydigan `delivery` kalitlari. */
+const DELIVERY_ONLY_KEEP = new Set<string>([
+  NotificationChannel.IN_APP,
+  NotificationChannel.REALTIME,
+  NotificationChannel.SMS,
+  'escalation',
+  'escalation_due_at',
+]);
+
 @Injectable()
 export class NotificationInboxService {
   private readonly logger = new Logger(NotificationInboxService.name);
@@ -416,7 +425,16 @@ export class NotificationInboxService {
 
       // (7Ec56EIw #2 a/b) Katalog sukuti yoki chaqiruvchi so'ragani ∩
       // katalogda ruxsat etilgan kanallar — ortiqcha kanal qo'shilmaydi.
-      const channels = requestedChannels(dto.type, defaults.channels);
+      // (#699 follow-up S3) `delivery_only` — mavjud qatorga faqat TASHQI
+      // shaxsiy kanal (Telegram DM, push); ilova ichi, realtime toast va SMS
+      // yo'q (o'chirilgan qator uchun `notification:new` ketmasin).
+      const channels = requestedChannels(dto.type, defaults.channels).filter(
+        (c) =>
+          !dto.delivery_only ||
+          (c !== NotificationChannel.IN_APP &&
+            c !== NotificationChannel.REALTIME &&
+            c !== NotificationChannel.SMS),
+      );
 
       this.assertRecipientIds(dto);
 
@@ -550,9 +568,14 @@ export class NotificationInboxService {
       const plan = await this.planChannels(dto, recipients);
       const targets = recipients.filter((r) => !plan.skipped.has(r.id));
       // (7Ec56EIw #5) CRITICAL: N daqiqadan keyin o'qilmagan bo'lsa SMS.
-      const escalationDueAt =
-        this.escalation?.dueAt(dto.priority, channels, undefined, dto.type) ??
-        null;
+      const escalationDueAt = dto.delivery_only
+        ? null
+        : (this.escalation?.dueAt(
+            dto.priority,
+            channels,
+            undefined,
+            dto.type,
+          ) ?? null);
       const planned: DeliveryFor = escalationDueAt
         ? (id) => ({
             ...plan.deliveryFor(id),
@@ -773,10 +796,22 @@ export class NotificationInboxService {
             }
           : null,
       );
+      // (#699 follow-up S4) `delivery_only`, qatori yo'q qabul qiluvchilar —
+      // hech narsa yozilmadi va yuborilmadi («Saved to inbox only» emas).
+      const skippedNoRow = dto.delivery_only
+        ? Math.max(0, targets.length - rows.length)
+        : 0;
+      if (skippedNoRow) {
+        this.logger.log(
+          `notification.dispatch delivery_only: ${skippedNoRow} qabul qiluvchida group_key qatori yo'q — o'tkazildi`,
+        );
+      }
       const message =
-        !rows.length && plan.skipped.size
-          ? 'Skipped by recipient preferences — nothing dispatched'
-          : summary.message;
+        dto.delivery_only && !rows.length
+          ? 'Delivery only: no existing inbox row — nothing delivered'
+          : !rows.length && plan.skipped.size
+            ? 'Skipped by recipient preferences — nothing dispatched'
+            : summary.message;
 
       // (7Vozou5x) Tarix yakuni + kanal × holat (inbox qatorlaridan, SMS
       // navbat natijasi ham) — javobga ham: `{ sms: { queued, not_eligible } }`.
@@ -816,6 +851,7 @@ export class NotificationInboxService {
           },
           by_channel: summary.by_channel,
           no_provider: summary.no_provider,
+          ...(dto.delivery_only ? { skipped_no_row: skippedNoRow } : {}),
           // (aNynHYU0) tarixdagi bilan BIR xil holat (frontend o'zi hisoblamasin)
           // va kanal kesimi: full | partial | none.
           status: historyStatusFor(
@@ -1148,9 +1184,10 @@ export class NotificationInboxService {
       for (const recipient of recipients) {
         const rowId = rowIdByRecipient.get(recipient.id);
         if (!rowId || !existingById.has(rowId)) continue;
+        // Mavjud qatorning ilova ichi / realtime / SMS holatiga tegilmaydi (S3).
         const added = Object.fromEntries(
           Object.entries(deliveryFor(recipient.id)).filter(
-            ([channel]) => channel !== String(NotificationChannel.IN_APP),
+            ([key]) => !DELIVERY_ONLY_KEEP.has(key),
           ),
         );
         const key = JSON.stringify(added);
@@ -1896,11 +1933,15 @@ export class NotificationInboxService {
       this.assertId(recipientId, 'recipient_id');
       this.assertId(id, 'id');
       const row = await this.requireOwned(recipientId, id);
-      row.is_read = read;
-      row.read_at = read ? new Date() : null;
-      const saved = await this.repo.save(row);
+      // Faqat shu ustunlar (#699 follow-up S2): `save(row)` eski nusxani
+      // to'liq yozib, parallel yetkazish holatini (`delivery`) bosib ketardi.
+      const readAt = read ? new Date() : null;
+      await this.updateOwned(recipientId, id, {
+        is_read: read,
+        read_at: readAt,
+      });
       return successRes(
-        this.toPublic(saved),
+        this.toPublic({ ...row, is_read: read, read_at: readAt }),
         200,
         read ? 'Marked read' : 'Marked unread',
       );
@@ -1930,9 +1971,10 @@ export class NotificationInboxService {
     try {
       this.assertId(recipientId, 'recipient_id');
       this.assertId(id, 'id');
-      const row = await this.requireOwned(recipientId, id);
-      row.isDeleted = true;
-      await this.repo.save(row);
+      // Faqat `is_deleted` (#699 follow-up S2): 09:00 Telegram bilan bir vaqtda
+      // o'chirilsa, eski nusxa `delivery.telegram: queued` ni o'chirib, DM
+      // jim tushib qolardi.
+      await this.updateOwned(recipientId, id, { isDeleted: true });
       return successRes({ id }, 200, 'Notification deleted');
     } catch (error) {
       this.toRpcError(error);
@@ -1944,6 +1986,21 @@ export class NotificationInboxService {
   private assertId(value: string | undefined, field: string) {
     if (!value || !/^\d+$/.test(String(value))) {
       throw new BadRequestException(`${field} raqamli bo'lishi kerak`);
+    }
+  }
+
+  /** Egasining o'chirilmagan qatorida faqat berilgan ustunlar; yo'q — 404. */
+  private async updateOwned(
+    recipientId: string,
+    id: string,
+    patch: QueryDeepPartialEntity<Notification>,
+  ): Promise<void> {
+    const result = await this.repo.update(
+      { id, recipient_id: recipientId, isDeleted: false },
+      patch,
+    );
+    if (!result.affected) {
+      throw new NotFoundException('Bildirishnoma topilmadi');
     }
   }
 

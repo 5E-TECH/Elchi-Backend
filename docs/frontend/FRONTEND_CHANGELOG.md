@@ -22,6 +22,15 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — Bildirishnomalar: o'chirish / o'qildi belgisi yetkazish holatini bosib ketmaydi (#699 follow-up)
+
+Deploy: notification-service, migratsiyasiz.
+
+- 🔧 `DELETE /notifications/inbox/:id` va o'qildi belgisi endi faqat o'z ustunini yozadi: ayni paytda yuborilayotgan Telegram/push holati (`delivery`) yo'qolmaydi (ilgari kam hollarda DM jim tushib qolardi). Javoblar o'zgarmagan.
+- 🟢 Ichki `delivery_only` (faqat mavjud qatorga yetkazish): faqat tashqi shaxsiy kanallar (Telegram DM, push) — realtime toast, SMS va eskalatsiya yo'q; qatori yo'q qabul qiluvchilar javobda `skipped_no_row`.
+
+**Frontend action items:** yo'q.
+
 ### 2026-11-18 — AI maslahatchi (BE-5): R6 09:00 Telegram inbox qatorini qayta ko'tarmaydi
 
 - 🔧 (#655 N1 tuzatish) Tunda ochilgan R6 ning 09:00 dagi Telegram xabari ilova ichidagi `ai.advisor_alert` qatorini endi QAYTA KO'TARMAYDI: o'qilgan holati, inbox tartibi (`createdAt`), `data.count` va matn o'zgarmaydi — qatorga faqat `telegram` kanali qo'shiladi. Ilgari 09:00 da qator «o'qilmagan» bo'lib tepaga chiqardi (`count: 2`). Foydalanuvchi o'chirgan qator QAYTA PAYDO BO'LMAYDI (Telegram baribir yuboriladi).
