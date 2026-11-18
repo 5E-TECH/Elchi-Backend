@@ -467,10 +467,12 @@ export function maskCandidateText(
     out
       // Pasport/ID: 2 harf + 7 raqam ("AA 1234567", "AA-1234567",
       // "AA №1234567", "AA № 1234567").
-      // Oldida umumiy 2 harfli so'z ("1 ta - 1500000", "uy-1234567") —
-      // seriya EMAS.
+      // Oldida umumiy 2 harfli so'z yoki uy kalit so'zi ("1 ta - 1500000",
+      // "uy-1234567", "151-уй - 6356734") — seriya EMAS (raqami pastda,
+      // uy qoidalaridan keyin, [RAQAM] bo'ladi; kalit so'z uy qoidasiga
+      // qoladi).
       .replace(
-        /(?<![\p{L}\p{N}])(?!(?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва)(?![\p{L}]))\p{L}{2}\s?(?:[-–№]\s?)?\d{7}(?!\d)/gu,
+        /(?<![\p{L}\p{N}])(?!(?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва|уй|кв)(?![\p{L}]))\p{L}{2}\s?(?:[-–№]\s?)?\d{7}(?!\d)/gu,
         '[HUJJAT]',
       )
       // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta, slash,
@@ -497,6 +499,14 @@ export function maskCandidateText(
           'giu',
         ),
         '$1[N]',
+      )
+      // Umumiy 2 harfli so'z / uy kalit so'zi + 7 raqam ("va 2345678",
+      // "uy 2345678", "uy2345678"): so'z qoladi, raqam yopiladi (dev bu
+      // shaklni [HUJJAT] qilardi). "1 ta - 1500000", "uy-1234567" — dev'dagidek
+      // ochiq.
+      .replace(
+        /(?<![\p{L}\p{N}])((?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва|уй|кв)\s?)\d{7}(?!\d)/gu,
+        '$1[RAQAM]',
       )
   );
 }

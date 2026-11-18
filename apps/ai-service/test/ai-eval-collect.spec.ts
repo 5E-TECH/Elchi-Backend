@@ -536,4 +536,23 @@ describe('ai-eval-collect: PII (review round-7, dev tengligi)', () => {
       "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
     );
   });
+
+  it('B3: umumiy 2 harfli so‘z + 7 raqam — raqam yopiq (dev: [HUJJAT])', () => {
+    for (const [t, want] of [
+      ['Tel: 90 123 45 67 va 2345678', 'Tel: [RAQAM] va [RAQAM]'],
+      ['uy 2345678', 'uy [RAQAM]'],
+      ['uy2345678', 'uy[RAQAM]'],
+      ['tel uy 2345678', 'tel uy [RAQAM]'],
+      ['ва 1234567', 'ва [RAQAM]'],
+      ['кв 1234567', 'кв [RAQAM]'],
+      // dev'dagidek ochiq (dev ham maskalamagan).
+      ['Jami: 1 ta - 1500000', 'Jami: 1 ta - 1500000'],
+      ['uy-1234567', 'uy-1234567'],
+      // Pasport ajratgichi uy kalit so'zini yutmaydi (dev'dagidek).
+      ['151-уй - 6356734', '[N]-уй - 6356734'],
+      ['AA-1234567, AB №1234567', '[HUJJAT], [HUJJAT]'],
+    ]) {
+      expectAll(t, want);
+    }
+  });
 });
