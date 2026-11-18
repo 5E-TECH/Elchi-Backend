@@ -618,6 +618,12 @@ describe('ai-confirm audit — «Operator» tanlovi (operator_id)', () => {
   const linkItems = (ai: Fake) =>
     ai.send.mock.calls.find(([p]) => p.cmd === 'ai.usage.link_orders')?.[1]
       ?.items as Array<Record<string, unknown>>;
+  /** Birinchi `order.create` payloadining audit uchun kerakli qismi. */
+  const firstCreate = (fx: ReturnType<typeof setup>) =>
+    fx.creates()[0][1] as {
+      dto: { operator?: unknown };
+      ai_audit: { edited_fields?: unknown };
+    };
 
   it('operator_id berilsa audit saqlanadigan ismni ko‘radi (e’tiborsiz matnni emas)', async () => {
     const fx = setup({ contexts: contextsWithOperator('operator x') });
@@ -627,7 +633,7 @@ describe('ai-confirm audit — «Operator» tanlovi (operator_id)', () => {
       marketReq,
     );
 
-    const [, payload] = fx.creates()[0];
+    const payload = firstCreate(fx);
     expect(payload.dto.operator).toBe('Operator Bir');
     expect(payload.ai_audit.edited_fields).toEqual(['operator']);
     expect(linkItems(fx.ai)[0].field_corrections).toEqual({
@@ -654,6 +660,6 @@ describe('ai-confirm audit — «Operator» tanlovi (operator_id)', () => {
       marketReq,
     );
 
-    expect(fx.creates()[0][1].ai_audit.edited_fields).toEqual([]);
+    expect(firstCreate(fx).ai_audit.edited_fields).toEqual([]);
   });
 });
