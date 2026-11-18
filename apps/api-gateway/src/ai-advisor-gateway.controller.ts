@@ -69,6 +69,24 @@ const userRef = ref;
 /** `AiAdvisorAlertListItem` (shartnoma §7.2). */
 const listItem = {
   type: 'object',
+  required: [
+    'id',
+    'rule_key',
+    'severity',
+    'status',
+    'title',
+    'branch',
+    'subject',
+    'headline_amount',
+    'facts',
+    'occurrences',
+    'first_at',
+    'last_at',
+    'first_fact_at',
+    'last_fact_at',
+    'explanation_status',
+    'reopened_from_id',
+  ],
   properties: {
     id: { type: 'string' },
     rule_key: ruleKey,
@@ -78,8 +96,12 @@ const listItem = {
     branch: ref,
     subject: {
       type: 'object',
+      required: ['kind', 'id', 'name'],
       properties: {
-        kind: { type: 'string' },
+        kind: {
+          type: 'string',
+          enum: ['branch', 'courier', 'market', 'cashbox', 'system'],
+        },
         id: nullableString,
         name: nullableString,
       },
@@ -101,6 +123,7 @@ const listItem = {
 /** `AiAdvisorAlertDetail` (shartnoma §7.3). */
 const detail = {
   type: 'object',
+  required: listItem.required,
   properties: {
     ...listItem.properties,
     rule: {
@@ -131,12 +154,12 @@ const detail = {
     explanation_error: {
       type: 'string',
       nullable: true,
-      enum: ['budget_exceeded', 'ai_disabled', 'error'],
+      enum: ['budget_exceeded', 'ai_disabled', 'error', null],
     },
     explanation_error_scope: {
       type: 'string',
       nullable: true,
-      enum: ['advisor', 'global'],
+      enum: ['advisor', 'global', null],
     },
     explanation_retry_at: nullableTime,
     explanation_requested_at: nullableTime,
@@ -239,8 +262,8 @@ export class AiAdvisorGatewayController {
             critical_open_rule_keys: { type: 'array', items: ruleKey },
           },
         },
-        recommendations: { nullable: true },
-        budget: { nullable: true },
+        recommendations: { type: 'object', nullable: true },
+        budget: { type: 'object', nullable: true },
         usd_uzs_rate: { type: 'number', nullable: true },
         generated_at: { type: 'string', format: 'date-time' },
       },
