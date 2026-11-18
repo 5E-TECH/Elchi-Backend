@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, type QueryRunner } from 'typeorm';
+import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import {
   AI_ADVISOR_INPUT_MAX_PERIODS,
   AI_ADVISOR_INPUT_MAX_SINCE_DAYS,
@@ -546,7 +546,7 @@ export class AdvisorInputsService {
       await guard('R7', async () => {
         const since = parseSince(input.since?.R7, now);
         const r = await this.withTimeout(deadline, (q) =>
-          this.r7(q, since, now, names),
+          this.r7(q, since, now, names, deadline),
         );
         out.candidates.push(...r.candidates);
         out.cursors.R7 = r.cursor;
@@ -562,10 +562,13 @@ export class AdvisorInputsService {
       await guard('R8', async () => {
         budgetLeft();
         out.candidates.push(
-          ...(await this.r8(
-            input.thresholds?.R8 ?? {},
-            (input.periods?.weeks ?? []).slice(-AI_ADVISOR_INPUT_MAX_PERIODS),
-            now,
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r8(
+              q,
+              input.thresholds?.R8 ?? {},
+              (input.periods?.weeks ?? []).slice(-AI_ADVISOR_INPUT_MAX_PERIODS),
+              now,
+            ),
           )),
         );
       });
@@ -589,7 +592,7 @@ export class AdvisorInputsService {
    */
   private async withTimeout<T>(
     deadline: number,
-    fn: (q: SqlQuery) => Promise<T>,
+    fn: (q: SqlQuery, manager: EntityManager) => Promise<T>,
   ): Promise<T> {
     const remaining = deadline - Date.now();
     if (remaining < 250) throw new Error('advisor budget exhausted');
@@ -616,7 +619,7 @@ export class AdvisorInputsService {
           applied = next;
         }
         return runner.query(sql, params) as Promise<R>;
-      });
+      }, runner.manager);
       await runner.commitTransaction();
       return result;
     } catch (error) {
@@ -1718,6 +1721,7 @@ export class AdvisorInputsService {
     since: Date,
     now: Date,
     names: NameCache,
+    deadline: number,
   ): Promise<{ candidates: AiAdvisorCandidate[]; cursor: string | null }> {
     const t = this.tables();
     // (a) karta qoldig'i: faqat TASDIQLANGAN (smena yopilgan) tekshiruvlar.
@@ -1794,7 +1798,7 @@ export class AdvisorInputsService {
     }
     if (!cards.length && !receipts.length) return { candidates: [], cursor };
 
-    const receiptAi = await this.receiptAiEnabled();
+    const receiptAi = await this.receiptAiEnabled(deadline);
     const types = await this.cashboxTypes(q, [
       ...new Set(cards.map((r) => r.owner)),
     ]);
@@ -1879,7 +1883,9 @@ export class AdvisorInputsService {
       });
     }
 
-    const week = receipts.length ? await this.receiptWeekSummary(now) : null;
+    const week = receipts.length
+      ? await this.receiptWeekSummary(now, deadline)
+      : null;
     for (const r of receipts) {
       const transfer = r.kind === 'courier_to_hq' || r.kind === 'branch_to_hq';
       // O'tkazma chekida `history_id` — MAIN kirim oyog'i; jo'natuvchi —
@@ -1997,10 +2003,14 @@ export class AdvisorInputsService {
   }
 
   /** Chek AI yoqiqmi (manual_expense YOKI hq_transfer). O'qilmasa — null. */
-  private async receiptAiEnabled(): Promise<boolean | null> {
-    if (!this.receiptService) return null;
+  private async receiptAiEnabled(deadline: number): Promise<boolean | null> {
+    const svc = this.receiptService;
+    if (!svc) return null;
     try {
-      const s = await this.receiptService.loadSettings();
+      // O'z tranzaksiyasi, byudjet ichida (#704 review S3).
+      const s = await this.withTimeout(deadline, (_q, m) =>
+        svc.loadSettings(m),
+      );
       return Boolean(s.manual_expense.ai_enabled || s.hq_transfer.ai_enabled);
     } catch {
       return null;
@@ -2010,25 +2020,28 @@ export class AdvisorInputsService {
   /** Joriy Toshkent haftasi chek tekshiruvi sanoqlari (`checked = match + mismatch + unreadable`). */
   private async receiptWeekSummary(
     now: Date,
+    deadline: number,
   ): Promise<Record<string, unknown> | null> {
     try {
       const today = tashkentDateKey(now);
       const weekday = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = dushanba
       const from = addDaysKey(today, -weekday);
       const to = addDaysKey(from, 6);
-      const summary = await loadReceiptChecksSummary(
-        this.ds.manager,
-        {
-          receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
-          history: this.ds.getMetadata(CashboxHistory).tablePath,
-          cashbox: this.ds.getMetadata(Cashbox).tablePath,
-        },
-        {
-          start: new Date(`${from}T00:00:00.000+05:00`),
-          end: new Date(
-            new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
-          ),
-        },
+      const summary = await this.withTimeout(deadline, (_q, m) =>
+        loadReceiptChecksSummary(
+          m,
+          {
+            receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
+            history: this.ds.getMetadata(CashboxHistory).tablePath,
+            cashbox: this.ds.getMetadata(Cashbox).tablePath,
+          },
+          {
+            start: new Date(`${from}T00:00:00.000+05:00`),
+            end: new Date(
+              new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
+            ),
+          },
+        ),
       );
       const c = summary.counts as Record<string, number>;
       const match = Number(c.match ?? 0);
@@ -2053,6 +2066,7 @@ export class AdvisorInputsService {
   // ─── R8 Tuzatishlar ko'paydi (§4.2, BE-rev B2, Q4) ────────────────────
 
   private async r8(
+    q: SqlQuery,
     t: Record<string, number>,
     weeks: string[],
     now: Date,
@@ -2075,8 +2089,8 @@ export class AdvisorInputsService {
       const baseStart = new Date(
         start.getTime() - R8_BASELINE_DAYS * 86_400_000,
       );
-      const week = await this.correctionCounts(start, end);
-      const base = await this.correctionCounts(baseStart, start);
+      const week = await this.correctionCounts(q, start, end);
+      const base = await this.correctionCounts(q, baseStart, start);
       const counted = (k: CorrectionCounts) =>
         k.manual_correction + k.payment_reverse + k.payment_edit;
       const count = counted(week);
@@ -2092,7 +2106,7 @@ export class AdvisorInputsService {
         Math.round(ratio * 10) * baselineTotal * 7
       )
         continue;
-      const days = await this.correctionDays(start, end);
+      const days = await this.correctionDays(q, start, end);
       const key = `R8:week:${monday}`;
       out.push({
         rule_key: 'R8',
@@ -2147,11 +2161,12 @@ export class AdvisorInputsService {
    * tahrir (`payment_corrections.action`). `payment_reversal` — hech qachon.
    */
   private async correctionCounts(
+    q: SqlQuery,
     start: Date,
     end: Date,
   ): Promise<CorrectionCounts> {
     const t = this.tables();
-    const [h] = await this.ds.query<Array<{ manual: string; orders: string }>>(
+    const [h] = await q<Array<{ manual: string; orders: string }>>(
       `SELECT COUNT(*) FILTER (WHERE "source_id" IS NULL) AS manual,
               COUNT(DISTINCT "source_id") FILTER (WHERE "source_id" IS NOT NULL) AS orders
          FROM ${t.history}
@@ -2159,7 +2174,7 @@ export class AdvisorInputsService {
           AND "createdAt" >= $1 AND "createdAt" < $2`,
       [start, end],
     );
-    const pc = await this.ds.query<Array<{ action: string; n: string }>>(
+    const pc = await q<Array<{ action: string; n: string }>>(
       `SELECT "action", COUNT(*) AS n FROM ${t.corrections}
         WHERE "is_deleted" = false AND "createdAt" >= $1 AND "createdAt" < $2
         GROUP BY "action"`,
@@ -2176,11 +2191,12 @@ export class AdvisorInputsService {
 
   /** Hafta kunlari bo'yicha sanalgan tuzatishlar (counted_kinds). */
   private async correctionDays(
+    q: SqlQuery,
     start: Date,
     end: Date,
   ): Promise<Array<{ date: string; count: number }>> {
     const t = this.tables();
-    const rows = await this.ds.query<Array<{ day: string; n: string }>>(
+    const rows = await q<Array<{ day: string; n: string }>>(
       `SELECT day, SUM(n) AS n FROM (
          SELECT to_char("createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day, COUNT(*) AS n
            FROM ${t.history}

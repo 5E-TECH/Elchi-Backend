@@ -1860,6 +1860,24 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           periods: { weeks },
         });
 
+      it('#704 S3: R8 byudjet va lock_timeout ichida — qulflangan payment_corrections osiltirmaydi', async () => {
+        const locker = db.createQueryRunner();
+        await locker.connect();
+        await locker.startTransaction();
+        try {
+          await locker.query(
+            'LOCK TABLE "finance_schema"."payment_corrections" IN ACCESS EXCLUSIVE MODE',
+          );
+          const t0 = Date.now();
+          const out = await run({ ratio: 2, min_count: 3 });
+          expect(Date.now() - t0).toBeLessThan(10_000);
+          expect(out.errors?.R8).toMatch(/lock timeout/);
+        } finally {
+          await locker.rollbackTransaction();
+          await locker.release();
+        }
+      }, 60_000);
+
       it('qo‘lda + T6 sanaladi, buyurtma qaytarilishi va payment_reversal yo‘q; ≥ max(min_count, 2× bazaviy)', async () => {
         await corr('2026-09-20T05:00:00Z', null);
         await corr('2026-10-01T05:00:00Z', null);
