@@ -413,8 +413,11 @@ outstanding orders oldest-first and advances each order's `SettlementStatus`.
   `POST /finance/financial-balance/entries` (manual income/expense/bills/salary/correction).
 - **Shifts:** `POST /finance/shift/open` / `.../close`, `GET /finance/shift`.
 - **Salaries:** `POST|PATCH /finance/salary`, `GET /finance/salary/{user_id}`.
-- **Operator earnings:** `GET /finance/operators/{id}/earnings|payments|balance`,
-  `POST /finance/operator-payments`.
+- **Operator earnings:** `GET /finance/operators/{id}/earnings|payments|balance`
+  (SA/ADMIN/MANAGER, read-only), operator itself — `GET /finance/operators/me/*`.
+  Market records its own payouts to its operators WITHOUT touching any Elchi
+  cashbox (F2qp6FtE): `GET /finance/operator-payments/balances`,
+  `GET|POST /finance/operator-payments`, `POST /finance/operator-payments/{id}/cancel`.
 
 **Payment rules (2026-10-01, fix3):**
 - **`Idempotency-Key` header** on `POST /finance/cashbox/payment/courier`,

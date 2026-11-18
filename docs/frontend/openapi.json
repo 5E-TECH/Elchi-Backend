@@ -12667,50 +12667,6 @@
         ]
       }
     },
-    "/finance/operator-payments": {
-      "post": {
-        "operationId": "FinanceGatewayController_createOperatorPayment",
-        "parameters": [
-          {
-            "name": "idempotency-key",
-            "required": false,
-            "in": "header",
-            "description": "Har to'lov uchun bitta kalit (retry'da ayni kalit). Takroriy so'rov 200 va data.idempotent: true qaytaradi (FJVqcUTv).",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateOperatorPaymentRequestDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Record a payout to an operator",
-        "tags": [
-          "Finance"
-        ],
-        "x-roles": [
-          "superadmin",
-          "admin"
-        ]
-      }
-    },
     "/finance/operators/me/balance": {
       "get": {
         "description": "`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance }`, operator_id — JWT. Komissiya belgilanmagan operator — 0/0/0 (403 emas).",
@@ -25214,6 +25170,224 @@
         ]
       }
     },
+    "/finance/operator-payments/balances": {
+      "get": {
+        "description": "F2qp6FtE. Marketning barcha o'chirilmagan operatorlari (faol va nofaol), ism tartibida emas — identity ro'yxati tartibida. `earned` — o'chirilmagan daromadlar (`GET operators/me/balance` bilan AYNI qoida), `paid` — o'chirilmagan va bekor qilinmagan to'lovlar (eski Elchi to'lovlari ham), `balance` = earned − paid (manfiy — ortiqcha to'langan). `totals` — yig'indi.",
+        "operationId": "OperatorPaymentGatewayController_balances",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: OperatorBalancesDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorBalancesDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Market emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: har operator — «Ishlab topdi / To'landi / Qoldiq»",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/finance/operator-payments": {
+      "get": {
+        "description": "F2qp6FtE. Yangisi tepada (to'lov sanasi, keyin id). Shu market yozganlari + uning operatorlariga Elchi eski yo'lda (Asosiy kassadan, `source: elchi`) yozganlari. Bekor qilinganlar ham chiqadi (`status: cancelled`, sabab bilan). `operator_id` — faqat o'z operatori (begona — 404).",
+        "operationId": "OperatorPaymentGatewayController_list",
+        "parameters": [
+          {
+            "name": "operator_id",
+            "required": false,
+            "in": "query",
+            "description": "Faqat shu operator (shu marketning operatori)",
+            "schema": {
+              "example": "41",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1…100, sukut 20",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: OperatorPaymentListDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorPaymentListDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: operatorlarga to'lovlar tarixi",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      },
+      "post": {
+        "description": "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
+        "operationId": "OperatorPaymentGatewayController_record",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Har mantiqiy to'lov uchun bitta kalit (1-255 belgi); timeout'dan keyin qayta yuborishda — o'sha kalit.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordOperatorPaymentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "{ statusCode: 201, message, data: OperatorPaymentViewDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorPaymentViewDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          },
+          "409": {
+            "description": "Idempotency-Key boshqa to`lov uchun ishlatilgan"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market o'z operatoriga to'lovni yozadi (Elchi kassasiz)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/finance/operator-payments/{id}/cancel": {
+      "post": {
+        "description": "F2qp6FtE. Qator o'chirilmaydi: `status: cancelled`, `cancelled_at`, `cancel_reason`; «To'landi» ga kirmaydi. Faqat shu market yozgan yozuv (begona yoki yo'q — 404); eski Elchi (Asosiy kassadan) yozuvi — 409. Takroriy bekor — 200 (`idempotent: true`). Kassaga tegmaydi. Jurnal: `finance.operator_payment_cancelled`.",
+        "operationId": "OperatorPaymentGatewayController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "To'lov yozuvi ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelOperatorPaymentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message, data: OperatorPaymentViewDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorPaymentViewDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "To'lov topilmadi yoki begona"
+          },
+          "409": {
+            "description": "Eski Elchi to'lovi — bekor qilinmaydi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: xato to'lov yozuvini bekor qilish (sabab bilan)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
     "/public/delivery-quote": {
       "post": {
         "description": "Autentifikatsiyasiz (elchipochta.uz kalkulyatori). Hisob tokenli `POST /delivery/quote` bilan AYNI dvigatel (logistics `logistics.delivery.quote`). Posilka: yuqori darajadagi `weight_kg` (+ ixtiyoriy `length_cm`/`width_cm`/`height_cm` — uchalasi birga, `volumetric_enabled`) YOKI `items[]` (≤ 20, bitta jo'natma). `product_id` qabul qilinmaydi (400). `pickup: true` — bitta posilkali tashrif: `pickupFee` va `totalWithPickup` ga kiradi, `total` ga emas. Tarif: ikkala viloyat ham shahar zonasida → `city`, aks holda `where_deliver`. Javobda faqat hisob — tarif/sozlama id'lari yo'q. Xatolar: 400 (validatsiya, yo'q viloyat), 409 (faol tarif yo'q), 429 (per-IP limit, sukut 30/daqiqa), 504. Javob ≤ 30 s keshlanadi.",
@@ -32437,34 +32611,6 @@
           "user_id"
         ]
       },
-      "CreateOperatorPaymentRequestDto": {
-        "type": "object",
-        "properties": {
-          "operator_id": {
-            "type": "string",
-            "example": "42",
-            "description": "Operator user id (bigint string)"
-          },
-          "market_id": {
-            "type": "string",
-            "example": "7",
-            "description": "Market id (bigint string)"
-          },
-          "amount": {
-            "type": "number",
-            "example": 50000,
-            "description": "Payout amount"
-          },
-          "note": {
-            "type": "string",
-            "example": "Oylik komissiya to`lovi"
-          }
-        },
-        "required": [
-          "operator_id",
-          "amount"
-        ]
-      },
       "AudienceSegmentDto": {
         "type": "object",
         "properties": {
@@ -38782,6 +38928,301 @@
           "market_id",
           "courier_id",
           "parcel_count"
+        ]
+      },
+      "OperatorPaymentViewDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "301"
+          },
+          "operator_id": {
+            "type": "string",
+            "example": "41"
+          },
+          "operator_name": {
+            "type": "string",
+            "example": "Madina Xoliqova",
+            "nullable": true,
+            "description": "Operator ismi (o'chirilgan operatorda — null)"
+          },
+          "market_id": {
+            "type": "string",
+            "example": "12",
+            "nullable": true,
+            "description": "Yozgan market (eski Elchi yozuvlarida — null)"
+          },
+          "amount": {
+            "type": "number",
+            "example": 150000
+          },
+          "paid_at": {
+            "type": "string",
+            "example": "2026-11-18",
+            "description": "Toshkent kuni"
+          },
+          "note": {
+            "type": "string",
+            "example": "Oktabr komissiyasi",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "market",
+              "elchi"
+            ],
+            "description": "`market` — market o'zi yozgan (kassasiz); `elchi` — eski yo'l, Elchi xodimi yozgan (bekor qilib bo'lmaydi)."
+          },
+          "affects_cashbox": {
+            "type": "boolean",
+            "example": false,
+            "description": "Asosiy kassani o'zgartirganmi (faqat eski `elchi` yozuvlarida true)."
+          },
+          "recorded_by_role": {
+            "type": "string",
+            "example": "market",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-11-18T09:30:00.000Z"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "cancelled"
+            ]
+          },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "cancelled_by_role": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "cancel_reason": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "can_cancel": {
+            "type": "boolean",
+            "example": true,
+            "description": "Shu market bekor qila oladimi (o'z yozuvi, hali faol)."
+          },
+          "idempotent": {
+            "type": "boolean",
+            "example": false,
+            "description": "Yozish/bekor qilish javobida: takroriy so'rov (ayni Idempotency-Key yoki allaqachon bekor) — true."
+          }
+        },
+        "required": [
+          "id",
+          "operator_id",
+          "operator_name",
+          "market_id",
+          "amount",
+          "paid_at",
+          "note",
+          "source",
+          "affects_cashbox",
+          "recorded_by_role",
+          "created_at",
+          "status",
+          "cancelled_at",
+          "cancelled_by_role",
+          "cancel_reason",
+          "can_cancel"
+        ]
+      },
+      "OperatorPaymentPaginationDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number",
+            "example": 42
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "limit": {
+            "type": "number",
+            "example": 20
+          },
+          "totalPages": {
+            "type": "number",
+            "example": 3
+          }
+        },
+        "required": [
+          "total",
+          "page",
+          "limit",
+          "totalPages"
+        ]
+      },
+      "OperatorPaymentListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorPaymentViewDto"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/OperatorPaymentPaginationDto"
+          }
+        },
+        "required": [
+          "items",
+          "pagination"
+        ]
+      },
+      "OperatorBalanceItemDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "41"
+          },
+          "operator_name": {
+            "type": "string",
+            "example": "Madina Xoliqova"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "example": "active"
+          },
+          "earned": {
+            "type": "number",
+            "example": 1250000,
+            "description": "«Ishlab topdi» — o`chirilmagan daromadlar (GET operators/me/balance bilan AYNI qoida)"
+          },
+          "paid": {
+            "type": "number",
+            "example": 900000,
+            "description": "«To`landi» — o`chirilmagan va bekor qilinmagan to`lovlar (eski Elchi to`lovlari ham)"
+          },
+          "balance": {
+            "type": "number",
+            "example": 350000,
+            "description": "«Qoldiq» = earned − paid. Manfiy — ortiqcha to`langan."
+          },
+          "payments_count": {
+            "type": "number",
+            "example": 3
+          },
+          "last_paid_at": {
+            "type": "string",
+            "example": "2026-11-18",
+            "nullable": true
+          }
+        },
+        "required": [
+          "operator_id",
+          "operator_name",
+          "status",
+          "earned",
+          "paid",
+          "balance",
+          "payments_count",
+          "last_paid_at"
+        ]
+      },
+      "OperatorBalanceTotalsDto": {
+        "type": "object",
+        "properties": {
+          "earned": {
+            "type": "number",
+            "example": 2500000
+          },
+          "paid": {
+            "type": "number",
+            "example": 1800000
+          },
+          "balance": {
+            "type": "number",
+            "example": 700000
+          }
+        },
+        "required": [
+          "earned",
+          "paid",
+          "balance"
+        ]
+      },
+      "OperatorBalancesDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorBalanceItemDto"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/OperatorBalanceTotalsDto"
+          }
+        },
+        "required": [
+          "items",
+          "totals"
+        ]
+      },
+      "RecordOperatorPaymentRequestDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "41",
+            "description": "Operator (shu marketning operatori; begona yoki yo`q — 404)"
+          },
+          "amount": {
+            "type": "number",
+            "example": 150000,
+            "description": "To'langan summa, so'm (> 0, ko'pi bilan 2 kasr). Qoldiqdan oshsa ham yoziladi — «Qoldiq» manfiy (ortiqcha to'langan) bo'ladi."
+          },
+          "paid_at": {
+            "type": "string",
+            "example": "2026-11-18",
+            "description": "To'lov sanasi (Toshkent kuni, `YYYY-MM-DD`). Berilmasa — bugun. Kelajak sanasi — 400."
+          },
+          "note": {
+            "type": "string",
+            "example": "Oktabr komissiyasi, naqd",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "operator_id",
+          "amount"
+        ]
+      },
+      "CancelOperatorPaymentRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "Summa xato kiritildi",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "Bekor qilish sababi (majburiy)."
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "PublicDeliveryTariffDto": {

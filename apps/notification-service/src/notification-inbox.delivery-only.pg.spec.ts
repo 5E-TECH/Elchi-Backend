@@ -1,5 +1,11 @@
 import { of } from 'rxjs';
-import { DataSource } from 'typeorm';
+import {
+  DataSource,
+  type FindOneOptions,
+  type FindOptionsWhere,
+  type UpdateResult,
+} from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { CreateNotifications1716000000008 } from '../../../migrations/1716000000008-CreateNotifications';
 import { CreateNotificationDispatches1716000000084 } from '../../../migrations/1716000000084-CreateNotificationDispatches';
 import { DispatchNotificationDto } from './dto/dispatch-notification.dto';
@@ -32,6 +38,7 @@ const USER = '778000000001';
   () => {
     let ds: DataSource;
     let service: NotificationInboxService;
+    const emit = jest.fn(() => of(null));
 
     beforeAll(async () => {
       ds = new DataSource({
@@ -51,7 +58,7 @@ const USER = '778000000001';
       service = new NotificationInboxService(
         ds.getRepository(Notification),
         { send: jest.fn() } as never,
-        { emit: jest.fn(() => of(null)) } as never,
+        { emit } as never,
         { sendNotification: jest.fn() } as never,
         { log: jest.fn().mockResolvedValue(undefined) } as never,
         { enqueue: jest.fn().mockResolvedValue(undefined) } as never,
@@ -266,6 +273,157 @@ const USER = '778000000001';
       await service.dispatch(
         base({ channels: ['telegram'] as never, delivery_only: true }),
       );
+      expect(await rows()).toHaveLength(0);
+    });
+
+    /** Bir vaqtda yozilgan yetkazish holati (masalan 09:00 Telegram). */
+    const raceOnRead = () => {
+      const repo = ds.getRepository(Notification);
+      const original = (opts: FindOneOptions<Notification>) =>
+        repo.findOne(opts);
+      const spy = jest
+        .spyOn(repo, 'findOne')
+        .mockImplementationOnce(async (opts: FindOneOptions<Notification>) => {
+          const row: Notification | null = await original(opts);
+          await ds.query(
+            `UPDATE notification_schema.notifications
+                SET delivery = COALESCE(delivery, '{}'::jsonb) || '{"telegram":"queued"}'::jsonb
+              WHERE recipient_id = ${USER}`,
+          );
+          return row;
+        });
+      return spy;
+    };
+    const deliveryOf = async () =>
+      (
+        await ds.query<
+          Array<{
+            delivery: Record<string, string>;
+            is_deleted: boolean;
+            is_read: boolean;
+          }>
+        >(
+          `SELECT delivery, is_deleted, is_read FROM notification_schema.notifications WHERE recipient_id = ${USER}`,
+        )
+      )[0];
+
+    it('#699 S2: remove() — o‘qish va yozish orasidagi parallel yetkazish holati saqlanadi (faqat is_deleted)', async () => {
+      await service.dispatch(base());
+      const [row] = await rows();
+      const repo = ds.getRepository(Notification);
+      // Parallel yozuv — remove() ning YOZUVIDAN oldin (eski yo'lda findOne
+      // dan keyin, save(eski nusxa) dan oldin; yangi yo'lda UPDATE dan oldin).
+      const inject = () =>
+        ds.query(
+          `UPDATE notification_schema.notifications
+              SET delivery = COALESCE(delivery, '{}'::jsonb) || '{"telegram":"queued"}'::jsonb
+            WHERE recipient_id = ${USER}`,
+        );
+      const realSave = (entity: Notification): Promise<Notification> =>
+        repo.manager.save(Notification, entity);
+      const realUpdate = (
+        criteria: FindOptionsWhere<Notification>,
+        patch: QueryDeepPartialEntity<Notification>,
+      ): Promise<UpdateResult> =>
+        repo.manager.update(Notification, criteria, patch);
+      const saveSpy = jest
+        .spyOn(repo, 'save')
+        .mockImplementation(async (entity: Notification) => {
+          await inject();
+          return realSave(entity);
+        });
+      const updateSpy = jest
+        .spyOn(repo, 'update')
+        .mockImplementation(
+          async (
+            criteria: FindOptionsWhere<Notification>,
+            patch: QueryDeepPartialEntity<Notification>,
+          ) => {
+            await inject();
+            return realUpdate(criteria, patch);
+          },
+        );
+      try {
+        await service.remove(USER, row.id);
+      } finally {
+        saveSpy.mockRestore();
+        updateSpy.mockRestore();
+      }
+      expect(await deliveryOf()).toMatchObject({
+        is_deleted: true,
+        delivery: { telegram: 'queued' },
+      });
+      await expect(service.remove(USER, row.id)).rejects.toBeDefined();
+    });
+
+    it('#708 S-a: delivery_only [sms, telegram] — sms_reason / realtime_reason mavjud qatorga yozilmaydi', async () => {
+      await service.dispatch(base());
+      const before = await deliveryOf();
+      await service.dispatch(
+        base({
+          channels: ['sms', 'realtime', 'telegram'] as never,
+          delivery_only: true,
+        }),
+      );
+      const after = await deliveryOf();
+      const keys = (d: Record<string, string>) =>
+        Object.keys(d).filter((k) => !k.startsWith('telegram'));
+      expect(keys(after.delivery).sort()).toEqual(keys(before.delivery).sort());
+      for (const k of keys(before.delivery))
+        expect(after.delivery[k]).toBe(before.delivery[k]);
+    });
+
+    it('#708 S-c: delivery_only, tashqi kanal yo‘q ([in_app] / []) — 400, hech narsa yozilmaydi', async () => {
+      await service.dispatch(base());
+      const before = await deliveryOf();
+      for (const channels of [['in_app'], []]) {
+        await expect(
+          service.dispatch(
+            base({ channels: channels as never, delivery_only: true }),
+          ),
+        ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      }
+      expect(await deliveryOf()).toEqual(before);
+    });
+
+    it('#699 S2: markRead() ham — faqat is_read/read_at', async () => {
+      await service.dispatch(base());
+      const [row] = await rows();
+      const spy = raceOnRead();
+      try {
+        await service.markRead(USER, row.id);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await deliveryOf()).toMatchObject({
+        is_read: true,
+        delivery: { telegram: 'queued' },
+      });
+    });
+
+    it('#699 S3: delivery_only — realtime/SMS so‘ralsa ham emit yo‘q, mavjud realtime holati o‘zgarmaydi', async () => {
+      await service.dispatch(base());
+      const before = await deliveryOf();
+      emit.mockClear();
+      await service.dispatch(
+        base({
+          channels: ['realtime', 'telegram'] as never,
+          delivery_only: true,
+        }),
+      );
+      expect(emit).not.toHaveBeenCalled();
+      const after = await deliveryOf();
+      expect(after.delivery.realtime).toBe(before.delivery.realtime);
+      expect(after.delivery.in_app).toBe(before.delivery.in_app);
+      expect(after.is_read).toBe(false);
+    });
+
+    it('#699 S4: delivery_only, qator yo‘q — «saqlandi» emas, skipped_no_row', async () => {
+      const res = (await service.dispatch(
+        base({ channels: ['telegram'] as never, delivery_only: true }),
+      )) as { message: string; data: { skipped_no_row: number } };
+      expect(res.message).toMatch(/no existing inbox row/);
+      expect(res.data.skipped_no_row).toBe(1);
       expect(await rows()).toHaveLength(0);
     });
   },

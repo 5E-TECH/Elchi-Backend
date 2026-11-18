@@ -7512,225 +7512,33 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Record a payout against an operator's accrued earnings. */
-  async createOperatorPayment(input: {
-    operator_id: string;
-    market_id?: string | null;
-    paid_by_id?: string | null;
-    amount: number;
-    note?: string | null;
-    idempotency_key?: string | null;
-  }) {
-    try {
-      this.assertBigIntId(input.operator_id, 'operator_id');
-      const amount = Number(input.amount);
-      this.assertPositiveAmount(amount, 'amount');
-      const operatorId = String(input.operator_id);
-      const paidById = input.paid_by_id ? String(input.paid_by_id) : null;
-      // (FJVqcUTv) Kalit MAIN kassa tarixining `dedup_epoch` ida saqlanadi
-      // (migratsiyasiz): prefiks boshqa SALARY yozuvlari bilan to'qnashmasin.
-      const idempotencyKey = String(input.idempotency_key ?? '').trim();
-      if (idempotencyKey.length > 255) {
-        throw new BadRequestException(
-          'Idempotency-Key 255 belgidan oshmasligi kerak',
-        );
-      }
-      const dedupEpoch = idempotencyKey
-        ? `operator-payment:${idempotencyKey}`
-        : '';
-      const queryRunner = this.dataSource.createQueryRunner();
-      await queryRunner.connect();
-      await queryRunner.startTransaction();
-      let committed = false;
-      try {
-        // (FJVqcUTv) Bir operatorning parallel to'lovlari bir xil qarzni sarflamasin.
-        await queryRunner.query(
-          'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
-          [`operator-payment:${operatorId}`],
-        );
-
-        // (FJVqcUTv) Takroriy so'rov (ikki marta bosish / javobi yo'qolgan
-        // retry) — qulf ostida, qarz tekshiruvidan OLDIN: muvaffaqiyatli
-        // to'lovning retry'i "qarzdan oshib ketdi" 400 olmasin.
-        if (dedupEpoch) {
-          const replayHistory = await queryRunner.manager.findOne(
-            CashboxHistory,
-            {
-              where: {
-                source_type: Source_type.SALARY,
-                operation_type: Operation_type.EXPENSE,
-                source_user_id: operatorId,
-                dedup_epoch: dedupEpoch,
-                isDeleted: false,
-              },
-            },
-          );
-          const replayPayment = replayHistory?.source_id
-            ? await queryRunner.manager.findOne(OperatorPayment, {
-                where: { id: String(replayHistory.source_id) },
-              })
-            : null;
-          if (replayPayment) {
-            await queryRunner.commitTransaction();
-            committed = true;
-            return this.successRes(
-              { ...replayPayment, idempotent: true },
-              200,
-              "Operator to'lovi allaqachon qayd qilingan (takroriy so'rov)",
-            );
-          }
-        }
-
-        // (FJVqcUTv) Qarz shu tranzaksiya ulanishida o'qiladi (pool'dan
-        // ikkinchi ulanish olinmaydi; qulf ostida oldingi to'lov ko'rinadi).
-        const operatorBalance = await this.findOperatorBalance(
-          { operator_id: operatorId },
-          queryRunner.manager,
-        );
-        if (amount > Number(operatorBalance.data.balance)) {
-          throw new BadRequestException(
-            "To'lov miqdori operatorga qarzdan oshib ketdi",
-          );
-        }
-
-        const mainCashbox = await this.getCashboxBySelectorWithManager(
-          queryRunner.manager,
-          {
-            user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
-            cashbox_type: Cashbox_type.MAIN,
-          },
-          { lock: true },
-        );
-        this.updateBalancesByMethod(
-          mainCashbox,
-          amount,
-          Operation_type.EXPENSE,
-          PaymentMethod.CASH,
-        );
-
-        const saved = await queryRunner.manager.save(
-          this.paymentRepo.create({
-            operator_id: operatorId,
-            market_id: input.market_id ? String(input.market_id) : null,
-            paid_by_id: paidById,
-            amount,
-            note: input.note ?? null,
-          }),
-        );
-        const savedCashbox = await queryRunner.manager.save(mainCashbox);
-        await queryRunner.manager.save(
-          queryRunner.manager.create(CashboxHistory, {
-            operation_type: Operation_type.EXPENSE,
-            cashbox_id: savedCashbox.id,
-            source_type: Source_type.SALARY,
-            source_id: String(saved.id),
-            dedup_epoch: dedupEpoch,
-            source_user_id: operatorId,
-            amount,
-            balance_after: savedCashbox.balance,
-            balance_cash_after: savedCashbox.balance_cash,
-            balance_card_after: savedCashbox.balance_card,
-            payment_method: PaymentMethod.CASH,
-            comment: input.note ?? `Operator #${operatorId} to'lovi`,
-            created_by: paidById,
-          }),
-        );
-
-        await queryRunner.query('SELECT pg_advisory_xact_lock($1::bigint)', [
-          FinanceServiceService.FBH_ADVISORY_LOCK_KEY.toString(),
-        ]);
-        const balanceBefore = await this.lastLiveFinancialBalance(
-          queryRunner.manager,
-        );
-        const savedLedger = await queryRunner.manager.save(
-          queryRunner.manager.create(FinancialBalanceHistory, {
-            amount: -amount,
-            balance_before: balanceBefore,
-            balance_after: balanceBefore - amount,
-            source_type: FinancialSource_type.SALARY,
-            dedup_key: `operator-payment:${String(saved.id)}`,
-            order_id: null,
-            related_user_id: operatorId,
-            comment: `Operator #${operatorId} komissiya to'lovi`,
-            created_by: paidById,
-            expense_category: ExpenseCategory.SALARY,
-          }),
-        );
-
-        await queryRunner.commitTransaction();
-        committed = true;
-        const auditResults = await Promise.allSettled([
-          this.activityLog.log({
-            entity_type: 'Cashbox',
-            entity_id: savedCashbox.id,
-            action: 'finance.balance_update',
-            new_value: {
-              balance: savedCashbox.balance,
-              operation_type: Operation_type.EXPENSE,
-              amount,
-            },
-            user_id: paidById,
-            metadata: {
-              user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
-              source_id: String(saved.id),
-              source_user_id: operatorId,
-              amount,
-              created_by: paidById,
-              direction: Operation_type.EXPENSE,
-            },
-          }),
-          this.activityLog.log({
-            entity_type: 'FinancialBalanceHistory',
-            entity_id: savedLedger.id,
-            action: ActivityAction.CREATED,
-            new_value: {
-              amount: -amount,
-              balance_after: balanceBefore - amount,
-              source_type: FinancialSource_type.SALARY,
-            },
-            user_id: paidById,
-            metadata: { order_id: null },
-          }),
-          this.activityLog.log({
-            entity_type: 'OperatorPayment',
-            entity_id: saved.id,
-            action: ActivityAction.PAYMENT,
-            new_value: { amount, operator_id: operatorId },
-            user_id: paidById,
-            metadata: { note: input.note ?? null },
-            description: ActivityDescribeUz.operatorPayment(operatorId, amount),
-          }),
-        ]);
-        for (const result of auditResults) {
-          if (result.status === 'rejected') {
-            this.logger.error(
-              "Operator to'lovi audit jurnaliga yozilmadi",
-              result.reason,
-            );
-          }
-        }
-        return this.successRes(saved, 201, 'operator payment recorded');
-      } catch (error) {
-        if (!committed) {
-          await queryRunner.rollbackTransaction();
-        }
-        throw error;
-      } finally {
-        await queryRunner.release();
-      }
-    } catch (error) {
-      this.toRpcError(error);
-    }
+  /**
+   * ESKI yo'l (F2qp6FtE, ega qarori 2026-11-16): superadmin operatorga
+   * Asosiy kassadan naqd to'lardi («Maosh» xarajati). Endi market o'z
+   * operatoriga O'ZI to'laydi va buni kassasiz yozadi
+   * (`OperatorPaymentService.record`, `POST /finance/operator-payments` —
+   * faqat MARKET). Gateway yo'li olib tashlandi; bu handler faqat deploy
+   * oynasidagi eski gateway uchun qoldi — pulga tegmasdan 410 qaytaradi.
+   * Eski to'lovlar (va ularning kassa/daftar qatorlari) o'zgarmaydi.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async createOperatorPayment(): Promise<never> {
+    throw new RpcException({
+      statusCode: 410,
+      message:
+        "Operatorga to'lovni endi market o'zi «Operatorlar» sahifasida yozadi — Elchi kassasidan to'lanmaydi",
+    });
   }
 
   /**
-   * Operator balance = SUM(non-deleted earnings) - SUM(non-deleted payments).
-   * Positive balance means we owe the operator.
+   * Operator balance = SUM(non-deleted earnings) - SUM(non-deleted,
+   * non-cancelled payments). Musbat — operatorga hali to'lanmagan qoldiq;
+   * manfiy — ortiqcha to'langan (avans; F2qp6FtE — market qoldiqdan ko'p
+   * yozishi mumkin). Eski Elchi to'lovlari ham «to'langan» ga kiradi.
    */
   async findOperatorBalance(
     input: { operator_id: string },
-    // (FJVqcUTv) createOperatorPayment tranzaksiyasi ichidan chaqirilganda —
-    // o'sha ulanish (qulf ostidagi izchil o'qish).
+    // Tranzaksiya ichidan chaqirilganda — o'sha ulanish.
     manager?: EntityManager,
   ) {
     try {
@@ -7755,17 +7563,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         .select('COALESCE(SUM(p.amount), 0)', 'total')
         .where('p.operator_id = :operatorId', { operatorId })
         .andWhere('p.is_deleted = false')
+        // F2qp6FtE: bekor qilingan yozuv «to'langan» ga kirmaydi.
+        .andWhere('p.cancelled_at IS NULL')
         .getRawOne<{ total: string }>();
 
-      const earned = Number(earnedRow?.total ?? 0);
-      const paid = Number(paidRow?.total ?? 0);
+      // Tiyin aniqligida (suzuvchi nuqta qoldig'i — 0.30000000000000004 emas).
+      const earnedCents = Math.round(Number(earnedRow?.total ?? 0) * 100);
+      const paidCents = Math.round(Number(paidRow?.total ?? 0) * 100);
 
       return this.successRes(
         {
           operator_id: operatorId,
-          earned,
-          paid,
-          balance: earned - paid,
+          earned: earnedCents / 100,
+          paid: paidCents / 100,
+          balance: (earnedCents - paidCents) / 100,
         },
         200,
         'operator balance',
@@ -7811,12 +7622,29 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const skip = Math.max(Number(input.offset ?? 0), 0);
       const [rows, total] = await this.paymentRepo.findAndCount({
         where: { operator_id: String(input.operator_id), isDeleted: false },
-        order: { createdAt: 'DESC' },
+        // F2qp6FtE: to'lov sanasi bo'yicha (market o'tgan kunga yozishi mumkin).
+        order: { paid_at: 'DESC', id: 'DESC' },
         take,
         skip,
       });
       return this.successRes(
-        { rows, total, limit: take, offset: skip },
+        {
+          // Eski shakl saqlanadi (createdAt, amount, note …) + F2qp6FtE:
+          // `paid_at`, `source`, `status`, bekor qilish maydonlari. Ichki
+          // `idempotency_key` va xodim id'lari qaytmaydi.
+          rows: rows.map((row) => {
+            const view: Partial<OperatorPayment> & { status: string } = {
+              ...row,
+              status: row.cancelled_at ? 'cancelled' : 'active',
+            };
+            delete view.idempotency_key;
+            delete view.cancelled_by_id;
+            return view;
+          }),
+          total,
+          limit: take,
+          offset: skip,
+        },
         200,
         'operator payments',
       );

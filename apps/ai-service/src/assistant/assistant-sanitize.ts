@@ -1,11 +1,12 @@
-import { maskPhonesForLog } from '@app/common';
+import { maskPhonesForModel } from '@app/common';
 
 /**
  * F7PWp6cK — tool natijasini modelga (Anthropic, AQSh) yuborishdan OLDINGI
  * oxirgi himoya qatlami. Har tool o'zi faqat kerakli maydonlarni oladi
  * (projection); bu funksiya ustidan yana:
  *  - PII kalitlarini TASHLAYDI (telefon, manzil, parol, token, karta egasi…);
- *  - qolgan matnlardagi telefon raqamlarini maskalaydi;
+ *  - qolgan matnlardagi telefon raqamlarini maskalaydi (pul qo'riqchisi
+ *    bilan — formatlangan summa telefonga aylanmaydi);
  *  - uzun matnni 160 belgigacha qisqartiradi;
  *  - massivni 50 ta elementgacha, chuqurlikni 6 gacha cheklaydi.
  */
@@ -25,7 +26,7 @@ export function sanitizeForModel(value: unknown, depth = 0): unknown {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'string') {
-    const masked = maskPhonesForLog(value);
+    const masked = maskPhonesForModel(value);
     return masked.length > MAX_STRING
       ? `${masked.slice(0, MAX_STRING)}…`
       : masked;

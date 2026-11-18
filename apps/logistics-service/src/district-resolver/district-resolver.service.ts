@@ -86,11 +86,31 @@ export const DISTRICT_CORPUS_MAX_CHARS = 120;
  * va qisqa shakllar ham (shaxri, rayon, r-n, gorod, sh., g.).
  */
 const PLACE_WORD_RE =
-  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g)\./;
+  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g|tum)\.|\btuman(ida|idagi|iga)\b/;
 /** Shahar afzalligi belgisi — BeePost :1708-1709 (+ shaxri, gorod, sh., g.). */
 const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
-/** Tuman afzalligi belgisi — BeePost :1708-1709 (+ rayon, r-n). */
-const TUMAN_WORD_RE = /\b(tumani|tuman|rayon|rayoni|raion)\b|\br-n\b|\bt\./;
+/**
+ * Tuman afzalligi belgisi — BeePost :1708-1709 (+ rayon, r-n, "X t.").
+ * r4 NEW-B3 / r6 NEW-R6-1: "t." faqat nomdan keyin VA undan keyin vergul,
+ * nuqtali vergul yoki matn oxiri ("Qarshi t.", "Yunusobod t., 5-uy").
+ * Telefon ("t. 90 ...", "t.: 90..."), "t.y." / "t. y." (temir yo'l), ism
+ * bosh harfi ("Toshkent T. Malik", "Qarshi T.Malik") va "Qarshi t. 5-uy"
+ * (raqam) — belgi EMAS. Matnlar `, ` bilan qo'shiladi (maydon chegarasi).
+ * r7 B2: "X t." faqat X tuman/viloyat nomi bo'lsa (`namedT`) — "Karimov T."
+ * (familiya + bosh harf) joy belgisi EMAS; shuning uchun umumiy "X t."
+ * PLACE_WORD_RE / TUMAN_WORD_RE dan olib tashlangan.
+ */
+const TUMAN_T_ABBR_RE = /([a-z]{2,})\s+t\.(?=\s*(?:[,;]|$))/g;
+const TUMAN_WORD_RE =
+  /\b(tumani|tuman|tumanida|tumanidagi|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b/;
+/**
+ * r7 B1: vergulsiz "X t. <so'z|uy raqami>" ("Qarshi t. Mustaqillik", "Qarshi
+ * T.Malik", "Qarshi t. 5-uy") — tuman belgisi ham, ism bosh harfi / boshqa
+ * narsa ham bo'lishi mumkin. Telefon ("t. 90 123 ...", "t. 901234567",
+ * "t.: ", "t. +998", "t. (90)"), "t.y." va "[TEL_1]" bundan mustasno.
+ */
+const SOFT_TUMAN_T_RE =
+  /([a-z]{2,})\s+t\.(?!\s*(?:[,;:+([]|$|y\b|y\.|\d{2}\s*\d{3}|\d{5,}))/g;
 
 /**
  * D2: manzilda tuman nomidan KEYIN kelsa — bu ko'cha/mahalla nomi, tuman
@@ -124,7 +144,11 @@ const STREET_AFTER_WORDS: ReadonlySet<string> = new Set([
   'ulica',
   'proyezd',
   'pereulok',
+  // Faqat keyin raqam yoki matn oxiri bo'lsa (2b'da tekshiriladi).
   'ul',
+  // "Sergeli yo'li" — yo'l (translit apostrofni olib tashlaydi), r4 S2.
+  'yoli',
+  'yuli',
   'maxalla',
   'maxallasi',
   'qishlogi',
@@ -136,6 +160,22 @@ const STREET_AFTER_WORDS: ReadonlySet<string> = new Set([
   'poselok',
   'bozori',
   'bekati',
+]);
+/**
+ * "Olmazor ul. d. 5", "Sergeli ul. dom 12", "Chilonzor ul. uy 5" — "ul."
+ * dan keyin uy/xonadon belgisi: bu ko'cha (r6 S1).
+ */
+const UL_HOUSE_WORDS: ReadonlySet<string> = new Set([
+  'd',
+  'dom',
+  'uy',
+  'kv',
+  'kvartira',
+  'xonadon',
+  'k',
+  'korpus',
+  'no',
+  'n',
 ]);
 /** Nomdan OLDIN kelsa ko'cha belgisi ("ул. Навои", "pr. Amir Temur"). */
 const STREET_BEFORE_WORDS: ReadonlySet<string> = new Set([
@@ -160,6 +200,10 @@ const REGION_AFTER_WORDS: ReadonlySet<string> = new Set([
 const PLACE_AFTER_WORDS: ReadonlySet<string> = new Set([
   'tumani',
   'tuman',
+  'tum',
+  'tumanida',
+  'tumanidagi',
+  'tumaniga',
   'shahri',
   'shaxri',
   'shahar',
@@ -189,13 +233,53 @@ const AREA_AFTER_WORDS: ReadonlySet<string> = new Set([
   'kvartali',
 ]);
 
-/** Manzil tokenlari: `normGeo` qo'shimchalarini SAQLAB (tumani, shahri). */
+const TUMAN_AFTER_WORDS: ReadonlySet<string> = new Set([
+  'tumani',
+  'tuman',
+  // "Toshkent tum., ...", "Toshkent tumanida, ..." (r6). "tumanidan"
+  // ("…dan kelgan") — yetkazish manzili EMAS, belgi emas (r7 S3).
+  'tum',
+  'tumanida',
+  'tumanidagi',
+  'tumaniga',
+  'rayon',
+  'rayoni',
+  'raion',
+]);
+
+/** `tokens[j]` dan aniq tuman belgisi boshlanadimi ("tumani", "t.", "r-n"). */
+function tumanMarkerAt(tokens: string[], j: number): boolean {
+  const w = tokens[j] ?? '';
+  return TUMAN_AFTER_WORDS.has(w) || (w === 'r' && tokens[j + 1] === 'n');
+}
+
+/** Nomdan OLDIN tuman belgisi — rus tartibi ("р-н X", "rayon X"). */
+function tumanMarkerBefore(tokens: string[], i: number): boolean {
+  const prev = tokens[i - 1] ?? '';
+  return (
+    prev === 'rayon' ||
+    prev === 'raion' ||
+    (prev === 'n' && tokens[i - 2] === 'r')
+  );
+}
+
+/**
+ * Manzil tokenlari: `normGeo` qo'shimchalarini SAQLAB (tumani, shahri).
+ * Nomdan keyingi "t." (`TUMAN_T_ABBR_RE`) — "tumani" tokeni; telefon,
+ * "t.y." yoki ism bosh harfidagi "t." esa oddiy "t" bo'lib qoladi.
+ */
 function addressTokens(text: string): string[] {
-  return lightNorm(text)
-    .replace(RU_ADJ_SUFFIX_RE, '$1')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(' ')
-    .filter(Boolean);
+  return (
+    lightNorm(text)
+      // "№12": translit (kichik harf) dan keyin NFKC "№" → "No" (katta N) —
+      // `[^a-z0-9]` uni o'chirib "o12" qoldirardi (r7 B3).
+      .replace(/No(?=\s*\d)/g, ' no ')
+      .replace(TUMAN_T_ABBR_RE, '$1 tumani ')
+      .replace(RU_ADJ_SUFFIX_RE, '$1')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(' ')
+      .filter(Boolean)
+  );
 }
 
 type DistrictKind = 'city' | 'tuman';
@@ -533,9 +617,12 @@ function crossRegionNeighbours(
  * Matn qaysi turni so'rayapti: "shahri/shahar" → shahar, "tumani/tuman" →
  * tuman (BeePost :1703-1719); ikkalasi ham yoki hech biri bo'lmasa null.
  */
-function wantedKind(markerText: string): DistrictKind | null {
+function wantedKind(
+  markerText: string,
+  namedTumanT = false,
+): DistrictKind | null {
   const wantsCity = CITY_WORD_RE.test(markerText);
-  const wantsTuman = TUMAN_WORD_RE.test(markerText);
+  const wantsTuman = TUMAN_WORD_RE.test(markerText) || namedTumanT;
   if (wantsCity && !wantsTuman) return 'city';
   if (wantsTuman && !wantsCity) return 'tuman';
   return null;
@@ -626,6 +713,25 @@ export function resolveDistrictText(
     ...idx.districts.map((d) => d.skel),
     ...OFFICIAL_SKELS,
   ]);
+  // r7 B2: "X t." faqat X tuman/viloyat nomi bo'lsa ("Karimov T." — ism
+  // bosh harfi, joy belgisi EMAS).
+  const tHeads = new Set<string>(allSkels);
+  for (const d of idx.districts) {
+    const last = d.tokens[d.tokens.length - 1];
+    if (last) tHeads.add(geoSkeleton(last));
+    for (const a of d.aliases) tHeads.add(a);
+  }
+  for (const row of REGION_ALIASES) {
+    for (const b of row.bases) tHeads.add(geoSkeleton(normGeo(b)));
+  }
+  const namedT = (text: string, re: RegExp): boolean => {
+    for (const m of lightNorm(text).matchAll(re)) {
+      if (tHeads.has(geoSkeleton(m[1]))) return true;
+    }
+    return false;
+  };
+  const kindOf = (text: string): DistrictKind | null =>
+    wantedKind(translit(text), namedT(text, TUMAN_T_ABBR_RE));
   const addressKind = new Map<string, DistrictKind>();
   const streetRejected = new Set<string>();
   const pool = lockedRegion
@@ -717,7 +823,8 @@ export function resolveDistrictText(
   // district_name bo'lmasa — oddiy ko'cha so'zi jimgina TUMANga aylanmaydi.
   const hasPlaceSignal =
     !!q.district_name ||
-    PLACE_WORD_RE.test(translit(`${q.full_address} ${q.address}`));
+    PLACE_WORD_RE.test(translit(`${q.full_address}, ${q.address}`)) ||
+    namedT(`${q.full_address}, ${q.address}`, TUMAN_T_ABBR_RE);
   let forceCandidate = false;
 
   /** Viloyat nomli tuman boshqa topilgan tumandan KEYIN; eng uzun nom. */
@@ -789,7 +896,7 @@ export function resolveDistrictText(
         // Viloyat nomli tuman ("Toshkent tumani") faqat tur ANIQ yozilganda:
         // "Toshkent shahri" + "Toshkent tumani" → 1727265; yalang'och
         // "Toshkent" esa avvalgidek topilmaydi (#646 review, round 2).
-        (!d.regionNamed || wantedKind(translit(q.district_name)) === d.kind) &&
+        (!d.regionNamed || kindOf(q.district_name) === d.kind) &&
         isTashkentSato(idx.regionById.get(d.region_id)?.sato),
     );
     matches = exactIn(outside).found.slice(0, AI_MAX_CANDIDATES);
@@ -831,6 +938,7 @@ export function resolveDistrictText(
     };
     const strong: PreparedDistrict[] = [];
     const weak: PreparedDistrict[] = [];
+    const softTumanT = new Set<string>();
     for (const d of pool) {
       if (d.geo.length < 4 || !d.tokens.length) continue;
       let best: 'strong' | 'weak' | null = null;
@@ -868,14 +976,25 @@ export function resolveDistrictText(
           ) {
             continue;
           }
-          // "Toshkent shahri/sh." — 1726 VILOYAT, "Toshkent tumani" (1727)
-          // emas (#646 review B1).
+          // Yalang'och "Toshkent" (1726 ham, 1727 ham) — "Toshkent tumani"
+          // (1727) uchun dalil faqat ANIQ tuman belgisi bilan: keyin
+          // "tumani/t./r-n" yoki oldidan "р-н/rayon". "Toshkent shahri/sh.",
+          // "Toshkent shahrida", "g. Toshkent", "Toshkent, Mirobod" — bu
+          // VILOYAT (#646 review B1, r4 NEW-B2).
           if (
             d.regionNamed &&
             AMBIGUOUS_REGION_WORDS.has(d.geo) &&
-            CITY_AFTER_WORDS.has(next) &&
-            d.kind !== 'city'
+            d.kind !== 'city' &&
+            !tumanMarkerAt(tokens, i + len) &&
+            !tumanMarkerBefore(tokens, i)
           ) {
+            // "Toshkent t. Keles" — "t." keyin vergulsiz: tuman belgisi
+            // ham, ism bosh harfi ("T. Malik") ham bo'lishi mumkin — faqat
+            // NOMZOD (dev bilan bir xil), hech qachon avto emas (r6).
+            if (next === 't') {
+              softTumanT.add(d.id);
+              best = best ?? 'weak';
+            }
             continue;
           }
           // part of a longer district name ("Yuqori Chirchiq")
@@ -884,8 +1003,18 @@ export function resolveDistrictText(
             (next && allSkels.has(d.skel + next))
           )
             continue;
+          // "Sergeli ul. 12" / "Olmazor ul. d. 5" — ko'cha; "Chilonzor ul.
+          // Bunyodkor 5" — "ul." keyingi nomga tegishli (r4 S1, r6).
+          const afterUl = tokens[i + len + 1];
+          const streetAfter =
+            STREET_AFTER_WORDS.has(next) &&
+            (next !== 'ul' ||
+              afterUl === undefined ||
+              // "12", "no5", "n5", "№12" (→ "no 12")
+              /^(?:no?)?\d/.test(afterUl) ||
+              UL_HOUSE_WORDS.has(afterUl));
           if (
-            STREET_AFTER_WORDS.has(next) ||
+            streetAfter ||
             STREET_BEFORE_WORDS.has(prev) ||
             // "Andijon viloyati ..." — bu VILOYAT, tuman emas.
             REGION_AFTER_WORDS.has(next)
@@ -938,6 +1067,7 @@ export function resolveDistrictText(
         matches = longestNonRegion(weak);
       }
       if (!hasPlaceSignal) forceCandidate = true;
+      if (matches.some((d) => softTumanT.has(d.id))) candidateOnly = true;
       // Operator tuman nomini yozgan, lekin u topilmadi — manzildagi so'z
       // bilan almashtirish TAXMIN.
       if (dq) candidateOnly = true;
@@ -1035,10 +1165,20 @@ export function resolveDistrictText(
   }
 
   // R1: shahar/tuman afzalligi (SOATO turi bo'yicha).
-  const want = wantedKind(
-    translit(`${q.district_name} ${q.full_address || q.address}`),
-  );
+  const markerText = `${q.district_name}, ${q.full_address || q.address}`;
+  const want = kindOf(markerText);
   matches = preferCityOrTuman(matches, want, idx);
+  // r7 B1: vergulsiz "Qarshi t. Mustaqillik" — tur noaniq: shahar/tuman
+  // juftligida ikkalasi NOMZOD, hech biri avto emas (yalang'och "Qarshi"
+  // shaharga tushib, avto-tanlanardi).
+  if (!want && matches.length && namedT(markerText, SOFT_TUMAN_T_RE)) {
+    const asTuman = preferCityOrTuman(matches, 'tuman', idx);
+    const extra = asTuman.filter((d) => !matches.includes(d));
+    if (extra.length || asTuman.length !== matches.length) {
+      matches = [...matches, ...extra];
+      candidateOnly = true;
+    }
+  }
   // #646 review B2: R1 toraytirgandan KEYIN ham — 4-usulda faqat ko'cha
   // sifatida rad etilgan yoki viloyat nomli qator qolsa, avto emas.
   if (
@@ -1153,7 +1293,7 @@ export function resolveDistrictText(
     // Tur faqat TUMAN maydonidan: full_address'dagi "Toshkent shahri"
     // (viloyat) tumanning turini bildirmaydi.
     const explicitKind =
-      wantedKind(translit(q.district_name)) ??
+      kindOf(q.district_name) ??
       addressKind.get(d.id) ??
       // #646 review B4: 4-usul topilmasida manzildagi tur ham hisobga
       // olinadi ("Шахрисабзский р-н" — tuman).
