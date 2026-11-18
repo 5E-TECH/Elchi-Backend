@@ -14,6 +14,15 @@ import { COURIER_ACTIONS } from './courier-cards';
 /** Bitta "Tayyor" da hisobga olinadigan eng ko'p buyurtma. */
 export const SCAN_DONE_MAX_ORDERS = 200;
 
+/**
+ * Skan bilan olingan (kuryerdagi) buyurtma holatlari: `waiting` — skan =
+ * qabul (COURIER-SCAN), `on the road` — eski skan qatorlari.
+ */
+export const SCAN_SUMMARY_STATUSES: readonly string[] = Object.freeze([
+  'waiting',
+  'on the road',
+]);
+
 const ID_RE = /^\d{1,20}$/;
 
 type OrderListResponse = {
@@ -34,8 +43,10 @@ function rowsOf(response: OrderListResponse | null): unknown[] {
  * "N ta buyurtma qabul qilindi" + "📋 Topshiriqlarim" (`/ishim` 1-sahifa).
  *
  * Son mijozdan OLINMAYDI: Mini App skan qilgan id'larni yuboradi, server esa
- * faqat HOZIR shu kuryerda yo'lda (`on the road`) turganlarini sanaydi —
- * boshqa kuryerniki yoki o'ylab topilgan id hisobga kirmaydi. Xabar
+ * faqat HOZIR shu kuryerda turganlarini sanaydi — boshqa kuryerniki yoki
+ * o'ylab topilgan id hisobga kirmaydi. COURIER-SCAN (ega, 2026-11-17): skan =
+ * qabul, olingan posilka darhol «Kutilmoqda» (`waiting`); `on the road` —
+ * eski (deploy oynasidagi) skan qatorlari uchun ham sanaladi. Xabar
  * `notification.dispatch` orqali (in-app + kuryerning shaxsiy Telegram'i);
  * kuryer bog'lanmagan bo'lsa Telegram `skipped`, in-app baribir yoziladi.
  */
@@ -75,7 +86,7 @@ export class CourierScanSummaryService {
       {
         query: {
           courier_ids: [courierId],
-          status: ['on the road'],
+          status: SCAN_SUMMARY_STATUSES,
           fetch_all: true,
         },
       },
@@ -95,7 +106,7 @@ export class CourierScanSummaryService {
     const lines = [`✅ ${accepted.length} ta buyurtma qabul qilindi.`];
     if (ignored) {
       lines.push(
-        `⚠️ ${ignored} tasi sizda yo'lda emas — hisobga olinmadi (kabinetda tekshiring).`,
+        `⚠️ ${ignored} tasi sizda emas — hisobga olinmadi (kabinetda tekshiring).`,
       );
     }
     const inbox = this.moduleRef.get(NotificationInboxService, {

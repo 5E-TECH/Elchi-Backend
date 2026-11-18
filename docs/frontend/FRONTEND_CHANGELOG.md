@@ -27,6 +27,34 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 - 🔧 (#655 N1 tuzatish) Tunda ochilgan R6 ning 09:00 dagi Telegram xabari ilova ichidagi `ai.advisor_alert` qatorini endi QAYTA KO'TARMAYDI: o'qilgan holati, inbox tartibi (`createdAt`), `data.count` va matn o'zgarmaydi — qatorga faqat `telegram` kanali qo'shiladi. Ilgari 09:00 da qator «o'qilmagan» bo'lib tepaga chiqardi (`count: 2`). Foydalanuvchi o'chirgan qator QAYTA PAYDO BO'LMAYDI (Telegram baribir yuboriladi).
 - 🟢 notification-service: ichki `notification.dispatch` ga ixtiyoriy `delivery_only: true` (gateway HTTP'da yo'q). FE'dan ish talab qilinmaydi.
 
+### 2026-11-17 — Kuryer skani = qabul: yo'ldagi pochtadan olish, «Yo'lda» va «Qabul qilish» qadami yo'q (COURIER-SCAN)
+
+Ega (2026-11-17): HQ pochtani filialga jo'natdi — menejer hali qabul qilmagan bo'lsa ham filial kuryeri buyurtmani skanerlab oladi; skan = qabul; olgandan keyin holat «Yo'lda» ga qaytmaydi, «Qabul qilish» chiqmaydi, darhol «Sotish» / «Bekor qilish».
+Deploy: order-service, logistics-service, notification-service, api-gateway + migration-runner (**migratsiya 1716000000240**). Eski FE bu backend bilan ishlayveradi (skan bilan olingan qator endi `waiting` — eski FE ham «Sotish / Bekor» ko'rsatadi).
+
+- ✏️ [logistics] `POST /orders/scan-assign` — muvaffaqiyatli skandan keyin buyurtma DOIM `waiting` + kuryerda (`courier_id`, `holder_type: COURIER`, `holder_courier_id`), ilgari `on the road` edi (6qypMFeT, bekor qilindi). Javob `data`: avvalgi maydonlar + `status: "waiting"`.
+  - Filial kuryeri o'z filialiga kelgan HQ → filial o'tkazma pochtasidagi (`courier_id` '0', `sent`) yo'ldagi buyurtmani menejer qabul qilmasdan oladi: skan shu bitta buyurtmani filialga qabul qiladi va kuryerga beradi. Pochtani butunlay qabul qilish menejerda qoladi; oxirgi yo'ldagi buyurtma olinsa pochta o'zi `received` bo'ladi va filialga «Pochta filialga yetib keldi» xabari bir marta ketadi (son — pochtaning `order_quantity`).
+  - Kuryerning o'zidagi yo'ldagi buyurtmani (menejer biriktirgan, «Pochta → HQ kuryeri») qayta skanlash — **qabul**: `waiting`, javobda `data.accepted: true`, `idempotent: false`. O'z `waiting` buyurtmasi — avvalgidek `idempotent: true`.
+  - Kuryer pochtasi: bugungi `sent` → bugungi `received` → yangi pochta darhol `received`; `sent` pochtada yo'ldagi qolmasa u yopiladi (bo'sh «yo'ldagi» kuryer pochtasi qolmaydi).
+  - 🆕 409 `data.reason = order_marked_not_arrived` «Bu buyurtma «kelmagan» deb belgilangan — menejer belgini olib tashlasin» (`details`: `order_id`, `post_id`) — o'tkazma pochtasidagi `return_requested` buyurtma.
+  - 🆕 409 `courier_scan_receive_failed` «Buyurtmani filialga qabul qilib bo'lmadi — qayta skanerlang» (`details`: `order_id`, `post_id`) — kamdan-kam (qabul yozuvi o'tmadi).
+  - Ikki kuryer bir vaqtda skanlasa — biri 200, ikkinchisi 400 «Buyurtma allaqachon boshqa kuryerga biriktirilgan». Boshqa filial kuryeri — 403, boshqa viloyat — 403 `district_not_served_by_branch` (filialga ham qabul qilinmaydi), HQ kuryeri yo'ldagi buyurtmani avvalgidek olmaydi.
+- 🆕 [logistics] `PATCH /post/receive/:id` `{ order_ids, scan: true }` (menejerning «Pochtadan qabul»i): kuryer skan bilan olib ketgan buyurtma skanlansa — 400 `data.reason = order_taken_by_courier` «Bu buyurtmani kuryer <ism> skan bilan olgan» (`details`: `order_id`, `post_id`, `courier_id`, `courier_name`), ilgari `order_not_in_post`. Bulk qabul kuryer olganlarga tegmaydi (ular pochtada yo'q), qisman qabulda «kelmagan» belgisi ham faqat pochtada qolganlarga.
+- ✏️ [order] Tarix (`GET /orders/:id/tracking`): yangi amallar —
+  - `courier_scan_received` «Kuryer <ism> skan bilan oldi» (`metadata`: `post_id`, `courier_name`) — har kuryer skani; filial qabul qilgan `waiting` buyurtma uchun `from_status = to_status = waiting` qatori (`old_value.courier_id` / `new_value.courier_id`);
+  - `branch_post_received_by_courier_scan` «Kuryer <ism> skani bilan filialga qabul qilindi» (`metadata`: `post_id`, `branch_name`, `courier_name`) — o'tkazma pochtasidan olishda birinchi qator;
+  - kuryer skani endi «Kuryer pochtani qabul qildi» (`post_received`) deb yozilmaydi; «Kutilmoqda → Yo'lda → Kutilmoqda» izi yo'q.
+- ✏️ [order/gateway] Kuryer ro'yxati (`GET /orders/courier/orders`), tab sonlari va `/region/my/district-stats`: skan bilan olingan posilka endi oddiy `waiting` qator. 6qypMFeT istisnosi (`isCourierScanTakenOrder`, `scan_taken_courier_id`) faqat deploy oynasi uchun (migratsiya yurgandan servislar qayta ishga tushguncha eski kod yozgan `on the road` skan qatorlari ro'yxatdan yo'qolmasin) **bir reliz saqlanadi**, keyingi relizda olib tashlanadi; FE uchun farq yo'q. Migratsiya 240 hamon `on the road` turgan shunday qatorlarni `waiting` ga o'tkazadi (tarixga `courier_scan_received`, tizim nomidan) va yo'ldagisi qolmagan `sent` kuryer pochtalarini yopadi.
+- 🟢 [notification] Mini App «✅ Tayyor» xulosasi kuryerdagi `waiting` (va eski `on the road`) buyurtmalarni sanaydi; e'tiborsizlar matni «… tasi sizda emas …».
+- 🟢 [gateway] `POST /orders/sell|partly-sell|cancel/:id` — skan bilan olingan buyurtma `waiting`, avtomatik qabul chaqirilmaydi (bir bosishda). Avtomatik qabul (2026-11-12) skansiz biriktirilgan `on the road` buyurtmalar uchun qoladi; uning xato matni: «… buyurtma QR kodini skanerlang yoki qayta urinib ko'ring» (`auto_receive_failed`).
+- 🟢 Hamkor webhook'lari qisqaradi: skan bilan olingan buyurtmada `on_the_road` → `waiting` almashinuvi endi yo'q (o'tkazma pochtasidan olinganda bitta `waiting`, keyin natija). Marketga `order.on_way` faqat jo'natishda; skanda `order.assigned_to_courier`.
+
+**Frontend action items:**
+- 🔧 Kuryer ro'yxati: «Qabul qilish» tugmasi (`PATCH /post/receive/:id` `scan:true`) olib tashlanadi — faol qatorda faqat «Sotish» + «Bekor qilish».
+- 🔧 `/scan/:token`: o'z buyurtmasi (`waiting` / `on the road` / `waiting_customer`) — «Sotish / Bekor qilish»; «O'zimga olish»dan keyin shu sahifada qoladi. `/scan` dagi kuryer «Qabul qilish» rejimi olib tashlanadi; «O'zimga olish» rejimida o'z yo'ldagi buyurtmasi — `accepted: true` («sizga biriktirildi»).
+- 🔧 `/courier-bulk`: «Pochta hali qabul qilinmagan» to'sig'i olib tashlanadi.
+- 🔧 Yorliq: `waiting` + kuryer — «Kuryerda»; yangi tarix amallari (uz/ru/en). `order_taken_by_courier` / `order_marked_not_arrived` — boshqa skan xatolari kabi backend `message` matni ko'rsatiladi.
+
 ### 2026-11-17 — Yetkazish tariflari: rejalashtirilgan tarif versiyasini bekor qilish (B0ILd7YI)
 
 Maqsad: «Hududlar → Yetkazish tariflari» (`/delivery-tariffs`)da kelajak sanaga rejalashtirilgan tarif xato kiritilsa, uni kuchga kirishidan oldin bekor qilish (hozir faqat ustidan yangi versiya yozish mumkin edi).

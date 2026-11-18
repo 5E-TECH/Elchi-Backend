@@ -58,6 +58,8 @@ import {
   OutboxService,
   PaymentMethod,
   POST_RECEIVED_TRACKING_ACTION,
+  COURIER_SCAN_RECEIVED_TRACKING_ACTION,
+  BRANCH_POST_RECEIVED_BY_COURIER_SCAN_TRACKING_ACTION,
   Roles,
   SettlementStatus,
   Source_type,
@@ -66,6 +68,7 @@ import {
   normalizeSpecialCategories,
   normalizeUzPhone,
   postReceiveKindOfNote,
+  courierScanKindOfNote,
   SPECIAL_CATEGORIES_ERROR_CODES,
   SPECIAL_CATEGORIES_LOCKED_MESSAGE,
   SPECIAL_CATEGORIES_TRACKING_ACTION,
@@ -498,6 +501,12 @@ export const RETURN_REQUEST_REVIEW_CONFLICT_REASON =
  * buyurtma shu orada pochtadan chiqqan (masalan HQ «Qaytarish» tasdig'i).
  */
 export const POST_RECEIVE_CONFLICT_REASON = 'post_receive_conflict';
+/**
+ * COURIER-SCAN — `courier_scan_guard` (logistics `scan-assign`) qulf ostida
+ * mos kelmadi: shu orada buyurtmani boshqa kuryer olgan yoki holati / pochtasi
+ * o'zgargan (ikki kuryer bir vaqtda skanlasa — faqat bittasi oladi).
+ */
+export const COURIER_SCAN_CONFLICT_REASON = 'courier_scan_conflict';
 
 /**
  * (hwTkXsGi) Qo'shimcha xarajat so'rovi yopilish (`void` / `reversed`)
@@ -864,6 +873,21 @@ export class OrderLifecycleService {
     const postId = order.post_id ? String(order.post_id) : null;
     const requesterId = String(requester?.id ?? '').trim();
 
+    // COURIER-SCAN (ega, 2026-11-17): kuryer skani = qabul — «Kuryer <ism>
+    // skan bilan oldi» / «… skani bilan filialga qabul qilindi», «Kuryer
+    // pochtani qabul qildi» (`post_received`) EMAS.
+    const courierScanKind =
+      requesterId && order.status === Order_status.WAITING
+        ? courierScanKindOfNote(requester?.note)
+        : null;
+    if (courierScanKind) {
+      return this.resolveCourierScanTrackingExtras(
+        courierScanKind,
+        order,
+        requesterId,
+      );
+    }
+
     const receiveKind =
       oldStatus === Order_status.ON_THE_ROAD &&
       order.status === Order_status.WAITING &&
@@ -903,6 +927,46 @@ export class OrderLifecycleService {
         : null;
     }
     return null;
+  }
+
+  /**
+   * COURIER-SCAN — kuryer skani tarix qatori (`courier_scan_received` yoki
+   * `branch_post_received_by_courier_scan`). Nomlar YOZUV paytida olinadi
+   * (metadata'da `*_branch_id` yo'q — vbu7Wr3o bilan bir xil sabab); nom
+   * olinmasa ham yozuv yoziladi.
+   */
+  private async resolveCourierScanTrackingExtras(
+    kind: 'TAKE' | 'BRANCH_RECEIVE',
+    order: Order,
+    courierId: string,
+  ): Promise<{
+    action: string;
+    description: string;
+    metadata: Record<string, unknown>;
+  }> {
+    const postId = order.post_id ? String(order.post_id) : null;
+    const courierName = await this.resolveUserTrackingName(courierId);
+    if (kind === 'BRANCH_RECEIVE') {
+      const branchName = await this.resolveBranchName(order.branch_id);
+      return {
+        action: BRANCH_POST_RECEIVED_BY_COURIER_SCAN_TRACKING_ACTION,
+        description: courierName
+          ? `Kuryer ${courierName} skani bilan filialga qabul qilindi`
+          : 'Kuryer skani bilan filialga qabul qilindi',
+        metadata: {
+          post_id: postId,
+          branch_name: branchName,
+          courier_name: courierName,
+        },
+      };
+    }
+    return {
+      action: COURIER_SCAN_RECEIVED_TRACKING_ACTION,
+      description: courierName
+        ? `Kuryer ${courierName} skan bilan oldi`
+        : 'Kuryer skan bilan oldi',
+      metadata: { post_id: postId, courier_name: courierName },
+    };
   }
 
   /**
@@ -14392,6 +14456,40 @@ export class OrderLifecycleService {
     }
   }
 
+  /**
+   * COURIER-SCAN — kuryer skani (logistics `scan-assign`): buyurtma hali
+   * o'qilgan holatda, o'sha pochtada va o'sha kuryerda (yoki kuryersiz)
+   * bo'lsin. Aks holda 409 `courier_scan_conflict` — ikki kuryer bir vaqtda
+   * skanlasa yoki skan bilan filial qabuli to'qnashsa, faqat birinchisi
+   * yozadi (qulfsiz va qulf ostida tekshiriladi).
+   */
+  private assertCourierScanUnchanged(
+    order: Order,
+    guard?: {
+      status?: string | null;
+      post_id?: string | null;
+      courier_id?: string | null;
+    } | null,
+  ): void {
+    if (!guard) return;
+    const expectedStatus = String(guard.status ?? '').trim();
+    const expectedPostId = String(guard.post_id ?? '').trim();
+    const expectedCourierId = String(guard.courier_id ?? '').trim();
+    const holderCourierId = String(order.holder_courier_id ?? '').trim();
+    if (
+      (expectedStatus && String(order.status) !== expectedStatus) ||
+      String(order.post_id ?? '').trim() !== expectedPostId ||
+      String(order.courier_id ?? '').trim() !== expectedCourierId ||
+      (holderCourierId && holderCourierId !== expectedCourierId)
+    ) {
+      throw new RpcException({
+        statusCode: 409,
+        message: `Buyurtma #${order.id} shu orada boshqa kuryerga o'tdi yoki holati o'zgardi — qayta skanerlang`,
+        reason: COURIER_SCAN_CONFLICT_REASON,
+      });
+    }
+  }
+
   async updateFull(
     id: string,
     dto: {
@@ -14517,6 +14615,16 @@ export class OrderLifecycleService {
         post_id?: string | null;
         status?: string | null;
       } | null;
+      /**
+       * COURIER-SCAN — kuryer skani (logistics `scan-assign`): buyurtma hali
+       * o'qilgan holat / pochta / kuryerda bo'lsin (qulf ostida, aks holda
+       * 409 `courier_scan_conflict`).
+       */
+      courier_scan_guard?: {
+        status?: string | null;
+        post_id?: string | null;
+        courier_id?: string | null;
+      } | null;
     },
     externalManager?: EntityManager,
     /**
@@ -14551,6 +14659,7 @@ export class OrderLifecycleService {
       requester?.return_request_review,
     );
     this.assertPostReceiveUnchanged(order, requester?.post_receive_guard);
+    this.assertCourierScanUnchanged(order, requester?.courier_scan_guard);
     if (!externalManager) {
       this.assertCommercialFieldsEditable(order, dto);
       await this.assertDeliveryDetailsEditable(order, dto);
@@ -14777,6 +14886,24 @@ export class OrderLifecycleService {
       typeof dto.branch_id !== 'undefined',
       requester,
     );
+    // COURIER-SCAN: filial qabul qilgan (WAITING) buyurtmani kuryer skan
+    // bilan oldi — holat o'zgarmaydi (WAITING → WAITING), lekin tarixda
+    // «Kuryer <ism> skan bilan oldi» qatori bo'lishi shart (custody hodisasi
+    // tarixda ko'rinmaydi). Faqat kuryer haqiqatan almashganda — bir marta.
+    const courierScanTakeTracking =
+      oldStatus === order.status &&
+      order.status === Order_status.WAITING &&
+      String(order.courier_id ?? '').trim() &&
+      String(previousCourierId ?? '').trim() !==
+        String(order.courier_id ?? '').trim() &&
+      String(requester?.id ?? '').trim() &&
+      courierScanKindOfNote(requester?.note) === 'TAKE'
+        ? await this.resolveCourierScanTrackingExtras(
+            'TAKE',
+            order,
+            String(requester?.id ?? '').trim(),
+          )
+        : null;
 
     const writeOrderChanges = async (manager: EntityManager): Promise<void> => {
       const orderRepo = manager.getRepository(Order);
@@ -14809,6 +14936,18 @@ export class OrderLifecycleService {
           this.notFound(`Buyurtma #${order.id} topilmadi`);
         }
         this.assertCourierReturnRequestable(locked, notArrivedRequest);
+      }
+      if (requester?.courier_scan_guard) {
+        // COURIER-SCAN: ikki kuryer (yoki kuryer skani va filial qabuli) bir
+        // vaqtda — ikkinchisi birinchining commit'ini kutadi va 409 oladi.
+        const locked = await orderRepo.findOne({
+          where: { id: String(order.id) },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!locked) {
+          this.notFound(`Buyurtma #${order.id} topilmadi`);
+        }
+        this.assertCourierScanUnchanged(locked, requester.courier_scan_guard);
       }
       if (
         requester?.return_request_review ||
@@ -14984,6 +15123,27 @@ export class OrderLifecycleService {
                 null,
               to_branch_name: postBranchReassign.to_branch_name ?? null,
             },
+            note: requester?.note ?? null,
+          },
+          trackingRepo,
+        );
+      }
+
+      if (courierScanTakeTracking) {
+        await this.custody.createTrackingEvent(
+          {
+            order_id: order.id,
+            from_status: oldStatus,
+            to_status: order.status,
+            changed_by: String(requester?.id ?? 'system'),
+            changed_by_role: requester?.id
+              ? this.custody.toTrackingRole(requester.roles)
+              : 'system',
+            action: courierScanTakeTracking.action,
+            description: courierScanTakeTracking.description,
+            old_value: { courier_id: previousCourierId ?? null },
+            new_value: { courier_id: order.courier_id ?? null },
+            metadata: courierScanTakeTracking.metadata,
             note: requester?.note ?? null,
           },
           trackingRepo,

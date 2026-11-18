@@ -30,6 +30,13 @@ export type CourierPostOrdersQuery = {
  * qilinmagan pochta yashirin qoladi. Pochta qabulida rad etilgani
  * (`return_requested`) qo'lda emas. Order-service'dagi SQL shartning aynan
  * nusxasi (`buildOrderListQuery`).
+ *
+ * COURIER-SCAN (ega, 2026-11-17): skan endi darhol WAITING yozadi, eski qatorlar
+ * migratsiya 1716000000240 bilan WAITING ga ko'chiriladi. Bu istisno faqat
+ * deploy oynasi uchun (migratsiya yurgandan servislar qayta ishga tushguncha
+ * eski kod yozgan ON_THE_ROAD skan qatorlari kuryer ro'yxatidan yo'qolmasin)
+ * BIR RELIZ saqlanadi; prod'da 240 dan keyin shart bo'yicha qator qolmaganini
+ * tekshirib, keyingi relizda olib tashlang.
  */
 export function isCourierScanTakenOrder(
   order: {
