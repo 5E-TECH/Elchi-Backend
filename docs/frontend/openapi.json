@@ -24058,9 +24058,11 @@
                           }
                         },
                         "recommendations": {
+                          "type": "object",
                           "nullable": true
                         },
                         "budget": {
+                          "type": "object",
                           "nullable": true
                         },
                         "usd_uzs_rate": {
@@ -24254,6 +24256,24 @@
                           "type": "array",
                           "items": {
                             "type": "object",
+                            "required": [
+                              "id",
+                              "rule_key",
+                              "severity",
+                              "status",
+                              "title",
+                              "branch",
+                              "subject",
+                              "headline_amount",
+                              "facts",
+                              "occurrences",
+                              "first_at",
+                              "last_at",
+                              "first_fact_at",
+                              "last_fact_at",
+                              "explanation_status",
+                              "reopened_from_id"
+                            ],
                             "properties": {
                               "id": {
                                 "type": "string"
@@ -24305,9 +24325,21 @@
                               },
                               "subject": {
                                 "type": "object",
+                                "required": [
+                                  "kind",
+                                  "id",
+                                  "name"
+                                ],
                                 "properties": {
                                   "kind": {
-                                    "type": "string"
+                                    "type": "string",
+                                    "enum": [
+                                      "branch",
+                                      "courier",
+                                      "market",
+                                      "cashbox",
+                                      "system"
+                                    ]
                                   },
                                   "id": {
                                     "type": "string",
@@ -24475,6 +24507,24 @@
                     },
                     "data": {
                       "type": "object",
+                      "required": [
+                        "id",
+                        "rule_key",
+                        "severity",
+                        "status",
+                        "title",
+                        "branch",
+                        "subject",
+                        "headline_amount",
+                        "facts",
+                        "occurrences",
+                        "first_at",
+                        "last_at",
+                        "first_fact_at",
+                        "last_fact_at",
+                        "explanation_status",
+                        "reopened_from_id"
+                      ],
                       "properties": {
                         "id": {
                           "type": "string"
@@ -24526,9 +24576,21 @@
                         },
                         "subject": {
                           "type": "object",
+                          "required": [
+                            "kind",
+                            "id",
+                            "name"
+                          ],
                           "properties": {
                             "kind": {
-                              "type": "string"
+                              "type": "string",
+                              "enum": [
+                                "branch",
+                                "courier",
+                                "market",
+                                "cashbox",
+                                "system"
+                              ]
                             },
                             "id": {
                               "type": "string",
@@ -24648,7 +24710,8 @@
                           "enum": [
                             "budget_exceeded",
                             "ai_disabled",
-                            "error"
+                            "error",
+                            null
                           ]
                         },
                         "explanation_error_scope": {
@@ -24656,7 +24719,8 @@
                           "nullable": true,
                           "enum": [
                             "advisor",
-                            "global"
+                            "global",
+                            null
                           ]
                         },
                         "explanation_retry_at": {
@@ -24844,6 +24908,24 @@
                     },
                     "data": {
                       "type": "object",
+                      "required": [
+                        "id",
+                        "rule_key",
+                        "severity",
+                        "status",
+                        "title",
+                        "branch",
+                        "subject",
+                        "headline_amount",
+                        "facts",
+                        "occurrences",
+                        "first_at",
+                        "last_at",
+                        "first_fact_at",
+                        "last_fact_at",
+                        "explanation_status",
+                        "reopened_from_id"
+                      ],
                       "properties": {
                         "id": {
                           "type": "string"
@@ -24895,9 +24977,21 @@
                         },
                         "subject": {
                           "type": "object",
+                          "required": [
+                            "kind",
+                            "id",
+                            "name"
+                          ],
                           "properties": {
                             "kind": {
-                              "type": "string"
+                              "type": "string",
+                              "enum": [
+                                "branch",
+                                "courier",
+                                "market",
+                                "cashbox",
+                                "system"
+                              ]
                             },
                             "id": {
                               "type": "string",
@@ -25017,7 +25111,8 @@
                           "enum": [
                             "budget_exceeded",
                             "ai_disabled",
-                            "error"
+                            "error",
+                            null
                           ]
                         },
                         "explanation_error_scope": {
@@ -25025,7 +25120,8 @@
                           "nullable": true,
                           "enum": [
                             "advisor",
-                            "global"
+                            "global",
+                            null
                           ]
                         },
                         "explanation_retry_at": {
