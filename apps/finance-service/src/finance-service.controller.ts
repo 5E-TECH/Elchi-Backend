@@ -25,7 +25,6 @@ import { FindShiftsDto } from './dto/shift/find-shifts.dto';
 import { CreateSalaryDto } from './dto/salary/create-salary.dto';
 import { UpdateSalaryDto } from './dto/salary/update-salary.dto';
 import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
-import { CreateOperatorPaymentDto } from './dto/operator/create-operator-payment.dto';
 import { RecordFinancialBalanceDto } from './dto/financial/record-financial-balance.dto';
 
 @Controller()
@@ -445,13 +444,13 @@ export class FinanceServiceController {
     );
   }
 
+  // F2qp6FtE: eski superadmin yo'li (Asosiy kassadan to'lov) — faqat deploy
+  // oynasidagi eski gateway uchun; pulga tegmasdan 410. Yangi yozuv —
+  // `finance.operator.market_payment.*` (OperatorPaymentController).
   @MessagePattern({ cmd: 'finance.operator.payment.create' })
-  createOperatorPayment(
-    @Payload() data: CreateOperatorPaymentDto,
-    @Ctx() context: RmqContext,
-  ) {
+  createOperatorPayment(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.financeService.createOperatorPayment(data),
+      this.financeService.createOperatorPayment(),
     );
   }
 
