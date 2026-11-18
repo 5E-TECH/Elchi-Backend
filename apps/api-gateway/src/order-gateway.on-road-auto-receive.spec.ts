@@ -181,6 +181,21 @@ describe("Yo'ldagi buyurtmani sotish/bekor qilish — avtomatik qabul", () => {
     },
   );
 
+  // COURIER-SCAN (ega, 2026-11-17): skan = qabul — skan bilan olingan
+  // buyurtma darhol `waiting`, shuning uchun sotish / bekor qilish avtomatik
+  // qabulsiz, birinchi bosishda.
+  it.each(acts)(
+    '⭐ %s: skan bilan olingan (waiting) buyurtma — avtomatik qabul chaqirilmaydi, amal darhol',
+    async (_label, cmd, act) => {
+      const { controller, calls } = make({
+        order: { id: '81', status: 'waiting', post_id: '7' },
+        post: { id: '7', courier_id: '25' },
+      });
+      await act(controller, req('25', ['courier'], '3'));
+      expect(calls).toEqual(['order.find_by_id', cmd]);
+    },
+  );
+
   it("post_id yo'q / buyurtma topilmadi — amal avvalgidek (order-service javob beradi)", async () => {
     const noPost = make({
       order: { id: '81', status: 'on the road', post_id: null },

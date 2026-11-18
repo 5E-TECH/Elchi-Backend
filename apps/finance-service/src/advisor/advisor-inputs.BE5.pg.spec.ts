@@ -777,6 +777,179 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(b.candidates[0].fact_keys[0].fact_key).toBe('ep:g:2026-10-17');
       });
 
+      it('#702 B2 (E8): 15 kundan uzun o‘sish qatori — ep:g kaliti har kuni siljimaydi', async () => {
+        const cb = await cashbox('couriers', 93, 5000000);
+        // 26.09 dan 23.10 gacha har kuni +100k (28 kun, qat'iy o'sish).
+        for (let i = 0; i < 28; i++) {
+          const day = new Date(Date.UTC(2026, 8, 26 + i))
+            .toISOString()
+            .slice(0, 10);
+          await daily(cb, 93, day, 2000000 + i * 100000);
+        }
+        // Qoldiq kecha nolga tushgan — «topshirilmagan» triggeri yo'q (faqat o'sish).
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -100000,
+          0,
+          '2026-10-21T06:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          5000000,
+          5000000,
+          '2026-10-21T08:00:00Z',
+        );
+        const at22 = await runWith(
+          ['R2'],
+          { R2: R2T },
+          '2026-10-22T09:00:00.000Z',
+        );
+        expect(at22.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: 'ep:g:2026-09-26' }],
+          facts: { trigger: 'growth' },
+        });
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -100000,
+          0,
+          '2026-10-23T06:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          5000000,
+          5000000,
+          '2026-10-23T08:00:00Z',
+        );
+        const at24 = await runWith(
+          ['R2'],
+          { R2: R2T },
+          '2026-10-24T09:00:00.000Z',
+        );
+        expect(at24.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: 'ep:g:2026-09-26' }],
+          facts: { trigger: 'growth' },
+        });
+      });
+
+      it('#702 B3 (E4): kun faqat yig‘indi bilan hisoblangan, bir oyog‘i T6 bilan qaytarildi — chegara qaytarish lahzasi', async () => {
+        const cb = await cashbox('couriers', 91, 500000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          1200000,
+          1200000,
+          '2026-10-09T08:00:00Z',
+        );
+        // 10.10: 500k + 500k (1.2 mln dan) — har biri 42%, birga 83% → kun hisoblanadi.
+        const a = await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -500000,
+          700000,
+          '2026-10-10T08:00:00Z',
+        );
+        const b = await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -500000,
+          200000,
+          '2026-10-10T12:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          300000,
+          500000,
+          '2026-10-11T08:00:00Z',
+        );
+        const before = await runWith(['R2'], { R2: R2T });
+        expect(before.candidates[0].fact_keys[0].fact_key).toBe(`ep:h:${b}`);
+        // 12.10: birinchi oyoq T6 bilan qaytarildi — kun endi 42%.
+        const rev = await hist(
+          cb,
+          'income',
+          'payment_reversal',
+          500000,
+          1000000,
+          '2026-10-12T08:00:00Z',
+          a,
+        );
+        const after = await runWith(['R2'], { R2: R2T });
+        expect(after.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: `ep:h:${a}:r${rev}` }],
+          facts: { days_without_handover: 10 },
+        });
+      });
+
+      it('#702 B3 (E5): qaytarilgandan keyin ham kun ≥ 80% — chegara surilmaydi (kunlar saqlanadi)', async () => {
+        const cb = await cashbox('couriers', 92, 500000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          1000000,
+          1000000,
+          '2026-10-09T08:00:00Z',
+        );
+        // 10.10: 900k (90%) + 90k → 99%.
+        const big = await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -900000,
+          100000,
+          '2026-10-10T08:00:00Z',
+        );
+        const small = await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -90000,
+          10000,
+          '2026-10-10T12:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          400000,
+          410000,
+          '2026-10-11T08:00:00Z',
+        );
+        const before = await runWith(['R2'], { R2: R2T });
+        expect(before.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: `ep:h:${small}` }],
+          facts: { days_without_handover: 12 },
+        });
+        // 21.10: faqat 90k oyog'i qaytarildi — kun hamon 90% → hisoblanadi.
+        await hist(
+          cb,
+          'income',
+          'payment_reversal',
+          90000,
+          500000,
+          '2026-10-21T08:00:00Z',
+          small,
+        );
+        const after = await runWith(['R2'], { R2: R2T });
+        expect(after.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: `ep:h:${big}` }],
+          facts: { days_without_handover: 12 },
+        });
+      });
+
       it('P2: hammasini topshirgan kuryer bugun pul olsa — darhol «N kundan beri» emas', async () => {
         const cb = await cashbox('couriers', 83, 150000);
         await hist(
@@ -991,6 +1164,78 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           facts: { days_without_handover: 7 },
           evidence: {
             last_handover: { at: '2026-10-15T10:00:00.000Z', amount: 850000 },
+          },
+        });
+      });
+
+      it('#702 should-fix: R5 dalilidagi o‘tkazmalar ham samarali (root) vaqt bilan', async () => {
+        const cb = await cashbox('branch', 87, 3000000);
+        const leg = (
+          amount: number,
+          after: number,
+          at: string,
+          transfer: string,
+          source = 'branch_to_main',
+          op = 'expense',
+          reverses: string | null = null,
+        ) =>
+          db
+            .query<Array<{ id: string }>>(
+              `INSERT INTO "finance_schema"."cashbox_history"
+                 ("operation_type", "cashbox_id", "source_type", "amount", "balance_after", "createdAt", "transfer_id", "reverses_history_id")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING "id"::text AS id`,
+              [op, cb, source, amount, after, at, transfer, reverses],
+            )
+            .then((r) => r[0].id);
+        const T1 = '44444444-4444-4444-8444-444444444444';
+        const TR = '55555555-5555-4555-8555-555555555555';
+        const T2 = '66666666-6666-4666-8666-666666666666';
+        await hist(
+          cb,
+          'income',
+          'sell',
+          1000000,
+          1000000,
+          '2026-10-10T08:00:00Z',
+        );
+        const h1 = await leg(-900000, 100000, '2026-10-15T10:00:00Z', T1);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          2900000,
+          3000000,
+          '2026-10-16T08:00:00Z',
+        );
+        await leg(
+          900000,
+          3900000,
+          '2026-10-21T09:00:00Z',
+          TR,
+          'payment_reversal',
+          'income',
+          h1,
+        );
+        await leg(-850000, 3050000, '2026-10-21T09:00:00Z', T2);
+        await db.query(
+          `INSERT INTO "finance_schema"."payment_corrections"
+             ("action", "payment_kind", "original_transfer_id", "root_transfer_id", "reversal_transfer_id",
+              "replacement_transfer_id", "original_amount", "new_amount", "payment_method",
+              "counterparty_user_id", "receiver_cashbox_id", "reason", "created_by", "idempotency_key", "root_created_at")
+           VALUES ('edit', 'branch_to_main', $1, $1, $2, $3, 900000, 850000, 'cash', 87, 1, 'xato summa', 1, 'k-r5', '2026-10-15T10:00:00Z')`,
+          [T1, TR, T2],
+        );
+        const out = await runWith(['R5'], {
+          R5: {
+            balance_uzs: 500000,
+            days_without_transfer: 3,
+            min_transfer_pct: 80,
+          },
+        });
+        expect(out.candidates[0]).toMatchObject({
+          facts: { last_transfer_at: '2026-10-15T10:00:00.000Z' },
+          evidence: {
+            transfers: [{ at: '2026-10-15T10:00:00.000Z', amount: 850000 }],
           },
         });
       });

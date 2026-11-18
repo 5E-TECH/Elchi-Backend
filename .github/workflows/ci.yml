@@ -313,7 +313,9 @@ jobs:
           apps/ai-service/src/ai-config/ai-key-store.pg.spec.ts
           apps/ai-service/src/ai-config/ai-runtime.provider.pg.spec.ts
           apps/finance-service/src/advisor/advisor-inputs.BE5.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-inputs.volume.pg.spec.ts
           apps/logistics-service/src/delivery-pricing/delivery-pricing-settings-restore.pg.spec.ts
+          apps/logistics-service/src/courier-scan-taken-to-waiting.migration.pg.spec.ts
           apps/logistics-service/src/delivery-pricing/city-zone-restore.pg.spec.ts
           apps/branch-service/src/hq-branch-region-restore.pg.spec.ts
           apps/finance-service/src/user-cashboxes-restore.pg.spec.ts
@@ -354,6 +356,9 @@ jobs:
           # rejalashtirilganini bekor qilish) — elchi_e_test ichida logistics_schema
           # ni o'zi yaratadi va o'chiradi (bu jobda boshqa spec unga tegmaydi).
           DELIVERY_PRICING_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # COURIER-SCAN: migratsiya 240 (skan bilan olingan qatorlar WAITING ga) —
+          # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
+          COURIER_SCAN_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # Migratsiya 233 (HQ filiali viloyati) — o'z vaqtinchalik bazasi,
           # elchi_e_test faqat ulanish uchun. Migratsiya 234 (kuryer / market /
           # filial kassalari) — yuqoridagi FINANCE_PG_TEST_URI bilan.

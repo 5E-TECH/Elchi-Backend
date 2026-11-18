@@ -609,9 +609,10 @@ describe('anKpzwxk 2-band — kuryer o‘zi skanerlab oladi (scanAssignOrder)', 
     const res: any = await scan(ctx, 'Q108');
 
     expect(res.data).toMatchObject({ idempotent: false, order_id: '108' });
+    // COURIER-SCAN: skan = qabul — kuryerda, WAITING.
     expect(ctx.orders.get('108')).toMatchObject({
       courier_id: '44',
-      status: Order_status.ON_THE_ROAD,
+      status: Order_status.WAITING,
     });
   });
 });

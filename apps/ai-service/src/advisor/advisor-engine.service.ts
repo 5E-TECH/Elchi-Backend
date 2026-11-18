@@ -408,12 +408,28 @@ export class AdvisorEngineService {
       // Ochiq yo'q: faqat YANGI fakt yangi ogohlantirish ochadi.
       if (!fresh.length) return { outcome: 'noop', alertId: null };
       const rule = rules[c.rule_key];
-      const previous = await m.query<Array<{ id: string }>>(
-        `SELECT "id"::text AS id FROM ${ALERTS}
+      const previous = await m.query<
+        Array<{ id: string; last_fact_at: Date | null }>
+      >(
+        `SELECT "id"::text AS id, "last_fact_at" FROM ${ALERTS}
           WHERE "dedup_key" = $1 AND "status" IN ('resolved','dismissed') AND "is_deleted" = false
           ORDER BY "id" DESC LIMIT 1`,
         [c.dedup_key],
       );
+      // R2/R4/R5 (#702 review B4): yangi kalitli epizod yopilgan ogohlantirish
+      // oxirgi aniqlangan kunidan OLDIN boshlangan bo'lsa — bu o'sha davom
+      // etayotgan holat (kalit formati o'zgargan: v0.3 → v0.4 yangilanishi,
+      // growth → both), yangi ogohlantirish ochilmaydi (Q23).
+      const prevLast = previous[0]?.last_fact_at
+        ? new Date(previous[0].last_fact_at)
+        : null;
+      if (
+        ADVISOR_STATE_RULES.has(c.rule_key) &&
+        prevLast &&
+        tashkentDay(maxFactAt(fresh)) < tashkentDay(prevLast)
+      ) {
+        return { outcome: 'noop', alertId: null };
+      }
       // R1 (round-4 #651-1): yopilgan ogohlantirishda allaqachon hisoblangan
       // smenalar (ketma-ketlik oynasi / kursor qayta o'qishi) yangisiga
       // QAYTA kirmaydi — faktlar va dalil FAQAT yangi fact_key'lardan.
@@ -684,18 +700,25 @@ function withStoredNames(
       (cur.id ?? cur.owner_id) === (old.id ?? old.owner_id)
     ) {
       facts[k] = { ...cur, name: old.name };
+    } else if (k === 'branch' && cur == null && old) {
+      // R2: filial qidiruvi yiqilganda `facts.branch` null keladi — saqlangani
+      // qoladi (#702 review, alert.branch bilan mos).
+      facts[k] = old;
     }
   }
   return { ...c, facts };
 }
 
-/** P6: `title, …, subject, branch, branch_id` — saqlangan qiymatlar. */
+/**
+ * P6: `subject, branch, branch_id` — saqlangan qiymatlar. Sarlavha QAYTA
+ * hisoblanadi (nomlar `withStoredNames` dan, raqamlar — yangi; #702 review:
+ * sarlavhada eski summa/kun qolib ketmasin).
+ */
 function keepStoredNames(
   present: unknown[],
-  stored: Pick<OpenAlertRow, 'title' | 'subject' | 'branch' | 'branch_id'>,
+  stored: Pick<OpenAlertRow, 'subject' | 'branch' | 'branch_id'>,
 ): unknown[] {
   const out = [...present];
-  out[0] = stored.title;
   out[4] = JSON.stringify(stored.subject ?? null);
   out[5] = stored.branch ? JSON.stringify(stored.branch) : null;
   out[6] = stored.branch_id;
