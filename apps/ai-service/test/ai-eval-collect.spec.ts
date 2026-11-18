@@ -684,3 +684,26 @@ describe('ai-eval-collect: havolaga yopishgan telefon (round-8)', () => {
     );
   });
 });
+
+/**
+ * Review round-9 - C (ta/та), D (шт/по pasport istisnosi), E2 (egalik
+ * shakllaridan keyingi narx) qamrovi; "uyi 61 500" - qayd etilgan murosa.
+ */
+describe('ai-eval-collect: miqdor/narx istisnolari (round-9)', () => {
+  it.each([
+    '1 ta 1500000',
+    '1 \u0442\u0430 1500000',
+    '2 \u0448\u0442 1500000',
+    '\u043F\u043E 1500000',
+    '\u0448\u04421234567',
+    'uyigacha 19 900',
+    '\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u0434\u043E \u0434\u043E\u043C\u0430 25 500',
+    'uyi 61 500',
+  ])("o'zgarmaydi: %j", (text) => {
+    expect(maskCandidateText(text, [])).toBe(text);
+  });
+
+  it("E2 istisnosi yangi qatorni kesib o'tmaydi", () => {
+    expect(maskCandidateText('uyi 61\n120 000', [])).toBe('uyi [N]\n120 000');
+  });
+});

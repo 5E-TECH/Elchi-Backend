@@ -457,9 +457,10 @@ const NOT_QTY =
  * "xonadoniga", kirillda "do doma", "kvartire") - narx istisnosi keng
  * (bo'shliq/nuqta + istalgan 3 raqam): "uyigacha 19 900", "Dostavka do
  * doma 25 500" (kirillda) narxi dev'dagidek ochiq qoladi.
+ * Faqat shu qatorda: "uyi 61" + keyingi qatordagi "120 000" — uy raqami.
  */
 const NOT_QTY_WIDE =
-  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]\\d{3}(?!\\d))";
+  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[^\\S\\n]\\d{3}(?!\\d)|\\.\\d{3}(?!\\d))";
 const HOUSE_CASE =
   '(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
 /** Dev'da bo'lmagan shakllar: egalikli kalit so'z, kirill "dom[eau]", "kvartir[euy]". */

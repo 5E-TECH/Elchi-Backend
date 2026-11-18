@@ -136,7 +136,8 @@ Matnda nima maskalanadi (shu tartibda) — faqat shu ro'yxat, boshqasi yo'q:
   ham `[RAQAM]` bo'ladi;
 - havola dumidagi raqam (post raqami, koordinata) FAQAT keyingi matn
   bilan UZ telefonini boshlasa ajratiladi: "t.me/kanal/1543 150 000" →
-  "[LINK] 150 000", "maps?q=41.31,69.24 85 000" → "[LINK] 85 000";
+  "[LINK] 150 000", "https://maps.google.com/?q=41.31,69.24 85 000" →
+  "[LINK] 85 000";
   havola xostiga yopishgan telefon ham butunligicha `[RAQAM]`
   ("93_918 34 78_www.google.com/maps" → "[RAQAM]_[LINK]");
 - uy/xonadon raqami → `[N]` — FAQAT kalit so'z (uy, xonadon, kvartira,
@@ -226,11 +227,14 @@ maxfiylik orasidagi murosa, keyingi PR'larda o'lchanadi:
   bo'shliq/nuqta + istalgan 3 raqam kelsa — narx deb ochiq qoladi
   ("uyigacha 19 900"). ⚠️ **Bu PR keltirgan murosa:** "uyi 61 500" kabi
   uy raqami ham ochiq qolishi mumkin; istisno hozircha yangi qatorni
-  ham kesib o'tadi ("uyi 61" + keyingi qatordagi "120 000") — keyingi
-  PR'da gorizontal bo'shliq/nuqta bilan cheklanadi. "uy 12 000" (uy
+  kesib o'tmaydi: "uyi 61" + keyingi qatordagi "120 000" → "uyi [N]"
+  (round 9). "uy 12 000" (uy
   raqamidan keyin darhol "000") — avvalgidek narx.
 - **Havolaga yopishgan telefondan keyingi narx** ham `[RAQAM]` ga
-  qo'shilib ketadi.
+  qo'shilib ketadi ("wa.me/AbC12390 742 90 47 150 000" — telefon va
+  narx birga `[RAQAM]`).
+- **Google Maps `!4d<uzunlik>` dumidan keyingi qisqa son** ham havolaga
+  qo'shilib yutiladi (30k korpusda 5 ta).
 
 📝 **Belgilovchi uchun:** mahsulot/tovar o'rnidagi `[ISM]` mahsulot
 so'zi bo'lishi mumkin — ism o'zagi mahsulot nomiga teng: "Asaljon" →
