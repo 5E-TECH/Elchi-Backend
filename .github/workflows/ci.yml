@@ -312,6 +312,7 @@ jobs:
           apps/ai-service/src/advisor/advisor-alerts.BE5.pg.spec.ts
           apps/ai-service/src/advisor/advisor-notify.BE5.pg.spec.ts
           apps/ai-service/src/advisor/advisor-explain.BE5.pg.spec.ts
+          apps/notification-service/src/notification-inbox.delivery-only.pg.spec.ts
           apps/ai-service/src/ai-config/ai-key-store.pg.spec.ts
           apps/ai-service/src/ai-config/ai-runtime.provider.pg.spec.ts
           apps/finance-service/src/advisor/advisor-inputs.BE5.pg.spec.ts
@@ -343,6 +344,8 @@ jobs:
           # BE-5 (LhTIno57) AI maslahatchi sozlamalari/jadvallari (migratsiya 224):
           # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
           AI_ADVISOR_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # BE-5 #655 N1: dispatch delivery_only (notification_schema elchi_e_test ichida).
+          NOTIFICATION_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # «AI kalit va modellar» (migratsiya 228): kalit saqlash va runtime
           # provayderi — o'z vaqtinchalik bazalari, elchi_e_test faqat ulanish uchun.
           AI_CONFIG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
