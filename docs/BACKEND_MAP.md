@@ -653,6 +653,30 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `fill`, `spend`, payments (`payment_courier`, `payment_market`,
   `payment_branch_main`), `financial_balance.{record,history}`, history list,
   shifts (`open`/`close`/`find_all`), salary CRUD, operator earnings/payments/balance.
+- **Operator payments (F2qp6FtE, 2026-11-18, migr `1716000000241`):** owner
+  decision 2026-11-16 — a market pays its own operators itself; Elchi's MAIN
+  cashbox is NOT involved. `OperatorPaymentService`
+  (`operator-payment/`, RMQ `finance.operator.market_payment.{record,cancel,list}`,
+  `finance.operator.market_balances`) writes `operator_payments` rows only
+  (`source = 'market'`, `affects_cashbox = false` — DB CHECK) — no cashbox,
+  cashbox_history, P&L ledger, expense or shift effect. Gateway
+  `OperatorPaymentGatewayController` (`/finance/operator-payments`, MARKET only,
+  market = JWT `sub`, operator must be one of the market's non-deleted
+  operators via `identity.market_operator.find_by_market`, else 404):
+  `GET balances` (earned / paid / balance per operator), `GET` history,
+  `POST` (Idempotency-Key required, UNIQUE `(market_id, idempotency_key)`;
+  replay → 200, other payment → 409; `paid_at` Tashkent day, not future;
+  overpayment allowed → negative balance), `POST :id/cancel` (reason
+  required; row kept with `cancelled_*`; legacy `elchi` row → 409; repeat →
+  200). Balance = Σ non-deleted earnings − Σ non-deleted, non-cancelled
+  payments (legacy `elchi` payments included). The old superadmin cash-out
+  (`finance.operator.payment.create`, MAIN cashbox expense + `SALARY` ledger)
+  is removed — the RMQ handler answers 410 without writing (deploy window).
+  Legacy rows keep their cashbox/ledger rows; migr 241 marks them
+  `source = 'elchi'`, `affects_cashbox` from data (cashbox history or
+  `operator-payment:<id>` ledger row), `paid_at` = Tashkent date of
+  `createdAt`. Activity verbs `finance.operator_payment_recorded` /
+  `_cancelled`.
 - **Invariant:** the cashbox system enforces a money invariant (checked by
   `scripts/check-cashbox-invariant.ts`, `npm run db:check-cashbox`).
 - **Realtime (rWdLuoP3, 2026-10-25):** `FinanceRealtimeService` writes
