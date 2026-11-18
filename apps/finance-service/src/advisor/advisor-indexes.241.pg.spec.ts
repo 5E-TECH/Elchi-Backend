@@ -72,7 +72,7 @@ describePg('Migratsiya 241 — maslahatchi ustunlari va indekslari', () => {
   const indexes = () =>
     db.query<Array<{ indexname: string }>>(
       `SELECT indexname FROM pg_indexes
-        WHERE indexname IN ('IDX_CASHBOX_HISTORY_ADVISOR_R3', 'IDX_SHIFTS_ADVISOR_R1_OWNER_CLOSED')
+        WHERE indexname IN ('IDX_CASHBOX_HISTORY_ADVISOR_R3', 'IDX_SHIFT_ADVISOR_R1_OWNER_CLOSED')
         ORDER BY indexname`,
     );
 
@@ -87,7 +87,7 @@ describePg('Migratsiya 241 — maslahatchi ustunlari va indekslari', () => {
     expect(row).toEqual({ last_failed: 0, failures: {} });
     expect((await indexes()).map((r) => r.indexname)).toEqual([
       'IDX_CASHBOX_HISTORY_ADVISOR_R3',
-      'IDX_SHIFTS_ADVISOR_R1_OWNER_CLOSED',
+      'IDX_SHIFT_ADVISOR_R1_OWNER_CLOSED',
     ]);
   });
 
@@ -107,7 +107,7 @@ describePg('Migratsiya 241 — maslahatchi ustunlari va indekslari', () => {
       )
         .map((r) => r['QUERY PLAN'])
         .join('\n');
-      expect(r1).toContain('IDX_SHIFTS_ADVISOR_R1_OWNER_CLOSED');
+      expect(r1).toContain('IDX_SHIFT_ADVISOR_R1_OWNER_CLOSED');
       expect(r1).not.toMatch(/Sort/);
 
       const r3 = (
@@ -126,6 +126,38 @@ describePg('Migratsiya 241 — maslahatchi ustunlari va indekslari', () => {
       await db.query(`RESET enable_seqscan`);
     }
   });
+
+  it('R3 indeksi INCLUDE da id ham bor (oynadagi w.id <> h.id — index-only)', async () => {
+    await run('up');
+    const [{ def }] = await db.query<Array<{ def: string }>>(
+      `SELECT indexdef AS def FROM pg_indexes WHERE indexname = 'IDX_CASHBOX_HISTORY_ADVISOR_R3'`,
+    );
+    expect(def).toMatch(/INCLUDE \(cashbox_id, amount, id\)/);
+  });
+
+  it('lock_timeout 5 s: cashbox_history da ochiq yozuv tranzaksiyasi bo‘lsa — DDL uzoq kutmaydi, yiqiladi', async () => {
+    await run('down');
+    const writer = db.createQueryRunner();
+    await writer.connect();
+    await writer.startTransaction();
+    const runner = db.createQueryRunner();
+    try {
+      await writer.query(
+        'LOCK TABLE "finance_schema"."cashbox_history" IN ROW EXCLUSIVE MODE',
+      );
+      await runner.startTransaction();
+      const t0 = Date.now();
+      await expect(migration.up(runner)).rejects.toThrow(/lock timeout/);
+      expect(Date.now() - t0).toBeLessThan(9000);
+    } finally {
+      if (runner.isTransactionActive) await runner.rollbackTransaction();
+      await runner.release();
+      await writer.rollbackTransaction();
+      await writer.release();
+    }
+    await run('up');
+    expect(await indexes()).toHaveLength(2);
+  }, 30_000);
 
   it('down — indekslar olib tashlanadi, ustunlar qoladi; qayta up ishlaydi', async () => {
     await run('down');

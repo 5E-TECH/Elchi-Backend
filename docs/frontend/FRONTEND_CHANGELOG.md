@@ -24,7 +24,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-11-18 — AI maslahatchi (BE-5): migratsiya 241 — holat ustunlari va qoida indekslari
 
-Deploy: **migratsiya 1716000000241** (finance-service/ai-service kodi o'zgarmaydi). Idempotent; `cashbox_history` va `shifts` da indeks qurilishi davomida yozish qisqa kutadi — kam yuklamali vaqtda.
+Deploy: **migratsiya 1716000000241** (finance-service/ai-service kodi o'zgarmaydi) — relizda OXIRGI migratsiya bo'lsin, kam yuklamali vaqtda. Idempotent; indeks qurilishi davomida `cashbox_history` / `shifts` ga yozish kutadi (db-prepare bitta tranzaksiyasida — butun partiya commit'igacha). O'lchov: 10M tarix / 1M smena — R3 indeksi ~1–2 s, R1 ~1 s. `lock_timeout` 5 s: ochiq pul yozuvi tranzaksiyasi bo'lsa migratsiya uzoq kutmay yiqiladi — qayta yurgiziladi.
 
 - 🔧 `ai_advisor_rule_state.last_failed` / `failures` — eski 226 ni yurgizgan bazalarda yetishmasdi (qoidalar holati saqlanmasdi).
 - ⚡ R3 (g'ayrioddiy xarajat) va R1 (smena kamomadi) tekshiruvlari indeks bilan (o'lchov: R3 8.7 s → 0.6 s, R1 0.29 s → 0.4 ms).
