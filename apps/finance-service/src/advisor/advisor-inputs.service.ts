@@ -593,23 +593,30 @@ export class AdvisorInputsService {
   private async withTimeout<T>(
     deadline: number,
     fn: (q: SqlQuery, manager: EntityManager) => Promise<T>,
+    /**
+     * `manager` orqali (q dan tashqari) KETMA-KET yuboriladigan ifodalar
+     * soni: ular uchun chegara qayta qo'yilmaydi, shuning uchun boshlang'ich
+     * chegara qolgan byudjetning 1/N qismi (jami ≤ qolgan byudjet).
+     */
+    managerStatements = 1,
   ): Promise<T> {
-    const remaining = deadline - Date.now();
-    if (remaining < 250) throw new Error('advisor budget exhausted');
+    if (deadline - Date.now() < 250)
+      throw new Error('advisor budget exhausted');
     const runner: QueryRunner = this.ds.createQueryRunner();
     await runner.connect();
     try {
+      // Pool kutish vaqti ham hisobga olinadi — qolgan byudjet ulanishdan keyin.
+      const remaining = deadline - Date.now();
+      if (remaining < 250) throw new Error('advisor budget exhausted');
       await runner.startTransaction();
-      await runner.query(
-        `SET LOCAL statement_timeout = ${Math.floor(
-          Math.min(this.statementTimeoutMs, remaining),
-        )}`,
-      );
-      await runner.query(`SET LOCAL lock_timeout = '${ADVISOR_LOCK_TIMEOUT}'`);
       // statement_timeout har IFODAGA (#704 review B1): qoida ichidagi har
       // so'rov oldidan qolgan byudjet bilan qayta qo'yiladi — ko'p ifodali
       // qoida (R3: chunk + har anomaliya uchun r3Sample) chegaradan oshmaydi.
-      let applied = Math.floor(Math.min(this.statementTimeoutMs, remaining));
+      let applied = Math.floor(
+        Math.min(this.statementTimeoutMs, remaining / managerStatements),
+      );
+      await runner.query(`SET LOCAL statement_timeout = ${applied}`);
+      await runner.query(`SET LOCAL lock_timeout = '${ADVISOR_LOCK_TIMEOUT}'`);
       const result = await fn(async <R>(sql: string, params?: unknown[]) => {
         const left = deadline - Date.now();
         if (left < 250) throw new Error('advisor budget exhausted');
@@ -2027,21 +2034,26 @@ export class AdvisorInputsService {
       const weekday = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = dushanba
       const from = addDaysKey(today, -weekday);
       const to = addDaysKey(from, 6);
-      const summary = await this.withTimeout(deadline, (_q, m) =>
-        loadReceiptChecksSummary(
-          m,
-          {
-            receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
-            history: this.ds.getMetadata(CashboxHistory).tablePath,
-            cashbox: this.ds.getMetadata(Cashbox).tablePath,
-          },
-          {
-            start: new Date(`${from}T00:00:00.000+05:00`),
-            end: new Date(
-              new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
-            ),
-          },
-        ),
+      // loadReceiptChecksSummary — `m` orqali 2 ta ifoda (Promise.all,
+      // bitta ulanishda ketma-ket): har biriga qolgan byudjetning yarmi.
+      const summary = await this.withTimeout(
+        deadline,
+        (_q, m) =>
+          loadReceiptChecksSummary(
+            m,
+            {
+              receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
+              history: this.ds.getMetadata(CashboxHistory).tablePath,
+              cashbox: this.ds.getMetadata(Cashbox).tablePath,
+            },
+            {
+              start: new Date(`${from}T00:00:00.000+05:00`),
+              end: new Date(
+                new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
+              ),
+            },
+          ),
+        2,
       );
       const c = summary.counts as Record<string, number>;
       const match = Number(c.match ?? 0);

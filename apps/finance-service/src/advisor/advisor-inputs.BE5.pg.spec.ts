@@ -1798,6 +1798,31 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(out.candidates.map((c) => c.facts.mismatch)).toEqual([['card']]);
       });
 
+      it('#704 (S3 regressiya F1): haftalik chek xulosasi (manager orqali 2 ifoda) byudjetni 2 baravar oshirmaydi', async () => {
+        await receipt({});
+        // cashbox_receipts o'rniga har ifodada 10.5 s uxlaydigan view.
+        await db.query(`
+          ALTER TABLE "finance_schema"."cashbox_receipts" RENAME TO "cashbox_receipts_t";
+          CREATE VIEW "finance_schema"."cashbox_receipts" AS
+            SELECT r.* FROM "finance_schema"."cashbox_receipts_t" r
+            CROSS JOIN (SELECT pg_sleep(10.5)) gate;
+        `);
+        try {
+          const t0 = Date.now();
+          const out = await runR7('2026-10-22T08:00:00Z');
+          const took = Date.now() - t0;
+          // Eski: 10.5 + 2 × 10.5 = 31.5 s (30 s reader chegarasidan oshadi).
+          expect(took).toBeLessThan(25_000);
+          expect(out.errors?.R7).toBeUndefined();
+          expect(out.candidates).toHaveLength(1);
+        } finally {
+          await db.query(`
+            DROP VIEW "finance_schema"."cashbox_receipts";
+            ALTER TABLE "finance_schema"."cashbox_receipts_t" RENAME TO "cashbox_receipts";
+          `);
+        }
+      }, 120_000);
+
       it('S5: receipt_ai_enabled — chek sozlamasidan (stub)', async () => {
         await receipt({});
         const withSettings = new AdvisorInputsService(
