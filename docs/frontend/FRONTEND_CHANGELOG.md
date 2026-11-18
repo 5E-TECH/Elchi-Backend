@@ -26,7 +26,8 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 Deploy: ai-service + notification-service, migratsiyasiz.
 
-- 🔧 Jiddiy ogohlantirish bildirishnomasi yuborilmasa — qayta urinish oralig'i o'sadi (30 daq, 1 s, 2 s, 4 s); 5 urinishdan keyin to'xtatiladi (log'da `ai_advisor_notify_gave_up`). Ogohlantirishning o'zi ro'yxatda qoladi. Xatoli ogohlantirishlar yangi jiddiy ogohlantirishlar bildirishnomasini endi kechiktirmaydi.
+- 🔧 Jiddiy ogohlantirish bildirishnomasi notification-service tomonidan RAD ETILSA (xato javobi) — qayta urinish oralig'i o'sadi (30 daqiqa, 1 soat, 2 soat, 4 soat); 5 urinishdan keyin to'xtatiladi (log'da `ai_advisor_notify_gave_up`). Xizmat vaqtincha YETIB BO'LMASA (timeout / RabbitMQ uzilishi) — urinish sanalmaydi, har 30 daqiqada qayta uriniladi (24 soatgacha): uzilishdan keyin xabar baribir yetadi. Ogohlantirishning o'zi ro'yxatda qoladi. Xatoli ogohlantirishlar yangi jiddiy ogohlantirishlar bildirishnomasini kechiktirmaydi. R6 09:00 Telegram'i uchun ham xuddi shu qoida.
+- 🔧 Tunda ochilgan R6 ning birinchi yuborishi yiqilib, 09:00 dan keyin qayta urinilsa — Telegram ham yetadi (ilgari yo'qolishi mumkin edi).
 - 🔒 `ai.advisor_alert` turi uchun SMS eskalatsiyasi navbatda qolib ketgan eski hodisalarda ham ishlamaydi (`delivery.escalation: "skipped"`, `escalation_reason: "type_opt_out"`).
 - 🟢 `GET /notifications/types` javobida `ai.advisor_alert` uchun `escalation: false` maydoni bor (qo'shimcha, ixtiyoriy): «bu tur SMS eskalatsiyasiz». FE turlarini generatsiya qilishda `escalation?: boolean` deb qo'shing.
 
