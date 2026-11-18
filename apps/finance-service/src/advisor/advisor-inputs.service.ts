@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, type QueryRunner } from 'typeorm';
+import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import {
   AI_ADVISOR_INPUT_MAX_PERIODS,
   AI_ADVISOR_INPUT_MAX_SINCE_DAYS,
@@ -66,6 +66,29 @@ const USER_BRANCH_CHUNK = 500;
  * faqat o'sha qoidaga tegadi (`errors`).
  */
 export const ADVISOR_STATEMENT_TIMEOUT_MS = 15_000;
+/**
+ * Qoidalar SQL qismining UMUMIY byudjeti (#704 review B1): statement_timeout
+ * har ifodaga — qoidalar ketma-ket, bitta qulflangan jadval 5 × 15 s = 75 s
+ * bo'lardi. 30 s AdvisorReader − 5 s nomlar − zaxira = 22 s; har qoida
+ * qolgan vaqt bilan cheklanadi, tugasa — keyingi qoidalar `errors` ga.
+ */
+export const ADVISOR_RULES_BUDGET_MS = 22_000;
+/** Butun `rule_inputs` (nomlar bilan) — AdvisorReader 30 s dan past. */
+export const ADVISOR_TOTAL_BUDGET_MS = 28_000;
+/** Qulflangan jadval butun byudjetni yemasin — har tranzaksiyada. */
+const ADVISOR_LOCK_TIMEOUT = '2s';
+/**
+ * Ism/filial qidiruvining UMUMIY chegarasi (round-4 #651-2 / #652): osilgan
+ * identity/branch-service bilan ham `rule_inputs` AdvisorReader 30 s
+ * budjetidan oshmaydi — chegarada nomlar null, `names_degraded` (P6).
+ */
+export const ADVISOR_NAMES_DEADLINE_MS = 5_000;
+/**
+ * R2/R4/R5 «hisoblanadigan topshirish» va T6 qaytarish (P4) qidiruvi oynasi
+ * (#702 review B1): butun tarix emas, oxirgi 90 kun (chegaralar ≤ 60 kun).
+ * Oynada hisoblanadigan kun bo'lmasa — chegara musbat qator boshi (P2).
+ */
+export const ADVISOR_EPISODE_LOOKBACK_DAYS = 90;
 /** R3: bitta tekshiruvdagi vaqt byudjeti — oshsa, ishlangan qismgacha kursor. */
 export const R3_TIME_BUDGET_MS = 12_000;
 /** R3: yangi qatorlar shu bo'laklarda ishlanadi (progress kafolati). */
@@ -123,33 +146,88 @@ interface EpisodeRow {
   cashbox_id: string;
   owner: string;
   balance: string;
+  /** Oxirgi (T6 qaytarilmagan) chiqish — dalil va `last_*` faktlar uchun. */
   last_id: string | null;
   last_at: Date | null;
   last_amount: string | null;
-  last_day: string | null;
-  first_at: Date | null;
-  first_day: string | null;
+  /** Oxirgi «hisoblanadigan» topshirish kuni (kun yig'indisi ≥ N% boshlang'ich qoldiq). */
+  qual_id: string | null;
+  qual_at: Date | null;
+  /** Joriy musbat qatorning boshi (oxirgi `balance_after <= 0` dan keyingi qator). */
+  run_id: string | null;
+  run_at: Date | null;
+  /** Hisoblanadigan topshirishdan keyingi T6 qaytarish (P4). */
+  rev_id: string | null;
+  rev_orig_id: string | null;
+  rev_at: Date | null;
 }
 
 interface Episode {
-  /** `ep:h:<oxirgi chiqish history_id>` yoki `ep:d:<boshlangan kun>`. */
+  /**
+   * v0.4: `ep:h:<topshirish id>` | `ep:p:<musbat qator boshi id>` |
+   * `ep:h:<asl id>:r<qaytarish id>` (R2 o'sish — `ep:g:<kun>`, r2() da).
+   */
   key: string;
   /** Epizod boshlangan Toshkent kuni 00:00 (ISO). */
   at: string;
-  /** «N kundan beri» = bugun − hodisa kuni (to'liq kalendar kunlari). */
+  /** «N kundan beri» = bugun − chegara kuni (to'liq kalendar kunlari). */
   days: number;
 }
 
-/** Epizod: oxirgi chiqishdan (bo'lmasa qoldiq paydo bo'lgan kundan) beri. */
-function episodeOf(r: EpisodeRow, today: string): Episode | null {
-  const day = r.last_id ? r.last_day : r.first_day;
-  if (!day) return null;
-  const key = r.last_id ? `ep:h:${r.last_id}` : `ep:d:${day}`;
+/**
+ * Epizod chegarasi (shartnoma v0.4, ega qarori 2026-11-18) — eng kechki:
+ * - hisoblanadigan topshirish (kun yig'indisi ≥ min_pct × kun boshidagi
+ *   qoldiq; R4 — har qanday to'lov) → `ep:h:<o'sha kunning oxirgi chiqishi>`;
+ * - joriy musbat qatorning boshi (qoldiq 0 dan o'tgan) → `ep:p:<id>` (P2;
+ *   chegaraga bog'liq emas — P3);
+ * - hisoblanadigan topshirishdan keyin T6 qaytarilgan topshirish →
+ *   `ep:h:<asl>:r<qaytarish>` (P4).
+ */
+export function episodeOf(r: EpisodeRow, today: string): Episode | null {
+  // Teng vaqtda ustunlik: qaytarish > topshirish > musbat qator boshi
+  // (qaytarish qatori qoldiqni 0 dan o'tkazsa ikkalasi bir lahzada).
+  const options: Array<{ key: string; at: Date }> = [];
+  if (r.rev_id && r.rev_orig_id && r.rev_at)
+    options.push({
+      key: `ep:h:${r.rev_orig_id}:r${r.rev_id}`,
+      at: new Date(r.rev_at),
+    });
+  if (r.qual_id && r.qual_at)
+    options.push({ key: `ep:h:${r.qual_id}`, at: new Date(r.qual_at) });
+  if (r.run_id && r.run_at)
+    options.push({ key: `ep:p:${r.run_id}`, at: new Date(r.run_at) });
+  if (!options.length) return null;
+  const boundary = options.reduce((a, b) => (b.at > a.at ? b : a));
+  const day = tashkentDateKey(boundary.at);
   const days = Math.round(
     (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) /
       86_400_000,
   );
-  return { key, at: new Date(`${day}T00:00:00.000+05:00`).toISOString(), days };
+  return {
+    key: boundary.key,
+    at: new Date(`${day}T00:00:00.000+05:00`).toISOString(),
+    days,
+  };
+}
+
+/**
+ * R2 o'sish epizodi (P1): kechagacha uzluksiz, qat'iy o'sib borayotgan
+ * yopilishlar qatorining birinchi kuni. Kun yetishmasa (snapshot yo'q) —
+ * qator o'sha yerda uziladi (shartnoma v0.4 (b): yo'q kun o'tkaziladi).
+ */
+export function growthRunStart(
+  days: Array<{ date: string; closing: number }>,
+  today: string,
+): string | null {
+  let i = days.length - 1;
+  if (i < 0 || days[i].date !== addDaysKey(today, -1)) return null;
+  while (
+    i > 0 &&
+    days[i - 1].date === addDaysKey(days[i].date, -1) &&
+    days[i].closing > days[i - 1].closing
+  )
+    i -= 1;
+  return days[i].date;
 }
 
 interface CardCheckRow {
@@ -349,6 +427,12 @@ interface R3Row {
 @Injectable()
 export class AdvisorInputsService {
   private readonly logger = new Logger(AdvisorInputsService.name);
+  /** Ism qidiruvi umumiy chegarasi (testlarda qisqartiriladi). */
+  namesDeadlineMs = ADVISOR_NAMES_DEADLINE_MS;
+  /** Har SQL ifoda chegarasi (testlarda qisqartiriladi). */
+  statementTimeoutMs = ADVISOR_STATEMENT_TIMEOUT_MS;
+  /** Qoidalar SQL byudjeti (testlarda qisqartiriladi). */
+  rulesBudgetMs = ADVISOR_RULES_BUDGET_MS;
 
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
@@ -385,9 +469,18 @@ export class AdvisorInputsService {
     const now = new Date(input?.now ?? Date.now());
     if (Number.isNaN(now.getTime())) throw new Error('now noto‘g‘ri');
     const started = Date.now();
+    const deadline = started + this.rulesBudgetMs;
     const rules = new Set(Array.isArray(input?.rules) ? input.rules : []);
     const out: AiAdvisorRuleInputsResponse = { candidates: [], cursors: {} };
-    const names = new NameCache(this);
+    const names = new NameCache(this, () =>
+      Math.max(
+        0,
+        Math.min(
+          this.namesDeadlineMs,
+          started + ADVISOR_TOTAL_BUDGET_MS - Date.now(),
+        ),
+      ),
+    );
     // Har qoida alohida: biri yiqilsa (timeout) — boshqalari odatdagidek,
     // yiqilgan qoida `errors` da, kursorsiz (round-2 #651 ops-B1).
     const guard = async (rule: AiAdvisorRuleKey, fn: () => Promise<void>) => {
@@ -403,7 +496,7 @@ export class AdvisorInputsService {
       await guard('R1', async () => {
         const t = input.thresholds?.R1 ?? {};
         const since = parseSince(input.since?.R1, now);
-        const r = await this.withTimeout((q) =>
+        const r = await this.withTimeout(deadline, (q) =>
           this.r1(q, since, now, t, names),
         );
         out.candidates.push(...r.candidates);
@@ -414,7 +507,7 @@ export class AdvisorInputsService {
       await guard('R3', async () => {
         const t = input.thresholds?.R3 ?? {};
         const since = parseSince(input.since?.R3, now);
-        const r = await this.withTimeout((q) =>
+        const r = await this.withTimeout(deadline, (q) =>
           this.r3(q, since, now, t, names, started + R3_TIME_BUDGET_MS),
         );
         out.candidates.push(...r.candidates);
@@ -425,49 +518,71 @@ export class AdvisorInputsService {
     if (rules.has('R2')) {
       await guard('R2', async () => {
         out.candidates.push(
-          ...(await this.r2(input.thresholds?.R2 ?? {}, today, names)),
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r2(q, input.thresholds?.R2 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R4')) {
       await guard('R4', async () => {
         out.candidates.push(
-          ...(await this.r4(input.thresholds?.R4 ?? {}, today, names)),
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r4(q, input.thresholds?.R4 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R5')) {
       await guard('R5', async () => {
         out.candidates.push(
-          ...(await this.r5(input.thresholds?.R5 ?? {}, today, names)),
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r5(q, input.thresholds?.R5 ?? {}, today, names),
+          )),
         );
       });
     }
     if (rules.has('R7')) {
       await guard('R7', async () => {
         const since = parseSince(input.since?.R7, now);
-        const r = await this.r7(since, now, names);
+        const r = await this.withTimeout(deadline, (q) =>
+          this.r7(q, since, now, names, deadline),
+        );
         out.candidates.push(...r.candidates);
         out.cursors.R7 = r.cursor;
       });
     }
+    // R8/R6 (kunlik guruh) o'z so'rovlari bilan — byudjet tugagan bo'lsa
+    // boshlanmaydi (kursorsiz `errors`).
+    const budgetLeft = () => {
+      if (deadline - Date.now() < 250)
+        throw new Error('advisor budget exhausted');
+    };
     if (rules.has('R8')) {
       await guard('R8', async () => {
+        budgetLeft();
         out.candidates.push(
-          ...(await this.r8(
-            input.thresholds?.R8 ?? {},
-            (input.periods?.weeks ?? []).slice(-AI_ADVISOR_INPUT_MAX_PERIODS),
-            now,
+          ...(await this.withTimeout(deadline, (q) =>
+            this.r8(
+              q,
+              input.thresholds?.R8 ?? {},
+              (input.periods?.weeks ?? []).slice(-AI_ADVISOR_INPUT_MAX_PERIODS),
+              now,
+            ),
           )),
         );
       });
     }
     if (rules.has('R6')) {
       await guard('R6', async () => {
+        budgetLeft();
         out.candidates.push(...(await this.r6(input.periods ?? {}, now)));
       });
     }
     await names.fill(out.candidates);
+    // P6 (v0.4): ism qidiruvi yiqilgan — dvigatel saqlangan nom/filial/
+    // sarlavhani yangilamaydi (null bilan almashtirmaydi).
+    if (names.degraded) out.names_degraded = true;
     return out;
   }
 
@@ -475,18 +590,43 @@ export class AdvisorInputsService {
    * O'qish so'rovlari alohida ulanishda, `statement_timeout` bilan (SET
    * LOCAL — faqat shu tranzaksiya). Hech narsa yozilmaydi.
    */
-  private async withTimeout<T>(fn: (q: SqlQuery) => Promise<T>): Promise<T> {
+  private async withTimeout<T>(
+    deadline: number,
+    fn: (q: SqlQuery, manager: EntityManager) => Promise<T>,
+    /**
+     * `manager` orqali (q dan tashqari) KETMA-KET yuboriladigan ifodalar
+     * soni: ular uchun chegara qayta qo'yilmaydi, shuning uchun boshlang'ich
+     * chegara qolgan byudjetning 1/N qismi (jami ≤ qolgan byudjet).
+     */
+    managerStatements = 1,
+  ): Promise<T> {
+    if (deadline - Date.now() < 250)
+      throw new Error('advisor budget exhausted');
     const runner: QueryRunner = this.ds.createQueryRunner();
     await runner.connect();
     try {
+      // Pool kutish vaqti ham hisobga olinadi — qolgan byudjet ulanishdan keyin.
+      const remaining = deadline - Date.now();
+      if (remaining < 250) throw new Error('advisor budget exhausted');
       await runner.startTransaction();
-      await runner.query(
-        `SET LOCAL statement_timeout = ${ADVISOR_STATEMENT_TIMEOUT_MS}`,
+      // statement_timeout har IFODAGA (#704 review B1): qoida ichidagi har
+      // so'rov oldidan qolgan byudjet bilan qayta qo'yiladi — ko'p ifodali
+      // qoida (R3: chunk + har anomaliya uchun r3Sample) chegaradan oshmaydi.
+      let applied = Math.floor(
+        Math.min(this.statementTimeoutMs, remaining / managerStatements),
       );
-      const result = await fn(
-        <R>(sql: string, params?: unknown[]) =>
-          runner.query(sql, params) as Promise<R>,
-      );
+      await runner.query(`SET LOCAL statement_timeout = ${applied}`);
+      await runner.query(`SET LOCAL lock_timeout = '${ADVISOR_LOCK_TIMEOUT}'`);
+      const result = await fn(async <R>(sql: string, params?: unknown[]) => {
+        const left = deadline - Date.now();
+        if (left < 250) throw new Error('advisor budget exhausted');
+        const next = Math.floor(Math.min(this.statementTimeoutMs, left));
+        if (next < applied) {
+          await runner.query(`SET LOCAL statement_timeout = ${next}`);
+          applied = next;
+        }
+        return runner.query(sql, params) as Promise<R>;
+      }, runner.manager);
       await runner.commitTransaction();
       return result;
     } catch (error) {
@@ -981,52 +1121,212 @@ export class AdvisorInputsService {
   // ─── R2/R4/R5 holat qoidalari: epizod (§4.1, §4.2, BE-rev B5) ─────────
 
   /**
-   * Kassa turi bo'yicha joriy holat: qoldiq, oxirgi «chiqish» (topshirish /
-   * to'lov / o'tkazma — `createdAt` bo'yicha, T6 bilan qaytarilgani
-   * hisobga olinmaydi) va bunday chiqish bo'lmasa epizod boshlangan lahza
-   * (qoldiq birinchi marta `episodeFloor` dan oshgan qator).
+   * Kassa turi bo'yicha joriy holat va epizod chegaralari (v0.4):
+   * - `lh` — oxirgi chiqish (T6 qaytarilmagan) — dalil;
+   * - `qh` — oxirgi «hisoblanadigan» topshirish kuni: shu kundagi chiqishlar
+   *   yig'indisi × 100 ≥ `minPct` × kun boshidagi qoldiq (R4 — `minPct` 0);
+   *   kalit — o'sha kunning oxirgi chiqishi;
+   * - `zr`/`rs` — joriy musbat qatorning boshi (oxirgi `balance_after <= 0`
+   *   dan keyingi birinchi qator; bo'lmasa — birinchi qator);
+   * - `rv` — `qh` dan keyin qilingan, o'zi hisoblanadigan bo'lgan va T6
+   *   bilan qaytarilgan topshirish (qaytarish lahzasi — chegara, P4).
    */
   private async episodes(
+    q: SqlQuery,
     type: 'couriers' | 'markets' | 'branch',
     source: 'courier_payment' | 'market_payment' | 'branch_to_main',
     minBalance: number,
-    episodeFloor: number,
+    minPct: number,
+    today: string,
   ): Promise<EpisodeRow[]> {
     const t = this.tables();
-    return this.ds.query<EpisodeRow[]>(
-      `SELECT c."id"::text AS cashbox_id, c."user_id"::text AS owner, c."balance",
-              lh.id AS last_id, lh."createdAt" AS last_at, lh.amount AS last_amount,
-              to_char(lh."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS last_day,
-              fp.first_at,
-              to_char(fp.first_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS first_day
-         FROM ${t.cashboxes} c
+    // P5 (v0.4): T6 tahririning almashtiruvchi oyog'i — vaqti va id'si
+    // zanjirning BIRINCHI (root) oyog'idan (ayni kassa): tahrir «oxirgi
+    // topshirish»ni oldinga surmaydi, kunlar sanog'ini nolga tushirmaydi.
+    const effective = (a: string) => this.effectiveJoin(a);
+    const day = (at: string) => `(${at} AT TIME ZONE 'Asia/Tashkent')::date`;
+    // Oyna: [today − N kun] dan (bir kun oldingi qatorlar — kun boshi qoldig'i uchun).
+    const since = `($5::date::timestamp AT TIME ZONE 'Asia/Tashkent')`;
+    // #702 review B1: kun boshidagi qoldiq har (kassa, kun) uchun alohida
+    // korrelyatsion so'rov EMAS — bitta oyna o'tishi (LAG) bilan; `qh`/`rv`
+    // ham kunlik agregatdan (kassalar soni × tarix uzunligiga chiziqli).
+    // JIT o'chiq: rejalashtiruvchi lateral'lar narxini katta baholab JIT
+    // kompilyatsiyasiga (~1.4 s) kiradi, so'rovning o'zi ~0.5 s (#702 B1).
+    // withTimeout tranzaksiyasi ichida (SET LOCAL).
+    await q('SET LOCAL jit = off');
+    return q<EpisodeRow[]>(
+      `WITH cb AS (
+         SELECT c."id", c."user_id", c."balance" FROM ${t.cashboxes} c
+          WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
+            AND c."balance" > $3::numeric
+       ),
+       -- Kun boshidagi qoldiq: kunning birinchi qatoridan oldingi balance_after
+       -- (tor qatorlar — saralash xotirada).
+       starts AS (
+         SELECT x.cashbox_id, x.day, x.start_balance FROM (
+           SELECT y.cashbox_id, y.d AS day,
+                  COALESCE(LAG(y.balance_after) OVER w,
+                    -- oynadagi birinchi qator: qoldiq shu qatordan OLDIN
+                    y.balance_after + CASE WHEN y.op = 'expense'
+                      THEN ABS(y.amount) ELSE -ABS(y.amount) END) AS start_balance,
+                  y.d IS DISTINCT FROM LAG(y.d) OVER w AS first_of_day
+             FROM (
+               SELECT h."cashbox_id" AS cashbox_id, h."createdAt" AS at, h."id" AS id,
+                      h."balance_after" AS balance_after, h."operation_type"::text AS op,
+                      h."amount" AS amount, ${day('h."createdAt"')} AS d
+                 FROM ${t.history} h JOIN cb ON cb."id" = h."cashbox_id"
+                WHERE h."is_deleted" = false AND h."createdAt" >= ${since}
+             ) y
+           WINDOW w AS (PARTITION BY y.cashbox_id ORDER BY y.at, y.id)
+         ) x WHERE x.first_of_day
+       ),
+       -- Chiqish oyoqlari: samarali vaqt/id (P5) va T6 qaytarilishi (turi bilan).
+       legs AS (
+         SELECT o."cashbox_id", o."id", COALESCE(oe.rid, o."id") AS kid,
+                COALESCE(oe.rat, o."createdAt") AS at, ABS(o."amount") AS amount,
+                rv.rid, rv.rat, rv.kind
+           FROM ${t.history} o JOIN cb ON cb."id" = o."cashbox_id"
+           ${effective('o')}
+           LEFT JOIN LATERAL (
+             SELECT r."id" AS rid, r."createdAt" AS rat,
+                    CASE WHEN EXISTS (
+                      SELECT 1 FROM ${t.corrections} pe
+                       WHERE pe."reversal_transfer_id" = r."transfer_id"
+                         AND pe."action" = 'edit' AND pe."is_deleted" = false)
+                    THEN 'edit' ELSE 'reverse' END AS kind
+               FROM ${t.history} r
+              WHERE r."reverses_history_id" = o."id"
+                AND r."source_type" = 'payment_reversal' AND r."is_deleted" = false
+              ORDER BY r."createdAt" DESC, r."id" DESC LIMIT 1
+           ) rv ON true
+          WHERE o."operation_type" = 'expense' AND o."source_type" = $2
+            AND o."is_deleted" = false AND o."createdAt" >= ${since}
+       ),
+       -- Kun yig'indilari: \`live\` — amaldagi oyoqlar; \`with_rev\` — T6
+       -- «qaytarish» bilan bekor qilinganlari ham (tahrir — almashtiruvchi
+       -- oyoq allaqachon \`live\` da, root kunida).
+       days AS (
+         SELECT l."cashbox_id" AS cashbox_id, ${day('l.at')} AS day,
+                SUM(l.amount) FILTER (WHERE l.rid IS NULL) AS live,
+                SUM(l.amount) FILTER (WHERE l.rid IS NULL OR l.kind = 'reverse') AS with_rev,
+                MAX(l.at) FILTER (WHERE l.rid IS NULL) AS last_at,
+                (array_agg(l.kid::text ORDER BY l.at DESC, l.kid DESC)
+                   FILTER (WHERE l.rid IS NULL))[1] AS last_id
+           FROM legs l GROUP BY 1, 2
+       ),
+       dq AS (
+         SELECT d.*, GREATEST(COALESCE(s.start_balance, 0), 0) AS sb
+           FROM days d
+           LEFT JOIN starts s ON s.cashbox_id = d.cashbox_id AND s.day = d.day
+          -- Oyna birinchi kunining boshlang'ich qoldig'i oynadan tashqarida.
+          WHERE d.day > $5::date
+       ),
+       qh AS (
+         SELECT DISTINCT ON (dq.cashbox_id) dq.cashbox_id, dq.day, dq.last_id, dq.last_at
+           FROM dq
+          WHERE dq.live IS NOT NULL AND dq.live * 100 >= $4::numeric * dq.sb
+          ORDER BY dq.cashbox_id, dq.day DESC
+       ),
+       -- P4 (#702 review B3): T6 «qaytarish» — chegara faqat qaytarilgan
+       -- oyoq kuni oxirgi hisoblanadigan kundan KEYIN va o'sha kun qaytarilgan
+       -- oyoqlari bilan birga hisoblanadigan bo'lgan bo'lsa (kun yig'indisi).
+       -- Har kun uchun: kun 80% dan PASTGA tushgan BIRINCHI qaytarish
+       -- (qolgan = with_rev − shu paytgacha qaytarilganlar).
+       rvd AS (
+         SELECT DISTINCT ON (x.cashbox_id, x.day) x.cashbox_id, x.rid, x.oid, x.rat
+           FROM (
+             SELECT l."cashbox_id" AS cashbox_id, dq.day, dq.sb, l.rid, l."id" AS oid, l.rat,
+                    dq.with_rev - SUM(l.amount) OVER (
+                      PARTITION BY l."cashbox_id", dq.day ORDER BY l.rat, l.rid) AS remaining
+               FROM legs l
+               JOIN dq ON dq.cashbox_id = l."cashbox_id" AND dq.day = ${day('l.at')}
+               LEFT JOIN qh ON qh.cashbox_id = l."cashbox_id"
+              WHERE l.kind = 'reverse'
+                AND dq.with_rev * 100 >= $4::numeric * dq.sb
+                AND (qh.day IS NULL OR dq.day > qh.day)
+           ) x
+          WHERE x.remaining <= 0 OR x.remaining * 100 < $4::numeric * x.sb
+          ORDER BY x.cashbox_id, x.day, x.rat ASC, x.rid ASC
+       ),
+       rv AS (
+         SELECT DISTINCT ON (r.cashbox_id) r.cashbox_id, r.rid::text AS rid,
+                r.oid::text AS oid, r.rat
+           FROM rvd r ORDER BY r.cashbox_id, r.rat DESC, r.rid DESC
+       )
+       SELECT cb."id"::text AS cashbox_id, cb."user_id"::text AS owner, cb."balance",
+              lh.id AS last_id, lh.at AS last_at, lh.amount AS last_amount,
+              qh.last_id AS qual_id, qh.last_at AS qual_at,
+              rs.id AS run_id, rs."createdAt" AS run_at,
+              rv.rid AS rev_id, rv.oid AS rev_orig_id, rv.rat AS rev_at
+         FROM cb
+         -- Oxirgi (T6 qaytarilmagan) chiqish — dalil; butun tarix bo'yicha.
          LEFT JOIN LATERAL (
-           SELECT h."id"::text AS id, h."createdAt", ABS(h."amount") AS amount
+           SELECT h."id"::text AS id, COALESCE(he.rat, h."createdAt") AS at,
+                  ABS(h."amount") AS amount
              FROM ${t.history} h
-            WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
+             ${effective('h')}
+            WHERE h."cashbox_id" = cb."id" AND h."operation_type" = 'expense'
               AND h."source_type" = $2 AND h."is_deleted" = false
               AND NOT EXISTS (
-                SELECT 1 FROM ${t.history} r
-                 WHERE r."source_type" = 'payment_reversal'
-                   AND r."reverses_history_id" = h."id" AND r."is_deleted" = false)
-            ORDER BY h."createdAt" DESC, h."id" DESC
+                SELECT 1 FROM ${t.history} rr
+                 WHERE rr."source_type" = 'payment_reversal'
+                   AND rr."reverses_history_id" = h."id" AND rr."is_deleted" = false)
+            ORDER BY COALESCE(he.rat, h."createdAt") DESC, h."id" DESC
             LIMIT 1
          ) lh ON true
+         LEFT JOIN qh ON qh.cashbox_id = cb."id"
+         LEFT JOIN rv ON rv.cashbox_id = cb."id"
          LEFT JOIN LATERAL (
-           SELECT MIN(h."createdAt") AS first_at
-             FROM ${t.history} h
-            WHERE lh.id IS NULL AND h."cashbox_id" = c."id"
-              AND h."is_deleted" = false AND h."balance_after" > $4::numeric
-         ) fp ON true
-        WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
-          AND c."balance" > $3::numeric
-        ORDER BY c."id"`,
-      [type, source, minBalance, episodeFloor],
+           SELECT z."createdAt", z."id" FROM ${t.history} z
+            WHERE z."cashbox_id" = cb."id" AND z."is_deleted" = false
+              AND z."balance_after" <= 0
+            ORDER BY z."createdAt" DESC, z."id" DESC LIMIT 1
+         ) zr ON true
+         -- Bitta qator taqqoslashi (OR emas): IDX_CASHBOX_HISTORY_CASHBOX_CREATED
+         -- (migratsiya 243) bo'yicha kassa ichida zr dan keyingi birinchi qator.
+         -- OR bilan rejalashtiruvchi "createdAt" indeksini jadval boshidan
+         -- o'qib, har kassa uchun cashbox_id bo'yicha filtrlardi (kvadratik).
+         LEFT JOIN LATERAL (
+           SELECT s."id"::text AS id, s."createdAt" FROM ${t.history} s
+            WHERE s."cashbox_id" = cb."id" AND s."is_deleted" = false
+              AND (s."createdAt", s."id") >
+                  (COALESCE(zr."createdAt", '-infinity'::timestamptz), COALESCE(zr."id", 0))
+            ORDER BY s."createdAt" ASC, s."id" ASC LIMIT 1
+         ) rs ON true
+        ORDER BY cb."id"`,
+      [
+        type,
+        source,
+        minBalance,
+        minPct,
+        addDaysKey(today, -ADVISOR_EPISODE_LOOKBACK_DAYS - 1),
+      ],
     );
+  }
+
+  /**
+   * P5 (v0.4): T6 tahririning almashtiruvchi oyog'i uchun samarali vaqt/id —
+   * zanjirning BIRINCHI (root) oyog'idan (ayni kassa). Natija: `<a>e.rid`,
+   * `<a>e.rat` (tahrir bo'lmasa — NULL).
+   */
+  private effectiveJoin(a: string): string {
+    const t = this.tables();
+    return `LEFT JOIN LATERAL (
+                SELECT ro."id" AS rid, ro."createdAt" AS rat
+                  FROM ${t.corrections} pc
+                  JOIN ${t.history} ro ON ro."transfer_id" = pc."root_transfer_id"
+                   AND ro."cashbox_id" = ${a}."cashbox_id" AND ro."operation_type" = 'expense'
+                   AND ro."source_type" = ${a}."source_type"
+                 WHERE ${a}."transfer_id" IS NOT NULL
+                   AND pc."replacement_transfer_id" = ${a}."transfer_id"
+                   AND pc."is_deleted" = false
+                 ORDER BY ro."createdAt" ASC, ro."id" ASC LIMIT 1
+              ) ${a}e ON true`;
   }
 
   /** Kassa kunlik yopilishlari (`finance_cashbox_daily`) — oxirgi kunlar. */
   private async dailyClosings(
+    q: SqlQuery,
     cashboxIds: string[],
     fromDay: string,
     toDay: string,
@@ -1041,7 +1341,7 @@ export class AdvisorInputsService {
       Array<{ date: string; opening: number; income: number; closing: number }>
     >();
     if (!cashboxIds.length) return out;
-    const rows = await this.ds.query<
+    const rows = await q<
       Array<{
         cashbox_id: string;
         date: string;
@@ -1071,8 +1371,43 @@ export class AdvisorInputsService {
     return out;
   }
 
+  /**
+   * P1 (#702 review B2): kechagacha tugaydigan qat'iy o'suvchi kunlik
+   * yopilishlar qatorining BOSHI — butun tarix bo'yicha (gaps-and-islands),
+   * 15 kunlik dalil oynasi bilan cheklanmaydi (aks holda uzun o'sishda
+   * `ep:g:<kun>` har kuni bir kun oldinga siljirdi).
+   */
+  private async growthRunStarts(
+    q: SqlQuery,
+    cashboxIds: string[],
+    yesterday: string,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!cashboxIds.length) return out;
+    const rows = await q<Array<{ cashbox_id: string; start: string | null }>>(
+      `SELECT x.cashbox_id::text AS cashbox_id,
+              to_char(MAX(x.snapshot_date) FILTER (WHERE x.brk), 'YYYY-MM-DD') AS start
+         FROM (
+           SELECT d."cashbox_id", d."snapshot_date",
+                  NOT COALESCE(
+                    LAG(d."snapshot_date") OVER w = d."snapshot_date" - 1
+                      AND d."closing_balance" > LAG(d."closing_balance") OVER w,
+                    false) AS brk
+             FROM ${this.tables().daily} d
+            WHERE d."cashbox_id" = ANY($1::bigint[]) AND d."snapshot_date" <= $2::date
+              AND d."is_deleted" = false
+           WINDOW w AS (PARTITION BY d."cashbox_id" ORDER BY d."snapshot_date")
+         ) x
+        GROUP BY x.cashbox_id`,
+      [cashboxIds, yesterday],
+    );
+    for (const r of rows) if (r.start) out.set(r.cashbox_id, r.start);
+    return out;
+  }
+
   /** Kun bo'yicha «chiqish» yig'indisi (T6 qaytarilganlarsiz). */
   private async dailyOutflows(
+    q: SqlQuery,
     cashboxIds: string[],
     source: string,
     fromDay: string,
@@ -1080,7 +1415,7 @@ export class AdvisorInputsService {
     const out = new Map<string, Map<string, number>>();
     if (!cashboxIds.length) return out;
     const t = this.tables();
-    const rows = await this.ds.query<
+    const rows = await q<
       Array<{ cashbox_id: string; day: string; total: string }>
     >(
       `SELECT h."cashbox_id"::text AS cashbox_id,
@@ -1107,6 +1442,7 @@ export class AdvisorInputsService {
 
   /** R2 Kuryer qarzi o'smoqda: (o'sish VA > balance_uzs) YOKI (> N kun topshirilmagan). */
   private async r2(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
@@ -1114,39 +1450,58 @@ export class AdvisorInputsService {
     const balanceUzs = positive(t.balance_uzs, 2_000_000);
     const growthDays = Math.floor(positive(t.growth_days, 3));
     const noHandover = Math.floor(positive(t.no_handover_days, 3));
-    const rows = await this.episodes('couriers', 'courier_payment', 0, 0);
+    const minPct = clampPct(t.min_handover_pct, 80);
+    const rows = await this.episodes(
+      q,
+      'couriers',
+      'courier_payment',
+      0,
+      minPct,
+      today,
+    );
     if (!rows.length) return [];
     const ids = rows.map((r) => r.cashbox_id);
     const window = Math.max(growthDays + 1, ADVISOR_EVIDENCE_LIMIT);
     const closings = await this.dailyClosings(
+      q,
       ids,
       addDaysKey(today, -window),
       addDaysKey(today, -1),
     );
     const outflows = await this.dailyOutflows(
+      q,
       ids,
       'courier_payment',
       addDaysKey(today, -window),
+    );
+    const closedDays = (r: EpisodeRow) =>
+      (closings.get(r.cashbox_id) ?? []).filter((d) => d.date < today);
+    // (a) o'sish: oxirgi growthDays+1 ta YOPILGAN kun (kechagacha) — har kuni
+    // oldingisidan qat'iy katta. Kun yetishmasa (snapshot hali yo'q) — o'tkaziladi.
+    const expected = Array.from({ length: growthDays + 1 }, (_, i) =>
+      addDaysKey(today, i - growthDays - 1),
+    );
+    const isGrowth = (r: EpisodeRow) => {
+      const tail = closedDays(r).slice(-(growthDays + 1));
+      return (
+        tail.length === growthDays + 1 &&
+        tail.every((d, i) => d.date === expected[i]) &&
+        tail.every((d, i) => i === 0 || d.closing > tail[i - 1].closing) &&
+        money(r.balance) > balanceUzs
+      );
+    };
+    const runStarts = await this.growthRunStarts(
+      q,
+      rows.filter(isGrowth).map((r) => r.cashbox_id),
+      addDaysKey(today, -1),
     );
     const candidates: AiAdvisorCandidate[] = [];
     for (const r of rows) {
       const ep = episodeOf(r, today);
       if (!ep) continue;
       const balance = money(r.balance);
-      const days = (closings.get(r.cashbox_id) ?? []).filter(
-        (d) => d.date < today,
-      );
-      // (a) o'sish: oxirgi growthDays+1 ta YOPILGAN kun (kechagacha) — har kuni
-      // oldingisidan qat'iy katta. Kun yetishmasa (snapshot hali yo'q) — o'tkaziladi.
-      const tail = days.slice(-(growthDays + 1));
-      const expected = Array.from({ length: growthDays + 1 }, (_, i) =>
-        addDaysKey(today, i - growthDays - 1),
-      );
-      const growth =
-        tail.length === growthDays + 1 &&
-        tail.every((d, i) => d.date === expected[i]) &&
-        tail.every((d, i) => i === 0 || d.closing > tail[i - 1].closing) &&
-        balance > balanceUzs;
+      const days = closedDays(r);
+      const growth = isGrowth(r);
       const stale = balance > 0 && ep.days > noHandover;
       if (!growth && !stale) continue;
       // O'sish signali kechagacha yopilgan kunlardan; bugun topshirish bo'lsa
@@ -1156,6 +1511,18 @@ export class AdvisorInputsService {
       if (growth && !stale && ep.days <= 0) continue;
       const trigger =
         growth && stale ? 'both' : growth ? 'growth' : 'no_handover';
+      // P1 (v0.4): faqat o'sish — epizod o'sish qatorining boshi; qisman
+      // topshirishlar (har kuni yangi `ep:h`) occurrence ko'paytirmaydi.
+      const runStart =
+        trigger === 'growth'
+          ? (runStarts.get(r.cashbox_id) ?? growthRunStart(days, today))
+          : null;
+      const fact = runStart
+        ? {
+            fact_key: `ep:g:${runStart}`,
+            fact_at: new Date(`${runStart}T00:00:00.000+05:00`).toISOString(),
+          }
+        : { fact_key: ep.key, fact_at: ep.at };
       names.wantUser(r.owner);
       names.wantUserBranch(r.owner);
       const out = outflows.get(r.cashbox_id) ?? new Map<string, number>();
@@ -1163,7 +1530,7 @@ export class AdvisorInputsService {
       candidates.push({
         rule_key: 'R2',
         dedup_key: `R2:courier:${r.owner}`,
-        fact_keys: [{ fact_key: ep.key, fact_at: ep.at }],
+        fact_keys: [fact],
         branch: null,
         subject: { kind: 'courier', id: r.owner, name: null },
         headline_amount: balance,
@@ -1194,6 +1561,8 @@ export class AdvisorInputsService {
                 history_id: r.last_id,
               }
             : null,
+          // v0.4: «topshirilmagan kunlar» faqat ≥ min_handover_pct topshirishda nolga tushadi.
+          min_handover_pct: minPct,
         },
       });
     }
@@ -1202,12 +1571,21 @@ export class AdvisorInputsService {
 
   /** R4 Market to'lovi kechikmoqda: qarz > 0 VA > N kun to'lov yo'q. */
   private async r4(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
   ): Promise<AiAdvisorCandidate[]> {
     const limitDays = Math.floor(positive(t.days_without_payout, 7));
-    const rows = await this.episodes('markets', 'market_payment', 0, 0);
+    // R4 o'zgarmaydi (ega, 2026-11-18): har qanday to'lov — minPct 0.
+    const rows = await this.episodes(
+      q,
+      'markets',
+      'market_payment',
+      0,
+      0,
+      today,
+    );
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
       .filter(
@@ -1217,8 +1595,13 @@ export class AdvisorInputsService {
     if (!hits.length) return [];
     const ids = hits.map((x) => x.r.cashbox_id);
     const from = addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT);
-    const closings = await this.dailyClosings(ids, from, addDaysKey(today, -1));
-    const paid = await this.dailyOutflows(ids, 'market_payment', from);
+    const closings = await this.dailyClosings(
+      q,
+      ids,
+      from,
+      addDaysKey(today, -1),
+    );
+    const paid = await this.dailyOutflows(q, ids, 'market_payment', from);
     return hits.map(({ r, ep }) => {
       names.wantUser(r.owner);
       const debt = money(r.balance);
@@ -1261,17 +1644,22 @@ export class AdvisorInputsService {
 
   /** R5 HQ'ga o'tkazma kechikmoqda: qoldiq > balance_uzs VA > N kun o'tkazma yo'q (Q17). */
   private async r5(
+    q: SqlQuery,
     t: Record<string, number>,
     today: string,
     names: NameCache,
   ): Promise<AiAdvisorCandidate[]> {
     const balanceUzs = positive(t.balance_uzs, 5_000_000);
     const limitDays = Math.floor(positive(t.days_without_transfer, 3));
+    const minPct = clampPct(t.min_transfer_pct, 80);
+    // P3: epizod boshi chegaraga (balance_uzs) bog'liq emas — musbat qator.
     const rows = await this.episodes(
+      q,
       'branch',
       'branch_to_main',
       balanceUzs,
-      balanceUzs,
+      minPct,
+      today,
     );
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
@@ -1282,12 +1670,13 @@ export class AdvisorInputsService {
     if (!hits.length) return [];
     const ids = hits.map((x) => x.r.cashbox_id);
     const closings = await this.dailyClosings(
+      q,
       ids,
       addDaysKey(today, -ADVISOR_EVIDENCE_LIMIT),
       addDaysKey(today, -1),
     );
     const t2 = this.tables();
-    const transfers = await this.ds.query<
+    const transfers = await q<
       Array<{
         cashbox_id: string;
         id: string;
@@ -1297,9 +1686,12 @@ export class AdvisorInputsService {
       }>
     >(
       `SELECT * FROM (
-         SELECT h."cashbox_id"::text AS cashbox_id, h."id"::text AS id, h."createdAt", ABS(h."amount") AS amount,
-                ROW_NUMBER() OVER (PARTITION BY h."cashbox_id" ORDER BY h."createdAt" DESC, h."id" DESC) AS rn
+         SELECT h."cashbox_id"::text AS cashbox_id, h."id"::text AS id,
+                COALESCE(he.rat, h."createdAt") AS "createdAt", ABS(h."amount") AS amount,
+                ROW_NUMBER() OVER (PARTITION BY h."cashbox_id"
+                  ORDER BY COALESCE(he.rat, h."createdAt") DESC, h."id" DESC) AS rn
            FROM ${t2.history} h
+           ${this.effectiveJoin('h')}
           WHERE h."cashbox_id" = ANY($1::bigint[]) AND h."operation_type" = 'expense'
             AND h."source_type" = 'branch_to_main' AND h."is_deleted" = false
             AND NOT EXISTS (
@@ -1329,6 +1721,8 @@ export class AdvisorInputsService {
         },
         evidence: {
           kind: 'branch_transfers',
+          // v0.4: «o'tkazmasiz kunlar» faqat ≥ min_transfer_pct o'tkazmada nolga tushadi.
+          min_transfer_pct: minPct,
           total_rows: (closings.get(r.cashbox_id) ?? []).length,
           truncated: false,
           days: (closings.get(r.cashbox_id) ?? []).map((d) => ({
@@ -1351,9 +1745,11 @@ export class AdvisorInputsService {
   // ─── R7 Chek yoki karta farqi (§4.2, BE-rev B4; #653 review) ──────────
 
   private async r7(
+    q: SqlQuery,
     since: Date,
     now: Date,
     names: NameCache,
+    deadline: number,
   ): Promise<{ candidates: AiAdvisorCandidate[]; cursor: string | null }> {
     const t = this.tables();
     // (a) karta qoldig'i: faqat TASDIQLANGAN (smena yopilgan) tekshiruvlar.
@@ -1363,7 +1759,7 @@ export class AdvisorInputsService {
     // GREATEST(ai_checked_at, confirmed_at): yopishdan oldingi tick qatorni
     // ko'rmasa ham, yopishdan keyingisi ko'radi (`attachLatePhoto` ham).
     const cardSeen = `GREATEST(k."ai_checked_at", k."confirmed_at")`;
-    const cards = await this.ds.query<CardCheckRow[]>(
+    const cards = await q<CardCheckRow[]>(
       `SELECT k."id"::text AS id, k."shift_id"::text AS shift_id, k."cashbox_card_id"::text AS card_id,
               k."entered_balance", k."ai_read_balance", k."expected_balance", k."ai_entered_ok",
               k."ai_last4_detected", cc."last4" AS card_last4, k."ai_confidence",
@@ -1386,7 +1782,7 @@ export class AdvisorInputsService {
     // bilan bir xil). Kursor GREATEST(ai_checked_at, updatedAt): T6 tahriri
     // (`carryOverForCorrection`) holat/farqni qayta hisoblaydi.
     const receiptSeen = `GREATEST(r."ai_checked_at", r."updatedAt")`;
-    const receipts = await this.ds.query<ReceiptRow[]>(
+    const receipts = await q<ReceiptRow[]>(
       `SELECT r."id"::text AS id, r."kind"::text AS kind, r."ai_status"::text AS ai_status, r."ai_flags",
               r."entered_amount", r."ai_amount", r."ai_difference", r."ai_currency", r."ai_error_reason",
               r."ai_date", r."ai_recipient_last4", r."ai_payer_last4",
@@ -1430,11 +1826,10 @@ export class AdvisorInputsService {
     }
     if (!cards.length && !receipts.length) return { candidates: [], cursor };
 
-    const receiptAi = await this.receiptAiEnabled();
-    const types = await this.cashboxTypes(
-      (sql, params) => this.ds.query(sql, params),
-      [...new Set(cards.map((r) => r.owner))],
-    );
+    const receiptAi = await this.receiptAiEnabled(deadline);
+    const types = await this.cashboxTypes(q, [
+      ...new Set(cards.map((r) => r.owner)),
+    ]);
     const candidates: AiAdvisorCandidate[] = [];
 
     for (const r of cards) {
@@ -1516,7 +1911,9 @@ export class AdvisorInputsService {
       });
     }
 
-    const week = receipts.length ? await this.receiptWeekSummary(now) : null;
+    const week = receipts.length
+      ? await this.receiptWeekSummary(now, deadline)
+      : null;
     for (const r of receipts) {
       const transfer = r.kind === 'courier_to_hq' || r.kind === 'branch_to_hq';
       // O'tkazma chekida `history_id` — MAIN kirim oyog'i; jo'natuvchi —
@@ -1634,10 +2031,14 @@ export class AdvisorInputsService {
   }
 
   /** Chek AI yoqiqmi (manual_expense YOKI hq_transfer). O'qilmasa — null. */
-  private async receiptAiEnabled(): Promise<boolean | null> {
-    if (!this.receiptService) return null;
+  private async receiptAiEnabled(deadline: number): Promise<boolean | null> {
+    const svc = this.receiptService;
+    if (!svc) return null;
     try {
-      const s = await this.receiptService.loadSettings();
+      // O'z tranzaksiyasi, byudjet ichida (#704 review S3).
+      const s = await this.withTimeout(deadline, (_q, m) =>
+        svc.loadSettings(m),
+      );
       return Boolean(s.manual_expense.ai_enabled || s.hq_transfer.ai_enabled);
     } catch {
       return null;
@@ -1647,25 +2048,33 @@ export class AdvisorInputsService {
   /** Joriy Toshkent haftasi chek tekshiruvi sanoqlari (`checked = match + mismatch + unreadable`). */
   private async receiptWeekSummary(
     now: Date,
+    deadline: number,
   ): Promise<Record<string, unknown> | null> {
     try {
       const today = tashkentDateKey(now);
       const weekday = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = dushanba
       const from = addDaysKey(today, -weekday);
       const to = addDaysKey(from, 6);
-      const summary = await loadReceiptChecksSummary(
-        this.ds.manager,
-        {
-          receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
-          history: this.ds.getMetadata(CashboxHistory).tablePath,
-          cashbox: this.ds.getMetadata(Cashbox).tablePath,
-        },
-        {
-          start: new Date(`${from}T00:00:00.000+05:00`),
-          end: new Date(
-            new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
+      // loadReceiptChecksSummary — `m` orqali 2 ta ifoda (Promise.all,
+      // bitta ulanishda ketma-ket): har biriga qolgan byudjetning yarmi.
+      const summary = await this.withTimeout(
+        deadline,
+        (_q, m) =>
+          loadReceiptChecksSummary(
+            m,
+            {
+              receipts: this.ds.getMetadata(CashboxReceipt).tablePath,
+              history: this.ds.getMetadata(CashboxHistory).tablePath,
+              cashbox: this.ds.getMetadata(Cashbox).tablePath,
+            },
+            {
+              start: new Date(`${from}T00:00:00.000+05:00`),
+              end: new Date(
+                new Date(`${to}T00:00:00.000+05:00`).getTime() + 86_400_000,
+              ),
+            },
           ),
-        },
+        2,
       );
       const c = summary.counts as Record<string, number>;
       const match = Number(c.match ?? 0);
@@ -1690,6 +2099,7 @@ export class AdvisorInputsService {
   // ─── R8 Tuzatishlar ko'paydi (§4.2, BE-rev B2, Q4) ────────────────────
 
   private async r8(
+    q: SqlQuery,
     t: Record<string, number>,
     weeks: string[],
     now: Date,
@@ -1712,8 +2122,8 @@ export class AdvisorInputsService {
       const baseStart = new Date(
         start.getTime() - R8_BASELINE_DAYS * 86_400_000,
       );
-      const week = await this.correctionCounts(start, end);
-      const base = await this.correctionCounts(baseStart, start);
+      const week = await this.correctionCounts(q, start, end);
+      const base = await this.correctionCounts(q, baseStart, start);
       const counted = (k: CorrectionCounts) =>
         k.manual_correction + k.payment_reverse + k.payment_edit;
       const count = counted(week);
@@ -1729,7 +2139,7 @@ export class AdvisorInputsService {
         Math.round(ratio * 10) * baselineTotal * 7
       )
         continue;
-      const days = await this.correctionDays(start, end);
+      const days = await this.correctionDays(q, start, end);
       const key = `R8:week:${monday}`;
       out.push({
         rule_key: 'R8',
@@ -1784,11 +2194,12 @@ export class AdvisorInputsService {
    * tahrir (`payment_corrections.action`). `payment_reversal` — hech qachon.
    */
   private async correctionCounts(
+    q: SqlQuery,
     start: Date,
     end: Date,
   ): Promise<CorrectionCounts> {
     const t = this.tables();
-    const [h] = await this.ds.query<Array<{ manual: string; orders: string }>>(
+    const [h] = await q<Array<{ manual: string; orders: string }>>(
       `SELECT COUNT(*) FILTER (WHERE "source_id" IS NULL) AS manual,
               COUNT(DISTINCT "source_id") FILTER (WHERE "source_id" IS NOT NULL) AS orders
          FROM ${t.history}
@@ -1796,7 +2207,7 @@ export class AdvisorInputsService {
           AND "createdAt" >= $1 AND "createdAt" < $2`,
       [start, end],
     );
-    const pc = await this.ds.query<Array<{ action: string; n: string }>>(
+    const pc = await q<Array<{ action: string; n: string }>>(
       `SELECT "action", COUNT(*) AS n FROM ${t.corrections}
         WHERE "is_deleted" = false AND "createdAt" >= $1 AND "createdAt" < $2
         GROUP BY "action"`,
@@ -1813,11 +2224,12 @@ export class AdvisorInputsService {
 
   /** Hafta kunlari bo'yicha sanalgan tuzatishlar (counted_kinds). */
   private async correctionDays(
+    q: SqlQuery,
     start: Date,
     end: Date,
   ): Promise<Array<{ date: string; count: number }>> {
     const t = this.tables();
-    const rows = await this.ds.query<Array<{ day: string; n: string }>>(
+    const rows = await q<Array<{ day: string; n: string }>>(
       `SELECT day, SUM(n) AS n FROM (
          SELECT to_char("createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day, COUNT(*) AS n
            FROM ${t.history}
@@ -1862,7 +2274,10 @@ export class AdvisorInputsService {
   }
 
   /** `identity.user.find_by_ids` — fail-open. */
-  async userNames(ids: string[]): Promise<Map<string, string>> {
+  async userNames(
+    ids: string[],
+    onFail?: () => void,
+  ): Promise<Map<string, string>> {
     const unique = [...new Set(ids.filter(isId))];
     const out = new Map<string, string>();
     if (!unique.length) return out;
@@ -1883,6 +2298,7 @@ export class AdvisorInputsService {
         if (id && name) out.set(id, name.slice(0, 120));
       }
     } catch (error) {
+      onFail?.();
       this.logger.warn(`advisor: ismlar olinmadi — ${short(error)}`);
     }
     return out;
@@ -1892,12 +2308,19 @@ export class AdvisorInputsService {
    * Foydalanuvchi → filial (`branch.user.find_by_user_ids`) — fail-open.
    * branch-service bir so'rovda ≤ 500 id qabul qiladi — bo'laklarda (round-2).
    */
-  async userBranches(ids: string[]): Promise<Map<string, AiAdvisorRef>> {
+  async userBranches(
+    ids: string[],
+    onFail?: () => void,
+  ): Promise<Map<string, AiAdvisorRef>> {
     const out = new Map<string, AiAdvisorRef>();
     const unique = [...new Set(ids.filter(isId))];
     if (!this.branchClient || !unique.length) return out;
     for (let i = 0; i < unique.length; i += USER_BRANCH_CHUNK) {
-      await this.userBranchChunk(unique.slice(i, i + USER_BRANCH_CHUNK), out);
+      await this.userBranchChunk(
+        unique.slice(i, i + USER_BRANCH_CHUNK),
+        out,
+        onFail,
+      );
     }
     return out;
   }
@@ -1905,6 +2328,7 @@ export class AdvisorInputsService {
   private async userBranchChunk(
     unique: string[],
     out: Map<string, AiAdvisorRef>,
+    onFail?: () => void,
   ): Promise<void> {
     if (!this.branchClient) return;
     try {
@@ -1937,6 +2361,7 @@ export class AdvisorInputsService {
         out.set(userId, { id: branchId, name });
       }
     } catch (error) {
+      onFail?.();
       this.logger.warn(`advisor: kuryer filiallari olinmadi — ${short(error)}`);
     }
   }
@@ -1945,7 +2370,10 @@ export class AdvisorInputsService {
    * Filial nomlari (`branch.find_by_id`) — fail-open, parallel (≤ 5 bir
    * vaqtda): osilgan branch-service tick'ni 30 s dan oshirmasin (round-2).
    */
-  async branchNames(ids: string[]): Promise<Map<string, string>> {
+  async branchNames(
+    ids: string[],
+    onFail?: () => void,
+  ): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     if (!this.branchClient) return out;
     const client = this.branchClient;
@@ -1963,6 +2391,7 @@ export class AdvisorInputsService {
           if (typeof name === 'string' && name.trim())
             out.set(id, name.trim().slice(0, 120));
         } catch (error) {
+          onFail?.();
           this.logger.warn(
             `advisor: filial nomi olinmadi (${id}) — ${short(error)}`,
           );
@@ -1985,7 +2414,11 @@ class NameCache {
   private readonly branches = new Set<string>();
   private readonly userBranches = new Set<string>();
 
-  constructor(private readonly svc: AdvisorInputsService) {}
+  constructor(
+    private readonly svc: AdvisorInputsService,
+    /** Chegara `fill()` paytida hisoblanadi (umumiy byudjetdan qolgani). */
+    private readonly deadlineMs: () => number = () => ADVISOR_NAMES_DEADLINE_MS,
+  ) {}
 
   wantUser(id: string): void {
     this.users.add(id);
@@ -2007,12 +2440,28 @@ class NameCache {
     else if (cb.type !== 'main') this.users.add(cb.owner_id);
   }
 
+  /** Ism/filial qidiruvi yiqildimi (P6 `names_degraded`). */
+  degraded = false;
+
   async fill(candidates: AiAdvisorCandidate[]): Promise<void> {
+    const fail = () => {
+      this.degraded = true;
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'deadline'>((resolve) => {
+      timer = setTimeout(() => resolve('deadline'), this.deadlineMs());
+    });
+    const within = async <T>(p: Promise<Map<string, T>>) => {
+      const r = await Promise.race([p, deadline]);
+      if (r !== 'deadline') return r;
+      fail();
+      return new Map<string, T>();
+    };
     const [users, branches, userBranch] = await Promise.all([
-      this.svc.userNames([...this.users]),
-      this.svc.branchNames([...this.branches]),
-      this.svc.userBranches([...this.userBranches]),
-    ]);
+      within(this.svc.userNames([...this.users], fail)),
+      within(this.svc.branchNames([...this.branches], fail)),
+      within(this.svc.userBranches([...this.userBranches], fail)),
+    ]).finally(() => clearTimeout(timer));
     const branchRef = (ref: unknown) => {
       const r = ref as AiAdvisorRef | null;
       if (r && r.name === null) r.name = branches.get(r.id) ?? null;
@@ -2124,6 +2573,12 @@ function parseSince(value: string | undefined, now: Date): Date {
   if (d && !Number.isNaN(d.getTime()) && d <= now) return d < floor ? floor : d;
   // Kursor yo'q / noto'g'ri — §4.3 qisqa orqa oyna (7 kun).
   return new Date(now.getTime() - 7 * 24 * 3600_000);
+}
+
+/** Foiz chegarasi 1–100 (sozlama limiti bilan bir xil); noto'g'ri — sukut. */
+function clampPct(v: unknown, fallback: number): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : NaN;
+  return n >= 1 && n <= 100 ? n : fallback;
 }
 
 function positive(v: unknown, fallback: number): number {
