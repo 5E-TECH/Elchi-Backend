@@ -278,3 +278,34 @@ describe('ai-eval-collect: PII (review round-2)', () => {
     }
   });
 });
+
+/** Review round-3 (N3, should-fix) — hammasi sintetik ma'lumot. */
+describe('ai-eval-collect: PII (review round-3)', () => {
+  const masked = (text: string, names: string[]): string =>
+    maskCandidateText(text, names);
+
+  it('N3: uy/xonadon raqami — egalik qo‘shimchasi (-i/-si, -и/-си)', () => {
+    expect(
+      masked(
+        'Yunusobod 4-kvartal 12-uyi 5-xonadoni, mo‘ljal: uyi 12, xonadoni 45, kvartirasi 7. Юнусобод 4-мавзе 12-уйи 5-хонадони',
+        [],
+      ),
+    ).toBe(
+      'Yunusobod 4-kvartal [N]-uyi [N]-xonadoni, mo‘ljal: uyi [N], xonadoni [N], kvartirasi [N]. Юнусобод 4-мавзе [N]-уйи [N]-хонадони',
+    );
+    expect(masked('12-uyida, 45-xonadonida, kvartirasiga 5', [])).toBe(
+      '[N]-uyida, [N]-xonadonida, kvartirasiga [N]',
+    );
+    expect(masked('12-uyining, uyidan 9', [])).toBe('[N]-uyining, uyidan [N]');
+  });
+
+  it('N3: "12-a uy", "12 A uy", "kv-ra 5"', () => {
+    expect(masked('12-a uy, 12 A uy, kv-ra 5, кв-ра 9, 5-kv-ra', [])).toBe(
+      '[N] uy, [N] uy, kv-ra [N], кв-ра [N], [N]-kv-ra',
+    );
+    // Bog'lovchi / ko'paytirish belgisi uy raqamiga yutilmaydi; miqdor emas.
+    expect(masked('дом 12 и кв 5, 1 x uy, uyiga 2 ta, uyi bor', [])).toBe(
+      'дом [N] и кв [N], 1 x uy, uyiga 2 ta, uyi bor',
+    );
+  });
+});

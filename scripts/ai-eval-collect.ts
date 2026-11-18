@@ -336,11 +336,19 @@ const EMAIL_RE =
 /** Telegram/Instagram foydalanuvchi nomi (email maskalangandan keyin). */
 const USER_HANDLE_RE = /(?<![\p{L}\p{N}_.@])@[A-Za-z0-9_.]{3,32}/gu;
 
-/** Uy/xonadon kalit so'zlari (uzunidan boshlab). "д."/"d." — faqat nuqta bilan. */
-const HOUSE_KW = 'xonadon|kvartira|хонадон|квартира|dom|uy|kv|дом|уй|кв';
-/** Kalit so'zdan keyingi kelishik qo'shimchasi ("12-uyda", "kvartiraga 5"). */
+/**
+ * Uy/xonadon kalit so'zlari (uzunidan boshlab; "kv-ra" — "kv" dan oldin).
+ * "д."/"d." — faqat nuqta bilan.
+ */
+const HOUSE_KW =
+  'xonadon|kvartira|хонадон|квартира|kv-ra|кв-ра|dom|uy|kv|дом|уй|кв';
+/**
+ * Kalit so'zdan keyin: egalik ("12-uyi", "5-xonadoni", "kvartirasi 7",
+ * "12-уйи") va kelishik ("12-uyda", "kvartiraga 5", "12-uyida",
+ * "kvartirasiga 5") qo'shimchasi — ikkalasi ham ixtiyoriy.
+ */
 const HOUSE_KW_SUFFIX =
-  '(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
+  '(?:i|si|и|си)?(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
 /**
  * "uyga 2 ta", "kvartiraga 3 dona" — miqdor/narx, uy raqami EMAS.
  */
@@ -348,6 +356,13 @@ const NOT_QTY =
   "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}]))";
 /** Uy raqami: 12, 12a, 12/3. */
 const HOUSE_NUM = '\\d{1,4}(?:\\/\\d{1,4}|\\p{L}(?![\\p{L}\\p{N}]))?';
+/**
+ * Kalit so'zdan OLDINGI uy raqami: yana "12-a uy" (tire + harf) va
+ * "12 A uy" (bo'shliq + FAQAT lotin harfi, x dan tashqari) — "дом 12 и кв 5"
+ * dagi "и" va "1 x uy" dagi "x" yutilmasin.
+ */
+const HOUSE_NUM_BEFORE_KW =
+  '\\d{1,4}(?:\\/\\d{1,4}|-?\\p{L}(?![\\p{L}\\p{N}])|\\s[a-wyz](?![\\p{L}\\p{N}]))?';
 
 /**
  * Telefon tokenlaridan tashqari PII: email, ijtimoiy tarmoq havolasi,
@@ -393,15 +408,17 @@ export function maskCandidateText(
       .replace(/(?<!\[TEL_)\d[\d\s\-‐-―−()./_]{7,}\d/g, (m) =>
         m.replace(/\D/g, '').length >= 9 ? '[RAQAM]' : m,
       )
-      // "12-uy", "12a-uy", "12/3-uyda", "5-xonadonga", "12-уйда".
+      // "12-uy", "12a-uy", "12-a uy", "12/3-uyda", "5-xonadonga", "12-uyi",
+      // "45-xonadonida", "12-уйда", "5-хонадони".
       .replace(
         new RegExp(
-          `(?<![\\p{L}\\p{N}])([№#]?)${HOUSE_NUM}(\\s*-?\\s*)((?:${HOUSE_KW})${HOUSE_KW_SUFFIX})(?![\\p{L}\\p{N}])`,
+          `(?<![\\p{L}\\p{N}])([№#]?)${HOUSE_NUM_BEFORE_KW}(\\s*-?\\s*)((?:${HOUSE_KW})${HOUSE_KW_SUFFIX})(?![\\p{L}\\p{N}])`,
           'giu',
         ),
         '$1[N]$2$3',
       )
-      // "uy 12/3", "kvartiraga 5", "kv №5", "дом №12", "д. 15", "d.15".
+      // "uy 12/3", "uyi 12", "kvartiraga 5", "kvartirasi 7", "kv-ra 5",
+      // "kv №5", "дом №12", "д. 15", "d.15".
       .replace(
         new RegExp(
           `(?<![\\p{L}\\p{N}])((?:(?:${HOUSE_KW})${HOUSE_KW_SUFFIX}\\.?|[дd]\\.)\\s*[-:]?\\s*(?:[№#]|N(?=\\s*\\d))?\\s*)${HOUSE_NUM}(?!\\d)${NOT_QTY}`,
