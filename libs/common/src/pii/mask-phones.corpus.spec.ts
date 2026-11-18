@@ -763,6 +763,103 @@ const PRIVACY_CASES: C[] = [
     text: 'Aziza 901234000',
     phones: [P('901234000')],
   },
+  // #647 round 3 (N4): ikkinchi telefon `/ - .` bilan yopishgan — birinchisi
+  // sana deb qolmaydi.
+  {
+    id: 'N4a Tel: dashes / dashes',
+    text: 'Tel: 90-123-12-11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4b spaces / dashes',
+    text: '90 123 12 11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4c name spaces / dots',
+    text: 'Aziza 90 123 12 11/93.765.43.21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4d spaces - dashes',
+    text: '90 123 12 11-93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4e spaces . dashes',
+    text: '90 123 12 11.93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4f Tel: spaces / dashes',
+    text: 'Tel: 90 123 12 11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4g Telefon: dashes / dashes',
+    text: 'Telefon: 90-123-25-11/97-111-22-33',
+    phones: [P('901232511'), P('971112233')],
+  },
+  {
+    id: 'N4h dashes / dashes',
+    text: '90-123-12-11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4i spaces / 2 spaces',
+    text: '90 123 12 11/93  765 43 21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4j spaces / spaced dash',
+    text: '90 123 12 11/93 - 765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4k spaces / NBSP dashes',
+    text: `90 123 12 11/93${NB}-${NB}765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4l spaces / NNBSP',
+    text: `90 123 12 11/93${NNB}765${NNB}43${NNB}21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4m spaces / NNBSP dashes',
+    text: `Aziza 90 123 12 11/93${NNB}-${NNB}765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4r Tel: NNBSP / dashes',
+    text: `Tel: 90${NNB}123${NNB}12${NNB}11/93-765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4s NNBSP-grouped date-like phone (no word)',
+    text: `90${NNB}123${NNB}12${NNB}11/93-765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4n Tel: 75 000 14.11 (phone word wins)',
+    text: 'Tel: 75 000 14.11',
+    phones: [P('750001411')],
+  },
+  {
+    id: 'N4o list 2-3-2-2 / 2-3-2-2',
+    text: '90 123 45 67/91 234 56 78',
+    phones: [P('901234567'), P('912345678')],
+  },
+  {
+    id: 'N4p list comma',
+    text: '90 123 12 11, 93 765 43 21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4q list /+998',
+    text: '90 123 12 11/+998 93 765 43 21',
+    phones: [P('901231211'), P('937654321')],
+  },
 ];
 
 const amountsOnly: { id: string; text: string; keep: string }[] = [
@@ -1519,13 +1616,17 @@ const AMOUNT_CASES: Case[] = [
  * - prefikssiz 3-3-3 telefon so'zisiz (dev'da ham maskalanmasdi) —
  *   `Malibu 335 450 990` narx bo'lishi mumkin;
  * - `…000` bilan tugagan yaxlit 9 raqam telefon so'zisiz (dev maskalardi —
- *   ATAYLAB: `Malibu 335450000` narxini yo'qotish qimmatroq).
+ *   ATAYLAB: `Malibu 335450000` narxini yo'qotish qimmatroq);
+ * - NBSP/NNBSP bilan guruhlangan, oxiri sanaga o'xshash (`90 123 12 11`)
+ *   prefikssiz telefon so'zisiz — dev ham maskalamagan (NBSP'ni tanimasdi),
+ *   narx + sanadan (`90 500 12 11`) farqlab bo'lmaydi.
  */
 const KNOWN_PRIVACY_GAPS: ReadonlySet<string> = new Set<string>([
   'B54 3-3-3 no word',
   'B55 3-3-3 dashes no word',
   'B61 3-3-3 local Cyrillic around',
   'S4c name …000 (no phone word)',
+  'N4s NNBSP-grouped date-like phone (no word)',
 ]);
 /** Hozircha bo'sh (STIR/Trek/ID #647 round 2 da tuzatildi). */
 const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([]);

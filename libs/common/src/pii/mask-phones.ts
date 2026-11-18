@@ -276,6 +276,9 @@ function looksLikePriceAndDate(
   if (/^[+0]|\(/.test(raw)) return false;
   const digits = raw.replace(/\D/g, '');
   if (digits.length === 12) return false;
+  // Telefon so'zi oldida — sana qoidalaridan OLDIN: `Tel: 90-123-12-11/…`
+  // (#647 round 3 N4).
+  if (isPhoneWordBefore(before)) return false;
   const nat = digits.slice(-9);
   // 2-3-4 + ISO sana davomi: `90 500 2026-11-14` (faqat prefikssiz).
   if (/^\d{2}\D\d{3}\D\d{4}$/.test(raw)) {
@@ -299,11 +302,14 @@ function looksLikePriceAndDate(
   // `890 123 14.11` — dev'dagidek telefon (maxfiylik dev'dan pasaymaydi).
   if (!/^\d{2}\D+\d{3}\D/.test(raw) && !devUnknownSep) return false;
   const roundThousands = nat.slice(2, 5) === '000';
-  // Sana yil bilan davom etadi: `14.11.2026`, `14/11/26` (lekin
-  // `…/91 234 56 78` — ikkinchi telefon, sana emas).
-  if (/^[./\-–](?:\d{4}(?!\d)|\d{2}(?!\d|[ \u00a0]?\d{3}))/.test(after)) {
-    return true;
-  }
+  // Sana yil bilan davom etadi: `14.11.2026`, `14/11/26`. Lekin
+  // `…/91 234 56 78`, `…/93-765-43-21`, `….93.765.43.21` — ikkinchi
+  // telefon, sana emas (#647 round 3 N4: aks holda birinchi telefon ochiq).
+  const yearContinues =
+    /^[./\-–](?:\d{4}(?!\d)|\d{2}(?!\d|[ \u00a0\u202f]{0,2}[./\-–]?[ \u00a0\u202f]{0,2}\d{3}))/.test(
+      after,
+    );
+  if (yearContinues) return true;
   const strip = (x: string) => x.replace(/[ \u00a0\u202f]/g, '');
   const lastSep = strip(tail[4]);
   // Oxirgi ajratgich `.`/`/` va sanadan oldingisidan farqli: `75 000 14.11`,
@@ -311,11 +317,10 @@ function looksLikePriceAndDate(
   if ((lastSep === '.' || lastSep === '/') && lastSep !== strip(tail[2])) {
     return true;
   }
-  if (isPhoneWordBefore(before)) return false;
   // `CC 000 DD MM` — yaxlit narx + sana (`50 000 25 11 kuni`, `75000  14 11`,
   // `850 000 25/11`); summa so'zidan keyin (`jami: 90 500 12 11`); yoki dev
   // tanimagan keng ajratgich (`/`, `–`, 2 bo'shliq, ` - `):
-  // `90 500 – 14 – 11`. Telefon so'zi oldida bo'lsa — telefon.
+  // `90 500 – 14 – 11`.
   return roundThousands || MONEY_OR_ID_BEFORE_RE.test(before) || devUnknownSep;
 }
 
