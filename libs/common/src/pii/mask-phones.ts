@@ -372,6 +372,34 @@ function isGuardedNonPhone(
 }
 
 /**
+ * Model yo'li (sanitizeForModel): log maskasi (3-3-3 manbasi bilan) + FAQAT
+ * noaniq summa shakli (yaxlit 9 / 3-3-3, ixtiyoriy `0 `/`8 `) summa so'zi,
+ * id belgisi, harflar orasida, katta sonning davomi yoki `…000` bo'lsa
+ * tegilmaydi. Telefon so'zidan keyingi `…000` — telefon.
+ */
+const AMBIGUOUS_SHAPE_MODEL_RE =
+  /^(?:[08][ \u00A0\u202F])?(?:\d{9}|\d{3}[ .\-\u00A0\u202F]\d{3}[ .\-\u00A0\u202F]\d{3})$/u;
+function isAmountOrIdForModel(
+  raw: string,
+  before: string,
+  after: string,
+): boolean {
+  if (!AMBIGUOUS_SHAPE_MODEL_RE.test(raw)) return false;
+  if (MONEY_AFTER_RE.test(after) || MONEY_OR_ID_BEFORE_RE.test(before)) {
+    return true;
+  }
+  if (/\p{L}$/u.test(before) && /^\p{L}/u.test(after)) return true;
+  const phoneWord = isPhoneWordBefore(before);
+  // `1 905 512 345` — katta sonning davomi (oldida 1-3 xonali guruh, xuddi
+  // shu ajratgich bilan).
+  const lead = /(?:^|[^\d.,])\d{1,3}([ .\u00A0\u202F])$/u.exec(before);
+  if (!phoneWord && lead && /\D/.test(raw) && raw.includes(lead[1])) {
+    return true;
+  }
+  return /000$/.test(raw) && !phoneWord;
+}
+
+/**
  * Matndagi har bir telefon nomzodini `replacer` natijasi bilan almashtiradi.
  *
  * ⚠️ Abonent qismi (oxirgi 7 raqam) butunlay nol bo'lsa (`900000000`,
@@ -381,7 +409,7 @@ function isGuardedNonPhone(
 function replacePhoneCandidates(
   text: string,
   replacer: (e164: string, match: string) => string,
-  opts: { moneyGuard: boolean } = { moneyGuard: true },
+  opts: { moneyGuard: boolean; model?: boolean } = { moneyGuard: true },
 ): string {
   // Hamma shakl BITTA matn ustida yig'iladi va chapdan o'ngga almashtiriladi:
   // tokenlar matndagi tartibda raqamlanadi; kesishganda boshlanishi oldin,
@@ -389,7 +417,7 @@ function replacePhoneCandidates(
   const sources = [
     { source: UZ_PHONE_RE.source, kind: 'main' as SourceKind },
     ...UZ_ALT_PHONE_SOURCES,
-    ...(opts.moneyGuard ? [] : UZ_LOG_ONLY_SOURCES),
+    ...(opts.moneyGuard && !opts.model ? [] : UZ_LOG_ONLY_SOURCES),
   ];
   const found: { start: number; end: number; e164: string; raw: string }[] = [];
   for (const { source, kind } of sources) {
@@ -399,14 +427,12 @@ function replacePhoneCandidates(
       const end = start + raw.length;
       const e164 = toUzE164(raw);
       if (!e164 || /^0{7}$/.test(e164.slice(-7))) continue;
+      const before = text.slice(Math.max(0, start - 32), start);
+      const after = text.slice(end);
       if (
-        opts.moneyGuard &&
-        isGuardedNonPhone(
-          kind,
-          raw,
-          text.slice(Math.max(0, start - 32), start),
-          text.slice(end),
-        )
+        opts.model
+          ? isAmountOrIdForModel(raw, before, after)
+          : opts.moneyGuard && isGuardedNonPhone(kind, raw, before, after)
       ) {
         continue;
       }
@@ -550,14 +576,19 @@ export function maskPhonesForLog(text: string): string {
 
 /**
  * Modelga (Claude) ketadigan tool natijalari uchun: telefon `maskPhoneForLog`
- * shaklida (qaytarib bo'lmaydi), lekin `maskPhones` kabi PUL QO'RIQCHISI
- * bilan va log uchungina mo'ljallangan 3-3-3 manbasisiz. Aks holda
- * formatlangan summa (`Ijara to'lovi 905 500 000`) soxta telefonga
- * aylanib, modelga noto'g'ri raqam ketardi.
+ * shaklida (qaytarib bo'lmaydi). Log maskasining barcha manbalari (3-3-3
+ * ham) ishlaydi, faqat noaniq summa shakli (`isAmountOrIdForModel`: summa
+ * so'zi/id yonida, harflar orasida, katta son davomi yoki telefon so'zisiz
+ * `…000`) tegilmaydi — aks holda `Ijara to'lovi 905 500 000` soxta telefonga
+ * aylanardi. Order-text'ning narx+sana va o'lcham qo'riqchilari bu yo'lda
+ * QO'LLANMAYDI (tool natijasida bunday matn yo'q; aks holda dev maskalagan
+ * telefon ochiq ketardi). Qabul qilingan qoldiq: summa/id so'zi yonidagi
+ * 9 raqam yoki 3-3-3 ochiq qoladi.
  */
 export function maskPhonesForModel(text: string): string {
   if (typeof text !== 'string' || text.length === 0) return text;
   return replacePhoneCandidates(text, (e164) => maskPhoneForLog(e164), {
     moneyGuard: true,
+    model: true,
   });
 }
