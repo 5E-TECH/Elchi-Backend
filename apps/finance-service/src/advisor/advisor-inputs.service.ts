@@ -67,6 +67,17 @@ const USER_BRANCH_CHUNK = 500;
  */
 export const ADVISOR_STATEMENT_TIMEOUT_MS = 15_000;
 /**
+ * Qoidalar SQL qismining UMUMIY byudjeti (#704 review B1): statement_timeout
+ * har ifodaga — qoidalar ketma-ket, bitta qulflangan jadval 5 × 15 s = 75 s
+ * bo'lardi. 30 s AdvisorReader − 5 s nomlar − zaxira = 22 s; har qoida
+ * qolgan vaqt bilan cheklanadi, tugasa — keyingi qoidalar `errors` ga.
+ */
+export const ADVISOR_RULES_BUDGET_MS = 22_000;
+/** Butun `rule_inputs` (nomlar bilan) — AdvisorReader 30 s dan past. */
+export const ADVISOR_TOTAL_BUDGET_MS = 28_000;
+/** Qulflangan jadval butun byudjetni yemasin — har tranzaksiyada. */
+const ADVISOR_LOCK_TIMEOUT = '2s';
+/**
  * Ism/filial qidiruvining UMUMIY chegarasi (round-4 #651-2 / #652): osilgan
  * identity/branch-service bilan ham `rule_inputs` AdvisorReader 30 s
  * budjetidan oshmaydi — chegarada nomlar null, `names_degraded` (P6).
@@ -420,6 +431,8 @@ export class AdvisorInputsService {
   namesDeadlineMs = ADVISOR_NAMES_DEADLINE_MS;
   /** Har SQL ifoda chegarasi (testlarda qisqartiriladi). */
   statementTimeoutMs = ADVISOR_STATEMENT_TIMEOUT_MS;
+  /** Qoidalar SQL byudjeti (testlarda qisqartiriladi). */
+  rulesBudgetMs = ADVISOR_RULES_BUDGET_MS;
 
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
@@ -456,9 +469,18 @@ export class AdvisorInputsService {
     const now = new Date(input?.now ?? Date.now());
     if (Number.isNaN(now.getTime())) throw new Error('now noto‘g‘ri');
     const started = Date.now();
+    const deadline = started + this.rulesBudgetMs;
     const rules = new Set(Array.isArray(input?.rules) ? input.rules : []);
     const out: AiAdvisorRuleInputsResponse = { candidates: [], cursors: {} };
-    const names = new NameCache(this, this.namesDeadlineMs);
+    const names = new NameCache(this, () =>
+      Math.max(
+        0,
+        Math.min(
+          this.namesDeadlineMs,
+          started + ADVISOR_TOTAL_BUDGET_MS - Date.now(),
+        ),
+      ),
+    );
     // Har qoida alohida: biri yiqilsa (timeout) — boshqalari odatdagidek,
     // yiqilgan qoida `errors` da, kursorsiz (round-2 #651 ops-B1).
     const guard = async (rule: AiAdvisorRuleKey, fn: () => Promise<void>) => {
@@ -474,7 +496,7 @@ export class AdvisorInputsService {
       await guard('R1', async () => {
         const t = input.thresholds?.R1 ?? {};
         const since = parseSince(input.since?.R1, now);
-        const r = await this.withTimeout((q) =>
+        const r = await this.withTimeout(deadline, (q) =>
           this.r1(q, since, now, t, names),
         );
         out.candidates.push(...r.candidates);
@@ -485,7 +507,7 @@ export class AdvisorInputsService {
       await guard('R3', async () => {
         const t = input.thresholds?.R3 ?? {};
         const since = parseSince(input.since?.R3, now);
-        const r = await this.withTimeout((q) =>
+        const r = await this.withTimeout(deadline, (q) =>
           this.r3(q, since, now, t, names, started + R3_TIME_BUDGET_MS),
         );
         out.candidates.push(...r.candidates);
@@ -496,7 +518,7 @@ export class AdvisorInputsService {
     if (rules.has('R2')) {
       await guard('R2', async () => {
         out.candidates.push(
-          ...(await this.withTimeout((q) =>
+          ...(await this.withTimeout(deadline, (q) =>
             this.r2(q, input.thresholds?.R2 ?? {}, today, names),
           )),
         );
@@ -505,7 +527,7 @@ export class AdvisorInputsService {
     if (rules.has('R4')) {
       await guard('R4', async () => {
         out.candidates.push(
-          ...(await this.withTimeout((q) =>
+          ...(await this.withTimeout(deadline, (q) =>
             this.r4(q, input.thresholds?.R4 ?? {}, today, names),
           )),
         );
@@ -514,7 +536,7 @@ export class AdvisorInputsService {
     if (rules.has('R5')) {
       await guard('R5', async () => {
         out.candidates.push(
-          ...(await this.withTimeout((q) =>
+          ...(await this.withTimeout(deadline, (q) =>
             this.r5(q, input.thresholds?.R5 ?? {}, today, names),
           )),
         );
@@ -523,13 +545,22 @@ export class AdvisorInputsService {
     if (rules.has('R7')) {
       await guard('R7', async () => {
         const since = parseSince(input.since?.R7, now);
-        const r = await this.withTimeout((q) => this.r7(q, since, now, names));
+        const r = await this.withTimeout(deadline, (q) =>
+          this.r7(q, since, now, names),
+        );
         out.candidates.push(...r.candidates);
         out.cursors.R7 = r.cursor;
       });
     }
+    // R8/R6 (kunlik guruh) o'z so'rovlari bilan — byudjet tugagan bo'lsa
+    // boshlanmaydi (kursorsiz `errors`).
+    const budgetLeft = () => {
+      if (deadline - Date.now() < 250)
+        throw new Error('advisor budget exhausted');
+    };
     if (rules.has('R8')) {
       await guard('R8', async () => {
+        budgetLeft();
         out.candidates.push(
           ...(await this.r8(
             input.thresholds?.R8 ?? {},
@@ -541,6 +572,7 @@ export class AdvisorInputsService {
     }
     if (rules.has('R6')) {
       await guard('R6', async () => {
+        budgetLeft();
         out.candidates.push(...(await this.r6(input.periods ?? {}, now)));
       });
     }
@@ -555,14 +587,22 @@ export class AdvisorInputsService {
    * O'qish so'rovlari alohida ulanishda, `statement_timeout` bilan (SET
    * LOCAL — faqat shu tranzaksiya). Hech narsa yozilmaydi.
    */
-  private async withTimeout<T>(fn: (q: SqlQuery) => Promise<T>): Promise<T> {
+  private async withTimeout<T>(
+    deadline: number,
+    fn: (q: SqlQuery) => Promise<T>,
+  ): Promise<T> {
+    const remaining = deadline - Date.now();
+    if (remaining < 250) throw new Error('advisor budget exhausted');
     const runner: QueryRunner = this.ds.createQueryRunner();
     await runner.connect();
     try {
       await runner.startTransaction();
       await runner.query(
-        `SET LOCAL statement_timeout = ${Math.floor(this.statementTimeoutMs)}`,
+        `SET LOCAL statement_timeout = ${Math.floor(
+          Math.min(this.statementTimeoutMs, remaining),
+        )}`,
       );
+      await runner.query(`SET LOCAL lock_timeout = '${ADVISOR_LOCK_TIMEOUT}'`);
       const result = await fn(
         <R>(sql: string, params?: unknown[]) =>
           runner.query(sql, params) as Promise<R>,
@@ -2317,7 +2357,8 @@ class NameCache {
 
   constructor(
     private readonly svc: AdvisorInputsService,
-    private readonly deadlineMs: number = ADVISOR_NAMES_DEADLINE_MS,
+    /** Chegara `fill()` paytida hisoblanadi (umumiy byudjetdan qolgani). */
+    private readonly deadlineMs: () => number = () => ADVISOR_NAMES_DEADLINE_MS,
   ) {}
 
   wantUser(id: string): void {
@@ -2349,7 +2390,7 @@ class NameCache {
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<'deadline'>((resolve) => {
-      timer = setTimeout(() => resolve('deadline'), this.deadlineMs);
+      timer = setTimeout(() => resolve('deadline'), this.deadlineMs());
     });
     const within = async <T>(p: Promise<Map<string, T>>) => {
       const r = await Promise.race([p, deadline]);
