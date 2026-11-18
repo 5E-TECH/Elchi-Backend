@@ -37,6 +37,10 @@ import {
 } from '../order-create/order-create-content';
 import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
 import { OptionalOperatorPhone } from '../order-create/order-operator-phone';
+import {
+  CUSTOMER_ID_FORMAT_MESSAGE,
+  OptionalPositiveInt8Id,
+} from '../order-create/positive-int8-id';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -284,10 +288,12 @@ export class CreateOrderRequestDto {
       'POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): ' +
       "shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. " +
       "Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. " +
-      'POST /orders/external da faqat superadmin/admin (fix3 RBAC-01).',
+      'POST /orders/external da faqat superadmin/admin (fix3 RBAC-01). ' +
+      'Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun; bo‘sh satr — berilmagan), aks holda 400.',
   })
-  @IsOptional()
-  @IsString()
+  // ai-confirm (`AiConfirmOrderDto.customer_id`) bilan umumiy: '0120' market
+  // yo'lida satr solishtiruvida rad, admin yo'lida 120 bo'lib saqlanardi.
+  @OptionalPositiveInt8Id(CUSTOMER_ID_FORMAT_MESSAGE)
   customer_id?: string;
 
   @ApiPropertyOptional({ type: CreateOrderCustomerDto })

@@ -22,6 +22,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI tasdiq: mavjud mijozni tanlash (`orders[].customer_id`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `customer_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — berilmagan; boshqa qiymat — butun so'rov 400). Egalik `POST /orders` `customer_id` bilan **AYNI** (`resolveScopedCustomerId`, `GET /customers/suggest` qoidasi): superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa.
+  - ⚠️ Farq: `POST /orders` da tasdiqlanmagan id `customer` obyekti bo'lsa jimgina e'tiborsiz qoladi (telefon yo'li). ai-confirm'da `customer` doim bor, shu sabab tasdiqlanmagan id (boshqa rollar uchun: begona yoki mavjud bo'lmagan mijoz) **shu buyurtmani rad etadi**: `{ index, ok: false, code: 'create_failed', reason: 'customer_id qabul qilinmadi: …' }` (POST /orders 403 matni). Superadmin/admin — id tekshirilmaydi, POST /orders kabi (mavjudligi ham). Tekshiruv xizmati (order yoki identity) javob bermasa — `{ code: 'validation_unavailable', reason: "Mijozni tekshirib bo'lmadi — …" }` (fail-closed; buyurtma ANIQ yaratilmagan, qayta yuborish mumkin). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
+  - Qabul qilinsa buyurtma o'sha kartaga yoziladi, yangi karta ochilmaydi; `customer.name`/`phone_number` kartaga yozilmaydi — **AI o'qigan telefon saqlanmaydi**, buyurtmada kartadagi telefon bo'ladi; `customer.address`, `customer.extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi, market tomoni faqat o'z marketidagi mijozni). `customer` obyekti baribir majburiy.
+  - Berilmasa — avvalgi xulq (telefon bo'yicha).
+- ⚠️ [gateway] **`POST /orders` va `POST /orders/external` `customer_id` formati qat'iylashdi** (external DTO uni `OmitType` orqali meros oladi; ilgari faqat «satr» edi). Endi **400**: raqam bo'lmagan qiymatlar (`'abc'`, `'EXT-77'`, UUID, `'-1'`, `'1.5'`, `'1e3'`, `'+120'`), boshida nolli `'0120'`, `'0'`, int8 maksimumidan (`9223372036854775807`) kattasi, xavfsiz bo'lmagan JSON son (> 2^53). Ruxsat: musbat int8 satr, JSON xavfsiz butun son (`120` → `'120'`), chetida bo'shliqli `' 120 '` (trim qilinadi), bo'sh satr — berilmagan. Market roli JWT bilan `POST /orders/external` ga o'z (raqam bo'lmagan) mijoz identifikatorini `customer_id` da yuborayotgan tashqi mijoz endi 400 oladi — `customer` obyektini yuborsin.
+- 🟢 ai-confirm natijasida gateway'ning o'z 403 xatolari (shu jumladan «Mijoz kartasini yangilab bo'lmaydi…») endi `reason` da asl matni bilan (ilgari umumiy «Buyurtma yaratilmadi»); gateway'ning o'z 503 xatosi (yaratishdan oldingi tekshiruv) — `validation_unavailable` + matn.
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`customer_id` yubormaydi).
+
+**Frontend action items:**
+- 🔧 AI panelida mijoz telefoni bo'yicha `GET /customers/suggest` taklifini tanlash → `orders[i].customer_id` (va `customer.phone_number` — taklifdagi to'liq telefon).
+- 🔧 `customer_id` tanlangan kartada AI o'qigan telefonni emas, **kartadagi telefonni** ko'rsating (buyurtmaga o'sha yoziladi); AI telefoni boshqacha bo'lsa operator buni ko'rsin (kerak bo'lsa tanlovni bekor qilib, yangi mijoz sifatida yuborsin).
+- 🔧 `customer_id` tanlanganda `orders[i].customer.phone_number` ga **kartadagi telefonni** (va ismni) qo'ying: buyurtma kartaning ism/telefonini oladi, AI auditi (`edited_fields`, `field_corrections`) esa so'rovdagi `customer` ni AI taklifi bilan solishtiradi — so'rovda kartadan boshqa qiymat qolsa audit buyurtmaga yozilmagan qiymatni ko'rsatadi (soxta tuzatish yoki yashirin farq). Kartadagisi qo'yilsa audit buyurtmadagi haqiqiy qiymatni aks ettiradi. (Boshqa market mijozi uchun bu baribir shart — telefon kartaga TO'LIQ mos kelishi kerak.)
+
 ### 2026-11-18 — AI tasdiq: operator raqami (`orders[].operator_phone`)
 
 Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.

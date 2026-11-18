@@ -2239,6 +2239,10 @@ export class OrderGatewayController {
         ...(order.customer.address ? { address: order.customer.address } : {}),
       },
       ...(ctx.includeMarketId ? { market_id: ctx.marketId } : {}),
+      // Mavjud mijoz tanlovi — POST /orders egalik qoidasi
+      // (`resolveScopedCustomerId`); tasdiqlanmasa shu buyurtma rad
+      // (`strictCustomerId`, pastda). Berilmasa — avvalgidek telefon yo'li.
+      ...(order.customer_id ? { customer_id: order.customer_id } : {}),
       // txmkXVBa: «Kartani ham yangilash» (berilmasa — karta o'zgarmaydi).
       ...(order.update_customer_card === true
         ? { update_customer_card: true }
@@ -2296,6 +2300,7 @@ export class OrderGatewayController {
       marketProfile: ctx.marketProfile ?? null,
       operatorName: ctx.operatorName ?? null,
       branchAssignment: ctx.branchAssignment,
+      strictCustomerId: true,
       // Partiya boshida tekshirilgan (`resolveAiChosenOperators`).
       ...(item.chosenOperator ? { chosenOperator: item.chosenOperator } : {}),
     });
@@ -2908,12 +2913,15 @@ export class OrderGatewayController {
    *
    * Qaytaradi: qabul qilingan id yoki `null`. Xulosa olinmasa (timeout/xato)
    * va `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
-   * yo'q bo'lsa xato yuqoriga otiladi (fail-closed).
+   * yo'q bo'lsa xato yuqoriga otiladi (fail-closed). `failClosed`
+   * (ai-confirm) — obyekt bo'lsa ham 503: tanlangan mijoz tekshirilmay
+   * qolib ketmasin va 403 «begona mijoz» deb noto'g'ri aytilmasin.
    */
   private async resolveScopedCustomerId(
     marketId: string | undefined,
     rawCustomerId: unknown,
     customer: { phone_number?: unknown } | undefined,
+    failClosed = false,
   ): Promise<{ id: string; inMarket: boolean } | null> {
     const customerId = this.asStr(rawCustomerId).trim();
     const market = String(marketId ?? '').trim();
@@ -2927,6 +2935,11 @@ export class OrderGatewayController {
         { market_id: market, customer_ids: [customerId] },
       );
     } catch (error) {
+      if (failClosed) {
+        throw new ServiceUnavailableException(
+          "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        );
+      }
       if (customer) {
         return null;
       }
@@ -2953,7 +2966,20 @@ export class OrderGatewayController {
     const card: unknown = await this.sendIdentityWithTimeout(
       { cmd: 'identity.customer.find_by_id' },
       { id: customerId },
-    ).catch(() => null);
+    ).catch((error: unknown) => {
+      // Mijoz yo'q (identity 404) — oddiy rad (403). `failClosed`
+      // (ai-confirm) da boshqa xato/timeout — 503: identity uzilishi
+      // «begona mijoz» deb noto'g'ri aytilmasin.
+      const status = Number(
+        (error as { statusCode?: unknown } | null)?.statusCode,
+      );
+      if (failClosed && status !== 404) {
+        throw new ServiceUnavailableException(
+          "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        );
+      }
+      return null;
+    });
     const cardPhone = normalizeUzPhone(
       (card as { data?: { phone_number?: unknown } } | null)?.data
         ?.phone_number,
@@ -3016,6 +3042,13 @@ export class OrderGatewayController {
       branchAssignment?: BranchAssignment | null;
       /** Celz3rKJ: yaratish kanali (hozir faqat bot). */
       createdVia?: 'bot';
+      /**
+       * ai-confirm: tasdiqlanmagan `customer_id` `customer` obyekti bo'lsa
+       * ham 403 (POST /orders da obyekt bo'lsa jimgina telefon yo'li —
+       * AI'da obyekt DOIM bor, operator tanlagan mijoz yo'qolmasin);
+       * doira tekshiruvi ishlamasa — 503 (fail-closed).
+       */
+      strictCustomerId?: boolean;
       /**
        * ai-confirm: `dto.operator_id` partiya boshida AYNI
        * `resolveChosenOrderOperator` bilan (shu market, shu so'rovchi)
@@ -3205,17 +3238,20 @@ export class OrderGatewayController {
     let customerInMarket: boolean | null = null;
     let customerCreatedNow = false;
     if (!isSystemPrivileged && this.hasCustomerIdValue(dto.customer_id)) {
+      const strictCustomerId = opts?.strictCustomerId === true;
       const scoped = await this.resolveScopedCustomerId(
         resolvedMarketId,
         dto.customer_id,
         customer,
+        strictCustomerId,
       );
       if (scoped) {
         customerId = scoped.id;
         customerInMarket = scoped.inMarket;
-      } else if (!customer) {
+      } else if (!customer || strictCustomerId) {
         // Tasdiqlanmagan id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
-        // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi.
+        // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi
+        // (ai-confirm'da — rad, `strictCustomerId`).
         throw new ForbiddenException(
           "customer_id qabul qilinmadi: boshqa market mijozi uchun customer.phone_number mijoz telefoniga to'liq mos kelishi kerak (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring",
         );
