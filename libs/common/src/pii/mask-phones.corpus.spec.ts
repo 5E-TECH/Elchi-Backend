@@ -11,6 +11,7 @@ type C = { id: string; text: string; phones: string[]; keep?: string[] };
 type Case = { text: string; phones: string[]; keep?: string[]; tag?: string };
 const P = (n: string) => `+998${n}`;
 const NB = '\u00a0';
+const NNB = '\u202f';
 
 const PRIVACY_CASES: C[] = [
   // A. prefixed
@@ -1393,6 +1394,122 @@ const AMOUNT_CASES: Case[] = [
     phones: [P('901234567')],
     keep: ['905 000 000 so‘m'],
     tag: 'round 2',
+  },
+  // --- #647 round 3 (N3): 8+kod bilan boshlanadigan va yaxlit CC000 narx + sana ---
+  {
+    text: 'Narxi 850 000 25/11 kuni',
+    phones: [],
+    keep: ['850 000 25/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Atir 890 000 14/11',
+    phones: [],
+    keep: ['890 000 14/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Jami 899 000 01/12',
+    phones: [],
+    keep: ['899 000 01/12'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Atir 875 000 14/11/2026 gacha',
+    phones: [],
+    keep: ['875 000 14/11/2026'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Atir 75000 14/11',
+    phones: [],
+    keep: ['75000 14/11'],
+    tag: 'round 3',
+  },
+  {
+    text: '2 ta 50000 25/11 kuni',
+    phones: [],
+    keep: ['50000 25/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Narxi 90000 12/11 da olib keling',
+    phones: [],
+    keep: ['90000 12/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Narxi 75000  14 11',
+    phones: [],
+    keep: ['75000  14 11'],
+    tag: 'round 3',
+  },
+  {
+    text: `Atir 850${NB}000 14.11`,
+    phones: [],
+    keep: [`850${NB}000 14.11`],
+    tag: 'round 3',
+  },
+  {
+    text: `Atir 850${NNB}000 14.11`,
+    phones: [],
+    keep: [`850${NNB}000 14.11`],
+    tag: 'round 3',
+  },
+  {
+    text: `Narxi 75000${NB}${NB}14 11`,
+    phones: [],
+    keep: [`75000${NB}${NB}14 11`],
+    tag: 'round 3',
+  },
+  {
+    text: `Atir 75000${NNB}14/11`,
+    phones: [],
+    keep: [`75000${NNB}14/11`],
+    tag: 'round 3',
+  },
+  {
+    text: 'Narxi 850 000 – 25 – 11 kuni',
+    phones: [],
+    keep: ['850 000 – 25 – 11'],
+    tag: 'round 3',
+  },
+  // dev (21190eef) ham maskalagan: yaxlit/8-prefiksli shakl dev tanigan
+  // ajratgich bilan — telefon (maxfiylik dev'dan pasaymaydi).
+  {
+    text: 'Aziza 90123 14.11',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 890 123 14.11',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 90000 14 11',
+    phones: [P('900001411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 890 123 14 11',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: '8-90-123-14-11 Chilonzor',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: '+998 90 000 14/11',
+    phones: [P('900001411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 0 (90) 000 14 11',
+    phones: [P('900001411')],
+    tag: 'round 3',
   },
 ];
 

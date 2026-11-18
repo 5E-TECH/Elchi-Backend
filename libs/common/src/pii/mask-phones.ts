@@ -262,49 +262,61 @@ function isDayMonth(dd: string, mm: string): boolean {
 }
 
 /**
- * #647 N2: asosiy 2-3-2-2 / 2-3-4 dagi narx + sana (`75 000 14/11`,
+ * #647 N2/N3: asosiy 2-3-2-2 / 2-3-4 dagi narx + sana (`75 000 14/11`,
  * `50 000 25.11 kuni`, `70 000  12 11`, `75 000 14.11.2026`,
- * `90 500 2026-11-14`). Faqat prefikssiz, qavssiz, guruhli moslikka.
+ * `90 500 2026-11-14`). `8` + kod bilan boshlanadigan narx (`850 000 25/11`
+ * — `8` prefiks deb olinadi) va yaxlit `CC000` (`75000 14/11`) ham.
+ * +998/998/0 prefiksli yoki qavsli shakl — doim telefon.
  */
 function looksLikePriceAndDate(
   raw: string,
   before: string,
   after: string,
 ): boolean {
-  if (!/^\d{2}\D/.test(raw) || raw.replace(/\D/g, '').length !== 9) {
-    return false;
-  }
-  const groups = raw.split(/\D+/);
-  const rawSeps: string[] = raw.match(/\D+/g) ?? [];
-  // 2-3-4 + ISO sana davomi: `90 500 2026-11-14`.
-  if (groups.length === 3) {
+  if (/^[+0]|\(/.test(raw)) return false;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 12) return false;
+  const nat = digits.slice(-9);
+  // 2-3-4 + ISO sana davomi: `90 500 2026-11-14` (faqat prefikssiz).
+  if (/^\d{2}\D\d{3}\D\d{4}$/.test(raw)) {
     const iso = /^([./-])(\d{2})\1(\d{2})(?!\d)/.exec(after);
     return (
-      /^(?:19|20)\d{2}$/.test(groups[2]) &&
+      /^(?:19|20)\d{2}$/.test(nat.slice(5)) &&
       !!iso &&
       (isDayMonth(iso[2], iso[3]) || isDayMonth(iso[3], iso[2]))
     );
   }
-  if (groups.length !== 4 || groups[1].length !== 3) return false;
-  if (!isDayMonth(groups[2], groups[3])) return false;
+  // Oxirgi ikki juftlik — sana (`DD MM`); oldidagi ajratgich tail[2].
+  const tail = /(\d)(\D+)(\d{2})(\D+)(\d{2})$/.exec(raw);
+  if (!tail || !isDayMonth(tail[3], tail[5])) return false;
+  const rawSeps: string[] = raw.match(/\D+/g) ?? [];
+  // Dev (21190eef) tanimagan ajratgich (`/`, `–`, NBSP, 2 bo'shliq, ` - `)
+  // — dev bunday shaklni umuman telefon deb olmasdi.
+  const devUnknownSep = rawSeps.some((x) => !/^[ .-]$/.test(x));
+  // Asosiy N2 shakli — prefikssiz `CC NNN DD MM`. Boshqasi (`8` prefiksli
+  // `850 000 25/11` yoki yaxlit `75000 14/11`) faqat dev tanimagan ajratgich
+  // bilan — dev ularni telefon deb olmasdi. `90000 14.11`, `850 000 14 11`,
+  // `890 123 14.11` — dev'dagidek telefon (maxfiylik dev'dan pasaymaydi).
+  if (!/^\d{2}\D+\d{3}\D/.test(raw) && !devUnknownSep) return false;
+  const roundThousands = nat.slice(2, 5) === '000';
   // Sana yil bilan davom etadi: `14.11.2026`, `14/11/26` (lekin
   // `…/91 234 56 78` — ikkinchi telefon, sana emas).
   if (/^[./\-–](?:\d{4}(?!\d)|\d{2}(?!\d|[ \u00a0]?\d{3}))/.test(after)) {
     return true;
   }
-  const seps = rawSeps.map((x) => x.replace(/[ \u00a0\u202f]/g, ''));
-  // Oxirgi ajratgich `.`/`/` va birinchisidan farqli: `75 000 14.11`.
-  if ((seps[2] === '.' || seps[2] === '/') && seps[2] !== seps[0]) return true;
+  const strip = (x: string) => x.replace(/[ \u00a0\u202f]/g, '');
+  const lastSep = strip(tail[4]);
+  // Oxirgi ajratgich `.`/`/` va sanadan oldingisidan farqli: `75 000 14.11`,
+  // `75000 14/11`.
+  if ((lastSep === '.' || lastSep === '/') && lastSep !== strip(tail[2])) {
+    return true;
+  }
   if (isPhoneWordBefore(before)) return false;
-  // `CC 000 DD MM` — yaxlit narx + sana (`50 000 25 11 kuni`); summa so'zidan
-  // keyin (`jami: 90 500 12 11`); yoki dev tanimagan keng ajratgich (`/`,
-  // `–`, 2 bo'shliq, ` - `): `90 500 – 14 – 11`. Telefon so'zi oldida
-  // bo'lsa — telefon.
-  return (
-    groups[1] === '000' ||
-    MONEY_OR_ID_BEFORE_RE.test(before) ||
-    rawSeps.some((x) => !/^[ .-]$/.test(x))
-  );
+  // `CC 000 DD MM` — yaxlit narx + sana (`50 000 25 11 kuni`, `75000  14 11`,
+  // `850 000 25/11`); summa so'zidan keyin (`jami: 90 500 12 11`); yoki dev
+  // tanimagan keng ajratgich (`/`, `–`, 2 bo'shliq, ` - `):
+  // `90 500 – 14 – 11`. Telefon so'zi oldida bo'lsa — telefon.
+  return roundThousands || MONEY_OR_ID_BEFORE_RE.test(before) || devUnknownSep;
 }
 
 /**
