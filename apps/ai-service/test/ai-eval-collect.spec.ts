@@ -699,8 +699,21 @@ describe('ai-eval-collect: miqdor/narx istisnolari (round-9)', () => {
     'uyigacha 19 900',
     '\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u0434\u043E \u0434\u043E\u043C\u0430 25 500',
     'uyi 61 500',
+    'uyigacha 19.900',
+    'uyiga 25.000',
+    'uyiga 25\u00A0000',
   ])("o'zgarmaydi: %j", (text) => {
     expect(maskCandidateText(text, [])).toBe(text);
+  });
+
+  it.each([
+    ['uyi 61 5000', 'uyi [N] 5000'],
+    ['kv 18\nx2 sumka', 'kv [N]\nx2 sumka'],
+    ['uyi 12\nMing rahmat', 'uyi [N]\nMing rahmat'],
+    ['uyi 61\r120 000', 'uyi [N]\r120 000'],
+    ['uyi 61\u2028120 000', 'uyi [N]\u2028120 000'],
+  ])('qator chegarasi / qisqa son: %j', (text, want) => {
+    expect(maskCandidateText(text, [])).toBe(want);
   });
 
   it("E2 istisnosi yangi qatorni kesib o'tmaydi", () => {

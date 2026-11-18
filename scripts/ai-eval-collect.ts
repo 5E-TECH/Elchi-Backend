@@ -451,16 +451,18 @@ const HOUSE_KW_SUFFIX =
  * 250 000", "uy 12\n250 000" dagi uy/xonadon raqami yopiq qoladi.
  */
 const NOT_QTY =
-  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]000(?!\\d))";
+  "(?![^\\S\\n\\r\\u2028\\u2029]*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]000(?!\\d))";
 /**
  * Dev tanimagan egalik/kelishikli shakllar ("uyiga", "uyigacha",
  * "xonadoniga", kirillda "do doma", "kvartire") - narx istisnosi keng
  * (bo'shliq/nuqta + istalgan 3 raqam): "uyigacha 19 900", "Dostavka do
  * doma 25 500" (kirillda) narxi dev'dagidek ochiq qoladi.
  * Faqat shu qatorda: "uyi 61" + keyingi qatordagi "120 000" — uy raqami.
+ * Birlik so'zi ham faqat shu qatorda ("kv 18" + yangi qator + "x2 sumka"
+ * — `[N]`); qator chegarasi: \n, \r, U+2028, U+2029.
  */
 const NOT_QTY_WIDE =
-  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[^\\S\\n]\\d{3}(?!\\d)|\\.\\d{3}(?!\\d))";
+  "(?![^\\S\\n\\r\\u2028\\u2029]*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[^\\S\\n\\r\\u2028\\u2029]\\d{3}(?!\\d)|\\.\\d{3}(?!\\d))";
 const HOUSE_CASE =
   '(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
 /** Dev'da bo'lmagan shakllar: egalikli kalit so'z, kirill "dom[eau]", "kvartir[euy]". */
