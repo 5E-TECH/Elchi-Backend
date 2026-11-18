@@ -189,6 +189,31 @@ const AREA_AFTER_WORDS: ReadonlySet<string> = new Set([
   'kvartali',
 ]);
 
+const TUMAN_AFTER_WORDS: ReadonlySet<string> = new Set([
+  'tumani',
+  'tuman',
+  'rayon',
+  'rayoni',
+  'raion',
+  't',
+]);
+
+/** `tokens[j]` dan aniq tuman belgisi boshlanadimi ("tumani", "t.", "r-n"). */
+function tumanMarkerAt(tokens: string[], j: number): boolean {
+  const w = tokens[j] ?? '';
+  return TUMAN_AFTER_WORDS.has(w) || (w === 'r' && tokens[j + 1] === 'n');
+}
+
+/** Nomdan OLDIN tuman belgisi — rus tartibi ("р-н X", "rayon X"). */
+function tumanMarkerBefore(tokens: string[], i: number): boolean {
+  const prev = tokens[i - 1] ?? '';
+  return (
+    prev === 'rayon' ||
+    prev === 'raion' ||
+    (prev === 'n' && tokens[i - 2] === 'r')
+  );
+}
+
 /** Manzil tokenlari: `normGeo` qo'shimchalarini SAQLAB (tumani, shahri). */
 function addressTokens(text: string): string[] {
   return lightNorm(text)
@@ -868,13 +893,17 @@ export function resolveDistrictText(
           ) {
             continue;
           }
-          // "Toshkent shahri/sh." — 1726 VILOYAT, "Toshkent tumani" (1727)
-          // emas (#646 review B1).
+          // Yalang'och "Toshkent" (1726 ham, 1727 ham) — "Toshkent tumani"
+          // (1727) uchun dalil faqat ANIQ tuman belgisi bilan: keyin
+          // "tumani/t./r-n" yoki oldidan "р-н/rayon". "Toshkent shahri/sh.",
+          // "Toshkent shahrida", "g. Toshkent", "Toshkent, Mirobod" — bu
+          // VILOYAT (#646 review B1, r4 NEW-B2).
           if (
             d.regionNamed &&
             AMBIGUOUS_REGION_WORDS.has(d.geo) &&
-            CITY_AFTER_WORDS.has(next) &&
-            d.kind !== 'city'
+            d.kind !== 'city' &&
+            !tumanMarkerAt(tokens, i + len) &&
+            !tumanMarkerBefore(tokens, i)
           ) {
             continue;
           }

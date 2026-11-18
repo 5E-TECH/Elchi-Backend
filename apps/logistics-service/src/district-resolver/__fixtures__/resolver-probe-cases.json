@@ -1751,5 +1751,481 @@
    "sato": null,
    "reason": "district_not_found"
   }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent shahrida, Mirobod tumani 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent shahridagi Chilonzor tumani 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "gorod Toshkent, Yunusobod 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "g. Toshkent, Yunusobod t., 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "gorod Toshkent, Chilonzorskiy rayon, 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent, Mirobod tumani, 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent",
+   "full_address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "g. Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "gorod Toshkent, Chilonzor 5"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "g. Toshkent, Yunusobod 5-uy"
+  },
+  "seed": {
+   "sato": "1726266",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726266",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Ташкент",
+   "full_address": "g.Toshkent, Sergeli 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent tumani, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent viloyati",
+   "full_address": "Toshkent r-n, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent tumani, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent r-n, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1727265",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727265",
+   "reason": null
+  }
  }
 ]
