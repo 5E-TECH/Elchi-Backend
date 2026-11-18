@@ -193,6 +193,7 @@ const NAME_SUFFIX_ONE = [
   'opa',
   'aka',
   'xon',
+  'hon',
   'jon',
   'oy',
   'bek',
@@ -270,10 +271,12 @@ const NAME_PART_STOP = new Set([
 ]);
 
 /**
- * Ismga yopishgan murojaat ("Dilnozaxon", "Ферузажон") — olib tashlanadi,
+ * Ismga yopishgan murojaat ("Dilnozaxon", "Dilnozahon", "Dilnoza-xon",
+ * "Ферузажон") — tire bilan birga olib tashlanadi,
  * qolgan o'zak (3+ harf) alohida variant: matnda "Dilnoza" ham maskalanadi.
  */
-const GLUED_HONORIFIC_RE = /(?:xonim|xon|jon|opa|aka|хоним|хон|жон|опа|ака)$/iu;
+const GLUED_HONORIFIC_RE =
+  /[-‐]?(?:xonim|honim|xon|hon|jon|opa|aka|хоним|хон|жон|опа|ака)$/iu;
 
 /** Regex maxsus belgilarini qochiradi. */
 function escapeRe(x: string): string {
@@ -378,10 +381,11 @@ const USER_HANDLE_RE = /(?<![\p{L}\p{N}_.@])@[A-Za-z0-9_.]{3,32}/gu;
 
 /**
  * Uy/xonadon kalit so'zlari (uzunidan boshlab; "kv-ra" — "kv" dan oldin).
+ * Rus kelishiklari: "в доме 5", "квартире 7", "в квартиру 9".
  * "д."/"d." — faqat nuqta bilan.
  */
 const HOUSE_KW =
-  'xonadon|kvartira|хонадон|квартира|kv-ra|кв-ра|dom|uy|kv|дом|уй|кв';
+  'xonadon|kvartira|хонадон|квартир[аеуы]|kv-ra|кв-ра|dom|uy|kv|дом[еау]?|уй|кв';
 /**
  * Kalit so'zdan keyin: egalik ("12-uyi", "5-xonadoni", "kvartirasi 7",
  * "12-уйи") va kelishik ("12-uyda", "kvartiraga 5", "12-uyida",
@@ -462,8 +466,10 @@ export function maskCandidateText(
     out
       // Pasport/ID: 2 harf + 7 raqam ("AA 1234567", "AA-1234567",
       // "AA №1234567", "AA № 1234567").
+      // Oldida umumiy 2 harfli so'z ("1 ta - 1500000", "uy-1234567") —
+      // seriya EMAS.
       .replace(
-        /(?<![\p{L}\p{N}])\p{L}{2}\s?(?:[-–№]\s?)?\d{7}(?!\d)/gu,
+        /(?<![\p{L}\p{N}])(?!(?:ta|va|uy|kv|da|ga|ni|bu|to|та|ва)(?![\p{L}]))\p{L}{2}\s?(?:[-–№]\s?)?\d{7}(?!\d)/gu,
         '[HUJJAT]',
       )
       // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta, slash,

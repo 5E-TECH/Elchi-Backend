@@ -448,4 +448,32 @@ describe('ai-eval-collect: PII (review round-6)', () => {
       masked('12-uyi, uyiga 12, uy 120, Yunusobod 4 12-uy, дом 12 кв 5', []),
     ).toBe('[N]-uyi, uyiga [N], uy [N], Yunusobod 4 [N]-uy, дом [N] кв [N]');
   });
+
+  it('S2: -hon/-honim va tireli murojaat ("Dilnoza-xon")', () => {
+    expect(masked('Dilnozahonga bering', ['Dilnoza'])).toBe(
+      '[ISM]honga bering',
+    );
+    expect(masked('Dilnoza opa keldi', ['Dilnozahon'])).toBe('[ISM] opa keldi');
+    expect(masked('Dilnoza opaga bering', ['Dilnoza-xon'])).toBe(
+      '[ISM] opaga bering',
+    );
+    expect(nameVariants(['Dilnoza-xon'])).toEqual(['Dilnoza-xon', 'Dilnoza']);
+    expect(nameVariants(['Dilnozahonim'])).toContain('Dilnoza');
+  });
+
+  it('S3: rus kelishigidagi uy/kvartira', () => {
+    expect(
+      masked('в доме 5, квартире 7, в квартиру 9, квартиры 2 шт', []),
+    ).toBe('в доме [N], квартире [N], в квартиру [N], квартиры 2 шт');
+    expect(masked('дома никого нет', [])).toBe('дома никого нет');
+  });
+
+  it('S4: pasport — oldida umumiy 2 harfli so‘z bo‘lsa seriya emas', () => {
+    expect(masked('Jami: 1 ta - 1500000, uy-1234567', [])).toBe(
+      'Jami: 1 ta - 1500000, uy-1234567',
+    );
+    expect(masked('AA-1234567, AB №1234567, AA 1234567', [])).toBe(
+      '[HUJJAT], [HUJJAT], [HUJJAT]',
+    );
+  });
 });
