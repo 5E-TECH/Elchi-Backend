@@ -430,6 +430,29 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   tartib), ≤12 — to'lsa "⏳ Juda ko'p xabar navbatda". Har rasm/matn — o'z
   qoralamasi (ustma-ust yozilmaydi). Foydalanuvchi bo'yicha AI limiti —
   gateway `ai-user` throttler (429 → "🔁 Qayta urinish").
+- **Katalogda topilmagan mahsulot (#713).** Kartada har shunday item uchun
+  «❓ <nom> — tanlash» (≤5) → oyna: AI nomzodlari (≤5, `✅ <mahsulot>`),
+  «🔎 Qidirish», «📝 Nomi bilan qoldirish» (avvalgidek
+  `allow_unlisted_product`), «↩️ Orqaga». Amallar: `ai.item` (oyna),
+  `ai.pick` (`{o, i, s: 'c'|'s', k, pid}` — `pid` ro'yxatdagi o'rin bilan mos
+  kelmasa tanlov yozilmaydi), `ai.find` (qidiruv), `ai.keep`. Tanlov
+  qoralamadagi itemga `product_id` yozadi; ai-confirm API o'zgarmagan.
+- **Kutilgan matn** — `telegram_sessions.state.ai_input`
+  (`{draft_id, kind, o, i, at}` — faqat id/indeks, PII yo'q, 15 daqiqa).
+  Qidiruv kutilayotganda keyingi matn `GET /product/my-products?search=…&limit=5`
+  (operator JWT) ga ketadi; shtrix-kod (8–14 raqam) va `ELC-P-<n>` ham
+  qidiruv. Ko'p qatorli yoki harf + 7+ raqamli matn — yangi buyurtma (kutish
+  bekor). Qoralama boshqa aktor/chatniki bo'lsa kutish bekor.
+- **Natijasi noma'lum ai-confirm.** Server kaliti
+  `ai:<market>:<draft>:<index>` muddatsiz va yukni solishtirmaydi: keyingi
+  «✅» birinchi urinish natijasini (`idempotent_replay`) qaytaradi. Shuning
+  uchun timeout / tarmoq / 5xx / tushunarsiz 2xx / qotgan `creating` dan
+  keyin YUBORILGAN buyurtmalarga bot ichki belgi (`confirm_attempted_at`,
+  `confirm_fp`) qo'yiladi: kartada «⚠️ Javob kelmadi…», tugmalar faqat
+  ✅ Yaratish / ❌ Bekor / 🌐 Kabinet, botdagi tuzatish (tanlash, qidiruv)
+  rad etiladi. 409 / 503 `AI_CHECKS_UNAVAILABLE` / 4xx / parol almashtirish
+  — belgi YO'Q (server hech narsa yaratmagan). Takroriy javobda qoralama
+  urinishdan keyin o'zgargan bo'lsa — «⚠️ Tuzatishlar qo'llanmadi».
 
 ## 13. Skan Mini App (MWYaqprw) — chatda skan YO'Q
 

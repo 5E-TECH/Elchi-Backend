@@ -6,9 +6,14 @@ import {
   textUpdate,
 } from '../testing/bot-kit-spec';
 import { AI_HINT_TEXT } from './ai-order.handler';
-import { AI_EXPIRED_TEXT, AI_INPUT_TTL_MS } from './ai-order.service';
+import {
+  AI_EXPIRED_TEXT,
+  AI_INPUT_TTL_MS,
+  endsSearch,
+} from './ai-order.service';
 import { toConfirmOrder, type AiPreviewOrder } from './ai-preview';
 import {
+  AI_SEARCH_FAILED_TEXT,
   AI_SEARCH_PROMPT_TEXT,
   applyKeepName,
   applyProductPick,
@@ -173,7 +178,7 @@ const confirmBody = (calls: GatewayCall[]) =>
 
 describe('ai-product-pick — sof funksiyalar', () => {
   it('nomzod tanlansa product_id qo‘yiladi, item_unresolved olinadi, confirm product_id yuboradi', () => {
-    const orders = applyProductPick([preview()], 0, 0, 'c', 1)!;
+    const orders = applyProductPick([preview()], 0, 0, 'c', 1, '501')!;
     expect(orders[0].items![0]).toEqual(
       expect.objectContaining({
         product_id: '501',
@@ -188,9 +193,12 @@ describe('ai-product-pick — sof funksiyalar', () => {
   });
 
   it('ro‘yxatda yo‘q indeks / noto‘g‘ri item — o‘zgarish yo‘q (null)', () => {
-    expect(applyProductPick([preview()], 0, 0, 'c', 7)).toBeNull();
-    expect(applyProductPick([preview()], 0, 3, 'c', 0)).toBeNull();
-    expect(applyProductPick([preview()], 0, 0, 's', 0)).toBeNull();
+    expect(applyProductPick([preview()], 0, 0, 'c', 7, '507')).toBeNull();
+    expect(applyProductPick([preview()], 0, 3, 'c', 0, '500')).toBeNull();
+    expect(applyProductPick([preview()], 0, 0, 's', 0, '500')).toBeNull();
+    // S3: o'rindagi mahsulot tugmadagi `pid` emas / `pid` yo'q — o'zgarish yo'q.
+    expect(applyProductPick([preview()], 0, 0, 'c', 1, '500')).toBeNull();
+    expect(applyProductPick([preview()], 0, 0, 'c', 1, undefined)).toBeNull();
   });
 
   it('nomi bilan qoldirish — allow_unlisted_product (avvalgi xatti-harakat)', () => {
@@ -239,6 +247,7 @@ describe('bot — katalogda topilmagan mahsulotni tanlash', () => {
       i: 0,
       s: 'c',
       k: 1,
+      pid: '501',
       draft_id: draftRow(ctx).id,
     });
 
@@ -423,5 +432,125 @@ describe('bot — katalogda topilmagan mahsulotni tanlash', () => {
     expect(draftRow(ctx).status).toBe('created');
     await press(ctx, picker['✅ Namuna atir 1']);
     expect(draftRow(ctx).orders[0].items[0].product_id).toBeNull();
+  });
+});
+
+describe('review (#713) — qidiruv rejimi, eski tugma, egasi, xatolar', () => {
+  /** Qidiruv natijasi so'rovga qarab (`search=` qiymati). */
+  const bySearch = (path: string) => {
+    const q = decodeURIComponent(/search=([^&]*)/.exec(path)?.[1] ?? '');
+    return {
+      status: 200,
+      body: {
+        data: [
+          { id: q === 'atir' ? '701' : '801', name: `Topilgan ${q}` },
+          { id: q === 'atir' ? '702' : '802', name: `Topilgan ${q} 2` },
+        ],
+      },
+    };
+  };
+  const openSearch = async (ctx: Ctx) => {
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['❓ Namuna atir — tanlash']);
+    await press(ctx, buttons(ctx)['🔎 Qidirish']);
+  };
+  const searches = (calls: GatewayCall[]) =>
+    calls.filter((c) => c.path.startsWith('/product/'));
+
+  it('S2: shtrix-kod va Elchi kodi — qidiruv; ko‘p qatorli / ism+telefon — yangi buyurtma', () => {
+    expect(endsSearch('4780000000012')).toBe(false);
+    expect(endsSearch('ELC-P-1234567')).toBe(false);
+    expect(endsSearch('Atir 50ml')).toBe(false);
+    expect(endsSearch('krem\nikkinchi qator')).toBe(true);
+    expect(endsSearch('Boshqa Mijoz 90 111 22 33 krem')).toBe(true);
+  });
+
+  it('S2: qidiruv rejimida shtrix-kod my-products ga ketadi, AI chaqirilmaydi', async () => {
+    const { ctx, calls } = setup([preview()], bySearch);
+    await openSearch(ctx);
+    await send(ctx, '4780000000012');
+    expect(searches(calls).map((c) => c.path)).toEqual([
+      '/product/my-products?search=4780000000012&page=1&limit=5',
+    ]);
+    expect(calls.filter((c) => c.path === '/orders/ai-parse')).toHaveLength(1);
+  });
+
+  it('S3: eski qidiruv xabarining tugmasi yangi ro‘yxatdan boshqa mahsulot tanlamaydi', async () => {
+    const { ctx } = setup([preview()], bySearch);
+    await openSearch(ctx);
+    await send(ctx, 'atir');
+    const old = buttons(ctx);
+    await press(ctx, old['🔎 Qayta qidirish']);
+    await send(ctx, 'krem');
+    await press(ctx, old['✅ Topilgan atir']);
+    expect(draftRow(ctx).orders[0].items[0].product_id).toBeNull();
+    // Joriy (krem) ro'yxat qayta ko'rsatiladi.
+    expect(Object.keys(buttons(ctx))).toContain('✅ Topilgan krem');
+    await press(ctx, buttons(ctx)['✅ Topilgan krem']);
+    expect(draftRow(ctx).orders[0].items[0].product_id).toBe('801');
+  });
+
+  it('S5: kutish boshqa aktorning qoralamasiga ishora qilsa — bekor, qidiruv yo‘q', async () => {
+    const { ctx, calls } = setup([preview()], bySearch);
+    await openSearch(ctx);
+    draftRow(ctx).actor_user_id = '41';
+    await send(ctx, 'krem');
+    expect(searches(calls)).toEqual([]);
+    expect(ctx.sessions.states.get('40')?.ai_input).toBeUndefined();
+  });
+
+  it.each([
+    ['400', () => ({ status: 400, body: { message: 'yomon' } })],
+    ['503', () => ({ status: 503, body: null })],
+    [
+      'tarmoq xatosi',
+      (): { status: number; body: unknown } => {
+        throw new Error('ECONNRESET');
+      },
+    ],
+  ])(
+    'S7: my-products %s — «qidirib bo‘lmadi», kutish davom etadi',
+    async (_n, reply) => {
+      const { ctx, calls } = setup([preview()], reply);
+      await openSearch(ctx);
+      await send(ctx, 'krem');
+      expect(searches(calls)).toHaveLength(1);
+      expect(lastShown(ctx)).toBe(AI_SEARCH_FAILED_TEXT);
+      expect(ctx.sessions.states.get('40')?.ai_input).toBeDefined();
+      expect(draftRow(ctx).orders[0].items[0].product_id).toBeNull();
+    },
+  );
+
+  it('S7: ikki buyurtma — 2-buyurtma (o=1) mahsuloti tanlanadi, 1-si tegilmaydi', async () => {
+    const second = preview({
+      index: 1,
+      customer_name: 'Ikkinchi Mijoz',
+      phone_number: '+998900000002',
+      items: [
+        {
+          name: 'Namuna krem',
+          quantity: 1,
+          product_id: null,
+          unresolved: true,
+          candidates: [{ id: '601', name: 'Namuna krem 1' }],
+        },
+      ],
+    });
+    const { ctx, calls } = setup([preview(), second]);
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['❓ 2) Namuna krem — tanlash']);
+    await press(ctx, buttons(ctx)['✅ Namuna krem 1']);
+    expect(draftRow(ctx).orders[1].items[0].product_id).toBe('601');
+    expect(draftRow(ctx).orders[0].items[0].product_id).toBeNull();
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    const body = calls.find((c) => c.path === '/orders/ai-confirm')!.body as {
+      orders: Array<{ ai_item_index: number; items: unknown[] }>;
+    };
+    expect(body.orders[1]).toEqual(
+      expect.objectContaining({
+        ai_item_index: 1,
+        items: [{ product_id: '601', quantity: 1 }],
+      }),
+    );
   });
 });

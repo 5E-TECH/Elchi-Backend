@@ -28,7 +28,12 @@ import type { BotContext } from '../handlers/bot-context';
 import type { InlineKeyboardButton } from '../telegram.types';
 import {
   AI_ACK_SERVER_ASKED_TEXT,
+  AI_EDITS_NOT_APPLIED_TEXT,
   AiAckEntry,
+  confirmAttempted,
+  confirmSendable,
+  editedAfterAttempt,
+  markConfirmAttempted,
   AiPreviewOrder,
   ackPromptText,
   ackTargets,
@@ -140,15 +145,31 @@ const inputStateOf = (value: unknown): AiInputState | null => {
 };
 
 /**
- * Buyurtma matnidek (7+ raqam) yozuv yangi buyurtma deb olinadigan
- * kutishlar: telefon / manzil / izoh kutilayotganda raqamlar tabiiy.
+ * Qidiruv kutilayotganda yangi buyurtma matni: ko'p qatorli yoki harf VA
+ * 7+ raqam (ism + telefon). Shtrix-kod (8–14 raqam) va Elchi kodi
+ * (`ELC-P-<n>`) — qidiruv so'rovi (pullik ai-parse emas).
  */
-const orderTextEndsInput = (input: AiInputState) =>
-  input.kind === 'search' || input.f === 'name' || input.f === 'qty';
+export function endsSearch(text: string): boolean {
+  const trimmed = text.trim();
+  if (/^(?:\d{8,14}|ELC-P-\d+)$/i.test(trimmed)) return false;
+  return (
+    /\n/.test(trimmed) ||
+    (/\p{L}/u.test(trimmed) && (trimmed.match(/\d/g) ?? []).length >= 7)
+  );
+}
 
-/** Buyurtma matni (telefon kabi 7+ raqam) — qidiruv so'rovi emas, yangi buyurtma. */
-const looksLikeOrderText = (text: string) =>
-  (text.match(/\d/g) ?? []).length >= 7;
+/**
+ * Kutish turi bo'yicha: matn yangi buyurtma bo'lsa kutish tugaydi.
+ * Telefon / manzil / izoh kutilayotganda raqamlar tabiiy.
+ */
+const endsInput = (input: AiInputState, text: string): boolean =>
+  input.kind === 'edit'
+    ? (input.f === 'name' || input.f === 'qty') &&
+      (text.match(/\d/g) ?? []).length >= 7
+    : endsSearch(text);
+
+/** Kutish muddati. */
+const inputTtl = (_input: AiInputState): number => AI_INPUT_TTL_MS;
 
 export const AI_WORKING_TEXT = '⏳ AI buyurtmani o‘qiyapti… (1 daqiqagacha)';
 export const AI_EXPIRED_TEXT =
@@ -410,7 +431,8 @@ export class AiOrderService implements OnModuleDestroy {
         `ai draft ${draft.id}: ${draft.status} — ${this.transport.describe(error)}`,
       );
       if (draft.status === 'creating') {
-        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
+        // ai-confirm ketgan bo'lishi mumkin — natija noma'lum.
+        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT, true);
       } else {
         await this.fail(ctx, draft, AI_NETWORK_TEXT, true);
       }
@@ -509,7 +531,8 @@ export class AiOrderService implements OnModuleDestroy {
       const ctx = this.workerContext(row);
       try {
         if (row.old_status === 'creating') {
-          await this.backToPreview(ctx, row, AI_CONFIRM_FAILED_TEXT);
+          // Qotgan ai-confirm — server yaratgan bo'lishi mumkin.
+          await this.backToPreview(ctx, row, AI_CONFIRM_FAILED_TEXT, true);
         } else {
           await this.fail(ctx, row, AI_STALE_TEXT, true);
         }
@@ -824,7 +847,8 @@ export class AiOrderService implements OnModuleDestroy {
       this.logger.warn(
         `ai draft ${draft.id}: ai-confirm — ${error instanceof Error ? error.message : 'error'}`,
       );
-      await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT);
+      // Timeout / tarmoq — server yaratgan bo'lishi mumkin.
+      await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT, true);
       return;
     }
     const body = res.body as
@@ -836,12 +860,15 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     if (res.status >= 400 || !Array.isArray(body?.data?.results)) {
+      // 5xx / tushunarsiz 2xx — natija noma'lum; 4xx — server rad etdi.
+      const unknown = res.status >= 500 || res.status < 400;
       await this.backToPreview(
         ctx,
         draft,
-        res.status >= 500 || res.status < 400
+        unknown
           ? AI_CONFIRM_FAILED_TEXT
           : `❌ ${str(body?.message) || 'So‘rov qabul qilinmadi'}`,
+        unknown,
       );
       return;
     }
@@ -854,12 +881,17 @@ export class AiOrderService implements OnModuleDestroy {
     ) {
       return;
     }
-    const lines = results.map((result) => {
+    const lines = results.flatMap((result) => {
       const order = ready[result.index];
       const n = (order?.index ?? result.index) + 1;
-      return result.ok
-        ? `✅ ${n}) Buyurtma ${orderNumber(result.order_id)} ${result.idempotent_replay ? 'avval yaratilgan' : 'yaratildi'}`
-        : `❌ ${n}) ${str(result.reason) || 'yaratilmadi'}`;
+      if (!result.ok)
+        return [`❌ ${n}) ${str(result.reason) || 'yaratilmadi'}`];
+      const line = `✅ ${n}) Buyurtma ${orderNumber(result.order_id)} ${result.idempotent_replay ? 'avval yaratilgan' : 'yaratildi'}`;
+      // Takroriy javob — server birinchi urinish yukini qaytardi; undan
+      // keyin qoralama o'zgargan bo'lsa tuzatishlar buyurtmada YO'Q.
+      return result.idempotent_replay && order && editedAfterAttempt(order)
+        ? [line, `⚠️ ${n}) ${AI_EDITS_NOT_APPLIED_TEXT}`]
+        : [line];
     });
     for (const order of unacked) {
       lines.push(`⚠️ ${order.index + 1}) ${AI_UNACKED_SKIPPED_TEXT}`);
@@ -1262,11 +1294,8 @@ export class AiOrderService implements OnModuleDestroy {
     itemIndex: unknown,
   ): Promise<void> {
     await this.clearInput(ctx);
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
     const found = findItem(
       (draft.orders ?? []) as AiPreviewOrder[],
       orderIndex,
@@ -1279,26 +1308,67 @@ export class AiOrderService implements OnModuleDestroy {
     await this.showPicker(ctx, draft, found.order, itemIndex as number, 'c');
   }
 
-  /** Nomzod / qidiruv natijasi tanlandi → `product_id`, preview qayta. */
+  /**
+   * Nomzod / qidiruv natijasi tanlandi → `product_id`, preview qayta.
+   * Payload'dagi `pid` ro'yxatdagi o'rin bilan mos kelmasa (eski qidiruv
+   * xabarining tugmasi) — hech narsa yozilmaydi, joriy ro'yxat qayta.
+   */
   async pickProduct(
     ctx: BotContext,
     draftId: string,
     payload: Record<string, unknown> | null | undefined,
   ): Promise<void> {
     await this.clearInput(ctx);
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, payload?.o);
+    if (!draft) return;
+    const previews = (draft.orders ?? []) as AiPreviewOrder[];
     const orders = applyProductPick(
-      (draft.orders ?? []) as AiPreviewOrder[],
+      previews,
       payload?.o,
       payload?.i,
       payload?.s,
       payload?.k,
+      payload?.pid,
     );
+    const found = findItem(previews, payload?.o, payload?.i);
+    if (!orders && found && needsPick(found.item)) {
+      await this.showPicker(
+        ctx,
+        draft,
+        found.order,
+        payload?.i as number,
+        payload?.s === 's' ? 's' : 'c',
+      );
+      return;
+    }
     await this.saveAndShow(ctx, draft, orders);
+  }
+
+  /**
+   * Botda tuzatish mumkin bo'lgan qoralama: `preview` va buyurtma natijasi
+   * noma'lum ai-confirm urinishida emas (aks holda karta qayta). `null` —
+   * javob berildi.
+   */
+  private async editableDraft(
+    ctx: BotContext,
+    draftId: string,
+    orderIndex: unknown,
+  ): Promise<TelegramAiDraft | null> {
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.clearInput(ctx);
+      await this.explainState(ctx, draftId);
+      return null;
+    }
+    const order = ((draft.orders ?? []) as AiPreviewOrder[]).find(
+      (o) => o.index === orderIndex,
+    );
+    if (confirmAttempted(order)) {
+      await this.clearInput(ctx);
+      await this.showPreview(ctx, draft);
+      return null;
+    }
+    return draft;
   }
 
   /** «📝 Nomi bilan qoldirish» — katalogsiz yaratiladi, preview qayta. */
@@ -1309,11 +1379,8 @@ export class AiOrderService implements OnModuleDestroy {
     itemIndex: unknown,
   ): Promise<void> {
     await this.clearInput(ctx);
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
     const orders = applyKeepName(
       (draft.orders ?? []) as AiPreviewOrder[],
       orderIndex,
@@ -1329,12 +1396,8 @@ export class AiOrderService implements OnModuleDestroy {
     orderIndex: unknown,
     itemIndex: unknown,
   ): Promise<void> {
-    const draft = await this.previewDraft(draftId);
-    if (!draft) {
-      await this.clearInput(ctx);
-      await this.explainState(ctx, draftId);
-      return;
-    }
+    const draft = await this.editableDraft(ctx, draftId, orderIndex);
+    if (!draft) return;
     const found = findItem(
       (draft.orders ?? []) as AiPreviewOrder[],
       orderIndex,
@@ -1363,19 +1426,30 @@ export class AiOrderService implements OnModuleDestroy {
    * Kutilgan matn (🔎 qidiruv so'rovi). `false` — kutish yo'q / eskirgan /
    * matn yangi buyurtmaga o'xshaydi: handler odatdagidek (AI) ishlaydi.
    */
-  async handleInput(ctx: BotContext, text: string): Promise<boolean> {
+  async handleInput(
+    ctx: BotContext,
+    actorUserId: string,
+    text: string,
+  ): Promise<boolean> {
     if (!this.sessions) return false;
     const session = await this.sessions.load(ctx.chatId, ctx.slug);
     const input = inputStateOf(session.state?.ai_input);
     if (!input) return false;
-    if (
-      Date.now() - input.at > AI_INPUT_TTL_MS ||
-      (orderTextEndsInput(input) && looksLikeOrderText(text))
-    ) {
+    if (Date.now() - input.at > inputTtl(input) || endsInput(input, text)) {
       await this.clearInput(ctx);
       return false;
     }
     const draft = await this.previewDraft(input.draft_id);
+    // Qoralama shu aktor va shu chatniki bo'lishi shart (masalan chatga
+    // boshqa akkaunt ulangan) — aks holda kutish bekor, matn odatdagidek.
+    if (
+      draft &&
+      (String(draft.actor_user_id) !== String(actorUserId) ||
+        String(draft.chat_id) !== String(ctx.chatId))
+    ) {
+      await this.clearInput(ctx);
+      return false;
+    }
     if (!draft) {
       // Eskirgan qoralama — tugmalardagi kabi aniq javob; boshqa holat
       // (yaratilgan / bekor) — matn odatdagidek ishlanadi.
@@ -1383,6 +1457,19 @@ export class AiOrderService implements OnModuleDestroy {
       const row = await this.drafts.findOne({ where: { id: input.draft_id } });
       if (row && new Date(row.expires_at).getTime() > Date.now()) return false;
       await ctx.reply(AI_EXPIRED_TEXT);
+      return true;
+    }
+    // Natijasi noma'lum urinishdagi buyurtma — tuzatish yopiq.
+    if (
+      confirmAttempted(
+        ((draft.orders ?? []) as AiPreviewOrder[]).find(
+          (o) => o.index === input.o,
+        ),
+      )
+    ) {
+      await this.clearInput(ctx);
+      await this.dropCard(ctx, draft);
+      await this.showPreview(ctx, draft);
       return true;
     }
     return input.kind === 'edit'
@@ -1478,7 +1565,8 @@ export class AiOrderService implements OnModuleDestroy {
           draft,
           optionLabel(option),
           AI_ORDER_ACTIONS.pick,
-          { ...ref, s: source, k },
+          // `pid` — eski xabardagi tugma boshqa ro'yxatdan tanlamasin.
+          { ...ref, s: source, k, pid: option.id },
         ),
       ]);
     }
@@ -1583,12 +1671,32 @@ export class AiOrderService implements OnModuleDestroy {
     });
   }
 
+  /**
+   * Preview'ga qaytadi. `unknownOutcome` — ai-confirm natijasi noma'lum
+   * (yuborilgan bo'lishi mumkin): yuborilgan buyurtmalar belgilanadi va
+   * botda tuzatish yopiladi (server kaliti birinchi yukni qaytaradi).
+   * Server aniq hech narsa yaratmagan holatlarda (409 / 503 / 4xx / parol)
+   * belgi QO'YILMAYDI.
+   */
   private async backToPreview(
     ctx: BotContext,
     draft: TelegramAiDraft,
     text: string,
+    unknownOutcome = false,
   ) {
-    if (!(await this.finish(draft, { status: 'preview' }))) return;
+    const patch: Partial<Pick<TelegramAiDraft, 'status' | 'orders'>> = {
+      status: 'preview',
+    };
+    if (unknownOutcome) {
+      const previews = (draft.orders ?? []) as AiPreviewOrder[];
+      patch.orders = markConfirmAttempted(
+        previews,
+        confirmSendable(previews),
+        Date.now(),
+      );
+    }
+    if (!(await this.finish(draft, patch))) return;
+    if (patch.orders) draft.orders = patch.orders;
     const rows = await this.previewRows(ctx, draft);
     const previews = (draft.orders ?? []) as AiPreviewOrder[];
     await this.show(
@@ -1614,6 +1722,15 @@ export class AiOrderService implements OnModuleDestroy {
       rows.push([
         await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm),
       ]);
+    }
+    // Natijasi noma'lum urinish — faqat qayta tekshirish, bekor, kabinet:
+    // tuzatish keyingi «✅» da baribir qo'llanmaydi (server birinchi yuk).
+    if (orders.some(confirmAttempted)) {
+      return [
+        ...rows,
+        [await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel)],
+        [this.cabinetCreateButton()],
+      ];
     }
     const multi = orders.length > 1;
     // Tuman yo'q / AI ikkilangan — nomzod yoki viloyat bo'lsa botda tanlanadi.
