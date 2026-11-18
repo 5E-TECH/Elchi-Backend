@@ -31,6 +31,11 @@ Deploy: **migratsiya 1716000000241** (finance-service/ai-service kodi o'zgarmayd
 
 **Frontend action items:** yo'q.
 
+### 2026-11-18 — AI maslahatchi (BE-5): R6 09:00 Telegram inbox qatorini qayta ko'tarmaydi
+
+- 🔧 (#655 N1 tuzatish) Tunda ochilgan R6 ning 09:00 dagi Telegram xabari ilova ichidagi `ai.advisor_alert` qatorini endi QAYTA KO'TARMAYDI: o'qilgan holati, inbox tartibi (`createdAt`), `data.count` va matn o'zgarmaydi — qatorga faqat `telegram` kanali qo'shiladi. Ilgari 09:00 da qator «o'qilmagan» bo'lib tepaga chiqardi (`count: 2`). Foydalanuvchi o'chirgan qator QAYTA PAYDO BO'LMAYDI (Telegram baribir yuboriladi).
+- 🟢 notification-service: ichki `notification.dispatch` ga ixtiyoriy `delivery_only: true` (gateway HTTP'da yo'q). FE'dan ish talab qilinmaydi.
+
 ### 2026-11-17 — Kuryer skani = qabul: yo'ldagi pochtadan olish, «Yo'lda» va «Qabul qilish» qadami yo'q (COURIER-SCAN)
 
 Ega (2026-11-17): HQ pochtani filialga jo'natdi — menejer hali qabul qilmagan bo'lsa ham filial kuryeri buyurtmani skanerlab oladi; skan = qabul; olgandan keyin holat «Yo'lda» ga qaytmaydi, «Qabul qilish» chiqmaydi, darhol «Sotish» / «Bekor qilish».
