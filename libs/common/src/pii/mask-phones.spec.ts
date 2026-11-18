@@ -355,3 +355,43 @@ describe('#647 round 2: log maskalash (pul qo‘riqchisisiz)', () => {
     expect(maskPhonesForLog('Aziza 901 234 567')).toBe('Aziza +99890*****67');
   });
 });
+
+describe('#647 round 3: 3-3-3 ro‘yxat lookbehind’i chegaralangan (ReDoS)', () => {
+  // Ro'yxat lookbehind'i ilgari `)*` edi — har pozitsiyada butun oldingi
+  // ro'yxatni qayta tekshirib, ~100 KB da bir necha soniya ketardi
+  // (integration-service autentifikatsiyasiz webhook payload'ini log uchun
+  // shu bilan maskalaydi).
+  const big = 'tel: ' + '901 234 567, '.repeat(8000);
+
+  it.each([
+    ['maskPhonesForLog', maskPhonesForLog],
+    ['maskPhones', (t: string) => maskPhones(t).masked],
+  ] as const)('%s: ~100 KB ro‘yxat tez tugaydi', (_name, fn) => {
+    expect(big.length).toBeGreaterThan(100_000);
+    const t0 = Date.now();
+    fn(big);
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
+  it('5 tagacha 3-3-3 ro‘yxat hali ham maskalanadi', () => {
+    const { masked, tokens } = maskPhones(
+      'tel: 901 234 567, 911 234 567; 931 234 567 / 941 234 567 yoki 951 234 567',
+    );
+    expect(masked).toBe(
+      'tel: [TEL_1], [TEL_2]; [TEL_3] / [TEL_4] yoki [TEL_5]',
+    );
+    expect(tokens.size).toBe(5);
+  });
+
+  it.each([
+    'Tel 1: 901 234 567, Tel 2: 911 234 567',
+    'Tel1: 901 234 567; Tel2: 911 234 567',
+    'tel 901 234 567 yoki 911 234 567',
+    'raqam: 901 234 567 va 911 234 567',
+    'tel: +998 901 234 567, 911 234 567',
+  ])('%s — ikkala raqam maskalanadi', (text) => {
+    const { masked, tokens } = maskPhones(text);
+    expect(tokens.size).toBe(2);
+    expect(masked).not.toMatch(/\d{3} \d{3} \d{3}/);
+  });
+});

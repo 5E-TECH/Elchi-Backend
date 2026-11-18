@@ -232,8 +232,12 @@ const UZ_ALT_PHONE_SOURCES: readonly { source: string; kind: SourceKind }[] = [
   },
   // Prefikssiz 3-3-3 — telefon so'zidan keyin yoki shunday raqamlar
   // ro'yxatida (`tel: 901 234 567, 911 234 567`, `Tel 1: …, Tel 2: …`).
+  // ⚠️ Ro'yxat oldingi 4 ta raqam bilan chegaralangan (`{0,4}`): `*` bilan
+  // lookbehind har pozitsiyada butun ro'yxatni qayta o'qiydi — kvadratik,
+  // 100 KB da soniyalar (#647 round 3, log'ga ketadigan webhook payload).
+  // Ro'yxatdagi 6-raqamdan boshlab faqat log maskasi yashiradi.
   {
-    source: `(?=${UZ_NATIONAL_CODE}\\d)(?<=${PHONE_WORD_BEFORE}(?:(?:\\+?998[ \\-]?)?${NAT_333}${LIST_JOIN}(?:${PHONE_WORD_BEFORE})?)*)${UZ_NATIONAL_CODE}\\d[ .\\-\\u00a0]\\d{3}[ .\\-\\u00a0]\\d{3}(?!\\d)`,
+    source: `(?=${UZ_NATIONAL_CODE}\\d)(?<=${PHONE_WORD_BEFORE}(?:(?:\\+?998[ \\-]?)?${NAT_333}${LIST_JOIN}(?:${PHONE_WORD_BEFORE})?){0,4})${UZ_NATIONAL_CODE}\\d[ .\\-\\u00a0]\\d{3}[ .\\-\\u00a0]\\d{3}(?!\\d)`,
     kind: 'ambiguous',
   },
   // 0/8 + bo'shliq + 3-3-3 (`0 901 234 567`).
@@ -262,49 +266,93 @@ function isDayMonth(dd: string, mm: string): boolean {
 }
 
 /**
- * #647 N2: asosiy 2-3-2-2 / 2-3-4 dagi narx + sana (`75 000 14/11`,
+ * #647 N2/N3: asosiy 2-3-2-2 / 2-3-4 dagi narx + sana (`75 000 14/11`,
  * `50 000 25.11 kuni`, `70 000  12 11`, `75 000 14.11.2026`,
- * `90 500 2026-11-14`). Faqat prefikssiz, qavssiz, guruhli moslikka.
+ * `90 500 2026-11-14`). `8` + kod bilan boshlanadigan narx (`850 000 25/11`
+ * — `8` prefiks deb olinadi) va yaxlit `CC000` (`75000 14/11`) ham.
+ * +998/998/0 prefiksli yoki qavsli shakl — doim telefon (million narxning
+ * o'rta guruhi `1 090 000 14/11` dan tashqari).
  */
 function looksLikePriceAndDate(
   raw: string,
   before: string,
   after: string,
 ): boolean {
-  if (!/^\d{2}\D/.test(raw) || raw.replace(/\D/g, '').length !== 9) {
+  // Million narxning o'rta guruhi (`1 090 000 14/11` — moslik `090 000 …`
+  // dan boshlanadi, `0` prefiks deb olinadi): oldida 1-3 xonali guruh va
+  // `0NN 000` — narx, telefon emas (#647 round 4 A1).
+  const millionMiddle =
+    /^0\d{2}[ .\u00a0\u202f]000\D/.test(raw) &&
+    /(?:^|[^\d.,])\d{1,3}[ .\u00a0\u202f]$/.test(before);
+  if (/^\+|\(/.test(raw) || (raw.startsWith('0') && !millionMiddle)) {
     return false;
   }
-  const groups = raw.split(/\D+/);
-  const rawSeps: string[] = raw.match(/\D+/g) ?? [];
-  // 2-3-4 + ISO sana davomi: `90 500 2026-11-14`.
-  if (groups.length === 3) {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 12) return false;
+  // Telefon so'zi oldida — sana qoidalaridan OLDIN: `Tel: 90-123-12-11/…`
+  // (#647 round 3 N4).
+  // Telefon so'zidan keyin `8 `/`0 ` trunk prefiksi (`Tel: 8 90 000 12 11`,
+  // `raqami: 0 90 123 12.11`) — moslik prefikssiz boshlanadi.
+  const beforeNoTrunk = before.replace(
+    /(?<![\p{L}\p{N}.,])[08][ \u00a0]$/u,
+    '',
+  );
+  if (isPhoneWordBefore(before) || isPhoneWordBefore(beforeNoTrunk)) {
+    return false;
+  }
+  const nat = digits.slice(-9);
+  // Narx + ISO sana: `90 500 2026-11-14`, `20 000  2026-11-14`,
+  // `75 000 - 2026-11-14`, `850 000  2026-11-14` (#647 round 4 A2: GROUP_SEP
+  // 2 bo'shliq va ` - ` ni ham qabul qiladi). Prefikssiz 2-3-4 yoki dev
+  // tanimagan ajratgich bilan; `90 123 2026` (davomsiz) — telefon.
+  if (/\D(?:19|20)\d{2}$/.test(raw)) {
     const iso = /^([./-])(\d{2})\1(\d{2})(?!\d)/.exec(after);
+    if (!iso || !(isDayMonth(iso[2], iso[3]) || isDayMonth(iso[3], iso[2]))) {
+      return false;
+    }
     return (
-      /^(?:19|20)\d{2}$/.test(groups[2]) &&
-      !!iso &&
-      (isDayMonth(iso[2], iso[3]) || isDayMonth(iso[3], iso[2]))
+      /^\d{2}\D+\d{3}\D+\d{4}$/.test(raw) ||
+      (raw.match(/\D+/g) ?? []).some((x) => !/^[ .-]$/.test(x))
     );
   }
-  if (groups.length !== 4 || groups[1].length !== 3) return false;
-  if (!isDayMonth(groups[2], groups[3])) return false;
-  // Sana yil bilan davom etadi: `14.11.2026`, `14/11/26` (lekin
-  // `…/91 234 56 78` — ikkinchi telefon, sana emas).
-  if (/^[./\-–](?:\d{4}(?!\d)|\d{2}(?!\d|[ \u00a0]?\d{3}))/.test(after)) {
+  // Oxirgi ikki juftlik — sana (`DD MM`); oldidagi ajratgich tail[2].
+  const tail = /(\d)(\D+)(\d{2})(\D+)(\d{2})$/.exec(raw);
+  if (!tail || !isDayMonth(tail[3], tail[5])) return false;
+  const rawSeps: string[] = raw.match(/\D+/g) ?? [];
+  // Dev (21190eef) tanimagan ajratgich (`/`, `–`, NBSP, 2 bo'shliq, ` - `)
+  // — dev bunday shaklni umuman telefon deb olmasdi.
+  const devUnknownSep = rawSeps.some((x) => !/^[ .-]$/.test(x));
+  // Asosiy N2 shakli — prefikssiz `CC NNN DD MM`. Boshqasi (`8` prefiksli
+  // `850 000 25/11` yoki yaxlit `75000 14/11`) faqat dev tanimagan ajratgich
+  // bilan — dev ularni telefon deb olmasdi. `90000 14.11`, `850 000 14 11`,
+  // `890 123 14.11` — dev'dagidek telefon (maxfiylik dev'dan pasaymaydi).
+  if (!/^\d{2}\D+\d{3}\D/.test(raw) && !devUnknownSep) return false;
+  const roundThousands = nat.slice(2, 5) === '000';
+  // Sana yil bilan davom etadi: `14.11.2026`, `14/11/26`. Lekin
+  // `…/91 234 56 78`, `…/93-765-43-21`, `….93.765.43.21`, `…/97 76 54 321`
+  // — ikkinchi telefon, sana emas (#647 round 3 N4: aks holda birinchi
+  // telefon ochiq).
+  const yearContinues =
+    /^[./\-–](?:\d{4}(?!\d)|\d{2}(?!\d|[ \u00a0\u202f]{0,2}[./\-–]?[ \u00a0\u202f]{0,2}\d{3}|[ \u00a0\u202f\-–]\d{2}[ \u00a0\u202f\-–]\d{2}[ \u00a0\u202f\-–]\d{3}(?!\d)))/.test(
+      after,
+    );
+  if (yearContinues) return true;
+  const strip = (x: string) => x.replace(/[ \u00a0\u202f]/g, '');
+  const lastSep = strip(tail[4]);
+  // Oxirgi ajratgich `.`/`/` va OLDINGI HAMMA ajratgichlardan farqli:
+  // `75 000 14.11`, `75000 14/11`. `90.123 14.11`, `91.734-13.12` — telefon
+  // (dev'dagidek; faqat sanadan oldingisi bilan solishtirilsa ochiq ketardi).
+  if (
+    (lastSep === '.' || lastSep === '/') &&
+    !rawSeps.slice(0, -1).some((x) => strip(x) === lastSep)
+  ) {
     return true;
   }
-  const seps = rawSeps.map((x) => x.replace(/[ \u00a0\u202f]/g, ''));
-  // Oxirgi ajratgich `.`/`/` va birinchisidan farqli: `75 000 14.11`.
-  if ((seps[2] === '.' || seps[2] === '/') && seps[2] !== seps[0]) return true;
-  if (isPhoneWordBefore(before)) return false;
-  // `CC 000 DD MM` — yaxlit narx + sana (`50 000 25 11 kuni`); summa so'zidan
-  // keyin (`jami: 90 500 12 11`); yoki dev tanimagan keng ajratgich (`/`,
-  // `–`, 2 bo'shliq, ` - `): `90 500 – 14 – 11`. Telefon so'zi oldida
-  // bo'lsa — telefon.
-  return (
-    groups[1] === '000' ||
-    MONEY_OR_ID_BEFORE_RE.test(before) ||
-    rawSeps.some((x) => !/^[ .-]$/.test(x))
-  );
+  // `CC 000 DD MM` — yaxlit narx + sana (`50 000 25 11 kuni`, `75000  14 11`,
+  // `850 000 25/11`); summa so'zidan keyin (`jami: 90 500 12 11`); yoki dev
+  // tanimagan keng ajratgich (`/`, `–`, 2 bo'shliq, ` - `):
+  // `90 500 – 14 – 11`.
+  return roundThousands || MONEY_OR_ID_BEFORE_RE.test(before) || devUnknownSep;
 }
 
 /**
