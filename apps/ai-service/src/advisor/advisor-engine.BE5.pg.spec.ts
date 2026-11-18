@@ -617,6 +617,7 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       facts: {
         trigger: 'no_handover',
         courier: { id: '55', name: 'Jasur Tursunov' },
+        branch: { id: '1', name: 'Toshkent HQ' },
         balance,
         days_without_handover: days,
       },
@@ -654,7 +655,11 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     const degraded = r2('ep:h:900', 3200000, 6);
     degraded.branch = null;
     degraded.subject = { kind: 'courier', id: '55', name: null };
-    degraded.facts = { ...degraded.facts, courier: { id: '55', name: null } };
+    degraded.facts = {
+      ...degraded.facts,
+      courier: { id: '55', name: null },
+      branch: null,
+    };
     reply = { candidates: [degraded], cursors: {}, names_degraded: true };
     expect(
       await engine.run('frequent', new Date('2026-10-23T10:00:00Z')),
@@ -665,13 +670,19 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
         subject: { name: string };
         branch: { name: string } | null;
         branch_id: string | null;
-        facts: { courier: { name: string }; balance: number };
+        facts: {
+          courier: { name: string };
+          branch: { id: string } | null;
+          balance: number;
+        };
       }>
     >(
       `SELECT title, subject, branch, branch_id::text AS branch_id, facts FROM ai_schema.ai_advisor_alerts`,
     );
+    expect(kept.facts.branch).toEqual({ id: '1', name: 'Toshkent HQ' });
+    // Sarlavha qayta hisoblanadi: nom saqlangan, raqamlar yangi (#702 review).
     expect(kept.title).toBe(
-      "Jasur Tursunov: 3 100 000 so'm, 5 kundan beri topshirilmagan",
+      "Jasur Tursunov: 3 200 000 so'm, 6 kundan beri topshirilmagan",
     );
     expect(kept.subject.name).toBe('Jasur Tursunov');
     expect(kept.branch?.name).toBe('Toshkent HQ');

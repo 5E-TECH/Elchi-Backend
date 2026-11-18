@@ -672,18 +672,25 @@ function withStoredNames(
       (cur.id ?? cur.owner_id) === (old.id ?? old.owner_id)
     ) {
       facts[k] = { ...cur, name: old.name };
+    } else if (k === 'branch' && cur == null && old) {
+      // R2: filial qidiruvi yiqilganda `facts.branch` null keladi — saqlangani
+      // qoladi (#702 review, alert.branch bilan mos).
+      facts[k] = old;
     }
   }
   return { ...c, facts };
 }
 
-/** P6: `title, …, subject, branch, branch_id` — saqlangan qiymatlar. */
+/**
+ * P6: `subject, branch, branch_id` — saqlangan qiymatlar. Sarlavha QAYTA
+ * hisoblanadi (nomlar `withStoredNames` dan, raqamlar — yangi; #702 review:
+ * sarlavhada eski summa/kun qolib ketmasin).
+ */
 function keepStoredNames(
   present: unknown[],
-  stored: Pick<OpenAlertRow, 'title' | 'subject' | 'branch' | 'branch_id'>,
+  stored: Pick<OpenAlertRow, 'subject' | 'branch' | 'branch_id'>,
 ): unknown[] {
   const out = [...present];
-  out[0] = stored.title;
   out[4] = JSON.stringify(stored.subject ?? null);
   out[5] = stored.branch ? JSON.stringify(stored.branch) : null;
   out[6] = stored.branch_id;
