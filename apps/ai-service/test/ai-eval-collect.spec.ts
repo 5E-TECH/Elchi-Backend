@@ -555,4 +555,29 @@ describe('ai-eval-collect: PII (review round-7, dev tengligi)', () => {
       expectAll(t, want);
     }
   });
+
+  it('B1/B2: havola chegarasidagi telefon to‘liq [RAQAM]', () => {
+    for (const [t, want] of [
+      ['instagram.com/dilnoza_shop,90-742 90 47', '[LINK],[RAQAM]'],
+      ['instagram.com/dilnoza_shop,90 742 90 47', '[LINK],[RAQAM]'],
+      ['wa.me/90 742 90 47', '[LINK]/[RAQAM]'],
+      ['api.whatsapp.com/send?phone=90 742 90 47', '[LINK]=[RAQAM]'],
+      ['maps.app.goo.gl/AbC123.90 742 90 47', '[LINK].[RAQAM]'],
+      ['https://maps.app.goo.gl/AbC1-90 931 38 51', '[LINK]-[RAQAM]'],
+      ['Tel 98 710 45 85.maps.app.goo.gl/AbC123', 'Tel [RAQAM].[LINK]'],
+      ['goo.gl/AbC12390 742 90 47', '[LINK][RAQAM]'],
+      // Koordinata/zoom vergullari havola ichida; havolalar orasidagi vergul.
+      [
+        'google.com/maps/@41.31,69.23,17z/data=!3m1 va maps.google.com/?q=41.311081,69.240562, t.me/a_b.',
+        '[LINK] va [LINK], [LINK].',
+      ],
+      ['yandex.uz/maps/?ll=69.24,-41.31&z=12', '[LINK]'],
+    ]) {
+      expectAll(t, want);
+    }
+  });
+
+  it('havola [TEL_n] tokenini yutmaydi', () => {
+    expectAll('https://wa.me/[TEL_1] yozing', '[LINK][TEL_1] yozing');
+  });
 });

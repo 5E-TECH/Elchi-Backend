@@ -367,13 +367,13 @@ function nameAlternatives(skeleton: string): string[] {
  * Ijtimoiy tarmoq / messenjer (profil = shaxs) va xarita havolalari
  * (joylashuv = uy manzili): Google Maps (maps.app.goo.gl, goo.gl,
  * google.<tld>/maps, maps.google.<tld>), Yandex Maps, 2GIS, WhatsApp (wa.me).
- * Yo'lda vergul faqat raqamlardan keyin bo'shliqsiz belgi kelsa
- * ("?q=41.31,69.24", "@41.31,69.23,17z/"), shunda "[LINK], [LINK]" dagi
- * tinish belgisi saqlanadi va "…/shop,90 742 90 47" dagi telefon
- * havolaga yutilmaydi.
+ * Yo'lda vergul faqat koordinata/zoom oldidan ("?q=41.31,69.24",
+ * "@41.31,69.23,17z/"), shunda "[LINK], [LINK]" dagi tinish belgisi
+ * saqlanadi va "…/shop,90-742 90 47" dagi telefon havolaga yutilmaydi.
+ * Yo'l "[" da to'xtaydi ("wa.me/[TEL_1]" → "[LINK][TEL_1]").
  */
 const LINK_RE =
-  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com|wa\.me|whatsapp\.com|goo\.gl|maps\.google\.[a-z]{2,3}(?:\.[a-z]{2})?|google\.[a-z]{2,3}(?:\.[a-z]{2})?\/maps|yandex\.[a-z]{2,3}\/maps|2gis\.[a-z]{2,3})(?![\p{L}\p{N}_-])(?:[/?#](?:[^\s,;)\]]|,(?=\d+[^\d\s,;)\]]))*)?/giu;
+  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com|wa\.me|whatsapp\.com|goo\.gl|maps\.google\.[a-z]{2,3}(?:\.[a-z]{2})?|google\.[a-z]{2,3}(?:\.[a-z]{2})?\/maps|yandex\.[a-z]{2,3}\/maps|2gis\.[a-z]{2,3})(?![\p{L}\p{N}_-])(?:[/?#](?:[^\s,;)[\]]|,(?=-?\d{1,3}\.\d|\d{1,2}z))*)?/giu;
 const EMAIL_RE =
   /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
 /** Telegram/Instagram foydalanuvchi nomi (email maskalangandan keyin). */
@@ -425,21 +425,54 @@ export function maskCandidateText(
 ): string {
   let out = text
     .replace(EMAIL_RE, '[EMAIL]')
-    .replace(LINK_RE, (m: string, offset: number, whole: string) => {
-      // Havola oxiri "-90" / ",90" va keyin "742 90 47" — bu telefonning
-      // birinchi guruhi: ajratgich va raqamlar matnga qaytariladi, 9+
-      // raqam qoidasi butun telefonni ko'radi ("[LINK]-[RAQAM]").
-      const head = /[-,]\d{2,3}$/.exec(m)?.[0];
-      if (
-        head &&
-        /^[\s-]?\d{2,3}[\s-]?\d{2}[\s-]?\d{2}(?!\d)/.test(
-          whole.slice(offset + m.length),
-        )
-      ) {
-        return '[LINK]' + head;
+    .replace(LINK_RE, (m0: string, offset: number, whole: string) => {
+      // Havola boshidagi faqat raqamli "label" ("…45 85.maps.app.goo.gl") —
+      // oldingi telefonning oxirgi guruhi: matnga qaytariladi.
+      let lead = /^(?:\d[\d-]*\.)+/.exec(m0)?.[0] ?? '';
+      if (lead) {
+        const run =
+          /\d[\d\s\-\u2010-\u2015\u2212()./_]{7,}\d$/.exec(
+            whole.slice(0, offset) + lead.slice(0, -1),
+          )?.[0] ?? '';
+        if (!(
+          run.length >= lead.length && run.replace(/\D/g, '').length >= 9
+        )) {
+          lead = '';
+        }
+      }
+      const m = m0.slice(lead.length);
+      const dots = /\.+$/.exec(m)?.[0] ?? '';
+      const core = m.slice(0, m.length - dots.length);
+      const rest = whole.slice(offset + m0.length).replace(LINK_RE, '[LINK]');
+      // Havola dumidagi raqam guruhlari ("…/AbC1-90-742", "…?phone=90",
+      // "wa.me/90", "…,90.742") keyingi matn bilan 9+ raqamli ketma-ketlik
+      // bo'lsa — matnga qaytariladi, 9+ raqam qoidasi telefonni
+      // butunligicha ko'radi.
+      const t = dots ? null : /(?:[^\p{L}\p{N}\s]\(?\d+\)?)+$/u.exec(core);
+      if (t) {
+        for (let i = 0; i < t[0].length; i++) {
+          if (!/[^\p{L}\p{N}(]/u.test(t[0][i])) continue;
+          const back = t[0].slice(i + 1);
+          const run =
+            /^\(?\d[\d\s\-\u2010-\u2015\u2212()./_]{7,}\d/.exec(
+              back + rest,
+            )?.[0] ?? '';
+          if (run.length > back.length && run.replace(/\D/g, '').length >= 9) {
+            return lead + '[LINK]' + t[0].slice(i);
+          }
+        }
+      }
+      // Ajratgichsiz yopishgan raqamlar ("…/AbC12390 742 90 47"): dumdagi
+      // raqamlar keyingi matn bilan 9+ raqam bo'lsa — ular ham qaytariladi.
+      const glued = dots ? '' : (/\d+$/.exec(core)?.[0] ?? '');
+      if (glued && glued.length < core.length) {
+        const run = /^\d[\d\s\-‐-―−()./_]{7,}\d/.exec(glued + rest)?.[0] ?? '';
+        if (run.length > glued.length && run.replace(/\D/g, '').length >= 9) {
+          return lead + '[LINK]' + glued;
+        }
       }
       // Gap oxiridagi nuqta havolaga kirmaydi.
-      return '[LINK]' + (/\.+$/.exec(m)?.[0] ?? '');
+      return lead + '[LINK]' + dots;
     })
     .replace(USER_HANDLE_RE, (m) => {
       // Gap oxiridagi nuqta handle'ga kirmaydi.
