@@ -104,6 +104,10 @@ interface OpenAlertRow {
   id: string;
   facts: unknown;
   evidence: unknown;
+  title: string;
+  subject: unknown;
+  branch: unknown;
+  branch_id: string | null;
 }
 
 /** Natija holati — qoida bo'yicha (round-2 B2/S5). */
@@ -257,6 +261,7 @@ export class AdvisorEngineService {
           rules,
           now,
           firstRun,
+          response?.names_degraded === true,
         );
         delete outcome.failures[c.dedup_key];
         if (applied !== 'noop') result[applied] += 1;
@@ -300,6 +305,7 @@ export class AdvisorEngineService {
     rules: AiAdvisorRulesSettings,
     now: Date,
     firstRun: boolean,
+    namesDegraded = false,
   ): Promise<AdvisorApplyResult> {
     const facts = dedupeFacts(c.fact_keys);
     if (!facts.length) return { outcome: 'noop', alertId: null };
@@ -308,7 +314,8 @@ export class AdvisorEngineService {
       // vaqtinchalik deb hisoblanadi, kursor ushlanadi (round-2 S7/B2).
       await m.query(`SET LOCAL lock_timeout = '${APPLY_LOCK_TIMEOUT}'`);
       const open = await m.query<OpenAlertRow[]>(
-        `SELECT "id"::text AS id, "facts", "evidence" FROM ${ALERTS}
+        `SELECT "id"::text AS id, "facts", "evidence", "title", "subject", "branch",
+                "branch_id"::text AS branch_id FROM ${ALERTS}
           WHERE "dedup_key" = $1 AND "status" IN ('new','seen') AND "is_deleted" = false
           FOR UPDATE`,
         [c.dedup_key],
@@ -325,9 +332,18 @@ export class AdvisorEngineService {
 
       if (open.length) {
         const alertId = open[0].id;
+        // v0.4 P6: ism qidiruvi yiqilgan tick — saqlangan sarlavha/obyekt/
+        // filial va faktlardagi nomlar saqlanadi (null bilan almashmaydi).
+        const shown = (x: AiAdvisorCandidate) =>
+          namesDegraded
+            ? keepStoredNames(
+                this.presentation(withStoredNames(x, open[0])),
+                open[0],
+              )
+            : this.presentation(x);
         if (fresh.length) {
           // R1: yangi fakt-smenalar saqlanganlarga QO'SHILADI (round-2 B1).
-          const present = this.presentation(
+          const present = shown(
             c.rule_key === 'R1'
               ? mergeR1(open[0], c, new Set(fresh.map((f) => f.fact_key)))
               : c,
@@ -362,7 +378,7 @@ export class AdvisorEngineService {
             // aniqlash») O'ZGARMAYDI (§6 «ayni fact_key — hech narsa»).
             if (sameJson(open[0].facts, c.facts))
               return { outcome: 'noop', alertId: null };
-            const present = this.presentation(c);
+            const present = shown(c);
             await m.query(
               `UPDATE ${ALERTS}
                   SET "title" = $2, "facts" = $3::jsonb, "evidence" = $4::jsonb, "links" = $5::jsonb,
@@ -374,7 +390,7 @@ export class AdvisorEngineService {
             return { outcome: 'refreshed', alertId };
           }
           const factAt = now;
-          const present = this.presentation(c);
+          const present = shown(c);
           await m.query(
             `UPDATE ${ALERTS}
                 SET "last_at" = $2, "last_fact_at" = GREATEST(COALESCE("last_fact_at", $3), $3),
@@ -392,13 +408,42 @@ export class AdvisorEngineService {
       // Ochiq yo'q: faqat YANGI fakt yangi ogohlantirish ochadi.
       if (!fresh.length) return { outcome: 'noop', alertId: null };
       const rule = rules[c.rule_key];
-      const previous = await m.query<Array<{ id: string }>>(
-        `SELECT "id"::text AS id FROM ${ALERTS}
+      const previous = await m.query<
+        Array<{ id: string; last_fact_at: Date | null }>
+      >(
+        `SELECT "id"::text AS id,
+                GREATEST("last_fact_at", "last_at") AS "last_fact_at" FROM ${ALERTS}
           WHERE "dedup_key" = $1 AND "status" IN ('resolved','dismissed') AND "is_deleted" = false
           ORDER BY "id" DESC LIMIT 1`,
         [c.dedup_key],
       );
-      const present = this.presentation(c);
+      // R2/R4/R5 (#702 review B4): yangi kalitli epizod yopilgan ogohlantirish
+      // oxirgi aniqlangan kunidan OLDIN boshlangan bo'lsa — bu o'sha davom
+      // etayotgan holat (kalit formati o'zgargan: v0.3 → v0.4 yangilanishi,
+      // growth → both), yangi ogohlantirish ochilmaydi (Q23).
+      const prevLast = previous[0]?.last_fact_at
+        ? new Date(previous[0].last_fact_at)
+        : null;
+      if (
+        ADVISOR_STATE_RULES.has(c.rule_key) &&
+        prevLast &&
+        tashkentDay(maxFactAt(fresh)) < tashkentDay(prevLast)
+      ) {
+        return { outcome: 'noop', alertId: null };
+      }
+      // R1 (round-4 #651-1): yopilgan ogohlantirishda allaqachon hisoblangan
+      // smenalar (ketma-ketlik oynasi / kursor qayta o'qishi) yangisiga
+      // QAYTA kirmaydi — faktlar va dalil FAQAT yangi fact_key'lardan.
+      // Ketma-ketlik konteksti `streak_length`/`streak_total` da qoladi.
+      const present = this.presentation(
+        c.rule_key === 'R1'
+          ? mergeR1(
+              { facts: {}, evidence: {} },
+              c,
+              new Set(fresh.map((f) => f.fact_key)),
+            )
+          : c,
+      );
       const firstFactAt = c.first_fact_at ? new Date(c.first_fact_at) : null;
       const backfill =
         firstRun &&
@@ -539,7 +584,7 @@ export class AdvisorEngineService {
 
 /**
  * §4.3 backfill rejimi: qoidaning birinchi ishi YOKI kursordan beri > 24 soat
- * (R6 — > 48 soat: kursori kechagi kun oxiri) o'tgan — 24 soatdan eski
+ * (R6 — > 8 kun: catch-up oynasi + 1 kun) o'tgan — 24 soatdan eski
  * faktlardan ochilganlar bildirishnomasiz (`notify_skipped='backfill'`;
  * round-2 ops-S1, kelishilgan).
  */
@@ -551,7 +596,14 @@ export function catchingUp(
   if (!state?.first_run_at) return true;
   if (!state.cursor_at || !(isCursorRule(rule) || rule === 'R6')) return false;
   const gap = now.getTime() - new Date(state.cursor_at).getTime();
-  return gap > (rule === 'R6' ? 2 : 1) * ADVISOR_BACKFILL_NOTIFY_MS;
+  // R6 (#704 review B2): bitta o'tkazib yuborilgan kunlik yugurish (RPC
+  // qayta urinishsiz) o'sha kunning kritik R6 xabarini backfill qilib
+  // yo'qotmasin — kunlik catch-up oynasi (7 kun) ichidagi bo'shliq oddiy.
+  return (
+    gap >
+    (rule === 'R6' ? ADVISOR_R6_CATCHUP_DAYS + 1 : 1) *
+      ADVISOR_BACKFILL_NOTIFY_MS
+  );
 }
 
 /** Kalit tartibidan qat'i nazar JSON tengligi (jsonb kalitlarni qayta tartiblaydi). */
@@ -626,6 +678,59 @@ export function r6Periods(
     days: days.slice(-ADVISOR_R6_CATCHUP_DAYS),
     ...(weeks.length ? { weeks } : {}),
   };
+}
+
+const NAMED_FACTS = ['courier', 'market', 'branch', 'cashbox'] as const;
+
+/** P6: nomzod faktlaridagi `name: null` larni saqlangan nom bilan to'ldirish. */
+function withStoredNames(
+  c: AiAdvisorCandidate,
+  stored: Pick<OpenAlertRow, 'facts'>,
+): AiAdvisorCandidate {
+  const sf = (stored.facts ?? {}) as Record<string, unknown>;
+  const facts: Record<string, unknown> = { ...c.facts };
+  for (const k of NAMED_FACTS) {
+    const cur = facts[k] as {
+      id?: unknown;
+      owner_id?: unknown;
+      name?: unknown;
+    } | null;
+    const old = sf[k] as {
+      id?: unknown;
+      owner_id?: unknown;
+      name?: unknown;
+    } | null;
+    if (
+      cur &&
+      old &&
+      cur.name == null &&
+      typeof old.name === 'string' &&
+      (cur.id ?? cur.owner_id) === (old.id ?? old.owner_id)
+    ) {
+      facts[k] = { ...cur, name: old.name };
+    } else if (k === 'branch' && cur == null && old) {
+      // R2: filial qidiruvi yiqilganda `facts.branch` null keladi — saqlangani
+      // qoladi (#702 review, alert.branch bilan mos).
+      facts[k] = old;
+    }
+  }
+  return { ...c, facts };
+}
+
+/**
+ * P6: `subject, branch, branch_id` — saqlangan qiymatlar. Sarlavha QAYTA
+ * hisoblanadi (nomlar `withStoredNames` dan, raqamlar — yangi; #702 review:
+ * sarlavhada eski summa/kun qolib ketmasin).
+ */
+function keepStoredNames(
+  present: unknown[],
+  stored: Pick<OpenAlertRow, 'subject' | 'branch' | 'branch_id'>,
+): unknown[] {
+  const out = [...present];
+  out[4] = JSON.stringify(stored.subject ?? null);
+  out[5] = stored.branch ? JSON.stringify(stored.branch) : null;
+  out[6] = stored.branch_id;
+  return out;
 }
 
 /** §5.1: `kind: system` — «Butun tizim». */

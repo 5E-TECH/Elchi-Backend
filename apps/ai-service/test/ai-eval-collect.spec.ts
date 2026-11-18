@@ -594,3 +594,129 @@ describe('ai-eval-collect: PII (review round-7, dev tengligi)', () => {
     ).toBe('hon keldi, xonim keldi, honim');
   });
 });
+
+/**
+ * Review round-8 (eval aniqligi) - havola dumidagi raqam FAQAT telefon
+ * bo'lsa ajratiladi: post raqami / koordinata + narx [RAQAM] bo'lmaydi.
+ * Matn maskPhones'dan o'tgan ([TEL_n]) - haqiqiy yo'l.
+ */
+describe('ai-eval-collect: havoladan keyingi narx saqlanadi (round-8)', () => {
+  it.each([
+    ['https://t.me/elchi_shop/1543 150 000', '[LINK] 150 000'],
+    ["https://t.me/elchi_shop/1543\n175 000 so'm", "[LINK]\n175 000 so'm"],
+    ['https://t.me/c/1987654321/245 85 000', '[LINK] 85 000'],
+    ['instagram.com/p/C8x2Lm41 1 250 000', '[LINK] 1 250 000'],
+    [
+      'https://www.google.com/maps?q=41.311081,69.240562 85 000',
+      '[LINK] 85 000',
+    ],
+    [
+      'https://www.google.com/maps?q=41.311081,69.240562\n1 250 000',
+      '[LINK]\n1 250 000',
+    ],
+    ['https://maps.google.com/?q=41.31,69.24 12 500 000', '[LINK] 12 500 000'],
+    [
+      'https://yandex.uz/maps/?ll=69.240562,41.311081&z=17 12 500 000',
+      '[LINK] 12 500 000',
+    ],
+    ['https://maps.app.goo.gl/Xk3vQ9pR7mTz2 1 250 000', '[LINK] 1 250 000'],
+    // telefon holatlari avvalgidek
+    ['wa.me/90 742 90 47', '[LINK]/[RAQAM]'],
+    ['goo.gl/AbC12390 742 90 47', '[LINK][RAQAM]'],
+    ['https://maps.app.goo.gl/AbC1-90 931 38 51', '[LINK]-[RAQAM]'],
+    ['https://wa.me/[TEL_1] 150 000', '[LINK][TEL_1] 150 000'],
+  ])('%j', (text, want) => {
+    expect(maskCandidateText(text, [])).toBe(want);
+  });
+});
+
+/**
+ * Review round-8 (maxfiylik) - havola xostiga oldindan yopishgan telefon
+ * ("..._www.google.com", "...-maps.app.goo.gl", "...47www.google.com") va
+ * havola dumiga ajratgich bilan yopishgan telefon ("...AbC12355_150 50 15",
+ * "...x01133/142 83 08", "...(91_457 18 87", ".../@90_742 90 47") butunligicha
+ * [RAQAM]; "/" bilan tugagan havoladan keyingi narx ochiq qoladi.
+ */
+describe('ai-eval-collect: havolaga yopishgan telefon (round-8)', () => {
+  it.each([
+    ['93_918 34 78_www.google.com/maps/@901112233', '[RAQAM]_[LINK]'],
+    ['98\u2212341\u221237\u221210_www.google.com/maps', '[RAQAM]_[LINK]'],
+    ['90\u2212411\u221236\u221247www.google.com/maps/', '[RAQAM][LINK]'],
+    [
+      '50\u2013491\u201349\u201303 93_721 08 30-maps.app.goo.gl/AbC',
+      '[RAQAM]-[LINK]',
+    ],
+    ['(90)742-90-47-go.2gis.com/AbC', '([RAQAM]-[LINK]'],
+    ['wa.me/AbC12355_150 50 15', '[LINK][RAQAM]'],
+    ['api.whatsapp.com/send?phone=x01133/142 83 08', '[LINK][RAQAM]'],
+    ['https://www.go.2gis.com/x016(91_457 18 87', '[LINK][RAQAM]'],
+    ['maps.app.goo.gl/AbC12390-742 90 47', '[LINK][RAQAM]'],
+    ['maps.app.goo.gl/AbC12390.742 90 47', '[LINK][RAQAM]'],
+    ['https://goo.gl/maps/AbC12397.958 19 04', '[LINK][RAQAM]'],
+    ['maps.app.goo.gl/AbC123(98/866 29 30', '[LINK][RAQAM]'],
+    ['tiktok.com/@90_742 90 47', '[LINK][RAQAM]'],
+    // "dd.ddd dd dd" - nuqtali telefon, koordinata emas.
+    ['yandex.uz/maps/-/AbC53338#55.578 64 01', '[LINK]#[RAQAM]'],
+    ['facebook.com/x704,33.885 90 26', '[LINK],[RAQAM]'],
+    ['yandex.uz/maps/-/x/Saidaga(98.312 09 76', '[LINK][RAQAM]'],
+    // narx ochiq qoladi
+    [
+      'https://www.instagram.com/p/9Ujozfoh333/ 130000 som',
+      '[LINK] 130000 som',
+    ],
+    [
+      'https://www.google.com/maps/data=!3d41.311081!4d69.240562 85 000',
+      '[LINK] 85 000',
+    ],
+    ['https://yandex.uz/maps/?pt=69.279737%2C41.31 85 000', '[LINK] 85 000'],
+    ['https://maps.google.com/?q=41.31,69.240 85 000', '[LINK] 85 000'],
+  ])('%j', (text, want) => {
+    expect(maskCandidateText(text, [])).toBe(want);
+  });
+
+  it('ismlar: birinchi so\'z "Xonim" ism bo\'lsa ham maskalanadi', () => {
+    expect(
+      maskCandidateText('Xonim opaga bering, Karimova', ['Xonim Karimova']),
+    ).toBe('[ISM] opaga bering, [ISM]');
+    // Ikkinchi so'z sifatida - murojaat, ism emas.
+    expect(maskCandidateText('xonim keldi', ['Lola xonim'])).toBe(
+      'xonim keldi',
+    );
+  });
+});
+
+/**
+ * Review round-9 - C (ta/та), D (шт/по pasport istisnosi), E2 (egalik
+ * shakllaridan keyingi narx) qamrovi; "uyi 61 500" - qayd etilgan murosa.
+ */
+describe('ai-eval-collect: miqdor/narx istisnolari (round-9)', () => {
+  it.each([
+    '1 ta 1500000',
+    '1 \u0442\u0430 1500000',
+    '2 \u0448\u0442 1500000',
+    '\u043F\u043E 1500000',
+    '\u0448\u04421234567',
+    'uyigacha 19 900',
+    '\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u0434\u043E \u0434\u043E\u043C\u0430 25 500',
+    'uyi 61 500',
+    'uyigacha 19.900',
+    'uyiga 25.000',
+    'uyiga 25\u00A0000',
+  ])("o'zgarmaydi: %j", (text) => {
+    expect(maskCandidateText(text, [])).toBe(text);
+  });
+
+  it.each([
+    ['uyi 61 5000', 'uyi [N] 5000'],
+    ['kv 18\nx2 sumka', 'kv [N]\nx2 sumka'],
+    ['uyi 12\nMing rahmat', 'uyi [N]\nMing rahmat'],
+    ['uyi 61\r120 000', 'uyi [N]\r120 000'],
+    ['uyi 61\u2028120 000', 'uyi [N]\u2028120 000'],
+  ])('qator chegarasi / qisqa son: %j', (text, want) => {
+    expect(maskCandidateText(text, [])).toBe(want);
+  });
+
+  it("E2 istisnosi yangi qatorni kesib o'tmaydi", () => {
+    expect(maskCandidateText('uyi 61\n120 000', [])).toBe('uyi [N]\n120 000');
+  });
+});

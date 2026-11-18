@@ -50,6 +50,30 @@ describe('mergeR1 (BE-5 round-2 #651 B1)', () => {
     ...over,
   });
 
+  it('#704 S1: ketma-ketlik — headline_amount sarlavhadagi streak_total bilan mos (yangi alertda ham)', () => {
+    const c = candidate({
+      facts: {
+        trigger: 'consecutive_negative',
+        shifts_count: 2,
+        total_difference: -130000,
+        last_difference: -10000,
+        closed_by: [],
+        last_shift_id: '3',
+        streak_length: 2,
+        streak_total: -130000,
+      },
+      fact_keys: [
+        { fact_key: '3', fact_at: '2026-10-22T08:10:00.000Z', amount: -10000 },
+      ],
+    });
+    const m = mergeR1({ facts: {}, evidence: {} }, c, new Set(['3']));
+    expect(m.facts).toMatchObject({
+      shifts_count: 1,
+      total_difference: -10000,
+    });
+    expect(m.headline_amount).toBe(-130000);
+  });
+
   it('ikki tick: faktlar va dalil birlashadi (shifts_count 2, jami −200 000)', () => {
     const m = mergeR1(stored, candidate(), new Set(['3']));
     expect(m.facts).toMatchObject({
@@ -181,7 +205,7 @@ describe('r6Periods (BE-5 round-2 #651 S2/S3)', () => {
 describe('catchingUp (BE-5 round-2 ops-S1)', () => {
   const now = new Date('2026-10-22T09:00:00.000Z');
   const h = (n: number) => new Date(now.getTime() - n * 3600_000);
-  it('birinchi ish — ha; kursor 30 daq — yo‘q; > 24 soat — ha; R6 — > 48 soat', () => {
+  it('birinchi ish — ha; kursor 30 daq — yo‘q; > 24 soat — ha; R6 — > 8 kun', () => {
     expect(catchingUp('R1', undefined, now)).toBe(true);
     expect(
       catchingUp('R1', { first_run_at: h(100), cursor_at: h(0.5) }, now),
@@ -192,8 +216,12 @@ describe('catchingUp (BE-5 round-2 ops-S1)', () => {
     expect(
       catchingUp('R6', { first_run_at: h(100), cursor_at: h(27) }, now),
     ).toBe(false);
+    // #704 B2: bitta o'tkazilgan kunlik yugurish (50 soat) — backfill EMAS.
     expect(
       catchingUp('R6', { first_run_at: h(100), cursor_at: h(50) }, now),
+    ).toBe(false);
+    expect(
+      catchingUp('R6', { first_run_at: h(400), cursor_at: h(8 * 24 + 1) }, now),
     ).toBe(true);
     expect(
       catchingUp('R2', { first_run_at: h(100), cursor_at: null }, now),

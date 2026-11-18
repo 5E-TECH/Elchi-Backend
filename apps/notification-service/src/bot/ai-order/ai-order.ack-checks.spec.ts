@@ -318,8 +318,10 @@ describe('«✅ Yaratish» — bloklovchi tekshiruvda qayta tasdiq', () => {
     await press(ctx, buttons(ctx)['↩️ Yo‘q, orqaga']);
     expect(confirms(calls)).toHaveLength(0);
     expect(lastEdit(ctx)[2].text).not.toContain(AI_ACK_CONFIRM_TEXT);
+    // Tuman aniq emas — viloyat tumanlaridan tanlash tugmasi ham bor.
     expect(Object.keys(buttons(ctx))).toEqual([
       '✅ Yaratish',
+      '📍 Tumanni tanlash',
       '✏️ Tuzatish',
       '❌ Bekor',
     ]);

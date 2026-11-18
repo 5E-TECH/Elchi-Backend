@@ -53,7 +53,7 @@ Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
 
 Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
 
-- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — tanlanmagan; boshqa qiymat — butun so'rov 400). Shu format `POST /orders` `operator_id` ga ham qo'llanadi (ilgari '0…' va 19 xonali katta son o'tib, DB'da 22003 xato berardi). Qoida `POST /orders` `operator_id` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveChosenOrderOperator`): buyurtma marketining faol, o'chirilmagan operatori (`GET /market-operators/selectable` ro'yxati); market operatori faqat o'zini; superadmin/admin ham tekshiriladi. To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (yuborilgan `operator` matni e'tiborsiz) — komissiya shu operatorga.
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — tanlanmagan; boshqa qiymat — butun so'rov 400). ⚠️ Shu format `POST /orders` `operator_id` ga ham qo'llanadi: ilgari `'0120'` muvaffaqiyatli o'tardi (120 ga normallashtirilib) — endi **400** (avval ishlagan va endi rad etiladigan yagona sinf); `'0'` avvaldan 400; int8 dan katta qiymat ilgari DB'gacha yetib 22003 xato berardi — endi DTO'da 400; `' 31 '` (chetida bo'shliq) endi qabul qilinadi (trim). Qoida `POST /orders` `operator_id` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveChosenOrderOperator`): buyurtma marketining faol, o'chirilmagan operatori (`GET /market-operators/selectable` ro'yxati); market operatori faqat o'zini; superadmin/admin ham tekshiriladi. To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (yuborilgan `operator` matni e'tiborsiz) — komissiya shu operatorga.
   - Xato: `POST /orders` dagi 400 matni ai-confirm'da **shu buyurtma natijasi** bo'ladi — `{ index, ok: false, code: 'create_failed', reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' }` (market operatori boshqasini tanlasa — `reason: "Market operatori faqat o'zini operator qilib tanlay oladi"`). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
   - Operatorni tekshirib bo'lmasa (identity xatosi/timeout) — `{ ok: false, code: 'validation_unavailable', reason: 'Tanlangan operatorni tekshirib bo‘lmadi — …' }`: buyurtma ANIQ yaratilmagan (operatorsiz ham saqlanmaydi), qayta yuborish mumkin.
   - Tekshiruv partiya boshida, bir xil `operator_id` uchun bir marta. AI auditida (`edited_fields`, `field_corrections`) `operator` — buyurtmaga yozilgan tanlangan operator ismi.
@@ -63,6 +63,53 @@ Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
 **Frontend action items:**
 - 🔧 AI panelida har buyurtma kartasiga «Operator» select (`GET /market-operators/selectable`, qo'lda forma bilan bir xil) → `orders[i].operator_id`.
 - ⚠️ `operator_id` ni AI `operator` matnidan HECH QACHON avtomatik tanlamang (matn model chiqishi — ishonchsiz); faqat odam select'da tanlasin. Market operatori rolida select ko'rsatmang va `operator_id` yubormang (u baribir o'zi bo'ladi; boshqasi — `create_failed`).
+
+### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizod so'rovi tezlashtirildi
+
+Deploy: finance-service + **migratsiya 1716000000244** (`cashbox_history (cashbox_id, createdAt, id) WHERE balance_after <= 0 AND is_deleted = false` — qisman indeks). Relizda 240–244 bitta tranzaksiyada, 244 eng oxirida (qurilish vaqtida yozish kutadi, o'qish kutmaydi; kam yuklamali vaqtda).
+
+- 🟢 Natijalar o'zgarmaydi, faqat tezlik.
+
+**Frontend action items:** yo'q.
+
+### 2026-11-18 — AI maslahatchi (BE-5): bildirishnoma urinishlari va SMS eskalatsiyasi (review round-4)
+
+Deploy: ai-service + notification-service, migratsiyasiz.
+
+- 🔧 Jiddiy ogohlantirish bildirishnomasi notification-service tomonidan RAD ETILSA (4xx javobi) — qayta urinish oralig'i o'sadi (30 daqiqa, 1 soat, 2 soat, 4 soat); 5 urinishdan keyin to'xtatiladi (log'da `ai_advisor_notify_gave_up`). Xizmat vaqtincha YETIB BO'LMASA yoki nosoz bo'lsa (timeout / RabbitMQ uzilishi / 5xx) — urinish sanalmaydi, har 30 daqiqada qayta uriniladi (24 soatgacha): uzilishdan keyin xabar baribir yetadi. Bitta ogohlantirishga xos 5xx boshqalarini to'smaydi (navbat oxiriga, partiya davom etadi). R6 Telegram'i tunda (Toshkent 22:00–09:00) yuborilmaydi — qayta urinishlar ham: 09:00 gacha — o'sha kuni 09:00 da, 22:00 dan keyin — ertasi kuni 09:00 da; 09:00–22:00 — darhol. 09:00 Telegram'i ko'pi bilan bir marta yuboriladi; yetkazilmasa, qayta urinishlar due + 35 soatgacha (ertasi kuni 20:00 gacha) davom etadi, keyin tashlanadi. Ogohlantirishning o'zi ro'yxatda qoladi. Xatoli ogohlantirishlar yangi jiddiy ogohlantirishlar bildirishnomasini kechiktirmaydi. R6 09:00 Telegram'i uchun ham xuddi shu qoida.
+- 🔧 Tunda ochilgan R6 ning birinchi yuborishi yiqilib, 09:00 dan keyin qayta urinilsa — Telegram ham yetadi (ilgari yo'qolishi mumkin edi).
+- 🔒 `ai.advisor_alert` turi uchun SMS eskalatsiyasi navbatda qolib ketgan eski hodisalarda ham ishlamaydi (`delivery.escalation: "skipped"`, `escalation_reason: "type_opt_out"`).
+- 🟢 `GET /notifications/types` javobida `ai.advisor_alert` uchun `escalation: false` maydoni bor (qo'shimcha, ixtiyoriy): «bu tur SMS eskalatsiyasiz». FE turlarini generatsiya qilishda `escalation?: boolean` deb qo'shing.
+
+**Frontend action items:** yo'q (ixtiyoriy: `escalation?: boolean` turga).
+
+### 2026-11-18 — AI maslahatchi (BE-5): review round-4 tuzatishlari
+
+Deploy: api-gateway + ai-service + finance-service, migratsiyasiz.
+
+- 🔧 **R1:** yopilgandan keyin ochilgan yangi «smena kamomadi» ogohlantirishi endi faqat YANGI smenalarni hisoblaydi (`facts.shifts_count`, `total_difference`, `evidence.rows`, `closed_by`). Ilgari yopilgan ogohlantirishdagi smena yangisida qayta sanalardi (masalan `occurrences: 1`, lekin `shifts_count: 2`). Ketma-ketlik konteksti — `facts.streak_length` / `streak_total`; `consecutive_negative` da `headline_amount = streak_total` (sarlavha bilan bir xil, yopilgan smenalar ham kiradi), `total_difference`/`shifts_count`/`evidence` esa faqat yangi smenalar.
+- 🔧 Qoidalar tekshiruvi: butun tekshiruvning umumiy vaqt byudjeti bor (SQL ≤ 22 s, nomlar bilan ≤ 28 s; har SQL ifoda qolgan byudjet bilan cheklanadi, qulf kutish ≤ 2 s; istisno — kunlik R6 hisoboti hali byudjetdan tashqarida, faqat byudjet tugagan bo'lsa boshlanmaydi). Sekin/qulflangan jadval yoki osilgan xizmat (filial/foydalanuvchi nomlari) faqat ta'sirlangan qoidalarni `error` qiladi — byudjet tugasa keyingi qoidalar shu tick o'tkaziladi; muvaffaqiyatli qoidalar (masalan R1) kursori saqlanadi. Nomlar null bo'lib qolishi mumkin (FE allaqachon `#id` ko'rsatadi).
+- 🔒 **`/activity-logs`:** `ai` xizmati yozuvlari (`ai.advisor.*`, `ai.cap.raise`) endi FAQAT SUPERADMIN ga. ADMIN so'rovida bu yozuvlar yo'q, `?service=ai` — bo'sh ro'yxat (403 emas). Ega qarori 2026-11-18.
+- 🔧 R6 (kunlik): bitta o'tkazib yuborilgan tungi tekshiruv (xizmat vaqtincha javob bermasa) o'sha kunning R6 bildirishnomasini endi yo'qotmaydi — keyingi kunda ikkala kun ham xabar qilinadi (7 kunlik oynada).
+- 🟢 openapi: `/ai/advisor/*` javob sxemalari (`200` endi bo'sh emas), `from`/`to` — `format: date`.
+
+**Frontend action items:** yo'q (ADMIN faoliyat jurnalida `ai` xizmati filtrini yashirish mumkin).
+
+### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizodlari — shartnoma v0.4
+
+Ega qarori 2026-11-18. Deploy: ai-service + finance-service + **migratsiya 1716000000243** (`cashbox_history (cashbox_id, createdAt, id)` indeksi). Relizda 240–244 BITTA tranzaksiyada yuradi — SHARE qulflar partiya commit bo'lguncha turadi (`cashbox_history` ga yozish kutadi, o'qish kutmaydi): kam yuklamali vaqtda, 243/244 eng oxirida.
+
+- ✏️ **Topshirish chegarasi (R2, R5):** «topshirilmagan kunlar» faqat o'sha kun boshidagi qoldiqning kamida **80%** i topshirilganda (bir kundagi topshirishlar yig'indisi) nolga tushadi; kichikroq topshirishlar epizodni yangilamaydi, kunlar sanalishda davom etadi. Yangi sozlamalar: `rules.R2.min_handover_pct`, `rules.R5.min_transfer_pct` (sukut 80, 1–100, `limits` da `unit: "percent"` — **yangi birlik**). UI'da hozircha KO'RSATILMAYDI (FE sozlamalar dialogida yashiring). `rule.thresholds` va `evidence.min_handover_pct` / `evidence.min_transfer_pct` da snapshot. R4 (market to'lovi) o'zgarmaydi — har qanday to'lov.
+- ✏️ **R2 o'sish:** faqat o'sish triggeri — epizod o'sish qatorining boshlangan kuni; kuniga qisman topshirish «N marta» ni ko'paytirmaydi va yopilgandan keyin har kuni yangi ogohlantirish ochmaydi. Sarlavha: «{kuryer}: {qoldiq} so'm — qarz N kun ketma-ket o'sgan»; o'sish bo'lmasa `facts.growth_days = 0`.
+- ✏️ **Bekor turgan kassa (R2/R4/R5):** hammasi topshirilib (qoldiq 0) keyin yangi pul tushsa — kunlar o'sha paytdan sanaladi (darhol «12 kundan beri» emas). R5 epizodi `balance_uzs` chegarasiga bog'liq emas (chegara o'zgarsa yopilgan qayta ochilmaydi).
+- ✏️ **T6 qaytarish:** qaytarilgan to'lov kuni endi 80% ga yetmay qolsa (kun yig'indisi bo'yicha) — epizod qaytarish lahzasidan boshlanadi (ogohlantirish abadiy jim qolmaydi). Qaytarishdan keyin ham kun ≥ 80% bo'lsa — kunlar sanog'i o'zgarmaydi. `evidence.last_handover` — oxirgi amal qiluvchi (qaytarilmagan) topshirish, avvalgidek.
+- ✏️ **T6 tahriri 80% chegarasidan o'tsa** (masalan 900k → 700k): o'sha kun endi hisoblanmaydi, kunlar oldingi chegaradan sanaladi — admin tahriridan keyin darhol jiddiy R2 ochilishi mumkin (kutilgan xulq). Teskari tahrir (700k → 900k) chegarani qaytaradi.
+- ✏️ **R4:** 80% qoidasi yo'q (har qanday to'lov), lekin «bekor turgan kassa» qoidasi R4 ga ham tegishli: qarz to'liq to'langandan keyingi birinchi sotuvdan sanaladi (v0.3 da oxirgi to'lovdan edi — 1 kun farq qilishi mumkin).
+- 🟢 «Hisoblanadigan topshirish» oxirgi **90 kun** ichida qidiriladi (chegaralar ≤ 60 kun); 90 kun ichida bo'lmasa — kunlar musbat qoldiq qatori boshidan.
+- 🟢 Yangilanishdan keyin (kalit formati o'zgargani uchun) ochiq R2/R4/R5 da «N marta» bir marta +1 bo'lishi mumkin; yopilgan (hal qilingan / ahamiyatsiz) ogohlantirish shu sabab bilan QAYTA OCHILMAYDI.
+- ✏️ **T6 tahriri (summa tuzatish):** almashtiruvchi to'lov «oxirgi topshirish» sanasini oldinga surmaydi — `evidence.last_handover.at` va epizod asl (birinchi) to'lov vaqtida qoladi (summa — yangi), kunlar nolga tushmaydi, «N marta» oshmaydi.
+- 🟢 Ism/filial qidiruvi vaqtincha yiqilsa — ochiq ogohlantirishdagi nom va filial (`branch_id` filtri, `facts.branch`) saqlanadi (`#90` ga almashmaydi); sarlavha shu nomlar bilan, yangi raqamlar bilan qayta yoziladi.
+- 🟢 `finance_cashbox_daily` da yo'q kun — o'sish tekshiruvida o'tkazib yuboriladi (uzluksiz kunlar talab qilinadi), avvalgidek.
 
 ### 2026-11-18 — Bildirishnomalar: o'chirish / o'qildi belgisi yetkazish holatini bosib ketmaydi (#699 follow-up)
 
@@ -329,7 +376,11 @@ Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migrat
 - 🆕 `GET /ai/advisor/alerts?status&severity&rule_key&from&to&q&sort_by&sort_dir&page&limit` — `{items, meta{page, limit, total, totalPages}, counts{by_status}}`. Holatni o'zgartirmaydi. `counts.by_status` — `status` filtrisiz. Saralash oxirida doim `id DESC`. Noto'g'ri query — kodsiz 400.
 - 🆕 `GET /ai/advisor/alerts/:id[?include=history]` — tafsilot; `new` bo'lsa atomik `new → seen` (`seen_at`, `seen_by`), audit yo'q. ⚠️ prefetch/hover'da yubormang. 3 daqiqadan eski `pending` izoh — `failed` + `explanation_error: "error"`; `pending` da `explanation_poll_after_ms: 2000`. 404 `AI_ADVISOR_ALERT_NOT_FOUND`.
 - 🆕 `PATCH /ai/advisor/alerts/:id {status: resolved|dismissed, note?}` — `resolved` uchun izoh 3–500 (trim) majburiy → 400 `AI_ADVISOR_NOTE_INVALID {reason, min_length, max_length}`; `dismissed` — ixtiyoriy ≤ 500. Ayni foydalanuvchi ayni holatni qayta yuborsa — 200 (idempotent). Boshqa holat / boshqa superadmin yopgan — 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Javob — yangilangan tafsilot. Audit `ai.advisor.alert.resolve|dismiss` (`/activity-logs` da `ai` xizmati — 4-qism).
+- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\t`, `\n`, `\r` dan tashqari) → 400; `page` ≤ 1 000 000.
+- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
+- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
 - 🟢 `explain` (AI izohi) — 5-qism; hozircha `explanation_status` doim `none`.
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 2c review tuzatishlari): R7/R8 semantikasi — shartnoma v0.4 uchun
 
 #653 mustaqil review (FE sessiya) va ega qarori asosida. Deploy: ai-service + finance-service, migratsiyasiz.
@@ -457,9 +508,6 @@ Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir m
 - 🟢 Chek tekshiruvi xulosasi (`GET /finance/receipts/summary` → `mismatch_total`, `top`): bunday cheklar summaga va top-15 ga kirmaydi; `counts.mismatch` da qoladi. AI yordamchining `get_receipt_checks` vositasi ham xuddi shunday.
 - 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
 
-- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\n`, `\t` dan tashqari) → 400; `page` ≤ 1 000 000.
-- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
-- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
 **Frontend action items:**
 - 🔧 `ai_status === "mismatch"` va `ai.difference === null` bo'lishi mumkin — farq ustunida «—», `error_reason === "currency_not_uzs"` uchun matn tavsiya: «Chek so'mda emas ({currency}) — summani qo'lda tekshiring».
 
