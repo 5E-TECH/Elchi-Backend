@@ -300,7 +300,9 @@ describe('FIX3 CODE-25 — scanAssignOrder qoldiqlari', () => {
       { qr_token: 'ORD-abc' },
     );
 
-  it('o‘z ON_THE_ROAD buyurtmasini qayta skan, SENT pochta yo‘q — bo‘sh pochta YARATILMAYDI', async () => {
+  // COURIER-SCAN: o'z ON_THE_ROAD buyurtmasini qayta skanlash endi QABUL
+  // (WAITING, joyida) — lekin bo'sh pochta baribir yaratilmaydi.
+  it('o‘z ON_THE_ROAD buyurtmasini qayta skan, SENT pochta yo‘q — qabul, bo‘sh pochta YARATILMAYDI', async () => {
     const ctx = setup({
       order: {
         id: '101',
@@ -316,10 +318,20 @@ describe('FIX3 CODE-25 — scanAssignOrder qoldiqlari', () => {
     const result: any = await scan(ctx.service);
 
     expect(result.data).toEqual({
-      idempotent: true,
+      idempotent: false,
+      accepted: true,
       order_id: '101',
       post_id: 'p-old',
       post_created: false,
+      status: Order_status.WAITING,
+    });
+    const updates = ctx.orderClient.send.mock.calls.filter(
+      ([pattern]) => pattern.cmd === 'order.update',
+    );
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toMatchObject({
+      id: '101',
+      dto: { status: Order_status.WAITING },
     });
     expect(ctx.postRepo.create).not.toHaveBeenCalled();
     expect(ctx.postRepo.save).not.toHaveBeenCalled();

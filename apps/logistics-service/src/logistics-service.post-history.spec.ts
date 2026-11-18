@@ -1130,7 +1130,9 @@ describe('kuryer pochtasi: SENT paytida filialsiz, qabul qilinganda (RECEIVED) k
     expect(res.data.data.map((post: Row) => post.id)).toEqual(['702']);
   });
 
-  it('⭐ scanAssignOrder — kuryer skani bilan yaratilgan SENT pochta filialsiz', async () => {
+  // COURIER-SCAN (ega, 2026-11-17): skan bilan olingan posilka qo'lda — yangi
+  // kuryer pochtasi darhol RECEIVED, ya'ni kuryer filialida (ega qarori 4).
+  it('⭐ scanAssignOrder — kuryer skani bilan yaratilgan pochta darhol RECEIVED, kuryer filialida', async () => {
     const { service, postRepo } = baseService();
     jest.spyOn(service as any, 'findOrderByQrToken').mockResolvedValue({
       id: '101',
@@ -1164,10 +1166,16 @@ describe('kuryer pochtasi: SENT paytida filialsiz, qabul qilinganda (RECEIVED) k
     expect(postRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
         courier_id: '44',
-        status: Post_status.SENT,
+        status: Post_status.RECEIVED,
       }),
     );
-    expect(postRepo.create.mock.calls[0][0]).not.toHaveProperty('branch_id');
+    expect(postRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        courier_id: '44',
+        status: Post_status.RECEIVED,
+        branch_id: BRANCH,
+      }),
+    );
   });
 
   it('sendPost (HQ hudud pochtasi) — SENT pochta filialsiz qoladi, kuryer filiali so`ralmaydi', async () => {
