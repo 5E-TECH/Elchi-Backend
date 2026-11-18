@@ -30,6 +30,7 @@ import {
   AI_ACK_SERVER_ASKED_TEXT,
   AI_EDITS_NOT_APPLIED_TEXT,
   AiAckEntry,
+  PREVIEW_MAX_ORDERS,
   confirmAttempted,
   confirmSendable,
   editedAfterAttempt,
@@ -213,6 +214,16 @@ const PARSE_TIMEOUT_MS = 95_000;
 const CONFIRM_TIMEOUT_MS = 90_000;
 /** Server sababi: qayta urinish ma'noli (aks holda — kabinet). */
 const RETRYABLE_REASONS = new Set(['network', 'ai_error']);
+/**
+ * `preview` ga faqat shu holatlardan o'tiladi: yakunlangan (`created`,
+ * `cancelled`, …) qoralama HECH QACHON qaytmaydi — masalan natija xabari
+ * yuborilmay qolsa (show xatosi) buyurtma allaqachon yaratilgan.
+ */
+const PREVIEW_FROM_STATUSES: TelegramAiDraftStatus[] = [
+  'parsing',
+  'creating',
+  'preview',
+];
 
 const str = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
@@ -420,19 +431,60 @@ export class AiOrderService implements OnModuleDestroy {
   /** Bitta qoralama: parse yoki confirm. QAYTA URINMAYDI — xato tugma bilan. */
   private async work(draft: TelegramAiDraft): Promise<void> {
     const ctx = this.workerContext(draft);
+    // Ish bosqichi (da'vo paytidagi holat). `draft.status` muvaffaqiyatli
+    // `finish` dan keyin yangilanadi — catch bosqichni SHUNDAN oladi, joriy
+    // holatdan EMAS (aks holda `created` qoralama `fail` ga tushardi).
+    const phase = draft.status;
     try {
-      if (draft.status === 'creating') await this.runConfirm(ctx, draft);
+      if (phase === 'creating') await this.runConfirm(ctx, draft);
       else await this.runParse(ctx, draft);
     } catch (error) {
       this.logger.warn(
-        `ai draft ${draft.id}: ${draft.status} — ${this.transport.describe(error)}`,
+        `ai draft ${draft.id}: ${phase} — ${this.transport.describe(error)}`,
       );
-      if (draft.status === 'creating') {
-        // ai-confirm ketgan bo'lishi mumkin — natija noma'lum.
-        await this.backToPreview(ctx, draft, AI_CONFIRM_FAILED_TEXT, true);
-      } else {
-        await this.fail(ctx, draft, AI_NETWORK_TEXT, true);
+      await this.recover(ctx, draft, phase);
+    }
+  }
+
+  /**
+   * Ishchi xatosidan keyin holatni tiklash:
+   *  - confirm, yakuniy yozuv bo'lmagan — natija noma'lum: preview + belgi;
+   *  - confirm, natija aniq yozilgan (`preview`: 409 / tasdiq oynasi) — xabar
+   *    yiqilgan, belgisiz preview;
+   *  - confirm, `created` (yoki preview'ga qaytarish rad etildi va qoralama
+   *    yaratilgan) — saqlangan natija yangi xabar bilan (dublikat bo'lmasin);
+   *  - parse, natija yozilmagan — «🔁 Qayta urinish»; yozilgan (preview /
+   *    empty) — `failed` ga AYLANTIRILMAYDI, faqat karta qayta (best-effort).
+   */
+  private async recover(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    phase: TelegramAiDraftStatus,
+  ): Promise<void> {
+    if (phase === 'creating') {
+      if (draft.status === 'creating' || draft.status === 'preview') {
+        const shown = await this.backToPreview(
+          ctx,
+          draft,
+          AI_CONFIRM_FAILED_TEXT,
+          draft.status === 'creating',
+        );
+        if (shown) return;
       }
+      const row = await this.drafts.findOne({ where: { id: draft.id } });
+      if (row?.status === 'created') await this.showCreated(ctx, row);
+      return;
+    }
+    if (draft.status === phase) {
+      await this.fail(ctx, draft, AI_NETWORK_TEXT, true);
+      return;
+    }
+    if (draft.status === 'preview') {
+      await this.showPreview(ctx, draft).catch((error: unknown) =>
+        this.logger.warn(
+          `ai draft ${draft.id}: preview qayta ko'rsatilmadi — ${this.transport.describe(error)}`,
+        ),
+      );
     }
   }
 
@@ -806,11 +858,9 @@ export class AiOrderService implements OnModuleDestroy {
     draft: TelegramAiDraft,
   ): Promise<void> {
     const previews = (draft.orders ?? []) as AiPreviewOrder[];
-    const creatable = previews.filter(isCreatable);
     // (AI ack B3) Bloklovchi ogohlantirishi operatorga KO'RSATILIB
     // tasdiqlanmagan buyurtma yuborilmaydi — «kabinetda yarating».
-    const ready = creatable.filter(isFullyAcked);
-    const unacked = creatable.filter((order) => !isFullyAcked(order));
+    const ready = confirmSendable(previews);
     if (ready.length === 0) {
       // Hammasi tasdiq kutadi (masalan eski tugma) — oyna qayta.
       if (!(await this.finish(draft, { status: 'preview' }))) return;
@@ -878,6 +928,27 @@ export class AiOrderService implements OnModuleDestroy {
     ) {
       return;
     }
+    const { text, skipped } = this.createdSummary(previews, results);
+    await this.show(
+      ctx,
+      draft,
+      text,
+      skipped ? [[this.cabinetCreateButton()]] : [],
+    );
+  }
+
+  /**
+   * ai-confirm natijasi matni (saqlangan `orders` + `results` dan — xabar
+   * yuborilmay qolsa ham qayta tiklanadi). `skipped` — kabinetda
+   * yaratiladigan buyurtma bor.
+   */
+  private createdSummary(
+    previews: AiPreviewOrder[],
+    results: ConfirmResult[],
+  ): { text: string; skipped: boolean } {
+    const creatable = previews.filter(isCreatable);
+    const ready = creatable.filter(isFullyAcked);
+    const unacked = creatable.filter((order) => !isFullyAcked(order));
     const lines = results.flatMap((result) => {
       const order = ready[result.index];
       const n = (order?.index ?? result.index) + 1;
@@ -899,13 +970,43 @@ export class AiOrderService implements OnModuleDestroy {
         `🟠 ${incomplete} ta buyurtma kamchilik bilan — kabinetda yarating.`,
       );
     }
-    const skipped = incomplete + unacked.length;
-    await this.show(
-      ctx,
-      draft,
-      lines.join('\n'),
-      skipped > 0 ? [[this.cabinetCreateButton()]] : [],
-    );
+    return {
+      text: lines.join('\n'),
+      skipped: incomplete + unacked.length > 0,
+    };
+  }
+
+  /**
+   * Buyurtmalar YARATILGAN, lekin natija xabari ko'rsatilmadi (show
+   * yiqildi) — «⏳ Yaratilmoqda…» da qolmasin va operator matnni qayta
+   * yuborib dublikat yaratmasin: saqlangan natija YANGI xabar bilan; bu
+   * ham yiqilsa — «allaqachon yaratilgan» + kabinet havolasi.
+   */
+  private async showCreated(
+    ctx: BotContext,
+    row: TelegramAiDraft,
+  ): Promise<void> {
+    const results = Array.isArray(row.results)
+      ? (row.results as ConfirmResult[])
+      : [];
+    try {
+      const { text } = this.createdSummary(
+        (row.orders ?? []) as AiPreviewOrder[],
+        results,
+      );
+      await ctx.reply(text || AI_ALREADY_CREATED_TEXT, {
+        reply_markup: { inline_keyboard: [[this.cabinetCreateButton()]] },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `ai draft ${row.id}: natija xabari — ${this.transport.describe(error)}`,
+      );
+      await ctx
+        .reply(AI_ALREADY_CREATED_TEXT, {
+          reply_markup: { inline_keyboard: [[this.cabinetCreateButton()]] },
+        })
+        .catch(() => undefined);
+    }
   }
 
   /**
@@ -983,21 +1084,23 @@ export class AiOrderService implements OnModuleDestroy {
       await this.explainState(ctx, draftId);
       return;
     }
-    // Natijasi noma'lum urinishdagi (belgili) buyurtma botda tuzatilmaydi —
-    // faqat belgisizlari taklif qilinadi; hammasi belgili — karta qayta.
-    const orders = ((draft.orders ?? []) as AiPreviewOrder[]).filter(
-      (o) => !confirmAttempted(o),
-    );
+    // Kartada ko'rinadiganlar (avval kesish, keyin filtr — indekslar karta
+    // bilan mos). Natijasi noma'lum urinishdagi (belgili) buyurtma botda
+    // tuzatilmaydi; hammasi belgili — karta qayta; bitta qolsa — darhol
+    // uning menyusi.
+    const orders = ((draft.orders ?? []) as AiPreviewOrder[])
+      .slice(0, PREVIEW_MAX_ORDERS)
+      .filter((o) => !confirmAttempted(o));
     if (!orders.length) {
       await this.showPreview(ctx, draft);
       return;
     }
-    if ((draft.orders ?? []).length === 1) {
+    if (orders.length === 1) {
       await this.showEditMenu(ctx, draft, orders[0]);
       return;
     }
     const rows: InlineKeyboardButton[][] = [];
-    for (const order of orders.slice(0, 10)) {
+    for (const order of orders) {
       rows.push([
         await this.button(
           ctx,
@@ -1685,7 +1788,7 @@ export class AiOrderService implements OnModuleDestroy {
     draft: TelegramAiDraft,
     text: string,
     unknownOutcome = false,
-  ) {
+  ): Promise<boolean> {
     const patch: Partial<Pick<TelegramAiDraft, 'status' | 'orders'>> = {
       status: 'preview',
     };
@@ -1697,7 +1800,7 @@ export class AiOrderService implements OnModuleDestroy {
         Date.now(),
       );
     }
-    if (!(await this.finish(draft, patch))) return;
+    if (!(await this.finish(draft, patch))) return false;
     if (patch.orders) draft.orders = patch.orders;
     const rows = await this.previewRows(ctx, draft);
     const previews = (draft.orders ?? []) as AiPreviewOrder[];
@@ -1708,6 +1811,7 @@ export class AiOrderService implements OnModuleDestroy {
       rows,
       'HTML',
     );
+    return true;
   }
 
   /**
@@ -1728,12 +1832,14 @@ export class AiOrderService implements OnModuleDestroy {
     // Natijasi noma'lum urinishdagi (belgili) buyurtma — botda tuzatilmaydi
     // (keyingi «✅» da server birinchi yukni qaytaradi): uning 📍 / ❓
     // tugmalari yo'q. Yuborilmagan (belgisiz) buyurtmalar odatdagidek.
-    const editable = orders.filter((o) => !confirmAttempted(o));
-    const locked = editable.length < orders.length;
+    // Avval kartada ko'rinadiganlar (≤10), keyin belgisizlar — tugma kartada
+    // yo'q (11+) buyurtmaga ishora qilmasin.
+    const shown = orders.slice(0, PREVIEW_MAX_ORDERS);
+    const editable = shown.filter((o) => !confirmAttempted(o));
+    const locked = orders.some(confirmAttempted);
     const multi = orders.length > 1;
     // Tuman yo'q / AI ikkilangan — nomzod yoki viloyat bo'lsa botda tanlanadi.
     for (const order of editable
-      .slice(0, 10)
       .filter((o) => needsDistrict(o) && canPickDistrict(o))
       .slice(0, AI_DISTRICT_MAX_ENTRIES)) {
       rows.push([
@@ -1872,37 +1978,45 @@ export class AiOrderService implements OnModuleDestroy {
       worker_token: null,
       updated_at: new Date(),
     };
-    // `preview` ga faqat `parsing` / `creating` / `preview` dan: yakunlangan
-    // (`created`, `cancelled`, …) qoralama HECH QACHON qaytmaydi — masalan
-    // natija xabari yuborilmay qolsa (show xatosi) ishchi `backToPreview`
-    // ga tushadi, buyurtma esa allaqachon yaratilgan.
-    const status =
-      patch.status === 'preview'
-        ? { status: In(['parsing', 'creating', 'preview']) }
-        : {};
+    if (
+      patch.status === 'preview' &&
+      !PREVIEW_FROM_STATUSES.includes(draft.status)
+    ) {
+      this.logger.warn(
+        `ai draft ${draft.id}: preview'ga qaytarilmadi (qoralama ${draft.status})`,
+      );
+      return false;
+    }
+    const applied = () => {
+      draft.worker_token = null;
+      if (patch.status) draft.status = patch.status;
+      return true;
+    };
     if (!draft.worker_token) {
-      if (!status.status) {
-        await this.drafts.update({ id: draft.id }, values as never);
-        return true;
-      }
+      // Da'vo bo'shatilgan (shu ish oldingi `finish` bilan) — yozuv faqat
+      // qoralama hali biz bilgan holatda bo'lsa: orada yangi da'vo
+      // (masalan «✅» → `creating`) yoki yakuniy holat ustidan yozilmaydi.
       const res = await this.drafts.update(
-        { id: draft.id, ...status },
+        { id: draft.id, status: draft.status },
         values as never,
       );
-      if (res?.affected) return true;
+      if (res?.affected) return applied();
       this.logger.warn(
-        `ai draft ${draft.id}: preview'ga qaytarilmadi (qoralama yakunlangan)`,
+        `ai draft ${draft.id}: yozuv tashlandi (qoralama ${draft.status} emas)`,
       );
       return false;
     }
     const res = await this.drafts.update(
-      { id: draft.id, worker_token: draft.worker_token, ...status },
+      {
+        id: draft.id,
+        worker_token: draft.worker_token,
+        ...(patch.status === 'preview'
+          ? { status: In(PREVIEW_FROM_STATUSES) }
+          : {}),
+      },
       values as never,
     );
-    if (res?.affected) {
-      draft.worker_token = null;
-      return true;
-    }
+    if (res?.affected) return applied();
     this.logger.warn(
       `ai draft ${draft.id}: natija kech keldi (qoralama boshqa holatda) — tashlandi`,
     );

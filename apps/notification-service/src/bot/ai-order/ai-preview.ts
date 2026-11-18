@@ -389,7 +389,8 @@ export const editedAfterAttempt = (order: AiPreviewOrder): boolean =>
   typeof order.confirm_fp === 'string' &&
   order.confirm_fp !== confirmFingerprint(order);
 
-const PREVIEW_MAX_ORDERS = 10;
+/** Kartada ko‘rsatiladigan buyurtmalar (qolgani — «… yana N ta»). */
+export const PREVIEW_MAX_ORDERS = 10;
 
 /** dd.mm.yyyy (Toshkent, UTC+5) — ISO satr yoki epoch ms; bo'lmasa ''. */
 function tashkentDate(value: unknown): string {

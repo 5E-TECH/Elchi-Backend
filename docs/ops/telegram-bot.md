@@ -457,7 +457,13 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   buyurtmaning 📍 / ❓ / ✏️ tugmalari ishlayveradi (✏️ faqat belgisizlarni
   taklif qiladi); kartada «🌐 Kabinetda yaratish» ham bor. `created` /
   `cancelled` qoralama hech qachon `preview` ga qaytmaydi (shartli yozuv —
-  masalan natija xabarini yuborish yiqilsa ham).
+  masalan natija xabarini yuborish yiqilsa ham). Natija xabari yiqilsa
+  saqlangan natija YANGI xabar bilan (bo'lmasa «ℹ️ allaqachon yaratilgan» +
+  kabinet) — operator «⏳ Yaratilmoqda…» da qolib matnni qayta yuborib
+  dublikat yaratmasin. Da'vosi bo'shatilgan ishning yozuvi faqat qoralama
+  hali o'sha holatda bo'lsa o'tadi (yangi «✅» da'vosi ustidan yozilmaydi);
+  parse natijasi yozilib karta ko'rsatilmasa qoralama `failed` ga
+  aylanmaydi. Tugmalar faqat kartada ko'rinadigan (≤10) buyurtmalarga.
 - **Reliz eslatmasi (#713/#714).** Eski kod bilan natijasi noma'lum
   urinishdan `preview` ga qaytgan qoralamalarda belgi YO'Q: ular muddati
   (24 soat) tugaguncha takroriy javob (`idempotent_replay`) muammosiga ochiq

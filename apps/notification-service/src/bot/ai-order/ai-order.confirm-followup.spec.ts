@@ -3,8 +3,10 @@ import {
   callbackUpdate,
   makeRouter,
   shownTexts,
+  sentTexts,
   textUpdate,
 } from '../testing/bot-kit-spec';
+import { AI_ALREADY_CREATED_TEXT } from './ai-order.service';
 import { AI_CONFIRM_UNKNOWN_LINE, type AiPreviewOrder } from './ai-preview';
 
 /**
@@ -153,6 +155,26 @@ const press = (ctx: Ctx, data: string) =>
     ),
   );
 const row = (ctx: Ctx) => [...ctx.aiDrafts.rows.values()][0];
+const lastShownText = (ctx: Ctx) => shownTexts(ctx).at(-1) ?? '';
+
+/** `editMessage` (va ixtiyoriy `outbox.send`) shu matnda yiqiladi. */
+function breakShow(ctx: Ctx, needle: string, alsoReply = false) {
+  const edit = ctx.transport.editMessage.getMockImplementation()!;
+  ctx.transport.editMessage.mockImplementation(((
+    chatId: string,
+    messageId: string,
+    body: { text?: string },
+  ) => {
+    if (body?.text?.includes(needle)) throw new Error('telegram 500');
+    return edit(chatId, messageId, body);
+  }) as never);
+  if (!alsoReply) return;
+  const send = ctx.outbox.send.getMockImplementation()!;
+  ctx.outbox.send.mockImplementation(((message: { text?: string }) =>
+    message?.text?.includes(needle)
+      ? Promise.reject(new Error('outbox'))
+      : send(message as never)) as never);
+}
 
 describe('1) yaratilgan qoralama preview’ga qaytmaydi', () => {
   it('natija xabarini ko‘rsatish yiqilsa ham status `created` qoladi, belgi yo‘q', async () => {
@@ -193,17 +215,97 @@ describe('2) belgili kartada yuborilmagan buyurtma tuzatiladi', () => {
       '🌐 Kabinetda yaratish',
     ]);
 
-    // ✏️ — faqat belgisiz buyurtma taklif qilinadi.
+    // ✏️ — belgisiz buyurtma bitta: tanlashsiz darhol uning menyusi.
     await press(ctx, buttons(ctx)['✏️ Tuzatish']);
-    expect(Object.keys(buttons(ctx))).toEqual([
-      '2) Ikkinchi Mijoz',
-      '↩️ Orqaga',
-    ]);
+    expect(lastShownText(ctx)).toContain('2-buyurtma</b> — nimani tuzatamiz?');
+    expect(Object.keys(buttons(ctx))).toContain('👤 Ism');
     await press(ctx, buttons(ctx)['↩️ Orqaga']);
 
     await press(ctx, buttons(ctx)['📍 2) Tumanni tanlash']);
     await press(ctx, buttons(ctx)['Birinchi tuman']);
     expect(row(ctx).orders[1].district_id).toBe('21');
     expect(row(ctx).orders[0].district_id).toBe('12');
+  });
+});
+
+describe('#720 review', () => {
+  /** n-buyurtma: tayyor yoki tumansiz (🟠, yuborilmaydi). */
+  const nth = (index: number, ready: boolean) =>
+    ready
+      ? preview({
+          index,
+          customer_name: `Mijoz ${index + 1}`,
+          phone_number: `+9989000000${String(index + 10)}`,
+        })
+      : { ...noDistrict(), index, customer_name: `Mijoz ${index + 1}` };
+
+  it('MUST1: 12 buyurtma, belgililari bor — 📍 / ✏️ faqat kartadagi (≤10) belgisiz buyurtmaga', async () => {
+    // 1–5, 7–10 tayyor (yuboriladi → belgi), 6, 11, 12 — tumansiz.
+    const twelve = Array.from({ length: 12 }, (_, i) =>
+      nth(i, i !== 5 && i < 10),
+    );
+    const { ctx } = setup(twelve, [new Error('timeout')]);
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(
+      row(ctx).orders.filter((o: AiPreviewOrder) => o.confirm_attempted_at),
+    ).toHaveLength(9);
+    const keys = Object.keys(buttons(ctx));
+    expect(keys.filter((k) => k.startsWith('📍'))).toEqual([
+      '📍 6) Tumanni tanlash',
+    ]);
+    expect(keys).toContain('✏️ Tuzatish');
+    expect(keys).toContain('🌐 Kabinetda yaratish');
+    // Kartada belgisiz faqat 6-buyurtma — ✏️ darhol uning menyusi.
+    await press(ctx, buttons(ctx)['✏️ Tuzatish']);
+    expect(lastShownText(ctx)).toContain('6-buyurtma</b> — nimani tuzatamiz?');
+  });
+
+  it('MUST2: natija xabari yiqildi — saqlangan natija yangi xabar bilan (kabinet havolasi)', async () => {
+    const { ctx } = setup([preview()]);
+    await send(ctx, ORDER_TEXT);
+    breakShow(ctx, 'yaratildi');
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('created');
+    expect(sentTexts(ctx).at(-1)).toContain('Buyurtma');
+    expect(sentTexts(ctx).at(-1)).toContain('yaratildi');
+    expect(Object.keys(buttons(ctx))).toEqual(['🌐 Kabinetda yaratish']);
+  });
+
+  it('MUST2: natijani yangi xabar bilan ham yuborib bo‘lmasa — «allaqachon yaratilgan» + kabinet', async () => {
+    const { ctx } = setup([preview()]);
+    await send(ctx, ORDER_TEXT);
+    breakShow(ctx, 'yaratildi', true);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('created');
+    expect(sentTexts(ctx).at(-1)).toBe(AI_ALREADY_CREATED_TEXT);
+  });
+
+  it('3: da‘vosini bo‘shatgan ish yangi `creating` da‘vosi ustidan preview yozmaydi', async () => {
+    const { ctx } = setup([preview()]);
+    await send(ctx, ORDER_TEXT);
+    const stale = { ...row(ctx), status: 'preview', worker_token: null };
+    // Orada «✅» — yangi da'vo.
+    Object.assign(row(ctx), { status: 'creating', worker_token: 'token-new' });
+    const service = ctx.aiService as unknown as {
+      backToPreview: (...args: unknown[]) => Promise<boolean>;
+    };
+    await expect(
+      service.backToPreview({ chatId: '40' }, stale, 'x'),
+    ).resolves.toBe(false);
+    expect(row(ctx)).toEqual(
+      expect.objectContaining({
+        status: 'creating',
+        worker_token: 'token-new',
+      }),
+    );
+  });
+
+  it('5: parse natijasi yozildi, karta ko‘rsatilmadi — `failed` ga aylanmaydi', async () => {
+    const { ctx } = setup([preview()]);
+    breakShow(ctx, 'buyurtma topdi');
+    await send(ctx, ORDER_TEXT);
+    expect(row(ctx).status).toBe('preview');
+    expect(row(ctx).error).toBeNull();
   });
 });
