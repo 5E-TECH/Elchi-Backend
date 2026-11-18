@@ -52,6 +52,8 @@ export class AiOrderHandler implements BotMessageHandler {
     if (!text || text.startsWith('/')) return false;
     const actor = await this.marketActor(ctx);
     if (!actor) return false;
+    // «🔎 Qidirish» dan keyin kutilgan matn (mahsulot nomi) — AI emas.
+    if (await this.ai.handleInput(ctx, text)) return true;
     if (text.length > AI_TEXT_MAX_CHARS) {
       await ctx.reply(AI_TEXT_TOO_LONG_TEXT);
       return true;
@@ -125,6 +127,18 @@ export class AiOrderActions {
         if (!ctx.isPrivate) return;
         await fn(ctx, draftOf(action));
       };
+    const withPayload =
+      (
+        fn: (
+          ctx: BotContext,
+          draftId: string,
+          payload: Record<string, unknown>,
+        ) => Promise<void>,
+      ) =>
+      async (ctx: BotContext, action: TelegramBotAction) => {
+        if (!ctx.isPrivate) return;
+        await fn(ctx, draftOf(action), action.payload ?? {});
+      };
     this.handlers = [
       {
         action: AI_ORDER_ACTIONS.confirm,
@@ -163,6 +177,33 @@ export class AiOrderActions {
         action: AI_ORDER_ACTIONS.retry,
         expiredText: AI_EXPIRED_TEXT,
         handle: privateOnly((ctx, id) => this.ai.retry(ctx, id)),
+      },
+      // Katalogda topilmagan mahsulot: payload — faqat indekslar (o, i, s, k).
+      {
+        action: AI_ORDER_ACTIONS.item,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) =>
+          this.ai.openItem(ctx, id, p.o, p.i),
+        ),
+      },
+      {
+        action: AI_ORDER_ACTIONS.pick,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.pickProduct(ctx, id, p)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.find,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) =>
+          this.ai.startSearch(ctx, id, p.o, p.i),
+        ),
+      },
+      {
+        action: AI_ORDER_ACTIONS.keep,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) =>
+          this.ai.keepName(ctx, id, p.o, p.i),
+        ),
       },
     ];
   }

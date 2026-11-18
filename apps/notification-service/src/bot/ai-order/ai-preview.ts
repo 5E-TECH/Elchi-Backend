@@ -15,6 +15,30 @@ export interface AiReplacementCandidate {
   total_price?: number | null;
 }
 
+/** Katalog mahsuloti (AI nomzodi yoki «🔎 Qidirish» natijasi). */
+export interface AiProductOption {
+  id: string;
+  name: string;
+}
+
+/** Preview'dagi bitta mahsulot (order-service `AiPreviewItem`). */
+export interface AiPreviewItem {
+  name?: string | null;
+  quantity?: number | null;
+  product_id?: string | null;
+  resolved_name?: string | null;
+  unresolved?: boolean;
+  /** Katalogdan mos kelishi mumkin bo'lganlar (≤5) — operator tanlaydi. */
+  candidates?: AiProductOption[] | null;
+  /**
+   * BOT ICHKI maydoni: operator «📝 Nomi bilan qoldirish» ni bosdi —
+   * katalogsiz (`allow_unlisted_product`) yaratiladi, tanlash so'ralmaydi.
+   */
+  keep_name?: boolean;
+  /** BOT ICHKI maydoni: oxirgi «🔎 Qidirish» natijalari (≤5). */
+  search_results?: AiProductOption[] | null;
+}
+
 /**
  * `POST /orders/ai-parse` javobidagi bitta preview (order-service
  * `AiOrderPreview` shartnomasi — faqat bot o'qiydigan maydonlar).
@@ -31,13 +55,7 @@ export interface AiPreviewOrder {
   district_id?: string | null;
   district_name?: string | null;
   address?: string | null;
-  items?: Array<{
-    name?: string | null;
-    quantity?: number | null;
-    product_id?: string | null;
-    resolved_name?: string | null;
-    unresolved?: boolean;
-  }>;
+  items?: AiPreviewItem[];
   total_price?: number | null;
   where_deliver?: 'center' | 'address';
   comment?: string | null;
