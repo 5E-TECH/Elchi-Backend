@@ -453,6 +453,23 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   rad etiladi. 409 / 503 `AI_CHECKS_UNAVAILABLE` / 4xx / parol almashtirish
   — belgi YO'Q (server hech narsa yaratmagan). Takroriy javobda qoralama
   urinishdan keyin o'zgargan bo'lsa — «⚠️ Tuzatishlar qo'llanmadi».
+  Belgi buyurtma bo'yicha: shu kartadagi YUBORILMAGAN (belgisiz, masalan 🟠)
+  buyurtmaning 📍 / ❓ / ✏️ tugmalari ishlayveradi (✏️ faqat belgisizlarni
+  taklif qiladi); kartada «🌐 Kabinetda yaratish» ham bor. `created` /
+  `cancelled` qoralama hech qachon `preview` ga qaytmaydi (shartli yozuv —
+  masalan natija xabarini yuborish yiqilsa ham). Natija xabari yiqilsa
+  saqlangan natija YANGI xabar bilan (bo'lmasa «ℹ️ allaqachon yaratilgan» +
+  kabinet) — operator «⏳ Yaratilmoqda…» da qolib matnni qayta yuborib
+  dublikat yaratmasin. Da'vosi bo'shatilgan ishning yozuvi faqat qoralama
+  hali o'sha holatda bo'lsa o'tadi (yangi «✅» da'vosi ustidan yozilmaydi);
+  parse natijasi yozilib karta ko'rsatilmasa qoralama `failed` ga
+  aylanmaydi. Tugmalar faqat kartada ko'rinadigan (≤10) buyurtmalarga.
+- **Reliz eslatmasi (#713/#714).** Eski kod bilan natijasi noma'lum
+  urinishdan `preview` ga qaytgan qoralamalarda belgi YO'Q: ular muddati
+  (24 soat) tugaguncha takroriy javob (`idempotent_replay`) muammosiga ochiq
+  — botda tuzatib «✅» bosilsa, buyurtma birinchi urinish ma'lumoti bilan
+  qoladi. Deploy'dan keyin 24 soat ichida shunday shikoyat bo'lsa —
+  buyurtmani kabinetda tekshirib tahrirlang.
 - **«✏️ Tuzatish» menyusi (#714)** — qoralama yopilmaydi. Amallar:
   `ai.fix` (menyu; bir nechta buyurtmada avval tanlash), `ai.edit` (`{o}`),
   `ai.field` (`{o, f: name|phone|address|comment|qty, i?}` — keyingi matn
@@ -462,7 +479,10 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   o'chirish. `ai_input` `kind: 'edit'` (+ `f`), muddati 5 daqiqa; manzil /
   izoh kutilayotganda ichida telefon bor yoki ko'p qatorli matn, telefon
   kutilayotganda harf + 7+ raqam yoki 40+ belgi — yangi buyurtma (kutish
-  bekor). Natijasi noma'lum urinishdagi buyurtmada menyu yopiq.
+  bekor). Natijasi noma'lum urinishdagi buyurtmada menyu yopiq. **Ma'lum
+  xatti-harakat:** izoh ichida telefon bo'lsa (masalan «kuryer 90 111 22 33
+  ga qo'ng'iroq qilsin») matn izoh EMAS, yangi buyurtma deb olinadi (AI ga
+  ketadi) — bunday izohni kabinetda yozing yoki raqamni so'z bilan bering.
 - **Tuman.** Tuman yo'q yoki `district_low_confidence` — kartada «📍 Tumanni
   tanlash»: AI nomzodlari (`district_candidates`, ≤5), ular bo'lmasa viloyat
   tumanlari `GET /district?region_id=…` (operator JWT; qoralamada saqlanadi,
