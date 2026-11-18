@@ -896,6 +896,42 @@ const PRIVACY_CASES: C[] = [
     text: 'Mijoz Aziza 90.123 14.11. Chilonzor',
     phones: [P('901231411')],
   },
+  // #647 round 4: telefon so'zidan keyin `8 `/`0 ` trunk prefiksi; `/` bilan yopishgan 2-2-2-3 ikkinchi telefon.
+  {
+    id: 'R4Xa Tel: 8 + 2-3-2-2 date-like',
+    text: 'Tel: 8 90 000 12 11',
+    phones: [P('900001211')],
+  },
+  {
+    id: 'R4Xb Telefon: 0 + dot date-like',
+    text: 'Telefon: 0 90 123 12.11',
+    phones: [P('901231211')],
+  },
+  {
+    id: 'R4Xc raqami: 0 + dot date-like',
+    text: 'raqami: 0 90 123 12.11',
+    phones: [P('901231211')],
+  },
+  {
+    id: 'R4Xd Телефон 0 + dashes',
+    text: 'Телефон 0 67-000-18-05',
+    phones: [P('670001805')],
+  },
+  {
+    id: 'R4Xe Tel: 8 + NBSP trunk',
+    text: `Tel: 8${NB}90 000 12 11`,
+    phones: [P('900001211')],
+  },
+  {
+    id: 'R4Xf 2-3-2-2 / 2-2-2-3',
+    text: 'Aziza 90 123 14 11/97 76 54 321',
+    phones: [P('901231411'), P('977654321')],
+  },
+  {
+    id: 'R4Xg 2-3-2-2 / 2-2-2-3 dashes',
+    text: 'Aziza 90 123 14 11/97-76-54-321',
+    phones: [P('901231411'), P('977654321')],
+  },
 ];
 
 const amountsOnly: { id: string; text: string; keep: string }[] = [

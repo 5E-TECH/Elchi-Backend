@@ -291,7 +291,15 @@ function looksLikePriceAndDate(
   if (digits.length === 12) return false;
   // Telefon so'zi oldida — sana qoidalaridan OLDIN: `Tel: 90-123-12-11/…`
   // (#647 round 3 N4).
-  if (isPhoneWordBefore(before)) return false;
+  // Telefon so'zidan keyin `8 `/`0 ` trunk prefiksi (`Tel: 8 90 000 12 11`,
+  // `raqami: 0 90 123 12.11`) — moslik prefikssiz boshlanadi.
+  const beforeNoTrunk = before.replace(
+    /(?<![\p{L}\p{N}.,])[08][ \u00a0]$/u,
+    '',
+  );
+  if (isPhoneWordBefore(before) || isPhoneWordBefore(beforeNoTrunk)) {
+    return false;
+  }
   const nat = digits.slice(-9);
   // Narx + ISO sana: `90 500 2026-11-14`, `20 000  2026-11-14`,
   // `75 000 - 2026-11-14`, `850 000  2026-11-14` (#647 round 4 A2: GROUP_SEP
@@ -321,10 +329,11 @@ function looksLikePriceAndDate(
   if (!/^\d{2}\D+\d{3}\D/.test(raw) && !devUnknownSep) return false;
   const roundThousands = nat.slice(2, 5) === '000';
   // Sana yil bilan davom etadi: `14.11.2026`, `14/11/26`. Lekin
-  // `…/91 234 56 78`, `…/93-765-43-21`, `….93.765.43.21` — ikkinchi
-  // telefon, sana emas (#647 round 3 N4: aks holda birinchi telefon ochiq).
+  // `…/91 234 56 78`, `…/93-765-43-21`, `….93.765.43.21`, `…/97 76 54 321`
+  // — ikkinchi telefon, sana emas (#647 round 3 N4: aks holda birinchi
+  // telefon ochiq).
   const yearContinues =
-    /^[./\-–](?:\d{4}(?!\d)|\d{2}(?!\d|[ \u00a0\u202f]{0,2}[./\-–]?[ \u00a0\u202f]{0,2}\d{3}))/.test(
+    /^[./\-–](?:\d{4}(?!\d)|\d{2}(?!\d|[ \u00a0\u202f]{0,2}[./\-–]?[ \u00a0\u202f]{0,2}\d{3}|[ \u00a0\u202f\-–]\d{2}[ \u00a0\u202f\-–]\d{2}[ \u00a0\u202f\-–]\d{3}(?!\d)))/.test(
       after,
     );
   if (yearContinues) return true;
