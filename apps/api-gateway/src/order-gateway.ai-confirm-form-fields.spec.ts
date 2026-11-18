@@ -16,18 +16,24 @@ import { Where_deliver } from '@app/common';
 import { OrderGatewayController } from './order-gateway.controller';
 import type { AiStatusPoller } from './ai/ai-status.poller';
 import {
+  AiConfirmOrderDto,
   AiConfirmRequestDto,
-  type AiConfirmOrderDto,
 } from './dto/ai-order.swagger.dto';
+import { CreateOrderRequestDto } from './dto/order.swagger.dto';
+
+/** @nestjs/swagger `DECORATORS.API_MODEL_PROPERTIES` (chuqur import yo'q). */
+const API_MODEL_PROPERTIES = 'swagger/apiModelProperties';
 import {
   CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
   CHOSEN_OPERATOR_SELF_ONLY_MESSAGE,
 } from './order-create/order-chosen-operator';
+import { OPERATOR_PHONE_REQUIRED_MESSAGE } from './order-create/order-operator-phone';
 import { UzValidationPipe } from './validation/uz-validation.pipe';
 
 /**
  * `POST /orders/ai-confirm` — qo'lda forma (`POST /orders`) maydonlari AI
- * tasdig'ida ham: «Operator» tanlovi (`orders[].operator_id`).
+ * tasdig'ida ham: «Operator» tanlovi (`orders[].operator_id`) va operator
+ * raqami (`orders[].operator_phone`).
  *
  * Qoida `POST /orders` bilan AYNI (`createOrderInternal` →
  * `resolveChosenOrderOperator`); farqi faqat xato shaklida: ai-confirm har
@@ -548,5 +554,143 @@ describe('POST /orders/ai-confirm — orders[].operator_id («Operator» tanlovi
         '31',
       ]);
     });
+  });
+});
+
+describe('POST /orders/ai-confirm — orders[].operator_phone (VRyloH62)', () => {
+  /** Market: raqam majburiy, doimiy raqam yo'q. */
+  const STRICT_MARKET = {
+    status: 'active',
+    add_order: true,
+    require_operator_phone: true,
+    default_operator_phone: null,
+  };
+  const DEFAULT_PHONE = '+998901234567';
+  const FORM_PHONE = '+998907654321';
+
+  beforeEach(() => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  describe('DTO (POST /orders bilan ayni tekshiruv)', () => {
+    it.each([
+      [AiConfirmOrderDto, 'operator_phone'],
+      [CreateOrderRequestDto, 'operator_phone'],
+      [CreateOrderRequestDto, 'secondary_operator_phone'],
+    ] as const)(
+      'swagger: %p.%s — string, nullable (`string | null` → "object" bo`lmasin)',
+      (cls, key) => {
+        const meta = Reflect.getMetadata(
+          API_MODEL_PROPERTIES,
+          cls.prototype,
+          key,
+        ) as { type?: unknown; nullable?: boolean };
+        expect(meta.type).toBe(String);
+        expect(meta.nullable).toBe(true);
+      },
+    );
+
+    it('qabul qilinadi va normallashtiriladi; bo`sh satr — yuborilmagan', async () => {
+      const dto = await validateBody({
+        orders: [
+          { ...confirmOrder(1), operator_phone: '90 765 43 21' },
+          { ...confirmOrder(2), operator_phone: '0907654321' },
+          { ...confirmOrder(3), operator_phone: FORM_PHONE },
+          { ...confirmOrder(4), operator_phone: '  ' },
+        ],
+      });
+      expect(dto.orders.map((o) => o.operator_phone)).toEqual([
+        FORM_PHONE,
+        FORM_PHONE,
+        FORM_PHONE,
+        undefined,
+      ]);
+    });
+
+    it('noto`g`ri shakl — 400', async () => {
+      await expect(
+        validateBody({
+          orders: [{ ...confirmOrder(1), operator_phone: '12345' }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  it('raqam majburiy marketda raqamsiz AI buyurtma — create_failed (POST /orders 400 matni), mijoz yaratilmaydi', async () => {
+    const fx = makeController(STRICT_MARKET);
+    const res = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1)] },
+      marketReq,
+    );
+
+    expect(res.data.results).toEqual([
+      {
+        index: 0,
+        ok: false,
+        code: 'create_failed',
+        reason: OPERATOR_PHONE_REQUIRED_MESSAGE,
+      },
+    ]);
+    expect(sendsOf(fx.identity, 'identity.customer.create')).toHaveLength(0);
+    expect(createdPayloads(fx.order)).toHaveLength(0);
+  });
+
+  it('⭐ raqam majburiy marketda operator_phone bilan — yaratiladi, raqam 1-raqam', async () => {
+    const fx = makeController(STRICT_MARKET);
+    const res = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1, { operator_phone: FORM_PHONE })] },
+      marketReq,
+    );
+
+    expect(res.data.results).toEqual([
+      expect.objectContaining({ index: 0, ok: true }),
+    ]);
+    const [sent] = createdPayloads(fx.order);
+    expect(sent.dto).toMatchObject({ operator_phone: FORM_PHONE });
+    expect(sent.dto).not.toHaveProperty('secondary_operator_phone');
+  });
+
+  it('market doimiy raqami bor — u 1-raqam, formadagisi 2-raqam (bir xil bo`lsa takrorlanmaydi)', async () => {
+    const fx = makeController({
+      status: 'active',
+      add_order: true,
+      require_operator_phone: true,
+      default_operator_phone: DEFAULT_PHONE,
+    });
+    await fx.controller.aiConfirm(
+      {
+        orders: [
+          confirmOrder(1, { operator_phone: FORM_PHONE }),
+          confirmOrder(2, { operator_phone: DEFAULT_PHONE }),
+          confirmOrder(3),
+        ],
+      },
+      marketReq,
+    );
+
+    const sent = createdPayloads(fx.order).map((payload) => ({
+      operator_phone: payload.dto?.operator_phone,
+      secondary_operator_phone: payload.dto?.secondary_operator_phone,
+    }));
+    expect(sent).toEqual([
+      { operator_phone: DEFAULT_PHONE, secondary_operator_phone: FORM_PHONE },
+      { operator_phone: DEFAULT_PHONE, secondary_operator_phone: undefined },
+      { operator_phone: DEFAULT_PHONE, secondary_operator_phone: undefined },
+    ]);
+  });
+
+  it('berilmasa, majburiy bo`lmagan market — avvalgi xulq (raqam yozilmaydi)', async () => {
+    const fx = makeController();
+    const res = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1)] },
+      marketReq,
+    );
+
+    expect(res.data.results[0]).toMatchObject({ ok: true });
+    const [sent] = createdPayloads(fx.order);
+    expect(sent.dto).not.toHaveProperty('operator_phone');
+    expect(sent.dto).not.toHaveProperty('secondary_operator_phone');
   });
 });

@@ -2260,6 +2260,11 @@ export class OrderGatewayController {
       // (`createOrderInternal` → `resolveChosenOrderOperator`); berilmasa
       // maydon umuman yuborilmaydi (avvalgi xulq).
       ...(order.operator_id ? { operator_id: order.operator_id } : {}),
+      // VRyloH62: formadagi operator raqami — 1-/2-raqam qarori
+      // `createOrderInternal` da (`resolveOrderOperatorPhones`, POST /orders
+      // bilan AYNI). Ilgari uzatilmasdi: raqam majburiy, doimiy raqamsiz
+      // marketda veb AI buyurtmasi DOIM 400 (`create_failed`) bo'lardi.
+      ...(order.operator_phone ? { operator_phone: order.operator_phone } : {}),
       // Almashtirish: order-service eski buyurtmani shu market (ctx.marketId —
       // server aniqlagan) bo'yicha tekshiradi; begona buyurtma — 400.
       ...(order.replaced_order_id
@@ -3146,6 +3151,8 @@ export class OrderGatewayController {
     // VRyloH62: operator raqamlari va ismi — mijoz yaratilishidan OLDIN
     // (raqam majburiy bo'lsa 400 yetim mijoz qoldirmaydi). Bot formasida
     // raqam maydoni yo'q — u yerda 400 berilmaydi (BeePost bot yo'li kabi).
+    // ai-confirm (veb AI VA Telegram AI — ikkalasi ham shu yo'l) qat'iy:
+    // raqam `orders[].operator_phone` dan.
     const operatorPhones = resolveOrderOperatorPhones({
       market: marketProfile,
       operatorPhone: dto.operator_phone,

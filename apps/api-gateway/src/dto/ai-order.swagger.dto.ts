@@ -36,6 +36,7 @@ import {
   Where_deliver,
 } from '@app/common';
 import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
+import { OptionalOperatorPhone } from '../order-create/order-operator-phone';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -422,6 +423,26 @@ export class AiConfirmOrderDto {
   })
   @OptionalChosenOperatorId()
   operator_id?: string | null;
+
+  /**
+   * VRyloH62 — formadagi operator raqami, `POST /orders` `operator_phone`
+   * bilan AYNI (DTO tekshiruvi umumiy, 1-/2-raqam qarori
+   * `createOrderInternal` dagi `resolveOrderOperatorPhones`). Ilgari bu
+   * maydon yo'q edi — `require_operator_phone=true` va doimiy raqamsiz
+   * marketda veb AI buyurtmasi DOIM `create_failed` bo'lardi.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    example: '+998901234567',
+    description:
+      'Operator raqami — POST /orders `operator_phone` bilan AYNI qoida (normallashtiriladi: "90 123 45 67", "0901234567" → +998XXXXXXXXX; noto‘g‘ri shakl — 400, bo‘sh satr — yuborilmagan). ' +
+      'Market `default_operator_phone` bo‘lsa u 1-raqam, bu esa 2-raqam (bir xil bo‘lsa takrorlanmaydi); ' +
+      '`require_operator_phone=true` va default yo‘q bo‘lsa MAJBURIY va 1-raqam bo‘ladi — yuborilmasa SHU buyurtma `ok: false, code: "create_failed"`, ' +
+      '`reason` — POST /orders 400 matni («Operator telefon raqami majburiy…»).',
+  })
+  @OptionalOperatorPhone()
+  operator_phone?: string | null;
 
   @ApiPropertyOptional({
     enum: ORDER_FULFILLMENT_MODES,
