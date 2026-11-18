@@ -36,6 +36,7 @@ import {
   isProvidedDistrictId,
 } from '../order-create/order-create-content';
 import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
+import { OptionalOperatorPhone } from '../order-create/order-operator-phone';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -103,11 +104,8 @@ const UZ_PHONE_MESSAGE =
   "Telefon raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak";
 const toCanonicalUzPhone = ({ value }: { value: unknown }): unknown =>
   normalizeUzPhone(value) ?? value;
-/** Ixtiyoriy telefon: bo'sh satr/bo'shliq — yuborilmagan (`undefined`). */
-const toOptionalCanonicalUzPhone = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' && value.trim() === ''
-    ? undefined
-    : toCanonicalUzPhone({ value });
+// Ixtiyoriy operator raqamlari — `OptionalOperatorPhone()`
+// (`order-create/order-operator-phone.ts`, ai-confirm bilan umumiy).
 
 const parseStringArray = (value: unknown): unknown => {
   if (Array.isArray(value)) return value;
@@ -403,10 +401,8 @@ export class CreateOrderRequestDto {
       "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; " +
       "`require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi.",
   })
-  @Transform(toOptionalCanonicalUzPhone)
-  @IsOptional()
-  @IsString()
-  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
+  // Tekshiruv ai-confirm (`AiConfirmOrderDto.operator_phone`) bilan umumiy.
+  @OptionalOperatorPhone()
   operator_phone?: string | null;
 
   @ApiPropertyOptional({
@@ -414,10 +410,7 @@ export class CreateOrderRequestDto {
     description:
       '`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi.',
   })
-  @Transform(toOptionalCanonicalUzPhone)
-  @IsOptional()
-  @IsString()
-  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
+  @OptionalOperatorPhone()
   secondary_operator_phone?: string | null;
 
   @ApiPropertyOptional({

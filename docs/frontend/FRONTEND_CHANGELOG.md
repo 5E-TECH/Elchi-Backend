@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI tasdiq: operator raqami (`orders[].operator_phone`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- 🔧 [gateway] **Xato tuzatildi:** market profilida `require_operator_phone=true` va `default_operator_phone` bo'sh bo'lsa, `POST /orders/ai-confirm` dagi HAR buyurtma `{ ok: false, code: 'create_failed', reason: 'Operator telefon raqami majburiy…' }` bo'lardi — AI DTO'sida raqam maydoni yo'q edi (yuborilsa 400 «should not exist»).
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_phone` (string). Qoida `POST /orders` `operator_phone` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveOrderOperatorPhones`): `"90 123 45 67"`, `"0901234567"` → `+998XXXXXXXXX`; noto'g'ri shakl — butun so'rov 400; bo'sh satr — yuborilmagan. Market doimiy raqami bo'lsa u 1-raqam, bu — 2-raqam (bir xil bo'lsa takrorlanmaydi); majburiy va doimiy raqam yo'q bo'lsa bu raqam MAJBURIY va 1-raqam — yuborilmasa shu buyurtma `create_failed` (yuqoridagi matn), qolganlari yaratiladi. `secondary_operator_phone` AI'da yo'q.
+- ⚠️ Telegram bot AI yo'li ham `ai-confirm` orqali yaratadi va `operator_phone` yubormaydi — bunday marketlarda bot AI buyurtmalari hozircha ham `create_failed` (alohida ish; bot `POST /orders/telegram/bot/create` yo'li 400 bermaydi).
+
+**Frontend action items:**
+- 🔧 AI panelida operator raqami maydoni (qo'lda forma kabi; market `require_operator_phone && !default_operator_phone` bo'lsa majburiy) → `orders[i].operator_phone`.
+
 ### 2026-11-18 — AI tasdiq: «Operator» tanlovi (`orders[].operator_id`)
 
 Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
