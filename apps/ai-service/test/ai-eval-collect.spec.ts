@@ -382,3 +382,56 @@ describe('ai-eval-collect: PII (review round-3)', () => {
     expect(COLLECT_SQL).toMatch(/ELSE false END/);
   });
 });
+
+/** Review round-6 (L1, S1–S4) — hammasi sintetik ma'lumot. */
+describe('ai-eval-collect: PII (review round-6)', () => {
+  const masked = (text: string, names: string[]): string =>
+    maskCandidateText(text, names);
+
+  it('L1: havoladan keyingi telefon to‘liq [RAQAM] (birinchi guruh yutilmaydi)', () => {
+    for (const [t, want] of [
+      ['instagram.com/dilnoza_shop,90 742 90 47', '[LINK],[RAQAM]'],
+      ['t.me/dilnoza_shop,90 742 90 47', '[LINK],[RAQAM]'],
+      ['https://maps.app.goo.gl/AbC123,90 765 43 21', '[LINK],[RAQAM]'],
+      ['https://maps.app.goo.gl/AbC1-90 931 38 51', '[LINK]-[RAQAM]'],
+    ]) {
+      expect(masked(t, [])).toBe(want);
+    }
+    // Koordinatali xarita havolasi butunligicha; havolalar orasidagi vergul.
+    expect(
+      masked(
+        'google.com/maps/@41.31,69.23,17z/data=!3m1 va maps.google.com/?q=41.311081,69.240562',
+        [],
+      ),
+    ).toBe('[LINK] va [LINK]');
+    expect(masked('t.me/a_b, wa.me/998000000000', [])).toBe('[LINK], [LINK]');
+  });
+
+  it('L1: tuzatishlar va tasdiqlangan preview (maskDeep) orqali ham', () => {
+    const addr = 'Chilonzor 9, instagram.com/dilnoza_shop,90 742 90 47';
+    expect(
+      maskDeep(
+        scrubCorrections([
+          {
+            item_index: 0,
+            field_corrections: { address: { ai: null, final: addr } },
+          },
+        ]),
+        [],
+      ),
+    ).toEqual([
+      {
+        item_index: 0,
+        field_corrections: {
+          address: { ai: null, final: 'Chilonzor 9, [LINK],[RAQAM]' },
+        },
+      },
+    ]);
+    expect(
+      maskDeep(
+        confirmedPreview([{ index: 0, address: addr }], [{ item_index: 0 }]),
+        [],
+      ),
+    ).toEqual([{ index: 0, address: 'Chilonzor 9, [LINK],[RAQAM]' }]);
+  });
+});

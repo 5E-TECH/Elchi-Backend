@@ -364,11 +364,13 @@ function nameAlternatives(skeleton: string): string[] {
  * Ijtimoiy tarmoq / messenjer (profil = shaxs) va xarita havolalari
  * (joylashuv = uy manzili): Google Maps (maps.app.goo.gl, goo.gl,
  * google.<tld>/maps, maps.google.<tld>), Yandex Maps, 2GIS, WhatsApp (wa.me).
- * Yo'lda vergul faqat raqamdan oldin ("?q=41.31,69.24"), shunda
- * "[LINK], [LINK]" dagi tinish belgisi saqlanadi.
+ * Yo'lda vergul faqat raqamlardan keyin bo'shliqsiz belgi kelsa
+ * ("?q=41.31,69.24", "@41.31,69.23,17z/"), shunda "[LINK], [LINK]" dagi
+ * tinish belgisi saqlanadi va "…/shop,90 742 90 47" dagi telefon
+ * havolaga yutilmaydi.
  */
 const LINK_RE =
-  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com|wa\.me|whatsapp\.com|goo\.gl|maps\.google\.[a-z]{2,3}(?:\.[a-z]{2})?|google\.[a-z]{2,3}(?:\.[a-z]{2})?\/maps|yandex\.[a-z]{2,3}\/maps|2gis\.[a-z]{2,3})(?![\p{L}\p{N}_-])(?:[/?#](?:[^\s,;)\]]|,(?=\d))*)?/giu;
+  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com|wa\.me|whatsapp\.com|goo\.gl|maps\.google\.[a-z]{2,3}(?:\.[a-z]{2})?|google\.[a-z]{2,3}(?:\.[a-z]{2})?\/maps|yandex\.[a-z]{2,3}\/maps|2gis\.[a-z]{2,3})(?![\p{L}\p{N}_-])(?:[/?#](?:[^\s,;)\]]|,(?=\d+[^\d\s,;)\]]))*)?/giu;
 const EMAIL_RE =
   /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
 /** Telegram/Instagram foydalanuvchi nomi (email maskalangandan keyin). */
@@ -412,8 +414,22 @@ export function maskCandidateText(
 ): string {
   let out = text
     .replace(EMAIL_RE, '[EMAIL]')
-    // Gap oxiridagi nuqta havolaga kirmaydi.
-    .replace(LINK_RE, (m) => '[LINK]' + (/\.+$/.exec(m)?.[0] ?? ''))
+    .replace(LINK_RE, (m: string, offset: number, whole: string) => {
+      // Havola oxiri "-90" / ",90" va keyin "742 90 47" — bu telefonning
+      // birinchi guruhi: ajratgich va raqamlar matnga qaytariladi, 9+
+      // raqam qoidasi butun telefonni ko'radi ("[LINK]-[RAQAM]").
+      const head = /[-,]\d{2,3}$/.exec(m)?.[0];
+      if (
+        head &&
+        /^[\s-]?\d{2,3}[\s-]?\d{2}[\s-]?\d{2}(?!\d)/.test(
+          whole.slice(offset + m.length),
+        )
+      ) {
+        return '[LINK]' + head;
+      }
+      // Gap oxiridagi nuqta havolaga kirmaydi.
+      return '[LINK]' + (/\.+$/.exec(m)?.[0] ?? '');
+    })
     .replace(USER_HANDLE_RE, (m) => {
       // Gap oxiridagi nuqta handle'ga kirmaydi.
       const dots = /\.+$/.exec(m)?.[0] ?? '';
