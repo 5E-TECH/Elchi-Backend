@@ -28952,7 +28952,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun; bo‘sh satr — berilmagan), aks holda 400."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -29270,7 +29270,7 @@
           "customer_id": {
             "type": "string",
             "example": "120",
-            "description": "Mavjud mijoz ID si (GET /customers/suggest taklifidan). Egalik POST /orders `customer_id` bilan AYNI: superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa. Tasdiqlanmasa (begona mijoz, mavjud emas) SHU buyurtma yaratilmaydi: `ok: false, code: \"create_failed\"`, `reason` — POST /orders 403 matni («customer_id qabul qilinmadi: …»); tekshiruv xizmati javob bermasa — `create_failed` («Buyurtma yaratilmadi»). Partiyaning qolgani yaratiladi. Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (yangi karta ham ochilmaydi); `customer.address`/`extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi). `customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Raqam bo‘lmasa — 400 (DTO). Berilmasa — avvalgi xulq (telefon bo‘yicha)."
+            "description": "Mavjud mijoz ID si (GET /customers/suggest taklifidan). Egalik POST /orders `customer_id` bilan AYNI: superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa. Tasdiqlanmasa (boshqa rollar uchun: begona yoki mavjud bo‘lmagan mijoz; superadmin/admin — id tekshirilmaydi, POST /orders kabi) SHU buyurtma yaratilmaydi: `ok: false, code: \"create_failed\"`, `reason` — POST /orders 403 matni («customer_id qabul qilinmadi: …»); tekshiruv xizmati (order/identity) javob bermasa — `code: \"validation_unavailable\"` («Mijozni tekshirib bo‘lmadi …», buyurtma ANIQ yaratilmagan). Partiyaning qolgani yaratiladi. Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (AI o‘qigan telefon saqlanmaydi — kartadagi telefon ishlatiladi; yangi karta ham ochilmaydi); `customer.address`/`extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi). `customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun), aks holda 400 (DTO). Berilmasa — avvalgi xulq (telefon bo‘yicha)."
           },
           "district_id": {
             "type": "string",
@@ -29504,7 +29504,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun; bo‘sh satr — berilmagan), aks holda 400."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"

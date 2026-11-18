@@ -153,9 +153,14 @@ const makeController = (
         return of({ data: { id: payload.id, ...market } });
       case 'identity.customer.find_by_id': {
         const card = CUSTOMER_CARDS.find((row) => row.id === payload.id);
-        return of({
-          data: card ? { id: card.id, phone_number: card.phone } : null,
-        });
+        // identity `findCustomerById`: yo'q — RpcException(errorRes(…, 404)).
+        return card
+          ? of({ data: { id: card.id, phone_number: card.phone } })
+          : throwError(() => ({
+              statusCode: 404,
+              message: 'Customer topilmadi',
+              data: null,
+            }));
       }
       case 'identity.market_operator.selectable':
         return of({
@@ -707,10 +712,35 @@ describe('POST /orders/ai-confirm — orders[].customer_id (mavjud mijoz)', () =
       ]);
     });
 
-    it('raqam bo`lmasa — 400', async () => {
-      await expect(
-        validateBody({ orders: [{ ...confirmOrder(1), customer_id: 'c-1' }] }),
-      ).rejects.toThrow(BadRequestException);
+    it.each([['c-1'], ['0120'], ['0'], ['9999999999999999999'], [2 ** 53 + 2]])(
+      '%p — 400 (musbat int8, boshida nolsiz)',
+      async (value) => {
+        await expect(
+          validateBody({
+            orders: [{ ...confirmOrder(1), customer_id: value }],
+          }),
+        ).rejects.toThrow(BadRequestException);
+      },
+    );
+
+    it('POST /orders customer_id — ayni format', async () => {
+      const validateCreate = (customer_id: unknown) =>
+        pipe.transform(
+          {
+            customer_id,
+            district_id: '12',
+            total_price: 1000,
+            items: [{ product_id: '15', quantity: 1 }],
+          },
+          { type: 'body', metatype: CreateOrderRequestDto },
+        );
+      await expect(validateCreate('0120')).rejects.toThrow(BadRequestException);
+      await expect(validateCreate('9999999999999999999')).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(validateCreate('120')).resolves.toMatchObject({
+        customer_id: '120',
+      });
     });
   });
 
@@ -786,7 +816,7 @@ describe('POST /orders/ai-confirm — orders[].customer_id (mavjud mijoz)', () =
     },
   );
 
-  it('tekshiruv xizmati javob bermasa — fail-closed: shu buyurtma create_failed, hech narsa yaratilmaydi', async () => {
+  it('doira tekshiruvi (order-service) javob bermasa — fail-closed: validation_unavailable, hech narsa yaratilmaydi', async () => {
     const fx = makeController();
     const base = fx.order.send.getMockImplementation()!;
     fx.order.send.mockImplementation((pattern, payload) =>
@@ -803,12 +833,159 @@ describe('POST /orders/ai-confirm — orders[].customer_id (mavjud mijoz)', () =
       {
         index: 0,
         ok: false,
-        code: 'create_failed',
-        reason: 'Buyurtma yaratilmadi',
+        code: 'validation_unavailable',
+        reason: "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
       },
     ]);
     expect(customerCreates(fx.identity)).toHaveLength(0);
     expect(createdPayloads(fx.order)).toHaveLength(0);
+  });
+
+  it.each([
+    ['xato', () => new Error('identity down')],
+    ['RMQ 500 obyekti', () => ({ statusCode: 500, message: 'x' })],
+  ])(
+    'boshqa market mijozi kartasi (identity) %s — 403 EMAS, validation_unavailable',
+    async (_label, failure) => {
+      const fx = makeController();
+      const base = fx.identity.send.getMockImplementation()!;
+      fx.identity.send.mockImplementation((pattern, payload) =>
+        pattern.cmd === 'identity.customer.find_by_id'
+          ? throwError(failure)
+          : base(pattern, payload),
+      );
+      const order = confirmOrder(1, { customer_id: '130' });
+      order.customer.phone_number = '+998901110130';
+      const res = await fx.controller.aiConfirm({ orders: [order] }, marketReq);
+
+      expect(res.data.results).toEqual([
+        {
+          index: 0,
+          ok: false,
+          code: 'validation_unavailable',
+          reason: "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        },
+      ]);
+      expect(customerCreates(fx.identity)).toHaveLength(0);
+      expect(createdPayloads(fx.order)).toHaveLength(0);
+    },
+  );
+
+  it('admin + mavjud bo`lmagan id — POST /orders kabi tekshirilmaydi (hujjatlangan xulq)', async () => {
+    const fx = makeController();
+    const res = await fx.controller.aiConfirm(
+      {
+        market_id: MARKET_ID,
+        orders: [confirmOrder(1, { customer_id: '999' })],
+      },
+      adminReq,
+    );
+
+    expect(res.data.results[0]).toMatchObject({ ok: true });
+    expect(sendsOf(fx.identity, 'identity.customer.find_by_id')).toHaveLength(
+      0,
+    );
+    expect(sendsOf(fx.order, 'order.customer.market_summary')).toHaveLength(0);
+    expect(customerCreates(fx.identity)).toHaveLength(0);
+    expect(createdPayloads(fx.order)[0].dto).toMatchObject({
+      customer_id: '999',
+    });
+  });
+
+  it.each([
+    ['market_operator', operatorReq],
+    ['registrator', staffReq('registrator')],
+    ['manager', staffReq('manager')],
+  ])(
+    '%s + market_id: shu market mijozi qabul, begona (telefon mos emas) — rad; doira — server marketi',
+    async (_role, req) => {
+      const fx = makeController();
+      const res = await fx.controller.aiConfirm(
+        {
+          // market_operator uchun e'tiborsiz (server o'zi aniqlaydi).
+          market_id: MARKET_ID,
+          orders: [
+            confirmOrder(1, { customer_id: '120' }),
+            confirmOrder(2, { customer_id: '130' }),
+          ],
+        },
+        req,
+      );
+
+      expect(res.data.results).toEqual([
+        expect.objectContaining({ index: 0, ok: true }),
+        {
+          index: 1,
+          ok: false,
+          code: 'create_failed',
+          reason: expect.stringContaining(
+            'customer_id qabul qilinmadi',
+          ) as unknown as string,
+        },
+      ]);
+      expect(
+        sendsOf(fx.order, 'order.customer.market_summary').map(
+          ([, payload]) => payload.market_id,
+        ),
+      ).toEqual([MARKET_ID, MARKET_ID]);
+      const sent = createdPayloads(fx.order);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].dto).toMatchObject({
+        customer_id: '120',
+        market_id: MARKET_ID,
+      });
+    },
+  );
+
+  it('shu market mijozi + update_customer_card: true — karta yangilanadi', async () => {
+    const fx = makeController();
+    await fx.controller.aiConfirm(
+      {
+        orders: [
+          confirmOrder(1, {
+            customer_id: '120',
+            update_customer_card: true,
+            customer: {
+              name: 'Yangi Ism',
+              phone_number: phoneFor(1),
+              district_id: '12',
+            },
+          }),
+        ],
+      },
+      marketReq,
+    );
+
+    const updates = sendsOf(fx.identity, 'identity.customer.update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toMatchObject({
+      id: '120',
+      dto: expect.objectContaining({ name: 'Yangi Ism' }) as unknown,
+    });
+    expect(createdPayloads(fx.order)[0].dto).toMatchObject({
+      customer_id: '120',
+    });
+  });
+
+  it('boshqa market mijozi + update_customer_card: true — 403 matni, buyurtma yaratilmaydi', async () => {
+    const fx = makeController();
+    const order = confirmOrder(1, {
+      customer_id: '130',
+      update_customer_card: true,
+    });
+    order.customer.phone_number = '+998901110130';
+    const res = await fx.controller.aiConfirm({ orders: [order] }, marketReq);
+
+    expect(res.data.results).toEqual([
+      {
+        index: 0,
+        ok: false,
+        code: 'create_failed',
+        reason: expect.stringContaining("Mijoz kartasini yangilab bo'lmaydi"),
+      },
+    ]);
+    expect(createdPayloads(fx.order)).toHaveLength(0);
+    expect(sendsOf(fx.identity, 'identity.customer.update')).toHaveLength(0);
   });
 
   it('admin — POST /orders kabi istalgan mijoz (doira tekshiruvisiz)', async () => {

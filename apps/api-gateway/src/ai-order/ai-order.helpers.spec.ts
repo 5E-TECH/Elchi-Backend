@@ -6,6 +6,7 @@ import {
   GatewayTimeoutException,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import {
   BaseRpcExceptionFilter,
@@ -243,6 +244,17 @@ describe('ai-order.helpers', () => {
       ).toEqual({
         code: 'create_failed',
         reason: AI_CONFIRM_REASON_TEXT.create_failed,
+      });
+    });
+
+    it('gateway o`zi tashlagan 503 (ServiceUnavailableException) — validation_unavailable, matni bilan', () => {
+      expect(
+        toConfirmFailure(
+          new ServiceUnavailableException("Mijozni tekshirib bo'lmadi"),
+        ),
+      ).toEqual({
+        code: 'validation_unavailable',
+        reason: "Mijozni tekshirib bo'lmadi",
       });
     });
 

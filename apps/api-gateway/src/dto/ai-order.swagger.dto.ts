@@ -37,6 +37,10 @@ import {
 } from '@app/common';
 import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
 import { OptionalOperatorPhone } from '../order-create/order-operator-phone';
+import {
+  CUSTOMER_ID_FORMAT_MESSAGE,
+  OptionalPositiveInt8Id,
+} from '../order-create/positive-int8-id';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -253,22 +257,15 @@ export class AiConfirmOrderDto {
     description:
       'Mavjud mijoz ID si (GET /customers/suggest taklifidan). Egalik POST /orders `customer_id` bilan AYNI: superadmin/admin — istalgan mijoz; ' +
       "boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa. " +
-      'Tasdiqlanmasa (begona mijoz, mavjud emas) SHU buyurtma yaratilmaydi: `ok: false, code: "create_failed"`, `reason` — POST /orders 403 matni ' +
-      '(«customer_id qabul qilinmadi: …»); tekshiruv xizmati javob bermasa — `create_failed` («Buyurtma yaratilmadi»). Partiyaning qolgani yaratiladi. ' +
-      'Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (yangi karta ham ochilmaydi); ' +
+      'Tasdiqlanmasa (boshqa rollar uchun: begona yoki mavjud bo‘lmagan mijoz; superadmin/admin — id tekshirilmaydi, POST /orders kabi) SHU buyurtma yaratilmaydi: ' +
+      '`ok: false, code: "create_failed"`, `reason` — POST /orders 403 matni («customer_id qabul qilinmadi: …»); ' +
+      'tekshiruv xizmati (order/identity) javob bermasa — `code: "validation_unavailable"` («Mijozni tekshirib bo‘lmadi …», buyurtma ANIQ yaratilmagan). Partiyaning qolgani yaratiladi. ' +
+      'Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (AI o‘qigan telefon saqlanmaydi — kartadagi telefon ishlatiladi; yangi karta ham ochilmaydi); ' +
       "`customer.address`/`extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi). " +
-      '`customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Raqam bo‘lmasa — 400 (DTO). Berilmasa — avvalgi xulq (telefon bo‘yicha).',
+      '`customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun), aks holda 400 (DTO). ' +
+      'Berilmasa — avvalgi xulq (telefon bo‘yicha).',
   })
-  @IsOptional()
-  @Transform(({ value }: { value: unknown }): unknown => {
-    if (typeof value === 'number') return String(value);
-    if (typeof value === 'string' && value.trim() === '') return undefined;
-    return typeof value === 'string' ? value.trim() : value;
-  })
-  @IsString({ message: "customer_id matn bo'lishi kerak" })
-  @Matches(/^\d{1,19}$/, {
-    message: "customer_id mijoz ID si (raqam) bo'lishi kerak",
-  })
+  @OptionalPositiveInt8Id(CUSTOMER_ID_FORMAT_MESSAGE)
   customer_id?: string;
 
   @ApiProperty({ example: '12', description: 'Tuman ID (raqam)' })

@@ -13,6 +13,10 @@ import { IsOptional, ValidateBy } from 'class-validator';
  * qilinmaydi (satr yuborilsin).
  */
 export const INT8_MAX = 9223372036854775807n;
+
+/** `customer_id` (POST /orders va ai-confirm) formati xatosi. */
+export const CUSTOMER_ID_FORMAT_MESSAGE =
+  "customer_id mijoz ID si (raqam) bo'lishi kerak";
 const POSITIVE_INT8_TEXT_RE = /^[1-9]\d{0,18}$/;
 
 export function isPositiveInt8Id(value: unknown): value is string {

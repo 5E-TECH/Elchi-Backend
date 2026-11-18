@@ -2947,7 +2947,20 @@ export class OrderGatewayController {
     const card: unknown = await this.sendIdentityWithTimeout(
       { cmd: 'identity.customer.find_by_id' },
       { id: customerId },
-    ).catch(() => null);
+    ).catch((error: unknown) => {
+      // Mijoz yo'q (identity 404) — oddiy rad (403). `failClosed`
+      // (ai-confirm) da boshqa xato/timeout — 503: identity uzilishi
+      // «begona mijoz» deb noto'g'ri aytilmasin.
+      const status = Number(
+        (error as { statusCode?: unknown } | null)?.statusCode,
+      );
+      if (failClosed && status !== 404) {
+        throw new ServiceUnavailableException(
+          "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        );
+      }
+      return null;
+    });
     const cardPhone = normalizeUzPhone(
       (card as { data?: { phone_number?: unknown } } | null)?.data
         ?.phone_number,
