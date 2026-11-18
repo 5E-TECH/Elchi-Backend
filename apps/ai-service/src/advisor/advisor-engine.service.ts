@@ -104,6 +104,10 @@ interface OpenAlertRow {
   id: string;
   facts: unknown;
   evidence: unknown;
+  title: string;
+  subject: unknown;
+  branch: unknown;
+  branch_id: string | null;
 }
 
 /** Natija holati — qoida bo'yicha (round-2 B2/S5). */
@@ -257,6 +261,7 @@ export class AdvisorEngineService {
           rules,
           now,
           firstRun,
+          response?.names_degraded === true,
         );
         delete outcome.failures[c.dedup_key];
         if (applied !== 'noop') result[applied] += 1;
@@ -300,6 +305,7 @@ export class AdvisorEngineService {
     rules: AiAdvisorRulesSettings,
     now: Date,
     firstRun: boolean,
+    namesDegraded = false,
   ): Promise<AdvisorApplyResult> {
     const facts = dedupeFacts(c.fact_keys);
     if (!facts.length) return { outcome: 'noop', alertId: null };
@@ -308,7 +314,8 @@ export class AdvisorEngineService {
       // vaqtinchalik deb hisoblanadi, kursor ushlanadi (round-2 S7/B2).
       await m.query(`SET LOCAL lock_timeout = '${APPLY_LOCK_TIMEOUT}'`);
       const open = await m.query<OpenAlertRow[]>(
-        `SELECT "id"::text AS id, "facts", "evidence" FROM ${ALERTS}
+        `SELECT "id"::text AS id, "facts", "evidence", "title", "subject", "branch",
+                "branch_id"::text AS branch_id FROM ${ALERTS}
           WHERE "dedup_key" = $1 AND "status" IN ('new','seen') AND "is_deleted" = false
           FOR UPDATE`,
         [c.dedup_key],
@@ -325,9 +332,18 @@ export class AdvisorEngineService {
 
       if (open.length) {
         const alertId = open[0].id;
+        // v0.4 P6: ism qidiruvi yiqilgan tick — saqlangan sarlavha/obyekt/
+        // filial va faktlardagi nomlar saqlanadi (null bilan almashmaydi).
+        const shown = (x: AiAdvisorCandidate) =>
+          namesDegraded
+            ? keepStoredNames(
+                this.presentation(withStoredNames(x, open[0])),
+                open[0],
+              )
+            : this.presentation(x);
         if (fresh.length) {
           // R1: yangi fakt-smenalar saqlanganlarga QO'SHILADI (round-2 B1).
-          const present = this.presentation(
+          const present = shown(
             c.rule_key === 'R1'
               ? mergeR1(open[0], c, new Set(fresh.map((f) => f.fact_key)))
               : c,
@@ -362,7 +378,7 @@ export class AdvisorEngineService {
             // aniqlash») O'ZGARMAYDI (§6 «ayni fact_key — hech narsa»).
             if (sameJson(open[0].facts, c.facts))
               return { outcome: 'noop', alertId: null };
-            const present = this.presentation(c);
+            const present = shown(c);
             await m.query(
               `UPDATE ${ALERTS}
                   SET "title" = $2, "facts" = $3::jsonb, "evidence" = $4::jsonb, "links" = $5::jsonb,
@@ -374,7 +390,7 @@ export class AdvisorEngineService {
             return { outcome: 'refreshed', alertId };
           }
           const factAt = now;
-          const present = this.presentation(c);
+          const present = shown(c);
           await m.query(
             `UPDATE ${ALERTS}
                 SET "last_at" = $2, "last_fact_at" = GREATEST(COALESCE("last_fact_at", $3), $3),
@@ -626,6 +642,52 @@ export function r6Periods(
     days: days.slice(-ADVISOR_R6_CATCHUP_DAYS),
     ...(weeks.length ? { weeks } : {}),
   };
+}
+
+const NAMED_FACTS = ['courier', 'market', 'branch', 'cashbox'] as const;
+
+/** P6: nomzod faktlaridagi `name: null` larni saqlangan nom bilan to'ldirish. */
+function withStoredNames(
+  c: AiAdvisorCandidate,
+  stored: Pick<OpenAlertRow, 'facts'>,
+): AiAdvisorCandidate {
+  const sf = (stored.facts ?? {}) as Record<string, unknown>;
+  const facts: Record<string, unknown> = { ...c.facts };
+  for (const k of NAMED_FACTS) {
+    const cur = facts[k] as {
+      id?: unknown;
+      owner_id?: unknown;
+      name?: unknown;
+    } | null;
+    const old = sf[k] as {
+      id?: unknown;
+      owner_id?: unknown;
+      name?: unknown;
+    } | null;
+    if (
+      cur &&
+      old &&
+      cur.name == null &&
+      typeof old.name === 'string' &&
+      (cur.id ?? cur.owner_id) === (old.id ?? old.owner_id)
+    ) {
+      facts[k] = { ...cur, name: old.name };
+    }
+  }
+  return { ...c, facts };
+}
+
+/** P6: `title, …, subject, branch, branch_id` — saqlangan qiymatlar. */
+function keepStoredNames(
+  present: unknown[],
+  stored: Pick<OpenAlertRow, 'title' | 'subject' | 'branch' | 'branch_id'>,
+): unknown[] {
+  const out = [...present];
+  out[0] = stored.title;
+  out[4] = JSON.stringify(stored.subject ?? null);
+  out[5] = stored.branch ? JSON.stringify(stored.branch) : null;
+  out[6] = stored.branch_id;
+  return out;
 }
 
 /** §5.1: `kind: system` — «Butun tizim». */

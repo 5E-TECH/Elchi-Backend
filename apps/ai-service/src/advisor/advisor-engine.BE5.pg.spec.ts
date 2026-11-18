@@ -650,6 +650,35 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
       '2026-10-23T09:00:00.000Z',
     );
 
+    // v0.4 P6: ism qidiruvi yiqilgan tick — saqlangan nom/filial/sarlavha qoladi.
+    const degraded = r2('ep:h:900', 3200000, 6);
+    degraded.branch = null;
+    degraded.subject = { kind: 'courier', id: '55', name: null };
+    degraded.facts = { ...degraded.facts, courier: { id: '55', name: null } };
+    reply = { candidates: [degraded], cursors: {}, names_degraded: true };
+    expect(
+      await engine.run('frequent', new Date('2026-10-23T10:00:00Z')),
+    ).toMatchObject({ refreshed: 1 });
+    const [kept] = await ds.query<
+      Array<{
+        title: string;
+        subject: { name: string };
+        branch: { name: string } | null;
+        branch_id: string | null;
+        facts: { courier: { name: string }; balance: number };
+      }>
+    >(
+      `SELECT title, subject, branch, branch_id::text AS branch_id, facts FROM ai_schema.ai_advisor_alerts`,
+    );
+    expect(kept.title).toBe(
+      "Jasur Tursunov: 3 100 000 so'm, 5 kundan beri topshirilmagan",
+    );
+    expect(kept.subject.name).toBe('Jasur Tursunov');
+    expect(kept.branch?.name).toBe('Toshkent HQ');
+    expect(kept.branch_id).toBe('1');
+    expect(kept.facts.courier.name).toBe('Jasur Tursunov');
+    expect(kept.facts.balance).toBe(3200000); // raqamlar yangilanadi
+
     // «Ahamiyatsiz» — davom etayotgan holat qayta ochilmaydi.
     await ds.query(
       `UPDATE ai_schema.ai_advisor_alerts SET status = 'dismissed'`,

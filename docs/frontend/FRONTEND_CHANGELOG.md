@@ -22,6 +22,17 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizodlari — shartnoma v0.4
+
+Ega qarori 2026-11-18. Deploy: ai-service + finance-service, migratsiyasiz.
+
+- ✏️ **Topshirish chegarasi (R2, R5):** «topshirilmagan kunlar» faqat o'sha kun boshidagi qoldiqning kamida **80%** i topshirilganda (bir kundagi topshirishlar yig'indisi) nolga tushadi; kichikroq topshirishlar epizodni yangilamaydi, kunlar sanalishda davom etadi. Yangi sozlamalar: `rules.R2.min_handover_pct`, `rules.R5.min_transfer_pct` (sukut 80, 1–100, `limits` da `unit: "percent"` — **yangi birlik**). UI'da hozircha KO'RSATILMAYDI (FE sozlamalar dialogida yashiring). `rule.thresholds` va `evidence.min_handover_pct` / `evidence.min_transfer_pct` da snapshot. R4 (market to'lovi) o'zgarmaydi — har qanday to'lov.
+- ✏️ **R2 o'sish:** faqat o'sish triggeri — epizod o'sish qatorining boshlangan kuni; kuniga qisman topshirish «N marta» ni ko'paytirmaydi va yopilgandan keyin har kuni yangi ogohlantirish ochmaydi. Sarlavha: «{kuryer}: {qoldiq} so'm — qarz N kun ketma-ket o'sgan»; o'sish bo'lmasa `facts.growth_days = 0`.
+- ✏️ **Bekor turgan kassa (R2/R4/R5):** hammasi topshirilib (qoldiq 0) keyin yangi pul tushsa — kunlar o'sha paytdan sanaladi (darhol «12 kundan beri» emas). R5 epizodi `balance_uzs` chegarasiga bog'liq emas (chegara o'zgarsa yopilgan qayta ochilmaydi).
+- ✏️ **T6 qaytarish:** hisoblanadigan topshirish qaytarilsa — epizod qaytarish lahzasidan boshlanadi (ogohlantirish abadiy jim qolmaydi). `evidence.last_handover` — oxirgi amal qiluvchi (qaytarilmagan) topshirish, avvalgidek.
+- 🟢 Ism/filial qidiruvi vaqtincha yiqilsa — ochiq ogohlantirishdagi nom, filial (`branch_id` filtri) va sarlavha saqlanadi (`#90` ga almashmaydi).
+- 🟢 `finance_cashbox_daily` da yo'q kun — o'sish tekshiruvida o'tkazib yuboriladi (uzluksiz kunlar talab qilinadi), avvalgidek.
+
 ### 2026-11-17 — Yetkazish tariflari: rejalashtirilgan tarif versiyasini bekor qilish (B0ILd7YI)
 
 Maqsad: «Hududlar → Yetkazish tariflari» (`/delivery-tariffs`)da kelajak sanaga rejalashtirilgan tarif xato kiritilsa, uni kuchga kirishidan oldin bekor qilish (hozir faqat ustidan yangi versiya yozish mumkin edi).

@@ -123,33 +123,88 @@ interface EpisodeRow {
   cashbox_id: string;
   owner: string;
   balance: string;
+  /** Oxirgi (T6 qaytarilmagan) chiqish — dalil va `last_*` faktlar uchun. */
   last_id: string | null;
   last_at: Date | null;
   last_amount: string | null;
-  last_day: string | null;
-  first_at: Date | null;
-  first_day: string | null;
+  /** Oxirgi «hisoblanadigan» topshirish kuni (kun yig'indisi ≥ N% boshlang'ich qoldiq). */
+  qual_id: string | null;
+  qual_at: Date | null;
+  /** Joriy musbat qatorning boshi (oxirgi `balance_after <= 0` dan keyingi qator). */
+  run_id: string | null;
+  run_at: Date | null;
+  /** Hisoblanadigan topshirishdan keyingi T6 qaytarish (P4). */
+  rev_id: string | null;
+  rev_orig_id: string | null;
+  rev_at: Date | null;
 }
 
 interface Episode {
-  /** `ep:h:<oxirgi chiqish history_id>` yoki `ep:d:<boshlangan kun>`. */
+  /**
+   * v0.4: `ep:h:<topshirish id>` | `ep:p:<musbat qator boshi id>` |
+   * `ep:h:<asl id>:r<qaytarish id>` (R2 o'sish — `ep:g:<kun>`, r2() da).
+   */
   key: string;
   /** Epizod boshlangan Toshkent kuni 00:00 (ISO). */
   at: string;
-  /** «N kundan beri» = bugun − hodisa kuni (to'liq kalendar kunlari). */
+  /** «N kundan beri» = bugun − chegara kuni (to'liq kalendar kunlari). */
   days: number;
 }
 
-/** Epizod: oxirgi chiqishdan (bo'lmasa qoldiq paydo bo'lgan kundan) beri. */
-function episodeOf(r: EpisodeRow, today: string): Episode | null {
-  const day = r.last_id ? r.last_day : r.first_day;
-  if (!day) return null;
-  const key = r.last_id ? `ep:h:${r.last_id}` : `ep:d:${day}`;
+/**
+ * Epizod chegarasi (shartnoma v0.4, ega qarori 2026-11-18) — eng kechki:
+ * - hisoblanadigan topshirish (kun yig'indisi ≥ min_pct × kun boshidagi
+ *   qoldiq; R4 — har qanday to'lov) → `ep:h:<o'sha kunning oxirgi chiqishi>`;
+ * - joriy musbat qatorning boshi (qoldiq 0 dan o'tgan) → `ep:p:<id>` (P2;
+ *   chegaraga bog'liq emas — P3);
+ * - hisoblanadigan topshirishdan keyin T6 qaytarilgan topshirish →
+ *   `ep:h:<asl>:r<qaytarish>` (P4).
+ */
+export function episodeOf(r: EpisodeRow, today: string): Episode | null {
+  // Teng vaqtda ustunlik: qaytarish > topshirish > musbat qator boshi
+  // (qaytarish qatori qoldiqni 0 dan o'tkazsa ikkalasi bir lahzada).
+  const options: Array<{ key: string; at: Date }> = [];
+  if (r.rev_id && r.rev_orig_id && r.rev_at)
+    options.push({
+      key: `ep:h:${r.rev_orig_id}:r${r.rev_id}`,
+      at: new Date(r.rev_at),
+    });
+  if (r.qual_id && r.qual_at)
+    options.push({ key: `ep:h:${r.qual_id}`, at: new Date(r.qual_at) });
+  if (r.run_id && r.run_at)
+    options.push({ key: `ep:p:${r.run_id}`, at: new Date(r.run_at) });
+  if (!options.length) return null;
+  const boundary = options.reduce((a, b) => (b.at > a.at ? b : a));
+  const day = tashkentDateKey(boundary.at);
   const days = Math.round(
     (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) /
       86_400_000,
   );
-  return { key, at: new Date(`${day}T00:00:00.000+05:00`).toISOString(), days };
+  return {
+    key: boundary.key,
+    at: new Date(`${day}T00:00:00.000+05:00`).toISOString(),
+    days,
+  };
+}
+
+/**
+ * R2 o'sish epizodi (P1): kechagacha uzluksiz, qat'iy o'sib borayotgan
+ * yopilishlar qatorining birinchi kuni. Kun yetishmasa (snapshot yo'q) —
+ * qator o'sha yerda uziladi (shartnoma v0.4 (b): yo'q kun o'tkaziladi).
+ */
+export function growthRunStart(
+  days: Array<{ date: string; closing: number }>,
+  today: string,
+): string | null {
+  let i = days.length - 1;
+  if (i < 0 || days[i].date !== addDaysKey(today, -1)) return null;
+  while (
+    i > 0 &&
+    days[i - 1].date === addDaysKey(days[i].date, -1) &&
+    days[i].closing > days[i - 1].closing
+  )
+    i -= 1;
+  return days[i].date;
 }
 
 interface CardCheckRow {
@@ -468,6 +523,9 @@ export class AdvisorInputsService {
       });
     }
     await names.fill(out.candidates);
+    // P6 (v0.4): ism qidiruvi yiqilgan — dvigatel saqlangan nom/filial/
+    // sarlavhani yangilamaydi (null bilan almashtirmaydi).
+    if (names.degraded) out.names_degraded = true;
     return out;
   }
 
@@ -981,47 +1039,95 @@ export class AdvisorInputsService {
   // ─── R2/R4/R5 holat qoidalari: epizod (§4.1, §4.2, BE-rev B5) ─────────
 
   /**
-   * Kassa turi bo'yicha joriy holat: qoldiq, oxirgi «chiqish» (topshirish /
-   * to'lov / o'tkazma — `createdAt` bo'yicha, T6 bilan qaytarilgani
-   * hisobga olinmaydi) va bunday chiqish bo'lmasa epizod boshlangan lahza
-   * (qoldiq birinchi marta `episodeFloor` dan oshgan qator).
+   * Kassa turi bo'yicha joriy holat va epizod chegaralari (v0.4):
+   * - `lh` — oxirgi chiqish (T6 qaytarilmagan) — dalil;
+   * - `qh` — oxirgi «hisoblanadigan» topshirish kuni: shu kundagi chiqishlar
+   *   yig'indisi × 100 ≥ `minPct` × kun boshidagi qoldiq (R4 — `minPct` 0);
+   *   kalit — o'sha kunning oxirgi chiqishi;
+   * - `zr`/`rs` — joriy musbat qatorning boshi (oxirgi `balance_after <= 0`
+   *   dan keyingi birinchi qator; bo'lmasa — birinchi qator);
+   * - `rv` — `qh` dan keyin qilingan, o'zi hisoblanadigan bo'lgan va T6
+   *   bilan qaytarilgan topshirish (qaytarish lahzasi — chegara, P4).
    */
   private async episodes(
     type: 'couriers' | 'markets' | 'branch',
     source: 'courier_payment' | 'market_payment' | 'branch_to_main',
     minBalance: number,
-    episodeFloor: number,
+    minPct: number,
   ): Promise<EpisodeRow[]> {
     const t = this.tables();
+    const notReversed = (a: string) => `NOT EXISTS (
+                SELECT 1 FROM ${t.history} rr
+                 WHERE rr."source_type" = 'payment_reversal'
+                   AND rr."reverses_history_id" = ${a}."id" AND rr."is_deleted" = false)`;
+    const balanceBefore = (at: string, id: string) => `(
+                SELECT b."balance_after" FROM ${t.history} b
+                 WHERE b."cashbox_id" = c."id" AND b."is_deleted" = false
+                   AND (b."createdAt", b."id") < (${at}, ${id})
+                 ORDER BY b."createdAt" DESC, b."id" DESC LIMIT 1)`;
     return this.ds.query<EpisodeRow[]>(
       `SELECT c."id"::text AS cashbox_id, c."user_id"::text AS owner, c."balance",
               lh.id AS last_id, lh."createdAt" AS last_at, lh.amount AS last_amount,
-              to_char(lh."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS last_day,
-              fp.first_at,
-              to_char(fp.first_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS first_day
+              qh.last_id AS qual_id, qh.last_at AS qual_at,
+              rs.id AS run_id, rs."createdAt" AS run_at,
+              rv.rid AS rev_id, rv.oid AS rev_orig_id, rv.rat AS rev_at
          FROM ${t.cashboxes} c
          LEFT JOIN LATERAL (
            SELECT h."id"::text AS id, h."createdAt", ABS(h."amount") AS amount
              FROM ${t.history} h
             WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
               AND h."source_type" = $2 AND h."is_deleted" = false
-              AND NOT EXISTS (
-                SELECT 1 FROM ${t.history} r
-                 WHERE r."source_type" = 'payment_reversal'
-                   AND r."reverses_history_id" = h."id" AND r."is_deleted" = false)
+              AND ${notReversed('h')}
             ORDER BY h."createdAt" DESC, h."id" DESC
             LIMIT 1
          ) lh ON true
          LEFT JOIN LATERAL (
-           SELECT MIN(h."createdAt") AS first_at
-             FROM ${t.history} h
-            WHERE lh.id IS NULL AND h."cashbox_id" = c."id"
-              AND h."is_deleted" = false AND h."balance_after" > $4::numeric
-         ) fp ON true
+           SELECT d.last_id, d.last_at FROM (
+             SELECT (h."createdAt" AT TIME ZONE 'Asia/Tashkent')::date AS day,
+                    SUM(ABS(h."amount")) AS total, MAX(h."createdAt") AS last_at,
+                    (array_agg(h."id"::text ORDER BY h."createdAt" DESC, h."id" DESC))[1] AS last_id
+               FROM ${t.history} h
+              WHERE h."cashbox_id" = c."id" AND h."operation_type" = 'expense'
+                AND h."source_type" = $2 AND h."is_deleted" = false
+                AND ${notReversed('h')}
+              GROUP BY 1
+           ) d
+           LEFT JOIN LATERAL (
+             SELECT b."balance_after" AS start_balance FROM ${t.history} b
+              WHERE b."cashbox_id" = c."id" AND b."is_deleted" = false
+                AND b."createdAt" < (d.day::timestamp AT TIME ZONE 'Asia/Tashkent')
+              ORDER BY b."createdAt" DESC, b."id" DESC LIMIT 1
+           ) sb ON true
+           WHERE d.total * 100 >= $4::numeric * GREATEST(COALESCE(sb.start_balance, 0), 0)
+           ORDER BY d.day DESC LIMIT 1
+         ) qh ON true
+         LEFT JOIN LATERAL (
+           SELECT z."createdAt", z."id" FROM ${t.history} z
+            WHERE z."cashbox_id" = c."id" AND z."is_deleted" = false AND z."balance_after" <= 0
+            ORDER BY z."createdAt" DESC, z."id" DESC LIMIT 1
+         ) zr ON true
+         LEFT JOIN LATERAL (
+           SELECT s."id"::text AS id, s."createdAt" FROM ${t.history} s
+            WHERE s."cashbox_id" = c."id" AND s."is_deleted" = false
+              AND (zr."id" IS NULL OR (s."createdAt", s."id") > (zr."createdAt", zr."id"))
+            ORDER BY s."createdAt" ASC, s."id" ASC LIMIT 1
+         ) rs ON true
+         LEFT JOIN LATERAL (
+           SELECT r."id"::text AS rid, o."id"::text AS oid, r."createdAt" AS rat
+             FROM ${t.history} o
+             JOIN ${t.history} r ON r."reverses_history_id" = o."id"
+              AND r."source_type" = 'payment_reversal' AND r."is_deleted" = false
+            WHERE o."cashbox_id" = c."id" AND o."operation_type" = 'expense'
+              AND o."source_type" = $2 AND o."is_deleted" = false
+              AND (qh.last_at IS NULL OR o."createdAt" > qh.last_at)
+              AND ABS(o."amount") * 100 >= $4::numeric
+                  * GREATEST(COALESCE(${balanceBefore('o."createdAt"', 'o."id"')}, 0), 0)
+            ORDER BY r."createdAt" DESC, r."id" DESC LIMIT 1
+         ) rv ON true
         WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
           AND c."balance" > $3::numeric
         ORDER BY c."id"`,
-      [type, source, minBalance, episodeFloor],
+      [type, source, minBalance, minPct],
     );
   }
 
@@ -1114,7 +1220,8 @@ export class AdvisorInputsService {
     const balanceUzs = positive(t.balance_uzs, 2_000_000);
     const growthDays = Math.floor(positive(t.growth_days, 3));
     const noHandover = Math.floor(positive(t.no_handover_days, 3));
-    const rows = await this.episodes('couriers', 'courier_payment', 0, 0);
+    const minPct = clampPct(t.min_handover_pct, 80);
+    const rows = await this.episodes('couriers', 'courier_payment', 0, minPct);
     if (!rows.length) return [];
     const ids = rows.map((r) => r.cashbox_id);
     const window = Math.max(growthDays + 1, ADVISOR_EVIDENCE_LIMIT);
@@ -1156,6 +1263,16 @@ export class AdvisorInputsService {
       if (growth && !stale && ep.days <= 0) continue;
       const trigger =
         growth && stale ? 'both' : growth ? 'growth' : 'no_handover';
+      // P1 (v0.4): faqat o'sish — epizod o'sish qatorining boshi; qisman
+      // topshirishlar (har kuni yangi `ep:h`) occurrence ko'paytirmaydi.
+      const runStart =
+        trigger === 'growth' ? growthRunStart(days, today) : null;
+      const fact = runStart
+        ? {
+            fact_key: `ep:g:${runStart}`,
+            fact_at: new Date(`${runStart}T00:00:00.000+05:00`).toISOString(),
+          }
+        : { fact_key: ep.key, fact_at: ep.at };
       names.wantUser(r.owner);
       names.wantUserBranch(r.owner);
       const out = outflows.get(r.cashbox_id) ?? new Map<string, number>();
@@ -1163,7 +1280,7 @@ export class AdvisorInputsService {
       candidates.push({
         rule_key: 'R2',
         dedup_key: `R2:courier:${r.owner}`,
-        fact_keys: [{ fact_key: ep.key, fact_at: ep.at }],
+        fact_keys: [fact],
         branch: null,
         subject: { kind: 'courier', id: r.owner, name: null },
         headline_amount: balance,
@@ -1194,6 +1311,8 @@ export class AdvisorInputsService {
                 history_id: r.last_id,
               }
             : null,
+          // v0.4: «topshirilmagan kunlar» faqat ≥ min_handover_pct topshirishda nolga tushadi.
+          min_handover_pct: minPct,
         },
       });
     }
@@ -1207,6 +1326,7 @@ export class AdvisorInputsService {
     names: NameCache,
   ): Promise<AiAdvisorCandidate[]> {
     const limitDays = Math.floor(positive(t.days_without_payout, 7));
+    // R4 o'zgarmaydi (ega, 2026-11-18): har qanday to'lov — minPct 0.
     const rows = await this.episodes('markets', 'market_payment', 0, 0);
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
@@ -1267,11 +1387,13 @@ export class AdvisorInputsService {
   ): Promise<AiAdvisorCandidate[]> {
     const balanceUzs = positive(t.balance_uzs, 5_000_000);
     const limitDays = Math.floor(positive(t.days_without_transfer, 3));
+    const minPct = clampPct(t.min_transfer_pct, 80);
+    // P3: epizod boshi chegaraga (balance_uzs) bog'liq emas — musbat qator.
     const rows = await this.episodes(
       'branch',
       'branch_to_main',
       balanceUzs,
-      balanceUzs,
+      minPct,
     );
     const hits = rows
       .map((r) => ({ r, ep: episodeOf(r, today) }))
@@ -1329,6 +1451,8 @@ export class AdvisorInputsService {
         },
         evidence: {
           kind: 'branch_transfers',
+          // v0.4: «o'tkazmasiz kunlar» faqat ≥ min_transfer_pct o'tkazmada nolga tushadi.
+          min_transfer_pct: minPct,
           total_rows: (closings.get(r.cashbox_id) ?? []).length,
           truncated: false,
           days: (closings.get(r.cashbox_id) ?? []).map((d) => ({
@@ -1862,7 +1986,10 @@ export class AdvisorInputsService {
   }
 
   /** `identity.user.find_by_ids` — fail-open. */
-  async userNames(ids: string[]): Promise<Map<string, string>> {
+  async userNames(
+    ids: string[],
+    onFail?: () => void,
+  ): Promise<Map<string, string>> {
     const unique = [...new Set(ids.filter(isId))];
     const out = new Map<string, string>();
     if (!unique.length) return out;
@@ -1883,6 +2010,7 @@ export class AdvisorInputsService {
         if (id && name) out.set(id, name.slice(0, 120));
       }
     } catch (error) {
+      onFail?.();
       this.logger.warn(`advisor: ismlar olinmadi — ${short(error)}`);
     }
     return out;
@@ -1892,12 +2020,19 @@ export class AdvisorInputsService {
    * Foydalanuvchi → filial (`branch.user.find_by_user_ids`) — fail-open.
    * branch-service bir so'rovda ≤ 500 id qabul qiladi — bo'laklarda (round-2).
    */
-  async userBranches(ids: string[]): Promise<Map<string, AiAdvisorRef>> {
+  async userBranches(
+    ids: string[],
+    onFail?: () => void,
+  ): Promise<Map<string, AiAdvisorRef>> {
     const out = new Map<string, AiAdvisorRef>();
     const unique = [...new Set(ids.filter(isId))];
     if (!this.branchClient || !unique.length) return out;
     for (let i = 0; i < unique.length; i += USER_BRANCH_CHUNK) {
-      await this.userBranchChunk(unique.slice(i, i + USER_BRANCH_CHUNK), out);
+      await this.userBranchChunk(
+        unique.slice(i, i + USER_BRANCH_CHUNK),
+        out,
+        onFail,
+      );
     }
     return out;
   }
@@ -1905,6 +2040,7 @@ export class AdvisorInputsService {
   private async userBranchChunk(
     unique: string[],
     out: Map<string, AiAdvisorRef>,
+    onFail?: () => void,
   ): Promise<void> {
     if (!this.branchClient) return;
     try {
@@ -1937,6 +2073,7 @@ export class AdvisorInputsService {
         out.set(userId, { id: branchId, name });
       }
     } catch (error) {
+      onFail?.();
       this.logger.warn(`advisor: kuryer filiallari olinmadi — ${short(error)}`);
     }
   }
@@ -1945,7 +2082,10 @@ export class AdvisorInputsService {
    * Filial nomlari (`branch.find_by_id`) — fail-open, parallel (≤ 5 bir
    * vaqtda): osilgan branch-service tick'ni 30 s dan oshirmasin (round-2).
    */
-  async branchNames(ids: string[]): Promise<Map<string, string>> {
+  async branchNames(
+    ids: string[],
+    onFail?: () => void,
+  ): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     if (!this.branchClient) return out;
     const client = this.branchClient;
@@ -1963,6 +2103,7 @@ export class AdvisorInputsService {
           if (typeof name === 'string' && name.trim())
             out.set(id, name.trim().slice(0, 120));
         } catch (error) {
+          onFail?.();
           this.logger.warn(
             `advisor: filial nomi olinmadi (${id}) — ${short(error)}`,
           );
@@ -2007,11 +2148,17 @@ class NameCache {
     else if (cb.type !== 'main') this.users.add(cb.owner_id);
   }
 
+  /** Ism/filial qidiruvi yiqildimi (P6 `names_degraded`). */
+  degraded = false;
+
   async fill(candidates: AiAdvisorCandidate[]): Promise<void> {
+    const fail = () => {
+      this.degraded = true;
+    };
     const [users, branches, userBranch] = await Promise.all([
-      this.svc.userNames([...this.users]),
-      this.svc.branchNames([...this.branches]),
-      this.svc.userBranches([...this.userBranches]),
+      this.svc.userNames([...this.users], fail),
+      this.svc.branchNames([...this.branches], fail),
+      this.svc.userBranches([...this.userBranches], fail),
     ]);
     const branchRef = (ref: unknown) => {
       const r = ref as AiAdvisorRef | null;
@@ -2124,6 +2271,12 @@ function parseSince(value: string | undefined, now: Date): Date {
   if (d && !Number.isNaN(d.getTime()) && d <= now) return d < floor ? floor : d;
   // Kursor yo'q / noto'g'ri — §4.3 qisqa orqa oyna (7 kun).
   return new Date(now.getTime() - 7 * 24 * 3600_000);
+}
+
+/** Foiz chegarasi 1–100 (sozlama limiti bilan bir xil); noto'g'ri — sukut. */
+function clampPct(v: unknown, fallback: number): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : NaN;
+  return n >= 1 && n <= 100 ? n : fallback;
 }
 
 function positive(v: unknown, fallback: number): number {

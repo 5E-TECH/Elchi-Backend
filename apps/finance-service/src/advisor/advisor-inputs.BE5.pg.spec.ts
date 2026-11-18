@@ -461,7 +461,8 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         0,
         '2026-10-17T10:00:00Z',
       );
-      // 18.10 dagi topshirish T6 bilan qaytarilgan — oxirgi topshirish h1 bo'lib qoladi.
+      // 18.10 dagi topshirish T6 bilan qaytarilgan — dalildagi oxirgi topshirish
+      // h1; v0.4 P4: epizod chegarasi — qaytarish lahzasi (`ep:h:<h2>:r<rev>`).
       const h2 = await hist(
         cb,
         'expense',
@@ -470,7 +471,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         0,
         '2026-10-18T10:00:00Z',
       );
-      await hist(
+      const rev = await hist(
         cb,
         'income',
         'payment_reversal',
@@ -492,7 +493,10 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       expect(out.candidates[0]).toMatchObject({
         dedup_key: 'R2:courier:55',
         fact_keys: [
-          { fact_key: `ep:h:${h1}`, fact_at: '2026-10-16T19:00:00.000Z' },
+          {
+            fact_key: `ep:h:${h2}:r${rev}`,
+            fact_at: '2026-10-17T19:00:00.000Z',
+          },
         ],
         branch: { id: '1', name: 'Toshkent HQ' },
         subject: { kind: 'courier', id: '55', name: 'User 55' },
@@ -500,7 +504,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         facts: {
           trigger: 'no_handover',
           balance: 2840000,
-          days_without_handover: 5,
+          days_without_handover: 4,
           growth_days: 0,
         },
         evidence: {
@@ -539,7 +543,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
 
     it('round-2 #652 B1: o‘sish + BUGUN topshirish — yangi epizod ochilmaydi (ayni holat)', async () => {
       const cb = await cashbox('couriers', 58, 3500000);
-      const h20 = await hist(
+      await hist(
         cb,
         'expense',
         'courier_payment',
@@ -557,7 +561,8 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       }
       const before = await run(['R2']);
       expect(before.candidates[0]).toMatchObject({
-        fact_keys: [{ fact_key: `ep:h:${h20}` }],
+        // v0.4 P1: faqat o'sish — o'sish qatori boshi (qisman topshirish kalitni o'zgartirmaydi).
+        fact_keys: [{ fact_key: 'ep:g:2026-10-18' }],
         facts: { trigger: 'growth' },
       });
       // 22.10 08:30Z: 1,2 mln topshirildi (qoldiq 2,3 mln) — bugungi epizod.
@@ -607,7 +612,14 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         '2026-10-13T10:00:00Z',
       );
       const m2 = await cashbox('markets', 71, 50000);
-      await hist(m2, 'income', 'sell', 50000, 50000, '2026-10-10T10:00:00Z');
+      const m2first = await hist(
+        m2,
+        'income',
+        'sell',
+        50000,
+        50000,
+        '2026-10-10T10:00:00Z',
+      );
       const m3 = await cashbox('markets', 72, 0); // qarz yo'q
       await hist(m3, 'income', 'sell', 50000, 50000, '2026-10-01T10:00:00Z');
       const out = await run(['R4']);
@@ -619,12 +631,275 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         ]),
       ).toEqual([
         ['R4:market:70', expect.stringMatching(/^ep:h:\d+$/), 9],
-        ['R4:market:71', 'ep:d:2026-10-10', 12],
+        // v0.4 P2: to'lov hech bo'lmasa — musbat qator boshi (`ep:p:<id>`).
+        ['R4:market:71', `ep:p:${m2first}`, 12],
       ]);
       expect(out.candidates[0].facts).toMatchObject({
         debt: 3120000,
         last_payout_amount: 800000,
         market: { id: '70', name: 'User 70' },
+      });
+    });
+
+    describe('v0.4 epizod kalitlari (ega qarori 2026-11-18)', () => {
+      const runWith = (
+        rules: Array<'R2' | 'R4' | 'R5'>,
+        thresholds: Record<string, Record<string, number>>,
+        now = NOW.toISOString(),
+      ) => svc.ruleInputs({ rules, now, thresholds, since: {} });
+      const R2T = {
+        balance_uzs: 2000000,
+        growth_days: 3,
+        no_handover_days: 3,
+        min_handover_pct: 80,
+      };
+
+      it('R2: < 80% topshirish kunlarni nolga tushirmaydi; kun yig‘indisi ≥ 80% — tushiradi', async () => {
+        const cb = await cashbox('couriers', 81, 900000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          1000000,
+          1000000,
+          '2026-10-15T08:00:00Z',
+        );
+        // 18.10: 300 000 (kun boshida 1 mln → 30%) — hisoblanmaydi.
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -300000,
+          700000,
+          '2026-10-18T10:00:00Z',
+        );
+        const partial = await runWith(['R2'], { R2: R2T });
+        expect(partial.candidates[0].fact_keys[0].fact_key).toMatch(
+          /^ep:p:\d+$/,
+        );
+        expect(partial.candidates[0]).toMatchObject({
+          facts: { days_without_handover: 7, trigger: 'no_handover' },
+          evidence: { min_handover_pct: 80 },
+        });
+        // 19.10: ikki topshirish 300k + 300k = 600k ≥ 80% × 700k → hisoblanadi.
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -300000,
+          400000,
+          '2026-10-19T08:00:00Z',
+        );
+        const h = await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -300000,
+          100000,
+          '2026-10-19T12:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          800000,
+          900000,
+          '2026-10-19T14:00:00Z',
+        );
+        // 19.10 → 22.10 = 3 kun (> 3 emas) — ogohlantirish yo'q; 23.10 da — `ep:h:<h>`.
+        expect((await runWith(['R2'], { R2: R2T })).candidates).toEqual([]);
+        const next = await runWith(
+          ['R2'],
+          { R2: R2T },
+          '2026-10-23T09:00:00.000Z',
+        );
+        expect(next.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: `ep:h:${h}` }],
+          facts: { days_without_handover: 4 },
+        });
+        // Sozlama 100% — o'sha kun ham hisoblanmaydi (600k < 700k).
+        const strict = await runWith(['R2'], {
+          R2: { ...R2T, min_handover_pct: 100 },
+        });
+        expect(strict.candidates[0].facts).toMatchObject({
+          days_without_handover: 7,
+        });
+      });
+
+      it('P1: o‘sish paytida har kuni qisman topshirish — kalit o‘zgarmaydi (ep:g)', async () => {
+        const cb = await cashbox('couriers', 82, 3500000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          3000000,
+          3000000,
+          '2026-10-17T08:00:00Z',
+        );
+        for (const [d, v] of [
+          ['2026-10-17', 3000000],
+          ['2026-10-18', 3100000],
+          ['2026-10-19', 3200000],
+          ['2026-10-20', 3300000],
+          ['2026-10-21', 3400000],
+        ] as const) {
+          await daily(cb, 82, d, v);
+        }
+        // Har kuni kichik topshirish (< 80%).
+        for (const d of ['18', '19', '20', '21'])
+          await hist(
+            cb,
+            'expense',
+            'courier_payment',
+            -50000,
+            1,
+            `2026-10-${d}T12:00:00Z`,
+          );
+        const a = await runWith(['R2'], { R2: R2T });
+        expect(a.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: 'ep:g:2026-10-17' }],
+          facts: { trigger: 'growth' },
+        });
+        await daily(cb, 82, '2026-10-22', 3500000);
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -50000,
+          1,
+          '2026-10-22T12:00:00Z',
+        );
+        const b = await runWith(
+          ['R2'],
+          { R2: R2T },
+          '2026-10-23T09:00:00.000Z',
+        );
+        expect(b.candidates[0].fact_keys[0].fact_key).toBe('ep:g:2026-10-17');
+      });
+
+      it('P2: hammasini topshirgan kuryer bugun pul olsa — darhol «N kundan beri» emas', async () => {
+        const cb = await cashbox('couriers', 83, 150000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          500000,
+          500000,
+          '2026-10-05T08:00:00Z',
+        );
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -500000,
+          0,
+          '2026-10-10T10:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          150000,
+          150000,
+          '2026-10-22T07:00:00Z',
+        );
+        expect((await runWith(['R2'], { R2: R2T })).candidates).toEqual([]);
+        // 4 kundan keyin — yana topshirilmagan: musbat qator boshidan sanaladi.
+        const later = await runWith(
+          ['R2'],
+          { R2: R2T },
+          '2026-10-26T09:00:00.000Z',
+        );
+        expect(later.candidates[0].fact_keys[0].fact_key).toMatch(/^ep:p:\d+$/);
+        expect(later.candidates[0]).toMatchObject({
+          facts: { days_without_handover: 4 },
+        });
+      });
+
+      it('P3: R5 kaliti balance_uzs ga bog‘liq emas', async () => {
+        const b = await cashbox('branch', 13, 7000000);
+        await hist(
+          b,
+          'income',
+          'sell',
+          4000000,
+          4000000,
+          '2026-10-01T08:00:00Z',
+        );
+        await hist(
+          b,
+          'income',
+          'sell',
+          3000000,
+          7000000,
+          '2026-10-05T08:00:00Z',
+        );
+        const at5 = await runWith(['R5'], {
+          R5: {
+            balance_uzs: 5000000,
+            days_without_transfer: 3,
+            min_transfer_pct: 80,
+          },
+        });
+        const at6 = await runWith(['R5'], {
+          R5: {
+            balance_uzs: 6000000,
+            days_without_transfer: 3,
+            min_transfer_pct: 80,
+          },
+        });
+        expect(at5.candidates[0].fact_keys[0].fact_key).toMatch(/^ep:p:\d+$/);
+        expect(at6.candidates[0].fact_keys[0].fact_key).toBe(
+          at5.candidates[0].fact_keys[0].fact_key,
+        );
+        expect(at5.candidates[0].evidence).toMatchObject({
+          min_transfer_pct: 80,
+        });
+      });
+
+      it('P6: identity yiqilsa — names_degraded, nomlar null', async () => {
+        const cb = await cashbox('couriers', 85, 900000);
+        await hist(
+          cb,
+          'income',
+          'sell',
+          900000,
+          900000,
+          '2026-10-10T08:00:00Z',
+        );
+        identitySend.mockImplementationOnce(() => {
+          throw new Error('identity down');
+        });
+        const out = await runWith(['R2'], { R2: R2T });
+        expect(out.names_degraded).toBe(true);
+        expect(out.candidates[0].subject.name).toBeNull();
+        const ok = await runWith(['R2'], { R2: R2T });
+        expect(ok.names_degraded).toBeUndefined();
+      });
+
+      it('R4 o‘zgarmaydi: har qanday to‘lov kunlarni nolga tushiradi', async () => {
+        const m = await cashbox('markets', 84, 3000000);
+        await hist(
+          m,
+          'income',
+          'sell',
+          3000000,
+          3000000,
+          '2026-10-01T08:00:00Z',
+        );
+        const p = await hist(
+          m,
+          'expense',
+          'market_payment',
+          -1000,
+          2999000,
+          '2026-10-12T08:00:00Z',
+        );
+        const out = await runWith(['R4'], { R4: { days_without_payout: 7 } });
+        expect(out.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: `ep:h:${p}` }],
+          facts: { days_without_payout: 10 },
+        });
       });
     });
 
