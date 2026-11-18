@@ -699,8 +699,20 @@ describePg('AdvisorEngineService — real Postgres (BE-5)', () => {
     ).toMatchObject({ opened: 0, refreshed: 0 });
     expect(await alerts()).toHaveLength(1);
 
-    // Topshirishdan keyin yana shart rost — yangi epizod, yangi ogohlantirish.
-    reply = { candidates: [r2('ep:h:950', 2500000, 4)], cursors: {} };
+    // #702 B4: kalit o'zgargan, lekin epizod yopilgan ogohlantirishning oxirgi
+    // aniqlanishidan OLDIN boshlangan (v0.3 → v0.4) — o'sha holat, yangi qator yo'q.
+    reply = { candidates: [r2('ep:p:880', 2500000, 9)], cursors: {} };
+    expect(
+      await engine.run('frequent', new Date('2026-10-25T09:00:00Z')),
+    ).toMatchObject({ opened: 0 });
+    expect(await alerts()).toHaveLength(1);
+
+    // Topshirishdan keyin (26.10) yana shart rost — yangi epizod, yangi ogohlantirish.
+    const fresh = r2('ep:h:950', 2500000, 4);
+    fresh.fact_keys = [
+      { fact_key: 'ep:h:950', fact_at: '2026-10-26T08:00:00.000Z' },
+    ];
+    reply = { candidates: [fresh], cursors: {} };
     expect(
       await engine.run('frequent', new Date('2026-10-30T09:00:00Z')),
     ).toMatchObject({ opened: 1 });

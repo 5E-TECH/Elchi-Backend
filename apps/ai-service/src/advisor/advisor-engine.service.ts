@@ -408,12 +408,28 @@ export class AdvisorEngineService {
       // Ochiq yo'q: faqat YANGI fakt yangi ogohlantirish ochadi.
       if (!fresh.length) return { outcome: 'noop', alertId: null };
       const rule = rules[c.rule_key];
-      const previous = await m.query<Array<{ id: string }>>(
-        `SELECT "id"::text AS id FROM ${ALERTS}
+      const previous = await m.query<
+        Array<{ id: string; last_fact_at: Date | null }>
+      >(
+        `SELECT "id"::text AS id, "last_fact_at" FROM ${ALERTS}
           WHERE "dedup_key" = $1 AND "status" IN ('resolved','dismissed') AND "is_deleted" = false
           ORDER BY "id" DESC LIMIT 1`,
         [c.dedup_key],
       );
+      // R2/R4/R5 (#702 review B4): yangi kalitli epizod yopilgan ogohlantirish
+      // oxirgi aniqlangan kunidan OLDIN boshlangan bo'lsa — bu o'sha davom
+      // etayotgan holat (kalit formati o'zgargan: v0.3 → v0.4 yangilanishi,
+      // growth → both), yangi ogohlantirish ochilmaydi (Q23).
+      const prevLast = previous[0]?.last_fact_at
+        ? new Date(previous[0].last_fact_at)
+        : null;
+      if (
+        ADVISOR_STATE_RULES.has(c.rule_key) &&
+        prevLast &&
+        tashkentDay(maxFactAt(fresh)) < tashkentDay(prevLast)
+      ) {
+        return { outcome: 'noop', alertId: null };
+      }
       const present = this.presentation(c);
       const firstFactAt = c.first_fact_at ? new Date(c.first_fact_at) : null;
       const backfill =
