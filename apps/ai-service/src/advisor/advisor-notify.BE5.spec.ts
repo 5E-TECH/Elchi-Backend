@@ -3,6 +3,7 @@ import { of, throwError } from 'rxjs';
 import {
   advisorNotifyBody,
   buildAdvisorDispatch,
+  r6TelegramDueAt,
   type AdvisorNotifyRow,
 } from './advisor-notify';
 import { AdvisorRealtime, ADVISOR_REALTIME_EVENT } from './advisor-realtime';
@@ -197,6 +198,25 @@ describe('buildAdvisorDispatch (BE-5 §9.3)', () => {
     expect(advisorNotifyBody(rule, facts as Record<string, unknown>)).toBe(
       expected,
     );
+  });
+});
+
+describe('r6TelegramDueAt — tun 22:00–09:00 (#705 S4)', () => {
+  // Toshkent = UTC+5.
+  const at = (iso: string) => new Date(iso);
+  it('09:00 gacha — o‘sha kuni 09:00; 09:00–22:00 — darhol; 22:00 dan keyin — ertasi kuni 09:00', () => {
+    expect(
+      r6TelegramDueAt('R6', at('2026-11-17T21:30:00Z'))?.toISOString(),
+    ).toBe('2026-11-18T04:00:00.000Z'); // 18.11 02:30
+    expect(r6TelegramDueAt('R6', at('2026-11-18T04:00:00Z'))).toBeNull(); // 09:00
+    expect(r6TelegramDueAt('R6', at('2026-11-18T16:45:00Z'))).toBeNull(); // 21:45
+    expect(
+      r6TelegramDueAt('R6', at('2026-11-18T17:00:00Z'))?.toISOString(),
+    ).toBe('2026-11-19T04:00:00.000Z'); // 22:00
+    expect(
+      r6TelegramDueAt('R6', at('2026-11-18T18:30:00Z'))?.toISOString(),
+    ).toBe('2026-11-19T04:00:00.000Z'); // 23:30
+    expect(r6TelegramDueAt('R2', at('2026-11-18T18:30:00Z'))).toBeNull();
   });
 });
 

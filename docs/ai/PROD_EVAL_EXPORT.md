@@ -123,16 +123,23 @@ Matnda nima maskalanadi (shu tartibda) — faqat shu ro'yxat, boshqasi yo'q:
 - pasport seriyasi (2 harf + 7 raqam; "AA1234567", "AA 1234567",
   "AA-1234567", "AA №1234567", "AA № 1234567") → `[HUJJAT]`. Harflar
   umumiy 2 harfli so'z yoki uy kalit so'zi bo'lsa (ta, va, uy, kv, da,
-  ga, ni, bu, to, та, ва, уй, кв) seriya hisoblanmaydi: bo'shliqsiz
-  yoki bitta bo'shliq bilan 7 raqam bo'lsa so'z qoladi, raqam
-  `[RAQAM]` ("va 2345678" → "va [RAQAM]", "uy2345678" →
-  "uy[RAQAM]"); tire/№ bilan — ochiq qoladi ("1 ta - 1500000",
+  ga, ni, bu, to, та, ва, уй, кв, шт, по) seriya hisoblanmaydi:
+  bo'shliqsiz yoki bitta bo'shliq bilan 7 raqam bo'lsa so'z qoladi,
+  raqam `[RAQAM]` ("va 2345678" → "va [RAQAM]", "uy2345678" →
+  "uy[RAQAM]"); ta/та/шт/по + 7 raqam esa narx sifatida ochiq qoladi
+  ("1 ta 1500000"); tire/№ bilan — ochiq qoladi ("1 ta - 1500000",
   "uy-1234567"; ular 7 raqam — pastdagi ro'yxatga qarang). Pasport
   ajratgichi uy kalit so'zini yutmaydi ("151-уй - 6356734" →
   "[N]-уй - 6356734");
 - 9+ raqam (bo'shliq, tire `-–—`, nuqta, slash, `_`, qavs bilan ham) →
   `[RAQAM]` (JShShIR, karta raqami ham). ⚠️ 100 mln so'mdan katta narx
   ham `[RAQAM]` bo'ladi;
+- havola dumidagi raqam (post raqami, koordinata) FAQAT keyingi matn
+  bilan UZ telefonini boshlasa ajratiladi: "t.me/kanal/1543 150 000" →
+  "[LINK] 150 000", "https://maps.google.com/?q=41.31,69.24 85 000" →
+  "[LINK] 85 000";
+  havola xostiga yopishgan telefon ham butunligicha `[RAQAM]`
+  ("93_918 34 78_www.google.com/maps" → "[RAQAM]_[LINK]");
 - uy/xonadon raqami → `[N]` — FAQAT kalit so'z (uy, xonadon, kvartira,
   kv, kv-ra, dom, д./d., уй, хонадон, квартира/квартире/квартиру/
   квартиры, кв, кв-ра, дом/доме/дома/дому) yonida:
@@ -147,7 +154,12 @@ Matnda nima maskalanadi (shu tartibda) — faqat shu ro'yxat, boshqasi yo'q:
     "uyigacha 20 000 so'm", "Narxi 1 586 000 uyiga" (narx — raqamdan
     keyin bo'shliq/nuqta + "000" kelsa yoki kalit so'z oldidagi "000"
     narxning oxirgi guruhi bo'lsa; "kv 45 250 000", "dom 7 123" dagi
-    45/7 esa `[N]`); "19-kvartal", "4-мавзе" (mavze).
+    45/7 esa `[N]`); egalik/kelishikli shakl ("uyiga", "uyigacha",
+    "kvartirasi", "квартире", "до дома") dan keyin esa bo'shliq/nuqta +
+    HAR QANDAY 3 raqam narx deb qoladi ("uyigacha 19 900"), lekin faqat
+    shu qatorda; miqdor so'zi ("x2", "ta", "ming") ham faqat shu qatorda
+    hisoblanadi ("kv 18" + yangi qator + "x2 sumka" → "kv [N]");
+    "19-kvartal", "4-мавзе" (mavze).
 
 Tuzatishlardan izoh, operator va telefon maskasi tashlanadi.
 
@@ -197,6 +209,40 @@ Ortiqcha maskalash ham bo'ladi (maxfiylik uchun xavfsiz, lekin matn
 o'zgaradi): murojaatsiz o'zak umumiy so'z bo'lsa ("Gulxon" → "gul"
 so'zi ham `[ISM]`), ismga teng umumiy so'z, 100 mln dan katta narx,
 rus "дома" oldidagi son ("2 дома", "12 дома" → "[N] дома").
+
+⚠️ **Ma'lum qoldiqlar (#701 review round 8)** — eval aniqligi va
+maxfiylik orasidagi murosa, keyingi PR'larda o'lchanadi:
+
+- **Havola + shu qatordagi narx:** havola raqam bilan tugasa (post id,
+  `?start=`, vk/instagram id, `t.me/c/…` id) va u narx bilan birga UZ
+  telefoniga o'xshasa, narx `[RAQAM]` bo'ladi ("t.me/dokon_uz/9015
+  45 000 so'm" → "[LINK]/[RAQAM] so'm", "vk.com/id557217 36 900 som").
+  Aralash havola+narx kirishlarning ~0,4% i; raqam bilan tugaydigan
+  havoladan keyin narx kelganda 3,4–3,8% (avval ~40%). Narx keyingi
+  qatorda bo'lsa yo'qolmaydi.
+- **Raqam bilan tugaydigan kanal nomi** ("t.me/xegm994/61 25 000"):
+  qaytariladigan dum kanal raqamlaridan boshlanishi mumkin — maxfiylik
+  foydasiga shunday qoldirilgan.
+- **7 raqamli sonlar** (shahar telefoni) ochiq qoladi; ta/шт/по + 7 raqam
+  narx sifatida ochiq.
+- **Ikki marta yopishgan shakllar** ("#42 uy.yandex.uz/…", "199a
+  uyNarxi") — maskalanmaydi.
+- **Egalik/kelishikli uy kalit so'zi** ("uyiga", "uyigacha", "uyi",
+  "xonadoni", "kvartirasi", "квартире", "в доме", "до дома") dan keyin
+  bo'shliq/nuqta + istalgan 3 raqam kelsa — narx deb ochiq qoladi
+  ("uyigacha 19 900"). ⚠️ **#711 keltirgan murosa:** "uyi 61 500" kabi
+  uy raqami ham ochiq qoladi — istisno egalik/kelishikli shakldan keyingi
+  bo'shliq/nuqta + istalgan 3 raqamni (`NOT_QTY_WIDE`) qamraydi. Istisno
+  yangi qatorni kesib o'tmaydi: "uyi 61" + keyingi qatordagi "120 000" →
+  "uyi [N]". Oddiy kalit so'zdan keyin ("uy 12 000" — uy raqamidan keyin
+  darhol "000") avvalgidek narx.
+- **Havolaga yopishgan telefondan keyingi narx** ham `[RAQAM]` ga
+  qo'shilib ketadi ("wa.me/AbC12390 742 90 47 150 000" — telefon va
+  narx birga `[RAQAM]`).
+- **Google Maps `!4d<uzunlik>` dumi** faqat uzunlik 3 kasr xonali va
+  keyin "dd dd" kelsa telefon boshi deb olinadi: "…!4d66.164  25 50" →
+  "[LINK][RAQAM]" (30k korpusda 5 ta); odatiy "…!4d69.240562 45 000" →
+  "[LINK] 45 000".
 
 📝 **Belgilovchi uchun:** mahsulot/tovar o'rnidagi `[ISM]` mahsulot
 so'zi bo'lishi mumkin — ism o'zagi mahsulot nomiga teng: "Asaljon" →

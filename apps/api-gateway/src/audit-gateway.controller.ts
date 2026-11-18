@@ -6,6 +6,7 @@ import {
   Optional,
   Param,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -38,6 +39,26 @@ import {
 import { ActivityLogQueryDto } from './dto/activity-log.swagger.dto';
 
 type Row = Record<string, any>;
+
+interface AuditRequest {
+  user?: { roles?: unknown[] };
+}
+
+/**
+ * (BE-5 B2/S5, ega qarori 2026-11-18) `ai` oyog'i (`ai.cap.raise`,
+ * `ai.advisor.*`) — FAQAT superadmin: maslahatchi va AI bilim bazasi
+ * superadmin uchun. ADMIN so'roviga bu oyoq umuman yuborilmaydi.
+ * So'rov konteksti bo'lmasa (ichki chaqiruv) — ham yuborilmaydi.
+ */
+const SUPERADMIN_ONLY_LEGS = new Set(['ai']);
+function isSuperadmin(req: AuditRequest | undefined): boolean {
+  const roles = Array.isArray(req?.user?.roles) ? req.user.roles : [];
+  return roles.some(
+    (r) =>
+      typeof r === 'string' &&
+      r.trim().toLowerCase() === String(RoleEnum.SUPERADMIN),
+  );
+}
 
 interface ServiceLeg {
   name: string;
@@ -153,7 +174,7 @@ export class AuditGatewayController {
   @ApiOperation({
     summary: 'Audit-log feed (merged across services, enriched)',
   })
-  async list(@Query() q: ActivityLogQueryDto) {
+  async list(@Query() q: ActivityLogQueryDto, @Req() req?: AuditRequest) {
     const page = q.page && q.page > 0 ? Math.floor(q.page) : 1;
     const limit =
       q.limit && q.limit > 0 ? Math.min(Math.floor(q.limit), 100) : 20;
@@ -173,8 +194,10 @@ export class AuditGatewayController {
       ...(q.archive === true ? { archive: true } : {}),
     };
 
+    const allowed = this.visibleTo(req);
     const legs: RankedLeg[] = this.services
       .map((s, rank) => ({ ...s, rank }))
+      .filter((s) => allowed(s))
       .filter((s) => !q.service || s.name === q.service);
     const names = this.services.map((s) => s.name);
 
@@ -401,10 +424,11 @@ export class AuditGatewayController {
     @Param('entity_type') entityType: string,
     @Param('entity_id') entityId: string,
     @Query('limit') limitRaw?: string,
+    @Req() req?: AuditRequest,
   ) {
     const limit = Number(limitRaw) > 0 ? Math.min(Number(limitRaw), 500) : 200;
     const responses = await Promise.all(
-      this.services.map((leg) =>
+      this.services.filter(this.visibleTo(req)).map((leg) =>
         this.sendLeg(leg, `${leg.name}.activity_log.find_by_entity`, {
           entity_type: entityType,
           entity_id: entityId,
@@ -427,11 +451,19 @@ export class AuditGatewayController {
   async userHistory(
     @Param('user_id') userId: string,
     @Query() q: ActivityLogQueryDto,
+    @Req() req?: AuditRequest,
   ) {
-    return this.list({ ...q, user_id: userId });
+    return this.list({ ...q, user_id: userId }, req);
   }
 
   // ---- helpers ---------------------------------------------------------
+
+  /** Shu so'rovchi ko'radigan oyoqlar (`ai` — faqat superadmin). */
+  private visibleTo(req: AuditRequest | undefined) {
+    const superadmin = isSuperadmin(req);
+    return (leg: ServiceLeg) =>
+      superadmin || !SUPERADMIN_ONLY_LEGS.has(leg.name);
+  }
 
   private sendLeg(leg: ServiceLeg, cmd: string, payload: unknown) {
     return this.send(leg.client, cmd, payload, leg.timeoutMs);

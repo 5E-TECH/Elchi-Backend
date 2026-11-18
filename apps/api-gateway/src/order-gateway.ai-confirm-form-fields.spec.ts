@@ -2,7 +2,16 @@ import 'reflect-metadata';
 import { BadRequestException, Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { ClientProxy } from '@nestjs/microservices';
-import { type Observable, of, throwError, TimeoutError } from 'rxjs';
+import {
+  defer,
+  finalize,
+  type Observable,
+  of,
+  switchMap,
+  throwError,
+  timer,
+  TimeoutError,
+} from 'rxjs';
 import { Where_deliver } from '@app/common';
 import { OrderGatewayController } from './order-gateway.controller';
 import type { AiStatusPoller } from './ai/ai-status.poller';
@@ -456,6 +465,40 @@ describe('POST /orders/ai-confirm — orders[].operator_id («Operator» tanlovi
       expect(sent[0].dto).toMatchObject({ operator_id: null });
     },
   );
+
+  it('turli operator_id lar — identity so`rovlari PARALLEL (ketma-ket emas)', async () => {
+    const fx = makeController();
+    const base = fx.identity.send.getMockImplementation()!;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    fx.identity.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'identity.market_operator.selectable'
+        ? defer(() => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            return timer(20).pipe(
+              switchMap(() => base(pattern, payload)),
+              finalize(() => {
+                inFlight -= 1;
+              }),
+            );
+          })
+        : base(pattern, payload),
+    );
+    const res = await fx.controller.aiConfirm(
+      {
+        orders: [
+          confirmOrder(1, { operator_id: '31' }),
+          confirmOrder(2, { operator_id: '41' }),
+          confirmOrder(3, { operator_id: OPERATOR_SELF }),
+        ],
+      },
+      marketReq,
+    );
+
+    expect(maxInFlight).toBe(3);
+    expect(res.data.results.map((r) => r.ok)).toEqual([true, false, true]);
+  });
 
   it('bir xil operator_id partiyada — identity BIR marta so`raladi', async () => {
     const fx = makeController();

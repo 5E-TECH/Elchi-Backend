@@ -2458,7 +2458,7 @@ export class OrderGatewayController {
    * bilan AYNI tekshiruv (`resolveChosenOrderOperator`), lekin yaratishdan
    * OLDIN va partiyaga bir marta:
    *  - bir xil `operator_id` uchun identity bir marta so'raladi (market
-   *    partiyada bitta);
+   *    partiyada bitta), turli id'lar — PARALLEL;
    *  - 400 (begona/nofaol operator, market operatori boshqasini tanlagan) →
    *    shu buyurtma `create_failed`, sababi — POST /orders matni;
    *  - identity javob bermasa/xato → `validation_unavailable` (buyurtma ANIQ
@@ -2473,17 +2473,21 @@ export class OrderGatewayController {
     roles: string[],
     results: Map<number, AiConfirmResult>,
   ): Promise<EligibleAiOrder[]> {
-    const lookups = new Map<string, Promise<ChosenOrderOperator | null>>();
-    const kept: EligibleAiOrder[] = [];
+    const operatorIdOf = (item: EligibleAiOrder) =>
+      this.asStr(item.order.operator_id).trim();
+    // Avval HAMMA noyob operator_id so'rovi bir vaqtda boshlanadi (har biri
+    // 8 s gacha — ketma-ket kutilsa 75 s partiya muddatini yerdi), keyin
+    // natijalar bandlarga taqsimlanadi.
+    type Settled =
+      | { ok: true; value: ChosenOrderOperator | null }
+      | { ok: false; error: unknown };
+    const lookups = new Map<string, Promise<Settled>>();
     for (const item of eligible) {
-      const operatorId = this.asStr(item.order.operator_id).trim();
-      if (!operatorId) {
-        kept.push(item);
-        continue;
-      }
-      let lookup = lookups.get(operatorId);
-      if (!lookup) {
-        lookup = resolveChosenOrderOperator({
+      const operatorId = operatorIdOf(item);
+      if (!operatorId || lookups.has(operatorId)) continue;
+      lookups.set(
+        operatorId,
+        resolveChosenOrderOperator({
           operatorId,
           roles,
           requesterId: req.user.sub,
@@ -2493,16 +2497,31 @@ export class OrderGatewayController {
               { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
               payload,
             ),
-        });
-        // Rad etilgan va'da "unhandled" bo'lib qolmasin (pastda await qilinadi).
-        lookup.catch(() => undefined);
-        lookups.set(operatorId, lookup);
-      }
-      try {
-        const chosen = await lookup;
-        if (chosen) item.chosenOperator = chosen;
+        }).then(
+          (value): Settled => ({ ok: true, value }),
+          (error: unknown): Settled => ({ ok: false, error }),
+        ),
+      );
+    }
+    const settled = new Map<string, Settled>();
+    await Promise.all(
+      [...lookups].map(async ([operatorId, lookup]) => {
+        settled.set(operatorId, await lookup);
+      }),
+    );
+
+    const kept: EligibleAiOrder[] = [];
+    for (const item of eligible) {
+      const outcome = settled.get(operatorIdOf(item));
+      if (!outcome) {
         kept.push(item);
-      } catch (error: unknown) {
+        continue;
+      }
+      if (outcome.ok) {
+        if (outcome.value) item.chosenOperator = outcome.value;
+        kept.push(item);
+      } else {
+        const { error } = outcome;
         if (error instanceof BadRequestException) {
           results.set(item.index, {
             index: item.index,
