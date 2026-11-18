@@ -22,6 +22,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI maslahatchi (BE-5): bildirishnoma urinishlari va SMS eskalatsiyasi (review round-4)
+
+Deploy: ai-service + notification-service, migratsiyasiz.
+
+- 🔧 Jiddiy ogohlantirish bildirishnomasi yuborilmasa — qayta urinish oralig'i o'sadi (30 daq, 1 s, 2 s, 4 s); 5 urinishdan keyin to'xtatiladi (log'da `ai_advisor_notify_gave_up`). Ogohlantirishning o'zi ro'yxatda qoladi. Xatoli ogohlantirishlar yangi jiddiy ogohlantirishlar bildirishnomasini endi kechiktirmaydi.
+- 🔒 `ai.advisor_alert` turi uchun SMS eskalatsiyasi navbatda qolib ketgan eski hodisalarda ham ishlamaydi (`delivery.escalation: "skipped"`, `escalation_reason: "type_opt_out"`).
+- 🟢 `GET /notifications/types` javobida `ai.advisor_alert` uchun `escalation: false` maydoni bor (qo'shimcha, ixtiyoriy): «bu tur SMS eskalatsiyasiz». FE turlarini generatsiya qilishda `escalation?: boolean` deb qo'shing.
+
+**Frontend action items:** yo'q (ixtiyoriy: `escalation?: boolean` turga).
+
 ### 2026-11-17 — Kuryer skani = qabul: yo'ldagi pochtadan olish, «Yo'lda» va «Qabul qilish» qadami yo'q (COURIER-SCAN)
 
 Ega (2026-11-17): HQ pochtani filialga jo'natdi — menejer hali qabul qilmagan bo'lsa ham filial kuryeri buyurtmani skanerlab oladi; skan = qabul; olgandan keyin holat «Yo'lda» ga qaytmaydi, «Qabul qilish» chiqmaydi, darhol «Sotish» / «Bekor qilish».
