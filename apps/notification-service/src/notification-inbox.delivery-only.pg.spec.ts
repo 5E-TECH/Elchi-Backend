@@ -301,30 +301,73 @@ const USER = '778000000001';
         )
       )[0];
 
-    it('#699 S2: remove() bir vaqtdagi yetkazish holatini bosib ketmaydi (faqat is_deleted, save() yo‘q)', async () => {
+    it('#699 S2: remove() — o‘qish va yozish orasidagi parallel yetkazish holati saqlanadi (faqat is_deleted)', async () => {
       await service.dispatch(base());
       const [row] = await rows();
       const repo = ds.getRepository(Notification);
-      const save = jest.spyOn(repo, 'save');
-      const spy = raceOnRead();
+      // Parallel yozuv — remove() ning YOZUVIDAN oldin (eski yo'lda findOne
+      // dan keyin, save(eski nusxa) dan oldin; yangi yo'lda UPDATE dan oldin).
+      const inject = () =>
+        ds.query(
+          `UPDATE notification_schema.notifications
+              SET delivery = COALESCE(delivery, '{}'::jsonb) || '{"telegram":"queued"}'::jsonb
+            WHERE recipient_id = ${USER}`,
+        );
+      const save = repo.save.bind(repo);
+      const update = repo.update.bind(repo);
+      const saveSpy = jest
+        .spyOn(repo, 'save')
+        .mockImplementation(async (...args: Parameters<typeof save>) => {
+          await inject();
+          return save(...args);
+        });
+      const updateSpy = jest
+        .spyOn(repo, 'update')
+        .mockImplementation(async (...args: Parameters<typeof update>) => {
+          await inject();
+          return update(...args);
+        });
       try {
         await service.remove(USER, row.id);
-        // Eski yo'l: findOne -> (parallel yozuv) -> save(eski nusxa).
-        expect(save).not.toHaveBeenCalled();
       } finally {
-        spy.mockRestore();
-        save.mockRestore();
+        saveSpy.mockRestore();
+        updateSpy.mockRestore();
       }
-      await ds.query(
-        `UPDATE notification_schema.notifications
-            SET delivery = COALESCE(delivery, '{}'::jsonb) || '{"telegram":"queued"}'::jsonb
-          WHERE recipient_id = ${USER}`,
-      );
       expect(await deliveryOf()).toMatchObject({
         is_deleted: true,
         delivery: { telegram: 'queued' },
       });
       await expect(service.remove(USER, row.id)).rejects.toBeDefined();
+    });
+
+    it('#708 S-a: delivery_only [sms, telegram] — sms_reason / realtime_reason mavjud qatorga yozilmaydi', async () => {
+      await service.dispatch(base());
+      const before = await deliveryOf();
+      await service.dispatch(
+        base({
+          channels: ['sms', 'realtime', 'telegram'] as never,
+          delivery_only: true,
+        }),
+      );
+      const after = await deliveryOf();
+      const keys = (d: Record<string, string>) =>
+        Object.keys(d).filter((k) => !k.startsWith('telegram'));
+      expect(keys(after.delivery).sort()).toEqual(keys(before.delivery).sort());
+      for (const k of keys(before.delivery))
+        expect(after.delivery[k]).toBe(before.delivery[k]);
+    });
+
+    it('#708 S-c: delivery_only, tashqi kanal yo‘q ([in_app] / []) — 400, hech narsa yozilmaydi', async () => {
+      await service.dispatch(base());
+      const before = await deliveryOf();
+      for (const channels of [['in_app'], []]) {
+        await expect(
+          service.dispatch(
+            base({ channels: channels as never, delivery_only: true }),
+          ),
+        ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      }
+      expect(await deliveryOf()).toEqual(before);
     });
 
     it('#699 S2: markRead() ham — faqat is_read/read_at', async () => {

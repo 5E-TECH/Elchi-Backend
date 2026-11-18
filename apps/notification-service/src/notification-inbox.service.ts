@@ -193,14 +193,18 @@ function eventCount(data: unknown): number {
   return Number.isInteger(count) && count >= 1 ? count : 1;
 }
 
-/** `delivery_only` — mavjud qatorda o'zgarmaydigan `delivery` kalitlari. */
-const DELIVERY_ONLY_KEEP = new Set<string>([
-  NotificationChannel.IN_APP,
-  NotificationChannel.REALTIME,
-  NotificationChannel.SMS,
-  'escalation',
-  'escalation_due_at',
-]);
+/**
+ * `delivery_only` — mavjud qatorga faqat shu dispatch'ning tashqi kanallari
+ * (`telegram`, `push`) va ularning `<kanal>_reason` kalitlari yoziladi
+ * (oq ro'yxat): `in_app`/`realtime`/`sms`, ularning `*_reason` i va
+ * `escalation*` holati o'zgarmaydi.
+ */
+function deliveryOnlyKey(key: string, channels: readonly string[]): boolean {
+  const channel = key.endsWith('_reason')
+    ? key.slice(0, -'_reason'.length)
+    : key;
+  return channels.includes(channel);
+}
 
 @Injectable()
 export class NotificationInboxService {
@@ -435,6 +439,11 @@ export class NotificationInboxService {
             c !== NotificationChannel.REALTIME &&
             c !== NotificationChannel.SMS),
       );
+      if (dto.delivery_only && !channels.length) {
+        throw new BadRequestException(
+          "delivery_only: tashqi shaxsiy kanal (telegram, push) so'ralmagan — yetkaziladigan narsa yo'q",
+        );
+      }
 
       this.assertRecipientIds(dto);
 
@@ -807,7 +816,7 @@ export class NotificationInboxService {
         );
       }
       const message =
-        dto.delivery_only && !rows.length
+        dto.delivery_only && !rows.length && skippedNoRow
           ? 'Delivery only: no existing inbox row — nothing delivered'
           : !rows.length && plan.skipped.size
             ? 'Skipped by recipient preferences — nothing dispatched'
@@ -1186,8 +1195,8 @@ export class NotificationInboxService {
         if (!rowId || !existingById.has(rowId)) continue;
         // Mavjud qatorning ilova ichi / realtime / SMS holatiga tegilmaydi (S3).
         const added = Object.fromEntries(
-          Object.entries(deliveryFor(recipient.id)).filter(
-            ([key]) => !DELIVERY_ONLY_KEEP.has(key),
+          Object.entries(deliveryFor(recipient.id)).filter(([key]) =>
+            deliveryOnlyKey(key, channels),
           ),
         );
         const key = JSON.stringify(added);
