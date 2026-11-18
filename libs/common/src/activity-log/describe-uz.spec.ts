@@ -255,6 +255,14 @@ describe('ActivityDescribeUz — gaplar (2WRzdWpZ)', () => {
       ),
       marketPayment: ActivityDescribeUz.marketPayment('501', 150000, 'click'),
       operatorPayment: ActivityDescribeUz.operatorPayment('42', 150000),
+      operatorPaymentRecorded: ActivityDescribeUz.operatorPaymentRecorded(
+        '42',
+        150000,
+      ),
+      operatorPaymentCancelled: ActivityDescribeUz.operatorPaymentCancelled(
+        '42',
+        150000,
+      ),
       branchTransferCreated: ActivityDescribeUz.branchTransferCreated({
         batchId: '12',
         fromBranchId: '3',

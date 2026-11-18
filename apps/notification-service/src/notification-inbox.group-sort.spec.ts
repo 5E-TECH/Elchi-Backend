@@ -161,6 +161,8 @@ describe('NotificationInboxService — group_key yangilanganda qator inbox tepas
         store.set(String(row.id), saved);
         return Promise.resolve(saved);
       }),
+      // markRead / remove — faqat ustunlar (#699 follow-up S2).
+      update: jest.fn((where: any, patch: any) => txRepo.update(where, patch)),
       createQueryBuilder: jest.fn(() => qb),
       manager: {
         transaction: jest.fn((work: (manager: any) => Promise<unknown>) =>

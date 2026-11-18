@@ -618,7 +618,9 @@ describe('aLx7Di99 — my/district-stats = /orders ro‘yxati to‘plami', () =>
     );
   });
 
-  it('6qypMFeT: skan bilan olingan «Yo‘lda» sanaladi, qabul qilinmagan pochta sanalmaydi', async () => {
+  // COURIER-SCAN: skan = qabul — skan bilan olingan posilka WAITING (oddiy
+  // qator); 6qypMFeT dagi ON_THE_ROAD istisnosi olib tashlandi.
+  it('COURIER-SCAN: skan bilan olingan (WAITING) sanaladi, qabul qilinmagan pochta sanalmaydi', async () => {
     const { service, findOrders } = setup({
       courierRegion: { '77': '5' },
       postsByCourier: POSTS,
@@ -636,7 +638,7 @@ describe('aLx7Di99 — my/district-stats = /orders ro‘yxati to‘plami', () =>
         return_requested: false,
         post_id: 'p77a',
         branch_id: '7',
-        status: Order_status.ON_THE_ROAD,
+        status: Order_status.WAITING,
         total_price: 40_000,
       },
     ] as never);
