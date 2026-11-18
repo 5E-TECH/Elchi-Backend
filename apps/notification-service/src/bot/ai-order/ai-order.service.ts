@@ -56,6 +56,26 @@ import {
   productOptions,
   productsFromSearch,
 } from './ai-product-pick';
+import {
+  AI_DISTRICT_LOAD_FAILED_TEXT,
+  AI_DISTRICT_MAX_ENTRIES,
+  AI_EDIT_MAX_ITEMS,
+  AI_EDIT_NO_DISTRICT_TEXT,
+  type AiDistrictSource,
+  type AiEditField,
+  applyDistrictPick,
+  applyFieldEdit,
+  canPickDistrict,
+  districtCandidates,
+  districtPickerText,
+  districtsFromResponse,
+  editMenuText,
+  editPromptText,
+  isEditField,
+  needsDistrict,
+  parseEditValue,
+  storedDistrictOptions,
+} from './ai-order-edit';
 
 export const AI_ORDER_ACTIONS = {
   confirm: 'ai.ok',
@@ -63,6 +83,7 @@ export const AI_ORDER_ACTIONS = {
   ack: 'ai.ack',
   /** AI ack: «↩️ Yo‘q, orqaga» — preview'ga qaytadi, hech narsa yaratilmaydi. */
   back: 'ai.back',
+  /** «✏️ Tuzatish» — tuzatish menyusi (bir nechta buyurtmada — avval tanlash). */
   fix: 'ai.fix',
   cancel: 'ai.no',
   retry: 'ai.retry',
@@ -74,19 +95,32 @@ export const AI_ORDER_ACTIONS = {
   find: 'ai.find',
   /** Tanlash oynasi: «📝 Nomi bilan qoldirish». */
   keep: 'ai.keep',
+  /** Tuzatish: shu buyurtmaning maydonlar menyusi. */
+  edit: 'ai.edit',
+  /** Tuzatish: maydon tanlandi — keyingi matn yangi qiymat. */
+  field: 'ai.field',
+  /** Tuman tanlash oynasi (nomzodlar yoki viloyat tumanlari). */
+  district: 'ai.dist',
+  /** Tuman tanlandi. */
+  districtPick: 'ai.dpick',
 } as const;
 
 /**
  * Operator matn kiritishini kutish (`telegram_sessions.state.ai_input`):
- * faqat id/indekslar (PII yo'q). Shundan eski kutish e'tiborsiz.
+ * faqat id/indekslar va maydon kaliti (PII yo'q). Shundan eski kutish
+ * e'tiborsiz.
  */
 export const AI_INPUT_TTL_MS = 15 * 60_000;
 
 interface AiInputState {
   draft_id: string;
-  kind: 'search';
+  /** `search` — mahsulot qidiruvi; `edit` — maydonning yangi qiymati. */
+  kind: 'search' | 'edit';
   o: number;
+  /** Item o'rni (search / qty); boshqa maydonlarda -1. */
   i: number;
+  /** `edit` da maydon. */
+  f?: AiEditField;
   at: number;
 }
 
@@ -95,7 +129,7 @@ const inputStateOf = (value: unknown): AiInputState | null => {
   if (
     !v ||
     typeof v.draft_id !== 'string' ||
-    v.kind !== 'search' ||
+    (v.kind !== 'search' && !(v.kind === 'edit' && isEditField(v.f))) ||
     !Number.isInteger(v.o) ||
     !Number.isInteger(v.i) ||
     typeof v.at !== 'number'
@@ -104,6 +138,13 @@ const inputStateOf = (value: unknown): AiInputState | null => {
   }
   return v as AiInputState;
 };
+
+/**
+ * Buyurtma matnidek (7+ raqam) yozuv yangi buyurtma deb olinadigan
+ * kutishlar: telefon / manzil / izoh kutilayotganda raqamlar tabiiy.
+ */
+const orderTextEndsInput = (input: AiInputState) =>
+  input.kind === 'search' || input.f === 'name' || input.f === 'qty';
 
 /** Buyurtma matni (telefon kabi 7+ raqam) — qidiruv so'rovi emas, yangi buyurtma. */
 const looksLikeOrderText = (text: string) =>
@@ -117,8 +158,9 @@ export const AI_EMPTY_TEXT =
 export const AI_NETWORK_TEXT =
   '❌ AI bilan aloqa bo‘lmadi. Matningiz saqlangan — «🔁 Qayta urinish» ni bosing.';
 export const AI_CANCELLED_TEXT = '❌ Bekor qilindi — hech narsa yaratilmadi.';
-export const AI_FIX_TEXT =
-  '✏️ Matnni tuzatib qayta yuboring yoki buyurtmani kabinetda (to‘liq forma) yarating.';
+/** Tuzatish: bir nechta buyurtma — qaysi biri. */
+export const AI_EDIT_CHOOSE_TEXT =
+  '✏️ Qaysi buyurtmani tuzatamiz? (Boshqa o‘zgarishlar — matnni tuzatib qayta yuboring yoki kabinetda yarating.)';
 export const AI_CREATING_TEXT = '⏳ Buyurtmalar yaratilmoqda…';
 export const AI_ALREADY_CREATED_TEXT = 'ℹ️ Bu ro‘yxat allaqachon yaratilgan.';
 export const AI_CONFIRM_FAILED_TEXT =
@@ -886,8 +928,9 @@ export class AiOrderService implements OnModuleDestroy {
     return false;
   }
 
-  /** `✏️ Tuzatish` / `❌ Bekor` — preview yopiladi, hech narsa yaratilmaydi. */
-  async close(ctx: BotContext, draftId: string, kind: 'fix' | 'cancel') {
+  /** `❌ Bekor` — preview yopiladi, hech narsa yaratilmaydi. */
+  async close(ctx: BotContext, draftId: string) {
+    await this.clearInput(ctx);
     const draft = await this.claim(
       draftId,
       ['preview', 'failed', 'empty'],
@@ -897,12 +940,318 @@ export class AiOrderService implements OnModuleDestroy {
       await this.explainState(ctx, draftId);
       return;
     }
+    await this.show(ctx, draft, AI_CANCELLED_TEXT, []);
+  }
+
+  /**
+   * `✏️ Tuzatish` — qoralama ochiq qoladi: bitta buyurtma bo'lsa darhol
+   * maydonlar menyusi, bir nechta bo'lsa avval buyurtma tanlanadi.
+   */
+  async editMenu(ctx: BotContext, draftId: string): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const orders = (draft.orders ?? []) as AiPreviewOrder[];
+    if (orders.length === 1) {
+      await this.showEditMenu(ctx, draft, orders[0]);
+      return;
+    }
+    const rows: InlineKeyboardButton[][] = [];
+    for (const order of orders.slice(0, 10)) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          `${order.index + 1}) ${str(order.customer_name).slice(0, 30) || '—'}`,
+          AI_ORDER_ACTIONS.edit,
+          { o: order.index },
+        ),
+      ]);
+    }
+    rows.push([
+      await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back),
+    ]);
+    await this.show(ctx, draft, AI_EDIT_CHOOSE_TEXT, rows);
+  }
+
+  /** Tanlangan buyurtmaning maydonlar menyusi. */
+  async editOrder(
+    ctx: BotContext,
+    draftId: string,
+    orderIndex: unknown,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const order = ((draft.orders ?? []) as AiPreviewOrder[]).find(
+      (o) => o.index === orderIndex,
+    );
+    if (!order) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    await this.showEditMenu(ctx, draft, order);
+  }
+
+  /**
+   * Maydon tanlandi (`f`, qty uchun `i`) — so'rov matni, keyingi oddiy
+   * matn yangi qiymat (`ai_input`).
+   */
+  async editField(
+    ctx: BotContext,
+    draftId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.clearInput(ctx);
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const order = ((draft.orders ?? []) as AiPreviewOrder[]).find(
+      (o) => o.index === payload.o,
+    );
+    const field = payload.f;
+    const itemIndex = field === 'qty' ? payload.i : -1;
+    if (
+      !order ||
+      !isEditField(field) ||
+      !Number.isInteger(itemIndex) ||
+      (field === 'qty' && !order.items?.[itemIndex as number]) ||
+      !this.sessions
+    ) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    const state: AiInputState = {
+      draft_id: draft.id,
+      kind: 'edit',
+      o: order.index,
+      i: itemIndex as number,
+      f: field,
+      at: Date.now(),
+    };
+    await this.sessions.update(ctx.chatId, ctx.slug, (s) => ({
+      state: { ...s.state, ai_input: state },
+    }));
     await this.show(
       ctx,
       draft,
-      kind === 'fix' ? AI_FIX_TEXT : AI_CANCELLED_TEXT,
-      kind === 'fix' ? [[this.cabinetCreateButton()]] : [],
+      editPromptText(order, field, itemIndex as number),
+      [[await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back)]],
+      'HTML',
     );
+  }
+
+  /** Kutilgan qiymat: tekshirish → saqlash → preview (yangi xabar). */
+  private async editInput(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    input: AiInputState,
+    text: string,
+  ): Promise<boolean> {
+    const field = input.f as AiEditField;
+    const parsed = parseEditValue(field, text);
+    if (!parsed.ok) {
+      // Kutish davom etadi — operator qayta yozadi yoki «↩️ Orqaga».
+      await ctx.reply(parsed.error);
+      return true;
+    }
+    const orders = applyFieldEdit(
+      (draft.orders ?? []) as AiPreviewOrder[],
+      input.o,
+      field,
+      input.i,
+      parsed.value,
+    );
+    await this.clearInput(ctx);
+    if (!orders) return false;
+    if (!(await this.saveOrders(draft, orders))) {
+      await this.explainState(ctx, draft.id);
+      return true;
+    }
+    await this.dropCard(ctx, draft);
+    await this.showPreview(ctx, draft);
+    return true;
+  }
+
+  /**
+   * «📍 Tuman»: AI nomzodlari bo'lsa — ular; aks holda viloyat tumanlari
+   * (`GET /district?region_id`, operator JWT) — qoralamada saqlanadi.
+   */
+  async openDistrict(
+    ctx: BotContext,
+    draftId: string,
+    orderIndex: unknown,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    let orders = (draft.orders ?? []) as AiPreviewOrder[];
+    let order = orders.find((o) => o.index === orderIndex);
+    if (!order) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    const back = await this.button(
+      ctx,
+      draft,
+      '↩️ Orqaga',
+      AI_ORDER_ACTIONS.back,
+    );
+    let source: AiDistrictSource = 'c';
+    let options = districtCandidates(order);
+    if (!options.length) {
+      source = 'r';
+      options = storedDistrictOptions(order);
+    }
+    if (!options.length) {
+      const regionId = str(order.region_id);
+      if (!/^\d{1,20}$/.test(regionId)) {
+        await this.show(ctx, draft, AI_EDIT_NO_DISTRICT_TEXT, [[back]]);
+        return;
+      }
+      let res: { status: number; body: unknown };
+      try {
+        res = await this.gateway.request(
+          ctx.fromId ?? ctx.chatId,
+          'GET',
+          `/district?region_id=${regionId}`,
+        );
+      } catch (error) {
+        if (error instanceof BotPasswordChangeRequiredError) throw error;
+        this.logger.warn(
+          `ai draft ${draft.id}: tumanlar ro'yxati — ${error instanceof Error ? error.message : 'error'}`,
+        );
+        res = { status: 503, body: null };
+      }
+      options =
+        res.status < 400
+          ? districtsFromResponse(res.body, order.region_name ?? null)
+          : [];
+      if (!options.length) {
+        await this.show(ctx, draft, AI_DISTRICT_LOAD_FAILED_TEXT, [[back]]);
+        return;
+      }
+      orders = orders.map((o) =>
+        o.index === order!.index ? { ...o, district_options: options } : o,
+      );
+      if (!(await this.saveOrders(draft, orders))) {
+        await this.explainState(ctx, draft.id);
+        return;
+      }
+      order = orders.find((o) => o.index === orderIndex)!;
+    }
+    const current = str(order.district_id);
+    const rows: InlineKeyboardButton[][] = [];
+    // Viloyat tumanlari ko'p — ikkitadan qatorda.
+    const perRow = source === 'r' ? 2 : 1;
+    for (let k = 0; k < options.length; k += perRow) {
+      const row: InlineKeyboardButton[] = [];
+      for (const [j, option] of options.slice(k, k + perRow).entries()) {
+        row.push(
+          await this.button(
+            ctx,
+            draft,
+            `${option.id === current ? '• ' : ''}${option.name}`,
+            AI_ORDER_ACTIONS.districtPick,
+            { o: order.index, s: source, k: k + j },
+          ),
+        );
+      }
+      rows.push(row);
+    }
+    rows.push([back]);
+    await this.show(
+      ctx,
+      draft,
+      districtPickerText(order, source),
+      rows,
+      'HTML',
+    );
+  }
+
+  /**
+   * Tuman tanlandi → `district_id` (operator tahriri: AI taklifidan farq
+   * qilsa `district_low_confidence` tasdiq so'ramaydi — server ham), preview.
+   */
+  async pickDistrict(
+    ctx: BotContext,
+    draftId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const orders = (draft.orders ?? []) as AiPreviewOrder[];
+    const order = orders.find((o) => o.index === payload.o);
+    const list = !order
+      ? []
+      : payload.s === 'r'
+        ? storedDistrictOptions(order)
+        : districtCandidates(order);
+    const option = Number.isInteger(payload.k)
+      ? list[payload.k as number]
+      : undefined;
+    await this.saveAndShow(
+      ctx,
+      draft,
+      order && option ? applyDistrictPick(orders, order.index, option) : null,
+    );
+  }
+
+  /** Maydonlar menyusi: ism / telefon / manzil / izoh / soni / tuman. */
+  private async showEditMenu(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    order: AiPreviewOrder,
+  ): Promise<void> {
+    const o = order.index;
+    const field = (text: string, f: AiEditField, i = -1) =>
+      this.button(ctx, draft, text, AI_ORDER_ACTIONS.field, {
+        o,
+        f,
+        ...(f === 'qty' ? { i } : {}),
+      });
+    const rows: InlineKeyboardButton[][] = [
+      [await field('👤 Ism', 'name'), await field('📞 Telefon', 'phone')],
+      [await field('🏠 Manzil', 'address'), await field('💬 Izoh', 'comment')],
+    ];
+    for (const [i, item] of (order.items ?? [])
+      .slice(0, AI_EDIT_MAX_ITEMS)
+      .entries()) {
+      rows.push([
+        await field(
+          `🔢 Soni: ${str(item.resolved_name || item.name).slice(0, 30) || 'Mahsulot'}`,
+          'qty',
+          i,
+        ),
+      ]);
+    }
+    if (canPickDistrict(order)) {
+      rows.push([
+        await this.button(ctx, draft, '📍 Tuman', AI_ORDER_ACTIONS.district, {
+          o,
+        }),
+      ]);
+    }
+    rows.push(
+      [await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back)],
+      [this.cabinetCreateButton()],
+    );
+    await this.show(ctx, draft, editMenuText(order), rows, 'HTML');
   }
 
   /** «❓ … — tanlash»: shu item uchun nomzodlar oynasi. */
@@ -1019,7 +1368,10 @@ export class AiOrderService implements OnModuleDestroy {
     const session = await this.sessions.load(ctx.chatId, ctx.slug);
     const input = inputStateOf(session.state?.ai_input);
     if (!input) return false;
-    if (Date.now() - input.at > AI_INPUT_TTL_MS || looksLikeOrderText(text)) {
+    if (
+      Date.now() - input.at > AI_INPUT_TTL_MS ||
+      (orderTextEndsInput(input) && looksLikeOrderText(text))
+    ) {
       await this.clearInput(ctx);
       return false;
     }
@@ -1033,6 +1385,18 @@ export class AiOrderService implements OnModuleDestroy {
       await ctx.reply(AI_EXPIRED_TEXT);
       return true;
     }
+    return input.kind === 'edit'
+      ? this.editInput(ctx, draft, input, text)
+      : this.searchInput(ctx, draft, input, text);
+  }
+
+  /** «🔎 Qidirish» so'rovi → my-products → natijalar oynasi. */
+  private async searchInput(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    input: AiInputState,
+    text: string,
+  ): Promise<boolean> {
     const found = findItem(
       (draft.orders ?? []) as AiPreviewOrder[],
       input.o,
@@ -1252,6 +1616,21 @@ export class AiOrderService implements OnModuleDestroy {
       ]);
     }
     const multi = orders.length > 1;
+    // Tuman yo'q / AI ikkilangan — nomzod yoki viloyat bo'lsa botda tanlanadi.
+    for (const order of orders
+      .slice(0, 10)
+      .filter((o) => needsDistrict(o) && canPickDistrict(o))
+      .slice(0, AI_DISTRICT_MAX_ENTRIES)) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          `📍 ${multi ? `${order.index + 1}) ` : ''}Tumanni tanlash`,
+          AI_ORDER_ACTIONS.district,
+          { o: order.index },
+        ),
+      ]);
+    }
     for (const { order, itemIndex, item } of pickEntries(orders)) {
       rows.push([
         await this.button(

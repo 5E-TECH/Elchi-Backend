@@ -87,6 +87,31 @@ export interface AiPreviewOrder {
    * ko'rsatilmagan ogohlantirish hech qachon avtomatik tasdiqlanmaydi.
    */
   acked_checks?: string[];
+  /** Tuman aniqlanmadi — nomzodlar (≤5, order-service `district_candidates`). */
+  district_candidates?: AiDistrictCandidate[] | null;
+  /**
+   * BOT ICHKI maydoni: operator tumanni birinchi marta o'zgartirganda AI
+   * taklif qilgan `district_id` (yo'q bo'lsa null). `undefined` — tuman
+   * tahrirlanmagan. AI ack: tuman shundan farq qilsa
+   * `district_low_confidence` tasdiq so'ramaydi (server ham shunday).
+   */
+  ai_district_id?: string | null;
+  /** BOT ICHKI maydoni: viloyat tumanlari ro'yxati (`GET /district`). */
+  district_options?: AiDistrictOption[] | null;
+}
+
+/** order-service `AiDistrictCandidate`: `label` = "<viloyat>, <tuman>". */
+export interface AiDistrictCandidate {
+  id?: string | null;
+  label?: string | null;
+  region_name?: string | null;
+}
+
+/** Botda tanlanadigan tuman. */
+export interface AiDistrictOption {
+  id: string;
+  name: string;
+  region_name?: string | null;
 }
 
 /** order-service `AiCheck` — bot o'qiydigan maydonlar. */
@@ -102,12 +127,36 @@ export interface AiPreviewCheck {
 const BLOCKING_CODES: ReadonlySet<string> = new Set(AI_BLOCKING_CHECK_CODES);
 
 /**
+ * Operator tumanni botda AI taklifidan BOSHQASIGA o'zgartirdimi. Server
+ * `edited_fields` (AI snapshot `district_id` ≠ tasdiqlangan) bilan bir xil:
+ * o'sha tumanni qayta tanlash — tahrir emas.
+ */
+export function districtEdited(order: AiPreviewOrder): boolean {
+  return (
+    order.ai_district_id !== undefined &&
+    String(order.ai_district_id ?? '') !== String(order.district_id ?? '')
+  );
+}
+
+/**
+ * Amaldagi AI tekshiruvlari: operator tegishli maydonni o'zi tuzatgan
+ * bo'lsa bloklovchi kod taalluqli emas (`AI_CHECK_EXEMPT_BY_EDIT`: tuman
+ * o'zgardi → `district_low_confidence` yo'q).
+ */
+export function activeChecks(order: AiPreviewOrder): AiPreviewCheck[] {
+  const checks = Array.isArray(order.checks) ? order.checks : [];
+  return districtEdited(order)
+    ? checks.filter((check) => check?.code !== 'district_low_confidence')
+    : checks;
+}
+
+/**
  * Preview'dagi bloklovchi tekshiruv kodlari (takrorsiz, qat'iy tartibda) —
  * ai-confirm `ack_checks` ga AYNAN shular yuboriladi.
  */
 export function blockingCheckCodes(order: AiPreviewOrder): string[] {
   const codes = new Set(
-    (Array.isArray(order.checks) ? order.checks : [])
+    activeChecks(order)
       .map((check) => (typeof check?.code === 'string' ? check.code : ''))
       .filter((code) => BLOCKING_CODES.has(code)),
   );
@@ -346,7 +395,10 @@ const plainSum = (value: unknown): string =>
  * avval. Noma'lum kod — qatorsiz.
  */
 export function aiCheckLines(order: AiPreviewOrder): string[] {
-  const checks = Array.isArray(order.checks) ? order.checks : [];
+  return checkLines(order, activeChecks(order));
+}
+
+function checkLines(order: AiPreviewOrder, checks: AiPreviewCheck[]): string[] {
   const has = (code: string) => checks.find((c) => c?.code === code);
   const lines: string[] = [];
   if (has('district_low_confidence')) {
@@ -460,12 +512,12 @@ export function ackTargets(
 /** Faqat berilgan bloklovchi kodlar uchun «⚠️» qatorlari. */
 function blockingLines(order: AiPreviewOrder, codes: string[]): string[] {
   const checks = Array.isArray(order.checks) ? order.checks : [];
-  return aiCheckLines({
-    ...order,
-    checks: codes.map(
+  return checkLines(
+    order,
+    codes.map(
       (code) => checks.find((check) => check?.code === code) ?? { code },
     ),
-  });
+  );
 }
 
 /**
