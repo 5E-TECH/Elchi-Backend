@@ -1114,7 +1114,29 @@ export class NotificationInboxService {
     // `delivery_only`: mavjud qator qayta ko'tarilmaydi — faqat yangi
     // kanallar va ularning `delivery` holati qo'shiladi (BE-5 R6 09:00
     // Telegram; o'qilgan, tartib, count, matn — o'zgarishsiz).
-    if (dto.delivery_only && rowIdByRecipient.size) {
+    if (dto.delivery_only) {
+      // Qatorini O'CHIRGAN qabul qiluvchi: qator tiriltirilmaydi (o'chirilgan
+      // holicha qoladi) — faqat yetkazish holati shu qatorga yoziladi, DM
+      // shu qator orqali ketadi. Shu group_key bo'yicha hech qachon qatori
+      // bo'lmagan qabul qiluvchiga — hech narsa (yangi in-app qator YO'Q).
+      const missing = recipients.filter((r) => !rowIdByRecipient.has(r.id));
+      if (missing.length && dto.group_key) {
+        const deleted = await repo.find({
+          where: {
+            recipient_id: In(missing.map((r) => r.id)),
+            group_key: dto.group_key,
+            isDeleted: true,
+          },
+          order: { id: 'DESC' },
+        });
+        for (const row of deleted) {
+          const key = String(row.recipient_id);
+          if (!rowIdByRecipient.has(key)) {
+            rowIdByRecipient.set(key, row.id);
+            existingById.set(row.id, row);
+          }
+        }
+      }
       const kept: string[] = [];
       for (const recipient of recipients) {
         const rowId = rowIdByRecipient.get(recipient.id);
@@ -1122,7 +1144,7 @@ export class NotificationInboxService {
         if (!rowId || !row) continue;
         const added = Object.fromEntries(
           Object.entries(deliveryFor(recipient.id)).filter(
-            ([channel]) => channel !== NotificationChannel.IN_APP,
+            ([channel]) => channel !== String(NotificationChannel.IN_APP),
           ),
         );
         await repo.update({ id: rowId }, {
@@ -1131,20 +1153,7 @@ export class NotificationInboxService {
         } as QueryDeepPartialEntity<Notification>);
         kept.push(rowId);
       }
-      // Qatori yo'q qabul qiluvchilar — odatdagidek yangi qator.
-      const pending = recipients.filter((r) => !rowIdByRecipient.has(r.id));
-      const inserted = pending.length
-        ? await this.persistRows(
-            manager,
-            { ...dto, delivery_only: false },
-            pending,
-            channels,
-            deliveryFor,
-            dispatchId,
-            textFor,
-          )
-        : [];
-      return [...(await repo.find({ where: { id: In(kept) } })), ...inserted];
+      return kept.length ? repo.find({ where: { id: In(kept) } }) : [];
     }
 
     // (A1HzKEby #4) Bo'ron chegarasi: group_key bo'yicha qatori yo'q, lekin

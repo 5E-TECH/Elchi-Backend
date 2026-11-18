@@ -144,11 +144,33 @@ const USER = '778000000001';
       expect(after.data.count).toBe(2);
     });
 
-    it('delivery_only, qator yo‘q — odatdagidek yangi qator', async () => {
+    it('delivery_only, foydalanuvchi qatorni o‘chirgan — tiriltirilmaydi, faqat yetkazish holati yoziladi', async () => {
+      await service.dispatch(base());
+      const [first] = await rows();
+      await ds.query(
+        `UPDATE notification_schema.notifications SET is_deleted = true WHERE id = $1`,
+        [first.id],
+      );
       await service.dispatch(
         base({ channels: ['telegram'] as never, delivery_only: true }),
       );
-      expect(await rows()).toHaveLength(1);
+      const all = await ds.query<
+        Array<{ id: string; is_deleted: boolean; delivery: object }>
+      >(
+        `SELECT id::text AS id, is_deleted, delivery
+           FROM notification_schema.notifications WHERE recipient_id = ${USER}`,
+      );
+      expect(all).toHaveLength(1);
+      expect(all[0].id).toBe(first.id);
+      expect(all[0].is_deleted).toBe(true);
+      expect(all[0].delivery).toHaveProperty('telegram');
+    });
+
+    it('delivery_only, shu group_key bo‘yicha hech qachon qator bo‘lmagan — yangi qator YO‘Q', async () => {
+      await service.dispatch(
+        base({ channels: ['telegram'] as never, delivery_only: true }),
+      );
+      expect(await rows()).toHaveLength(0);
     });
   },
 );

@@ -190,8 +190,10 @@ export class DispatchNotificationDto {
    * u QAYTA KO'TARILMAYDI (o'qilgan holati, inbox tartibi, `data.count`,
    * matn o'zgarmaydi); faqat yangi kanallar qatorga qo'shiladi va ularning
    * `delivery` holati yoziladi. Masalan: ilova ichida allaqachon ko'rsatilgan
-   * ogohlantirishning kechiktirilgan Telegram'i (BE-5 R6, 09:00). Qator yo'q
-   * bo'lsa — odatdagidek yangi qator.
+   * ogohlantirishning kechiktirilgan Telegram'i (BE-5 R6, 09:00). Foydalanuvchi
+   * qatorni o'chirgan bo'lsa — qator tiriltirilmaydi (o'chirilganligicha
+   * qoladi), yetkazish holati unga yoziladi. Qatori umuman bo'lmagan qabul
+   * qiluvchiga — hech narsa (yangi in-app qator yaratilmaydi).
    */
   @IsOptional()
   @IsBoolean()
