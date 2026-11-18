@@ -996,7 +996,9 @@ export class OrderGatewayController {
       throw new BadRequestException({
         statusCode: 400,
         message:
-          "Buyurtmani avtomatik qabul qilib bo'lmadi — avval «Qabul qilish»ni bosing",
+          // COURIER-SCAN: kuryer «Qabul qilish» tugmasi olib tashlandi — QR
+          // skani (skan = qabul) yoki qayta urinish.
+          "Buyurtmani avtomatik qabul qilib bo'lmadi — buyurtma QR kodini skanerlang yoki qayta urinib ko'ring",
         reason: 'auto_receive_failed',
       });
     }
@@ -7588,7 +7590,7 @@ export class OrderGatewayController {
     summary:
       "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number }, special_categories (T8) } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
     description:
-      "anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi (va «eski filialda tugasin» imtiyozli buyurtmalar — tuman HQ viloyatidan ko'chganda yoki deploy paytida HQ kuryerlarida bo'lganlar) — aks holda 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`). O'z WAITING / ON_THE_ROAD buyurtmasini qayta skanlash — idempotent 200.",
+      "COURIER-SCAN (ega, 2026-11-17) — SKAN = QABUL: muvaffaqiyatli skandan keyin buyurtma darhol `waiting` (Kutilmoqda) va kuryerda (`courier_id`, `holder_type COURIER`), `on the road` ga qaytmaydi; «Sotish» / «Bekor qilish» darhol ochiq (javobda `data.status = waiting`). Filial kuryeri o'z filialiga kelgan HQ → filial o'tkazma pochtasidagi yo'ldagi buyurtmani menejer pochtani qabul qilmagan bo'lsa ham oladi (skan shu bitta buyurtmani filialga qabul qiladi; oxirgisi olinsa pochta «Qabul qilingan»); «kelmagan» belgili (`return_requested`) — 409 `order_marked_not_arrived`. Kuryerning o'zidagi yo'ldagi buyurtmasini qayta skanlash — qabul (200, `data.accepted = true`); o'z `waiting` buyurtmasini — idempotent 200 (`data.idempotent = true`). Ikki kuryer bir vaqtda — biri 200, ikkinchisi 400 «Buyurtma allaqachon boshqa kuryerga biriktirilgan». anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi (va «eski filialda tugasin» imtiyozli buyurtmalar — tuman HQ viloyatidan ko'chganda yoki deploy paytida HQ kuryerlarida bo'lganlar) — aks holda 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`; filialga jo'natilgan (yo'ldagi) buyurtmani HQ kuryeri olmaydi. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`).",
   })
   @ApiBody({ type: ScanAssignOrderRequestDto })
   async scanAssignOrder(

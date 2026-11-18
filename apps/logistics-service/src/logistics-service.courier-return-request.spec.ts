@@ -210,9 +210,16 @@ describe('requestCourierOrderReturn — «Bu buyurtma kelmagan»', () => {
     );
   });
 
-  it('o‘zi skanerlab olgan posilka — 400 (u kuryer qo‘lida)', async () => {
+  // COURIER-SCAN: skan = qabul — o'zi skanerlab olgan posilka WAITING
+  // (qo'lida), «kelmagan» deb bo'lmaydi (yo'lda emas — 400).
+  it('o‘zi skanerlab olgan posilka — 400 (u kuryer qo‘lida, WAITING)', async () => {
     const ctx = setup({
-      orders: [onTheRoad('101', { last_handover_by: 'c1' })],
+      orders: [
+        onTheRoad('101', {
+          status: Order_status.WAITING,
+          last_handover_by: 'c1',
+        }),
+      ],
     });
     await expectStatus(
       ctx.service.requestCourierOrderReturn(courier, '98', '101'),
