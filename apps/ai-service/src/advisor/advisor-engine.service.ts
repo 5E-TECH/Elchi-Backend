@@ -414,7 +414,19 @@ export class AdvisorEngineService {
           ORDER BY "id" DESC LIMIT 1`,
         [c.dedup_key],
       );
-      const present = this.presentation(c);
+      // R1 (round-4 #651-1): yopilgan ogohlantirishda allaqachon hisoblangan
+      // smenalar (ketma-ketlik oynasi / kursor qayta o'qishi) yangisiga
+      // QAYTA kirmaydi — faktlar va dalil FAQAT yangi fact_key'lardan.
+      // Ketma-ketlik konteksti `streak_length`/`streak_total` da qoladi.
+      const present = this.presentation(
+        c.rule_key === 'R1'
+          ? mergeR1(
+              { facts: {}, evidence: {} },
+              c,
+              new Set(fresh.map((f) => f.fact_key)),
+            )
+          : c,
+      );
       const firstFactAt = c.first_fact_at ? new Date(c.first_fact_at) : null;
       const backfill =
         firstRun &&
