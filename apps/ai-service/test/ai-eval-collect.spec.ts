@@ -1,4 +1,5 @@
 import {
+  COLLECT_SQL,
   UNEDITED_SAMPLE_SQL,
   confirmedPreview,
   hasUnnamedOrder,
@@ -339,5 +340,45 @@ describe('ai-eval-collect: PII (review round-3)', () => {
       '[ISM]chaga bering',
     );
     expect(masked('Ферузачага', ['Феруза'])).toBe('[ISM]чага');
+  });
+
+  it('xarita / WhatsApp havolalari → [LINK] (tinish belgisi saqlanadi)', () => {
+    expect(
+      masked(
+        'joy: https://maps.app.goo.gl/AbCdEf123xyz, https://www.google.com/maps?q=41.311081,69.240562; yandex.uz/maps/-/CDabC9~x. 2gis.uz/tashkent/geo/7030000 va go.2gis.com/ab12c, wa.me/998000000000',
+        [],
+      ),
+    ).toBe('joy: [LINK], [LINK]; [LINK]. [LINK] va [LINK], [LINK]');
+    expect(
+      masked(
+        'https://maps.google.com/?q=41.3,69.2 va google.co.uz/maps/place/X, goo.gl/maps/abc.',
+        [],
+      ),
+    ).toBe('[LINK] va [LINK], [LINK].');
+    // Xarita bo'lmagan / domen ichida emas — tegilmaydi.
+    expect(
+      masked('t.meeting emas, google.com/search?q=a emas, yandex.uz emas', []),
+    ).toBe('t.meeting emas, google.com/search?q=a emas, yandex.uz emas');
+  });
+
+  it('pasport: ajratgich bilan (tire, №)', () => {
+    expect(
+      masked(
+        'pasport AA-1234567, AA №1234567, AA № 1234567, AA1234567, AB–7654321',
+        [],
+      ),
+    ).toBe('pasport [HUJJAT], [HUJJAT], [HUJJAT], [HUJJAT], [HUJJAT]');
+  });
+
+  it('SQL: edited_fields JSON null/skalyar — jsonb_array_length faqat massivda', () => {
+    for (const sql of [COLLECT_SQL, UNEDITED_SAMPLE_SQL]) {
+      expect(sql).toMatch(
+        /jsonb_typeof\(i\.edited_fields\) = 'array'\s+THEN jsonb_array_length\(i\.edited_fields\) > 0/,
+      );
+      expect(sql).not.toContain('COALESCE(i.edited_fields');
+    }
+    // Tahrirlanmagan namunada massiv bo'lmagan qiymat "solishtirib bo'lmadi".
+    expect(UNEDITED_SAMPLE_SQL).toMatch(/ELSE true END\)/);
+    expect(COLLECT_SQL).toMatch(/ELSE false END/);
   });
 });

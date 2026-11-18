@@ -87,7 +87,11 @@ export const COLLECT_SQL = `
       OR EXISTS (
         SELECT 1 FROM ai_schema.ai_order_draft_item i
         WHERE i.draft_id = d.id
-          AND jsonb_array_length(COALESCE(i.edited_fields, '[]'::jsonb)) > 0
+          -- JSON 'null' / skalyar: jsonb_array_length xato bermasin
+          -- (CASE — AND tartibi Postgres'da kafolatlanmagan).
+          AND CASE WHEN jsonb_typeof(i.edited_fields) = 'array'
+                   THEN jsonb_array_length(i.edited_fields) > 0
+                   ELSE false END
       )
     )
   ORDER BY d.created_at DESC
@@ -135,7 +139,11 @@ export const UNEDITED_SAMPLE_SQL = `
       WHERE i.draft_id = d.id
         AND (i.edited_fields IS NULL
              OR i.item_index IS NULL
-             OR jsonb_array_length(i.edited_fields) > 0)
+             -- JSON 'null' / skalyar — "solishtirib bo'lmadi" (NULL kabi);
+             -- jsonb_array_length faqat massivda chaqiriladi.
+             OR CASE WHEN jsonb_typeof(i.edited_fields) = 'array'
+                     THEN jsonb_array_length(i.edited_fields) > 0
+                     ELSE true END)
     )
     -- Deterministik namuna ($4 = seed): bir xil seed — bir xil to'plam.
     AND ('x' || substr(md5($4::text || d.id::text), 1, 8))::bit(32)::bigint
@@ -349,9 +357,15 @@ function nameAlternatives(skeleton: string): string[] {
   return alts;
 }
 
-/** Ijtimoiy tarmoq / messenjer havolalari (profil = shaxs). */
+/**
+ * Ijtimoiy tarmoq / messenjer (profil = shaxs) va xarita havolalari
+ * (joylashuv = uy manzili): Google Maps (maps.app.goo.gl, goo.gl,
+ * google.<tld>/maps, maps.google.<tld>), Yandex Maps, 2GIS, WhatsApp (wa.me).
+ * Yo'lda vergul faqat raqamdan oldin ("?q=41.31,69.24"), shunda
+ * "[LINK], [LINK]" dagi tinish belgisi saqlanadi.
+ */
 const LINK_RE =
-  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com)(?:\/[^\s,;)\]]*)?/giu;
+  /(?<![\p{L}\p{N}_.-])(?:https?:\/\/)?(?:[\w-]+\.)*(?:t\.me|telegram\.me|instagram\.com|instagr\.am|facebook\.com|fb\.com|vk\.com|tiktok\.com|wa\.me|whatsapp\.com|goo\.gl|maps\.google\.[a-z]{2,3}(?:\.[a-z]{2})?|google\.[a-z]{2,3}(?:\.[a-z]{2})?\/maps|yandex\.[a-z]{2,3}\/maps|2gis\.[a-z]{2,3})(?![\p{L}\p{N}_-])(?:[/?#](?:[^\s,;)\]]|,(?=\d))*)?/giu;
 const EMAIL_RE =
   /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
 /** Telegram/Instagram foydalanuvchi nomi (email maskalangandan keyin). */
@@ -395,7 +409,8 @@ export function maskCandidateText(
 ): string {
   let out = text
     .replace(EMAIL_RE, '[EMAIL]')
-    .replace(LINK_RE, '[LINK]')
+    // Gap oxiridagi nuqta havolaga kirmaydi.
+    .replace(LINK_RE, (m) => '[LINK]' + (/\.+$/.exec(m)?.[0] ?? ''))
     .replace(USER_HANDLE_RE, (m) => {
       // Gap oxiridagi nuqta handle'ga kirmaydi.
       const dots = /\.+$/.exec(m)?.[0] ?? '';
@@ -420,8 +435,12 @@ export function maskCandidateText(
   }
   return (
     out
-      // Pasport/ID: 2 harf + 7 raqam ("AA 1234567").
-      .replace(/(?<![\p{L}\p{N}])\p{L}{2}\s?\d{7}(?!\d)/gu, '[HUJJAT]')
+      // Pasport/ID: 2 harf + 7 raqam ("AA 1234567", "AA-1234567",
+      // "AA №1234567", "AA № 1234567").
+      .replace(
+        /(?<![\p{L}\p{N}])\p{L}{2}\s?(?:[-–№]\s?)?\d{7}(?!\d)/gu,
+        '[HUJJAT]',
+      )
       // 9+ raqamli ketma-ketlik (maskalanmagan telefon/karta; nuqta, slash,
       // pastki chiziq, har xil tire ajratgichlar ham). ⚠️ 100 mln dan katta
       // narx ("150 000 000") ham [RAQAM] bo'ladi; narxlar odatda 7–8 raqam
