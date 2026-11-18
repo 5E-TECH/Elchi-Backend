@@ -166,12 +166,33 @@ export class AiOrderActions {
       {
         action: AI_ORDER_ACTIONS.fix,
         expiredText: AI_EXPIRED_TEXT,
-        handle: privateOnly((ctx, id) => this.ai.close(ctx, id, 'fix')),
+        handle: privateOnly((ctx, id) => this.ai.editMenu(ctx, id)),
       },
       {
         action: AI_ORDER_ACTIONS.cancel,
         expiredText: AI_EXPIRED_TEXT,
-        handle: privateOnly((ctx, id) => this.ai.close(ctx, id, 'cancel')),
+        handle: privateOnly((ctx, id) => this.ai.close(ctx, id)),
+      },
+      // Tuzatish: payload — buyurtma indeksi, maydon kaliti, item / ro'yxat o'rni.
+      {
+        action: AI_ORDER_ACTIONS.edit,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.editOrder(ctx, id, p.o)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.field,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.editField(ctx, id, p)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.district,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.openDistrict(ctx, id, p.o)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.districtPick,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.pickDistrict(ctx, id, p)),
       },
       {
         action: AI_ORDER_ACTIONS.retry,

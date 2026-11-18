@@ -453,6 +453,26 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   rad etiladi. 409 / 503 `AI_CHECKS_UNAVAILABLE` / 4xx / parol almashtirish
   — belgi YO'Q (server hech narsa yaratmagan). Takroriy javobda qoralama
   urinishdan keyin o'zgargan bo'lsa — «⚠️ Tuzatishlar qo'llanmadi».
+- **«✏️ Tuzatish» menyusi (#714)** — qoralama yopilmaydi. Amallar:
+  `ai.fix` (menyu; bir nechta buyurtmada avval tanlash), `ai.edit` (`{o}`),
+  `ai.field` (`{o, f: name|phone|address|comment|qty, i?}` — keyingi matn
+  yangi qiymat), `ai.dist` (`{o}` — tuman oynasi), `ai.dpick`
+  (`{o, s: 'c'|'r', k, did}`). Tekshiruv: telefon — `normalizeUzPhone`,
+  ism 2–120 (harf), manzil 3–255, izoh ≤1000, son 1–999, manzil/izoh «-» —
+  o'chirish. `ai_input` `kind: 'edit'` (+ `f`), muddati 5 daqiqa; manzil /
+  izoh kutilayotganda ichida telefon bor yoki ko'p qatorli matn, telefon
+  kutilayotganda harf + 7+ raqam yoki 40+ belgi — yangi buyurtma (kutish
+  bekor). Natijasi noma'lum urinishdagi buyurtmada menyu yopiq.
+- **Tuman.** Tuman yo'q yoki `district_low_confidence` — kartada «📍 Tumanni
+  tanlash»: AI nomzodlari (`district_candidates`, ≤5), ular bo'lmasa viloyat
+  tumanlari `GET /district?region_id=…` (operator JWT; qoralamada saqlanadi,
+  ≤40 tugma, ortig'i — «… yana N ta — kabinetda»). Viloyat ham, nomzod ham
+  yo'q — tugma yo'q (kabinet). **AI ack:** birinchi tahrirda AI tumani
+  `ai_district_id` ga saqlanadi; tanlangan tuman undan farq qilsa
+  `district_low_confidence` tasdiq so'ramaydi (server `edited_fields` +
+  `AI_CHECK_EXEMPT_BY_EDIT` bilan bir xil); o'sha tumanni qayta tanlash —
+  tahrir emas, «Baribir yaratamanmi?» qoladi. Server 409 so'rasa — oyna
+  odatdagidek.
 
 ## 13. Skan Mini App (MWYaqprw) — chatda skan YO'Q
 
