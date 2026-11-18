@@ -391,9 +391,15 @@ const HOUSE_KW_SUFFIX =
   '(?:i|si|и|си)?(?:gacha|dagi|ning|dan|ga|da|ni|гача|даги|нинг|дан|га|да|ни)?';
 /**
  * "uyga 2 ta", "kvartiraga 3 dona" — miqdor/narx, uy raqami EMAS.
+ * "uyiga 25 000", "uyigacha 20 000 so'm" — narxning birinchi guruhi
+ * (keyin bo'shliq/nuqta + 3 raqam), uy raqami EMAS.
  */
 const NOT_QTY =
-  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}]))";
+  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]\\d{3}(?!\\d))";
+/**
+ * "Narxi 1 586 000 uyiga" — narxning oxirgi "000" guruhi, uy raqami EMAS.
+ */
+const NOT_PRICE_TAIL = '(?!(?<=\\d[\\s.])000(?!\\d))';
 /** Uy raqami: 12, 12a, 12/3. */
 const HOUSE_NUM = '\\d{1,4}(?:\\/\\d{1,4}|\\p{L}(?![\\p{L}\\p{N}]))?';
 /**
@@ -471,7 +477,7 @@ export function maskCandidateText(
       // "45-xonadonida", "12-уйда", "5-хонадони".
       .replace(
         new RegExp(
-          `(?<![\\p{L}\\p{N}])([№#]?)${HOUSE_NUM_BEFORE_KW}(\\s*-?\\s*)((?:${HOUSE_KW})${HOUSE_KW_SUFFIX})(?![\\p{L}\\p{N}])`,
+          `(?<![\\p{L}\\p{N}])([№#]?)${NOT_PRICE_TAIL}${HOUSE_NUM_BEFORE_KW}(\\s*-?\\s*)((?:${HOUSE_KW})${HOUSE_KW_SUFFIX})(?![\\p{L}\\p{N}])`,
           'giu',
         ),
         '$1[N]$2$3',

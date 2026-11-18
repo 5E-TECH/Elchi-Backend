@@ -434,4 +434,18 @@ describe('ai-eval-collect: PII (review round-6)', () => {
       ),
     ).toEqual([{ index: 0, address: 'Chilonzor 9, [LINK],[RAQAM]' }]);
   });
+
+  it('S1: narx guruhi uy raqamiga aylanmaydi', () => {
+    expect(
+      masked(
+        "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+        [],
+      ),
+    ).toBe(
+      "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+    );
+    expect(
+      masked('12-uyi, uyiga 12, uy 120, Yunusobod 4 12-uy, дом 12 кв 5', []),
+    ).toBe('[N]-uyi, uyiga [N], uy [N], Yunusobod 4 [N]-uy, дом [N] кв [N]');
+  });
 });
