@@ -86,7 +86,7 @@ export const DISTRICT_CORPUS_MAX_CHARS = 120;
  * va qisqa shakllar ham (shaxri, rayon, r-n, gorod, sh., g.).
  */
 const PLACE_WORD_RE =
-  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g|tum)\.|\btuman(ida|idagi|idan|iga)\b/;
+  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g|tum)\.|\btuman(ida|idagi|iga)\b/;
 /** Shahar afzalligi belgisi — BeePost :1708-1709 (+ shaxri, gorod, sh., g.). */
 const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
 /**
@@ -102,7 +102,7 @@ const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
  */
 const TUMAN_T_ABBR_RE = /([a-z]{2,})\s+t\.(?=\s*(?:[,;]|$))/g;
 const TUMAN_WORD_RE =
-  /\b(tumani|tuman|tumanida|tumanidagi|tumanidan|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b/;
+  /\b(tumani|tuman|tumanida|tumanidagi|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b/;
 /**
  * r7 B1: vergulsiz "X t. <so'z|uy raqami>" ("Qarshi t. Mustaqillik", "Qarshi
  * T.Malik", "Qarshi t. 5-uy") — tuman belgisi ham, ism bosh harfi / boshqa
@@ -203,7 +203,6 @@ const PLACE_AFTER_WORDS: ReadonlySet<string> = new Set([
   'tum',
   'tumanida',
   'tumanidagi',
-  'tumanidan',
   'tumaniga',
   'shahri',
   'shaxri',
@@ -237,11 +236,11 @@ const AREA_AFTER_WORDS: ReadonlySet<string> = new Set([
 const TUMAN_AFTER_WORDS: ReadonlySet<string> = new Set([
   'tumani',
   'tuman',
-  // "Toshkent tum., ...", "Toshkent tumanida, ..." (r6)
+  // "Toshkent tum., ...", "Toshkent tumanida, ..." (r6). "tumanidan"
+  // ("…dan kelgan") — yetkazish manzili EMAS, belgi emas (r7 S3).
   'tum',
   'tumanida',
   'tumanidagi',
-  'tumanidan',
   'tumaniga',
   'rayon',
   'rayoni',

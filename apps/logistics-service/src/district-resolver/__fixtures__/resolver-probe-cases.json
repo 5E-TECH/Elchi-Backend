@@ -3674,5 +3674,33 @@
    "reason": null
   },
   "note": "r7 S1 documented: split fields — no name before \"t.\", bare \"Qarshi\" → city (dev: 1710224)"
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Yunusobod, Chilonzor tumanidan kelgan"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Yunusobod 5, Chilonzor tumanidan kelgan"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
  }
 ]
