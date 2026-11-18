@@ -1754,40 +1754,6 @@ export class RecordFinancialBalanceRequestDto {
   expense_category?: ExpenseCategory;
 }
 
-export class CreateOperatorPaymentRequestDto {
-  @ApiProperty({
-    example: '42',
-    description: 'Operator user id (bigint string)',
-  })
-  @IsString()
-  @Matches(/^\d+$/, {
-    message: 'operator_id must be a bigint-like numeric string',
-  })
-  operator_id!: string;
-
-  @ApiPropertyOptional({
-    example: '7',
-    description: 'Market id (bigint string)',
-  })
-  @IsOptional()
-  @IsString()
-  @Matches(/^\d+$/, {
-    message: 'market_id must be a bigint-like numeric string',
-  })
-  market_id?: string;
-
-  @ApiProperty({ example: 50000, description: 'Payout amount' })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
-  amount!: number;
-
-  @ApiPropertyOptional({ example: 'Oylik komissiya to`lovi' })
-  @IsOptional()
-  @IsString()
-  note?: string;
-}
-
 // --- GET /finance/cashbox/hq-couriers (C1) — faqat javob hujjati ---
 
 export class HqCourierCashboxDto {
