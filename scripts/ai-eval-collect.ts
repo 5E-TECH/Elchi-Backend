@@ -396,10 +396,11 @@ const HOUSE_KW_SUFFIX =
 /**
  * "uyga 2 ta", "kvartiraga 3 dona" — miqdor/narx, uy raqami EMAS.
  * "uyiga 25 000", "uyigacha 20 000 so'm" — narxning birinchi guruhi
- * (keyin bo'shliq/nuqta + 3 raqam), uy raqami EMAS.
+ * (keyin bo'shliq/nuqta + "000"), uy raqami EMAS. Faqat "000": "kv 45
+ * 250 000", "uy 12\n250 000" dagi uy/xonadon raqami yopiq qoladi.
  */
 const NOT_QTY =
-  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]\\d{3}(?!\\d))";
+  "(?!\\s*(?:ta|dona|shtuk|шт|та|дона|ming|минг|тыс|mln|млн|so'm|сум|x)(?![\\p{L}])|[\\s.]000(?!\\d))";
 /**
  * "Narxi 1 586 000 uyiga" — narxning oxirgi "000" guruhi, uy raqami EMAS.
  */

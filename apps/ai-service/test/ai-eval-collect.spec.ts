@@ -477,3 +477,63 @@ describe('ai-eval-collect: PII (review round-6)', () => {
     );
   });
 });
+
+/**
+ * Review round-7 — dev bilan tenglik (dev maskalagan narsa ochilmasin).
+ * Har holat maskCandidateText VA maskDeep (tuzatishlar, tasdiqlangan
+ * preview) orqali. Hammasi sintetik.
+ */
+describe('ai-eval-collect: PII (review round-7, dev tengligi)', () => {
+  const viaDeep = (text: string): string[] => {
+    const corr = maskDeep(
+      scrubCorrections([
+        {
+          item_index: 0,
+          field_corrections: { address: { ai: null, final: text } },
+        },
+      ]),
+      [],
+    ) as { field_corrections: { address: { final: string } } }[];
+    const prev = maskDeep(
+      confirmedPreview([{ index: 0, address: text }], [{ item_index: 0 }]),
+      [],
+    ) as { address: string }[];
+    return [corr[0].field_corrections.address.final, prev[0].address];
+  };
+  const expectAll = (text: string, want: string): void => {
+    expect(maskCandidateText(text, [])).toBe(want);
+    expect(viaDeep(text)).toEqual([want, want]);
+  };
+
+  it('B4: uy/xonadon raqamidan keyingi narx raqamni ochmaydi', () => {
+    for (const [t, want] of [
+      [
+        "Chilonzor 12 kvartal uy 5 kv 45 250 000 so'm",
+        "Chilonzor 12 kvartal uy [N] kv [N] 250 000 so'm",
+      ],
+      ["kv 45 150 000 so'm", "kv [N] 150 000 so'm"],
+      ['uy 12 100 000', 'uy [N] 100 000'],
+      ['дом 12 300 000 сум', 'дом [N] 300 000 сум'],
+      ['кв 45 200 тыс', 'кв [N] 200 тыс'],
+      ['dom 7 123', 'dom [N] 123'],
+      ['uyga 1.500', 'uyga [N].500'],
+      [
+        "Sergeli, dom 15, kv 7 350.000 so'm",
+        "Sergeli, dom [N], kv [N] 350.000 so'm",
+      ],
+      ["Olmazor uy 23 120 000 so'm", "Olmazor uy [N] 120 000 so'm"],
+      ['kvartira 7 200 ming', 'kvartira [N] 200 ming'],
+      [
+        "Dilnoza 90 742 90 47\nToshkent Chilonzor 9-kvartal, uy 12 kv 45\n250 000 so'm\natir 1 ta",
+        "Dilnoza [RAQAM]\nToshkent Chilonzor 9-kvartal, uy [N] kv [N]\n250 000 so'm\natir 1 ta",
+      ],
+    ]) {
+      expectAll(t, want);
+    }
+    // S1 narx holatlari avvalgidek saqlanadi.
+    expectAll(
+      "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+      "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+    );
+  });
+});
