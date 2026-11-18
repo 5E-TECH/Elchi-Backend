@@ -406,15 +406,21 @@ describe('AiConfirmRequestDto — qat’iy ai-confirm DTO (C10)', () => {
     // DTO'da QABUL qilinadi (POST /orders bilan ayni tekshiruv; server uni
     // shu marketning faol operatori ekanini partiya boshida tekshiradi).
     // «Model chiqishidan operator_id o'tmaydi» kafolati endi bu DTO'da EMAS,
-    // quyidagilarda:
-    //  - ai-service `order-extract/injection-regression.spec.ts` (a) va (e)
-    //    — sanitize to'qilgan `operator_id` kalitini tashlaydi;
-    //  - order-service `ai/ai-preview.service.spec.ts` #8 — preview oq
-    //    ro'yxati (`operator` faqat matn, `operator_id` yo'q);
-    //  - payload quruvchilar: bot `toConfirmOrder`
-    //    (notification-service `ai-preview.confirm-keys.spec.ts` — kalitlar
-    //    oq ro'yxati) va FE `buildAiConfirmPayload` (operator_id faqat odam
-    //    select'da tanlasa).
+    // quyidagi qatlamlarda (ega qarori, #715):
+    //  1. model chiqishi: ai-service `prompts/order-extract.schema.ts`
+    //     (json_schema, `additionalProperties: false`) — model `operator_id`
+    //     maydonini qaytara olmaydi;
+    //  2. ai-service `order-extract/sanitize-extraction.ts`
+    //     (`sanitizeExtraction` oq ro'yxati) — to'qilgan `operator_id`
+    //     tashlanadi; `order-extract/injection-regression.spec.ts` (a), (e);
+    //  3. order-service `ai/ai-preview.service.spec.ts` #8 — preview oq
+    //     ro'yxati (`operator` faqat matn, `operator_id` yo'q);
+    //  4. payload quruvchilar: bot `toConfirmOrder` (notification-service
+    //     `ai-preview.confirm-keys.spec.ts` — ifloslangan preview bilan ham
+    //     operator_id, verified_operator_id, customer_id, operator_phone,
+    //     secondary_operator_phone, market_id chiqmaydi) va FE `mappers.ts`
+    //     `toConfirmOrder` oq ro'yxati (operator_id faqat odam select'da
+    //     tanlasa).
     it("(e) operator '#admin' — faqat matn; operator_id faqat raqam (aks holda RAD)", async () => {
       const paths = await errorPaths(
         body(baseOrder({ operator: '#admin', operator_id: '#admin' })),
