@@ -35,6 +35,7 @@ import {
   IsOrderCreateItems,
   isProvidedDistrictId,
 } from '../order-create/order-create-content';
+import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -385,19 +386,11 @@ export class CreateOrderRequestDto {
       "o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» " +
       "(superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi " +
       "yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). " +
-      "Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11).",
+      "Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11). " +
+      'Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa), aks holda 400.',
   })
-  @IsOptional()
-  @Transform(({ value }: { value: unknown }) => {
-    if (typeof value === 'number') return String(value);
-    // Bo'sh satr — «tanlanmagan» (forma select'ining bo'sh qiymati).
-    if (typeof value === 'string' && value.trim() === '') return undefined;
-    return value;
-  })
-  @IsString()
-  @Matches(/^\d{1,19}$/, {
-    message: "operator_id operator ID si (raqam) bo'lishi kerak",
-  })
+  // Tekshiruv ai-confirm (`AiConfirmOrderDto.operator_id`) bilan umumiy.
+  @OptionalChosenOperatorId()
   operator_id?: string | null;
 
   /**

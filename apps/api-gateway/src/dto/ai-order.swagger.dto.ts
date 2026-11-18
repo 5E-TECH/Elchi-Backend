@@ -35,6 +35,7 @@ import {
   type OrderFulfillmentMode,
   Where_deliver,
 } from '@app/common';
+import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -392,12 +393,35 @@ export class AiConfirmOrderDto {
     example: 'sevinch',
     maxLength: 100,
     description:
-      'Operator nomi — FAQAT matn (varchar). operator_id ga HECH QACHON bog‘lanmaydi.',
+      'Operator nomi — FAQAT matn (varchar); matndan operator_id HECH QACHON aniqlanmaydi. ' +
+      '`operator_id` berilsa bu matn e’tiborsiz — buyurtmaga tanlangan operator ismi yoziladi (POST /orders bilan bir xil).',
   })
   @IsOptional()
   @IsString({ message: "Operator matn bo'lishi kerak" })
   @MaxLength(100, { message: 'Operator nomi 100 belgidan oshmasligi kerak' })
   operator?: string;
+
+  /**
+   * Formadagi «Operator» tanlovi — `POST /orders` `operator_id` bilan AYNI
+   * (DTO tekshiruvi umumiy, server tekshiruvi `createOrderInternal` dagi
+   * `resolveChosenOrderOperator`). Har buyurtmaga ALOHIDA.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    example: '26',
+    description:
+      'Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan) — POST /orders `operator_id` bilan AYNI qoida. ' +
+      "Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART (superadmin/admin ham tekshiriladi); market operatori faqat o'zini tanlay oladi. " +
+      'Aks holda SHU buyurtma yaratilmaydi: natijada `ok: false, code: "create_failed"`, `reason` — POST /orders 400 matni ' +
+      '(«Tanlangan operator bu marketga tegishli emas yoki faol emas» yoki «Market operatori faqat o‘zini operator qilib tanlay oladi»); ' +
+      'partiyadagi boshqa buyurtmalar yaratiladi. Operatorni tekshirib bo‘lmasa (identity javob bermadi) — `code: "validation_unavailable"`, buyurtma ANIQ yaratilmagan, qayta yuboring. ' +
+      'To‘g‘ri bo‘lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e’tiborsiz; AI auditida ham shu ism). ' +
+      'Musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa) — aks holda 400 (DTO). Bo‘sh satr — tanlanmagan. ' +
+      'Berilmasa — avvalgi xulq (`operator` matni; market operatori — o‘zi; qolganlar — operatorsiz). ' +
+      '⚠️ Faqat odam select’da tanlaydi: AI `operator` matnidan operator_id ni AVTOMATIK tanlamang; market operatori roli uni yubormasin (u baribir o‘zi).',
+  })
+  @OptionalChosenOperatorId()
+  operator_id?: string | null;
 
   @ApiPropertyOptional({
     enum: ORDER_FULFILLMENT_MODES,
