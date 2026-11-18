@@ -140,7 +140,7 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
   it('dispatch xatosi — notified_at bo‘sh qoladi, keyingi tick ayni client_request_id bilan', async () => {
     await insert('critical');
     dispatch.mockReturnValueOnce(
-      throwError(() => ({ statusCode: 500, message: 'notification xatosi' })),
+      throwError(() => ({ statusCode: 400, message: 'notification xatosi' })),
     );
     expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 1 });
     expect((await notified())[0].notified_at).toBeNull();
@@ -277,6 +277,24 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       sent: 2,
       failed: 0,
     });
+  });
+
+  it('#705 S-d: 5xx (xizmat nosoz) — urinish sanalmaydi, «failed» bo‘lmaydi', async () => {
+    const [{ id }] = await insert('critical');
+    dispatch.mockImplementation(() =>
+      throwError(() => ({ statusCode: 500, message: 'Internal server error' })),
+    );
+    let t = Date.now();
+    for (let i = 0; i < 20; i++) {
+      await notifier.dispatchPending(new Date(t));
+      t += 30 * 60_000;
+    }
+    expect(dispatch).toHaveBeenCalledTimes(20);
+    const [row] = await ds.query<Array<{ notify_skipped: string | null }>>(
+      `SELECT notify_skipped FROM ai_schema.ai_advisor_alerts WHERE id = $1`,
+      [id],
+    );
+    expect(row.notify_skipped).toBeNull();
   });
 
   it('round-4 S2: oraliqdagi qatorlar partiya joyini olmaydi — yangi critical shu tick yuboriladi', async () => {
@@ -454,6 +472,89 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       expect(retry.client_request_id).toBe(first.client_request_id);
       expect(retry.channels).toEqual(['in_app', 'realtime']);
       expect(tg.channels).toEqual(['telegram']);
+      expect((await due(id)).telegram_due_at).toBeNull();
+    });
+
+    // Bugungi Toshkent kunidan (stale DB soati bilan) — 02:30 va ertangi kun.
+    const todayAt = (hours: number) => {
+      const day = Math.floor((Date.now() + 5 * 3600_000) / 86_400_000);
+      return new Date(day * 86_400_000 - 5 * 3600_000 + hours * 3600_000);
+    };
+
+    it('#705 S-a: uzilish yarim tundan o‘tsa — Telegram tunda emas, o‘sha kuni 09:00 da', async () => {
+      const [{ id }] = await insert('critical', 'new', null, 'R6');
+      await ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET first_at = $2 WHERE id = $1`,
+        [id, todayAt(2.5)],
+      );
+      dispatch.mockReturnValueOnce(throwError(() => new TimeoutError()));
+      await notifier.dispatchPending(todayAt(2.5));
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      // Ertasi kuni 00:30 — ilova ichi darhol, Telegram yo'q.
+      expect(await notifier.dispatchPending(todayAt(24.5))).toEqual({
+        sent: 1,
+        failed: 0,
+      });
+      expect(payloads()[1].channels).toEqual(['in_app', 'realtime']);
+      expect((await due(id)).telegram_due_at?.toISOString()).toBe(
+        todayAt(33).toISOString(),
+      );
+      // 09:00 da — faqat Telegram.
+      await notifier.dispatchPending(todayAt(33));
+      expect(payloads()[2].channels).toEqual(['telegram']);
+    });
+
+    it('#705 S-b: 09:00 Telegram — o‘z timeout’i bor qator boshqasini to‘smaydi (navbat oxiriga)', async () => {
+      const [{ id: x }] = await insert('critical', 'new', null, 'R6');
+      const [{ id: y }] = await insert('critical', 'new', null, 'R6');
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      await notifier.dispatchPending(night);
+      dispatch.mockReset();
+      dispatch.mockImplementation((_p: unknown, body: unknown) =>
+        (body as { data: { alert_id: string } }).data.alert_id === x
+          ? throwError(() => new TimeoutError())
+          : of({ statusCode: 201 }),
+      );
+      await ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() - INTERVAL '1 hour' WHERE id = $1`,
+        [x],
+      );
+      let t = nine.getTime();
+      for (let i = 0; i < 3; i++) {
+        await notifier.dispatchPending(new Date(t));
+        t += 30 * 60_000;
+      }
+      expect((await due(y)).telegram_due_at).toBeNull();
+      expect((await due(x)).telegram_due_at).not.toBeNull();
+    });
+
+    it('#705 S-c: 09:00 da superadminlar olinmasa — qatorlarga urinish yozilmaydi, keyin yetkaziladi', async () => {
+      const [{ id }] = await insert('critical', 'new', null, 'R6');
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      await notifier.dispatchPending(night);
+      dispatch.mockClear();
+      // Superadminlar keshi (real soat bo'yicha 5 daq) — tozalanadi.
+      (notifier as unknown as { recipientsCache: unknown }).recipientsCache =
+        null;
+      identity.mockImplementation(
+        () =>
+          throwError(() => ({ statusCode: 500, message: 'identity' })) as never,
+      );
+      try {
+        let t = nine.getTime();
+        for (let i = 0; i < 10; i++) {
+          await notifier.dispatchPending(new Date(t));
+          t += 60 * 60_000;
+        }
+        expect(dispatch).not.toHaveBeenCalled();
+        expect((await due(id)).telegram_due_at).not.toBeNull();
+      } finally {
+        identity.mockImplementation(() =>
+          of({ data: { items: [{ id: '1' }, { id: 5 }] } }),
+        );
+      }
+      await notifier.dispatchPending(new Date(nine.getTime() + 11 * 3600_000));
+      expect(payloads().map((p) => p.channels)).toEqual([['telegram']]);
       expect((await due(id)).telegram_due_at).toBeNull();
     });
 

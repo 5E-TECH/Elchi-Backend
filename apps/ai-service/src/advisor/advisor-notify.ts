@@ -60,10 +60,18 @@ export const advisorNotifyBackoffMs = (attempt: number): number =>
   NOTIFY_BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1);
 /** Tick vaqti siljishi (qoidalar fazasi davomiyligi) — oraliq bir tick'ka siljimasin. */
 const NOTIFY_BACKOFF_SLACK_MS = 2 * 60_000;
-/** Xizmat yetib bo'lmadi (timeout / transport, `statusCode` yo'q) — qatorning aybi emas. */
-export const isDispatchUnreachable = (error: unknown): boolean =>
-  error instanceof TimeoutError ||
-  typeof (error as { statusCode?: unknown } | null)?.statusCode !== 'number';
+/**
+ * Qatorning aybi emas — xizmat yetib bo'lmadi (timeout / transport,
+ * `statusCode` yo'q) yoki xizmatning o'zi nosoz (5xx: `toRpcError` har
+ * kutilmagan istisnoni 500 qiladi — deploy xatosi, pool buzilishi).
+ * Hisoblanmaydi (§9.2; 24 soatlik `stale` baribir chegaralaydi). Faqat 4xx
+ * (qator/payload rad etildi) urinish sifatida sanaladi.
+ */
+export const isDispatchUnreachable = (error: unknown): boolean => {
+  if (error instanceof TimeoutError) return true;
+  const code = (error as { statusCode?: unknown } | null)?.statusCode;
+  return typeof code !== 'number' || code >= 500;
+};
 export const ADVISOR_RECIPIENTS_TTL_MS = 5 * 60_000;
 const BODY_MAX = 600;
 
@@ -419,8 +427,12 @@ export class AdvisorNotifier {
       const openedAt =
         firstAt && firstAt.getTime() <= now.getTime() ? firstAt : now;
       const r6Due = telegram ? r6TelegramDueAt(row.rule_key, openedAt) : null;
+      // 09:00 o'tgan: hozir kunduz bo'lsa — darhol; tun bo'lsa (uzilish yarim
+      // tundan o'tgan) — bugungi 09:00 (R6 ega qarori: Telegram tunda yo'q).
       const telegramDueAt =
-        r6Due && r6Due.getTime() < now.getTime() ? now : r6Due;
+        r6Due && r6Due.getTime() < now.getTime()
+          ? (r6TelegramDueAt(row.rule_key, now) ?? now)
+          : r6Due;
       const payload = buildAdvisorDispatch(row, {
         recipients,
         rules,
@@ -554,7 +566,7 @@ export class AdvisorNotifier {
          FROM ai_schema.ai_advisor_alerts a
         WHERE a."telegram_due_at" IS NOT NULL AND a."telegram_due_at" <= $1
           AND NOT (a."id" = ANY($2::bigint[]))
-        ORDER BY a."telegram_due_at" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+        ORDER BY a."updatedAt" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
       [now, this.waitingIds(now, ':tg')],
     );
     if (!rows.length) return out;
@@ -582,8 +594,19 @@ export class AdvisorNotifier {
         await clear(row.id);
         continue;
       }
+      // Qabul qiluvchilar — qator xatosi EMAS (#705 S-c): olinmasa partiya
+      // to'xtaydi, hech bir qatorga urinish yozilmaydi (dispatchBatch kabi).
+      if (recipients === null) {
+        try {
+          recipients = await this.recipients();
+        } catch (error) {
+          this.logger.warn(
+            `ai_advisor_notify_telegram: superadminlar olinmadi — ${short(error)}`,
+          );
+          return { sent: out.sent, failed: out.failed + 1 };
+        }
+      }
       try {
-        recipients ??= await this.recipients();
         const payload = buildAdvisorDispatch(row, {
           recipients,
           rules,
@@ -612,6 +635,8 @@ export class AdvisorNotifier {
       } catch (error) {
         out.failed += 1;
         if (isDispatchUnreachable(error)) {
+          // Navbat oxiriga (S-b): o'z timeout'i bor qator boshqalarini to'smaydi.
+          await this.touch(row.id);
           this.logger.warn(
             `ai_advisor_notify_telegram_unreachable alert=${row.id}: ${short(error)}`,
           );
