@@ -432,6 +432,29 @@ export const AI_ADVISOR_SORT_FIELDS = [
 ] as const;
 export type AiAdvisorSortField = (typeof AI_ADVISOR_SORT_FIELDS)[number];
 
+/**
+ * Aniq kalendar kuni: `YYYY-MM-DD`, aylanib o'tmaydi (2026-02-30 → yo'q) va
+ * yil ≥ 2000 — Postgres 22008 → 500 bo'lmasin (round-2 #654 S1). Gateway
+ * DTO va ai-service bir xil qoidani ishlatadi (round-4 #654).
+ */
+export const isAiAdvisorDay = (v: unknown): v is string => {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return (
+    !Number.isNaN(d.getTime()) &&
+    d.getUTCFullYear() >= 2000 &&
+    d.toISOString().slice(0, 10) === v
+  );
+};
+
+/**
+ * C0 boshqaruv belgilari (`\t`, `\n`, `\r` dan tashqari) va DEL — `q` va
+ * `note` da rad etiladi (Postgres U+0000 ni qabul qilmaydi).
+ */
+export const AI_ADVISOR_CONTROL_CHARS =
+  // eslint-disable-next-line no-control-regex -- ataylab: boshqaruv belgilarini rad etish
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
 export interface AiAdvisorAlertsQuery {
   status?: AiAdvisorAlertStatus | 'open';
   severity?: AiAdvisorSeverity;
