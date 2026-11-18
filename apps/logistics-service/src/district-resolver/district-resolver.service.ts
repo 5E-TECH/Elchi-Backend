@@ -150,6 +150,22 @@ const STREET_AFTER_WORDS: ReadonlySet<string> = new Set([
   'bozori',
   'bekati',
 ]);
+/**
+ * "Olmazor ul. d. 5", "Sergeli ul. dom 12", "Chilonzor ul. uy 5" — "ul."
+ * dan keyin uy/xonadon belgisi: bu ko'cha (r6 S1).
+ */
+const UL_HOUSE_WORDS: ReadonlySet<string> = new Set([
+  'd',
+  'dom',
+  'uy',
+  'kv',
+  'kvartira',
+  'xonadon',
+  'k',
+  'korpus',
+  'no',
+  'n',
+]);
 /** Nomdan OLDIN kelsa ko'cha belgisi ("ул. Навои", "pr. Amir Temur"). */
 const STREET_BEFORE_WORDS: ReadonlySet<string> = new Set([
   'ul',
@@ -938,12 +954,15 @@ export function resolveDistrictText(
             (next && allSkels.has(d.skel + next))
           )
             continue;
-          // "Sergeli ul. 12" — ko'cha; "Chilonzor ul. Bunyodkor 5" — "ul."
-          // keyingi nomga tegishli, Chilonzor tuman (r4 S1).
+          // "Sergeli ul. 12" / "Olmazor ul. d. 5" — ko'cha; "Chilonzor ul.
+          // Bunyodkor 5" — "ul." keyingi nomga tegishli (r4 S1, r6).
           const afterUl = tokens[i + len + 1];
           const streetAfter =
             STREET_AFTER_WORDS.has(next) &&
-            (next !== 'ul' || afterUl === undefined || /^\d/.test(afterUl));
+            (next !== 'ul' ||
+              afterUl === undefined ||
+              /^\d/.test(afterUl) ||
+              UL_HOUSE_WORDS.has(afterUl));
           if (
             streetAfter ||
             STREET_BEFORE_WORDS.has(prev) ||

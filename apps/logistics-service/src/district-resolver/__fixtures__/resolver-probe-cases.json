@@ -2991,5 +2991,173 @@
    "sato": "1727265",
    "reason": null
   }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Olmazor ul. d. 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Olmazor ul. d. 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Olmazor ul., d.5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Olmazor ul., d.5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Sergeli ul. dom 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Sergeli ul. dom 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Chilonzor ul. uy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Chilonzor ul. uy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "Toshkent sh., Yunusobod ul. kv 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Toshkent sh., Yunusobod ul. kv 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Toshkent shahri",
+   "full_address": "г. Ташкент, Сергели ул. д. 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "г. Ташкент, Сергели ул. д. 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
  }
 ]
