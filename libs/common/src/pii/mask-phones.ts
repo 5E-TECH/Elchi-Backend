@@ -232,8 +232,12 @@ const UZ_ALT_PHONE_SOURCES: readonly { source: string; kind: SourceKind }[] = [
   },
   // Prefikssiz 3-3-3 — telefon so'zidan keyin yoki shunday raqamlar
   // ro'yxatida (`tel: 901 234 567, 911 234 567`, `Tel 1: …, Tel 2: …`).
+  // ⚠️ Ro'yxat oldingi 4 ta raqam bilan chegaralangan (`{0,4}`): `*` bilan
+  // lookbehind har pozitsiyada butun ro'yxatni qayta o'qiydi — kvadratik,
+  // 100 KB da soniyalar (#647 round 3, log'ga ketadigan webhook payload).
+  // Ro'yxatdagi 6-raqamdan boshlab faqat log maskasi yashiradi.
   {
-    source: `(?=${UZ_NATIONAL_CODE}\\d)(?<=${PHONE_WORD_BEFORE}(?:(?:\\+?998[ \\-]?)?${NAT_333}${LIST_JOIN}(?:${PHONE_WORD_BEFORE})?)*)${UZ_NATIONAL_CODE}\\d[ .\\-\\u00a0]\\d{3}[ .\\-\\u00a0]\\d{3}(?!\\d)`,
+    source: `(?=${UZ_NATIONAL_CODE}\\d)(?<=${PHONE_WORD_BEFORE}(?:(?:\\+?998[ \\-]?)?${NAT_333}${LIST_JOIN}(?:${PHONE_WORD_BEFORE})?){0,4})${UZ_NATIONAL_CODE}\\d[ .\\-\\u00a0]\\d{3}[ .\\-\\u00a0]\\d{3}(?!\\d)`,
     kind: 'ambiguous',
   },
   // 0/8 + bo'shliq + 3-3-3 (`0 901 234 567`).
