@@ -1,7 +1,6 @@
-import { applyDecorators, BadRequestException } from '@nestjs/common';
-import { Transform } from 'class-transformer';
-import { IsOptional, IsString, Matches } from 'class-validator';
+import { BadRequestException } from '@nestjs/common';
 import { Roles as RoleEnum } from '@app/common';
+import { INT8_MAX, OptionalPositiveInt8Id } from './positive-int8-id';
 
 /**
  * Buyurtma formasidagi «Operator» tanlovi — `POST /orders` `operator_id`
@@ -48,24 +47,20 @@ export const CHOSEN_OPERATOR_ID_FORMAT_MESSAGE =
  * (`CreateOrderRequestDto`) va `POST /orders/ai-confirm`
  * (`AiConfirmOrderDto`) uchun AYNI qoida (bir joyda — ikki DTO ajralib
  * ketmasin). Swagger tavsifi har DTO'ning o'zida (xato shakli farq qiladi).
- *  • son → satr; bo'sh satr — «tanlanmagan» (forma select'ining bo'sh
- *    qiymati) → `undefined`;
- *  • aks holda 1–19 xonali raqam, bo'lmasa 400.
+ *  • xavfsiz butun son → satr; bo'sh satr — «tanlanmagan» (forma
+ *    select'ining bo'sh qiymati) → `undefined`;
+ *  • aks holda musbat int8 (boshida nolsiz, ≤ 9223372036854775807), bo'lmasa
+ *    400 (`positive-int8-id.ts`).
  */
 export function OptionalChosenOperatorId(): PropertyDecorator {
-  return applyDecorators(
-    IsOptional(),
-    Transform(({ value }: { value: unknown }) => {
-      if (typeof value === 'number') return String(value);
-      if (typeof value === 'string' && value.trim() === '') return undefined;
-      return value;
-    }),
-    IsString(),
-    Matches(/^\d{1,19}$/, { message: CHOSEN_OPERATOR_ID_FORMAT_MESSAGE }),
-  );
+  return OptionalPositiveInt8Id(CHOSEN_OPERATOR_ID_FORMAT_MESSAGE);
 }
 
 const BIGINT_ID_RE = /^[0-9]{1,19}$/;
+
+/** Ichki chaqiruvlar: boshida nol bo'lishi mumkin, lekin 0 va int8 dan katta — yo'q. */
+const isInt8IdText = (value: string): boolean =>
+  BIGINT_ID_RE.test(value) && BigInt(value) > 0n && BigInt(value) <= INT8_MAX;
 
 const idText = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number'
@@ -92,7 +87,7 @@ export async function resolveChosenOrderOperator(params: {
     return null;
   }
   // DTO tekshiradi; bu — DTO'dan o'tmaydigan ichki chaqiruvlar uchun.
-  if (!BIGINT_ID_RE.test(operatorId)) {
+  if (!isInt8IdText(operatorId)) {
     throw new BadRequestException(CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE);
   }
   const chosenId = canonicalId(operatorId);

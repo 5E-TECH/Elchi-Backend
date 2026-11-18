@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { BadRequestException, Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { ClientProxy } from '@nestjs/microservices';
-import { type Observable, of } from 'rxjs';
+import { type Observable, of, throwError, TimeoutError } from 'rxjs';
 import { Where_deliver } from '@app/common';
 import { OrderGatewayController } from './order-gateway.controller';
 import type { AiStatusPoller } from './ai/ai-status.poller';
@@ -109,6 +109,8 @@ const makeController = (
   };
   const poller = { getState: jest.fn(() => 'enabled') };
 
+  // Xodim (registrator/menejer) — filialsiz (HQ).
+  branch.send.mockImplementation(() => of({ data: null }));
   logistics.send.mockImplementation((_pattern, payload) =>
     of({
       data: (payload.ids ?? [])
@@ -184,6 +186,9 @@ const marketReq = {
 const operatorReq = {
   user: { sub: OPERATOR_SELF, username: 'op', roles: ['market_operator'] },
 };
+const staffReq = (role: string) => ({
+  user: { sub: '9', username: role, roles: [role] },
+});
 
 const sendsOf = (fake: Fake, cmd: string) =>
   fake.send.mock.calls.filter(([pattern]) => pattern.cmd === cmd);
@@ -357,5 +362,148 @@ describe('POST /orders/ai-confirm — orders[].operator_id («Operator» tanlovi
       operator_id: OPERATOR_SELF,
     });
     expect(byOperator).not.toHaveProperty('verified_operator_id');
+  });
+
+  it.each(['registrator', 'admin', 'manager'])(
+    '%s + tanadagi market_id: shu market operatori — qabul, boshqa market operatori — create_failed',
+    async (role) => {
+      const fx = makeController();
+      const res = await fx.controller.aiConfirm(
+        {
+          market_id: MARKET_ID,
+          orders: [
+            confirmOrder(1, { operator_id: '31' }),
+            confirmOrder(2, { operator_id: '41' }),
+          ],
+        },
+        staffReq(role),
+      );
+
+      expect(res.data.results).toEqual([
+        expect.objectContaining({ index: 0, ok: true }),
+        {
+          index: 1,
+          ok: false,
+          code: 'create_failed',
+          reason: CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
+        },
+      ]);
+      const sent = createdPayloads(fx.order);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].dto).toMatchObject({
+        market_id: MARKET_ID,
+        operator_id: '31',
+        operator: 'Operator Bir',
+      });
+      expect(sent[0].verified_operator_id).toBe('31');
+      // Tekshiruv — tanadagi market bo'yicha.
+      expect(
+        sendsOf(fx.identity, 'identity.market_operator.selectable').map(
+          ([, payload]) => payload.market_id,
+        ),
+      ).toEqual([MARKET_ID, MARKET_ID]);
+    },
+  );
+
+  it.each([
+    ['RPC xatosi', () => throwError(() => new Error('identity down'))],
+    ['timeout', () => throwError(() => new TimeoutError())],
+    [
+      'RMQ xato obyekti',
+      () => throwError(() => ({ status: 'error', message: 'x' })),
+    ],
+  ])(
+    'selectable %s → validation_unavailable (yaratilmagan), mijoz va operatorsiz buyurtma saqlanmaydi',
+    async (_label, failure) => {
+      const fx = makeController();
+      const base = fx.identity.send.getMockImplementation()!;
+      fx.identity.send.mockImplementation((pattern, payload) =>
+        pattern.cmd === 'identity.market_operator.selectable'
+          ? failure()
+          : base(pattern, payload),
+      );
+      const res = await fx.controller.aiConfirm(
+        {
+          orders: [confirmOrder(1, { operator_id: '31' }), confirmOrder(2)],
+        },
+        marketReq,
+      );
+
+      expect(res.data.results).toEqual([
+        {
+          index: 0,
+          ok: false,
+          code: 'validation_unavailable',
+          reason: expect.stringContaining(
+            'operatorni tekshirib',
+          ) as unknown as string,
+        },
+        expect.objectContaining({ index: 1, ok: true }),
+      ]);
+      expect(
+        sendsOf(fx.identity, 'identity.customer.create').map(
+          ([, payload]) => payload.dto?.phone_number,
+        ),
+      ).toEqual([phoneFor(2)]);
+      const sent = createdPayloads(fx.order);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].dto).toMatchObject({ operator_id: null });
+    },
+  );
+
+  it('bir xil operator_id partiyada — identity BIR marta so`raladi', async () => {
+    const fx = makeController();
+    const res = await fx.controller.aiConfirm(
+      {
+        orders: [
+          confirmOrder(1, { operator_id: '31' }),
+          confirmOrder(2, { operator_id: '31' }),
+          confirmOrder(3, { operator_id: '41' }),
+          confirmOrder(4, { operator_id: '41' }),
+        ],
+      },
+      marketReq,
+    );
+
+    expect(res.data.results.map((r) => r.ok)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(
+      sendsOf(fx.identity, 'identity.market_operator.selectable').map(
+        ([, payload]) => payload.operator_id,
+      ),
+    ).toEqual(['31', '41']);
+  });
+
+  describe('DTO: musbat int8 (bigint toshib ketmasin)', () => {
+    it.each([
+      ['9999999999999999999'],
+      ['9223372036854775808'],
+      ['0'],
+      ['031'],
+      [2 ** 53 + 2],
+      [-5],
+      [3.5],
+    ])('%p — 400', async (value) => {
+      await expect(
+        validateBody({ orders: [{ ...confirmOrder(1), operator_id: value }] }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('chegaradagi qiymat qabul qilinadi', async () => {
+      const dto = await validateBody({
+        orders: [
+          { ...confirmOrder(1), operator_id: '9223372036854775807' },
+          { ...confirmOrder(2), operator_id: ' 31 ' },
+        ],
+      });
+      expect(dto.orders.map((o) => o.operator_id)).toEqual([
+        '9223372036854775807',
+        '31',
+      ]);
+    });
   });
 });

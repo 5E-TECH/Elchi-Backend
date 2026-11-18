@@ -26,13 +26,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
 
-- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_id` (string, 1–19 raqam; son ham qabul qilinadi, bo'sh satr — tanlanmagan). Qoida `POST /orders` `operator_id` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveChosenOrderOperator`): buyurtma marketining faol, o'chirilmagan operatori (`GET /market-operators/selectable` ro'yxati); market operatori faqat o'zini; superadmin/admin ham tekshiriladi. To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (yuborilgan `operator` matni e'tiborsiz) — komissiya shu operatorga.
-  - Xato: `POST /orders` dagi 400 matni ai-confirm'da **shu buyurtma natijasi** bo'ladi — `{ index, ok: false, code: 'create_failed', reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' }` (market operatori boshqasini tanlasa — `reason: "Market operatori faqat o'zini operator qilib tanlay oladi"`). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi. Raqam bo'lmagan qiymat — butun so'rov 400 (DTO).
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — tanlanmagan; boshqa qiymat — butun so'rov 400). Shu format `POST /orders` `operator_id` ga ham qo'llanadi (ilgari '0…' va 19 xonali katta son o'tib, DB'da 22003 xato berardi). Qoida `POST /orders` `operator_id` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveChosenOrderOperator`): buyurtma marketining faol, o'chirilmagan operatori (`GET /market-operators/selectable` ro'yxati); market operatori faqat o'zini; superadmin/admin ham tekshiriladi. To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (yuborilgan `operator` matni e'tiborsiz) — komissiya shu operatorga.
+  - Xato: `POST /orders` dagi 400 matni ai-confirm'da **shu buyurtma natijasi** bo'ladi — `{ index, ok: false, code: 'create_failed', reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' }` (market operatori boshqasini tanlasa — `reason: "Market operatori faqat o'zini operator qilib tanlay oladi"`). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
+  - Operatorni tekshirib bo'lmasa (identity xatosi/timeout) — `{ ok: false, code: 'validation_unavailable', reason: 'Tanlangan operatorni tekshirib bo‘lmadi — …' }`: buyurtma ANIQ yaratilmagan (operatorsiz ham saqlanmaydi), qayta yuborish mumkin.
+  - Tekshiruv partiya boshida, bir xil `operator_id` uchun bir marta. AI auditida (`edited_fields`, `field_corrections`) `operator` — buyurtmaga yozilgan tanlangan operator ismi.
   - Berilmasa — avvalgi xulq o'zgarmagan (`operator` matni; market operatori — o'zi; qolganlar — operatorsiz).
-- 🟢 Telegram bot AI yo'li o'zgarmagan (`operator_id` yubormaydi).
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`operator_id`, `customer_id`, `operator_phone` yubormaydi — kalitlar oq ro'yxati testi bilan qotirilgan).
 
 **Frontend action items:**
 - 🔧 AI panelida har buyurtma kartasiga «Operator» select (`GET /market-operators/selectable`, qo'lda forma bilan bir xil) → `orders[i].operator_id`.
+- ⚠️ `operator_id` ni AI `operator` matnidan HECH QACHON avtomatik tanlamang (matn model chiqishi — ishonchsiz); faqat odam select'da tanlasin. Market operatori rolida select ko'rsatmang va `operator_id` yubormang (u baribir o'zi bo'ladi; boshqasi — `create_failed`).
 
 ### 2026-11-18 — Bildirishnomalar: o'chirish / o'qildi belgisi yetkazish holatini bosib ketmaydi (#699 follow-up)
 

@@ -220,6 +220,7 @@ import {
   type OrderMarketPhonePolicy,
 } from './order-create/order-operator-phone';
 import {
+  type ChosenOrderOperator,
   MARKET_OPERATOR_SELECTABLE_CMD,
   resolveChosenOrderOperator,
 } from './order-create/order-chosen-operator';
@@ -410,6 +411,10 @@ type AiParseResponseData = {
   reset_at?: string;
 };
 
+/** ai-confirm: tanlangan operatorni identity'da tekshirib bo'lmadi. */
+const AI_OPERATOR_CHECK_UNAVAILABLE_REASON =
+  'Tanlangan operatorni tekshirib bo‘lmadi — buyurtma yaratilmadi, birozdan so‘ng qayta yuboring';
+
 /** Tekshiruvdan o'tgan, yaratishga navbatdagi AI buyurtma. */
 type EligibleAiOrder = {
   index: number;
@@ -435,6 +440,12 @@ type EligibleAiOrder = {
    * topilmasa — bo'sh.
    */
   requiredAcks?: string[];
+  /**
+   * Formadagi «Operator» tanlovi (`order.operator_id`) — partiya boshida
+   * BIR MARTA tekshirilgan (`resolveAiChosenOperators`); auditda `operator`
+   * shu ism bilan yoziladi, `createOrderInternal` uni qayta so'ramaydi.
+   */
+  chosenOperator?: ChosenOrderOperator;
 };
 
 /**
@@ -2280,6 +2291,8 @@ export class OrderGatewayController {
       marketProfile: ctx.marketProfile ?? null,
       operatorName: ctx.operatorName ?? null,
       branchAssignment: ctx.branchAssignment,
+      // Partiya boshida tekshirilgan (`resolveAiChosenOperators`).
+      ...(item.chosenOperator ? { chosenOperator: item.chosenOperator } : {}),
     });
     const body = (response ?? {}) as {
       id?: unknown;
@@ -2436,6 +2449,78 @@ export class OrderGatewayController {
   }
 
   /**
+   * ai-confirm «Operator» tanlovi (`orders[].operator_id`) — POST /orders
+   * bilan AYNI tekshiruv (`resolveChosenOrderOperator`), lekin yaratishdan
+   * OLDIN va partiyaga bir marta:
+   *  - bir xil `operator_id` uchun identity bir marta so'raladi (market
+   *    partiyada bitta);
+   *  - 400 (begona/nofaol operator, market operatori boshqasini tanlagan) →
+   *    shu buyurtma `create_failed`, sababi — POST /orders matni;
+   *  - identity javob bermasa/xato → `validation_unavailable` (buyurtma ANIQ
+   *    yaratilmagan — `timeout_unknown` «yaratilgan bo'lishi mumkin» EMAS);
+   *    operatorsiz buyurtma saqlanmaydi (fail-closed).
+   * Qaytaradi: yaratishga qolgan buyurtmalar (`chosenOperator` bilan).
+   */
+  private async resolveAiChosenOperators(
+    eligible: EligibleAiOrder[],
+    req: { user: JwtUser },
+    marketId: string,
+    roles: string[],
+    results: Map<number, AiConfirmResult>,
+  ): Promise<EligibleAiOrder[]> {
+    const lookups = new Map<string, Promise<ChosenOrderOperator | null>>();
+    const kept: EligibleAiOrder[] = [];
+    for (const item of eligible) {
+      const operatorId = this.asStr(item.order.operator_id).trim();
+      if (!operatorId) {
+        kept.push(item);
+        continue;
+      }
+      let lookup = lookups.get(operatorId);
+      if (!lookup) {
+        lookup = resolveChosenOrderOperator({
+          operatorId,
+          roles,
+          requesterId: req.user.sub,
+          marketId,
+          loadSelectable: (payload) =>
+            this.sendIdentityWithTimeout(
+              { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+              payload,
+            ),
+        });
+        // Rad etilgan va'da "unhandled" bo'lib qolmasin (pastda await qilinadi).
+        lookup.catch(() => undefined);
+        lookups.set(operatorId, lookup);
+      }
+      try {
+        const chosen = await lookup;
+        if (chosen) item.chosenOperator = chosen;
+        kept.push(item);
+      } catch (error: unknown) {
+        if (error instanceof BadRequestException) {
+          results.set(item.index, {
+            index: item.index,
+            ok: false,
+            ...toConfirmFailure(error),
+          });
+        } else {
+          this.logger.warn(
+            `ai-confirm: operator tekshiruvi ishlamadi (${this.errorName(error)}) — validation_unavailable`,
+          );
+          results.set(item.index, {
+            index: item.index,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: AI_OPERATOR_CHECK_UNAVAILABLE_REASON,
+          });
+        }
+      }
+    }
+    return kept;
+  }
+
+  /**
    * vncdmXOy #2: har eligible buyurtmaga `aiAudit` (activity_log metadata) va
    * SERVER tomonda hisoblangan `editedFields`. draft_id bo'lmasa — audit yo'q
    * (oddiy qo'lda kiritilgan buyurtma kabi; majburiy rejimda bunga
@@ -2554,7 +2639,11 @@ export class OrderGatewayController {
         total_price: item.order.total_price,
         where_deliver: item.order.where_deliver,
         comment: item.order.comment,
-        operator: item.order.operator,
+        // Operator tanlangan bo'lsa buyurtmaga UNING ismi yoziladi (matn
+        // e'tiborsiz) — audit ham saqlanadigan qiymatni ko'rsin.
+        operator: item.chosenOperator
+          ? item.chosenOperator.name || null
+          : item.order.operator,
         items: item.order.items,
       };
       item.editedFields = preview
@@ -2903,6 +2992,12 @@ export class OrderGatewayController {
       branchAssignment?: BranchAssignment | null;
       /** Celz3rKJ: yaratish kanali (hozir faqat bot). */
       createdVia?: 'bot';
+      /**
+       * ai-confirm: `dto.operator_id` partiya boshida AYNI
+       * `resolveChosenOrderOperator` bilan (shu market, shu so'rovchi)
+       * tekshirilgan — identity qayta so'ralmaydi.
+       */
+      chosenOperator?: ChosenOrderOperator;
     },
   ): Promise<unknown> {
     // IR2OHIiN: mahsulotsiz / tumansiz buyurtma — hech narsa (mijoz ham)
@@ -3043,17 +3138,19 @@ export class OrderGatewayController {
     // bo'lmasa 400 (SUPERADMIN/ADMIN ham). ai-confirm `orders[].operator_id`
     // ni shu yerga uzatadi (400 → shu buyurtma `create_failed`); bot yo'li
     // (`botOrderCreate`) va Telegram AI (hozircha) uni yubormaydi.
-    const chosenOperator = await resolveChosenOrderOperator({
-      operatorId: dto.operator_id,
-      roles,
-      requesterId: req.user.sub,
-      marketId: resolvedMarketId,
-      loadSelectable: (payload) =>
-        this.sendIdentityWithTimeout(
-          { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
-          payload,
-        ),
-    });
+    const chosenOperator =
+      opts?.chosenOperator ??
+      (await resolveChosenOrderOperator({
+        operatorId: dto.operator_id,
+        roles,
+        requesterId: req.user.sub,
+        marketId: resolvedMarketId,
+        loadSelectable: (payload) =>
+          this.sendIdentityWithTimeout(
+            { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+            payload,
+          ),
+      }));
     // Operator tanlangan bo'lsa ism — uniki (yozilgan matn ham, so'rovchi
     // ismi ham ishlatilmaydi).
     const filledOperatorName = chosenOperator
@@ -4043,6 +4140,21 @@ export class OrderGatewayController {
         editedFields: null,
       });
     });
+
+    // «Operator» tanlovi (`operator_id`) — yaratishdan va auditdan OLDIN,
+    // partiyaga (market, operator_id) bo'yicha BIR MARTA. Rad etilgan
+    // buyurtma navbatdan chiqadi (hech narsa yaratilmaydi).
+    eligible.splice(
+      0,
+      eligible.length,
+      ...(await this.resolveAiChosenOperators(
+        eligible,
+        req,
+        marketId,
+        roles,
+        results,
+      )),
+    );
 
     // vncdmXOy: audit metadata (model, prompt versiyasi, xarajat, server
     // hisoblagan edited_fields) va AI ack darvozalari (400/503 —
