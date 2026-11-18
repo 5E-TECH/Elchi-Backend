@@ -693,8 +693,14 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       dispatch.mockReturnValueOnce(throwError(() => new TimeoutError()));
       await notifier.dispatchPending(todayAt(10));
       dispatch.mockReturnValue(of({ statusCode: 201 }));
-      // 23:00 — qayta urinish (ayni client_request_id).
+      // 23:00 — qayta urinish (ayni client_request_id); Telegram tunda yo'q.
       await notifier.dispatchPending(todayAt(23));
+      expect(
+        payloads().filter((x) => x.channels.includes('telegram')),
+      ).toHaveLength(0);
+      expect((await due(id)).telegram_due_at?.toISOString()).toBe(
+        todayAt(33).toISOString(),
+      );
       await notifier.dispatchPending(todayAt(33));
       const p = payloads();
       const main = p.filter(

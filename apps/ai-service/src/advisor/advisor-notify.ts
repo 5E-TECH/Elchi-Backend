@@ -729,10 +729,15 @@ export class AdvisorNotifier {
 function short(error: unknown): string {
   // Log uchun: hech qachon tashlamaydi (aylanma / prototipsiz obyekt, getter).
   try {
-    if (error instanceof Error)
-      return (
-        typeof error.message === 'string' ? error.message : error.name
-      ).slice(0, 200);
+    if (error instanceof Error) {
+      const t =
+        typeof error.message === 'string'
+          ? error.message
+          : typeof error.name === 'string'
+            ? error.name
+            : 'Error';
+      return t.slice(0, 200);
+    }
     // RPC xatosi — `{statusCode, message}` obyekti ('[object Object]' emas).
     if (error && typeof error === 'object') {
       const e = error as { statusCode?: unknown; message?: unknown };
