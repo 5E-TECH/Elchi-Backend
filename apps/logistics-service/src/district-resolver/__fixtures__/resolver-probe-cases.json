@@ -3448,5 +3448,231 @@
    "reason": null
   },
   "note": "r7 S2 accepted residual: initial split across fields (full_address ends with \"Samarqand T.\")"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Do'stlik qishlog'i 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. markaz 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Bog'ishamol MFY 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t.Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Navoiy ko'chasi 12"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "address": "Qarshi t. Do'stlik qishlog'i 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Do'stlik qishlog'i 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "address": "Qarshi t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": null,
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "Qarshi t. 5-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": "Samarqand",
+   "full_address": "Samarqand t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "district_name": "Buxoro",
+   "full_address": "Buxoro t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Namangan",
+   "district_name": "Namangan",
+   "full_address": "Namangan t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "district_name": "Qarshi",
+   "full_address": "t. Mustaqillik 5"
+  },
+  "seed": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "note": "r7 S1 documented: split fields — no name before \"t.\", bare \"Qarshi\" → city (dev: 1710224)"
  }
 ]

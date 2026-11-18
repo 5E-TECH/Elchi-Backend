@@ -103,6 +103,14 @@ const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
 const TUMAN_T_ABBR_RE = /([a-z]{2,})\s+t\.(?=\s*(?:[,;]|$))/g;
 const TUMAN_WORD_RE =
   /\b(tumani|tuman|tumanida|tumanidagi|tumanidan|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b/;
+/**
+ * r7 B1: vergulsiz "X t. <so'z|uy raqami>" ("Qarshi t. Mustaqillik", "Qarshi
+ * T.Malik", "Qarshi t. 5-uy") — tuman belgisi ham, ism bosh harfi / boshqa
+ * narsa ham bo'lishi mumkin. Telefon ("t. 90 123 ...", "t. 901234567",
+ * "t.: ", "t. +998", "t. (90)"), "t.y." va "[TEL_1]" bundan mustasno.
+ */
+const SOFT_TUMAN_T_RE =
+  /([a-z]{2,})\s+t\.(?!\s*(?:[,;:+([]|$|y\b|y\.|\d{2}\s*\d{3}|\d{5,}))/g;
 
 /**
  * D2: manzilda tuman nomidan KEYIN kelsa — bu ko'cha/mahalla nomi, tuman
@@ -1161,6 +1169,17 @@ export function resolveDistrictText(
   const markerText = `${q.district_name}, ${q.full_address || q.address}`;
   const want = kindOf(markerText);
   matches = preferCityOrTuman(matches, want, idx);
+  // r7 B1: vergulsiz "Qarshi t. Mustaqillik" — tur noaniq: shahar/tuman
+  // juftligida ikkalasi NOMZOD, hech biri avto emas (yalang'och "Qarshi"
+  // shaharga tushib, avto-tanlanardi).
+  if (!want && matches.length && namedT(markerText, SOFT_TUMAN_T_RE)) {
+    const asTuman = preferCityOrTuman(matches, 'tuman', idx);
+    const extra = asTuman.filter((d) => !matches.includes(d));
+    if (extra.length || asTuman.length !== matches.length) {
+      matches = [...matches, ...extra];
+      candidateOnly = true;
+    }
+  }
   // #646 review B2: R1 toraytirgandan KEYIN ham — 4-usulda faqat ko'cha
   // sifatida rad etilgan yoki viloyat nomli qator qolsa, avto emas.
   if (
