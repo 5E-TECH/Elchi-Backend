@@ -777,6 +777,68 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
         expect(b.candidates[0].fact_keys[0].fact_key).toBe('ep:g:2026-10-17');
       });
 
+      it('#702 B2 (E8): 15 kundan uzun o‘sish qatori — ep:g kaliti har kuni siljimaydi', async () => {
+        const cb = await cashbox('couriers', 93, 5000000);
+        // 26.09 dan 23.10 gacha har kuni +100k (28 kun, qat'iy o'sish).
+        for (let i = 0; i < 28; i++) {
+          const day = new Date(Date.UTC(2026, 8, 26 + i))
+            .toISOString()
+            .slice(0, 10);
+          await daily(cb, 93, day, 2000000 + i * 100000);
+        }
+        // Qoldiq kecha nolga tushgan — «topshirilmagan» triggeri yo'q (faqat o'sish).
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -100000,
+          0,
+          '2026-10-21T06:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          5000000,
+          5000000,
+          '2026-10-21T08:00:00Z',
+        );
+        const at22 = await runWith(
+          ['R2'],
+          { R2: R2T },
+          '2026-10-22T09:00:00.000Z',
+        );
+        expect(at22.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: 'ep:g:2026-09-26' }],
+          facts: { trigger: 'growth' },
+        });
+        await hist(
+          cb,
+          'expense',
+          'courier_payment',
+          -100000,
+          0,
+          '2026-10-23T06:00:00Z',
+        );
+        await hist(
+          cb,
+          'income',
+          'sell',
+          5000000,
+          5000000,
+          '2026-10-23T08:00:00Z',
+        );
+        const at24 = await runWith(
+          ['R2'],
+          { R2: R2T },
+          '2026-10-24T09:00:00.000Z',
+        );
+        expect(at24.candidates[0]).toMatchObject({
+          fact_keys: [{ fact_key: 'ep:g:2026-09-26' }],
+          facts: { trigger: 'growth' },
+        });
+      });
+
       it('#702 B3 (E4): kun faqat yig‘indi bilan hisoblangan, bir oyog‘i T6 bilan qaytarildi — chegara qaytarish lahzasi', async () => {
         const cb = await cashbox('couriers', 91, 500000);
         await hist(

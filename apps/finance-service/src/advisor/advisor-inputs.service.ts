@@ -1263,6 +1263,41 @@ export class AdvisorInputsService {
     return out;
   }
 
+  /**
+   * P1 (#702 review B2): kechagacha tugaydigan qat'iy o'suvchi kunlik
+   * yopilishlar qatorining BOSHI — butun tarix bo'yicha (gaps-and-islands),
+   * 15 kunlik dalil oynasi bilan cheklanmaydi (aks holda uzun o'sishda
+   * `ep:g:<kun>` har kuni bir kun oldinga siljirdi).
+   */
+  private async growthRunStarts(
+    cashboxIds: string[],
+    yesterday: string,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!cashboxIds.length) return out;
+    const rows = await this.ds.query<
+      Array<{ cashbox_id: string; start: string | null }>
+    >(
+      `SELECT x.cashbox_id::text AS cashbox_id,
+              to_char(MAX(x.snapshot_date) FILTER (WHERE x.brk), 'YYYY-MM-DD') AS start
+         FROM (
+           SELECT d."cashbox_id", d."snapshot_date",
+                  NOT COALESCE(
+                    LAG(d."snapshot_date") OVER w = d."snapshot_date" - 1
+                      AND d."closing_balance" > LAG(d."closing_balance") OVER w,
+                    false) AS brk
+             FROM ${this.tables().daily} d
+            WHERE d."cashbox_id" = ANY($1::bigint[]) AND d."snapshot_date" <= $2::date
+              AND d."is_deleted" = false
+           WINDOW w AS (PARTITION BY d."cashbox_id" ORDER BY d."snapshot_date")
+         ) x
+        GROUP BY x.cashbox_id`,
+      [cashboxIds, yesterday],
+    );
+    for (const r of rows) if (r.start) out.set(r.cashbox_id, r.start);
+    return out;
+  }
+
   /** Kun bo'yicha «chiqish» yig'indisi (T6 qaytarilganlarsiz). */
   private async dailyOutflows(
     cashboxIds: string[],
@@ -1327,25 +1362,33 @@ export class AdvisorInputsService {
       'courier_payment',
       addDaysKey(today, -window),
     );
+    const closedDays = (r: EpisodeRow) =>
+      (closings.get(r.cashbox_id) ?? []).filter((d) => d.date < today);
+    // (a) o'sish: oxirgi growthDays+1 ta YOPILGAN kun (kechagacha) — har kuni
+    // oldingisidan qat'iy katta. Kun yetishmasa (snapshot hali yo'q) — o'tkaziladi.
+    const expected = Array.from({ length: growthDays + 1 }, (_, i) =>
+      addDaysKey(today, i - growthDays - 1),
+    );
+    const isGrowth = (r: EpisodeRow) => {
+      const tail = closedDays(r).slice(-(growthDays + 1));
+      return (
+        tail.length === growthDays + 1 &&
+        tail.every((d, i) => d.date === expected[i]) &&
+        tail.every((d, i) => i === 0 || d.closing > tail[i - 1].closing) &&
+        money(r.balance) > balanceUzs
+      );
+    };
+    const runStarts = await this.growthRunStarts(
+      rows.filter(isGrowth).map((r) => r.cashbox_id),
+      addDaysKey(today, -1),
+    );
     const candidates: AiAdvisorCandidate[] = [];
     for (const r of rows) {
       const ep = episodeOf(r, today);
       if (!ep) continue;
       const balance = money(r.balance);
-      const days = (closings.get(r.cashbox_id) ?? []).filter(
-        (d) => d.date < today,
-      );
-      // (a) o'sish: oxirgi growthDays+1 ta YOPILGAN kun (kechagacha) — har kuni
-      // oldingisidan qat'iy katta. Kun yetishmasa (snapshot hali yo'q) — o'tkaziladi.
-      const tail = days.slice(-(growthDays + 1));
-      const expected = Array.from({ length: growthDays + 1 }, (_, i) =>
-        addDaysKey(today, i - growthDays - 1),
-      );
-      const growth =
-        tail.length === growthDays + 1 &&
-        tail.every((d, i) => d.date === expected[i]) &&
-        tail.every((d, i) => i === 0 || d.closing > tail[i - 1].closing) &&
-        balance > balanceUzs;
+      const days = closedDays(r);
+      const growth = isGrowth(r);
       const stale = balance > 0 && ep.days > noHandover;
       if (!growth && !stale) continue;
       // O'sish signali kechagacha yopilgan kunlardan; bugun topshirish bo'lsa
@@ -1358,7 +1401,9 @@ export class AdvisorInputsService {
       // P1 (v0.4): faqat o'sish — epizod o'sish qatorining boshi; qisman
       // topshirishlar (har kuni yangi `ep:h`) occurrence ko'paytirmaydi.
       const runStart =
-        trigger === 'growth' ? growthRunStart(days, today) : null;
+        trigger === 'growth'
+          ? (runStarts.get(r.cashbox_id) ?? growthRunStart(days, today))
+          : null;
       const fact = runStart
         ? {
             fact_key: `ep:g:${runStart}`,
