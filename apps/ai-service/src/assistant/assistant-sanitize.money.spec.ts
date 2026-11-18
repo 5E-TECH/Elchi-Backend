@@ -47,6 +47,13 @@ describe('sanitizeForModel — summa vs telefon', () => {
     ['Aziza 90 000 12 11', '+99890*****11'],
     ['Razmer 901 23 45 67', '+99890*****67'],
     ['{"tel":"901 234 567"}', '+99890*****67'],
+    // prefiks nomzodga qo'shilmagan `…000`: yorliq prefiksdan oldin
+    ['Tel: 8 901234000', '+99890*****00'],
+    ['aloqa: 0 901234000', '+99890*****00'],
+    ['Tel: 8 901\u202F234\u202F000', '+99890*****00'],
+    ['Aziza (+998) 901234000', '+99890*****00'],
+    ['Aziza (+998) 901 234 000', '+99890*****00'],
+    ['Telefon 8 939826000', '+99893*****00'],
   ])('dev maskalagan telefon ochiq ketmaydi: %s', (text, masked) => {
     expect(sanitizeForModel(text)).toContain(masked);
   });
@@ -55,6 +62,9 @@ describe('sanitizeForModel — summa vs telefon', () => {
     "Ijara \u00B7 Kommunal: 1 905 512 345 so'm",
     'Jami 1 905 512 345',
     "R7: chek so'mda emas (905 512 345 USD)",
+    "R7: chek so'mda emas (905 512 345 EUR)",
+    "R7: chek so'mda emas (905 512 345 RUB)",
+    "Ijara: chek so'mda emas (905 512 345 valyuta), kiritilgan 1 000 so'm",
   ])('katta summa saqlanadi: %s', (text) => {
     expect(sanitizeForModel(text)).toBe(text);
   });

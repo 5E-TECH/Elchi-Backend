@@ -379,17 +379,30 @@ function isGuardedNonPhone(
  */
 const AMBIGUOUS_SHAPE_MODEL_RE =
   /^(?:[08][ \u00A0\u202F])?(?:\d{9}|\d{3}[ .\-\u00A0\u202F]\d{3}[ .\-\u00A0\u202F]\d{3})$/u;
+/** R7: `chek so'mda emas (905 512 345 EUR)` — `read_currency` (ISO, katta harf). */
+const MODEL_CURRENCY_AFTER_RE =
+  /^[ \u00A0\u202F]{0,2}(?:EUR|RUB|KZT|CNY|TRY|GBP|AED|KGS|TJS|JPY|KRW|CHF|INR|valyuta)(?![\p{L}\d])/u;
 function isAmountOrIdForModel(
   raw: string,
   before: string,
   after: string,
 ): boolean {
   if (!AMBIGUOUS_SHAPE_MODEL_RE.test(raw)) return false;
-  if (MONEY_AFTER_RE.test(after) || MONEY_OR_ID_BEFORE_RE.test(before)) {
+  if (
+    MONEY_AFTER_RE.test(after) ||
+    MODEL_CURRENCY_AFTER_RE.test(after) ||
+    MONEY_OR_ID_BEFORE_RE.test(before)
+  ) {
     return true;
   }
   if (/\p{L}$/u.test(before) && /^\p{L}/u.test(after)) return true;
-  const phoneWord = isPhoneWordBefore(before);
+  // `Tel: 8 901234000`, `(+998) 901 234 000`: prefiks nomzodga qo'shilmagan —
+  // yorliq prefiksdan oldin qidiriladi, `(+998)` / `+998` o'zi yorliq.
+  // Oddiy tekshiruv birinchi: aks holda `Telefon 8 939826000` ochilardi.
+  const phoneWord =
+    isPhoneWordBefore(before) ||
+    /(?:\(\+?998\)|\+998)[ \u00A0\u202F]?$/u.test(before) ||
+    isPhoneWordBefore(before.replace(/(?<!\d)[08][ \u00A0\u202F]$/u, ''));
   // `1 905 512 345` — katta sonning davomi (oldida 1-3 xonali guruh, xuddi
   // shu ajratgich bilan).
   const lead = /(?:^|[^\d.,])\d{1,3}([ .\u00A0\u202F])$/u.exec(before);
