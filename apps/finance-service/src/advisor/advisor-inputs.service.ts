@@ -1145,11 +1145,32 @@ export class AdvisorInputsService {
     // topshirish»ni oldinga surmaydi, kunlar sanog'ini nolga tushirmaydi.
     const effective = (a: string) => this.effectiveJoin(a);
     const day = (at: string) => `(${at} AT TIME ZONE 'Asia/Tashkent')::date`;
+    // Toshkent kuni boshi (timestamptz): `day(at) = d` ⇔ `dayStart(d) <= at < dayStart(d + 1)`.
+    const dayStart = (d: string) =>
+      `((${d})::timestamp AT TIME ZONE 'Asia/Tashkent')`;
     // Oyna: [today − N kun] dan (bir kun oldingi qatorlar — kun boshi qoldig'i uchun).
-    const since = `($5::date::timestamp AT TIME ZONE 'Asia/Tashkent')`;
-    // #702 review B1: kun boshidagi qoldiq har (kassa, kun) uchun alohida
-    // korrelyatsion so'rov EMAS — bitta oyna o'tishi (LAG) bilan; `qh`/`rv`
-    // ham kunlik agregatdan (kassalar soni × tarix uzunligiga chiziqli).
+    const since = dayStart('$5::date');
+    // `lh` uchun «amaldagi chiqish oyog'i»: turi va manbasi mos, T6 bilan
+    // qaytarilmagan (qaytarish ham, tahrir ham asl oyoqni chiqaradi).
+    // `fence` (2-qadam): `OFFSET 0` — NOT EXISTS anti-join'ga aylantirilmaydi,
+    // har nomzod uchun UQ_CASHBOX_HISTORY_REVERSES bo'yicha bitta qadam: aks
+    // holda rejalashtiruvchi qisqa nomzodlar ro'yxatiga Merge Anti Join
+    // tanlab, har kassa uchun BUTUN qaytarish indeksini o'qiydi (kassalar ×
+    // qaytarishlar). 1-qadamda (LIMIT 1, indeks tartibida) fence'siz: SubPlan
+    // narxi har o'qiladigan qatorga qo'shilib, rejalashtiruvchi tartibli
+    // skan o'rniga IDX_CASHBOX_HISTORY_OP_TYPE/SOURCE BitmapAnd tanlaydi.
+    const liveLeg = (a: string, fence = false) => `${a}."cashbox_id" = cb."id"
+              AND ${a}."operation_type" = 'expense'
+              AND ${a}."source_type" = $2 AND ${a}."is_deleted" = false
+              AND NOT EXISTS (
+                SELECT 1 FROM ${t.history} rr
+                 WHERE rr."source_type" = 'payment_reversal'
+                   AND rr."reverses_history_id" = ${a}."id" AND rr."is_deleted" = false
+                ${fence ? 'OFFSET 0' : ''})`;
+    // #702 review B1: kun boshidagi qoldiq oynadan, qaytarish/qh kunlik
+    // agregatdan. #702 perf: kun boshi — faqat chiqishli kunlar uchun ikki
+    // indeks qadami (IDX_CASHBOX_HISTORY_CASHBOX_CREATED), oynaning barcha
+    // qatorlari bo'yicha LAG o'tishi emas.
     // JIT o'chiq: rejalashtiruvchi lateral'lar narxini katta baholab JIT
     // kompilyatsiyasiga (~1.4 s) kiradi, so'rovning o'zi ~0.5 s (#702 B1).
     // withTimeout tranzaksiyasi ichida (SET LOCAL).
@@ -1159,26 +1180,6 @@ export class AdvisorInputsService {
          SELECT c."id", c."user_id", c."balance" FROM ${t.cashboxes} c
           WHERE c."cashbox_type" = $1 AND c."is_deleted" = false
             AND c."balance" > $3::numeric
-       ),
-       -- Kun boshidagi qoldiq: kunning birinchi qatoridan oldingi balance_after
-       -- (tor qatorlar — saralash xotirada).
-       starts AS (
-         SELECT x.cashbox_id, x.day, x.start_balance FROM (
-           SELECT y.cashbox_id, y.d AS day,
-                  COALESCE(LAG(y.balance_after) OVER w,
-                    -- oynadagi birinchi qator: qoldiq shu qatordan OLDIN
-                    y.balance_after + CASE WHEN y.op = 'expense'
-                      THEN ABS(y.amount) ELSE -ABS(y.amount) END) AS start_balance,
-                  y.d IS DISTINCT FROM LAG(y.d) OVER w AS first_of_day
-             FROM (
-               SELECT h."cashbox_id" AS cashbox_id, h."createdAt" AS at, h."id" AS id,
-                      h."balance_after" AS balance_after, h."operation_type"::text AS op,
-                      h."amount" AS amount, ${day('h."createdAt"')} AS d
-                 FROM ${t.history} h JOIN cb ON cb."id" = h."cashbox_id"
-                WHERE h."is_deleted" = false AND h."createdAt" >= ${since}
-             ) y
-           WINDOW w AS (PARTITION BY y.cashbox_id ORDER BY y.at, y.id)
-         ) x WHERE x.first_of_day
        ),
        -- Chiqish oyoqlari: samarali vaqt/id (P5) va T6 qaytarilishi (turi bilan).
        legs AS (
@@ -1211,13 +1212,42 @@ export class AdvisorInputsService {
                 SUM(l.amount) FILTER (WHERE l.rid IS NULL OR l.kind = 'reverse') AS with_rev,
                 MAX(l.at) FILTER (WHERE l.rid IS NULL) AS last_at,
                 (array_agg(l.kid::text ORDER BY l.at DESC, l.kid DESC)
-                   FILTER (WHERE l.rid IS NULL))[1] AS last_id
+                   FILTER (WHERE l.rid IS NULL))[1] AS last_id,
+                -- O'z createdAt'i shu kunda bo'lgan oyoq bor (kid = id ⇒ at = createdAt):
+                -- kunda oyna qatori bor.
+                bool_or(l.kid = l."id") AS own
            FROM legs l GROUP BY 1, 2
        ),
+       -- Kun boshidagi qoldiq (oyna ichida): kunning birinchi qatoridan
+       -- oldingi qatorning balance_after (\`pv\`); oldingi qator oynada
+       -- bo'lmasa — birinchi qatorning (\`fd\`) o'zidan (balance_after ∓ summa);
+       -- kunda oyna qatori bo'lmasa — 0. Oyna qatorlari (createdAt, id)
+       -- tartibida, kun — Toshkent bo'yicha. \`fd\` faqat kerak bo'lganda.
+       -- $4 = 0 (R4): \`sb\` hech bir shartga ta'sir qilmaydi (0 × sb) — qadamsiz.
        dq AS (
-         SELECT d.*, GREATEST(COALESCE(s.start_balance, 0), 0) AS sb
+         SELECT d.*, GREATEST(COALESCE(CASE WHEN d.own OR fd."id" IS NOT NULL THEN
+                  COALESCE(pv."balance_after", fd."balance_after"
+                    + CASE WHEN fd."operation_type" = 'expense'
+                        THEN ABS(fd."amount") ELSE -ABS(fd."amount") END)
+                END, 0), 0) AS sb
            FROM days d
-           LEFT JOIN starts s ON s.cashbox_id = d.cashbox_id AND s.day = d.day
+           LEFT JOIN LATERAL (
+             SELECT x."balance_after" FROM ${t.history} x
+              WHERE $4::numeric <> 0
+                AND x."cashbox_id" = d.cashbox_id AND x."is_deleted" = false
+                AND x."createdAt" >= ${since}
+                AND x."createdAt" < ${dayStart('d.day')}
+              ORDER BY x."createdAt" DESC, x."id" DESC LIMIT 1
+           ) pv ON true
+           LEFT JOIN LATERAL (
+             SELECT x."id", x."balance_after", x."operation_type", x."amount"
+               FROM ${t.history} x
+              WHERE $4::numeric <> 0 AND (pv."balance_after" IS NULL OR NOT d.own)
+                AND x."cashbox_id" = d.cashbox_id AND x."is_deleted" = false
+                AND x."createdAt" >= ${dayStart('d.day')}
+                AND x."createdAt" < ${dayStart('d.day + 1')}
+              ORDER BY x."createdAt" ASC, x."id" ASC LIMIT 1
+           ) fd ON true
           -- Oyna birinchi kunining boshlang'ich qoldig'i oynadan tashqarida.
           WHERE d.day > $5::date
        ),
@@ -1252,6 +1282,31 @@ export class AdvisorInputsService {
          SELECT DISTINCT ON (r.cashbox_id) r.cashbox_id, r.rid::text AS rid,
                 r.oid::text AS oid, r.rat
            FROM rvd r ORDER BY r.cashbox_id, r.rat DESC, r.rid DESC
+       ),
+       -- \`lh\` chegarasi himoyasi: samarali vaqti (root oyog'i) o'z
+       -- createdAt'idan KEYIN bo'lgan almashtiruvchi oyoqlar (ilova yaratmaydi:
+       -- tahrir root'dan keyin, createdAt — tranzaksiya now(); qo'lda
+       -- tuzatilgan ma'lumot uchun). Odatda bo'sh. Tahrirlar soniga chiziqli:
+       -- har tahrir uchun IDX_CASHBOX_HISTORY_TRANSFER bo'yicha qadam
+       -- (\`OFFSET 0\` — rejalashtiruvchi Merge Join bilan transfer_id'li
+       -- BARCHA qatorlarni o'qimasin).
+       la AS (
+         SELECT a."cashbox_id", MIN(a."createdAt") AS lo
+           FROM ${t.corrections} pc
+           JOIN LATERAL (
+             SELECT x."cashbox_id", x."createdAt", x."source_type" FROM ${t.history} x
+              WHERE x."transfer_id" = pc."replacement_transfer_id"
+                AND x."operation_type" = 'expense' AND x."source_type" = $2
+             OFFSET 0
+           ) a ON true
+          WHERE pc."replacement_transfer_id" IS NOT NULL AND pc."is_deleted" = false
+            AND EXISTS (
+              SELECT 1 FROM ${t.history} ro
+               WHERE ro."transfer_id" = pc."root_transfer_id"
+                 AND ro."cashbox_id" = a."cashbox_id" AND ro."operation_type" = 'expense'
+                 AND ro."source_type" = a."source_type" AND ro."createdAt" > a."createdAt"
+              OFFSET 0)
+          GROUP BY a."cashbox_id"
        )
        SELECT cb."id"::text AS cashbox_id, cb."user_id"::text AS owner, cb."balance",
               lh.id AS last_id, lh.at AS last_at, lh.amount AS last_amount,
@@ -1259,23 +1314,42 @@ export class AdvisorInputsService {
               rs.id AS run_id, rs."createdAt" AS run_at,
               rv.rid AS rev_id, rv.oid AS rev_orig_id, rv.rat AS rev_at
          FROM cb
-         -- Oxirgi (T6 qaytarilmagan) chiqish — dalil; butun tarix bo'yicha.
+         -- Oxirgi (T6 qaytarilmagan) chiqish — dalil; butun tarix bo'yicha,
+         -- samarali vaqt (P5) tartibida, IKKI chegaralangan qadamda
+         -- (IDX_CASHBOX_HISTORY_CASHBOX_CREATED): \`lh0\` — createdAt bo'yicha
+         -- oxirgi amaldagi oyoq; \`lh\` — samarali vaqt bo'yicha eng oxirgisi,
+         -- faqat createdAt ∈ [lh0 samarali vaqti (yoki \`la\`), lh0.createdAt]
+         -- bo'lganlar orasida. Aniq: \`la\` dan tashqari har oyoqda samarali
+         -- vaqt <= createdAt, demak createdAt < lh0 samarali vaqti bo'lgan oyoq
+         -- lh0 dan oldin turadi; createdAt > lh0.createdAt bo'lgan amaldagi
+         -- oyoq yo'q (lh0 ta'rifi). Yuqori chegara rejalashtiruvchiga ham
+         -- kerak: bir tomonli oraliqni 1/3 deb baholab, butun
+         -- IDX_CASHBOX_HISTORY_OP_TYPE ni har kassa uchun BitmapAnd qilardi.
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(h0e.rat, h0."createdAt") AS at, h0."createdAt" AS ca
+             FROM ${t.history} h0
+             ${effective('h0')}
+            WHERE ${liveLeg('h0')}
+            ORDER BY h0."createdAt" DESC, h0."id" DESC
+            LIMIT 1
+         ) lh0 ON true
+         LEFT JOIN la ON la."cashbox_id" = cb."id"
          LEFT JOIN LATERAL (
            SELECT h."id"::text AS id, COALESCE(he.rat, h."createdAt") AS at,
                   ABS(h."amount") AS amount
              FROM ${t.history} h
              ${effective('h')}
-            WHERE h."cashbox_id" = cb."id" AND h."operation_type" = 'expense'
-              AND h."source_type" = $2 AND h."is_deleted" = false
-              AND NOT EXISTS (
-                SELECT 1 FROM ${t.history} rr
-                 WHERE rr."source_type" = 'payment_reversal'
-                   AND rr."reverses_history_id" = h."id" AND rr."is_deleted" = false)
+            WHERE ${liveLeg('h', true)}
+              AND h."createdAt" >= LEAST(lh0.at, la.lo)
+              AND h."createdAt" <= lh0.ca
             ORDER BY COALESCE(he.rat, h."createdAt") DESC, h."id" DESC
             LIMIT 1
          ) lh ON true
          LEFT JOIN qh ON qh.cashbox_id = cb."id"
          LEFT JOIN rv ON rv.cashbox_id = cb."id"
+         -- Oxirgi \`balance_after <= 0\` qatori: IDX_CASHBOX_HISTORY_ZERO_BAL
+         -- (migratsiya 244, qisman) — hech qachon nolga tushmagan kassada ham
+         -- butun tarix o'qilmaydi.
          LEFT JOIN LATERAL (
            SELECT z."createdAt", z."id" FROM ${t.history} z
             WHERE z."cashbox_id" = cb."id" AND z."is_deleted" = false
