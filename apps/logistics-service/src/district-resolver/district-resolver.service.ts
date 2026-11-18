@@ -86,7 +86,7 @@ export const DISTRICT_CORPUS_MAX_CHARS = 120;
  * va qisqa shakllar ham (shaxri, rayon, r-n, gorod, sh., g.).
  */
 const PLACE_WORD_RE =
-  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g|tum)\.|\btuman(ida|idagi|idan|iga)\b|[a-z]{2,}\s+t\.(?=\s*(?:[,;]|$))/;
+  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g|tum)\.|\btuman(ida|idagi|idan|iga)\b/;
 /** Shahar afzalligi belgisi — BeePost :1708-1709 (+ shaxri, gorod, sh., g.). */
 const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
 /**
@@ -96,10 +96,13 @@ const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
  * Telefon ("t. 90 ...", "t.: 90..."), "t.y." / "t. y." (temir yo'l), ism
  * bosh harfi ("Toshkent T. Malik", "Qarshi T.Malik") va "Qarshi t. 5-uy"
  * (raqam) — belgi EMAS. Matnlar `, ` bilan qo'shiladi (maydon chegarasi).
+ * r7 B2: "X t." faqat X tuman/viloyat nomi bo'lsa (`namedT`) — "Karimov T."
+ * (familiya + bosh harf) joy belgisi EMAS; shuning uchun umumiy "X t."
+ * PLACE_WORD_RE / TUMAN_WORD_RE dan olib tashlangan.
  */
 const TUMAN_T_ABBR_RE = /([a-z]{2,})\s+t\.(?=\s*(?:[,;]|$))/g;
 const TUMAN_WORD_RE =
-  /\b(tumani|tuman|tumanida|tumanidagi|tumanidan|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b|[a-z]{2,}\s+t\.(?=\s*(?:[,;]|$))/;
+  /\b(tumani|tuman|tumanida|tumanidagi|tumanidan|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b/;
 
 /**
  * D2: manzilda tuman nomidan KEYIN kelsa — bu ko'cha/mahalla nomi, tuman
@@ -607,9 +610,12 @@ function crossRegionNeighbours(
  * Matn qaysi turni so'rayapti: "shahri/shahar" → shahar, "tumani/tuman" →
  * tuman (BeePost :1703-1719); ikkalasi ham yoki hech biri bo'lmasa null.
  */
-function wantedKind(markerText: string): DistrictKind | null {
+function wantedKind(
+  markerText: string,
+  namedTumanT = false,
+): DistrictKind | null {
   const wantsCity = CITY_WORD_RE.test(markerText);
-  const wantsTuman = TUMAN_WORD_RE.test(markerText);
+  const wantsTuman = TUMAN_WORD_RE.test(markerText) || namedTumanT;
   if (wantsCity && !wantsTuman) return 'city';
   if (wantsTuman && !wantsCity) return 'tuman';
   return null;
@@ -700,6 +706,25 @@ export function resolveDistrictText(
     ...idx.districts.map((d) => d.skel),
     ...OFFICIAL_SKELS,
   ]);
+  // r7 B2: "X t." faqat X tuman/viloyat nomi bo'lsa ("Karimov T." — ism
+  // bosh harfi, joy belgisi EMAS).
+  const tHeads = new Set<string>(allSkels);
+  for (const d of idx.districts) {
+    const last = d.tokens[d.tokens.length - 1];
+    if (last) tHeads.add(geoSkeleton(last));
+    for (const a of d.aliases) tHeads.add(a);
+  }
+  for (const row of REGION_ALIASES) {
+    for (const b of row.bases) tHeads.add(geoSkeleton(normGeo(b)));
+  }
+  const namedT = (text: string, re: RegExp): boolean => {
+    for (const m of lightNorm(text).matchAll(re)) {
+      if (tHeads.has(geoSkeleton(m[1]))) return true;
+    }
+    return false;
+  };
+  const kindOf = (text: string): DistrictKind | null =>
+    wantedKind(translit(text), namedT(text, TUMAN_T_ABBR_RE));
   const addressKind = new Map<string, DistrictKind>();
   const streetRejected = new Set<string>();
   const pool = lockedRegion
@@ -791,7 +816,8 @@ export function resolveDistrictText(
   // district_name bo'lmasa — oddiy ko'cha so'zi jimgina TUMANga aylanmaydi.
   const hasPlaceSignal =
     !!q.district_name ||
-    PLACE_WORD_RE.test(translit(`${q.full_address}, ${q.address}`));
+    PLACE_WORD_RE.test(translit(`${q.full_address}, ${q.address}`)) ||
+    namedT(`${q.full_address}, ${q.address}`, TUMAN_T_ABBR_RE);
   let forceCandidate = false;
 
   /** Viloyat nomli tuman boshqa topilgan tumandan KEYIN; eng uzun nom. */
@@ -863,7 +889,7 @@ export function resolveDistrictText(
         // Viloyat nomli tuman ("Toshkent tumani") faqat tur ANIQ yozilganda:
         // "Toshkent shahri" + "Toshkent tumani" → 1727265; yalang'och
         // "Toshkent" esa avvalgidek topilmaydi (#646 review, round 2).
-        (!d.regionNamed || wantedKind(translit(q.district_name)) === d.kind) &&
+        (!d.regionNamed || kindOf(q.district_name) === d.kind) &&
         isTashkentSato(idx.regionById.get(d.region_id)?.sato),
     );
     matches = exactIn(outside).found.slice(0, AI_MAX_CANDIDATES);
@@ -1132,9 +1158,8 @@ export function resolveDistrictText(
   }
 
   // R1: shahar/tuman afzalligi (SOATO turi bo'yicha).
-  const want = wantedKind(
-    translit(`${q.district_name}, ${q.full_address || q.address}`),
-  );
+  const markerText = `${q.district_name}, ${q.full_address || q.address}`;
+  const want = kindOf(markerText);
   matches = preferCityOrTuman(matches, want, idx);
   // #646 review B2: R1 toraytirgandan KEYIN ham — 4-usulda faqat ko'cha
   // sifatida rad etilgan yoki viloyat nomli qator qolsa, avto emas.
@@ -1250,7 +1275,7 @@ export function resolveDistrictText(
     // Tur faqat TUMAN maydonidan: full_address'dagi "Toshkent shahri"
     // (viloyat) tumanning turini bildirmaydi.
     const explicitKind =
-      wantedKind(translit(q.district_name)) ??
+      kindOf(q.district_name) ??
       addressKind.get(d.id) ??
       // #646 review B4: 4-usul topilmasida manzildagi tur ham hisobga
       // olinadi ("Шахрисабзский р-н" — tuman).

@@ -3327,5 +3327,126 @@
    "sato": null,
    "reason": "district_ambiguous"
   }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": null,
+   "full_address": "Samarqand, Navoiy ko'chasi 5, Karimov T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Namangan",
+   "district_name": null,
+   "full_address": "Namangan, Navoiy ko'chasi 5, Karimov T., [TEL_1]"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "district_name": null,
+   "full_address": "Farg'ona, Navoiy ko'chasi 5; oluvchi: Rahimova T.; [TEL_1]"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "district_name": null,
+   "full_address": "Buxoro viloyati, Buxoro, Mustaqillik 12, Ivanov T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "district_name": null,
+   "full_address": "Samarqand sh., Navoiy ko'chasi 5, Karimov T."
+  },
+  "seed": {
+   "sato": "1718401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718401",
+   "reason": null
+  }
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand, Navoiy ko'chasi 5, oluvchi Furqat T."
+  },
+  "seed": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "note": "r7 S2 accepted residual: a district name that is also a person name before an initial (Furqat T.) is still a tuman marker"
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "full_address": "Farg'ona, Navoiy ko'chasi 5, oluvchi Furqat T."
+  },
+  "seed": {
+   "sato": "1730238",
+   "reason": null
+  },
+  "full": {
+   "sato": "1730238",
+   "reason": null
+  },
+  "note": "r7 S2 accepted residual: a district name that is also a person name before an initial (Furqat T.) is still a tuman marker"
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand T.",
+   "address": "Malik ko'chasi 5"
+  },
+  "seed": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718233",
+   "reason": null
+  },
+  "note": "r7 S2 accepted residual: initial split across fields (full_address ends with \"Samarqand T.\")"
  }
 ]
