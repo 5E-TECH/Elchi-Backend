@@ -367,7 +367,7 @@ jobs:
           # elchi_e_test faqat ulanish uchun. Migratsiya 234 (kuryer / market /
           # filial kassalari) — yuqoridagi FINANCE_PG_TEST_URI bilan.
           # F2qp6FtE: operatorga to'lov yozuvi (kassasiz) — elchi_e_test ichida o'z
-          # sxemasi; migratsiya 241 spec'i — o'z vaqtinchalik bazasi (FINANCE_PG_TEST_URI).
+          # sxemasi; migratsiya 242 spec'i — o'z vaqtinchalik bazasi (FINANCE_PG_TEST_URI).
           BRANCH_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).

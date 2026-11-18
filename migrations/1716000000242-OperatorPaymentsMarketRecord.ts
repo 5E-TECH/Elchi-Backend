@@ -44,8 +44,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Market yozuvlari qoladi — eski kod ularni oddiy to'lov deb ko'radi (kassa
  * baribir o'zgarmagan).
  */
-export class OperatorPaymentsMarketRecord1716000000241 implements MigrationInterface {
-  name = 'OperatorPaymentsMarketRecord1716000000241';
+export class OperatorPaymentsMarketRecord1716000000242 implements MigrationInterface {
+  name = 'OperatorPaymentsMarketRecord1716000000242';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`

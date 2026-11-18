@@ -653,7 +653,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `fill`, `spend`, payments (`payment_courier`, `payment_market`,
   `payment_branch_main`), `financial_balance.{record,history}`, history list,
   shifts (`open`/`close`/`find_all`), salary CRUD, operator earnings/payments/balance.
-- **Operator payments (F2qp6FtE, 2026-11-18, migr `1716000000241`):** owner
+- **Operator payments (F2qp6FtE, 2026-11-18, migr `1716000000242`):** owner
   decision 2026-11-16 — a market pays its own operators itself; Elchi's MAIN
   cashbox is NOT involved. `OperatorPaymentService`
   (`operator-payment/`, RMQ `finance.operator.market_payment.{record,cancel,list}`,
@@ -672,7 +672,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   payments (legacy `elchi` payments included). The old superadmin cash-out
   (`finance.operator.payment.create`, MAIN cashbox expense + `SALARY` ledger)
   is removed — the RMQ handler answers 410 without writing (deploy window).
-  Legacy rows keep their cashbox/ledger rows; migr 241 marks them
+  Legacy rows keep their cashbox/ledger rows; migr 242 marks them
   `source = 'elchi'`, `affects_cashbox` from data (cashbox history or
   `operator-payment:<id>` ledger row), `paid_at` = Tashkent date of
   `createdAt`. Activity verbs `finance.operator_payment_recorded` /

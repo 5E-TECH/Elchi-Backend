@@ -228,6 +228,12 @@ describePg(
       }
       expect(await db.getRepository(OperatorPayment).count()).toBe(1);
       await expectCashUntouched();
+
+      // review: katta, lekin to'g'ri 2 kasrli summa (float `* 100` xatosi uni rad etardi) — qabul.
+      const big: any = await payments.record(
+        base({ amount: 1234567890.12, idempotency_key: 'k-big' }),
+      );
+      expect(Number(big.data.amount)).toBe(1234567890.12);
     });
 
     it('ayni Idempotency-Key: takror — o`sha yozuv (200), boshqa summa — 409; parallel — bitta qator', async () => {

@@ -127,7 +127,9 @@ export class OperatorPaymentService {
       reject(400, "Summa 0 dan katta bo'lishi kerak");
     }
     const num = amount as number;
-    if (Math.abs(num * 100 - toCents(num)) > 1e-6) {
+    // `num * 100` ning float xatosi ~1e9 dan yuqorida to'g'ri 2 kasrli summani ham rad etardi (review):
+    // 2 kasrgacha yaxlitlangan qiymat aynan o'zi bo'lsa — kasr ko'pi bilan 2 ta.
+    if (Number(num.toFixed(2)) !== num) {
       reject(400, "Summada ko'pi bilan 2 ta kasr xona bo'lishi mumkin");
     }
     if (num > OPERATOR_PAYMENT_AMOUNT_MAX) {

@@ -2,7 +2,7 @@ import { Check, Column, Entity, Index } from 'typeorm';
 import { BaseEntity, numericTransformer } from '@app/common';
 
 /**
- * Kim yozgan (F2qp6FtE, migratsiya 241):
+ * Kim yozgan (F2qp6FtE, migratsiya 242):
  *  - `elchi` — eski yo'l: superadmin «Moliya operatorlari» dan yozgan (AUDIT
  *    M6 dan keyin Asosiy kassadan naqd chiqim + «Maosh» xarajati bilan —
  *    `affects_cashbox = true`). Yangi yozuv bu manba bilan YARATILMAYDI.
@@ -26,7 +26,7 @@ const TASHKENT_TODAY_SQL = "((now() AT TIME ZONE 'Asia/Tashkent'))::date";
  * (`cancelled_*`, sabab bilan) — qator qoladi, «To'landi» ga kirmaydi.
  */
 @Entity({ name: 'operator_payments' })
-// Migratsiya 241 dagi CHECK'lar (synchronize'li pg spec'larda ham kuchda).
+// Migratsiya 242 dagi CHECK'lar (synchronize'li pg spec'larda ham kuchda).
 @Check('CHK_OPERATOR_PAYMENT_SOURCE', `"source" IN ('elchi', 'market')`)
 @Check(
   'CHK_OPERATOR_PAYMENT_MARKET_NO_CASHBOX',

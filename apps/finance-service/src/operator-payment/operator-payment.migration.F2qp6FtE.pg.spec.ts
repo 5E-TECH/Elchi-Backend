@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { FinancialSource_type, Operation_type, Source_type } from '@app/common';
 import { ExpenseCategory } from '@app/common/enums';
-import { OperatorPaymentsMarketRecord1716000000241 } from '../../../../migrations/1716000000241-OperatorPaymentsMarketRecord';
+import { OperatorPaymentsMarketRecord1716000000242 } from '../../../../migrations/1716000000242-OperatorPaymentsMarketRecord';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
@@ -10,7 +10,7 @@ import { OperatorPayment } from '../entities/operator-payment.entity';
 import { tashkentToday } from './operator-payment.service';
 
 /**
- * F2qp6FtE — migratsiya 241 haqiqiy Postgres'da (`FINANCE_PG_TEST_URI`
+ * F2qp6FtE — migratsiya 242 haqiqiy Postgres'da (`FINANCE_PG_TEST_URI`
  * bo'lmasa skip). Migratsiya `finance_schema` ga qattiq bog'langan, shu bois
  * o'z vaqtinchalik BAZASINI yaratadi va oxirida o'chiradi.
  *
@@ -26,11 +26,11 @@ import { tashkentToday } from './operator-payment.service';
 const pgUri = process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
-describePg('F2qp6FtE migratsiya 241 — haqiqiy Postgres', () => {
+describePg('F2qp6FtE migratsiya 242 — haqiqiy Postgres', () => {
   const dbName = `spec_opay_mig_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
   let admin: DataSource;
   let db: DataSource;
-  const migration = new OperatorPaymentsMarketRecord1716000000241();
+  const migration = new OperatorPaymentsMarketRecord1716000000242();
   const ids: Record<string, string> = {};
 
   /** TypeORM kabi: bitta tranzaksiyada. */
@@ -100,7 +100,7 @@ describePg('F2qp6FtE migratsiya 241 — haqiqiy Postgres', () => {
     await bootstrap.initialize();
     await bootstrap.query('CREATE SCHEMA finance_schema');
     await bootstrap.synchronize();
-    // `operator_payments` — migratsiya 241 dan OLDINGI shakl (100 + 159).
+    // `operator_payments` — migratsiya 242 dan OLDINGI shakl (100 + 159).
     await bootstrap.query(`
       CREATE TABLE "finance_schema"."operator_payments" (
         "id" BIGSERIAL PRIMARY KEY,
