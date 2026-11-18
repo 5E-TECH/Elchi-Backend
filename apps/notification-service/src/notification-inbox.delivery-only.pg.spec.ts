@@ -166,6 +166,102 @@ const USER = '778000000001';
       expect(all[0].delivery).toHaveProperty('telegram');
     });
 
+    it('aralash qabul qiluvchilar + haqiqiy DM yo‘li: o‘qilgan qator o‘zgarmaydi, o‘chirilgani o‘chirilganligicha, qatorsizga yangi qator yo‘q; DM mavjud qator id lari bilan', async () => {
+      const A = USER;
+      const B = '778000000002';
+      const C = '778000000003';
+      const enqueue = jest.fn<Promise<void>, [unknown, string[]]>(() =>
+        Promise.resolve(),
+      );
+      const dm = {
+        plan: jest.fn((ids: string[]) =>
+          Promise.resolve(
+            new Map(ids.map((id) => [id, { telegram: 'queued' }])),
+          ),
+        ),
+        enqueue,
+      };
+      const withDm = new NotificationInboxService(
+        ds.getRepository(Notification),
+        { send: jest.fn() } as never,
+        { emit: jest.fn(() => of(null)) } as never,
+        { sendNotification: jest.fn() } as never,
+        { log: jest.fn().mockResolvedValue(undefined) } as never,
+        { enqueue: jest.fn().mockResolvedValue(undefined) } as never,
+        { assertFanout: jest.fn(), queueForNotifications: jest.fn() } as never,
+        undefined,
+        undefined,
+        undefined,
+        dm as never,
+      );
+      const all = [A, B, C];
+      const visible = () =>
+        ds.query<
+          Array<{
+            id: string;
+            recipient_id: string;
+            is_read: boolean;
+            is_deleted: boolean;
+            createdAt: Date;
+            delivery: Record<string, string>;
+          }>
+        >(
+          `SELECT id::text AS id, recipient_id::text AS recipient_id, is_read, is_deleted, "createdAt", delivery
+             FROM notification_schema.notifications
+            WHERE recipient_id = ANY($1::bigint[]) ORDER BY recipient_id`,
+          [all],
+        );
+      try {
+        await ds.query(
+          `DELETE FROM notification_schema.notifications WHERE recipient_id = ANY($1::bigint[])`,
+          [all],
+        );
+        await withDm.dispatch(base({ recipient_ids: [A, B] }));
+        const [ra, rb] = await visible();
+        await ds.query(
+          `UPDATE notification_schema.notifications SET is_read = true WHERE id = $1`,
+          [ra.id],
+        );
+        await ds.query(
+          `UPDATE notification_schema.notifications SET is_deleted = true WHERE id = $1`,
+          [rb.id],
+        );
+        const before = await visible();
+        const res = (await withDm.dispatch(
+          base({
+            recipient_ids: [A, B, C],
+            channels: ['telegram'] as never,
+            delivery_only: true,
+          }),
+        )) as { data: { delivery: { in_app: number } } };
+        const after = await visible();
+        expect(after.map((r) => r.recipient_id)).toEqual([A, B]);
+        expect(after[0]).toMatchObject({ id: ra.id, is_read: true });
+        expect(after[1]).toMatchObject({ id: rb.id, is_deleted: true });
+        expect(after.map((r) => new Date(r.createdAt).getTime())).toEqual(
+          before.map((r) => new Date(r.createdAt).getTime()),
+        );
+        for (const r of after) expect(r.delivery.telegram).toBe('queued');
+        // Ko'rinadigan o'qilmaganlar soni o'zgarmadi (0).
+        const [{ n }] = await ds.query<Array<{ n: string }>>(
+          `SELECT COUNT(*) AS n FROM notification_schema.notifications
+            WHERE recipient_id = ANY($1::bigint[]) AND is_deleted = false AND is_read = false`,
+          [all],
+        );
+        expect(Number(n)).toBe(0);
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        expect([...enqueue.mock.calls[0][1]].sort()).toEqual(
+          [ra.id, rb.id].sort(),
+        );
+        expect(res.data.delivery.in_app).toBe(0);
+      } finally {
+        await ds.query(
+          `DELETE FROM notification_schema.notifications WHERE recipient_id = ANY($1::bigint[])`,
+          [all],
+        );
+      }
+    });
+
     it('delivery_only, shu group_key bo‘yicha hech qachon qator bo‘lmagan — yangi qator YO‘Q', async () => {
       await service.dispatch(
         base({ channels: ['telegram'] as never, delivery_only: true }),

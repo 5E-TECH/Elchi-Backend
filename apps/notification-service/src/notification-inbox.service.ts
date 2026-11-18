@@ -632,11 +632,14 @@ export class NotificationInboxService {
                     texts?.textFor,
                   )
                 : [];
+              // Faqat shu dispatch push so'ragan bo'lsa — `delivery_only` bilan
+              // mavjud qatorning eski `push: queued` i qayta navbatga tushmaydi.
               const pushIds = persisted
                 .filter(
                   (row) =>
+                    channels.includes(NotificationChannel.PUSH) &&
                     row.delivery?.[NotificationChannel.PUSH] ===
-                    NotificationDeliveryStatus.QUEUED,
+                      NotificationDeliveryStatus.QUEUED,
                 )
                 .map((row) => row.id);
               if (pushIds.length) {
@@ -803,7 +806,8 @@ export class NotificationInboxService {
           telegram,
           // Kanal kesimidagi holat — quruq 201 emas (3fRbyadQ #7).
           delivery: {
-            in_app: rows.length,
+            // `delivery_only` — yangi in-app qator yozilmaydi (mavjudiga kanal).
+            in_app: dto.delivery_only ? 0 : rows.length,
             ...(smsResult ?? {}),
             ...(realtime ? { realtime: realtime.emitted } : {}),
             ...(telegramOutcome
@@ -1137,21 +1141,37 @@ export class NotificationInboxService {
           }
         }
       }
-      const kept: string[] = [];
+      // Bir xil qo'shiladigan holat — BITTA set-based UPDATE (qabul qiluvchi
+      // soniga bog'liq so'rov yo'q). `delivery` / `channels` DB'da birlashadi
+      // (find() surati emas) — parallel yetkazish yozuvi yo'qolmaydi.
+      const groups = new Map<string, { added: object; ids: string[] }>();
       for (const recipient of recipients) {
         const rowId = rowIdByRecipient.get(recipient.id);
-        const row = rowId ? existingById.get(rowId) : undefined;
-        if (!rowId || !row) continue;
+        if (!rowId || !existingById.has(rowId)) continue;
         const added = Object.fromEntries(
           Object.entries(deliveryFor(recipient.id)).filter(
             ([channel]) => channel !== String(NotificationChannel.IN_APP),
           ),
         );
-        await repo.update({ id: rowId }, {
-          channels: [...new Set([...(row.channels ?? []), ...channels])],
-          delivery: { ...(row.delivery ?? {}), ...added },
-        } as QueryDeepPartialEntity<Notification>);
-        kept.push(rowId);
+        const key = JSON.stringify(added);
+        const group = groups.get(key) ?? { added, ids: [] };
+        group.ids.push(rowId);
+        groups.set(key, group);
+      }
+      const kept: string[] = [];
+      for (const { added, ids } of groups.values()) {
+        await manager.query(
+          `UPDATE "notification_schema"."notifications"
+              SET "delivery" = COALESCE("delivery", '{}'::jsonb) || $2::jsonb,
+                  "channels" = (
+                    SELECT jsonb_agg(DISTINCT c)
+                      FROM jsonb_array_elements_text(
+                        COALESCE("channels", '[]'::jsonb) || $3::jsonb) AS c),
+                  "updatedAt" = now()
+            WHERE "id" = ANY($1::bigint[])`,
+          [ids, JSON.stringify(added), JSON.stringify(channels)],
+        );
+        kept.push(...ids);
       }
       return kept.length ? repo.find({ where: { id: In(kept) } }) : [];
     }
