@@ -52,6 +52,7 @@ describe('0d11ewk7 — courierOrderCounts', () => {
         {
           post_ids: ['5', '6'],
           status: [Order_status.WAITING],
+          scan_taken_courier_id: '119',
           page: 1,
           limit: 1,
         },
@@ -63,6 +64,7 @@ describe('0d11ewk7 — courierOrderCounts', () => {
             Order_status.RECEIVED,
             Order_status.ON_THE_ROAD,
           ],
+          scan_taken_courier_id: '119',
           page: 1,
           limit: 1,
         },

@@ -69,6 +69,7 @@ import {
   effectiveDistrictRegionId,
   effectiveOrderRegionId,
   districtServingBranchId,
+  isCourierScanTakenOrder,
   isHqBranch,
   isOrderServedByBranch,
   fetchScanOrderSummaries,
@@ -1616,6 +1617,7 @@ export class LogisticsServiceService implements OnModuleInit {
       // (menejer: branch_id; kuryer: post_ids + exclude_statuses).
       branch_id?: string;
       exclude_statuses?: Order_status[];
+      scan_taken_courier_id?: string;
       // rehomeOpenDistrictOrders: faqat shu tuman buyurtmalari.
       district_id?: string;
       start_day?: string;
@@ -7666,6 +7668,14 @@ export class LogisticsServiceService implements OnModuleInit {
         "Buyurtma kuryer hisobida emas — qaytarish so'rovini yuborib bo'lmaydi, sahifani yangilang",
       );
     }
+    // 6qypMFeT / COURIER-SCAN: yangi skan WAITING yozadi; bu tekshiruv deploy
+    // oynasida eski kod yozgan ON_THE_ROAD skan qatorlari uchun bir reliz qoladi.
+    if (isCourierScanTakenOrder(order, requester.id)) {
+      this.badRequest(
+        "Bu buyurtmani o'zingiz skanerlab olgansiz — u sizda, «kelmagan» deb bo'lmaydi",
+      );
+    }
+
     await this.updateOrder(
       String(order.id),
       { return_requested: true },
@@ -13570,7 +13580,7 @@ export class LogisticsServiceService implements OnModuleInit {
       if (!postIds.length) {
         return [];
       }
-      const query = courierPostOrdersQuery(postIds);
+      const query = courierPostOrdersQuery(postIds, undefined, courierId);
       const postIdSet = new Set(postIds);
       const hidden = new Set<string>(COURIER_LIST_HIDDEN_STATUSES);
       const rows = await this.findOrders({
@@ -13582,7 +13592,8 @@ export class LogisticsServiceService implements OnModuleInit {
       return rows.filter(
         (order) =>
           postIdSet.has(String(order.post_id ?? '').trim()) &&
-          !hidden.has(String(order.status ?? '')),
+          (!hidden.has(String(order.status ?? '')) ||
+            isCourierScanTakenOrder(order, courierId)),
       );
     }
 

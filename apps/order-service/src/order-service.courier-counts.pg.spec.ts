@@ -86,15 +86,15 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
         );
       }
 
-      // COURIER-SCAN — pochta 5: biri kuryer skan bilan o'zi olgan (skan =
-      // qabul — `waiting`), biri pochta qabulida rad etilgan (`on the road`).
+      // 6qypMFeT — pochta 5 dagi ON_THE_ROAD: biri kuryer skan bilan o'zi olgan
+      // (`last_handover_by` = kuryer), biri pochta qabulida rad etilgan.
       await db.query(
         `INSERT INTO order_schema.orders (
            market_id, customer_id, status, post_id, courier_id,
            holder_courier_id, holder_type, last_handover_by, return_requested
          )
          VALUES
-           (1, 2, 'waiting', 5, 119, 119, 'COURIER', 119, false),
+           (1, 2, 'on the road', 5, 119, 119, 'COURIER', 119, false),
            (1, 2, 'on the road', 5, 119, 119, 'COURIER', 119, true)`,
       );
 
@@ -139,8 +139,8 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
         courier_id: COURIER_ID,
         post_ids: ['5', '6'],
       });
-      // COURIER-SCAN: +1 skan bilan olingan (WAITING); qabul qilinmagan pochta
-      // (seed'dagi ON_THE_ROAD) va rad etilgani sanalmaydi.
+      // 6qypMFeT: +1 skan bilan olingan; qabul qilinmagan pochta (seed'dagi
+      // ON_THE_ROAD) va rad etilgani sanalmaydi.
       expect(counts).toEqual({ waiting: 5, all: 9, cancelled: 3 });
     });
 
@@ -150,12 +150,16 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
         post_ids: ['5', '6'],
       });
       const waitingList = await service.findAll({
-        ...courierPostOrdersQuery(['5', '6'], [Order_status.WAITING]),
+        ...courierPostOrdersQuery(
+          ['5', '6'],
+          [Order_status.WAITING],
+          COURIER_ID,
+        ),
         page: 1,
         limit: 10,
       });
       const allList = await service.findAll({
-        ...courierPostOrdersQuery(['5', '6']),
+        ...courierPostOrdersQuery(['5', '6'], undefined, COURIER_ID),
         page: 1,
         limit: 10,
       });
@@ -175,13 +179,13 @@ const SCHEMAS = ['order_schema', 'branch_schema', 'logistics_schema'];
       expect(allList.data).toHaveLength(9);
     });
 
-    it('COURIER-SCAN: status-counts (GET /orders doirasi) — skan bilan olingan «Kutilmoqda» da, «Yo‘lda» da emas', async () => {
+    it('6qypMFeT: status-counts (GET /orders doirasi) skan bilan olinganni ham sanaydi', async () => {
       const counts = await service.statusCounts({
         query: { courier_ids: [COURIER_ID] },
       });
-      // Seed'dagi 1 ta + rad etilgan: doira `courier_id`, holat filtrisiz.
-      // Skan bilan olingan — WAITING (skan = qabul).
-      expect(counts.by_status[Order_status.ON_THE_ROAD]).toBe(2);
+      // Seed'dagi 1 ta + skan bilan olingan + rad etilgan: doira `courier_id`,
+      // holat filtrisiz — bu ro'yxat `on the road`ni hech qachon yashirmagan.
+      expect(counts.by_status[Order_status.ON_THE_ROAD]).toBe(3);
     });
 
     it("buyurtma sotilgach «Kutilayotgan» darhol kamayadi (kesh yo'q, har so'rov SQL)", async () => {

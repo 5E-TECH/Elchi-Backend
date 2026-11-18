@@ -45,7 +45,10 @@ describePg('Migratsiya 240 — skan bilan olingan buyurtmalar WAITING ga', () =>
       CREATE SCHEMA "branch_schema";
       CREATE TYPE "order_schema"."orders_status_enum" AS ENUM
         ('new', 'received', 'on the road', 'waiting', 'sold');
-      -- Tarix ustuni boshqa enum turida (migratsiya turini o'zi topishi shart).
+      -- Tarix ustunlari boshqa (va bir-biridan ham farqli) enum turlarida —
+      -- migratsiya har ustun turini o'zi topishi shart (ikki enum orasida cast yo'q).
+      CREATE TYPE "order_schema"."order_tracking_from_status_enum" AS ENUM
+        ('new', 'received', 'on the road', 'waiting', 'sold');
       CREATE TYPE "order_schema"."order_tracking_to_status_enum" AS ENUM
         ('new', 'received', 'on the road', 'waiting', 'sold');
       CREATE TYPE "logistics_schema"."posts_status_enum" AS ENUM
@@ -64,7 +67,7 @@ describePg('Migratsiya 240 — skan bilan olingan buyurtmalar WAITING ga', () =>
       CREATE TABLE "order_schema"."order_tracking" (
         "id" serial PRIMARY KEY,
         "order_id" bigint NOT NULL,
-        "from_status" "order_schema"."order_tracking_to_status_enum",
+        "from_status" "order_schema"."order_tracking_from_status_enum",
         "to_status" "order_schema"."order_tracking_to_status_enum" NOT NULL,
         "changed_by" varchar(64) NOT NULL,
         "changed_by_role" varchar(32) NOT NULL,

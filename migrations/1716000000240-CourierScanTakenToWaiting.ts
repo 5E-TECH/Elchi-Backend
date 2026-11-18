@@ -32,13 +32,15 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * yuboradi). Qayta yurgizish xatosiz: ikkinchi marta mos qator yo'q.
  * Jadval(lar) bo'lmasa — o'tkazib yuboriladi.
  *
- * DEPLOY OYNASI: migratsiya servislar qayta qurilishidan OLDIN yuradi —
+ * DEPLOY OYNASI: migratsiya servislar qayta ishga tushishidan OLDIN yuradi —
  * shu oraliqda ESKI logistics-service yangi skanni hamon `on the road`
- * yozadi. Bunday qator yo'qolmaydi (kuryer ro'yxatining «Yo'lda» tabida,
- * «Sotish» / «Bekor qilish» o'zi qabul qiladi), lekin yorlig'i «Yo'lda»
- * qoladi. Hamma servis yangi kodda ishlay boshlagach shu SQL ni
+ * yozadi. Bunday qator yo'qolmaydi: `isCourierScanTakenOrder` istisnosi
+ * (kuryer ro'yxati, tab sonlari, «kelmagan» taqiqi) shu sabab bir reliz
+ * saqlanadi — u «Kutilayotgan» da chiqadi, «Sotish» / «Bekor qilish» o'zi
+ * qabul qiladi, qayta skan ham qabul qiladi; faqat yorlig'i «Yo'lda» qoladi.
+ * Hamma servis yangi kodda ishlay boshlagach shu SQL ni
  * (`COURIER_SCAN_TAKEN_TO_WAITING_UP_SQL`) psql bilan bir marta qayta
- * yurgizing — idempotent.
+ * yurgizish mumkin — idempotent; keyingi relizda istisno olib tashlanadi.
  *
  * down(): hech narsa qilmaydi — `waiting` buyurtma keyin sotilgan bo'lishi
  * mumkin, uni `on the road` ga qaytarish pulni buzadi.
@@ -46,7 +48,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export const COURIER_SCAN_TAKEN_TO_WAITING_UP_SQL = `
       DO $$
       DECLARE
-        tracking_status_type text;
+        from_status_type text;
+        to_status_type text;
         closed_post_ids bigint[];
       BEGIN
         IF to_regclass('"order_schema"."orders"') IS NULL
@@ -55,9 +58,17 @@ export const COURIER_SCAN_TAKEN_TO_WAITING_UP_SQL = `
           RETURN;
         END IF;
 
-        -- Tarix ustunining enum turi (orders bilan bir xil bo'lmasligi mumkin).
+        -- Tarix ustunlarining enum turlari — har biri alohida (orders bilan ham,
+        -- bir-biri bilan ham bir xil bo'lmasligi mumkin: Postgres ikki xil enum
+        -- orasida cast qilmaydi).
         SELECT format('%I.%I', c."udt_schema", c."udt_name")
-          INTO tracking_status_type
+          INTO from_status_type
+          FROM information_schema.columns c
+         WHERE c."table_schema" = 'order_schema'
+           AND c."table_name" = 'order_tracking'
+           AND c."column_name" = 'from_status';
+        SELECT format('%I.%I', c."udt_schema", c."udt_name")
+          INTO to_status_type
           FROM information_schema.columns c
          WHERE c."table_schema" = 'order_schema'
            AND c."table_name" = 'order_tracking'
@@ -85,7 +96,7 @@ export const COURIER_SCAN_TAKEN_TO_WAITING_UP_SQL = `
           INSERT INTO "order_schema"."order_tracking"
             ("order_id", "from_status", "to_status", "changed_by",
              "changed_by_role", "action", "description", "metadata", "note")
-          SELECT m."id", %1$L::%2$s, %3$L::%2$s, 'system', 'system',
+          SELECT m."id", %1$L::%2$s, %3$L::%4$s, 'system', 'system',
                  'courier_scan_received',
                  'Kuryer skan bilan olgan buyurtma «Kutilmoqda» holatiga o''tkazildi (skan = qabul)',
                  jsonb_build_object(
@@ -97,8 +108,9 @@ export const COURIER_SCAN_TAKEN_TO_WAITING_UP_SQL = `
             FROM moved m
           $sql$,
           'on the road',
-          tracking_status_type,
-          'waiting'
+          from_status_type,
+          'waiting',
+          to_status_type
         );
 
         -- 3. Yo'ldagi buyurtmasi qolmagan SENT kuryer pochtalari yopiladi.

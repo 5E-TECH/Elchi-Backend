@@ -1488,9 +1488,11 @@ road` left is closed. Tracking: `courier_scan_received` /
 `branch_post_received_by_courier_scan` (notes `COURIER_SCAN_TRACKING_NOTES`),
 a manager scan of a taken order → 400 `order_taken_by_courier`. The courier
 list (`courierPostOrdersQuery`, also counts and `/region/my/district-stats`)
-hides `on the road` until the post is received; the 6qypMFeT exception
-(`isCourierScanTakenOrder`) is gone — migration 1716000000240 moved those rows
-to `waiting`. **Auto-receive on sell/cancel (2026-11-12):** `POST
+hides `on the road` until the post is received; migration 1716000000240 moved
+scan-taken `on the road` rows to `waiting`. The 6qypMFeT exception
+(`isCourierScanTakenOrder` / `scan_taken_courier_id`) stays for ONE release only
+— for rows the old code writes in the deploy window — and is removed next
+release. **Auto-receive on sell/cancel (2026-11-12):** `POST
 /orders/sell|partly-sell|cancel/:id` on an `on the road`/`waiting_customer`
 order with a `post_id` first runs the scan receive at the gateway
 (`OrderGatewayController.autoReceiveOnRoadOrder` → `logistics.post.receive`

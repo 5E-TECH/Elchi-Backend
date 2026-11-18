@@ -146,10 +146,11 @@ describe('0d11ewk7 — GET /orders/courier/orders/counts', () => {
     }
     // Ishonch uchun: uchala tab ham haqiqatan turli so'rov.
     expect(listQueries[0]).toMatchObject({ status: [Order_status.WAITING] });
-    // COURIER-SCAN: skan bilan olingan posilka WAITING — 6qypMFeT istisnosi
-    // (`scan_taken_courier_id`) endi yo'q.
-    expect(listQueries[0]).not.toHaveProperty('scan_taken_courier_id');
-    expect(listQueries[1]).not.toHaveProperty('scan_taken_courier_id');
+    // 6qypMFeT: «Kutilayotgan» va «Barchasi» — skan bilan olingan posilka bilan.
+    // COURIER-SCAN: yangi skan WAITING yozadi; istisno deploy oynasidagi eski
+    // ON_THE_ROAD qatorlar uchun bir reliz saqlanadi (migratsiya 240 izohi).
+    expect(listQueries[0]).toMatchObject({ scan_taken_courier_id: '119' });
+    expect(listQueries[1]).toMatchObject({ scan_taken_courier_id: '119' });
     expect(listQueries[2]).toMatchObject({ courier_cancelled_tab: true });
   });
 });
