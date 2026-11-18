@@ -499,6 +499,8 @@ function replacePhoneCandidates(
     e164: string;
     raw: string;
     guardEnd?: number;
+    /** Himoyalangan oraliqda nomzoddan OLDINGI raqamlar soni. */
+    guardLead?: number;
   }[] = [];
   // Himoyalangan (narx/sana/summa/id deb saqlangan) asosiy moslik oralig'i:
   // uning ICHIDA boshlanadigan boshqa manba nomzodi (`Atir 75000 – 20-11 91
@@ -512,12 +514,14 @@ function replacePhoneCandidates(
       const end = start + raw.length;
       const e164 = toUzE164(raw);
       if (!e164 || /^0{7}$/.test(e164.slice(-7))) continue;
-      // Qat'iy `start > s0`: oraliq bilan bir joyda boshlangan nomzod
-      // (`Trek 998880002 /204`) tegilmaydi.
+      // `start >= s0`: oraliq bilan bir joyda boshlangan nomzod ham
+      // himoyalangan — yolg'iz bo'lsa (`Trek 998880002 /204`) telefon bo'lib
+      // qoladi, keyingi telefonni yutsa (`Buyurtma raqami 998335797 - 998 98
+      // 180 64 87`) tashlanadi (#710 review r2).
       const guard =
         kind === 'main'
           ? undefined
-          : guardedMain.find(([s0, e0]) => start > s0 && start < e0);
+          : guardedMain.find(([s0, e0]) => start >= s0 && start < e0);
       const before = text.slice(Math.max(0, start - 32), start);
       const after = text.slice(end);
       if (opts.model) {
@@ -529,17 +533,34 @@ function replacePhoneCandidates(
         if (kind === 'main') guardedMain.push([start, end]);
         continue;
       }
-      found.push({ start, end, e164, raw, guardEnd: guard?.[1] });
+      found.push({
+        start,
+        end,
+        e164,
+        raw,
+        guardEnd: guard?.[1],
+        guardLead: guard
+          ? text.slice(guard[0], start).replace(/\D/g, '').length
+          : undefined,
+      });
     }
   }
-  // Himoyalangan oraliq ichida boshlangan nomzod faqat oraliqdan KEYIN
-  // boshlanadigan boshqa (himoyasiz) nomzod bilan kesishsa tashlanadi
-  // (keyingi telefonni yutmasin); yolg'iz bo'lsa (`75 000 – 20 12 34 567`,
-  // `Mijoz uy 20 - 901 25 06 45`) — dev'dagidek telefon (#710 review).
+  // Himoyalangan oraliqda boshlangan nomzod faqat (1) oraliq bilan BIR
+  // JOYDA boshlangan (`Buyurtma raqami 998335797 - 998 98 180 64 87` — id
+  // bilan ustma-ust) yoki oraliqda undan OLDIN to'liq narx (≥ 5 raqam)
+  // turgan — ya'ni nomzod sana qismidan boshlangan (`Atir 75000 – 20-11 91
+  // 234 56 78`) — va (2) oraliqdan KEYIN boshlanadigan boshqa (himoyasiz)
+  // nomzod bilan kesishgan bo'lsa tashlanadi (keyingi telefonni yutmasin).
+  // Yolg'iz (`75 000 – 20 12 34 567`, `Trek 998880002 /204`) yoki oraliq
+  // boshidagi 1-4 raqamdan keyin boshlangan nomzod (`uy 20 - 901 25 06 75
+  // 1500000 so'm` — telefonning o'zi, keyingi son narx/id; `95 / 998
+  // 20-05-22-894 …` — qisqa `998 20-05-22` qoldig'i soxta raqam bo'lardi) —
+  // dev'dagidek telefon (#710 review round 2).
   const guardedOut = new Set(
     found.filter(
       (f) =>
         f.guardEnd !== undefined &&
+        ((f.guardLead as number) === 0 || (f.guardLead as number) >= 5) &&
         found.some(
           (g) =>
             g !== f &&

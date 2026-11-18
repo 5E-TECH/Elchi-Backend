@@ -1055,9 +1055,17 @@ const PRIVACY_CASES: C[] = [
     keep: ['75000'],
   },
   {
-    id: 'R5v strict start > s0 (locked)',
+    id: 'R5v same-start lone candidate stays a phone',
     text: 'Trek 998880002 /204',
     phones: [P('880002204')],
+  },
+  // #710 review r2: post-filter faqat KESISHGAN keyingi nomzodda ishlaydi —
+  // keyinroq turgan alohida telefon yolg'iz nomzodni tashlatmaydi.
+  {
+    id: 'R5w lone guarded-alt + later separate phone',
+    text: 'Atir 75 000 \u2013 20 12 34 567, tel 90 123 45 67',
+    phones: [P('201234567'), P('901234567')],
+    keep: ['75 000'],
   },
 ];
 
@@ -1982,6 +1990,48 @@ const AMOUNT_CASES: Case[] = [
     keep: ['875 500  2026-11-14'],
     tag: 'round 5',
   },
+  // #710 review round 2: himoyalangan oraliq boshida 1-4 raqam (uy/kv
+  // raqami) — ichida boshlangan nomzod telefonning o'zi; keyingi son
+  // (narx/id) uning dumi bilan "telefon" yasab, telefonni ochib, narxni
+  // yo'qotmasin. Dev (194296bb ham, b4311ebf ham) aynan shunday.
+  {
+    text: "Mijoz uy 20 - 901 25 06 75 1500000 so'm",
+    phones: [P('901250675')],
+    keep: ['1500000'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'Kv 33 / 901 25 06 75 2500000',
+    phones: [P('901250675')],
+    keep: ['2500000'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'uy 20 - 901 25 06 75 85000 20 dona',
+    phones: [P('901250675')],
+    keep: ['85000 20'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'Krossovka 42 20\u2013776-11-07-75 5102932!',
+    phones: [P('776110775')],
+    keep: ['5102932'],
+    tag: '#710 r2',
+  },
+  // Uzun nomzod tashlansa, bir joyda boshlangan qisqa `998 20 05 22`
+  // qoldig'i soxta `+998998200522` tokeni bo'lmasin.
+  {
+    text: "Uy 33 / 998 20 05 22 894 - 1500000 so'm",
+    phones: [P('200522894')],
+    keep: ['1500000'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'Dostavka 95 / 998 20-05-22-894-99000  20-01',
+    phones: [P('200522894')],
+    keep: ['99000  20-01'],
+    tag: '#710 r2',
+  },
 ];
 
 /**
@@ -2050,6 +2100,8 @@ describe('maskPhones — maxfiylik korpusi (#647)', () => {
       expect(missed).toEqual(open === 'all' ? c.phones : open);
     } else {
       expect({ missed, masked }).toEqual({ missed: [], masked });
+      // Aniq: kutilmagan qo'shimcha token ham yo'q.
+      expect([...got].sort()).toEqual([...c.phones].sort());
       for (const k of c.keep ?? []) expect(masked).toContain(k);
     }
     // Log maskalash HAR DOIM telefonni yashiradi (pul qo'riqchisisiz),
@@ -2070,6 +2122,32 @@ describe('maskPhones — maxfiylik korpusi (#647)', () => {
       expect(maskPhones(m.text).masked).toContain(m.keep);
     },
   );
+});
+
+// #710 review r2: id/summa bilan BIR JOYDA boshlangan nomzod (`start >= s0`)
+// keyingi telefonni yutmaydi. Faqat maskPhones: log/model yo'lida (pul
+// qo'riqchisisiz) bu zanjir dev'dagidek hali ochiq — alohida follow-up.
+const SAME_START_CASES: C[] = [
+  {
+    id: 'R5x id + 998-prefixed phone',
+    text: 'Buyurtma raqami 998335797 - 998 98 180 64 87 Aziza',
+    phones: [P('981806487')],
+    keep: ['998335797'],
+  },
+  {
+    id: 'R5y STIR + 998 glued phone',
+    text: 'STIR 998633913 - 998 743107455',
+    phones: [P('743107455')],
+    keep: ['998633913'],
+  },
+];
+
+describe('maskPhones — bir joyda boshlangan himoya (#710)', () => {
+  it.each(SAME_START_CASES.map((c) => [c.id, c] as const))('%s', (_id, c) => {
+    const { masked, tokens } = maskPhones(c.text);
+    expect([...tokens.values()].sort()).toEqual([...c.phones].sort());
+    for (const k of c.keep ?? []) expect(masked).toContain(k);
+  });
 });
 
 describe('maskPhones — summa korpusi (#647)', () => {
