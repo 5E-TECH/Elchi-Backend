@@ -257,6 +257,9 @@ const NAME_PART_STOP = new Set([
   'opa',
   'aka',
   'xon',
+  'hon',
+  'xonim',
+  'honim',
   'jon',
   'mijoz',
   'uka',
@@ -265,6 +268,7 @@ const NAME_PART_STOP = new Set([
   'опа',
   'ака',
   'хон',
+  'хоним',
   'жон',
   'мижоз',
   'клиент',
@@ -276,7 +280,7 @@ const NAME_PART_STOP = new Set([
  * qolgan o'zak (3+ harf) alohida variant: matnda "Dilnoza" ham maskalanadi.
  */
 const GLUED_HONORIFIC_RE =
-  /[-‐]?(?:xonim|honim|xon|hon|jon|opa|aka|хоним|хон|жон|опа|ака)$/iu;
+  /[-‐–]?(?:xonim|honim|xon|hon|jon|opa|aka|хоним|хон|жон|опа|ака)$/iu;
 
 /** Regex maxsus belgilarini qochiradi. */
 function escapeRe(x: string): string {

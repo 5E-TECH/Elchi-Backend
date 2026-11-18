@@ -580,4 +580,17 @@ describe('ai-eval-collect: PII (review round-7, dev tengligi)', () => {
   it('havola [TEL_n] tokenini yutmaydi', () => {
     expectAll('https://wa.me/[TEL_1] yozing', '[LINK][TEL_1] yozing');
   });
+
+  it('ismlar: en-tireli murojaat; hon/xonim/honim alohida so‘z sifatida maskalanmaydi', () => {
+    expect(maskCandidateText('Dilnoza opaga bering', ['Dilnoza–xon'])).toBe(
+      '[ISM] opaga bering',
+    );
+    expect(
+      maskCandidateText('hon keldi, xonim keldi, honim', [
+        'Dilnoza hon',
+        'Lola xonim',
+        'Gul honim',
+      ]),
+    ).toBe('hon keldi, xonim keldi, honim');
+  });
 });
