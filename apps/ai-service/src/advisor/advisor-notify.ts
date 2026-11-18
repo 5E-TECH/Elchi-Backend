@@ -298,21 +298,26 @@ export class AdvisorNotifier {
   /** (S2) Muvaffaqiyatsiz urinishlar: alert id → {n, keyingi urinish}. */
   private readonly attempts = new Map<string, { n: number; next: number }>();
   /**
-   * Oxirgi tick'larda JAVOBSIZ (timeout) qolgan qatorlar (id+suffix → vaqt)
-   * — navbat oxiriga (#705 S1): engine yangilagan javobsiz qator
-   * ortidagilarni `break` bilan to'smasin. Muvaffaqiyatda o'chadi, 48 soatda
-   * kesiladi.
+   * Oxirgi «yetib bo'lmadi» (timeout / transport / 5xx) vaqti: id+suffix → ms.
+   * Navbat shu vaqt bo'yicha AYLANADI: hech yiqilmaganlar — oldin, keyin eng
+   * uzoq kutganlar, hozir yiqilgani — oxirida. Engine har tick `updatedAt` ni
+   * yangilasa ham (`touch` bekor bo'ladi), `break` (javobsiz / ketma-ket 3×5xx)
+   * ortidagilarni abadiy to'smaydi. Muvaffaqiyatda o'chadi, 48 soatda kesiladi.
    */
-  private readonly noReply = new Map<string, number>();
-  private noReplyIds(now: Date, suffix: string): string[] {
-    const out: string[] = [];
-    for (const [k, at] of this.noReply) {
-      if (at < now.getTime() - 2 * ADVISOR_NOTIFY_MAX_AGE_HOURS * 3600_000)
-        this.noReply.delete(k);
+  private readonly unreachableAt = new Map<string, number>();
+  private markUnreachable(key: string, now: Date): void {
+    this.unreachableAt.delete(key);
+    this.unreachableAt.set(key, now.getTime());
+  }
+  private unreachableOrder(now: Date, suffix: string): string[] {
+    const cutoff = now.getTime() - 2 * ADVISOR_NOTIFY_MAX_AGE_HOURS * 3600_000;
+    const out: Array<[string, number]> = [];
+    for (const [k, at] of this.unreachableAt) {
+      if (at < cutoff) this.unreachableAt.delete(k);
       else if (suffix ? k.endsWith(suffix) : !k.includes(':'))
-        out.push(k.slice(0, k.length - suffix.length));
+        out.push([k.slice(0, k.length - suffix.length), at]);
     }
-    return out;
+    return out.sort((a, b) => a[1] - b[1]).map(([id]) => id);
   }
 
   constructor(
@@ -428,8 +433,9 @@ export class AdvisorNotifier {
         WHERE a."severity" = 'critical' AND a."status" IN ('new','seen') AND a."is_deleted" = false
           AND a."notified_at" IS NULL AND a."notify_skipped" IS NULL
           AND NOT (a."id" = ANY($1::bigint[]))
-        ORDER BY (a."id" = ANY($2::bigint[])) ASC, a."updatedAt" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
-      [waiting, this.noReplyIds(now, '')],
+        ORDER BY COALESCE(array_position($2::bigint[], a."id"), 0) ASC, a."updatedAt" ASC, a."id" ASC
+        LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+      [waiting, this.unreachableOrder(now, '')],
     );
     if (!rows.length) return out;
     let recipients: string[];
@@ -458,18 +464,19 @@ export class AdvisorNotifier {
       // ning birinchi urinishi yiqilib, qayta urinish 09:00 dan keyin bo'lsa
       // ham ayni client_request_id ilova ichi uchun, Telegram — alohida
       // kechiktirilgan yo'l bilan (due = hozir, shu tick'da ketadi).
-      // Izoh: 09:00–22:00 orasida ochilgan R6 22:00 dan keyin qayta urinilsa —
-      // 'default' rejimda (tunda) ketadi; prod'da R6 faqat 02:30 da ochiladi.
+      // Kunduz ochilgan R6 tunda qayta urinilsa — hozirgi vaqt bo'yicha due
+      // (tun bo'lsa ertasi 09:00): Telegram tunda ketmaydi.
       const firstAt = row.first_at ? new Date(row.first_at) : null;
       const openedAt =
         firstAt && firstAt.getTime() <= now.getTime() ? firstAt : now;
       const r6Due = telegram ? r6TelegramDueAt(row.rule_key, openedAt) : null;
+      const nowDue = telegram ? r6TelegramDueAt(row.rule_key, now) : null;
       // 09:00 o'tgan: hozir kunduz bo'lsa — darhol; tun bo'lsa (uzilish yarim
       // tundan o'tgan) — bugungi 09:00 (R6 ega qarori: Telegram tunda yo'q).
       const telegramDueAt =
         r6Due && r6Due.getTime() < now.getTime()
-          ? (r6TelegramDueAt(row.rule_key, now) ?? now)
-          : r6Due;
+          ? (nowDue ?? now)
+          : (r6Due ?? nowDue);
       const payload = buildAdvisorDispatch(row, {
         recipients,
         rules,
@@ -499,7 +506,7 @@ export class AdvisorNotifier {
           [row.id, telegramDueAt],
         );
         this.attempts.delete(row.id);
-        this.noReply.delete(row.id);
+        this.unreachableAt.delete(row.id);
         serverErrors = 0;
         out.sent += 1;
       } catch (error) {
@@ -511,10 +518,8 @@ export class AdvisorNotifier {
           this.logger.warn(
             `ai_advisor_notify_unreachable alert=${row.id}: ${short(error)}`,
           );
-          if (isDispatchNoReply(error)) {
-            this.noReply.set(row.id, now.getTime());
-            break;
-          }
+          this.markUnreachable(row.id, now);
+          if (isDispatchNoReply(error)) break;
           // 5xx tez javob — qatorga xos xato boshqalarni to'smasin (davom);
           // ketma-ket 3 ta — xizmat butunlay nosoz, tick to'xtaydi.
           if (++serverErrors >= ADVISOR_NOTIFY_MAX_SERVER_ERRORS) break;
@@ -617,8 +622,9 @@ export class AdvisorNotifier {
          FROM ai_schema.ai_advisor_alerts a
         WHERE a."telegram_due_at" IS NOT NULL AND a."telegram_due_at" <= $1
           AND NOT (a."id" = ANY($2::bigint[]))
-        ORDER BY (a."id" = ANY($3::bigint[])) ASC, a."updatedAt" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
-      [now, this.waitingIds(now, ':tg'), this.noReplyIds(now, ':tg')],
+        ORDER BY COALESCE(array_position($3::bigint[], a."id"), 0) ASC, a."updatedAt" ASC, a."id" ASC
+        LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+      [now, this.waitingIds(now, ':tg'), this.unreachableOrder(now, ':tg')],
     );
     if (!rows.length) return out;
     const clear = (id: string) =>
@@ -694,7 +700,7 @@ export class AdvisorNotifier {
         );
         await clear(row.id);
         this.attempts.delete(`${row.id}:tg`);
-        this.noReply.delete(`${row.id}:tg`);
+        this.unreachableAt.delete(`${row.id}:tg`);
         serverErrors = 0;
         out.sent += 1;
       } catch (error) {
@@ -705,10 +711,8 @@ export class AdvisorNotifier {
           this.logger.warn(
             `ai_advisor_notify_telegram_unreachable alert=${row.id}: ${short(error)}`,
           );
-          if (isDispatchNoReply(error)) {
-            this.noReply.set(`${row.id}:tg`, now.getTime());
-            break;
-          }
+          this.markUnreachable(`${row.id}:tg`, now);
+          if (isDispatchNoReply(error)) break;
           if (++serverErrors >= ADVISOR_NOTIFY_MAX_SERVER_ERRORS) break;
           continue;
         }
@@ -722,21 +726,29 @@ export class AdvisorNotifier {
 }
 
 function short(error: unknown): string {
-  if (error instanceof Error) return error.message.slice(0, 200);
-  // RPC xatosi — `{statusCode, message}` obyekti ('[object Object]' emas).
-  if (error && typeof error === 'object') {
-    const e = error as { statusCode?: unknown; message?: unknown };
-    const code =
-      typeof e.statusCode === 'number' || typeof e.statusCode === 'string'
-        ? String(e.statusCode)
-        : '';
-    const msg = typeof e.message === 'string' ? e.message : '';
-    if (code || msg) return `${code} ${msg}`.trim().slice(0, 200);
-    try {
+  // Log uchun: hech qachon tashlamaydi (aylanma / prototipsiz obyekt, getter).
+  try {
+    if (error instanceof Error) return error.message.slice(0, 200);
+    // RPC xatosi — `{statusCode, message}` obyekti ('[object Object]' emas).
+    if (error && typeof error === 'object') {
+      const e = error as { statusCode?: unknown; message?: unknown };
+      const code =
+        typeof e.statusCode === 'number' || typeof e.statusCode === 'string'
+          ? String(e.statusCode)
+          : '';
+      const msg =
+        typeof e.message === 'string'
+          ? e.message
+          : Array.isArray(e.message) // class-validator 400
+            ? e.message
+                .filter((m): m is string => typeof m === 'string')
+                .join('; ')
+            : '';
+      if (code || msg) return `${code} ${msg}`.trim().slice(0, 200);
       return JSON.stringify(error).slice(0, 200);
-    } catch {
-      /* aylanma obyekt */
     }
+    return String(error).slice(0, 200);
+  } catch {
+    return 'unprintable error';
   }
-  return String(error).slice(0, 200);
 }

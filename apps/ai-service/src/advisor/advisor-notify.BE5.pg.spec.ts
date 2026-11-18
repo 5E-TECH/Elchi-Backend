@@ -72,6 +72,9 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
     (
       notifier as unknown as { attempts: Map<string, unknown> }
     ).attempts.clear();
+    (
+      notifier as unknown as { unreachableAt: Map<string, unknown> }
+    ).unreachableAt.clear();
     await ds.query(
       'TRUNCATE ai_schema.ai_advisor_alerts RESTART IDENTITY CASCADE',
     );
@@ -344,6 +347,87 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
     expect(await notifier.dispatchPending()).toEqual({ sent: 2, failed: 1 });
   });
 
+  it('#705 rr12: engine har tick «eng eski» qiladigan 3 ta doimiy 5xx qator — keyingi tick yaxshilar ketadi', async () => {
+    const bad: string[] = [];
+    for (let i = 0; i < 3; i++) bad.push((await insert('critical'))[0].id);
+    for (let i = 0; i < 2; i++) await insert('critical');
+    dispatch.mockImplementation((_p: unknown, body: unknown) =>
+      bad.includes((body as { data: { alert_id: string } }).data.alert_id)
+        ? throwError(() => ({ statusCode: 500, message: 'x' }))
+        : of({ statusCode: 201 }),
+    );
+    const bump = () =>
+      ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() - INTERVAL '1 day' WHERE id = ANY($1::bigint[])`,
+        [bad],
+      );
+    await bump();
+    // 1-tick: ketma-ket 3×5xx — partiya to'xtaydi.
+    expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 3 });
+    await bump();
+    expect(await notifier.dispatchPending()).toEqual({ sent: 2, failed: 3 });
+  });
+
+  it('#705 rr12: bir marta javobsiz qolgan qator doimiy javobsiz qator ortida abadiy qolmaydi', async () => {
+    const [{ id: slow }] = await insert('critical');
+    const [{ id: good }] = await insert('critical');
+    // 2 tick xizmat butunlay javobsiz: avval `slow`, keyin `good` javobsiz.
+    dispatch.mockImplementation(() => throwError(() => new TimeoutError()));
+    expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 1 });
+    expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 1 });
+    // Xizmat tiklandi, faqat `slow` doim javobsiz; engine uni «eng eski» qiladi.
+    dispatch.mockImplementation((_p: unknown, body: unknown) =>
+      (body as { data: { alert_id: string } }).data.alert_id === slow
+        ? throwError(() => new TimeoutError())
+        : of({ statusCode: 201 }),
+    );
+    let sent = 0;
+    for (let i = 0; i < 3; i++) {
+      await ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() - INTERVAL '1 day' WHERE id = $1`,
+        [slow],
+      );
+      sent += (await notifier.dispatchPending()).sent;
+    }
+    expect(sent).toBe(1);
+    const [row] = await ds.query<Array<{ notified: boolean }>>(
+      `SELECT notified_at IS NOT NULL AS notified FROM ai_schema.ai_advisor_alerts WHERE id = $1`,
+      [good],
+    );
+    expect(row.notified).toBe(true);
+  });
+
+  it('#705 S4: chop etib bo‘lmaydigan xato obyekti (prototipsiz, getter tashlaydi) — tick to‘xtamaydi; massiv message birlashtiriladi', async () => {
+    await insert('critical');
+    const warn = jest.spyOn(
+      (notifier as unknown as { logger: { warn: (m: string) => void } }).logger,
+      'warn',
+    );
+    const weird = Object.create(null) as Record<string, unknown>;
+    weird.statusCode = 400;
+    Object.defineProperty(weird, 'message', {
+      get() {
+        throw new Error('getter');
+      },
+    });
+    weird.self = weird;
+    dispatch.mockReturnValueOnce(throwError(() => weird));
+    expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 1 });
+    (
+      notifier as unknown as { attempts: Map<string, unknown> }
+    ).attempts.clear();
+    dispatch.mockReturnValueOnce(
+      throwError(() => ({ statusCode: 400, message: ['a bad', 'b bad'] })),
+    );
+    expect(await notifier.dispatchPending()).toEqual({ sent: 0, failed: 1 });
+    const logs = warn.mock.calls.map((c) => String(c[0]));
+    warn.mockRestore();
+    expect(logs).toEqual([
+      expect.stringContaining('unprintable error'),
+      expect.stringContaining('400 a bad; b bad'),
+    ]);
+  });
+
   it('#705 S3: superadminlar ro‘yxati bo‘sh — urinish sanalmaydi, «failed» bo‘lmaydi', async () => {
     const [{ id }] = await insert('critical');
     (notifier as unknown as { recipientsCache: unknown }).recipientsCache =
@@ -577,6 +661,26 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       // 09:00 da — faqat Telegram.
       await notifier.dispatchPending(todayAt(33));
       expect(payloads()[2].channels).toEqual(['telegram']);
+    });
+
+    it('#705 S1: kunduz ochilgan R6 tunda qayta urinilsa — Telegram tunda emas, ertasi 09:00 da', async () => {
+      const [{ id }] = await insert('critical', 'new', null, 'R6');
+      await ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET first_at = $2 WHERE id = $1`,
+        [id, todayAt(21)],
+      );
+      dispatch.mockReturnValueOnce(throwError(() => new TimeoutError()));
+      await notifier.dispatchPending(todayAt(21));
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      // 23:00 — ilova ichi darhol, Telegram yo'q.
+      expect(await notifier.dispatchPending(todayAt(23))).toEqual({
+        sent: 1,
+        failed: 0,
+      });
+      expect(payloads()[1].channels).toEqual(['in_app', 'realtime']);
+      expect((await due(id)).telegram_due_at?.toISOString()).toBe(
+        todayAt(33).toISOString(),
+      );
     });
 
     it('#705 S-b: 09:00 Telegram — o‘z timeout’i bor qator boshqasini to‘smaydi (navbat oxiriga)', async () => {
