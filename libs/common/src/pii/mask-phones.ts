@@ -270,14 +270,23 @@ function isDayMonth(dd: string, mm: string): boolean {
  * `50 000 25.11 kuni`, `70 000  12 11`, `75 000 14.11.2026`,
  * `90 500 2026-11-14`). `8` + kod bilan boshlanadigan narx (`850 000 25/11`
  * — `8` prefiks deb olinadi) va yaxlit `CC000` (`75000 14/11`) ham.
- * +998/998/0 prefiksli yoki qavsli shakl — doim telefon.
+ * +998/998/0 prefiksli yoki qavsli shakl — doim telefon (million narxning
+ * o'rta guruhi `1 090 000 14/11` dan tashqari).
  */
 function looksLikePriceAndDate(
   raw: string,
   before: string,
   after: string,
 ): boolean {
-  if (/^[+0]|\(/.test(raw)) return false;
+  // Million narxning o'rta guruhi (`1 090 000 14/11` — moslik `090 000 …`
+  // dan boshlanadi, `0` prefiks deb olinadi): oldida 1-3 xonali guruh va
+  // `0NN 000` — narx, telefon emas (#647 round 4 A1).
+  const millionMiddle =
+    /^0\d{2}[ .\u00a0\u202f]000\D/.test(raw) &&
+    /(?:^|[^\d.,])\d{1,3}[ .\u00a0\u202f]$/.test(before);
+  if (/^\+|\(/.test(raw) || (raw.startsWith('0') && !millionMiddle)) {
+    return false;
+  }
   const digits = raw.replace(/\D/g, '');
   if (digits.length === 12) return false;
   // Telefon so'zi oldida — sana qoidalaridan OLDIN: `Tel: 90-123-12-11/…`

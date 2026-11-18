@@ -1644,6 +1644,65 @@ const AMOUNT_CASES: Case[] = [
     phones: [P('900001411')],
     tag: 'round 3',
   },
+  // #647 round 4 (A1): million narx + sana — o'rta `0NN 000` guruhi `0` prefiksli telefon emas.
+  {
+    text: 'Narxi 1 090 000 14/11',
+    phones: [],
+    keep: ['1 090 000 14/11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Jami 2 050 000 25/11 kuni',
+    phones: [],
+    keep: ['2 050 000 25/11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 1.090.000 14/11',
+    phones: [],
+    keep: ['1.090.000 14/11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 1 090 000 14/11/2026',
+    phones: [],
+    keep: ['1 090 000 14/11/2026'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Divan 3 070 000 01/12 gacha',
+    phones: [],
+    keep: ['3 070 000 01/12'],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 1${NB}090${NB}000 14.11`,
+    phones: [],
+    keep: [`1${NB}090${NB}000 14.11`],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 1${NNB}090${NNB}000 14.11`,
+    phones: [],
+    keep: [`1${NNB}090${NNB}000 14.11`],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 12 090 000 – 14 – 11',
+    phones: [],
+    keep: ['12 090 000 – 14 – 11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 5 090 000 14 11',
+    phones: [P('900001411')],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 0 (90) 000 14/11',
+    phones: [P('900001411')],
+    tag: 'round 4',
+  },
 ];
 
 /**
