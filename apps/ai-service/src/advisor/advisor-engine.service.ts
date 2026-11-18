@@ -583,7 +583,7 @@ export class AdvisorEngineService {
 
 /**
  * §4.3 backfill rejimi: qoidaning birinchi ishi YOKI kursordan beri > 24 soat
- * (R6 — > 48 soat: kursori kechagi kun oxiri) o'tgan — 24 soatdan eski
+ * (R6 — > 8 kun: catch-up oynasi + 1 kun) o'tgan — 24 soatdan eski
  * faktlardan ochilganlar bildirishnomasiz (`notify_skipped='backfill'`;
  * round-2 ops-S1, kelishilgan).
  */
@@ -595,7 +595,14 @@ export function catchingUp(
   if (!state?.first_run_at) return true;
   if (!state.cursor_at || !(isCursorRule(rule) || rule === 'R6')) return false;
   const gap = now.getTime() - new Date(state.cursor_at).getTime();
-  return gap > (rule === 'R6' ? 2 : 1) * ADVISOR_BACKFILL_NOTIFY_MS;
+  // R6 (#704 review B2): bitta o'tkazib yuborilgan kunlik yugurish (RPC
+  // qayta urinishsiz) o'sha kunning kritik R6 xabarini backfill qilib
+  // yo'qotmasin — kunlik catch-up oynasi (7 kun) ichidagi bo'shliq oddiy.
+  return (
+    gap >
+    (rule === 'R6' ? ADVISOR_R6_CATCHUP_DAYS + 1 : 1) *
+      ADVISOR_BACKFILL_NOTIFY_MS
+  );
 }
 
 /** Kalit tartibidan qat'i nazar JSON tengligi (jsonb kalitlarni qayta tartiblaydi). */

@@ -205,7 +205,7 @@ describe('r6Periods (BE-5 round-2 #651 S2/S3)', () => {
 describe('catchingUp (BE-5 round-2 ops-S1)', () => {
   const now = new Date('2026-10-22T09:00:00.000Z');
   const h = (n: number) => new Date(now.getTime() - n * 3600_000);
-  it('birinchi ish — ha; kursor 30 daq — yo‘q; > 24 soat — ha; R6 — > 48 soat', () => {
+  it('birinchi ish — ha; kursor 30 daq — yo‘q; > 24 soat — ha; R6 — > 8 kun', () => {
     expect(catchingUp('R1', undefined, now)).toBe(true);
     expect(
       catchingUp('R1', { first_run_at: h(100), cursor_at: h(0.5) }, now),
@@ -216,8 +216,12 @@ describe('catchingUp (BE-5 round-2 ops-S1)', () => {
     expect(
       catchingUp('R6', { first_run_at: h(100), cursor_at: h(27) }, now),
     ).toBe(false);
+    // #704 B2: bitta o'tkazilgan kunlik yugurish (50 soat) — backfill EMAS.
     expect(
       catchingUp('R6', { first_run_at: h(100), cursor_at: h(50) }, now),
+    ).toBe(false);
+    expect(
+      catchingUp('R6', { first_run_at: h(400), cursor_at: h(8 * 24 + 1) }, now),
     ).toBe(true);
     expect(
       catchingUp('R2', { first_run_at: h(100), cursor_at: null }, now),
