@@ -199,7 +199,8 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
     expect(draft).toEqual(
       expect.objectContaining({
         status: 'preview',
-        input: { text: ORDER_TEXT },
+        // meta.role — bot ichki (operator tanlovi faqat market).
+        input: { text: ORDER_TEXT, meta: { role: 'market_operator' } },
       }),
     );
   });
@@ -299,7 +300,7 @@ describe('e7KhaeOO — matn → AI preview (mavjud endpoint, operator JWT)', () 
     expect(draft).toEqual(
       expect.objectContaining({
         status: 'failed',
-        input: { text: ORDER_TEXT },
+        input: { text: ORDER_TEXT, meta: { role: 'market_operator' } },
       }),
     );
     fail = false;

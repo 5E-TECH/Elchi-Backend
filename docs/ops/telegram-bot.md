@@ -493,6 +493,33 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   `AI_CHECK_EXEMPT_BY_EDIT` bilan bir xil); o'sha tumanni qayta tanlash —
   tahrir emas, «Baribir yaratamanmi?» qoladi. Server 409 so'rasa — oyna
   odatdagidek.
+- **«👤 Operator» tanlovi (ai-confirm `orders[].operator_id`, #715).** Faqat
+  MARKET egasiga: parse'dan keyin `GET /market-operators/selectable` (aktor
+  JWT, `market_id` siz) — ≥1 operator bo'lsa kartada «👤 Operator:
+  <ism|tanlanmagan>» → oyna (≤20, ortig'i «… yana N ta — kabinetda»),
+  «🚫 Tanlamaslik», «↩️ Orqaga». Amallar `ai.op`, `ai.opick` (`{k, oid}` —
+  ro'yxat almashgan eski tugma qo'llanmaydi; `{k: -1}` — tanlamaslik).
+  Tanlov QORALAMA bo'yicha bitta (hamma buyurtmaga) — `input.meta`
+  (`role`, `operators`, `operator_id`, `operator_name`); `operator_id` faqat
+  odam tanlaganda yuboriladi (model chiqishi uni bera olmaydi —
+  `toConfirmOrder` `extra` argumenti). Market operatori: ro'yxat
+  so'ralmaydi, tugma yo'q, `operator_id` YUBORILMAYDI (FE shartnomasi).
+  Natijasi noma'lum urinish bo'lsa tanlov yopiq.
+- **Operator raqami (`orders[].operator_phone`, #716).** Market: «✅» da
+  `GET /auth/my-profile` — `require_operator_phone` va doimiy raqam yo'q
+  bo'lsa marketning o'z raqami yuboriladi; talab qilmaydigan market — HECH
+  narsa yuborilmaydi (chekda 2-raqam paydo bo'lmasin). Market operatori:
+  market sozlamasi operatorga ko'rinmaydi — server «Operator telefon raqami
+  majburiy» desa (`create_failed`) natija qayta urinishli: qoralama
+  preview'da qoladi (`meta.operator_phone_needed`), keyingi «✅» operatorning
+  profil raqami bilan. Raqam bo'sh / normallashmasa — yuborilmaydi.
+- **Qayta urinishli natijalar.** `validation_unavailable` (server tekshira
+  olmadi — buyurtma ANIQ yaratilmagan) va yuqoridagi raqam holati: qoralama
+  `created` EMAS, preview'ga qaytadi, yuborilgan buyurtmalar belgilanadi
+  (tuzatish yopiq), xabarda natija qatorlari + «🔁 … qayta bosing»;
+  yaratilganlari qayta bosishda server kaliti bilan takrorlanmaydi
+  (`idempotent_replay`). Boshqa `create_failed` (masalan noto'g'ri operator)
+  — server sababi `❌ N) …`, qayta urinish yo'q.
 
 ## 13. Skan Mini App (MWYaqprw) — chatda skan YO'Q
 

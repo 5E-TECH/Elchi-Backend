@@ -62,7 +62,7 @@ export class AiOrderHandler implements BotMessageHandler {
       await ctx.reply(AI_HINT_TEXT);
       return true;
     }
-    await this.ai.start(ctx, actor.user_id, { text });
+    await this.ai.start(ctx, actor.user_id, { text }, actor.role);
     return true;
   }
 
@@ -85,10 +85,15 @@ export class AiOrderHandler implements BotMessageHandler {
         await ctx.reply(AI_MEDIA_TEXT);
         return true;
       }
-      await this.ai.start(ctx, actor.user_id, {
-        ...(caption ? { text: caption } : {}),
-        files: [{ file_id: size.file_id, mime: 'image/jpeg' }],
-      });
+      await this.ai.start(
+        ctx,
+        actor.user_id,
+        {
+          ...(caption ? { text: caption } : {}),
+          files: [{ file_id: size.file_id, mime: 'image/jpeg' }],
+        },
+        actor.role,
+      );
       return true;
     }
     const document = message.document!;
@@ -100,10 +105,15 @@ export class AiOrderHandler implements BotMessageHandler {
       await ctx.reply(AI_MEDIA_TEXT);
       return true;
     }
-    await this.ai.start(ctx, actor.user_id, {
-      ...(caption ? { text: caption } : {}),
-      files: [{ file_id: document.file_id, mime }],
-    });
+    await this.ai.start(
+      ctx,
+      actor.user_id,
+      {
+        ...(caption ? { text: caption } : {}),
+        files: [{ file_id: document.file_id, mime }],
+      },
+      actor.role,
+    );
     return true;
   }
 }
@@ -193,6 +203,17 @@ export class AiOrderActions {
         action: AI_ORDER_ACTIONS.districtPick,
         expiredText: AI_EXPIRED_TEXT,
         handle: withPayload((ctx, id, p) => this.ai.pickDistrict(ctx, id, p)),
+      },
+      // «👤 Operator» (faqat market): payload — `{k, oid}` / `{k: -1}`.
+      {
+        action: AI_ORDER_ACTIONS.operator,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: privateOnly((ctx, id) => this.ai.openOperators(ctx, id)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.operatorPick,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.pickOperator(ctx, id, p)),
       },
       {
         action: AI_ORDER_ACTIONS.retry,

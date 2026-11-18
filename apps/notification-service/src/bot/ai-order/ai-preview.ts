@@ -287,7 +287,19 @@ export function isCreatable(order: AiPreviewOrder): boolean {
 export function toConfirmOrder(
   order: AiPreviewOrder,
   aiDraftId: string | null,
+  /**
+   * ODAM tanlovi / aktor profili (preview'dan EMAS): `operator_id` — market
+   * «👤 Operator» da tanlagan; `operator_phone` — profil raqami (kerak
+   * bo'lsa). Model chiqishi bu maydonlarni hech qachon bera olmaydi.
+   */
+  extra: { operator_id?: string | null; operator_phone?: string | null } = {},
 ) {
+  const operatorId = /^\d{1,19}$/.test(String(extra.operator_id ?? ''))
+    ? String(extra.operator_id)
+    : null;
+  const operatorPhone = /^\+998\d{9}$/.test(String(extra.operator_phone ?? ''))
+    ? String(extra.operator_phone)
+    : null;
   const district = String(order.district_id);
   const address = clip(order.address, 255);
   const replacedOrderId = linkedReplacementId(order);
@@ -334,6 +346,8 @@ export function toConfirmOrder(
     ...(clip(order.operator, 100)
       ? { operator: clip(order.operator, 100) }
       : {}),
+    ...(operatorId ? { operator_id: operatorId } : {}),
+    ...(operatorPhone ? { operator_phone: operatorPhone } : {}),
   };
 }
 

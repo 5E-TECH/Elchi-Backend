@@ -3,13 +3,13 @@ import { toConfirmOrder, type AiPreviewOrder } from './ai-preview';
 /**
  * Telegram bot AI — `toConfirmOrder` kalitlar OQ RO'YXATI.
  *
- * Bot model chiqishini (ai-parse preview) ai-confirm payloadiga SERVER
- * tomonda o'zi aylantiradi — operatorni ham, mijozni ham odam select'da
- * tanlamaydi. Shu sabab `operator_id`, `customer_id`, `operator_phone`,
- * `verified_operator_id` (va boshqa formaga xos maydonlar) bot payloadiga
- * HECH QACHON tushmasligi kerak — preview'da (injection, kelajakdagi
- * maydon) bo'lsa ham. Gateway bu maydonlarni ai-confirm'da qabul qiladi
- * (veb AI paneli uchun), shu bois kafolat — shu yerda.
+ * Bot model chiqishini (ai-parse preview) ai-confirm payloadiga o'zi
+ * aylantiradi. Model chiqishi (preview) `operator_id`, `customer_id`,
+ * `operator_phone`, `verified_operator_id` (va boshqa formaga xos
+ * maydonlar) ni HECH QACHON bera olmaydi — preview'da (injection,
+ * kelajakdagi maydon) bo'lsa ham. `operator_id` / `operator_phone` faqat
+ * ODAM yo'lidan — `toConfirmOrder` ning `extra` argumenti («👤 Operator»
+ * tanlovi, aktor profil raqami); `customer_id` bot hech qachon yubormaydi.
  */
 const ALLOWED_ORDER_KEYS = new Set([
   'customer',
@@ -102,6 +102,32 @@ describe('toConfirmOrder — kalitlar oq ro‘yxati (bot ai-confirm payloadi)', 
     for (const key of FORBIDDEN_KEYS) {
       expect(serialized).not.toContain(`"${key}"`);
     }
+  });
+
+  it('odam tanlovi (extra) — operator_id / operator_phone FAQAT shundan; preview qiymati e’tiborsiz', () => {
+    const body = toConfirmOrder(hostilePreview(), null, {
+      operator_id: '31',
+      operator_phone: '+998900000077',
+    }) as Record<string, unknown>;
+    expect(body.operator_id).toBe('31');
+    expect(body.operator_phone).toBe('+998900000077');
+    const serialized = JSON.stringify(body);
+    for (const key of FORBIDDEN_KEYS.filter(
+      (k) => k !== 'operator_id' && k !== 'operator_phone',
+    )) {
+      expect(serialized).not.toContain(`"${key}"`);
+    }
+    // Preview'dagi `operator_id: '26'` hech qayerda yo'q.
+    expect(serialized).not.toContain('"26"');
+  });
+
+  it('odam tanlovi noto‘g‘ri shaklda — yuborilmaydi', () => {
+    const body = toConfirmOrder(hostilePreview(), null, {
+      operator_id: 'abc',
+      operator_phone: '901234567',
+    }) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('operator_id');
+    expect(body).not.toHaveProperty('operator_phone');
   });
 
   it('operator — faqat matn sifatida o‘tadi', () => {

@@ -13,6 +13,7 @@ import {
 import {
   TelegramAiDraft,
   TelegramAiDraftInput,
+  TelegramAiDraftMeta,
   TelegramAiDraftStatus,
 } from '../../entities/telegram-ai-draft.entity';
 import { BotActionsService } from '../bot-actions.service';
@@ -84,6 +85,21 @@ import {
   parseEditValue,
   storedDistrictOptions,
 } from './ai-order-edit';
+import {
+  AI_OPERATOR_NONE_TEXT,
+  AI_OPERATOR_PHONE_RETRY_TEXT,
+  AI_RETRY_HINT_TEXT,
+  canChooseOperator,
+  chosenOperatorId,
+  isRetryableResult,
+  metaOf,
+  needsProfilePhone,
+  operatorButtonLabel,
+  operatorPickerText,
+  operatorsFromResponse,
+  profileOperatorPhone,
+  storedOperators,
+} from './ai-order-operator';
 
 export const AI_ORDER_ACTIONS = {
   confirm: 'ai.ok',
@@ -111,6 +127,10 @@ export const AI_ORDER_ACTIONS = {
   district: 'ai.dist',
   /** Tuman tanlandi. */
   districtPick: 'ai.dpick',
+  /** «👤 Operator» tanlash oynasi (faqat market). */
+  operator: 'ai.op',
+  /** Operator tanlandi (`{k, oid}`) yoki «Tanlamaslik» (`{k: -1}`). */
+  operatorPick: 'ai.opick',
 } as const;
 
 /**
@@ -275,6 +295,8 @@ interface ConfirmResult {
   index: number;
   ok: boolean;
   order_id?: string;
+  /** Xato kodi (`create_failed`, `validation_unavailable`, …). */
+  code?: string;
   reason?: string;
   idempotent_replay?: boolean;
 }
@@ -353,6 +375,8 @@ export class AiOrderService implements OnModuleDestroy {
     ctx: BotContext,
     actorUserId: string,
     input: TelegramAiDraftInput,
+    /** Aktor roli — «👤 Operator» tanlovi faqat market uchun. */
+    role?: string,
   ): Promise<void> {
     const draft: Partial<TelegramAiDraft> = {
       id: deterministicUuid(
@@ -361,7 +385,7 @@ export class AiOrderService implements OnModuleDestroy {
       chat_id: ctx.chatId,
       actor_user_id: actorUserId,
       status: 'parsing',
-      input,
+      input: { ...input, ...(role ? { meta: { role } } : {}) },
     };
     try {
       await this.drafts.insert(draft as never);
@@ -688,17 +712,22 @@ export class AiOrderService implements OnModuleDestroy {
       await this.show(ctx, draft, AI_EMPTY_TEXT, []);
       return;
     }
+    // «👤 Operator» tanlovi — faqat market (market operatori operator_id
+    // YUBORMAYDI, FE shartnomasi). Ro'yxat olinmasa — tanlov yo'q.
+    const input = await this.withSelectableOperators(telegramId, draft);
     if (
       !(await this.finish(draft, {
         status: 'preview',
         orders,
         ai_draft_id: str(data.draft_id) || null,
         error: null,
+        input,
       }))
     ) {
       return;
     }
     draft.orders = orders;
+    draft.input = input;
     await this.showPreview(ctx, draft);
   }
 
@@ -870,8 +899,14 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     const telegramId = ctx.fromId ?? ctx.chatId;
+    const meta = metaOf(draft.input);
     let res: { status: number; body: unknown };
     try {
+      // ODAM tanlovi / aktor profili — model chiqishidan EMAS.
+      const extra = {
+        operator_id: chosenOperatorId(meta),
+        operator_phone: await this.operatorPhoneFor(telegramId, meta),
+      };
       res = await this.gateway.request(
         telegramId,
         'POST',
@@ -879,7 +914,7 @@ export class AiOrderService implements OnModuleDestroy {
         {
           request_id: deterministicUuid(`telegram-ai:${draft.id}`),
           orders: ready.map((order) =>
-            toConfirmOrder(order, draft.ai_draft_id),
+            toConfirmOrder(order, draft.ai_draft_id, extra),
           ),
         },
         { timeoutMs: CONFIRM_TIMEOUT_MS },
@@ -920,6 +955,10 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     const results = body.data.results;
+    if (results.some((result) => isRetryableResult(meta, result))) {
+      await this.retryableResults(ctx, draft, ready, results, meta);
+      return;
+    }
     if (
       !(await this.finish(draft, {
         status: 'created',
@@ -974,6 +1013,218 @@ export class AiOrderService implements OnModuleDestroy {
       text: lines.join('\n'),
       skipped: incomplete + unacked.length > 0,
     };
+  }
+
+  /**
+   * Market: tanlanadigan operatorlar (`GET /market-operators/selectable`,
+   * aktor JWT) `input.meta` ga. Market operatori / xato / bo'sh — tanlov
+   * yo'q (avvalgi meta tozalanadi).
+   */
+  private async withSelectableOperators(
+    telegramId: string,
+    draft: TelegramAiDraft,
+  ): Promise<TelegramAiDraftInput> {
+    const meta: TelegramAiDraftMeta = { ...metaOf(draft.input) };
+    delete meta.operators;
+    delete meta.operators_total;
+    delete meta.operator_id;
+    delete meta.operator_name;
+    if (canChooseOperator(meta)) {
+      try {
+        const res = await this.gateway.request(
+          telegramId,
+          'GET',
+          '/market-operators/selectable',
+        );
+        const { options, total } =
+          res.status < 400
+            ? operatorsFromResponse(res.body)
+            : { options: [], total: 0 };
+        if (options.length) {
+          meta.operators = options;
+          meta.operators_total = total;
+        }
+      } catch (error) {
+        // Ixtiyoriy qism: preview baribir ko'rsatiladi (parol talabi bo'lsa
+        // «✅ Yaratish» aniq ko'rsatma beradi).
+        this.logger.warn(
+          `ai draft ${draft.id}: operatorlar ro'yxati — ${error instanceof Error ? error.message : 'error'}`,
+        );
+      }
+    }
+    return { ...(draft.input ?? {}), meta };
+  }
+
+  /**
+   * ai-confirm `operator_phone` — aktor profilidan (`GET /auth/my-profile`),
+   * faqat kerak bo'lishi mumkin bo'lsa (`needsProfilePhone`). Xato — raqamsiz
+   * (server majburiy bo'lsa sababini qaytaradi). Parol xatosi — yuqoriga.
+   */
+  private async operatorPhoneFor(
+    telegramId: string,
+    meta: TelegramAiDraftMeta,
+  ): Promise<string | null> {
+    if (!needsProfilePhone(meta)) return null;
+    try {
+      const res = await this.gateway.request(
+        telegramId,
+        'GET',
+        '/auth/my-profile',
+      );
+      if (res.status >= 400) return null;
+      return profileOperatorPhone(
+        meta,
+        (res.body as { data?: unknown } | null)?.data,
+      );
+    } catch (error) {
+      if (error instanceof BotPasswordChangeRequiredError) throw error;
+      this.logger.warn(
+        `ai-confirm: profil raqami — ${error instanceof Error ? error.message : 'error'}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Natijada qayta «✅» bilan hal bo'ladigan xato bor (`validation_unavailable`
+   * yoki market operatorida birinchi «operator raqami majburiy»): qoralama
+   * `created` EMAS — preview'ga qaytadi, YUBORILGAN buyurtmalar belgilanadi
+   * (yaratilganlari keyingi bosishda server kaliti bilan takrorlanmaydi,
+   * tuzatish yopiq — server birinchi yukni eslaydi). Xabarda natija
+   * qatorlari + «🔁 qayta bosing».
+   */
+  private async retryableResults(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    sent: AiPreviewOrder[],
+    results: ConfirmResult[],
+    meta: TelegramAiDraftMeta,
+  ): Promise<void> {
+    const previews = (draft.orders ?? []) as AiPreviewOrder[];
+    const phoneRetry = results.some(
+      (result) =>
+        result.code !== 'validation_unavailable' &&
+        isRetryableResult(meta, result),
+    );
+    const input: TelegramAiDraftInput = {
+      ...(draft.input ?? {}),
+      meta: { ...meta, ...(phoneRetry ? { operator_phone_needed: true } : {}) },
+    };
+    const orders = markConfirmAttempted(previews, sent, Date.now());
+    if (!(await this.finish(draft, { status: 'preview', orders, input }))) {
+      return;
+    }
+    draft.orders = orders;
+    draft.input = input;
+    const { text } = this.createdSummary(previews, results);
+    await this.show(
+      ctx,
+      draft,
+      [
+        text,
+        '',
+        ...(phoneRetry ? [AI_OPERATOR_PHONE_RETRY_TEXT] : []),
+        AI_RETRY_HINT_TEXT,
+      ].join('\n'),
+      await this.previewRows(ctx, draft),
+    );
+  }
+
+  /** «👤 Operator» — tanlash oynasi (faqat market, belgisiz qoralama). */
+  async openOperators(ctx: BotContext, draftId: string): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const meta = metaOf(draft.input);
+    const options = storedOperators(meta);
+    if (
+      !canChooseOperator(meta) ||
+      !options.length ||
+      ((draft.orders ?? []) as AiPreviewOrder[]).some(confirmAttempted)
+    ) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    const current = str(meta.operator_id);
+    const rows: InlineKeyboardButton[][] = [];
+    for (const [k, option] of options.entries()) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          `${option.id === current ? '• ' : ''}${option.name}`,
+          AI_ORDER_ACTIONS.operatorPick,
+          // `oid` — ro'yxat almashgan eski tugma boshqa operatorni qo'ymasin.
+          { k, oid: option.id },
+        ),
+      ]);
+    }
+    rows.push(
+      [
+        await this.button(
+          ctx,
+          draft,
+          AI_OPERATOR_NONE_TEXT,
+          AI_ORDER_ACTIONS.operatorPick,
+          { k: -1 },
+        ),
+      ],
+      [await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back)],
+    );
+    await this.show(ctx, draft, operatorPickerText(meta), rows, 'HTML');
+  }
+
+  /**
+   * Operator tanlandi (`k`, `oid`) yoki «🚫 Tanlamaslik» (`k: -1`) →
+   * `meta.operator_id`, preview qayta. Natijasi noma'lum urinish bo'lsa —
+   * o'zgartirilmaydi (server birinchi yukni eslaydi).
+   */
+  async pickOperator(
+    ctx: BotContext,
+    draftId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const meta = metaOf(draft.input);
+    if (
+      !canChooseOperator(meta) ||
+      ((draft.orders ?? []) as AiPreviewOrder[]).some(confirmAttempted)
+    ) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    let next: TelegramAiDraftMeta;
+    if (payload.k === -1) {
+      next = { ...meta, operator_id: null, operator_name: null };
+    } else {
+      const option = Number.isInteger(payload.k)
+        ? storedOperators(meta)[payload.k as number]
+        : undefined;
+      if (!option || option.id !== payload.oid) {
+        await this.openOperators(ctx, draftId);
+        return;
+      }
+      next = { ...meta, operator_id: option.id, operator_name: option.name };
+    }
+    const input = { ...(draft.input ?? {}), meta: next };
+    const res = await this.drafts.update(
+      { id: draft.id, status: 'preview' },
+      { input, updated_at: new Date() },
+    );
+    if (!res?.affected) {
+      await this.explainState(ctx, draft.id);
+      return;
+    }
+    draft.input = input;
+    await this.showPreview(ctx, draft);
   }
 
   /**
@@ -1863,6 +2114,19 @@ export class AiOrderService implements OnModuleDestroy {
         ),
       ]);
     }
+    // «👤 Operator» — faqat market, ro'yxat bo'lsa va natijasi noma'lum
+    // urinish bo'lmasa (tanlov hamma buyurtmaga — belgilisiga ham tegardi).
+    const meta = metaOf(draft.input);
+    if (canChooseOperator(meta) && storedOperators(meta).length && !locked) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          operatorButtonLabel(meta),
+          AI_ORDER_ACTIONS.operator,
+        ),
+      ]);
+    }
     const cancel = await this.button(
       ctx,
       draft,
@@ -1968,7 +2232,7 @@ export class AiOrderService implements OnModuleDestroy {
     patch: Partial<
       Pick<
         TelegramAiDraft,
-        'status' | 'orders' | 'ai_draft_id' | 'error' | 'results'
+        'status' | 'orders' | 'ai_draft_id' | 'error' | 'results' | 'input'
       >
     >,
   ): Promise<boolean> {
