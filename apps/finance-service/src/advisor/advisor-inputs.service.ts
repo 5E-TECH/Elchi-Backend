@@ -603,10 +603,20 @@ export class AdvisorInputsService {
         )}`,
       );
       await runner.query(`SET LOCAL lock_timeout = '${ADVISOR_LOCK_TIMEOUT}'`);
-      const result = await fn(
-        <R>(sql: string, params?: unknown[]) =>
-          runner.query(sql, params) as Promise<R>,
-      );
+      // statement_timeout har IFODAGA (#704 review B1): qoida ichidagi har
+      // so'rov oldidan qolgan byudjet bilan qayta qo'yiladi — ko'p ifodali
+      // qoida (R3: chunk + har anomaliya uchun r3Sample) chegaradan oshmaydi.
+      let applied = Math.floor(Math.min(this.statementTimeoutMs, remaining));
+      const result = await fn(async <R>(sql: string, params?: unknown[]) => {
+        const left = deadline - Date.now();
+        if (left < 250) throw new Error('advisor budget exhausted');
+        const next = Math.floor(Math.min(this.statementTimeoutMs, left));
+        if (next < applied) {
+          await runner.query(`SET LOCAL statement_timeout = ${next}`);
+          applied = next;
+        }
+        return runner.query(sql, params) as Promise<R>;
+      });
       await runner.commitTransaction();
       return result;
     } catch (error) {

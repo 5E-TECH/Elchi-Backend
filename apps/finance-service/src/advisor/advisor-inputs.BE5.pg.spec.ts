@@ -1078,6 +1078,7 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       it('#704 B1: PROD chegaralari — qulflangan cashbox_history bilan butun frequent guruh 30 s AdvisorReader budjetidan past; R1 kursori saqlanadi', async () => {
         expect(svc.statementTimeoutMs).toBe(15000);
         expect(svc.rulesBudgetMs).toBe(22000);
+        await shift('7', '2026-10-22T07:00:00Z', -60000, null);
         const locker = db.createQueryRunner();
         await locker.connect();
         await locker.startTransaction();
@@ -1107,9 +1108,61 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
             'R7',
           ]);
           expect(out.errors?.R1).toBeUndefined();
+          expect(out.cursors.R1).toBeTruthy();
         } finally {
           await locker.rollbackTransaction();
           await locker.release();
+        }
+      }, 120_000);
+
+      it('#704 B1 (sekin ifodalar): har so‘rov qolgan byudjet bilan — jami 30 s dan past, R1 kursori saqlanadi', async () => {
+        expect(svc.statementTimeoutMs).toBe(15000);
+        expect(svc.rulesBudgetMs).toBe(22000);
+        await shift('7', '2026-10-22T07:00:00Z', -60000, null);
+        for (const [type, owner] of [
+          ['couriers', 71],
+          ['markets', 72],
+          ['branch', 73],
+        ] as const) {
+          const cb = await cashbox(type, owner, 9000000);
+          await hist(
+            cb,
+            'income',
+            'sell',
+            9000000,
+            9000000,
+            '2026-10-01T08:00:00Z',
+          );
+        }
+        // cashbox_history o'rniga har ifodada 8 s uxlaydigan view.
+        await db.query(`
+          ALTER TABLE "finance_schema"."cashbox_history" RENAME TO "cashbox_history_t";
+          CREATE VIEW "finance_schema"."cashbox_history" AS
+            SELECT h.* FROM "finance_schema"."cashbox_history_t" h
+            CROSS JOIN (SELECT pg_sleep(8)) gate;
+        `);
+        try {
+          const t0 = Date.now();
+          const out = await svc.ruleInputs({
+            rules: ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'],
+            now: NOW.toISOString(),
+            thresholds: {
+              R2: R2T,
+              R4: { days_without_payout: 7 },
+              R5: { balance_uzs: 5000000, days_without_transfer: 3 },
+            },
+            since: {},
+          });
+          const took = Date.now() - t0;
+          expect(took).toBeLessThan(30_000);
+          expect(out.cursors.R1).toBeTruthy();
+          expect(out.errors?.R1).toBeUndefined();
+          expect(Object.keys(out.errors ?? {}).length).toBeGreaterThan(0);
+        } finally {
+          await db.query(`
+            DROP VIEW "finance_schema"."cashbox_history";
+            ALTER TABLE "finance_schema"."cashbox_history_t" RENAME TO "cashbox_history";
+          `);
         }
       }, 120_000);
 
