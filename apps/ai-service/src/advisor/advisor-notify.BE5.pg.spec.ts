@@ -536,9 +536,8 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       // Superadminlar keshi (real soat bo'yicha 5 daq) — tozalanadi.
       (notifier as unknown as { recipientsCache: unknown }).recipientsCache =
         null;
-      identity.mockImplementation(
-        () =>
-          throwError(() => ({ statusCode: 500, message: 'identity' })) as never,
+      identity.mockImplementation(() =>
+        throwError(() => ({ statusCode: 500, message: 'identity' })),
       );
       try {
         let t = nine.getTime();
