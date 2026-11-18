@@ -460,23 +460,24 @@ export class AdvisorNotifier {
         rules,
         telegramEnabled,
       });
-      // R6 rejimi ogohlantirish OCHILGAN paytdan (#705 S6): tunda ochilgan R6
-      // ning birinchi urinishi yiqilib, qayta urinish 09:00 dan keyin bo'lsa
-      // ham ayni client_request_id ilova ichi uchun, Telegram — alohida
-      // kechiktirilgan yo'l bilan (due = hozir, shu tick'da ketadi).
-      // Kunduz ochilgan R6 tunda qayta urinilsa — hozirgi vaqt bo'yicha due
-      // (tun bo'lsa ertasi 09:00): Telegram tunda ketmaydi.
+      // R6 Telegram'i DOIM alohida kechiktirilgan yo'l bilan (`…:tg`, #705
+      // rr13): asosiy dispatch rejimi (`no_telegram`) qayta urinishlar orasida
+      // O'ZGARMAYDI. Ayni client_request_id takrorini notification-service
+      // umuman yubormaydi (kanallar ham qayta ko'rilmaydi): javobi yo'qolgan
+      // kunduzgi 'default' urinish + tungi qayta urinish — ikki Telegram;
+      // tungi 'no_telegram' + kunduzgi 'default' — Telegram yo'q edi.
+      // due: tunda ochilgan R6 — o'sha 09:00; o'tgan bo'lsa — hozir (kunduz,
+      // shu tick'da ketadi) yoki ertasi 09:00 (tun).
       const firstAt = row.first_at ? new Date(row.first_at) : null;
       const openedAt =
         firstAt && firstAt.getTime() <= now.getTime() ? firstAt : now;
       const r6Due = telegram ? r6TelegramDueAt(row.rule_key, openedAt) : null;
-      const nowDue = telegram ? r6TelegramDueAt(row.rule_key, now) : null;
-      // 09:00 o'tgan: hozir kunduz bo'lsa — darhol; tun bo'lsa (uzilish yarim
-      // tundan o'tgan) — bugungi 09:00 (R6 ega qarori: Telegram tunda yo'q).
       const telegramDueAt =
-        r6Due && r6Due.getTime() < now.getTime()
-          ? (nowDue ?? now)
-          : (r6Due ?? nowDue);
+        telegram && row.rule_key === 'R6'
+          ? r6Due && r6Due.getTime() >= now.getTime()
+            ? r6Due
+            : (r6TelegramDueAt(row.rule_key, now) ?? now)
+          : null;
       const payload = buildAdvisorDispatch(row, {
         recipients,
         rules,
@@ -728,7 +729,10 @@ export class AdvisorNotifier {
 function short(error: unknown): string {
   // Log uchun: hech qachon tashlamaydi (aylanma / prototipsiz obyekt, getter).
   try {
-    if (error instanceof Error) return error.message.slice(0, 200);
+    if (error instanceof Error)
+      return (
+        typeof error.message === 'string' ? error.message : error.name
+      ).slice(0, 200);
     // RPC xatosi — `{statusCode, message}` obyekti ('[object Object]' emas).
     if (error && typeof error === 'object') {
       const e = error as { statusCode?: unknown; message?: unknown };
@@ -749,6 +753,10 @@ function short(error: unknown): string {
     }
     return String(error).slice(0, 200);
   } catch {
-    return 'unprintable error';
+    try {
+      return String(error).slice(0, 200);
+    } catch {
+      return 'unprintable error';
+    }
   }
 }

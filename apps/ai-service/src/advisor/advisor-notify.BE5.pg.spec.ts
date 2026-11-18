@@ -683,6 +683,29 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       );
     });
 
+    it('#705 rr13: kunduz ochilgan R6 — asosiy rejim qayta urinishlarda o‘zgarmaydi; Telegram bir marta, tunda emas', async () => {
+      const [{ id }] = await insert('critical', 'new', null, 'R6');
+      await ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET first_at = $2 WHERE id = $1`,
+        [id, todayAt(10)],
+      );
+      // 10:00 — notification-service qabul qildi, javob yo'qoldi (timeout).
+      dispatch.mockReturnValueOnce(throwError(() => new TimeoutError()));
+      await notifier.dispatchPending(todayAt(10));
+      dispatch.mockReturnValue(of({ statusCode: 201 }));
+      // 23:00 — qayta urinish (ayni client_request_id).
+      await notifier.dispatchPending(todayAt(23));
+      await notifier.dispatchPending(todayAt(33));
+      const p = payloads();
+      const main = p.filter(
+        (x) => !x.channels.includes('telegram') || x.channels.length > 1,
+      );
+      expect(new Set(main.map((x) => x.client_request_id)).size).toBe(1);
+      expect(main.every((x) => !x.channels.includes('telegram'))).toBe(true);
+      expect(p.filter((x) => x.channels.includes('telegram'))).toHaveLength(1);
+      expect((await due(id)).telegram_due_at).toBeNull();
+    });
+
     it('#705 S-b: 09:00 Telegram — o‘z timeout’i bor qator boshqasini to‘smaydi (navbat oxiriga)', async () => {
       const [{ id: x }] = await insert('critical', 'new', null, 'R6');
       const [{ id: y }] = await insert('critical', 'new', null, 'R6');
@@ -764,14 +787,13 @@ describePg('AdvisorNotifier — real Postgres (BE-5)', () => {
       expect((await due(id)).telegram_due_at).toBeNull();
     });
 
-    it('09:00 dan keyin ochilgan R6 — darhol Telegram bilan; R2 tunda ham darhol', async () => {
+    it('09:00 dan keyin ochilgan R6 — shu tick Telegram (alohida `:tg`); R2 tunda ham darhol', async () => {
       const [{ id: day }] = await insert('critical', 'new', null, 'R6');
       dispatch.mockReturnValue(of({ statusCode: 201 }));
       await notifier.dispatchPending(new Date(nine.getTime() + 3600_000));
-      expect(payloads()[0].channels).toEqual([
-        'in_app',
-        'realtime',
-        'telegram',
+      expect(payloads().map((p) => p.channels)).toEqual([
+        ['in_app', 'realtime'],
+        ['telegram'],
       ]);
       expect((await due(day)).telegram_due_at).toBeNull();
 
