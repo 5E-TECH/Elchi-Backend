@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   cabinetBaseUrl,
   cabinetLinks,
@@ -983,13 +983,16 @@ export class AiOrderService implements OnModuleDestroy {
       await this.explainState(ctx, draftId);
       return;
     }
-    const orders = (draft.orders ?? []) as AiPreviewOrder[];
-    // Natijasi noma'lum urinish — botda tuzatish yopiq (faqat kabinet).
-    if (orders.some(confirmAttempted)) {
+    // Natijasi noma'lum urinishdagi (belgili) buyurtma botda tuzatilmaydi —
+    // faqat belgisizlari taklif qilinadi; hammasi belgili — karta qayta.
+    const orders = ((draft.orders ?? []) as AiPreviewOrder[]).filter(
+      (o) => !confirmAttempted(o),
+    );
+    if (!orders.length) {
       await this.showPreview(ctx, draft);
       return;
     }
-    if (orders.length === 1) {
+    if ((draft.orders ?? []).length === 1) {
       await this.showEditMenu(ctx, draft, orders[0]);
       return;
     }
@@ -1722,18 +1725,14 @@ export class AiOrderService implements OnModuleDestroy {
         await this.button(ctx, draft, '✅ Yaratish', AI_ORDER_ACTIONS.confirm),
       ]);
     }
-    // Natijasi noma'lum urinish — faqat qayta tekshirish, bekor, kabinet:
-    // tuzatish keyingi «✅» da baribir qo'llanmaydi (server birinchi yuk).
-    if (orders.some(confirmAttempted)) {
-      return [
-        ...rows,
-        [await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel)],
-        [this.cabinetCreateButton()],
-      ];
-    }
+    // Natijasi noma'lum urinishdagi (belgili) buyurtma — botda tuzatilmaydi
+    // (keyingi «✅» da server birinchi yukni qaytaradi): uning 📍 / ❓
+    // tugmalari yo'q. Yuborilmagan (belgisiz) buyurtmalar odatdagidek.
+    const editable = orders.filter((o) => !confirmAttempted(o));
+    const locked = editable.length < orders.length;
     const multi = orders.length > 1;
     // Tuman yo'q / AI ikkilangan — nomzod yoki viloyat bo'lsa botda tanlanadi.
-    for (const order of orders
+    for (const order of editable
       .slice(0, 10)
       .filter((o) => needsDistrict(o) && canPickDistrict(o))
       .slice(0, AI_DISTRICT_MAX_ENTRIES)) {
@@ -1747,7 +1746,7 @@ export class AiOrderService implements OnModuleDestroy {
         ),
       ]);
     }
-    for (const { order, itemIndex, item } of pickEntries(orders)) {
+    for (const { order, itemIndex, item } of pickEntries(editable)) {
       rows.push([
         await this.button(
           ctx,
@@ -1758,12 +1757,31 @@ export class AiOrderService implements OnModuleDestroy {
         ),
       ]);
     }
+    const cancel = await this.button(
+      ctx,
+      draft,
+      '❌ Bekor',
+      AI_ORDER_ACTIONS.cancel,
+    );
+    if (!locked) {
+      return [
+        ...rows,
+        [
+          await this.button(ctx, draft, '✏️ Tuzatish', AI_ORDER_ACTIONS.fix),
+          cancel,
+        ],
+      ];
+    }
+    // Belgili buyurtma bor: ✏️ faqat belgisizlari bo'lsa; kabinet — doim.
     return [
       ...rows,
-      [
-        await this.button(ctx, draft, '✏️ Tuzatish', AI_ORDER_ACTIONS.fix),
-        await this.button(ctx, draft, '❌ Bekor', AI_ORDER_ACTIONS.cancel),
-      ],
+      editable.length
+        ? [
+            await this.button(ctx, draft, '✏️ Tuzatish', AI_ORDER_ACTIONS.fix),
+            cancel,
+          ]
+        : [cancel],
+      [this.cabinetCreateButton()],
     ];
   }
 
@@ -1854,12 +1872,31 @@ export class AiOrderService implements OnModuleDestroy {
       worker_token: null,
       updated_at: new Date(),
     };
+    // `preview` ga faqat `parsing` / `creating` / `preview` dan: yakunlangan
+    // (`created`, `cancelled`, …) qoralama HECH QACHON qaytmaydi — masalan
+    // natija xabari yuborilmay qolsa (show xatosi) ishchi `backToPreview`
+    // ga tushadi, buyurtma esa allaqachon yaratilgan.
+    const status =
+      patch.status === 'preview'
+        ? { status: In(['parsing', 'creating', 'preview']) }
+        : {};
     if (!draft.worker_token) {
-      await this.drafts.update({ id: draft.id }, values as never);
-      return true;
+      if (!status.status) {
+        await this.drafts.update({ id: draft.id }, values as never);
+        return true;
+      }
+      const res = await this.drafts.update(
+        { id: draft.id, ...status },
+        values as never,
+      );
+      if (res?.affected) return true;
+      this.logger.warn(
+        `ai draft ${draft.id}: preview'ga qaytarilmadi (qoralama yakunlangan)`,
+      );
+      return false;
     }
     const res = await this.drafts.update(
-      { id: draft.id, worker_token: draft.worker_token },
+      { id: draft.id, worker_token: draft.worker_token, ...status },
       values as never,
     );
     if (res?.affected) {

@@ -582,15 +582,27 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
     }),
     update: jest.fn(
       (
-        where: { id: string; worker_token?: string },
+        where: {
+          id: string;
+          worker_token?: string;
+          status?: string | { value?: unknown };
+        },
         patch: Record<string, any>,
       ) => {
         const row = rows.get(where.id);
+        // Shartli holat: `status: 'preview'` yoki `In([...])` (FindOperator).
+        const allowed =
+          where.status === undefined
+            ? null
+            : typeof where.status === 'string'
+              ? [where.status]
+              : (where.status.value as string[]);
         // (BOT-3b) da'vo tokeni bilan yakuniy yozuv.
         if (
           !row ||
           (where.worker_token !== undefined &&
-            row.worker_token !== where.worker_token)
+            row.worker_token !== where.worker_token) ||
+          (allowed !== null && !allowed.includes(row.status))
         ) {
           return Promise.resolve({ affected: 0 });
         }
