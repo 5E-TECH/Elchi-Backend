@@ -131,7 +131,7 @@ function setup(
   });
   let next = 5000;
   orderC.send.mockImplementation((pattern) =>
-    // Takror so'rovi (`markAiReplays`): avval yaratilgan band yo'q.
+    // Takror so'rovi (`loadAiReplays`): avval yaratilgan band yo'q.
     pattern.cmd === 'order.ai_confirm.completed'
       ? of({ data: { items: [] } })
       : of({ data: { id: String(next++) } }),
@@ -394,7 +394,7 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
     expect(a.ai_signature).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('TC2: takror javob (idempotent_replay) → ok:true, idempotent_replay:true, birinchi order_id; xarajatga qayta bog‘lanmaydi', async () => {
+  it('TC2: takror javob (idempotent_replay) → ok:true, idempotent_replay:true, birinchi order_id; bog‘lanish takrorlanadi (idempotent)', async () => {
     const fx = setup();
     fx.orderC.send.mockImplementation(() =>
       of({ data: { id: '4242' }, idempotent_replay: true }),
@@ -409,12 +409,16 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
       order_id: '4242',
       idempotent_replay: true,
     });
-    expect(
-      fx.ai.send.mock.calls.filter(([p]) => p.cmd === 'ai.usage.link_orders'),
-    ).toHaveLength(0);
+    // 1-urinish timeout_unknown bo'lgan bo'lishi mumkin — takror ham
+    // bog'lanadi (ai-service: ON CONFLICT (order_id) DO NOTHING, DISTINCT).
+    const links = fx.ai.send.mock.calls.filter(
+      ([p]) => p.cmd === 'ai.usage.link_orders',
+    );
+    expect(links).toHaveLength(1);
+    expect(links[0][1]).toMatchObject({ order_ids: ['4242'] });
   });
 
-  it('TC3: bir xil draft+index bilan ikki marta chaqiruv → pul (narx qaydi) FAQAT BIR marta: link_orders bitta, market narxi bilan', async () => {
+  it('TC3: bir xil draft+index bilan ikki marta chaqiruv → AYNI buyurtma, link_orders ikkalasida ham AYNI order_id bilan (narx ai-service’da bir marta)', async () => {
     const fx = setup({ marketAiPrice: 450 });
     // order-service `executeIdempotent` emulyatsiyasi: request_id → bitta buyurtma.
     const byKey = new Map<string, string>();
@@ -462,13 +466,15 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
     });
     expect(byKey.size).toBe(1);
 
-    // Narx (pul) qaydi faqat YANGI buyurtma uchun — bitta link_orders.
-    // ai-service tomonda `order_id` UNIQUE + ON CONFLICT DO NOTHING
-    // (ai-draft.pg.spec "narx BIR MARTA qayd qilinadi") ikkinchi qatlam.
+    // Takror ham bog'lanadi (1-urinish natijasi noma'lum bo'lsa bog'lanmagan
+    // bo'lardi). Narx (pul) qaydi baribir BIR marta: ai-service'da
+    // `order_id` UNIQUE + ON CONFLICT DO NOTHING (ai-draft.pg.spec "narx BIR
+    // MARTA qayd qilinadi"); ikkala xabar ham AYNI order_id bilan.
     const links = fx.ai.send.mock.calls.filter(
       ([p]) => p.cmd === 'ai.usage.link_orders',
     );
-    expect(links).toHaveLength(1);
+    expect(links).toHaveLength(2);
+    expect(links[1][1]).toEqual(links[0][1]);
     expect(links[0][1]).toEqual(
       expect.objectContaining({
         draft_id: DRAFT,

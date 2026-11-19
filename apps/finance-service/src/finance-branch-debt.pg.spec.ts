@@ -23,7 +23,9 @@ import { Shift } from './entities/shift.entity';
  * filial HQ — avvalgidek 400. Haqiqiy Postgres
  * (`FINANCE_OPERATOR_PG_TEST_URI`).
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 const BRANCH = '15';
@@ -97,7 +99,8 @@ describePg('Filial kassasi qarzga ishlaydi — haqiqiy Postgres', () => {
         "${schema}".cashboxes RESTART IDENTITY CASCADE`,
     );
     await seed('0', Cashbox_type.MAIN);
-    await seed(BRANCH, Cashbox_type.BRANCH, 4_500_000, 200_000);
+    // 63HO6cBU — filial kassasi bitta jami (karta bo'lagi doim 0).
+    await seed(BRANCH, Cashbox_type.BRANCH, 4_500_000, 0);
   });
 
   async function seed(
@@ -146,7 +149,10 @@ describePg('Filial kassasi qarzga ishlaydi — haqiqiy Postgres', () => {
     branchReply({ id: BRANCH, type: 'REGIONAL', cashbox_debt_enabled: false });
 
     await expect(receive(5_000_000, 'gw:b-1')).rejects.toMatchObject({
-      error: { statusCode: 400, message: "Naqd kassada yetarli mablag' yo'q" },
+      error: {
+        statusCode: 400,
+        message: "Filial kassasida yetarli mablag' yo'q",
+      },
     });
     expect(Number((await box(BRANCH, Cashbox_type.BRANCH)).balance_cash)).toBe(
       4_500_000,
@@ -164,8 +170,8 @@ describePg('Filial kassasi qarzga ishlaydi — haqiqiy Postgres', () => {
     expect(res?.statusCode).toBe(200);
     const branchBox = await box(BRANCH, Cashbox_type.BRANCH);
     expect(Number(branchBox.balance_cash)).toBe(-500_000);
-    expect(Number(branchBox.balance_card)).toBe(200_000);
-    expect(Number(branchBox.balance)).toBe(-300_000);
+    expect(Number(branchBox.balance_card)).toBe(0);
+    expect(Number(branchBox.balance)).toBe(-500_000);
     expect(Number((await box('0', Cashbox_type.MAIN)).balance_cash)).toBe(
       5_000_000,
     );
@@ -229,21 +235,31 @@ describePg('Filial kassasi qarzga ishlaydi — haqiqiy Postgres', () => {
     ).rejects.toMatchObject({
       error: {
         statusCode: 400,
-        message: expect.stringMatching(/yetarli mablag' yo'q/),
+        message: "Filial kassasida yetarli mablag' yo'q",
       },
     });
   });
 
-  it('yoqiq — karta (Asosiy, karta tanlanmagan) ham manfiyga tushadi', async () => {
+  it('63HO6cBU — «O`tkazma» (click) ham filial JAMIdan; yoqiq bo`lsa jamidan ortig`i manfiy', async () => {
     branchReply({ id: BRANCH, type: 'REGIONAL', cashbox_debt_enabled: true });
 
     await receive(500_000, 'gw:b-3', { payment_method: PaymentMethod.CLICK });
 
     const branchBox = await box(BRANCH, Cashbox_type.BRANCH);
-    expect(Number(branchBox.balance_card)).toBe(-300_000);
-    expect(Number(branchBox.balance_cash)).toBe(4_500_000);
+    expect(Number(branchBox.balance_card)).toBe(0);
+    expect(Number(branchBox.balance_cash)).toBe(4_000_000);
     expect(Number((await box('0', Cashbox_type.MAIN)).balance_card)).toBe(
       500_000,
+    );
+
+    await receive(4_200_000, 'gw:b-3b', {
+      payment_method: PaymentMethod.CLICK,
+    });
+    const after = await box(BRANCH, Cashbox_type.BRANCH);
+    expect(Number(after.balance_cash)).toBe(-200_000);
+    expect(Number(after.balance_card)).toBe(0);
+    expect(Number((await box('0', Cashbox_type.MAIN)).balance_card)).toBe(
+      4_700_000,
     );
   });
 

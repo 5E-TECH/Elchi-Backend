@@ -20,7 +20,9 @@ import { FinancialBalanceHistory } from './entities/financial-balance-history.en
  *  • IgR4FVsR — qo'lda kirim/chiqim P&L daftariga AYNI tranzaksiyada;
  *    daftar yiqilsa kassa ham rollback; SUM(kassa manual) == SUM(FBH manual).
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 describePg('B4 (1bz6tOle, IgR4FVsR) — haqiqiy Postgres', () => {

@@ -706,9 +706,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   cashbox from the card), then cards; `applyCashboxCardSelection` binds a
   CLICK leg to a card of the SAME cashbox (MAIN/BRANCH; other cashbox → 403,
   cash/click_to_market → 400, no `card_id` → default card). `card_id` is
-  accepted by `fill`/`spend` (manager → own branch cashbox), `payment_courier`
-  (receiver leg, MAIN or manager's branch), `payment_market` (MAIN),
-  `payment_branch_main` (`card_id` = MAIN leg, `branch_card_id` = branch leg).
+  accepted by `fill`/`spend` (SA/admin, MAIN cashbox only — 63HO6cBU),
+  `payment_courier` (receiver leg, MAIN only — a BRANCH cashbox is a single
+  total, its cards are disabled), `payment_market` (MAIN),
+  `payment_branch_main` (`card_id` = MAIN leg; `branch_card_id` ignored).
   `make_default` swaps the default card under the cashbox lock (no money
   moves; old default keeps its derived balance as stored balance; its
   card-less CLICK history rows are stamped with its id so both ledgers stay
@@ -875,7 +876,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   gate R6), idempotency on the branch leg, `branch_to_hq` (`<token>:b`) then
   `hq_to_market` (`<token>`). Both new shapes are NOT correctable (T6
   `classifyTransfer` requires MAIN). A BRANCH cashbox may go negative only for system
-  legs — a manager's manual `spend` is strict like MAIN (400). `all_info` adds
+  legs; manual `spend`/`fill` on a BRANCH cashbox is rejected outright
+  (63HO6cBU: 400, gateway — SA/admin only, MAIN). `all_info` adds
   `marketPayableTotal` (sum of positive market balances). Financial-balance
   history/analytics/top-impacts and the cashbox history date filters use
   Tashkent days for `YYYY-MM-DD`.

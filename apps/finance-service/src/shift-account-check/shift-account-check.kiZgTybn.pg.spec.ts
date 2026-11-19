@@ -697,15 +697,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
         ai_check_enabled: true,
       }),
     );
-    expect(branch.data.cards.map((card: any) => card.name)).toEqual([
-      'Asosiy karta',
-      'Filial Humo',
-    ]);
-    for (const card of branch.data.cards) {
-      expect(card).toEqual(
-        expect.objectContaining({ photo_required: false, ai_enabled: false }),
-      );
-    }
+    // 63HO6cBU (N6) — filial kassasining kartalari yopish oynasida yo'q.
+    expect(branch.data.cards).toEqual([]);
   });
 
   it('BE-A: MAIN yopish (sukut) — har faol karta qoldig‘i va rasmi majburiy, AI pending; keyin yopiladi', async () => {
@@ -829,7 +822,7 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     expect(def.ai_status).toBe('not_required');
   });
 
-  it('BE-A: filial smenasi (sukut) — accounts’siz yopiladi; filial kaliti yoqilsa har karta majburiy', async () => {
+  it('BE-A / 63HO6cBU: filial smenasi — accounts’siz yopiladi; karta tekshiruvi yo`q (filial kaliti yoqilsa ham), eski FE `accounts` — e`tiborsiz', async () => {
     const branch = await seedBranch();
     const first = await branch.openBranchShift();
     const closed = (await service.closeShift({
@@ -840,8 +833,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     })) as Rpc;
     expect(closed.data.status).toBe(ShiftStatus.CLOSED);
     expect(closed.data.accounts_check).toBeUndefined();
-    // Ixtiyoriy yuborilgan karta — rasmsiz qabul qilinadi (filial kartasi
-    // bayrog'i o'chiq), qolganlari talab qilinmaydi.
+    // 63HO6cBU — eski FE yuborgan karta qoldig'i e'tiborsiz (filial kassasi
+    // naqd/kartaga ajralmaydi).
     const second = await branch.openBranchShift();
     const voluntary = (await service.closeShift({
       shift_id: second,
@@ -850,9 +843,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
       cashbox_user_id: BRANCH,
       accounts: [{ card_id: String(branch.humo.id), entered_balance: 20_000 }],
     })) as Rpc;
-    expect(voluntary.data.accounts_check).toEqual(
-      expect.objectContaining({ total: 1, not_required: 1 }),
-    );
+    expect(voluntary.data.status).toBe(ShiftStatus.CLOSED);
+    expect(voluntary.data.accounts_check).toBeUndefined();
     // MAIN smenasi bu paytda ham majburiy (filial yopilishi unga ta'sir qilmaydi).
     const mainStill = await rpcError(
       service.closeShift({
@@ -863,51 +855,35 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     );
     expect(mainStill.statusCode).toBe(400);
 
-    // Superadmin filial kalitini yoqadi — MAIN kaliti o'zgarmaydi.
+    // Eski FE filial kalitini yoqadi — 63HO6cBU (N6): eskirgan, saqlanmaydi.
     const patched = await setSettings({ branch_account_check_enabled: true });
     expect(patched.data).toEqual(
       expect.objectContaining({
         cashbox_type: 'main',
         account_check_enabled: true,
         main_account_check_enabled: true,
-        branch_account_check_enabled: true,
+        branch_account_check_enabled: false,
       }),
     );
     expect(
-      (
-        await db
-          .getRepository(FinanceSetting)
-          .findOneByOrFail({ key: 'shift.account_check.branch_enabled' })
-      ).value,
-    ).toBe(true);
+      await db
+        .getRepository(FinanceSetting)
+        .findOneBy({ key: 'shift.account_check.branch_enabled' }),
+    ).toBeNull();
+    // 63HO6cBU — filial kaliti yoqilgan bo'lsa ham filial smenasida karta
+    // qoldig'i so'ralmaydi: bitta «Sanalgan summa» bilan yopiladi.
     const third = await branch.openBranchShift();
-    const required = await rpcError(
-      service.closeShift({
-        shift_id: third,
-        closed_by: '26',
-        closing_balance_cash: 70_000,
-        cashbox_user_id: BRANCH,
-      }),
-    );
-    expect(required.statusCode).toBe(400);
-    expect(required.message).toBe(
-      "Har karta qoldig'ini tasdiqlang: Asosiy karta, Filial Humo",
-    );
-    // Filial kartalarida rasm baribir talab qilinmaydi (karta bayrog'i o'chiq).
     const ok = (await service.closeShift({
       shift_id: third,
       closed_by: '26',
       closing_balance_cash: 70_000,
       cashbox_user_id: BRANCH,
-      accounts: [
-        { card_id: String(branch.def.id), entered_balance: 30_000 },
-        { card_id: String(branch.humo.id), entered_balance: 20_000 },
-      ],
     })) as Rpc;
+    expect(ok.data.accounts_check).toBeUndefined();
     expect(ok.data.status).toBe(ShiftStatus.CLOSED);
   });
 
-  it('BE-A: avto-yopish — MAIN sukut: har faol karta yoziladi; filial sukut: faqat qoralamali karta', async () => {
+  it('BE-A / 63HO6cBU: avto-yopish — MAIN sukut: har faol karta yoziladi; filial — karta yozuvi yo`q', async () => {
     await mainCardsOn();
     const branch = await seedBranch();
     const branchShiftId = await branch.openBranchShift();
@@ -930,14 +906,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
       expect.objectContaining({ total: 3, unconfirmed: 3, auto_closed: true }),
     );
     const branchResult = await record(branchShiftId);
-    expect(branchResult).toEqual(
-      expect.objectContaining({ total: 1, unconfirmed: 1 }),
-    );
-    expect(
-      (branchResult as { accounts: Array<{ card_id: string }> }).accounts.map(
-        (row) => row.card_id,
-      ),
-    ).toEqual([String(branch.humo.id)]);
+    // 63HO6cBU — filial kassasida karta tekshiruvi yo'q.
+    expect(branchResult).toBeNull();
     const mainRows = await db.getRepository(ShiftAccountCheck).find({
       where: { shift_id: shiftId },
     });
@@ -948,7 +918,7 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     }
   });
 
-  it('BE-A: PATCH branch_account_check_enabled — faqat superadmin, boolean', async () => {
+  it('BE-A: PATCH branch_account_check_enabled — faqat superadmin, boolean; 63HO6cBU: eskirgan, saqlanmaydi', async () => {
     const denied = await rpcError(
       checks.updateSettings({
         requester_id: '2',
@@ -975,24 +945,19 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     const branch = (await checks.getSettings({
       cashbox_user_id: BRANCH,
     })) as Rpc;
+    // 63HO6cBU (N6) — filialda karta tasdiqlash doim o'chiq.
     expect(branch.data).toEqual(
       expect.objectContaining({
-        account_check_enabled: true,
+        account_check_enabled: false,
         main_account_check_enabled: false,
-        branch_account_check_enabled: true,
+        branch_account_check_enabled: false,
       }),
     );
     expect(activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'finance.shift_settings_updated',
-        old_value: expect.objectContaining({
-          account_check_enabled: true,
-          branch_account_check_enabled: false,
-        }),
-        new_value: expect.objectContaining({
-          account_check_enabled: false,
-          branch_account_check_enabled: true,
-        }),
+        old_value: expect.objectContaining({ account_check_enabled: true }),
+        new_value: expect.objectContaining({ account_check_enabled: false }),
       }),
     );
   });

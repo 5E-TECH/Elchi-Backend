@@ -291,7 +291,8 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+      message:
+        "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });
@@ -302,7 +303,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
     const error = await rpcErrorOf(
       env.service.fillTheCashbox({
         user_id: '15',
-        amount: 50_000,
+        amount: 900_001,
         type: 'click' as any,
         cashbox_type: 'branch' as any,
         created_by: '208',
@@ -415,7 +416,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Naqd kassada yetarli mablag' yo'q",
+      message: "Filial kassasida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });
@@ -639,7 +640,9 @@ describe('QTCUUgjA — smena darvozasi (FINANCE_REQUIRE_OPEN_SHIFT)', () => {
         cashbox_type: 'branch' as any,
       }),
     );
-    expect(branchSpend.message).toBe("Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi");
+    expect(branchSpend.message).toBe(
+      "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+    );
   });
 
   it('spendMoney (MAIN) ochiq smena bilan o`tadi', async () => {
@@ -773,7 +776,9 @@ describe('R6 (QTCUUgjA) — filial (BRANCH) kassasi smenasi: FINANCE_REQUIRE_OPE
         cashbox_type: 'branch' as any,
       }),
     );
-    expect(spend.message).toBe("Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi");
+    expect(spend.message).toBe(
+      "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+    );
     expect(fill.message).toBe("Filial kassasini qo'lda to'ldirib bo'lmaydi");
     expect(open.manager.save).not.toHaveBeenCalled();
   });

@@ -425,6 +425,96 @@ describe('C4 — POST cashbox/payment/courier (superadmin/admin)', () => {
     expect(env.orderClient.send).not.toHaveBeenCalled();
   });
 
+  describe('63HO6cBU — menejer faqat SUMMA bilan qabul qiladi', () => {
+    const managerEnv = () => {
+      const env = setup();
+      route(env.identityClient, {
+        'identity.user.find_by_id': (p) => ({
+          data: courierUser(String(p.id), { branch_id: '15' }),
+        }),
+      });
+      route(env.branchClient, {
+        'branch.cashbox.resolve_for_manager': () => ({
+          data: { branch_id: null },
+        }),
+        'branch.find_by_id': () => ({ data: { id: '15', parent_id: null } }),
+        'branch.user.find_by_user': () => ({ data: { branch_id: '15' } }),
+        'branch.user.find_by_branch': () => ({
+          data: [
+            {
+              user_id: '209',
+              branch_id: '15',
+              role: 'COURIER',
+              isDeleted: false,
+            },
+          ],
+        }),
+      });
+      route(env.financeClient, {
+        'finance.cashbox.payment_courier': () => ({ statusCode: 200 }),
+      });
+      return env;
+    };
+    const managerReq = {
+      user: { sub: '198', roles: ['manager'], branch_id: '15' },
+    } as any;
+
+    it.each([
+      ['usulsiz', {}],
+      ['naqd', { payment_method: 'cash' }],
+      [
+        'eski FE: click + card_id + branch_card_id',
+        { payment_method: 'click', card_id: '7', branch_card_id: '9' },
+      ],
+    ])('%s → finance`ga `cash`, karta uzatilmaydi', async (_label, extra) => {
+      const env = managerEnv();
+      await env.controller.paymentFromCourier(managerReq, {
+        courier_id: '209',
+        amount: 250000,
+        ...extra,
+      } as any);
+      const payload = payloadOf(
+        env.financeClient,
+        'finance.cashbox.payment_courier',
+      );
+      expect(payload).toEqual(
+        expect.objectContaining({
+          payment_method: 'cash',
+          receiver_user_id: '15',
+          receiver_cashbox_type: 'branch',
+        }),
+      );
+      expect(payload.card_id).toBeUndefined();
+      expect(payload).not.toHaveProperty('branch_card_id');
+    });
+
+    it('«Marketga o`tkazma» (click_to_market) → 400, finance chaqirilmaydi', async () => {
+      const env = managerEnv();
+      await expect(
+        env.controller.paymentFromCourier(
+          managerReq,
+          dto({
+            courier_id: '209',
+            payment_method: 'click_to_market',
+            market_id: '201',
+          }),
+        ),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(env.financeClient.send).not.toHaveBeenCalled();
+    });
+
+    it('superadmin/admin (HQ kuryeri) — usul MAJBURIY: yo`q → 400', async () => {
+      const env = setup();
+      await expect(
+        env.controller.paymentFromCourier(superadmin, {
+          courier_id: '263',
+          amount: 250000,
+        } as any),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(env.financeClient.send).not.toHaveBeenCalled();
+    });
+  });
+
   it('menejer: kuryer bo`lmagan foydalanuvchi → avvalgidek 403', async () => {
     const env = setup();
     const req = {

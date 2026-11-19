@@ -446,31 +446,23 @@ describe('C3 / M7 / RBAC-07 — menejer faqat O`Z filiali kuryeridan naqd oladi'
     );
   });
 
-  it('M4 (2026-11-11): «Marketga o`tkazma» ham qabul qilinadi — qabul qiluvchi filial 15', async () => {
+  it('63HO6cBU (ilgari M4): menejerning «Marketga o`tkazma»si → 400, finance chaqirilmaydi', async () => {
     const env = managerEnv({ resolvedBranch: '15' });
 
-    await env.controller.paymentFromCourier(
-      manager15,
-      {
-        courier_id: '209',
-        amount: 300_000,
-        payment_method: 'click_to_market',
-        market_id: '201',
-      } as any,
-      'idem-ctm',
-    );
-
-    expect(
-      payloadOf(env.financeClient, 'finance.cashbox.payment_courier'),
-    ).toEqual(
-      expect.objectContaining({
-        courier_id: '209',
-        payment_method: 'click_to_market',
-        market_id: '201',
-        receiver_user_id: '15',
-        receiver_cashbox_type: 'branch',
-        dedup_epoch: 'idem-ctm',
-      }),
+    await expect(
+      env.controller.paymentFromCourier(
+        manager15,
+        {
+          courier_id: '209',
+          amount: 300_000,
+          payment_method: 'click_to_market',
+          market_id: '201',
+        } as any,
+        'idem-ctm',
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(cmdsOf(env.financeClient)).not.toContain(
+      'finance.cashbox.payment_courier',
     );
   });
 

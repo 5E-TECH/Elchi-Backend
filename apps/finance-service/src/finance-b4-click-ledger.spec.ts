@@ -244,17 +244,30 @@ describe('1bz6tOle — updateBalancesByMethod usul tarmoqlari', () => {
     });
   });
 
-  it('BRANCH: CLICK kirimi kartaga, CASH chiqimi naqddan (usul bo`yicha ajratma saqlanadi)', () => {
+  it('63HO6cBU — BRANCH bitta jami: usuldan qat`i nazar `balance_cash`, karta doim 0; chiqim — jami bo`yicha', () => {
     const { service } = makeEnv();
     const branch = cashbox('branch', 100_000, 0);
 
     apply(service, branch, 70_000, 'income', 'click');
     apply(service, branch, 40_000, 'expense', 'cash');
+    // Ilgari karta bo'lagi 0 bo'lgani uchun 400 edi — endi jamidan.
+    apply(service, branch, 120_000, 'expense', 'click');
 
     expect(branch).toMatchObject({
-      balance: 130_000,
-      balance_cash: 60_000,
-      balance_card: 70_000,
+      balance: 10_000,
+      balance_cash: 10_000,
+      balance_card: 0,
+    });
+    expect(() => apply(service, branch, 10_001, 'expense', 'click')).toThrow(
+      "Filial kassasida yetarli mablag' yo'q",
+    );
+    // Eski bo'lingan qoldiq — jami saqlangan holda yig'iladi.
+    const legacy = cashbox('branch', 0, 500_000);
+    apply(service, legacy, 500_000, 'expense', 'click');
+    expect(legacy).toMatchObject({
+      balance: 0,
+      balance_cash: 0,
+      balance_card: 0,
     });
   });
 

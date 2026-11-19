@@ -347,8 +347,11 @@ describe('FinanceServiceService.myCashbox', () => {
         },
       }),
     );
-    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
-    expect(response.data.cashboxHistory).toEqual([withUsers(branchPayment)]);
+    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi;
+    // 63HO6cBU — filial kassasi qatori `branch_leg: true` (proyeksiya uchun).
+    expect(response.data.cashboxHistory).toEqual([
+      { ...withUsers(branchPayment), branch_leg: true },
+    ]);
   });
 
   it('shows all courier cashbox history by default', async () => {
@@ -384,6 +387,7 @@ describe('FinanceServiceService.myCashbox', () => {
       }),
     );
     // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
+    // 63HO6cBU (Y-3): manbasi kuryer bo'lmagan qator — `branch_leg` yo'q.
     expect(response.data.cashboxHistory).toEqual([withUsers(courierPayment)]);
   });
 
@@ -425,6 +429,7 @@ describe('FinanceServiceService.myCashbox', () => {
         .source_type,
     ).toBeDefined();
     // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
+    // 63HO6cBU (Y-3): manbasi kuryer bo'lmagan qator — `branch_leg` yo'q.
     expect(response.data.cashboxHistory).toEqual([withUsers(courierPayment)]);
   });
 });
@@ -1170,7 +1175,10 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
         cashbox_type: 'branch' as any,
       }),
     ).rejects.toMatchObject({
-      error: { statusCode: 400, message: "Filial kassasini qo'lda to'ldirib bo'lmaydi" },
+      error: {
+        statusCode: 400,
+        message: "Filial kassasini qo'lda to'ldirib bo'lmaydi",
+      },
     });
     expect(updateBalance).not.toHaveBeenCalled();
   });
@@ -1188,7 +1196,11 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
         cashbox_type: 'branch' as any,
       }),
     ).rejects.toMatchObject({
-      error: { statusCode: 400, message: "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi" },
+      error: {
+        statusCode: 400,
+        message:
+          "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+      },
     });
     expect(updateBalance).not.toHaveBeenCalled();
   });

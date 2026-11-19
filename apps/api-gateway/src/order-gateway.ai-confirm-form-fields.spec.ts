@@ -253,7 +253,7 @@ const makeController = (
     config as unknown as ConfigService,
     poller as unknown as AiStatusPoller,
   );
-  return { controller, order, identity, completed };
+  return { controller, order, identity, completed, catalog, logistics, ai };
 };
 
 const marketReq = {
@@ -1319,5 +1319,141 @@ describe('POST /orders/ai-confirm — takror (barqaror kalit) tekshiruvlardan OL
     expect(
       sendsOf(fx.identity, 'identity.market_operator.selectable'),
     ).toHaveLength(2);
+  });
+
+  /** Katalogdan mahsulot / logistikadan tuman "o'chiriladi" (find_by_ids bermaydi). */
+  const deleteProduct = (fx: ReturnType<typeof makeController>) =>
+    fx.catalog.send.mockImplementation(() => of({ data: [] }));
+  const deleteDistrict = (fx: ReturnType<typeof makeController>) =>
+    fx.logistics.send.mockImplementation(() => of({ data: [] }));
+
+  it.each([
+    ['mahsulot o`chirildi', deleteProduct],
+    ['tuman o`chirildi', deleteDistrict],
+  ])(
+    '%s (urinishlar orasida) → takror ok:true idempotent_replay:true; yangi band — avvalgidek rad',
+    async (_label, remove) => {
+      const fx = makeController();
+      await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
+      remove(fx);
+      fx.order.send.mockClear();
+
+      const res = await fx.controller.aiConfirm(
+        { orders: [confirmOrder(1), confirmOrder(2)] },
+        marketReq,
+      );
+
+      expect(res.data.results[0]).toEqual({
+        index: 0,
+        ok: true,
+        order_id: '1000',
+        idempotent_replay: true,
+      });
+      // Yangi band — tuman/mahsulot tekshiruvi susaymagan.
+      expect(res.data.results[1]).toMatchObject({ index: 1, ok: false });
+      expect(res.data.results[1].code).not.toBe('create_failed');
+      expect(createdPayloads(fx.order)).toHaveLength(0);
+    },
+  );
+
+  it('tuman/mahsulot tekshiruvi umuman ishlamasa — takror ok, yangi band validation_unavailable', async () => {
+    const fx = makeController();
+    await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
+    fx.catalog.send.mockImplementation(() =>
+      throwError(() => new Error('catalog down')),
+    );
+
+    const res = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1), confirmOrder(2)] },
+      marketReq,
+    );
+
+    expect(res.data.results).toEqual([
+      { index: 0, ok: true, order_id: '1000', idempotent_replay: true },
+      expect.objectContaining({
+        index: 1,
+        ok: false,
+        code: 'validation_unavailable',
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      'takror birinchi',
+      [confirmOrder(1), confirmOrder(1, { ai_item_index: 9 })],
+      1,
+    ],
+    [
+      'takror keyin',
+      [confirmOrder(1, { ai_item_index: 9 }), confirmOrder(1)],
+      0,
+    ],
+  ])(
+    'takror bandi partiya imzosini band qiladi (%s) — ayni mazmunli YANGI band duplicate_in_batch, ikkinchi buyurtma yaratilmaydi',
+    async (_label, batch, newIndex) => {
+      const fx = makeController();
+      await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
+      fx.order.send.mockClear();
+      const res = await fx.controller.aiConfirm({ orders: batch }, marketReq);
+
+      const replayIndex = 1 - newIndex;
+      expect(res.data.results[replayIndex]).toEqual({
+        index: replayIndex,
+        ok: true,
+        order_id: '1000',
+        idempotent_replay: true,
+      });
+      expect(res.data.results[newIndex]).toMatchObject({
+        index: newIndex,
+        ok: false,
+        code: 'duplicate_in_batch',
+      });
+      expect(createdPayloads(fx.order)).toHaveLength(0);
+    },
+  );
+
+  it('1-urinish timeout_unknown (bog`lanmagan) → takror buyurtmani draft/AI xarajatiga BOG`LAYDI', async () => {
+    const fx = makeController();
+    const base = fx.order.send.getMockImplementation()!;
+    let firstCreate = true;
+    fx.order.send.mockImplementation((pattern, payload) => {
+      if (pattern.cmd === 'order.create' && firstCreate) {
+        firstCreate = false;
+        // Buyurtma yaratildi, lekin javob gateway'ga yetmadi.
+        base(pattern, payload);
+        return throwError(() => new TimeoutError());
+      }
+      return base(pattern, payload);
+    });
+
+    const first = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1)] },
+      marketReq,
+    );
+    expect(first.data.results[0]).toMatchObject({
+      ok: false,
+      code: 'timeout_unknown',
+    });
+    expect(sendsOf(fx.ai, 'ai.usage.link_orders')).toHaveLength(0);
+
+    const replay = await fx.controller.aiConfirm(
+      { orders: [confirmOrder(1)] },
+      marketReq,
+    );
+    expect(replay.data.results[0]).toEqual({
+      index: 0,
+      ok: true,
+      order_id: '1000',
+      idempotent_replay: true,
+    });
+    const links = sendsOf(fx.ai, 'ai.usage.link_orders');
+    expect(links).toHaveLength(1);
+    expect(links[0][1]).toMatchObject({
+      draft_id: DRAFT_ID,
+      market_id: MARKET_ID,
+      order_ids: ['1000'],
+      items: [expect.objectContaining({ item_index: 1, order_id: '1000' })],
+    });
   });
 });

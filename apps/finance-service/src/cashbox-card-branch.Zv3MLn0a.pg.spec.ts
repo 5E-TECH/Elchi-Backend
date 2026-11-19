@@ -1,12 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { of } from 'rxjs';
-import {
-  Cashbox_type,
-  Operation_type,
-  PaymentMethod,
-  Source_type,
-} from '@app/common';
+import { Cashbox_type, PaymentMethod, Source_type } from '@app/common';
 import { CreateCashboxCards1716000000105 } from '../../../migrations/1716000000105-CreateCashboxCards';
 import { CashboxCardDetails1716000000161 } from '../../../migrations/1716000000161-CashboxCardDetails';
 import { FinanceServiceService } from './finance-service.service';
@@ -96,6 +91,10 @@ describePg(
       const runner = db.createQueryRunner();
       await base105.up(runner);
       await details161.up(runner);
+      // 63HO6cBU (N1) — migratsiya 245 qo'shgan ustun (entity'da bor).
+      await runner.query(
+        'ALTER TABLE "finance_schema"."cashbox_cards" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamptz NULL',
+      );
       await runner.release();
 
       cards = new CashboxCardService(
@@ -209,23 +208,36 @@ describePg(
     const balances = (list: any) =>
       list.cards.map((c: any) => [c.name, c.balance, c.is_default]);
 
-    const createBranchCard = async (name = 'Humo filial'): Promise<string> => {
-      const res: any = await cards.createCard({
-        name,
-        branch_id: BRANCH,
-        kind: 'virtual_card',
-        bank_name: 'Hamkorbank',
-        last4: '4417',
-        holder_name: 'Aziz Rahimov',
-        created_by: '1',
-      });
-      return String(res.data.card.id);
-    };
     const defaultIdOf = async (branchId?: string): Promise<string> => {
       const list: any = await cards.listCards(
         branchId ? { branch_id: branchId } : {},
       );
       return String(list.data.cards.find((c: any) => c.is_default).id);
+    };
+
+    /** 63HO6cBU — migratsiya 245 dan oldingi (eski) filial kartasi: nofaol. */
+    const legacyBranchCard = async (
+      name = 'Humo filial',
+      branchId = BRANCH,
+    ): Promise<string> => {
+      const cashbox = await cashboxOf(branchId, Cashbox_type.BRANCH);
+      const saved = await db.getRepository(CashboxCard).save(
+        db.getRepository(CashboxCard).create({
+          cashbox_id: String(cashbox.id),
+          name,
+          balance: 0,
+          is_default: false,
+          is_active: false,
+        }),
+      );
+      return String(saved.id);
+    };
+    const disabled = {
+      error: {
+        statusCode: 400,
+        message:
+          "Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q",
+      },
     };
 
     it('migratsiya 161: mavjud MAIN kartalari O`ZGARMAYDI; ustunlar + CHECK; qayta up() xavfsiz; down() → up()', async () => {
@@ -350,43 +362,36 @@ describePg(
       );
     });
 
-    it('⭐ filial kassasi kartalari: Asosiy karta = filial balance_card; tafsilotlar saqlanadi; MAIN bilan aralashmaydi', async () => {
+    it('⭐ 63HO6cBU: filial kassasida karta YO`Q — ro`yxat bo`sh (Asosiy karta yaratilmaydi), yaratish 400; MAIN bilan aralashmaydi', async () => {
       await seed();
-      const humo = await createBranchCard();
-      const { list } = await expectInvariant(BRANCH);
-      expect(list).toMatchObject({
+      const list: any = await cards.listCards({ branch_id: BRANCH });
+      expect(list.data).toMatchObject({
         cashbox_type: 'branch',
         branch_id: BRANCH,
-        balance_card: 50_000,
-        in_sync: true,
+        cards: [],
+        balance_card: 0,
+        total_card: 0,
+        cards_disabled: true,
       });
-      expect(list.cards).toHaveLength(2);
-      expect(list.cards[1]).toMatchObject({
-        id: humo,
-        name: 'Humo filial',
-        kind: 'virtual_card',
-        bank_name: 'Hamkorbank',
-        last4: '4417',
-        holder_name: 'Aziz Rahimov',
-        require_photo_on_shift_close: false,
-        ai_check_enabled: false,
+      expect(await db.getRepository(CashboxCard).count()).toBe(0);
+      await expect(
+        cards.createCard({ name: 'Humo filial', branch_id: BRANCH }),
+      ).rejects.toMatchObject(disabled);
+      // Eski (nofaol) karta — faqat `include_inactive` bilan, balans 0.
+      const legacy = await legacyBranchCard();
+      const archived: any = await cards.listCards({
+        branch_id: BRANCH,
+        include_inactive: true,
       });
-      // MAIN kassada filial kartasi yo'q.
+      expect(archived.data.cards).toEqual([
+        expect.objectContaining({ id: legacy, balance: 0, is_active: false }),
+      ]);
+      // MAIN kassada filial kartasi yo'q, MAIN avvalgidek.
       const main: any = await cards.listCards();
       expect(main.data.cashbox_type).toBe('main');
       expect(main.data.cards.map((c: any) => c.name)).toEqual(['Asosiy karta']);
-      // Realtime — filial menejeriga ham (cashbox_type: branch).
-      expect(realtime.cashboxCardChanged).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'created',
-          cashbox_type: 'branch',
-          branch_id: BRANCH,
-        }),
-        expect.anything(),
-      );
-      // Bir xil nom boshqa kassada — mumkin (nom kassa ichida noyob).
       await expect(
-        cards.createCard({ name: 'Humo filial', branch_id: OTHER_BRANCH }),
+        cards.createCard({ name: 'Humo HQ' }),
       ).resolves.toMatchObject({ statusCode: 201 });
       // Filial kassasi yo'q — 404.
       await expect(
@@ -484,7 +489,7 @@ describePg(
       });
     });
 
-    it('BE-A: yangi karta sukuti — MAIN rasm + AI yoqiq (Asosiy karta ham), filial o`chiq; superadmin MAIN kartasini o`chiradi', async () => {
+    it('BE-A: yangi karta sukuti — MAIN rasm + AI yoqiq (Asosiy karta ham), filialda karta yo`q (63HO6cBU); superadmin MAIN kartasini o`chiradi', async () => {
       await seed();
       // MAIN — bayroq berilmagan (admin ham yaratadi, 403 yo'q): true / true.
       const humo: any = await cards.createCard({
@@ -524,27 +529,15 @@ describePg(
         ai_check_enabled: false,
       });
 
-      // Filial — bayroqlar o'chiq (Asosiy karta ham).
-      await createBranchCard();
-      const branchList: any = await cards.listCards({ branch_id: BRANCH });
-      expect(branchList.data.cards).toHaveLength(2);
-      for (const card of branchList.data.cards) {
-        expect(card).toMatchObject({
-          require_photo_on_shift_close: false,
-          ai_check_enabled: false,
-        });
-      }
-      // Filialda superadmin aniq yoqsa — yoqiladi (AI berilmagan — o'chiq).
-      const branchOn: any = await cards.createCard({
-        name: 'Filial rasmli',
-        branch_id: BRANCH,
-        require_photo_on_shift_close: true,
-        allow_shift_settings: true,
-      });
-      expect(branchOn.data.card).toMatchObject({
-        require_photo_on_shift_close: true,
-        ai_check_enabled: false,
-      });
+      // 63HO6cBU — filialda karta yaratilmaydi (bayroqlar bilan ham).
+      await expect(
+        cards.createCard({
+          name: 'Filial rasmli',
+          branch_id: BRANCH,
+          require_photo_on_shift_close: true,
+          allow_shift_settings: true,
+        }),
+      ).rejects.toMatchObject(disabled);
 
       // PATCH: admin (ruxsatsiz) — 403; superadmin MAIN kartasini o'chiradi
       // (rasm o'chsa AI ham o'chadi), keyin qayta yoqadi.
@@ -585,9 +578,9 @@ describePg(
       expect(stored.ai_check_enabled).toBe(true);
     });
 
-    it('PATCH Asosiy kartada: yangi maydonlar tahrirlanadi, NOMI — 400; menejer doirasi — boshqa filial kartasi 403', async () => {
+    it('PATCH Asosiy kartada: yangi maydonlar tahrirlanadi, NOMI — 400; menejer doirasi — boshqa filial (eski) kartasi 403, o`z filiali tarixi o`qiladi', async () => {
       await seed();
-      const def = await defaultIdOf(BRANCH);
+      const def = await defaultIdOf();
       const res: any = await cards.updateCard({
         id: def,
         kind: 'plastic_card',
@@ -595,14 +588,13 @@ describePg(
         card_network: 'Uzcard',
         last4: '1234',
         holder_name: 'Shodiyor Ergashev',
-        branch_id: BRANCH,
       });
       expect(res.data.card).toMatchObject({
         is_default: true,
         name: 'Asosiy karta',
         bank_name: 'Agrobank',
         last4: '1234',
-        balance: 50_000,
+        balance: 100_000,
       });
       expect(activityLog.log).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -614,164 +606,95 @@ describePg(
         cards.updateCard({ id: def, name: 'Boshqa nom' }),
       ).rejects.toMatchObject({ error: { statusCode: 400 } });
 
-      // Menejer (OTHER_BRANCH doirasi) BRANCH kartasini ko'ra / o'zgartira olmaydi.
+      // 63HO6cBU — eski filial kartasi: tarix (ko'chirma) saqlanadi.
+      const legacy = await legacyBranchCard();
       await expect(
-        cards.getLedger({ id: def, branch_id: OTHER_BRANCH }),
+        cards.getLedger({ id: legacy, branch_id: OTHER_BRANCH }),
       ).rejects.toMatchObject({ error: { statusCode: 403 } });
       await expect(
-        cards.listMovements({ card_id: def, branch_id: OTHER_BRANCH }),
+        cards.listMovements({ card_id: legacy, branch_id: OTHER_BRANCH }),
       ).rejects.toMatchObject({ error: { statusCode: 403 } });
-      await expect(
-        cards.updateCard({ id: def, note: 'x', branch_id: OTHER_BRANCH }),
-      ).rejects.toMatchObject({ error: { statusCode: 403 } });
-      // MAIN kartasi ham menejer doirasidan tashqarida.
-      await expect(
-        cards.getLedger({ id: await defaultIdOf(), branch_id: BRANCH }),
-      ).rejects.toMatchObject({ error: { statusCode: 403 } });
-      // O'z filiali — ruxsat.
+      // MAIN kartasi menejer doirasidan tashqarida.
       await expect(
         cards.getLedger({ id: def, branch_id: BRANCH }),
+      ).rejects.toMatchObject({ error: { statusCode: 403 } });
+      // O'z filiali — ruxsat (eski tarix o'qiladi).
+      await expect(
+        cards.getLedger({ id: legacy, branch_id: BRANCH }),
       ).resolves.toMatchObject({ statusCode: 200 });
+      // Eski filial kartasini faollashtirish — 400.
+      await expect(
+        cards.setCardActive({ id: legacy, is_active: true, branch_id: BRANCH }),
+      ).rejects.toMatchObject(disabled);
     });
 
-    it('⭐ filial operatsiyalari card_id bilan: menejer kirim/chiqim, kuryerdan qabul, filial→HQ (ikkala oyoq); invariant HAR kassada; boshqa kassa kartasi 403', async () => {
+    it('⭐ 63HO6cBU: filial operatsiyalari — filial `card_id` e`tiborsiz (jami), kuryerdan qabul va filial→HQ: MAIN oyog`i tanlangan HQ kartasiga', async () => {
       await seed();
-      const humo = await createBranchCard();
-      const branchDef = await defaultIdOf(BRANCH);
-      await cards.transfer({
-        from_card_id: branchDef,
-        to_card_id: humo,
-        amount: 30_000,
-        comment: 'Humo ga',
-      });
+      const legacy = await legacyBranchCard();
+      const hq: any = await cards.createCard({ name: 'HQ Humo' });
+      const hqId = String(hq.data.card.id);
 
-      // Filial kassasidagi qo'lda kirim / chiqim qatorlari (63HO6cBU: menejerning
-      // «Kassadan xarajat» / «To'ldirish» yo'li yopiq — updateBalance orqali).
-      const spent: any = await finance.updateBalance({
-        user_id: BRANCH,
-        cashbox_type: Cashbox_type.BRANCH,
-        amount: 10_000,
-        payment_method: PaymentMethod.CLICK,
-        card_id: humo,
-        created_by: '25',
-        operation_type: Operation_type.EXPENSE,
-        source_type: Source_type.MANUAL_EXPENSE,
-      });
-      expect(spent.data.history.card_id).toBe(humo);
-      await finance.updateBalance({
-        user_id: BRANCH,
-        cashbox_type: Cashbox_type.BRANCH,
-        amount: 4_000,
-        payment_method: PaymentMethod.CLICK,
-        card_id: humo,
-        created_by: '25',
-        operation_type: Operation_type.INCOME,
-        source_type: Source_type.MANUAL_INCOME,
-      });
-      let branch = await expectInvariant(BRANCH);
-      expect(balances(branch.list)).toEqual([
-        ['Asosiy karta', 20_000, true],
-        ['Humo filial', 24_000, false],
-      ]);
-      expect(Number(branch.cashbox.balance_card)).toBe(44_000);
-
-      // Boshqa kassa (MAIN) kartasi filial operatsiyasida — 403, hech narsa o'zgarmaydi.
-      const mainDef = await defaultIdOf();
-      await expect(
-        finance.updateBalance({
-          user_id: BRANCH,
-          cashbox_type: Cashbox_type.BRANCH,
-          amount: 1_000,
-          payment_method: PaymentMethod.CLICK,
-          card_id: mainDef,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.MANUAL_EXPENSE,
-        }),
-      ).rejects.toMatchObject({ error: { statusCode: 403 } });
-      branch = await expectInvariant(BRANCH);
-      expect(Number(branch.cashbox.balance_card)).toBe(44_000);
-
-      // Kuryerdan qabul (menejer yo'li: receiver — filial kassasi) Humo ga.
+      // Kuryerdan filialga (eski FE: click + filial kartasi) — jamiga.
       await finance.paymentsFromCourier({
         courier_id: '501',
-        amount: 6_000,
+        amount: 100_000,
         payment_method: PaymentMethod.CLICK,
+        card_id: legacy,
+        created_by: '25',
+        dedup_epoch: 'gw:zv3-c1',
         receiver_user_id: BRANCH,
         receiver_cashbox_type: Cashbox_type.BRANCH,
-        card_id: humo,
-        created_by: '25',
-        dedup_epoch: 'c-1',
       });
-      const courierLeg = await db
-        .getRepository(CashboxHistory)
-        .findOneByOrFail({
-          cashbox_id: String(branch.cashbox.id),
-          source_type: 'courier_payment' as never,
-        });
-      expect(String(courierLeg.card_id)).toBe(humo);
-      branch = await expectInvariant(BRANCH);
-      expect(balances(branch.list)).toEqual([
-        ['Asosiy karta', 20_000, true],
-        ['Humo filial', 30_000, false],
-      ]);
+      let branch = await cashboxOf(BRANCH, Cashbox_type.BRANCH);
+      expect(Number(branch.balance)).toBe(400_000);
+      expect(Number(branch.balance_card)).toBe(0);
+      expect(Number(branch.balance_cash)).toBe(400_000);
 
-      // Filial → HQ: filial Humo dan chiqadi, MAIN nomli kartaga tushadi.
-      const mainCard: any = await cards.createCard({ name: 'Uzcard HQ' });
+      // Filial → HQ «O'tkazma»: filial jamidan, HQ — tanlangan nomli karta.
       await finance.paymentFromBranchToMain({
         branch_id: BRANCH,
-        amount: 25_000,
+        amount: 350_000,
         payment_method: PaymentMethod.CLICK,
-        branch_card_id: humo,
-        card_id: mainCard.data.card.id,
+        card_id: hqId,
+        branch_card_id: legacy,
         created_by: '1',
-        dedup_epoch: 'b-1',
+        dedup_epoch: 'gw:zv3-b1',
       });
-      branch = await expectInvariant(BRANCH);
-      expect(balances(branch.list)).toEqual([
-        ['Asosiy karta', 20_000, true],
-        ['Humo filial', 5_000, false],
-      ]);
-      const main = await expectInvariant();
-      expect(balances(main.list)).toEqual([
-        ['Asosiy karta', 100_000, true],
-        ['Uzcard HQ', 25_000, false],
-      ]);
-
-      // Filial kartasida yetmasa — 400, ikkala kassa o'zgarmaydi.
-      await expect(
-        finance.paymentFromBranchToMain({
-          branch_id: BRANCH,
-          amount: 6_000,
-          payment_method: PaymentMethod.CLICK,
-          branch_card_id: humo,
-          dedup_epoch: 'b-2',
-        }),
-      ).rejects.toMatchObject({
-        error: { statusCode: 400, message: expect.stringMatching(/Humo/) },
+      branch = await cashboxOf(BRANCH, Cashbox_type.BRANCH);
+      expect(Number(branch.balance)).toBe(50_000);
+      expect(Number(branch.balance_card)).toBe(0);
+      const main = await cashboxOf('0', Cashbox_type.MAIN);
+      expect(Number(main.balance_card)).toBe(450_000);
+      expect(
+        Number(
+          (await db.getRepository(CashboxCard).findOneByOrFail({ id: hqId }))
+            .balance,
+        ),
+      ).toBe(350_000);
+      const legs = await db.getRepository(CashboxHistory).find({
+        relations: ['cashbox'],
+        order: { id: 'ASC' },
       });
-      await expectInvariant(BRANCH);
-      expect(Number((await expectInvariant()).cashbox.balance_card)).toBe(
-        125_000,
-      );
-
-      // Kartasiz — Asosiy karta (avvalgi xatti-harakat).
-      const plain: any = await finance.updateBalance({
-        user_id: BRANCH,
-        cashbox_type: Cashbox_type.BRANCH,
-        amount: 2_000,
-        payment_method: PaymentMethod.CLICK,
-        operation_type: Operation_type.EXPENSE,
-        source_type: Source_type.MANUAL_EXPENSE,
-      });
-      expect(plain.data.history.card_id).toBeNull();
-      branch = await expectInvariant(BRANCH);
-      expect(balances(branch.list)[0]).toEqual(['Asosiy karta', 18_000, true]);
+      for (const leg of legs) {
+        if (leg.cashbox.cashbox_type === Cashbox_type.BRANCH) {
+          expect(leg.card_id).toBeNull();
+        }
+      }
+      expect(
+        legs.find(
+          (leg) =>
+            leg.cashbox.cashbox_type === Cashbox_type.MAIN &&
+            leg.source_type === Source_type.BRANCH_TO_MAIN,
+        )?.card_id,
+      ).toBe(hqId);
+      await expectInvariant();
     });
 
-    it('⭐ make-default: pul harakatlanmaydi, Σ == balance_card; eski Asosiy karta qoldig`i saqlanadi; ikkala ko`chirma to`g`ri; kartasiz to`lov — yangi Asosiyga', async () => {
+    it('⭐ N12 (MAIN) make-default: pul harakatlanmaydi, Σ == balance_card; eski Asosiy karta qoldig`i saqlanadi; ikkala ko`chirma to`g`ri; kartasiz to`lov — yangi Asosiyga; arxiv karta 400', async () => {
       await seed();
-      const humo = await createBranchCard();
-      const oldDef = await defaultIdOf(BRANCH);
+      const created: any = await cards.createCard({ name: 'Humo HQ' });
+      const humo = String(created.data.card.id);
+      const oldDef = await defaultIdOf();
       await cards.transfer({
         from_card_id: oldDef,
         to_card_id: humo,
@@ -779,38 +702,36 @@ describePg(
         comment: 'x',
       });
       // Kartasiz CLICK chiqim — eski Asosiy kartadan.
-      await finance.updateBalance({
-        user_id: BRANCH,
-        cashbox_type: Cashbox_type.BRANCH,
+      await finance.spendMoney({
+        user_id: '0',
+        cashbox_type: Cashbox_type.MAIN,
         amount: 5_000,
-        payment_method: PaymentMethod.CLICK,
-        operation_type: Operation_type.EXPENSE,
-        source_type: Source_type.MANUAL_EXPENSE,
+        type: PaymentMethod.CLICK,
       });
-      let state = await expectInvariant(BRANCH);
+      let state = await expectInvariant();
       expect(balances(state.list)).toEqual([
-        ['Asosiy karta', 15_000, true],
-        ['Humo filial', 30_000, false],
+        ['Asosiy karta', 65_000, true],
+        ['Humo HQ', 30_000, false],
       ]);
 
       const res: any = await cards.makeDefault({ id: humo, updated_by: '1' });
       expect(res.data).toMatchObject({
         changed: true,
         card: { id: humo, is_default: true, balance: 30_000 },
-        previous_default: { id: oldDef, is_default: false, balance: 15_000 },
+        previous_default: { id: oldDef, is_default: false, balance: 65_000 },
       });
-      state = await expectInvariant(BRANCH);
-      expect(Number(state.cashbox.balance_card)).toBe(45_000);
+      state = await expectInvariant();
+      expect(Number(state.cashbox.balance_card)).toBe(95_000);
       expect(balances(state.list)).toEqual([
-        ['Humo filial', 30_000, true],
-        ['Asosiy karta', 15_000, false],
+        ['Humo HQ', 30_000, true],
+        ['Asosiy karta', 65_000, false],
       ]);
       // Eski Asosiy karta ko'chirmasi: kartasiz chiqim qatori unga yozildi.
       const oldLedger: any = await cards.getLedger({ id: oldDef });
       expect(oldLedger.data.summary).toMatchObject({
-        opening_balance: 50_000,
-        closing_balance: 15_000,
-        current_balance: 15_000,
+        opening_balance: 100_000,
+        closing_balance: 65_000,
+        current_balance: 65_000,
       });
       expect(oldLedger.data.items.map((r: any) => r.kind)).toEqual([
         'expense',
@@ -823,18 +744,16 @@ describePg(
       });
 
       // Endi kartasiz CLICK kirim — yangi Asosiy (Humo) ga.
-      await finance.updateBalance({
-        user_id: BRANCH,
-        cashbox_type: Cashbox_type.BRANCH,
+      await finance.fillTheCashbox({
+        user_id: '0',
+        cashbox_type: Cashbox_type.MAIN,
         amount: 1_000,
-        payment_method: PaymentMethod.CLICK,
-        operation_type: Operation_type.INCOME,
-        source_type: Source_type.MANUAL_INCOME,
+        type: PaymentMethod.CLICK,
       });
-      state = await expectInvariant(BRANCH);
+      state = await expectInvariant();
       expect(balances(state.list)).toEqual([
-        ['Humo filial', 31_000, true],
-        ['Asosiy karta', 15_000, false],
+        ['Humo HQ', 31_000, true],
+        ['Asosiy karta', 65_000, false],
       ]);
       expect(activityLog.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'finance.card_made_default' }),
@@ -843,10 +762,7 @@ describePg(
       const again: any = await cards.makeDefault({ id: humo });
       expect(again.data.changed).toBe(false);
       // Arxivlangan karta asosiy bo'lmaydi.
-      const spare: any = await cards.createCard({
-        name: 'Zaxira',
-        branch_id: BRANCH,
-      });
+      const spare: any = await cards.createCard({ name: 'Zaxira' });
       await cards.setCardActive({ id: spare.data.card.id, is_active: false });
       await expect(
         cards.makeDefault({ id: spare.data.card.id }),
@@ -854,58 +770,103 @@ describePg(
       // Yaratishda «Asosiy karta qilish».
       const fresh: any = await cards.createCard({
         name: 'Visa yangi',
-        branch_id: BRANCH,
         make_default: true,
       });
       expect(fresh.data.card).toMatchObject({ is_default: true, balance: 0 });
-      state = await expectInvariant(BRANCH);
+      state = await expectInvariant();
       expect(balances(state.list)[0]).toEqual(['Visa yangi', 0, true]);
     });
 
-    it('filial smenasi (`all`): filial kartasi konvertatsiyasi smenasiz 400 (filial matni); smena yopishda kutilgan qoldiqqa qo`shiladi', async () => {
+    it('N7: arxiv filial «Asosiy karta»si (qoldiq 0) o`chadi (soft); qoldig`i bor bo`lsa va MAIN Asosiy kartasi — 400', async () => {
       await seed();
-      const humo = await createBranchCard();
+      const box = await cashboxOf(BRANCH, Cashbox_type.BRANCH);
+      const saved = await db.getRepository(CashboxCard).save(
+        db.getRepository(CashboxCard).create({
+          cashbox_id: String(box.id),
+          name: 'Asosiy karta',
+          balance: 0,
+          is_default: true,
+          is_active: false,
+        }),
+      );
+      // Migratsiyadan oldingi karta qismi (50 000) hali bor — 400.
+      await expect(
+        cards.deleteCard({ id: String(saved.id) }),
+      ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      // Migratsiya 245 dan keyin: karta qismi jamiga o'tgan.
+      await db.query(
+        `UPDATE "finance_schema"."cashboxes"
+            SET balance_cash = balance_cash + balance_card, balance_card = 0
+          WHERE id = $1`,
+        [box.id],
+      );
+      await cards.deleteCard({ id: String(saved.id) });
+      const after = await db
+        .getRepository(CashboxCard)
+        .findOneByOrFail({ id: String(saved.id) });
+      expect(after).toMatchObject({ isDeleted: true, is_active: false });
+      expect(
+        Number((await cashboxOf(BRANCH, Cashbox_type.BRANCH)).balance),
+      ).toBe(300_000);
+      // MAIN Asosiy kartasi — avvalgidek 400.
+      const mainDefault = await defaultIdOf();
+      await expect(cards.deleteCard({ id: mainDefault })).rejects.toMatchObject(
+        { error: { statusCode: 400 } },
+      );
+    });
+
+    it('63HO6cBU: eski filial kartasi — Asosiy qilish, o`tkazma 400; MAIN make-default avvalgidek', async () => {
+      await seed();
+      const legacy = await legacyBranchCard();
+      const other = await legacyBranchCard('Uzcard filial');
+      await expect(
+        cards.makeDefault({ id: legacy, branch_id: BRANCH }),
+      ).rejects.toMatchObject(disabled);
+      await expect(
+        cards.transfer({
+          from_card_id: legacy,
+          to_card_id: other,
+          amount: 1,
+          comment: 'x',
+        }),
+      ).rejects.toMatchObject(disabled);
+      const hq: any = await cards.createCard({ name: 'HQ Humo' });
+      await expect(
+        cards.makeDefault({ id: String(hq.data.card.id) }),
+      ).resolves.toMatchObject({ statusCode: 200 });
+      await expectInvariant();
+    });
+
+    it('63HO6cBU: filial kartasi konvertatsiyasi — 400 (smenadan qat`i nazar); filial smenasi bitta jami bilan yopiladi', async () => {
+      await seed();
+      const legacy = await legacyBranchCard();
       process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
-      jest
-        .spyOn((cards as any).logger, 'warn')
-        .mockImplementation(() => undefined);
       jest
         .spyOn((finance as any).logger, 'warn')
         .mockImplementation(() => undefined);
-      await expect(
-        cards.convert({
-          type: CardMovementType.CASH_TO_CARD,
-          card_id: humo,
-          amount: 1_000,
-          comment: 'x',
-        }),
-      ).rejects.toMatchObject({
-        error: { statusCode: 400, message: expect.stringMatching(/filial/) },
-      });
-
       await finance.openShift({
         opened_by: '25',
         cashbox_user_id: BRANCH,
-      } as never);
-      await cards.convert({
-        type: CardMovementType.CASH_TO_CARD,
-        card_id: humo,
-        amount: 10_000,
-        comment: 'kartaga',
       });
+      await expect(
+        cards.convert({
+          type: CardMovementType.CASH_TO_CARD,
+          card_id: legacy,
+          amount: 10_000,
+          comment: 'kartaga',
+        }),
+      ).rejects.toMatchObject(disabled);
       const closed: any = await finance.closeShift({
         closed_by: '25',
         cashbox_user_id: BRANCH,
-        closing_balance_cash: 240_000,
-        closing_balance_card: 60_000,
-      } as never);
-      expect(closed.data).toMatchObject({
-        expected_balance_cash: 240_000,
-        expected_balance_card: 60_000,
-        discrepancy_cash: 0,
-        discrepancy_card: 0,
+        closing_balance_cash: 300_000,
       });
-      await expectInvariant(BRANCH);
+      expect(closed.data).toMatchObject({
+        expected_balance_cash: 300_000,
+        expected_balance_card: 0,
+        discrepancy_cash: 0,
+        discrepancy_card: null,
+      });
     });
   },
 );

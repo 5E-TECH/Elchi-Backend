@@ -448,7 +448,8 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
     await expect(
       service.updateBalance({
         user_id: '15',
-        amount: 500_000,
+        amount: 100_001,
+        type: PaymentMethod.CLICK,
         cashbox_type: Cashbox_type.BRANCH,
         operation_type: Operation_type.EXPENSE,
         source_type: Source_type.MANUAL_EXPENSE,
@@ -457,7 +458,7 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
     ).rejects.toMatchObject({
       error: {
         statusCode: 400,
-        message: expect.stringMatching(/yetarli mablag' yo'q/),
+        message: "Filial kassasida yetarli mablag' yo'q",
       },
     });
     const branchAfterManual = await cashboxRepo().findOneByOrFail({

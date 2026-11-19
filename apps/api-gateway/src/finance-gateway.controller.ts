@@ -2272,7 +2272,11 @@ export class FinanceGatewayController {
   // T3 — chek bloki finance'dan so'ralmaydi; himoya qatlami sifatida.
   @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get my cashbox (courier/market)' })
+  @ApiOperation({
+    summary: 'Get my cashbox (courier/market)',
+    description:
+      "63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
+  })
   async myCashbox(
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
@@ -2366,11 +2370,23 @@ export class FinanceGatewayController {
         message: CASHBOX_RECEIPT_MESSAGES.RECEIPT_NOT_APPLICABLE,
       });
     }
+    /**
+     * 63HO6cBU (P0, ega qarori 2026-11-17) — menejer kuryerdan pulni faqat
+     * SUMMA bilan qabul qiladi: usul olinmaydi, server o'zi `cash` yozadi
+     * (filial kassasi naqd/kartaga ajralmaydi). Eski FE yuborgan
+     * `payment_method: 'cash' | 'click'`, `card_id`, `branch_card_id` —
+     * e'tiborsiz; «Marketga o'tkazma» (`click_to_market`) menejerga yopiq —
+     * 400. SA/A (HQ kuryeridan MAIN'ga) — usul MAJBURIY (pastda).
+     */
+    if (isManager && dto.payment_method === PaymentMethod.CLICK_TO_MARKET) {
+      throw new BadRequestException(
+        "Menejer kuryerdan pulni faqat summa bilan qabul qiladi — «Marketga o'tkazma» filialda yo'q",
+      );
+    }
+    if (!isManager && !dto.payment_method) {
+      throw new BadRequestException("payment_method bo'lishi shart");
+    }
     if (isManager) {
-      // Audit M4 (2026-11-11): menejer "Marketga o'tkazma" (click_to_market)
-      // ham qila oladi — filial kassasi sof 0, finance shu tranzaksiyada
-      // filial → HQ daftar siljishini ham navbatga qo'yadi (soxta filial
-      // qarzi qolmaydi).
       receiverBranchId =
         this.extractBranchId(req.user) ||
         (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
@@ -2402,14 +2418,20 @@ export class FinanceGatewayController {
     }
 
     const token = this.resolveTransferToken(idempotencyKey);
+    // 63HO6cBU — `branch_card_id` (eski FE) hech qachon uzatilmaydi.
+    const payload: Partial<PaymentFromCourierRequestDto> = { ...dto };
+    delete payload.branch_card_id;
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_courier' },
       {
-        ...dto,
+        ...payload,
         created_by: req.user.sub,
         dedup_epoch: token,
         ...(isManager
           ? {
+              payment_method: PaymentMethod.CASH,
+              card_id: undefined,
+              market_id: undefined,
               receiver_user_id: receiverBranchId,
               receiver_cashbox_type: Cashbox_type.BRANCH,
             }
@@ -2590,9 +2612,10 @@ export class FinanceGatewayController {
           "«Marketga o'tkazma» da market_id bo'lishi shart",
         );
       }
-      if (dto.card_id || dto.branch_card_id) {
+      // 63HO6cBU — `branch_card_id` (filial kartasi) endi e'tiborsiz.
+      if (dto.card_id) {
         throw new BadRequestException(
-          "«Marketga o'tkazma» da karta tanlanmaydi (card_id / branch_card_id faqat click to'lovida)",
+          "«Marketga o'tkazma» da karta tanlanmaydi (card_id faqat click to'lovida)",
         );
       }
     } else if (marketId) {
@@ -2628,8 +2651,8 @@ export class FinanceGatewayController {
         ...(dto.receipt_id ? { receipt_id: dto.receipt_id } : {}),
         // 3PE0B03q — CLICK pul asosiy kassaning qaysi nomli kartasiga.
         ...(dto.card_id ? { card_id: dto.card_id } : {}),
-        // Zv3MLn0a — CLICK pul filial kassasining qaysi kartasidan chiqdi.
-        ...(dto.branch_card_id ? { branch_card_id: dto.branch_card_id } : {}),
+        // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: eski FE
+        // yuborgan `branch_card_id` finance'ga uzatilmaydi (e'tiborsiz).
       },
     );
     // branch → HQ settlement advance is enqueued by finance-service via the
@@ -2640,6 +2663,9 @@ export class FinanceGatewayController {
   @Get('cashbox/all-info')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU — menejer `allCashboxHistories` (filial tarixi): chek va filial
+  // oyog'i usuli / kartasi rol bo'yicha proyeksiya qilinadi.
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all cashboxes total info' })
   async allCashboxesInfo(
@@ -3399,7 +3425,8 @@ export class FinanceGatewayController {
     description:
       'GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): ' +
       'AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — ' +
-      "tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami.",
+      "tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami. " +
+      "63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
   })
   @ApiOkResponse({
     schema: {
@@ -3778,7 +3805,8 @@ export class FinanceGatewayController {
       "Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id, transfer }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q. " +
       "mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; " +
       "`receiver` — kuryer to'lovida pulni olgan kassa, marketga to'lovda MAIN (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`. " +
-      "(2026-11-14) Barcha rollarga: `source_branch` — `branch_to_main` qatorida pulni topshirgan filial `{ id, name }`, boshqa turda `null`; `transfer_source_user` — o'tkazma manbasi `{ id, name, role, phone_number }` yoki `null`; `card` — `click` to'lovida MAIN / BRANCH kassaning qaysi kartasiga tushgan / qaysi kartasidan chiqqan `{ id, name, is_default, kind, bank_name, card_network, last4, holder_name }` (`card_id` siz — Asosiy karta; yozuvi yo'q bo'lsa `id: null`), naqd, «Marketga o'tkazma» va kuryer/market kassasida `null`. Fail-open — `null`.",
+      "(2026-11-14) Barcha rollarga: `source_branch` — `branch_to_main` qatorida pulni topshirgan filial `{ id, name }`, boshqa turda `null`; `transfer_source_user` — o'tkazma manbasi `{ id, name, role, phone_number }` yoki `null`; `card` — `click` to'lovida MAIN / BRANCH kassaning qaysi kartasiga tushgan / qaysi kartasidan chiqqan `{ id, name, is_default, kind, bank_name, card_network, last4, holder_name }` (`card_id` siz — Asosiy karta; yozuvi yo'q bo'lsa `id: null`), naqd, «Marketga o'tkazma» va kuryer/market kassasida `null`. Fail-open — `null`. " +
+      "63HO6cBU: FILIAL kassasi qatorida `card` doim `null` (filialda karta yo'q). `branch_leg: true` qatorda (filial oyog'i, kuryer → filial to'lovi) KURYER uchun `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; SA/admin, menejer, registrator — saqlanadi (ega qarori Q2).",
   })
   @ApiParam({ name: 'id', description: 'History id (bigint string)' })
   async findHistoryById(
@@ -4332,7 +4360,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Close shift',
     description:
-      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`).",
+      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`). 63HO6cBU: FILIAL smenasi bitta jami — `closing_balance_card` yuborilsa `closing_balance_cash` ga QO'SHILADI (bitta «Sanalgan summa»), `accounts[]` e'tiborsiz; javobda `expected_balance_card: 0`, `discrepancy_card: null`.",
   })
   @ApiBody({ type: CloseShiftRequestDto })
   async closeShift(
@@ -4770,7 +4798,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena yopish sozlamalari (global + karta bo'yicha)",
     description:
-      "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+      "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH). 63HO6cBU: filial kassasi (`cashbox_type: branch`) uchun `account_check_enabled` DOIM false va `cards: []` (filialda karta yo'q); `branch_account_check_enabled` eskirgan — doim false.",
   })
   async getShiftSettings(
     @Req() req: { user: JwtUser },
@@ -4807,7 +4835,7 @@ export class FinanceGatewayController {
     summary:
       "(kiZgTybn) Smena yopish sozlamalarini o'zgartirish — FAQAT superadmin",
     description:
-      "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, «Kun tartibi» `auto_open` va `late_alert` (ochish va yopish vaqti bir xil — 400 `SHIFT_SCHEDULE_CONFLICT` + `times`; ochish yoqiq-u vaqtsiz yoki xabar yoqiq-u kanalsiz — 400), `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`.",
+      "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, «Kun tartibi» `auto_open` va `late_alert` (ochish va yopish vaqti bir xil — 400 `SHIFT_SCHEDULE_CONFLICT` + `times`; ochish yoqiq-u vaqtsiz yoki xabar yoqiq-u kanalsiz — 400), `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`. 63HO6cBU: `branch_account_check_enabled` ESKIRGAN — qiymat tekshiriladi (boolean bo'lmasa 400), lekin saqlanmaydi; faqat shu kalit yuborilsa ham 200.",
   })
   async updateShiftSettings(
     @Req() req: { user: JwtUser },
@@ -5130,7 +5158,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena hisoboti: naqd + kartalar bo'yicha natijalar",
     description:
-      "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. (BE-B) Har karta qatorida: `photo_status` (not_required | uploaded | pending | missing — `pending`: rasm talab qilingan, yo'q, hali yuklash mumkin: smena ochiq yoki avto-yopilgan ASOSIY kassa smenasining 24 soatlik oynasi ichida; `missing`: oyna yopiq), `late_upload_deadline` (ISO, avto-yopilgan ASOSIY smenada `closed_at + 24 soat`, aks holda null), `late_uploaded` (rasm smena yopilgandan keyin yuklangan), `can_upload_late` (avto-yopilgan ASOSIY smena + oyna ichida VA so'rovchi superadmin / admin — `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` tugmasi). `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+      "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. (BE-B) Har karta qatorida: `photo_status` (not_required | uploaded | pending | missing — `pending`: rasm talab qilingan, yo'q, hali yuklash mumkin: smena ochiq yoki avto-yopilgan ASOSIY kassa smenasining 24 soatlik oynasi ichida; `missing`: oyna yopiq), `late_upload_deadline` (ISO, avto-yopilgan ASOSIY smenada `closed_at + 24 soat`, aks holda null), `late_uploaded` (rasm smena yopilgandan keyin yuklangan), `can_upload_late` (avto-yopilgan ASOSIY smena + oyna ichida VA so'rovchi superadmin / admin — `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` tugmasi). `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404). 63HO6cBU: FILIAL smenasida `data.card: null`, `data.accounts: []`, `data.operations[]` — tur × usul (menejer ham ko'radi, ega qarori Q2), jami bitta.",
   })
   async shiftReport(
     @Req() req: { user: JwtUser } & OriginRequest,
@@ -5469,7 +5497,7 @@ export class FinanceGatewayController {
     summary:
       'Kassa kartalari va hisob raqamlari (balanslar, moslik nazorati) — asosiy yoki filial kassasi',
     description:
-      "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403.",
+      "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403. 63HO6cBU: `branch_id` bilan (filial kassasi) — `cards: []`, `cards_disabled: true` (filial kassasi naqd/kartaga ajralmaydi).",
   })
   @ApiQuery({ name: 'include_inactive', required: false, type: Boolean })
   @ApiQuery({
@@ -5499,7 +5527,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Yangi karta yoki hisob raqam (balans 0)',
     description:
-      'Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta.',
+      "Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta. 63HO6cBU: filial kassasiga (`branch_id`) karta yaratish — 400 «Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q».",
   })
   @ApiBody({ type: CreateCashboxCardRequestDto })
   createCashboxCard(
@@ -5699,7 +5727,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Kartani kassaning Asosiy kartasi qilish',
     description:
-      "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400.",
+      "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400. 63HO6cBU: filial kassasi kartasi — 400 (filialda karta amallari yo'q).",
   })
   @ApiParam({ name: 'id', description: 'Karta ID' })
   makeCashboxCardDefault(
@@ -5743,7 +5771,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "Kartadan kartaga o'tkazma (balance_card o'zgarmaydi)",
     description:
-      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi o'tkazma yozmaydi.",
+      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi o'tkazma yozmaydi. 63HO6cBU: filial kassasi kartalari — 400 (filialda karta amallari yo'q).",
   })
   @ApiHeader({ name: 'Idempotency-Key', required: false })
   @ApiBody({ type: TransferCashboxCardRequestDto })
@@ -5770,7 +5798,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Karta↔naqd konvertatsiya (kassaning umumiy balansi o`zgarmaydi)',
     description:
-      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi konvertatsiya yozmaydi.",
+      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi konvertatsiya yozmaydi. 63HO6cBU: filial kassasi kartasi — 400 (filialda karta amallari yo'q).",
   })
   @ApiHeader({ name: 'Idempotency-Key', required: false })
   @ApiBody({ type: ConvertCashboxCardRequestDto })

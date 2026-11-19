@@ -65,21 +65,7 @@ const headerRows = (snapshot: ShiftReportSnapshot): Array<[string, string]> => [
   ],
 ];
 
-export async function buildXlsx(
-  snapshot: ShiftReportSnapshot,
-): Promise<Buffer> {
-  const workbook = new Workbook();
-  workbook.creator = 'Elchi';
-  const summary = workbook.addWorksheet('Xulosa');
-  summary.columns = [{ width: 28 }, { width: 48 }];
-  for (const row of headerRows(snapshot)) summary.addRow(row);
-  summary.addRow([]);
-  summary.addRow(['NAQD', '']).font = { bold: true };
-  for (const row of moneyRows(snapshot.cash)) summary.addRow(row);
-  summary.addRow([]);
-  summary.addRow(['KARTA', '']).font = { bold: true };
-  for (const row of moneyRows(snapshot.card)) summary.addRow(row);
-
+function addCardsSheet(workbook: Workbook, snapshot: ShiftReportSnapshot) {
   const cards = workbook.addWorksheet('Kartalar');
   cards.columns = [
     { header: 'Karta', width: 28 },
@@ -96,6 +82,30 @@ export async function buildXlsx(
       line.difference,
       AI_STATUS_LABELS[line.ai_status] ?? line.ai_status,
     ]);
+  }
+
+  return cards;
+}
+
+export async function buildXlsx(
+  snapshot: ShiftReportSnapshot,
+): Promise<Buffer> {
+  const workbook = new Workbook();
+  workbook.creator = 'Elchi';
+  const summary = workbook.addWorksheet('Xulosa');
+  summary.columns = [{ width: 28 }, { width: 48 }];
+  for (const row of headerRows(snapshot)) summary.addRow(row);
+  // 63HO6cBU — filial smenasi bitta jami: karta bloki va «Kartalar» varag'i yo'q.
+  const isBranch = snapshot.cashbox_type === 'branch';
+  summary.addRow([]);
+  summary.addRow([isBranch ? 'JAMI' : 'NAQD', '']).font = { bold: true };
+  for (const row of moneyRows(snapshot.cash)) summary.addRow(row);
+  const sheets: ReturnType<Workbook['addWorksheet']>[] = [];
+  if (!isBranch) {
+    summary.addRow([]);
+    summary.addRow(['KARTA', '']).font = { bold: true };
+    for (const row of moneyRows(snapshot.card)) summary.addRow(row);
+    sheets.push(addCardsSheet(workbook, snapshot));
   }
 
   const couriers = workbook.addWorksheet('Kuryerlar');
@@ -143,7 +153,7 @@ export async function buildXlsx(
       ]);
     }
   }
-  for (const sheet of [cards, couriers, markets]) {
+  for (const sheet of [...sheets, couriers, markets]) {
     sheet.getRow(1).font = { bold: true };
   }
   const buffer = await workbook.xlsx.writeBuffer();
@@ -200,11 +210,15 @@ export async function buildPdf(snapshot: ShiftReportSnapshot): Promise<Buffer> {
   doc.fontSize(15).text(t(`Smena #${snapshot.shift_id} hisoboti`));
   doc.moveDown(0.4);
   for (const [label, value] of headerRows(snapshot)) line(label, value);
-  heading('Naqd');
+  // 63HO6cBU — filial smenasi bitta jami (karta bo'limi yo'q).
+  const isBranch = snapshot.cashbox_type === 'branch';
+  heading(isBranch ? 'Jami' : 'Naqd');
   for (const [label, value] of moneyRows(snapshot.cash)) line(label, value);
-  heading('Karta');
-  for (const [label, value] of moneyRows(snapshot.card)) line(label, value);
-  if (snapshot.accounts.length) {
+  if (!isBranch) {
+    heading('Karta');
+    for (const [label, value] of moneyRows(snapshot.card)) line(label, value);
+  }
+  if (!isBranch && snapshot.accounts.length) {
     heading('Kartalar / hisoblar');
     for (const item of snapshot.accounts) {
       line(
