@@ -2587,9 +2587,18 @@ export class OrderSettlementService {
   }
 
   /** 63HO6cBU (PR-C) — bitta market: X filialnikimi va filial ulushi. */
+  /**
+   * 63HO6cBU (PR-C) — (X, M) ulushi. `pending_tokens` (ixtiyoriy, ≤ 200) —
+   * finance hali qo'llanganini bilmagan `branch_to_market` advance
+   * tokenlari: javobdagi `applied_tokens` — ulardan SHU suratda allaqachon
+   * qo'llanganlari. Ulush, (X, M) qoldig'i va M8 belgilari BITTA REPEATABLE
+   * READ suratidan o'qiladi (M8 belgisi FIFO bilan bitta tranzaksiyada
+   * yoziladi) — finance «ulush − qo'llanmagan pending» ni aniq hisoblaydi.
+   */
   async getBranchMarketShare(data: {
     branch_id?: string | null;
     market_id?: string | null;
+    pending_tokens?: unknown;
   }) {
     const branchId = String(data?.branch_id ?? '').trim();
     const marketId = String(data?.market_id ?? '').trim();
@@ -2597,39 +2606,85 @@ export class OrderSettlementService {
     if (!isId(branchId) || !isId(marketId)) {
       this.badRequest("branch_id va market_id raqamli ID bo'lishi kerak");
     }
+    const rawTokens = Array.isArray(data?.pending_tokens)
+      ? (data.pending_tokens as unknown[])
+      : [];
+    if (rawTokens.length > 200) {
+      this.badRequest("pending_tokens ro'yxati juda uzun");
+    }
+    const tokens = [
+      ...new Set(
+        rawTokens
+          .filter((token): token is string => typeof token === 'string')
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0),
+      ),
+    ];
     const orders = this.tableOf(Order);
     const settlements = this.tableOf(OrderSettlement);
-    const [row] = await this.dataSource.query<
-      Array<{ in_branch: boolean; share: string | null }>
-    >(
-      `SELECT EXISTS (
-                SELECT 1 FROM ${orders} o
-                 WHERE o."home_branch_id" = $1 AND o."market_id" = $2
-                   AND o."is_deleted" = false
-              ) AS in_branch,
-              (SELECT COALESCE(SUM(s."market_amount" - s."market_paid_by_branch_amount"), 0)
-                 FROM ${settlements} s
-                 JOIN ${orders} o ON o."id" = s."order_id"
-                WHERE o."home_branch_id" = $1
-                  AND s."branch_id" = $1
-                  AND s."market_id" = $2
-                  AND s."status" = 'courier_settled'
-                  AND s."market_paid_by_branch_at" IS NULL
-                  AND s."is_deleted" = false)::text AS share`,
-      [branchId, marketId],
+    const snapshot = await this.dataSource.transaction(
+      'REPEATABLE READ',
+      async (tx) => {
+        const [row] = await tx.query<
+          Array<{ in_branch: boolean; share: string | null }>
+        >(
+          `SELECT EXISTS (
+                    SELECT 1 FROM ${orders} o
+                     WHERE o."home_branch_id" = $1 AND o."market_id" = $2
+                       AND o."is_deleted" = false
+                  ) AS in_branch,
+                  (SELECT COALESCE(SUM(s."market_amount" - s."market_paid_by_branch_amount"), 0)
+                     FROM ${settlements} s
+                     JOIN ${orders} o ON o."id" = s."order_id"
+                    WHERE o."home_branch_id" = $1
+                      AND s."branch_id" = $1
+                      AND s."market_id" = $2
+                      AND s."status" = 'courier_settled'
+                      AND s."market_paid_by_branch_at" IS NULL
+                      AND s."is_deleted" = false)::text AS share`,
+          [branchId, marketId],
+        );
+        let carry = 0;
+        try {
+          const carries = await tx
+            .getRepository(OrderSettlementBranchMarketCarry)
+            .find({
+              where: {
+                branch_id: branchId,
+                market_id: marketId,
+                isDeleted: false,
+              },
+            });
+          carry = carries.reduce(
+            (sum, item) => sum + (Number(item.amount) || 0),
+            0,
+          );
+        } catch {
+          carry = 0;
+        }
+        let applied: string[] = [];
+        if (tokens.length) {
+          const keyOf = new Map(
+            tokens.map((token) => [this.advanceAppliedKey(token), token]),
+          );
+          const rows = await tx
+            .getRepository(IdempotencyKey)
+            .find({ where: { key: In([...keyOf.keys()]) } });
+          applied = rows
+            .map((item) => keyOf.get(item.key))
+            .filter((token): token is string => !!token);
+        }
+        return { row, carry, applied };
+      },
     );
     return successRes(
       {
         branch_id: branchId,
         market_id: marketId,
-        in_branch: row?.in_branch === true,
+        in_branch: snapshot.row?.in_branch === true,
         // (X, M) qoldig'i ayiriladi — ketma-ket to'lovlar ulushdan oshmaydi.
-        share: money2(
-          (Number(row?.share) || 0) -
-            (await this.loadBranchMarketCarries(branchId))
-              .filter((carry) => String(carry.market_id) === marketId)
-              .reduce((sum, carry) => sum + (Number(carry.amount) || 0), 0),
-        ),
+        share: money2((Number(snapshot.row?.share) || 0) - snapshot.carry),
+        applied_tokens: snapshot.applied,
       },
       200,
       'Branch market share',

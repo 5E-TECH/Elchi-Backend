@@ -592,6 +592,23 @@ describePg(
       await expectInvariants();
     });
 
+    it('12b) ulush + `applied_tokens` bitta suratda: qo`llangan tokenlar qaytadi, noma`lumi — yo`q; ro`yxat > 200 → 400', async () => {
+      const res: any = await service.getBranchMarketShare({
+        branch_id: X,
+        market_id: M,
+        pending_tokens: ['p-1', 'p-2', 'race-1', 'nope', 'p-1', 7],
+      });
+      expect(res.data.applied_tokens.sort()).toEqual(['p-1', 'p-2', 'race-1']);
+      expect(res.data.share).toBeCloseTo((await share(X, M)).share, 2);
+      await expect(
+        service.getBranchMarketShare({
+          branch_id: X,
+          market_id: M,
+          pending_tokens: Array.from({ length: 201 }, (_, i) => `t-${i}`),
+        }),
+      ).rejects.toMatchObject({ error: { statusCode: 400 } });
+    });
+
     it('13) noto`g`ri tomon / summa → 400', async () => {
       await expect(
         service.advanceSettlement({

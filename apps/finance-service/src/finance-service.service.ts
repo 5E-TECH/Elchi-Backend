@@ -14,6 +14,7 @@ import {
   Between,
   DataSource,
   EntityManager,
+  EntityMetadataNotFoundError,
   FindOptionsOrder,
   FindOptionsWhere,
   In,
@@ -77,6 +78,7 @@ import {
   isTransferReceiptPaymentMethod,
   rmqSend,
   OutboxService,
+  OutboxEvent,
   tashkentDayRange,
   toPublicUserSummary,
   type PublicUserSummary,
@@ -5194,6 +5196,124 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * request_id, so a redelivered outbox event is deduped by order-service's
    * runIdempotent and order_settlement is never advanced twice. (Audit I1/I2.)
    */
+  /**
+   * 63HO6cBU (PR-C) — filial → market to'lovining ulush chegarasi, POYGASIZ.
+   *
+   * Gateway ulushni so'rov boshida o'qiydi, daftar (order-service) esa
+   * to'lovni outbox orqali KEYINROQ qo'llaydi — ikki parallel (yoki tez
+   * ketma-ket) to'lov bir ulushni ikki marta ko'rib, ortiqcha to'lardi.
+   * Endi, pul tranzaksiyasi ichida:
+   *   1) `(filial, market)` advisory qulfi (shu juft to'lovlari navbat bilan;
+   *      filial kassasi qatori ham allaqachon qulflangan);
+   *   2) shu juftning hali «qo'llandi» deb tasdiqlanmagan `branch_to_market`
+   *      advance'lari (finance outbox, oxirgi 7 kun) — tokenlari bilan;
+   *   3) order-service'dan ulush + shu tokenlardan qaysilari qo'llangani
+   *      (bitta REPEATABLE READ surati);
+   *   4) samarali ulush = ulush − Σ qo'llanmagan pending; summa undan
+   *      oshsa → 400. Order-service javob bermasa → 503 (pul ko'chmaydi).
+   * (X, M) qoldig'i (`order_settlement_branch_market_carry`) endi faqat
+   * himoya — normal holda paydo bo'lmaydi.
+   */
+  private async assertBranchMarketShareInTx(
+    manager: EntityManager,
+    branchId: string,
+    marketId: string,
+    amount: number,
+  ): Promise<void> {
+    await manager.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+      [`63HO6cBU:branch_to_market:${branchId}:${marketId}`],
+    );
+    const pending = await this.pendingBranchMarketAdvances(
+      manager,
+      branchId,
+      marketId,
+    );
+    let reply: {
+      data?: { share?: unknown; applied_tokens?: unknown };
+    } | null = null;
+    try {
+      reply = await firstValueFrom(
+        this.orderClient
+          .send<{ data?: { share?: unknown; applied_tokens?: unknown } }>(
+            { cmd: 'order.settlement.branch_market_share' },
+            {
+              branch_id: branchId,
+              market_id: marketId,
+              pending_tokens: pending.map((item) => item.token),
+            },
+          )
+          .pipe(timeout(3000)),
+      );
+    } catch {
+      reply = null;
+    }
+    const share = Number(reply?.data?.share);
+    if (!reply?.data || !Number.isFinite(share)) {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+    const applied = new Set(
+      Array.isArray(reply.data.applied_tokens)
+        ? reply.data.applied_tokens.map((token) => String(token))
+        : [],
+    );
+    const inFlight = pending
+      .filter((item) => !applied.has(item.token))
+      .reduce((sum, item) => sum + item.amount, 0);
+    const effective = FinanceServiceService.roundMoney(share - inFlight);
+    if (FinanceServiceService.roundMoney(amount) > effective) {
+      throw new BadRequestException(
+        `Summa filial ulushidan oshmasligi kerak (ulush: ${FinanceServiceService.roundMoney(
+          Math.max(effective, 0),
+        )} so'm)`,
+      );
+    }
+  }
+
+  /**
+   * Shu (filial, market) juftining finance outbox'idagi `branch_to_market`
+   * advance'lari (oxirgi 7 kun, holatidan qat'i nazar — «yuborildi» hali
+   * «qo'llandi» degani emas). Qo'llanganlari order-service javobida
+   * `applied_tokens` bilan chiqarib tashlanadi.
+   */
+  private async pendingBranchMarketAdvances(
+    manager: EntityManager,
+    branchId: string,
+    marketId: string,
+  ): Promise<Array<{ token: string; amount: number }>> {
+    let rows: Array<{ token: string | null; amount: string | null }>;
+    try {
+      rows = await manager
+        .getRepository(OutboxEvent)
+        .createQueryBuilder('e')
+        .select(`e.payload->>'request_id'`, 'token')
+        .addSelect(`e.payload->>'amount'`, 'amount')
+        .where('e.pattern = :pattern', { pattern: 'order.settlement.advance' })
+        .andWhere(`e.payload->>'level' = 'branch_to_market'`)
+        .andWhere(`e.payload->>'match_value' = :match`, {
+          match: `${branchId}:${marketId}`,
+        })
+        .andWhere(`e.created_at > now() - interval '7 days'`)
+        .orderBy('e.created_at', 'DESC')
+        .limit(200)
+        .getRawMany();
+    } catch (error) {
+      // Outbox entity'si ro'yxatdan o'tmagan (faqat test muhiti) — pending yo'q.
+      if (error instanceof EntityMetadataNotFoundError) return [];
+      throw error;
+    }
+    return rows
+      .filter((row) => typeof row.token === 'string' && row.token !== '')
+      .map((row) => ({
+        token: String(row.token),
+        amount: Number(row.amount) || 0,
+      }));
+  }
+
   private async enqueueSettlementAdvance(
     manager: EntityManager,
     level:
@@ -6997,20 +7117,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * Admin market uchun «kassa qarzga ishlaydi» ni yoqqan bo'lsa — o'tadi.
      */
     if (payer.isBranch) {
-      // 63HO6cBU (PR-C) — filial faqat o'z ulushi doirasida to'laydi.
-      const share = Number(data.branch_share);
-      if (data.branch_share == null || !Number.isFinite(share)) {
-        throw new BadRequestException(
-          'Filial ulushi aniqlanmadi — marketga to`lovni qayta urinib ko`ring',
-        );
-      }
-      if (Number(data.amount) > share) {
-        throw new BadRequestException(
-          `Summa filial ulushidan oshmasligi kerak (ulush: ${FinanceServiceService.roundMoney(
-            Math.max(share, 0),
-          )} so'm)`,
-        );
-      }
+      // 63HO6cBU (PR-C) — filial faqat o'z ulushi doirasida to'laydi;
+      // tekshiruv (X, M) qulfi ostida, hali qo'llanmagan to'lovlar ayirilgan.
+      await this.assertBranchMarketShareInTx(
+        manager,
+        payer.userId,
+        String(data.market_id),
+        Number(data.amount),
+      );
     } else {
       await this.assertMarketPayoutWithinDebt(
         String(data.market_id),

@@ -1373,7 +1373,12 @@ export class OrderServiceController {
   /** 63HO6cBU (PR-C) — bitta market: filialnikimi va filial ulushi. */
   @MessagePattern({ cmd: 'order.settlement.branch_market_share' })
   settlementBranchMarketShare(
-    @Payload() data: { branch_id?: string | null; market_id?: string | null },
+    @Payload()
+    data: {
+      branch_id?: string | null;
+      market_id?: string | null;
+      pending_tokens?: unknown;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
