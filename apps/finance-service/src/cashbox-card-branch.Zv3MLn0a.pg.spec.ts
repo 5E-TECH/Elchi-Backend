@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { of } from 'rxjs';
-import { Cashbox_type, PaymentMethod } from '@app/common';
+import {
+  Cashbox_type,
+  Operation_type,
+  PaymentMethod,
+  Source_type,
+} from '@app/common';
 import { CreateCashboxCards1716000000105 } from '../../../migrations/1716000000105-CreateCashboxCards';
 import { CashboxCardDetails1716000000161 } from '../../../migrations/1716000000161-CashboxCardDetails';
 import { FinanceServiceService } from './finance-service.service';
@@ -640,23 +645,28 @@ describePg(
         comment: 'Humo ga',
       });
 
-      // Menejer kirim / chiqim (gateway: cashbox_type BRANCH, user_id = filial).
-      const spent: any = await finance.spendMoney({
+      // Filial kassasidagi qo'lda kirim / chiqim qatorlari (63HO6cBU: menejerning
+      // «Kassadan xarajat» / «To'ldirish» yo'li yopiq — updateBalance orqali).
+      const spent: any = await finance.updateBalance({
         user_id: BRANCH,
         cashbox_type: Cashbox_type.BRANCH,
         amount: 10_000,
-        type: PaymentMethod.CLICK,
+        payment_method: PaymentMethod.CLICK,
         card_id: humo,
         created_by: '25',
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.MANUAL_EXPENSE,
       });
       expect(spent.data.history.card_id).toBe(humo);
-      await finance.fillTheCashbox({
+      await finance.updateBalance({
         user_id: BRANCH,
         cashbox_type: Cashbox_type.BRANCH,
         amount: 4_000,
-        type: PaymentMethod.CLICK,
+        payment_method: PaymentMethod.CLICK,
         card_id: humo,
         created_by: '25',
+        operation_type: Operation_type.INCOME,
+        source_type: Source_type.MANUAL_INCOME,
       });
       let branch = await expectInvariant(BRANCH);
       expect(balances(branch.list)).toEqual([
@@ -668,12 +678,14 @@ describePg(
       // Boshqa kassa (MAIN) kartasi filial operatsiyasida — 403, hech narsa o'zgarmaydi.
       const mainDef = await defaultIdOf();
       await expect(
-        finance.spendMoney({
+        finance.updateBalance({
           user_id: BRANCH,
           cashbox_type: Cashbox_type.BRANCH,
           amount: 1_000,
-          type: PaymentMethod.CLICK,
+          payment_method: PaymentMethod.CLICK,
           card_id: mainDef,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.MANUAL_EXPENSE,
         }),
       ).rejects.toMatchObject({ error: { statusCode: 403 } });
       branch = await expectInvariant(BRANCH);
@@ -743,11 +755,13 @@ describePg(
       );
 
       // Kartasiz — Asosiy karta (avvalgi xatti-harakat).
-      const plain: any = await finance.spendMoney({
+      const plain: any = await finance.updateBalance({
         user_id: BRANCH,
         cashbox_type: Cashbox_type.BRANCH,
         amount: 2_000,
-        type: PaymentMethod.CLICK,
+        payment_method: PaymentMethod.CLICK,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.MANUAL_EXPENSE,
       });
       expect(plain.data.history.card_id).toBeNull();
       branch = await expectInvariant(BRANCH);
@@ -765,11 +779,13 @@ describePg(
         comment: 'x',
       });
       // Kartasiz CLICK chiqim — eski Asosiy kartadan.
-      await finance.spendMoney({
+      await finance.updateBalance({
         user_id: BRANCH,
         cashbox_type: Cashbox_type.BRANCH,
         amount: 5_000,
-        type: PaymentMethod.CLICK,
+        payment_method: PaymentMethod.CLICK,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.MANUAL_EXPENSE,
       });
       let state = await expectInvariant(BRANCH);
       expect(balances(state.list)).toEqual([
@@ -807,11 +823,13 @@ describePg(
       });
 
       // Endi kartasiz CLICK kirim — yangi Asosiy (Humo) ga.
-      await finance.fillTheCashbox({
+      await finance.updateBalance({
         user_id: BRANCH,
         cashbox_type: Cashbox_type.BRANCH,
         amount: 1_000,
-        type: PaymentMethod.CLICK,
+        payment_method: PaymentMethod.CLICK,
+        operation_type: Operation_type.INCOME,
+        source_type: Source_type.MANUAL_INCOME,
       });
       state = await expectInvariant(BRANCH);
       expect(balances(state.list)).toEqual([

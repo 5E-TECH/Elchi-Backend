@@ -355,7 +355,7 @@ describePg('B4 (1bz6tOle, IgR4FVsR) — haqiqiy Postgres', () => {
       );
     });
 
-    it('⭐ invariant: N ta qo`lda operatsiyadan keyin SUM(kassa manual) == SUM(FBH manual) (MAIN + BRANCH)', async () => {
+    it('⭐ invariant: N ta qo`lda operatsiyadan keyin SUM(kassa manual) == SUM(FBH manual) (MAIN; filialda qo`lda operatsiya yo`q — 63HO6cBU)', async () => {
       await seed('0', Cashbox_type.MAIN, 2_000_000, 500_000);
       await seed('15', Cashbox_type.BRANCH, 300_000, 0);
       const ops: Array<() => Promise<unknown>> = [
@@ -376,16 +376,14 @@ describePg('B4 (1bz6tOle, IgR4FVsR) — haqiqiy Postgres', () => {
           }),
         () =>
           service.spendMoney({
-            user_id: '15',
-            cashbox_type: Cashbox_type.BRANCH,
+            user_id: '1',
             amount: 50_000,
             dedup_epoch: 'n-3',
             financial_ledger: true,
           }),
         () =>
           service.fillTheCashbox({
-            user_id: '15',
-            cashbox_type: Cashbox_type.BRANCH,
+            user_id: '1',
             amount: 20_000,
             dedup_epoch: 'n-4',
             financial_ledger: true,

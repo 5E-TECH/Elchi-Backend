@@ -79,21 +79,11 @@ describe('IgR4FVsR — gateway qo`lda kirim/chiqim P&L bayrog`i', () => {
     );
   });
 
-  it('fill (menejer, BRANCH) — financial_ledger: true va cashbox_type branch', async () => {
+  it('63HO6cBU — fill (menejer) → 403, finance chaqirilmaydi', async () => {
     const env = setup();
-    await env.controller.fillCashbox(
-      manager,
-      { amount: 70_000 } as any,
-      'idem-2',
-    );
-
-    expect(env.financeClient.send).toHaveBeenCalledWith(
-      { cmd: 'finance.cashbox.fill' },
-      expect.objectContaining({
-        user_id: '15',
-        cashbox_type: 'branch',
-        financial_ledger: true,
-      }),
-    );
+    await expect(
+      env.controller.fillCashbox(manager, { amount: 70_000 } as any, 'idem-2'),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(env.financeClient.send).not.toHaveBeenCalled();
   });
 });

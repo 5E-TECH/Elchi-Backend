@@ -253,7 +253,8 @@ describePg('T3-1 kassa cheki — haqiqiy Postgres', () => {
   it.each([
     [['superadmin'], 'courier_to_hq', undefined, 200],
     [['admin'], 'branch_to_hq', undefined, 200],
-    [['manager'], 'manual_expense', '15', 200],
+    // 63HO6cBU (PR-B) — menejerda qo'lda chiqim yo'q → chek ham yo'q.
+    [['manager'], 'manual_expense', '15', 403],
     [['manager'], 'courier_to_hq', '15', 403],
     [['manager'], 'branch_to_hq', '15', 403],
     [['manager'], 'manual_expense', undefined, 403],
@@ -302,16 +303,24 @@ describePg('T3-1 kassa cheki — haqiqiy Postgres', () => {
     ).resolves.toMatchObject({ statusCode: 200 });
   });
 
-  it('⭐ qoralama: draft, menejer filiali, sozlama snapshot, jurnal (rasmsiz)', async () => {
+  it('⭐ qoralama: draft, admin (filialsiz), sozlama snapshot, jurnal (rasmsiz); menejer — 403 (63HO6cBU)', async () => {
     await service.updateSettings({
       requester_id: '1',
       requester_roles: SA,
       manual_expense: { ai_enabled: false },
     });
+    expect(
+      await rpcError(
+        draft({
+          requester_id: '31',
+          requester_roles: ['manager'],
+          branch_id: '15',
+        }),
+      ),
+    ).toMatchObject({ statusCode: 403 });
     const res = await draft({
       requester_id: '31',
-      requester_roles: ['manager'],
-      branch_id: '15',
+      requester_roles: ['admin'],
     });
     expect(res).toMatchObject({
       statusCode: 201,
@@ -322,7 +331,7 @@ describePg('T3-1 kassa cheki — haqiqiy Postgres', () => {
       .findOneByOrFail({ id: res.data.receipt_id });
     expect(row).toMatchObject({
       state: 'draft',
-      branch_id: '15',
+      branch_id: null,
       uploaded_by: '31',
       photo_required_snap: true,
       ai_enabled_snap: false,

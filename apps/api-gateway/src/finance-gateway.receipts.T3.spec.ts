@@ -174,19 +174,11 @@ describe('T3-1 — gateway: kassa cheki sozlamalari va yuklash', () => {
     });
   });
 
-  it('menejer: filial JWT`dan uzatiladi', async () => {
+  it('63HO6cBU — menejer chek yuklay olmaydi (403), fayl yuklanmaydi', async () => {
     happyFinance();
-    file.send.mockImplementation(() => of({ data: { key: KEY } }));
     const res = await upload('manager', 'manual_expense', jpegWithExif());
-    expect(res.status).toBe(201);
-    expect(cmd(finance.send, 'finance.receipt.upload_check')[0][1]).toEqual({
-      kind: 'manual_expense',
-      requester_roles: ['manager'],
-      branch_id: '13',
-    });
-    expect(
-      cmd(finance.send, 'finance.receipt.create_draft')[0][1].branch_id,
-    ).toBe('13');
+    expect(res.status).toBe(403);
+    expect(file.send).not.toHaveBeenCalled();
   });
 
   it('⭐ rasm o`chiq (RECEIPT_DISABLED) — fayl file-service`ga YUBORILMAYDI, kod FE`ga yetadi', async () => {
@@ -281,7 +273,7 @@ describe('T3-1 — gateway: kassa cheki sozlamalari va yuklash', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('rollar: GET — SA/admin/menejer; PATCH — faqat SA; yuklash — SA/admin/menejer', () => {
+  it('rollar: GET — SA/admin/menejer; PATCH — faqat SA; yuklash — SA/admin (63HO6cBU)', () => {
     const proto = FinanceGatewayController.prototype;
     const handler = (name: keyof FinanceGatewayController): object =>
       Object.getOwnPropertyDescriptor(proto, name)?.value as object;
@@ -291,9 +283,7 @@ describe('T3-1 — gateway: kassa cheki sozlamalari va yuklash', () => {
       ['admin', 'manager', 'superadmin'].sort(),
     );
     expect(roles('updateReceiptSettings')).toEqual(['superadmin']);
-    expect(roles('uploadReceipt')).toEqual(
-      ['admin', 'manager', 'superadmin'].sort(),
-    );
+    expect(roles('uploadReceipt')).toEqual(['admin', 'superadmin'].sort());
     for (const name of [
       'getReceiptSettings',
       'updateReceiptSettings',
