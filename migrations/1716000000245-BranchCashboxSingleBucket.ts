@@ -120,13 +120,18 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
     // Y-1/Y-2: shu yurishda harakat olgan har karta — kesim harakatdan KEYIN
     // (clock_timestamp: db-prepare 240–245 ni bitta tranzaksiyada yuradi,
     // now() esa tranzaksiya boshi — oynadagi eski servis to'lovi kesimdan
-    // chiqib qolardi). Avvalgi (up → down → up) qiymat ustidan yoziladi.
+    // chiqib qolardi). Faqat kesimi YO'Q kartaga: down() tiklangan kassa
+    // kartalari kesimini tozalaydi (u yerda yangi kesim yoziladi);
+    // tiklanmagan filial kartasi esa BIRINCHI kesimini saqlaydi — aks holda
+    // rollback → eski kod → qayta deploy'dan keyin uning ko'chirmasi yangi
+    // kod davri qatorlarini yig'ib, noto'g'ri qoldiqdan ochilardi.
     await queryRunner.query(`
       UPDATE "finance_schema"."cashbox_cards" c
          SET "deactivated_at" = clock_timestamp()
         FROM "finance_schema"."cashbox_card_movements" m
        WHERE m."dedup_epoch" =
              'migration-245:card:' || c."id" || ':' || txid_current()
+         AND c."deactivated_at" IS NULL
     `);
 
     // 1) Kassa: zaxira (faqat karta qismi bor qatorlar) → bitta jami.
