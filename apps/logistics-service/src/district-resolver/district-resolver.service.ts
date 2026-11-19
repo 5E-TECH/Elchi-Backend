@@ -359,6 +359,11 @@ const RU_FROM_WORDS: ReadonlySet<string> = new Set([
   'vozle',
   'okolo',
   'bliz',
+  // r15: o'zbekcha jo'natuvchi so'zlari ("jo'natuvchi: г. X").
+  'jonatuvchi',
+  'jonatuvchisi',
+  'yuboruvchi',
+  'yuboruvchisi',
 ]);
 
 /**
@@ -485,6 +490,17 @@ const LANDMARK_AFTER_WORDS: ReadonlySet<string> = new Set([
   'orqasida',
   'qarshisida',
   'chegarasida',
+  // r15: "X tumaniga boradigan yo'lda", "X tumani bilan chegarada", "X р-н
+  // рядом" (vergulsiz rus tartibi).
+  'boradigan',
+  'ketadigan',
+  'chiqadigan',
+  'yolda',
+  'chegarada',
+  'ryadom',
+  'vozle',
+  'okolo',
+  'bliz',
 ]);
 const LANDMARK_BEFORE_WORDS: ReadonlySet<string> = new Set([
   'moljal',
@@ -496,6 +512,16 @@ const LANDMARK_BEFORE_WORDS: ReadonlySet<string> = new Set([
   'bliz',
 ]);
 
+/** r15: `tokens[j]` joy belgisining oxirimi ("tumani", "sh", "р-н", "t."). */
+function placeMarkEndsAt(tokens: readonly string[], j: number): boolean {
+  const w = tokens[j] ?? '';
+  return (
+    PLACE_AFTER_WORDS.has(w) ||
+    w === TUMAN_T_ABBR_TOKEN ||
+    (w === 'n' && tokens[j - 1] === 'r')
+  );
+}
+
 /** r14 (S2): `tokens[start..end)` dagi nom mo'ljalmi (`LANDMARK_*`). */
 function landmarkAt(
   tokens: readonly string[],
@@ -503,9 +529,13 @@ function landmarkAt(
   end: number,
   sepBefore: ReadonlySet<number>,
 ): boolean {
+  const before = tokens[start - 1] ?? '';
   if (
     !sepBefore.has(start) &&
-    LANDMARK_BEFORE_WORDS.has(tokens[start - 1] ?? '')
+    LANDMARK_BEFORE_WORDS.has(before) &&
+    // r15: "Бандихан р-н рядом Jarqo'rg'on sh." - "рядом" oldingi belgili
+    // nomniki (u mo'ljal), keyingi nom esa manzil.
+    !(!sepBefore.has(start - 1) && placeMarkEndsAt(tokens, start - 2))
   ) {
     return true;
   }
@@ -518,12 +548,50 @@ function landmarkAt(
     j += 2;
     span = 2;
   }
-  // Belgisiz nom - faqat darhol keyingi so'z ("Kasbi yonida").
+  // Belgisiz nom - faqat darhol keyingi so'z ("Kasbi yonida"). r15: "bilan"
+  // oraliq so'z ("X tumani bilan chegarada").
   for (let k = 0; k < span && j + k < tokens.length; k++) {
     if (sepBefore.has(j + k)) break;
     if (LANDMARK_AFTER_WORDS.has(tokens[j + k])) return true;
+    if (tokens[j + k] === 'bilan' && span < 3) span++;
   }
   return false;
+}
+
+/**
+ * r15: jo'natuvchi so'zi + nom ("otpravitel Do'stlik sh.", "jo'natuvchi:
+ * Buloqboshi sh.") - jo'natish joyi: yetkazish manzili ham, raqib ham emas.
+ */
+const SENDER_WORDS: ReadonlySet<string> = new Set([
+  'otpravitel',
+  'otpravitelya',
+  'jonatuvchi',
+  'jonatuvchisi',
+  'yuboruvchi',
+  'yuboruvchisi',
+]);
+/**
+ * r15: jo'natish joyi bo'laklari (translit matnda) - "из г. X", "рядом с г.
+ * X", "отправитель: р-н X", "jo'natuvchi: X sh." - 4-usulning joy belgisi
+ * (`PLACE_STRICT_RE`) ulardan olinmaydi: "рядом с г. Карши" - Karshi TUMANi
+ * avto emas.
+ */
+const ORIGIN_CLAUSE_RES: readonly RegExp[] = [
+  /(?:^|[^a-z])(?:iz|s|ot|otkuda|otpravitel[a-z]*|ryadom|vozle|okolo|bliz|jonatuvchi[a-z]*|yuboruvchi[a-z]*)(?:\s+so?)?[\s:,.-]*(?:g\.|gorod\b|r-n\b|rayon[a-z]*\b)\s*[a-z-]+/g,
+  /(?:^|[^a-z])(?:otpravitel[a-z]*|jonatuvchi[a-z]*|yuboruvchi[a-z]*)[\s:-]*[a-z-]+(?:\s+(?:sh\.?|g\.|t\.|shahri|shahar|tumani|tuman|rayon|r-n)(?![a-z]))?/g,
+];
+function stripOriginClauses(translitText: string): string {
+  let out = translitText;
+  for (const re of ORIGIN_CLAUSE_RES) out = out.replace(re, ' ');
+  return out;
+}
+
+function senderAt(
+  tokens: readonly string[],
+  i: number,
+  sepBefore: ReadonlySet<number>,
+): boolean {
+  return !sepBefore.has(i) && SENDER_WORDS.has(tokens[i - 1] ?? '');
 }
 
 /**
@@ -643,6 +711,28 @@ const CAP_T_ANY_RE =
 const LOWER_T_ANY_RE =
   /([\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,})(?:\s*-\s*|\.\s*|\s+)[t\u0442]\./gu;
 /** Faqat katta "T." bilan yozilgan nomlar (skelet; kichik "t." bilan ham - yo'q). */
+/**
+ * r15 (S1): tuman nomi bilan bir xil yoziladigan keng tarqalgan odam ismlari
+ * ("Furqat T.", "Shirin T.", "Kitob T.") - katta "T." bilan bunday nom hech
+ * qachon tuman belgisi deb qabul qilinmaydi. `geoFold` shaklida
+ * ("Sherin", "Gulistan" ham). Kengaytirish uchun shu ro'yxatga qo'shing.
+ */
+export const PERSON_NAME_WORDS: readonly string[] = [
+  'Furqat',
+  'Shirin',
+  'Muborak',
+  'Guliston',
+  'Navbahor',
+  'Marhamat',
+  'Nurafshon',
+  'Nishon',
+  "Bo'ston",
+  'Kitob',
+];
+const PERSON_NAME_FOLDS: ReadonlySet<string> = new Set(
+  PERSON_NAME_WORDS.map((n) => geoFold(geoSkeleton(normGeo(n)))),
+);
+
 function capitalAbbrNames(text: string): Set<string> {
   const lower = new Set<string>();
   for (const m of text.matchAll(LOWER_T_ANY_RE)) {
@@ -719,11 +809,15 @@ function explicitOtherName(
           (w === 'n' && tokens[j - 1] === 'r')) &&
         !RU_FROM_WORDS.has(tokens[w === 'n' ? j - 2 : j - 1] ?? '');
       for (let k = 1; k <= 3; k++) {
+        const afterName = after && j >= k ? tokens.slice(j - k, j) : null;
         for (const name of [
-          after && j >= k ? tokens.slice(j - k, j) : null,
+          afterName,
           before ? tokens.slice(j + 1, j + 1 + k) : null,
         ]) {
           if (!name || name.length !== k) continue;
+          // r15: "otpravitel X sh." - jo'natish joyi, boshqa nom emas.
+          if (name === afterName && SENDER_WORDS.has(tokens[j - k - 1] ?? ''))
+            continue;
           const sk = name.join('');
           if (
             heads.has(sk) &&
@@ -1510,6 +1604,10 @@ export function resolveDistrictText(
   const placeText = `${q.full_address}, ${q.address}`;
   const strictPlaceSignal =
     !!q.district_name || PLACE_STRICT_RE.test(translit(placeText));
+  /** r15: jo'natish joyi bo'laklarisiz (`stripOriginClauses`) - 4-usul uchun. */
+  const strictNoOrigin =
+    !!q.district_name ||
+    PLACE_STRICT_RE.test(stripOriginClauses(translit(placeText)));
   /**
    * r12: 2b zaif moslik uchun PR'dagi yangi belgilar. "Y tumanida/tum." -
    * faqat Y topilgan nom bo'lsa. "Y t." - Y topilgan nom yoki qidiruv
@@ -1524,8 +1622,9 @@ export function resolveDistrictText(
     (poolInfo.heads ??= headsOf(pool));
   const placeSignalFor = (
     list: readonly PreparedDistrict[],
+    strict = strictPlaceSignal,
   ): 'strict' | 'own' | 'outside' | 'capOwn' | 'capOutside' | null => {
-    if (strictPlaceSignal) return 'strict';
+    if (strict) return 'strict';
     const heads = headsOf(list);
     if (suffixFor(placeText, heads)) return 'own';
     const outside = poolHeads();
@@ -1593,7 +1692,12 @@ export function resolveDistrictText(
           if (AMBIGUOUS_REGION_WORDS.has(w)) continue;
           if (opts.hasOrigin && REGION_BASE_SKELS.has(w)) continue;
           // r14 (B2): "из г. X", "с г. X" - jo'natish joyi, raqib emas.
-          if (ruOriginAt(tokens, i, sepBefore)) break;
+          if (
+            ruOriginAt(tokens, i, sepBefore) ||
+            senderAt(tokens, i, sepBefore)
+          ) {
+            break;
+          }
           // Vergul bilan ajralgan keyingi so'z bu nomga tegishli emas.
           const joined = !sepBefore.has(i + k);
           const next = joined ? (tokens[i + k] ?? '') : '';
@@ -1763,6 +1867,8 @@ export function resolveDistrictText(
   const tokenInfos = addressTexts.map(addressTokens);
   /** r13: 2b ziddiyati - 4-usul topmasa shu nomzodlar. */
   let deferred: PreparedDistrict[] = [];
+  /** r15: 2b'da faqat jo'natish joyi sifatida uchragan nomlar (4-usulda ham). */
+  const originIds = new Set<string>();
   /** r14 (S2): 2b'da mo'ljal sifatida topilgan nomlar (4-usulda raqib emas). */
   let landmarkList: PreparedDistrict[] = [];
   /**
@@ -1843,8 +1949,9 @@ export function resolveDistrictText(
     allowOutside: boolean,
     /** r14 (S2): mo'ljal nomlari - raqib emas (belgisi ularniki). */
     landmarks: readonly PreparedDistrict[] = [],
+    strict = strictPlaceSignal,
   ): 'ok' | 'none' | 'rival' | 'soft' => {
-    const signal = placeSignalFor(list);
+    const signal = placeSignalFor(list, strict);
     const outsideSignal = signal === 'outside' || signal === 'capOutside';
     if (!signal || (outsideSignal && !allowOutside)) return 'none';
     const own = landmarks.length ? [...list, ...landmarks] : list;
@@ -1888,7 +1995,7 @@ export function resolveDistrictText(
     const newMarkWord = new Map<string, string>();
     const devMarked = new Set<string>();
     // r12: "X tumanidan / tum-dan / tumani dan" - jo'natish joyi (r7 S3).
-    const originMarked = new Set<string>();
+    const originMarked = originIds;
     // r12: uy raqamisiz yalang'och moslik ("Qarshi, ..."; "Navoiy 5" emas).
     const plainWeak = new Set<string>();
     // r13: qoidaviy variantsiz (dev ham ko'radigan) moslik.
@@ -2058,7 +2165,10 @@ export function resolveDistrictText(
           // r14 (B2): rus old qo'shimchasi - "из г. X", "с г. X", "рядом с г.
           // X", "отправитель: г. X" - jo'natish joyi / mo'ljal, yetkazish
           // belgisi emas.
-          if (ruOriginAt(tokens, i, sepBefore)) {
+          if (
+            ruOriginAt(tokens, i, sepBefore) ||
+            senderAt(tokens, i, sepBefore)
+          ) {
             originMarked.add(d.id);
             continue;
           }
@@ -2122,6 +2232,35 @@ export function resolveDistrictText(
       else if (best === 'weak') weak.push(d);
     }
     if (strong.length || weak.length) stage = 'address';
+    // r15 (S1): katta "X T." nom bo'yicha qabul qilinadi (r14 da hech qachon
+    // emas edi) - agar X keng tarqalgan ism emas (`PERSON_NAME_FOLDS`), oldida
+    // oluvchi so'zi yo'q (`dropRecipientInitials` olib tashlagan) va matnda
+    // boshqa yalang'och joy nomi yo'q bo'lsa: "Kasbi T., Navoiy 5" - avto,
+    // "Furqat T., Navoiy 5" / "Qarshi, Navoiy 5, Kasbi T." - nomzod.
+    for (const d of strong) {
+      if (!capMarked.has(d.id) || firmMarked.has(d.id)) continue;
+      const word = newMarkWord.get(d.id) ?? d.skel;
+      const lasts = [...abbrAt.values()]
+        .filter((a) => a.d === d)
+        .map((a) => a.last);
+      if (
+        PERSON_NAME_FOLDS.has(foldOf(word)) ||
+        lasts.some((l) => PERSON_NAME_FOLDS.has(foldOf(l)))
+      ) {
+        continue;
+      }
+      const otherBare = [...strong, ...weak].some(
+        (o) =>
+          o !== d &&
+          !o.regionNamed &&
+          plainWeak.has(o.id) &&
+          !originMarked.has(o.id),
+      );
+      if (otherBare) continue;
+      firmMarked.add(d.id);
+      addressKind.set(d.id, 'tuman');
+      for (const l of lasts) capNames.delete(l);
+    }
     const landmarks = [...landmarkMarked.values()].filter(
       (d) => !strong.includes(d) && !weak.includes(d),
     );
@@ -2306,6 +2445,16 @@ export function resolveDistrictText(
       const signal = weakSignal(matches, true, landmarks);
       if (signal === 'none') forceCandidate = true;
       if (signal === 'rival' || signal === 'soft') candidateOnly = true;
+      // r15: belgi faqat jo'natish joyiniki ("из г. Карши") va moslik uy
+      // raqamli ko'cha ("Navoiy 5") - avto emas. Yalang'och nom ("Payariq,
+      // ..., с г. Джамбай") esa dev kabi qoladi.
+      if (
+        strictPlaceSignal &&
+        !strictNoOrigin &&
+        matches.some((d) => !plainWeak.has(d.id))
+      ) {
+        candidateOnly = true;
+      }
       if (matches.some((d) => softTumanT.has(d.id))) candidateOnly = true;
       // Operator tuman nomini yozgan, lekin u topilmadi — manzildagi so'z
       // bilan almashtirish TAXMIN.
@@ -2365,9 +2514,12 @@ export function resolveDistrictText(
         // belgisi EMAS; havzadan tashqaridagi "Name T." (S2) ham bu yerda
         // belgi emas (dev kabi nomzod); "Пахтаабад, Мархамат туманига
         // яқин" - yashirin boshqa joy nomi bilan avto emas.
-        const signal = weakSignal(matches, false, landmarkList);
+        const signal = weakSignal(matches, false, landmarkList, strictNoOrigin);
         if (signal === 'none') forceCandidate = true;
         if (signal === 'rival' || signal === 'soft') candidateOnly = true;
+        // r15: 4-usul jo'natish joyining o'zini ("из г. Карши") topdi - avto
+        // emas.
+        if (matches.some((d) => originIds.has(d.id))) candidateOnly = true;
         // D3: operator yozgan tuman nomi so'zma-so'z topilmadi — korpus
         // ichidagi qism ("Quvasoy" ichida "Quva") faqat nomzod.
         if (dq) candidateOnly = true;
