@@ -387,10 +387,8 @@ describe('FinanceServiceService.myCashbox', () => {
       }),
     );
     // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
-    // 63HO6cBU (N10): `transfer_id` siz eski kuryer to`lovi — `branch_leg`.
-    expect(response.data.cashboxHistory).toEqual([
-      { ...withUsers(courierPayment), branch_leg: true },
-    ]);
+    // 63HO6cBU (Y-3): manbasi kuryer bo'lmagan qator — `branch_leg` yo'q.
+    expect(response.data.cashboxHistory).toEqual([withUsers(courierPayment)]);
   });
 
   it('filters cashbox history by sourceTypes when requested', async () => {
@@ -431,10 +429,8 @@ describe('FinanceServiceService.myCashbox', () => {
         .source_type,
     ).toBeDefined();
     // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
-    // 63HO6cBU (N10): `transfer_id` siz eski kuryer to`lovi — `branch_leg`.
-    expect(response.data.cashboxHistory).toEqual([
-      { ...withUsers(courierPayment), branch_leg: true },
-    ]);
+    // 63HO6cBU (Y-3): manbasi kuryer bo'lmagan qator — `branch_leg` yo'q.
+    expect(response.data.cashboxHistory).toEqual([withUsers(courierPayment)]);
   });
 });
 

@@ -579,6 +579,22 @@ export class ShiftAccountCheckService {
       ) {
         throw new BadRequestException("O'zgartiriladigan sozlama berilmadi");
       }
+      // Y-4: faqat eskirgan filial kaliti — hech narsa o'zgarmaydi: tranzaksiya
+      // va audit yozuvisiz joriy ko'rinish (old == new audit yozilmasin).
+      if (!globals.length && !cardPatches.length && !automation.length) {
+        const current = await this.loadGlobalSettings();
+        return successRes(
+          {
+            ...current,
+            ...(await this.loadAutomationSettings()),
+            ...settingsView(current, 'main'),
+            cashbox_type: 'main',
+            cards: [],
+          },
+          200,
+          'Shift check settings updated',
+        );
+      }
 
       const before = {
         ...(await this.loadGlobalSettings()),

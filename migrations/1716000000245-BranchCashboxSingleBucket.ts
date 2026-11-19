@@ -20,8 +20,9 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * 0) (N1) Har filial kartasining qoldig'i jamiga o'tgani JURNALGA yoziladi:
  *    bitta `cashbox_card_movements` qatori (nomli — `card.balance`, Asosiy —
  *    `balance_card − Σ nomli`), izoh «Migratsiya 245: karta qoldig'i
- *    jamiga», `dedup_epoch` = `migration-245:card:<id>` (qayta yurganda
- *    ikkinchi qator yozilmaydi). Musbat — `card_to_cash`, manfiy —
+ *    jamiga», `dedup_epoch` = `migration-245:card:<id>:<txid>` (har yurish
+ *    noyob; qayta yurganda qoldiq 0 — qator yozilmaydi; up → down → up da
+ *    yangi qator). Vaqt — `clock_timestamp()` (tranzaksiya boshi emas). Musbat — `card_to_cash`, manfiy —
  *    `cash_to_card`. Shu bilan eski karta ko'chirmasi (`getLedger`, joriy
  *    qoldiqdan orqaga hisoblanadi) to'g'ri ochilish/yopilish ko'rsatadi.
  *    `cashbox_cards.deactivated_at` (yangi, nullable) — nofaol qilingan vaqt:
@@ -36,7 +37,12 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * yuklamali vaqtda. 241/243/244 indekslari CONCURRENTLY'siz: eski
  * finance-service ishlab turgan paytda filial pul tranzaksiyasi bilan
  * deadlock bo'lishi mumkin — shunda deploy'ni (db-prepare) qayta yurgizing,
- * hammasi bitta tranzaksiya, yarim holat qolmaydi. `lock_timeout` 5 s (241/243/244 kabi): ochiq pul yozuvi
+ * hammasi bitta tranzaksiya, yarim holat qolmaydi.
+ * ORQAGA QAYTARISH (F4): kod revert'idan keyin down() (faqat jami o'zgarmagan
+ * kassalarda bo'linish tiklanadi); so'ng ochiq filial smenalarini yopib-qayta
+ * oching, arxiv filial karta ko'chirmalariga qaramang (eski kod yangi kodning
+ * filial `click` qatorlarini karta harakati deb o'qiydi).
+ * `lock_timeout` 5 s (241/243/244 kabi): ochiq pul yozuvi
  * tranzaksiyasi bo'lsa UPDATE uzoq kutmaydi — migratsiya yiqiladi, qayta
  * yurgiziladi. Faqat BRANCH qatorlari (filiallar soni — o'nlab) qulflanadi.
  */
@@ -93,10 +99,12 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
          WHERE cb."cashbox_type" = 'branch' AND c."is_deleted" = false
       )
       INSERT INTO "finance_schema"."cashbox_card_movements"
-        ("type", "cashbox_id", "from_card_id", "to_card_id", "amount",
+        ("createdAt", "updatedAt",
+         "type", "cashbox_id", "from_card_id", "to_card_id", "amount",
          "balance_after_from", "balance_after_to", "comment", "created_by",
          "dedup_epoch")
-      SELECT CASE WHEN p.amount > 0 THEN 'card_to_cash' ELSE 'cash_to_card' END,
+      SELECT clock_timestamp(), clock_timestamp(),
+             CASE WHEN p.amount > 0 THEN 'card_to_cash' ELSE 'cash_to_card' END,
              p."cashbox_id",
              CASE WHEN p.amount > 0 THEN p.card_id END,
              CASE WHEN p.amount < 0 THEN p.card_id END,
@@ -105,14 +113,20 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
              CASE WHEN p.amount < 0 THEN 0 END,
              'Migratsiya 245: karta qoldig''i jamiga',
              NULL,
-             'migration-245:card:' || p.card_id
+             'migration-245:card:' || p.card_id || ':' || txid_current()
         FROM parts p
        WHERE p.amount <> 0
-         AND NOT EXISTS (
-           SELECT 1 FROM "finance_schema"."cashbox_card_movements" m
-            WHERE m."cashbox_id" = p."cashbox_id"
-              AND m."dedup_epoch" = 'migration-245:card:' || p.card_id
-         )
+    `);
+    // Y-1/Y-2: shu yurishda harakat olgan har karta — kesim harakatdan KEYIN
+    // (clock_timestamp: db-prepare 240–245 ni bitta tranzaksiyada yuradi,
+    // now() esa tranzaksiya boshi — oynadagi eski servis to'lovi kesimdan
+    // chiqib qolardi). Avvalgi (up → down → up) qiymat ustidan yoziladi.
+    await queryRunner.query(`
+      UPDATE "finance_schema"."cashbox_cards" c
+         SET "deactivated_at" = clock_timestamp()
+        FROM "finance_schema"."cashbox_card_movements" m
+       WHERE m."dedup_epoch" =
+             'migration-245:card:' || c."id" || ':' || txid_current()
     `);
 
     // 1) Kassa: zaxira (faqat karta qismi bor qatorlar) → bitta jami.
@@ -146,7 +160,7 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
       UPDATE "finance_schema"."cashbox_cards" c
          SET "is_active" = false,
              "balance" = 0,
-             "deactivated_at" = COALESCE(c."deactivated_at", now())
+             "deactivated_at" = COALESCE(c."deactivated_at", clock_timestamp())
         FROM "finance_schema"."cashboxes" cb
        WHERE cb."id" = c."cashbox_id"
          AND cb."cashbox_type" = 'branch'
@@ -155,7 +169,7 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
 
     await queryRunner.query(`
       UPDATE "finance_schema"."cashbox_cards" c
-         SET "deactivated_at" = now()
+         SET "deactivated_at" = clock_timestamp()
         FROM "finance_schema"."cashboxes" cb
        WHERE cb."id" = c."cashbox_id"
          AND cb."cashbox_type" = 'branch'
@@ -227,7 +241,13 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
     await queryRunner.query(`
       UPDATE "finance_schema"."cashbox_cards" c
          SET "balance" = b."balance",
-             "is_active" = b."is_active"
+             "is_active" = b."is_active",
+             -- F3: up() va down() orasida (qoldiq 0 bilan) o'chirilgan pulli
+             -- karta — to'liq orqaga (aks holda qoldig'ini «Asosiy karta»
+             -- yutardi). 245 dan keyin filial kartasi yaratilmaydi — nom
+             -- to'qnashuvi yo'q.
+             "is_deleted" = CASE WHEN b."balance" <> 0 THEN false
+                                 ELSE c."is_deleted" END
         FROM "finance_schema"."branch_card_backup_245" b
        WHERE b."card_id" = c."id"
          AND (
@@ -247,7 +267,18 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
              "opening_balance_card" = b."opening_balance_card"
         FROM "finance_schema"."branch_shift_backup_245" b
        WHERE b."shift_id" = s."id" AND s."status" = 'open'
-         AND s."cashbox_user_id" IN (SELECT r."user_id" FROM (${restorable}) r)
+         -- F2: kassasiz / karta qismi 0 (zaxirasiz kassa) filial smenasi ham
+         -- tiklanadi; faqat jami o'zgargan (tiklanmaydigan) kassa smenasi —
+         -- jami bilan qoladi.
+         AND COALESCE(s."cashbox_user_id", 0) NOT IN (
+           SELECT cb."user_id"
+             FROM "finance_schema"."cashboxes" cb
+             JOIN "finance_schema"."branch_cashbox_backup_245" bc
+               ON bc."cashbox_id" = cb."id"
+            WHERE cb."cashbox_type" = 'branch'
+              AND cb."user_id" IS NOT NULL
+              AND cb."id" NOT IN (SELECT r."id" FROM (${restorable}) r)
+         )
     `);
     await queryRunner.query(`
       UPDATE "finance_schema"."cashboxes" cb
@@ -267,7 +298,13 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
     await queryRunner.query(`
       UPDATE "finance_schema"."cashbox_cards" c
          SET "deactivated_at" = NULL
-       WHERE c."is_active" = true AND c."deactivated_at" IS NOT NULL
+       WHERE c."deactivated_at" IS NOT NULL
+         -- Y-2: tiklangan kassaning HAMMA kartalari (qayta up() yangi kesim
+         -- va yangi jurnal qatori yozsin), boshqalarida — faol bo'lganlari.
+         AND (
+           c."is_active" = true
+           OR c."cashbox_id" IN (SELECT r."id" FROM (${restorable}) r)
+         )
     `);
     await queryRunner.query(
       `DROP TABLE IF EXISTS "finance_schema"."branch_shift_backup_245"`,

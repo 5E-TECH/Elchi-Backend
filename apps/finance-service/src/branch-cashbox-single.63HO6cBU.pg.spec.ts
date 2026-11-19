@@ -180,6 +180,7 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
 
   beforeEach(async () => {
     outbox.enqueue.mockClear();
+    activityLog.log.mockClear();
     branchDebt = false;
     branch.send.mockReset();
     branch.send.mockImplementation(() =>
@@ -857,6 +858,10 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
       requester_roles: ['superadmin'],
       branch_account_check_enabled: true,
     });
+    // Y-4: faqat eskirgan kalit — audit yozilmaydi (old == new emas, umuman yo'q).
+    expect(activityLog.log).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'finance.shift_settings_updated' }),
+    );
     const view: any = await checks.getSettings({ cashbox_user_id: BRANCH });
     expect(view.data).toMatchObject({
       cashbox_type: 'branch',
@@ -924,6 +929,22 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
         balance_after: 0,
         payment_method: PaymentMethod.CLICK,
         transfer_id: null,
+        // 186 juftlari: eski kuryer → qabul qiluvchi oyog'ida manba — kuryer.
+        source_user_id: COURIER,
+      } as Partial<CashboxHistory>),
+    );
+    // Y-3: «market sotuvda to'langan» kuryer qatori (manba — market,
+    // transfer_id yo'q) — usul ko'rinadi.
+    const marketSale = await db.getRepository(CashboxHistory).save(
+      db.getRepository(CashboxHistory).create({
+        operation_type: Operation_type.EXPENSE,
+        cashbox_id: String(courierBox.id),
+        source_type: Source_type.COURIER_PAYMENT,
+        amount: 7_000,
+        balance_after: 0,
+        payment_method: PaymentMethod.CASH,
+        transfer_id: null,
+        source_user_id: MARKET,
       } as Partial<CashboxHistory>),
     );
     const mainPaid: any = await service.paymentsFromCourier({
@@ -936,15 +957,27 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
     const rows = await db.getRepository(CashboxHistory).find({
       where: { cashbox_id: String(courierBox.id) },
     });
+    // my-cashbox / cashbox/user/:id yo'li: kassa turi va egasi uzatiladi.
     const marked = await (service as any).withBranchLegs(
       rows,
       Cashbox_type.FOR_COURIER,
+      COURIER,
     );
     const flag = (transferId: string | null, id?: string) =>
       marked.find((r: any) =>
         id ? String(r.id) === id : r.transfer_id === transferId,
       )?.branch_leg ?? false;
     expect(flag(null, String(legacy.id))).toBe(true);
+    expect(flag(null, String(marketSale.id))).toBe(false);
+    // Egasi noma'lum (relation ham, egasi ham yo'q) — belgilanmaydi.
+    const unknownOwner = await (service as any).withBranchLegs(
+      rows,
+      Cashbox_type.FOR_COURIER,
+    );
+    expect(
+      unknownOwner.find((r: any) => String(r.id) === String(legacy.id))
+        ?.branch_leg ?? false,
+    ).toBe(false);
     expect(flag(res?.data?.transfer_id)).toBe(true);
     expect(flag(mainPaid?.data?.transfer_id)).toBe(false);
   });

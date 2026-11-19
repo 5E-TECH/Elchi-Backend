@@ -327,6 +327,8 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
     expect(await cardOf(ids.b1Default)).toEqual([0, true, false]);
     expect(await cardOf(ids.b1Archived)).toEqual([0, false, false]);
     expect(await shiftOf(ids.openBranch)).toEqual([100_000, 250_000]);
+    // F2: kassa qatori yo'q filial smenasi ham tiklanadi.
+    expect(await shiftOf(ids.openNoBox)).toEqual([3_000, 4_000]);
     // N1: tiklangan kassaning migratsiya jurnal qatorlari o'chadi.
     const [{ m }] = await db.query(
       `SELECT count(*)::int AS m FROM "finance_schema"."cashbox_card_movements"`,
@@ -338,6 +340,85 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
     );
     expect(n).toBe(0);
     await run('down');
+  });
+
+  it('F3: up() dan keyin (qoldiq 0 bilan) o`chirilgan pulli karta — down() to`liq tiklaydi (o`chirilmagan, qoldig`i bilan)', async () => {
+    await seed();
+    await run('up');
+    await db.query(
+      `UPDATE "finance_schema"."cashbox_cards" SET is_deleted = true WHERE id = $1`,
+      [ids.b1Named],
+    );
+    await run('down');
+    expect(await cardOf(ids.b1Named)).toEqual([90_000, true, false]);
+    expect(await boxOf(ids.b1)).toEqual([350_000, 100_000, 250_000]);
+  });
+
+  it('⭐ Y-2/F1: up → down → up — ikkinchi up() yangi jurnal qatori va yangi kesim yozadi; eski karta ko`chirmasi 0 dan ochiladi', async () => {
+    await seed();
+    await run('up');
+    const firstCut = (
+      await db.getRepository(CashboxCard).findOneByOrFail({ id: ids.b1Named })
+    ).deactivated_at;
+    await run('down');
+    expect(
+      (await db.getRepository(CashboxCard).findOneByOrFail({ id: ids.b1Named }))
+        .deactivated_at,
+    ).toBeNull();
+    await run('up');
+    const card = await db
+      .getRepository(CashboxCard)
+      .findOneByOrFail({ id: ids.b1Named });
+    expect(new Date(card.deactivated_at as Date).getTime()).toBeGreaterThan(
+      new Date(firstCut as Date).getTime(),
+    );
+    const [{ m }] = await db.query(
+      `SELECT count(*)::int AS m FROM "finance_schema"."cashbox_card_movements"`,
+    );
+    expect(m).toBe(2);
+    const cards = new CashboxCardService(db, {} as never);
+    for (const [id, amount] of [
+      [ids.b1Default, 160_000],
+      [ids.b1Named, 90_000],
+    ] as const) {
+      const res: any = await cards.getLedger({ id });
+      expect(
+        res.data.items.map((r: any) => [r.kind, r.delta, r.balance_after]),
+      ).toEqual([
+        ['card_to_cash', -amount, 0],
+        ['income', amount, amount],
+      ]);
+      expect(res.data.summary).toMatchObject({
+        opening_balance: 0,
+        closing_balance: 0,
+      });
+    }
+    await assertMigrated();
+  });
+
+  it('Y-1: jurnal qatori va kesim — clock_timestamp (tranzaksiya boshi emas): deploy oynasidagi to`lov kesimdan chiqib qolmaydi', async () => {
+    await seed();
+    const runner = db.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+    const [{ t0 }] = await runner.query(`SELECT now() AS t0`);
+    await runner.query(`SELECT pg_sleep(0.2)`);
+    await migration.up(runner);
+    await runner.commitTransaction();
+    await runner.release();
+    const [move] = await db.query(
+      `SELECT "createdAt" AS created FROM "finance_schema"."cashbox_card_movements"
+        WHERE from_card_id = $1`,
+      [ids.b1Named],
+    );
+    const card = await db
+      .getRepository(CashboxCard)
+      .findOneByOrFail({ id: ids.b1Named });
+    const created = new Date(move.created).getTime();
+    expect(created - new Date(t0).getTime()).toBeGreaterThanOrEqual(150);
+    expect(
+      new Date(card.deactivated_at as Date).getTime(),
+    ).toBeGreaterThanOrEqual(created);
   });
 
   it('⭐ up → filial pul sarfladi → down(): bo`linish TIKLANMAYDI (naqd manfiy / «fantom» karta yo`q) — eski kod karta chiqimini 400 bilan rad etadi', async () => {

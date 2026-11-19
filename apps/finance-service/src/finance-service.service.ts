@@ -1468,9 +1468,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private async branchLegIds(
     histories: CashboxHistory[],
     fallbackType?: Cashbox_type | null,
+    fallbackOwnerId?: string | null,
   ): Promise<Set<string>> {
     const typeOf = (h: CashboxHistory) =>
       h?.cashbox?.cashbox_type ?? fallbackType ?? null;
+    const ownerOf = (h: CashboxHistory) =>
+      String(h?.cashbox?.user_id ?? fallbackOwnerId ?? '');
     const result = new Set<string>();
     const courierRows: CashboxHistory[] = [];
     for (const h of histories ?? []) {
@@ -1488,7 +1491,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         h.source_type === Source_type.COURIER_PAYMENT &&
         (h.transfer_id === null ||
           h.transfer_id === undefined ||
-          h.transfer_id === '')
+          h.transfer_id === '') &&
+        /**
+         * Y-3: faqat eski kuryer → qabul qiluvchi shakli — `source_user_id` =
+         * kassa egasi kuryer (186 juftlari). «Market sotuvda to'langan»
+         * kuryer qatorlari (`source_user_id` = market) — usul ko'rinadi.
+         */
+        ownerOf(h) !== '' &&
+        String(h.source_user_id ?? '') === ownerOf(h)
       ) {
         result.add(String(h.id));
       } else if (
@@ -1538,9 +1548,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private async withBranchLegs<T extends CashboxHistory>(
     histories: T[],
     fallbackType?: Cashbox_type | null,
+    fallbackOwnerId?: string | null,
   ): Promise<Array<T & { branch_leg?: true }>> {
     if (!Array.isArray(histories) || !histories.length) return histories ?? [];
-    const legIds = await this.branchLegIds(histories, fallbackType);
+    const legIds = await this.branchLegIds(
+      histories,
+      fallbackType,
+      fallbackOwnerId,
+    );
     if (!legIds.size) return histories;
     return histories.map((h) =>
       h && legIds.has(String(h.id)) ? { ...h, branch_leg: true as const } : h,
@@ -2042,6 +2057,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
               ? await this.withPaymentAcks(rows)
               : rows,
             cashbox.cashbox_type,
+            String(cashbox.user_id),
           ),
           dto.include_receipts === true ? 'brief' : 'none',
         );
@@ -4737,6 +4753,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           ? await this.withPaymentAcks(rawHistory)
           : rawHistory,
         cashbox.cashbox_type,
+        String(cashbox.user_id),
       );
 
       /**
