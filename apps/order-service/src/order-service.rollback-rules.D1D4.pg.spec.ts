@@ -21,6 +21,7 @@ import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
 import { OrderSettlementBranchMarketCarry } from './entities/order-settlement-branch-market-carry.entity';
 import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { REMITTED_CREDIT_ROW_MESSAGE } from './lifecycle/rollback-eligibility';
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { FinanceServiceService } from '../../finance-service/src/finance-service.service';
 import { Cashbox } from '../../finance-service/src/entities/cashbox.entity';
@@ -849,8 +850,14 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
       '7001',
       'SUPERADMIN_ONLY',
     );
-    expect(managerError.message).toContain('manfiy (kredit)');
-    await deniedRollback(SUPERADMIN, '7001', 'CORRECTION_REQUIRED');
+    // Xabar yo'l ko'rsatadi (orkestr talabi): T6 — to'lovni qaytarish / tahrirlash.
+    expect(managerError.message).toBe(REMITTED_CREDIT_ROW_MESSAGE);
+    const saError = await deniedRollback(
+      SUPERADMIN,
+      '7001',
+      'CORRECTION_REQUIRED',
+    );
+    expect(saError.message).toBe(REMITTED_CREDIT_ROW_MESSAGE);
   }, 60_000);
 
   describe('D2 — superadmin: HQ`ga o`tgan, market to`langan, filial marketga to`lagan', () => {

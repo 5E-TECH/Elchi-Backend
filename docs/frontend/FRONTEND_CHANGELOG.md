@@ -39,7 +39,7 @@ Deploy: **order-service, api-gateway** (migratsiya yo'q). Joriy prod relizidan K
 | Superadmin | **D2:** hammasi — HQ'ga o'tgan, market to'langan, PR-C qatorlari ham | ✅ — naqd ko'chmaydi, daftar teskari (pastda) |
 | Kuryer | avvalgidek (faqat o'ziga biriktirilgan; topshirilgan pul) | ❌ 400 `COURIER_REMITTED` |
 
-M6 xavfsizlik sabablari (manfiy / kredit qator, filialsiz yoki HQ qatori, kuryer boshqa filialga o'tgan, snapshot mos emas) menejerga ham amal qiladi → 400 `SUPERADMIN_ONLY` (aniq sabab `message` da), superadminga → 400 `CORRECTION_REQUIRED`. Masalan: kuryer qo'shimcha xarajat bilan bekor qilib, o'sha kreditni topshiriqda ishlatgan buyurtma (S6) — avtomatik qaytarilmaydi.
+M6 xavfsizlik sabablari (manfiy / kredit qator, filialsiz yoki HQ qatori, kuryer boshqa filialga o'tgan, snapshot mos emas) menejerga ham amal qiladi → 400 `SUPERADMIN_ONLY` (aniq sabab `message` da), superadminga → 400 `CORRECTION_REQUIRED`. Masalan: kuryer qo'shimcha xarajat bilan bekor qilib, o'sha kreditni topshiriqda ishlatgan buyurtma (S6) — avtomatik qaytarilmaydi; xabar yo'l ko'rsatadi: «… Superadmin: Moliya → kuryer to'lovlari tarixida shu topshiriqni qaytaring yoki tahrirlang (T6); shundan keyin buyurtmani qaytarish mumkin bo'ladi».
 
 **Xato kodlari** (400 / 403 tanasida `code` + `message`; ro'yxatda `rollback.code` + `rollback.message` — matn AYNAN bir xil):
 

@@ -158,6 +158,17 @@ export function isRemittedSale(
 }
 
 /**
+ * S6 — kuryer qo'shimcha xarajat krediti (manfiy qator) bilan bekor qilgan
+ * va uni topshiriqda ishlatgan buyurtma: avtomatik qaytarish kuryer
+ * qoldig'ini manfiy qilardi. Xabar foydalanuvchiga YO'L ko'rsatadi (T6 —
+ * to'lovni qaytarish / tahrirlash, keyin qator yana ochiq bo'ladi).
+ */
+export const REMITTED_CREDIT_ROW_MESSAGE =
+  "Bu buyurtmada qo'shimcha xarajat krediti (manfiy (kredit) summa) bor va kuryer pulni filialga " +
+  "topshirib bo'lgan — avtomatik qaytarib bo'lmaydi. Superadmin: Moliya → kuryer to'lovlari " +
+  "tarixida shu topshiriqni qaytaring yoki tahrirlang (T6); shundan keyin buyurtmani qaytarish mumkin bo'ladi";
+
+/**
  * M6 — kuryer topshirgan summani uning qoldig'iga kredit qilish xavfsizmi.
  * `null` — xavfsiz; aks holda aniq sabab. `prepareRemittedCourierCredit`
  * bilan AYNAN bir xil shartlar.
@@ -173,10 +184,7 @@ export function remittedCreditBlocker(
     return 'Kuryer hisob-kitob qatori topilmadi — rollback bajarilmadi';
   }
   if (toTiyin(sale.courier_amount) <= 0) {
-    return (
-      "Kuryer bu buyurtmaning manfiy (kredit) summasini topshiriqda ishlatib bo'lgan — " +
-      "rollback kuryer qoldig'ini manfiy qilardi. Buxgalteriya tuzatishi kerak"
-    );
+    return REMITTED_CREDIT_ROW_MESSAGE;
   }
   const branchId = norm(sale.branch_id);
   if (!branchId) {

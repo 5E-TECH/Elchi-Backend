@@ -120,6 +120,7 @@ import {
 import {
   evaluateRollbackEligibility,
   isRemittedSale,
+  REMITTED_CREDIT_ROW_MESSAGE,
   type RollbackEligibility,
   type RollbackEligibilityContext,
 } from './rollback-eligibility';
@@ -7680,11 +7681,7 @@ export class OrderLifecycleService {
     // Manfiy (kredit) qator: qoldiq manfiy bo'la olmaydi (FIFO uni 0 deb
     // o'qiydi), ya'ni teskari yozuvni daftarda ifodalab bo'lmaydi.
     if (toTiyin(amount) <= 0) {
-      this.badRequest(
-        "Kuryer bu buyurtmaning manfiy (kredit) summasini topshiriqda ishlatib bo'lgan — " +
-          "rollback kuryer qoldig'ini manfiy qilardi, superadmin ham qaytara olmaydi. " +
-          'Buxgalteriya tuzatishi kerak',
-      );
+      this.badRequest(REMITTED_CREDIT_ROW_MESSAGE);
     }
     if (!branchId) {
       this.badRequest(
