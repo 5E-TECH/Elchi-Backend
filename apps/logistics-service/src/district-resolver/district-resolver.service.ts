@@ -93,6 +93,34 @@ export const DISTRICT_CORPUS_MAX_CHARS = 120;
  */
 const PLACE_STRICT_RE =
   /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b(?![\s-]*dan\b)|\br-n\b|\b(sh|g)\./;
+/**
+ * r17: belgilarning yana ikki yozuvi (translit matnda) - "р-он" ("r-on") =
+ * "р-н" (tuman); qism oxiridagi nuqtasiz "X sh" ("Shahrisabz sh", "URGANCH
+ * sh,") = "X sh." (shahar). Nuqtasiz "sh" faqat vergul / nuqtali vergul /
+ * matn oxiridan oldin va X MA'LUM joy nomi bo'lsa (`isPlace`: tuman, alias,
+ * fold shakli, viloyat so'zi) - "Ergasheva Sh" (ism bosh harfi), "Amir
+ * Temur sh" (shoh ko'chasi), "5 sh", "sh Navoiy" belgi EMAS. `isPlace`
+ * berilmasa (tokenlar - nuqta baribir o'chadi) faqat "р-он".
+ */
+function markNorm(
+  s: string,
+  isPlace?: (words: readonly string[]) => boolean,
+): string {
+  const out = s.replace(/\br-on\b/g, 'r-n');
+  if (!isPlace) return out;
+  return out.replace(
+    /\s+sh(?=\s*(?:[,;]|$))/g,
+    (m: string, at: number, all: string) => {
+      const words = all
+        .slice(0, at)
+        .replace(/kh/g, 'x')
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean)
+        .slice(-3);
+      return words.length && isPlace(words) ? `${m}.` : m;
+    },
+  );
+}
 /** Shahar afzalligi belgisi — BeePost :1708-1709 (+ shaxri, gorod, sh., g.). */
 const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
 /**
@@ -619,7 +647,7 @@ function senderAt(
  * "t.y." yoki ism bosh harfidagi "t." esa oddiy "t" bo'lib qoladi.
  */
 function addressTokens(text: string): AddressTokens {
-  const raw = lightNorm(text)
+  const raw = markNorm(lightNorm(text))
     // "№12": translit (kichik harf) dan keyin NFKC "№" → "No" (katta N) —
     // `[^a-z0-9]` uni o'chirib "o12" qoldirardi (r7 B3).
     // r11: raqamsiz "\u2116" ham ("Sergeli ul. \u2116").
@@ -770,9 +798,12 @@ function capitalAbbrNames(text: string): Set<string> {
  * keyingi "Name T." ("oluvchi Фуркат Т.", "получатель: Sherin Т.") - odam
  * ismi va bosh harfi: joy nomi ham, tuman belgisi ham emas - olib
  * tashlanadi (yalang'och raqib nom bo'lib ham qolmaydi).
+ * r17: har qanday bosh harf - "Sh" / "Ch" (nuqtali yoki nuqtasiz: "mijoz
+ * Guliston Sh", "получатель Rashidov SH", "oluvchi Muborak sh.") va bitta
+ * harf + nuqta ("oluvchi Karimova D.").
  */
 const RECIPIENT_INITIAL_RE =
-  /((?<![\p{L}\p{M}])(?:oluvchi(?:si)?|qabul\s+qiluvchi(?:si)?|buyurtmachi(?:si)?|xaridor(?:i)?|mijoz|ismi?|fio|f\.i\.o\.?|klient|poluchatel|kimga|олувчи(?:си)?|қабул\s+қилувчи(?:си)?|мижоз|исми?|получател[ьяю]|получ\.|клиент|имя|фио|ф\.и\.о\.?|кому|буюртмачи(?:си)?|харидор(?:и)?|заказчик(?:а|у)?|покупател[ьяю])(?![\p{L}\p{M}])\s*[:\-\u2013\u2014]?\s*)((?:[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,}\s+)?[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,})(?:\s*-\s*|\.\s*|\s+)[Tt\u0422\u0442]\./giu;
+  /((?<![\p{L}\p{M}])(?:oluvchi(?:si)?|qabul\s+qiluvchi(?:si)?|buyurtmachi(?:si)?|xaridor(?:i)?|mijoz|ismi?|fio|f\.i\.o\.?|klient|poluchatel|kimga|олувчи(?:си)?|қабул\s+қилувчи(?:си)?|мижоз|исми?|получател[ьяю]|получ\.|клиент|имя|фио|ф\.и\.о\.?|кому|буюртмачи(?:си)?|харидор(?:и)?|заказчик(?:а|у)?|покупател[ьяю])(?![\p{L}\p{M}])\s*[:\-\u2013\u2014]?\s*)((?:[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,}\s+)?[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,})(?:\s*-\s*|\.\s*|\s+)(?:[Tt\u0422\u0442]\.|(?:[Ss][Hh]|[Cc][Hh]|[\u0428\u0448\u0427\u0447])\.?(?![\p{L}\p{M}])|[A-Za-z\u0410-\u042f\u0430-\u044f]\.)/giu;
 function dropRecipientInitials(text: string): string {
   return text.replace(RECIPIENT_INITIAL_RE, '$1');
 }
@@ -1430,6 +1461,23 @@ export function resolveDistrictText(
     ),
   };
   const idx = prepareSnapshot(snapshot);
+  /**
+   * r17: nuqtasiz "X sh" dagi X ma'lum joy nomimi (oxirgi 1-3 so'z: tuman,
+   * alias, fold shakli yoki viloyat so'zi) - `markNorm`.
+   */
+  const isPlace = (words: readonly string[]): boolean => {
+    for (let k = 1; k <= words.length; k++) {
+      const sk = geoSkeleton(words.slice(-k).join(''));
+      if (
+        idx.tHeads.has(sk) ||
+        REGION_SATOS_BY_SKEL.has(sk) ||
+        idx.idsByFold.has(foldOf(sk))
+      )
+        return true;
+    }
+    return false;
+  };
+  const destNorm = (s: string): string => markNorm(translit(s), isPlace);
   /** r14 (S1): faqat katta "T." bilan yozilgan nomlar (`capitalAbbrNames`). */
   const capNames = capitalAbbrNames(`${q.full_address}, ${q.address}`);
 
@@ -1527,7 +1575,7 @@ export function resolveDistrictText(
     wantedKind(
       // r16: tur jo'natish joyi / mo'ljal belgisidan olinmaydi
       // ("jo'natuvchi: Kasbi sh." - Qarshi shahri emas).
-      stripNonDestClauses(translit(text)),
+      stripNonDestClauses(destNorm(text)),
       // r14 (S1): katta "T." ("Furqat T.") turni belgilamaydi.
       namedT(text, TUMAN_T_ABBR_RE, (_w, cap) => !cap) ||
         suffixFor(text, heads) ||
@@ -1627,17 +1675,17 @@ export function resolveDistrictText(
   // Касби") joy belgisi emas - 2b'da ham (r15 da faqat 4-usulda edi).
   const strictPlaceSignal =
     !!q.district_name ||
-    PLACE_STRICT_RE.test(stripOriginClauses(translit(placeText)));
+    PLACE_STRICT_RE.test(stripOriginClauses(destNorm(placeText)));
   /** r16: jo'natish joyi bilan birga (faqat yagona aniq nom uchun, 2b). */
   const strictWithOrigin =
-    strictPlaceSignal || PLACE_STRICT_RE.test(translit(placeText));
+    strictPlaceSignal || PLACE_STRICT_RE.test(destNorm(placeText));
   /**
    * r15/r16: 4-usul uchun - jo'natish joyi va mo'ljal bo'laklarisiz
    * ("Gulzor ko'chasi 1, Шават р-н рядом").
    */
   const strictNoOrigin =
     !!q.district_name ||
-    PLACE_STRICT_RE.test(stripNonDestClauses(translit(placeText)));
+    PLACE_STRICT_RE.test(stripNonDestClauses(destNorm(placeText)));
   /**
    * r12: 2b zaif moslik uchun PR'dagi yangi belgilar. "Y tumanida/tum." -
    * faqat Y topilgan nom bo'lsa. "Y t." - Y topilgan nom yoki qidiruv
@@ -1907,6 +1955,11 @@ export function resolveDistrictText(
    */
   const mentionedRegions = new Set<string>();
   /**
+   * r17: shahar belgili viloyat so'zi ("Buxoro sh.", "Toshkent sh" - faqat
+   * Toshkent SHAHRI, 1726) - jo'natish joyi qoidasi uchun.
+   */
+  const cityMarkedRegions = new Set<string>();
+  /**
    * r13: belgisiz yalang'och "Toshkent" o'rinlari (2b'da tuman sifatida
    * tanlanmaydi) - yangi belgili tuman uchun yalang'och raqib nom kabi.
    */
@@ -1921,6 +1974,10 @@ export function resolveDistrictText(
         if (s) satos = new Set([s]);
       }
       if (!satos) return;
+      if (CITY_AFTER_WORDS.has(next)) {
+        const city = [...satos].filter((x) => x === '1726');
+        for (const x of city.length ? city : satos) cityMarkedRegions.add(x);
+      }
       if (
         (PLACE_AFTER_WORDS.has(next) && next !== 'sh' && next !== 'g') ||
         (next === 'r' && tokens[j + 2] === 'n')
@@ -2529,6 +2586,22 @@ export function resolveDistrictText(
       if (signal === 'none') forceCandidate = true;
       if (signal === 'rival' || signal === 'soft') candidateOnly = true;
       if (matches.some((d) => softTumanT.has(d.id))) candidateOnly = true;
+      // r17: faqat jo'natish joyi topildi ("Tayloq tumani dan, Buxoro sh.,
+      // ..." - Buxoro boshqa viloyatda): belgi boshqa joyniki - avto emas.
+      // Matnda boshqa belgili nom yoki boshqa viloyat ("Buxoro sh.") bo'lsa.
+      if (
+        matches.every((d) => originMarked.has(d.id)) &&
+        (devOtherName(matches) ||
+          [mentionedRegions, cityMarkedRegions].some(
+            (regions) =>
+              regions.size > 0 &&
+              matches.every((d) => {
+                const sato = idx.regionById.get(d.region_id)?.sato;
+                return !!sato && !regions.has(sato);
+              }),
+          ))
+      )
+        candidateOnly = true;
       // Operator tuman nomini yozgan, lekin u topilmadi — manzildagi so'z
       // bilan almashtirish TAXMIN.
       if (dq) candidateOnly = true;
