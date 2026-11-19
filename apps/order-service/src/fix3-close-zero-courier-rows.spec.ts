@@ -438,6 +438,8 @@ describe('OrderSettlementService.closeZeroCourierRows', () => {
           market_id: '191',
           courier_amount: 0,
           branch_amount: 3000,
+          // WX-2: market ulushi > 0 (0 bo'lsa branch_to_hq darhol MARKET_SETTLED).
+          market_amount: 2000,
         },
       ],
       [{ level: 'branch_to_hq', party_id: '10', amount: 3000 }],

@@ -702,22 +702,72 @@ describePg(
         requester_id: '1',
       });
       expect(res.data.leftover).toBe(0);
-      // Filial to'lagan qatorlar — darhol MARKET_SETTLED; 0 so'mlik z0 —
-      // odatdagi yo'l: BRANCH_SETTLED, keyin HQ → market FIFO'si (keyingi
-      // to'lov) uni 0 so'm bilan yopadi.
-      expect(await statusOf('z1')).toBe(SettlementStatus.MARKET_SETTLED);
-      expect(await statusOf('z2')).toBe(SettlementStatus.MARKET_SETTLED);
-      expect(await statusOf('z0')).toBe(SettlementStatus.BRANCH_SETTLED);
-      const hq: any = await service.advanceSettlement({
-        level: 'hq_to_market',
-        match_value: '205',
-        amount: 1,
-        request_id: 'a2-m',
-        requester_id: '1',
-      });
-      expect(hq.data.allocated).toBe(0);
-      expect(await statusOf('z0')).toBe(SettlementStatus.MARKET_SETTLED);
+      // Filial to'lagan qatorlar — darhol MARKET_SETTLED; WX-2: market ulushi
+      // 0 bo'lgan z0 ham darhol MARKET_SETTLED (HQ marketga hech narsa
+      // to'lamaydi — BRANCH_SETTLED da osilib qolmaydi), belgisiz.
+      for (const key of ['z1', 'z0', 'z2']) {
+        expect(await statusOf(key)).toBe(SettlementStatus.MARKET_SETTLED);
+      }
       expect(await markedOf('z0')).toBe(false);
+    });
+
+    it('⭐ WX-1: migratsiya 246 konvertatsiya izi bor — ulush, ro`yxat va filial → market to`lovi 503 (kill switch), daftar o`zgarmaydi; iz bo`sh yoki yo`q — odatdagidek', async () => {
+      const CS = SettlementStatus.COURIER_SETTLED;
+      await row('k1', {
+        home: '19',
+        branch: '19',
+        market: '207',
+        branchAmount: 120_000,
+        marketAmount: 100_000,
+        status: CS,
+      });
+      const before = await share('19', '207');
+      expect(before.share).toBe(100_000);
+      // Jadval bor, lekin bo'sh — ishlaydi.
+      await db.query(`CREATE TABLE "${schema}".order_settlement_246_conversion (
+        "id" BIGSERIAL PRIMARY KEY, "kind" varchar(32) NOT NULL,
+        "amount" numeric(14,2) NOT NULL DEFAULT 0)`);
+      expect((await share('19', '207')).share).toBe(100_000);
+      // Konvertatsiya izi — hamma yo'l 503, hech narsa yozilmaydi.
+      await db.query(
+        `INSERT INTO "${schema}".order_settlement_246_conversion (kind, amount) VALUES ('carry_moved', 30000)`,
+      );
+      try {
+        const closed = { error: { statusCode: 503 } };
+        await expect(
+          service.getBranchMarketShare({ branch_id: '19', market_id: '207' }),
+        ).rejects.toMatchObject(closed);
+        await expect(
+          service.getBranchMarkets({ branch_id: '19' }),
+        ).rejects.toMatchObject(closed);
+        await expect(
+          service.advanceSettlement({
+            level: 'branch_to_market',
+            match_value: '19:207',
+            amount: 100_000,
+            request_id: 'wx1-1',
+            requester_id: '15001',
+          }),
+        ).rejects.toMatchObject(closed);
+        const [k1] = await db.query(
+          `SELECT market_paid_by_branch_amount::float AS paid, market_paid_by_branch_at AS at
+             FROM "${schema}".order_settlement WHERE id = $1`,
+          [ids.k1],
+        );
+        expect(k1).toEqual({ paid: 0, at: null });
+        // Token olinmagan — iz tozalangach shu so'rov qo'llanadi.
+        const [{ n }] = await db.query(
+          `SELECT count(*)::int AS n FROM "${schema}".order_settlement_branch_market_carry
+            WHERE branch_id = 19 AND market_id = 207`,
+        );
+        expect(n).toBe(0);
+      } finally {
+        await db.query(
+          `DROP TABLE "${schema}".order_settlement_246_conversion`,
+        );
+      }
+      await managerPays('19', '207', 100_000, 'wx1-1');
+      expect(await markedOf('k1')).toBe(true);
     });
 
     it('A3: FIFO butun tiyinda — aniq yig`indi (879 621,39) beshala qatorni yopadi, qoldiq 0', async () => {

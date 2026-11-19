@@ -129,12 +129,53 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     expect(store[1].status).toBe(SettlementStatus.COURIER_SETTLED);
   });
 
+  it('WX-2: market ulushi 0 bo`lgan qator branch→HQ da darhol MARKET_SETTLED (HQ → market da osilib qolmaydi); ulushli qator — BRANCH_SETTLED', async () => {
+    const { service, store } = makeService([
+      {
+        order_id: '211',
+        branch_id: '10',
+        branch_amount: 30,
+        market_amount: 0,
+        status: SettlementStatus.COURIER_SETTLED,
+      },
+      {
+        order_id: '212',
+        branch_id: '10',
+        branch_amount: 30,
+        market_amount: 0.001,
+        status: SettlementStatus.COURIER_SETTLED,
+      },
+      {
+        order_id: '213',
+        branch_id: '10',
+        branch_amount: 30,
+        market_amount: 25,
+        status: SettlementStatus.COURIER_SETTLED,
+      },
+    ]);
+
+    const res: any = await service.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: '10',
+      amount: 90,
+      requester_id: '1',
+    });
+
+    expect(res.data.settled_order_ids).toEqual(['211', '212', '213']);
+    // 0 va tiyindan kichik (money2 → 0) — MARKET_SETTLED.
+    expect(store[0].status).toBe(SettlementStatus.MARKET_SETTLED);
+    expect(store[1].status).toBe(SettlementStatus.MARKET_SETTLED);
+    expect(store[2].status).toBe(SettlementStatus.BRANCH_SETTLED);
+  });
+
   it('advance branch→HQ only advances COURIER_SETTLED orders (state-only)', async () => {
     const { service, store, outbox } = makeService([
       {
         order_id: '201',
         branch_id: '10',
         branch_amount: 30,
+        // WX-2: market ulushi > 0 (0 bo'lsa branch_to_hq darhol MARKET_SETTLED).
+        market_amount: 20,
         status: SettlementStatus.COURIER_SETTLED,
       },
       {
@@ -554,6 +595,8 @@ describe('OrderSettlementService — taqsimlanmagan qoldiq (carry)', () => {
       market_id: '191',
       status: SettlementStatus.COURIER_SETTLED,
       branch_amount: 235000,
+      // WX-2: market ulushi > 0 (0 bo'lsa branch_to_hq darhol MARKET_SETTLED).
+      market_amount: 200000,
     },
   ];
 
@@ -617,6 +660,8 @@ describe('OrderSettlementService — taqsimlanmagan qoldiq (carry)', () => {
           market_id: '191',
           courier_amount: 235000,
           branch_amount: 235000,
+          // WX-2: market ulushi > 0 (0 bo'lsa branch_to_hq darhol MARKET_SETTLED).
+          market_amount: 200000,
         },
       ],
       [{ level: 'branch_to_hq', party_id: '14', amount: 235000 }],
@@ -824,6 +869,8 @@ describe('OrderSettlementService — taqsimlanmagan qoldiq (carry)', () => {
             market_id: '191',
             status: SettlementStatus.COURIER_SETTLED,
             branch_amount: 450000,
+            // WX-2: market ulushi > 0 (0 bo'lsa branch_to_hq darhol MARKET_SETTLED).
+            market_amount: 400000,
           },
         ],
         [{ level: 'branch_to_hq', party_id: '1', amount: 300000 }],
