@@ -592,8 +592,12 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
       order_id: '555',
       idempotent_replay: true,
     });
-    // Qayta yuborish yangi buyurtma emas — xarajatga qayta bog'lanmaydi.
-    expect(sendsOf(fx.ai, 'ai.usage.link_orders')).toHaveLength(0);
+    // Takror ham bog'lanadi (1-urinish timeout_unknown bo'lgan bo'lishi
+    // mumkin); ai-service tomonda ON CONFLICT / DISTINCT — narx qayta
+    // qayd qilinmaydi.
+    const links = sendsOf(fx.ai, 'ai.usage.link_orders');
+    expect(links).toHaveLength(1);
+    expect(links[0][1]).toMatchObject({ order_ids: ['555'] });
   });
 
   it('dedupe kaliti: request_id = "ai:<market>:<draft>:<idx>", takror yuborishda AYNAN bir xil', async () => {
