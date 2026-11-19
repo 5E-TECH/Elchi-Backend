@@ -131,7 +131,7 @@ function setup(
   });
   let next = 5000;
   orderC.send.mockImplementation((pattern) =>
-    // Takror so'rovi (`markAiReplays`): avval yaratilgan band yo'q.
+    // Takror so'rovi (`loadAiReplays`): avval yaratilgan band yo'q.
     pattern.cmd === 'order.ai_confirm.completed'
       ? of({ data: { items: [] } })
       : of({ data: { id: String(next++) } }),

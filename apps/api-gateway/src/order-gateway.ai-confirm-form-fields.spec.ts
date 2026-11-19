@@ -1378,21 +1378,40 @@ describe('POST /orders/ai-confirm — takror (barqaror kalit) tekshiruvlardan OL
     ]);
   });
 
-  it('takror bandi partiya imzosini band qiladi — ayni mazmunli YANGI band duplicate_in_batch', async () => {
-    const fx = makeController();
-    await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
-    const res = await fx.controller.aiConfirm(
-      {
-        orders: [confirmOrder(1), confirmOrder(1, { ai_item_index: 9 })],
-      },
-      marketReq,
-    );
+  it.each([
+    [
+      'takror birinchi',
+      [confirmOrder(1), confirmOrder(1, { ai_item_index: 9 })],
+      1,
+    ],
+    [
+      'takror keyin',
+      [confirmOrder(1, { ai_item_index: 9 }), confirmOrder(1)],
+      0,
+    ],
+  ])(
+    'takror bandi partiya imzosini band qiladi (%s) — ayni mazmunli YANGI band duplicate_in_batch, ikkinchi buyurtma yaratilmaydi',
+    async (_label, batch, newIndex) => {
+      const fx = makeController();
+      await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
+      fx.order.send.mockClear();
+      const res = await fx.controller.aiConfirm({ orders: batch }, marketReq);
 
-    expect(res.data.results.map((r) => [r.ok, r.code])).toEqual([
-      [true, undefined],
-      [false, 'duplicate_in_batch'],
-    ]);
-  });
+      const replayIndex = 1 - newIndex;
+      expect(res.data.results[replayIndex]).toEqual({
+        index: replayIndex,
+        ok: true,
+        order_id: '1000',
+        idempotent_replay: true,
+      });
+      expect(res.data.results[newIndex]).toMatchObject({
+        index: newIndex,
+        ok: false,
+        code: 'duplicate_in_batch',
+      });
+      expect(createdPayloads(fx.order)).toHaveLength(0);
+    },
+  );
 
   it('1-urinish timeout_unknown (bog`lanmagan) → takror buyurtmani draft/AI xarajatiga BOG`LAYDI', async () => {
     const fx = makeController();

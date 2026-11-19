@@ -170,7 +170,7 @@ const makeController = () => {
   });
   let nextOrderId = 1000;
   order.send.mockImplementation((pattern) =>
-    // Takror so'rovi (`markAiReplays`): avval yaratilgan band yo'q.
+    // Takror so'rovi (`loadAiReplays`): avval yaratilgan band yo'q.
     pattern.cmd === 'order.ai_confirm.completed'
       ? of({ data: { items: [] } })
       : of({ id: String(nextOrderId++) }),
