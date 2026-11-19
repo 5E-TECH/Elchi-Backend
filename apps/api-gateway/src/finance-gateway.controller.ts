@@ -4352,7 +4352,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Close shift',
     description:
-      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`).",
+      "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`). 63HO6cBU: FILIAL smenasi bitta jami — `closing_balance_card` yuborilsa `closing_balance_cash` ga QO'SHILADI (bitta «Sanalgan summa»), `accounts[]` e'tiborsiz; javobda `expected_balance_card: 0`, `discrepancy_card: null`.",
   })
   @ApiBody({ type: CloseShiftRequestDto })
   async closeShift(
@@ -4790,7 +4790,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "(kiZgTybn) Smena yopish sozlamalari (global + karta bo'yicha)",
     description:
-      "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+      "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH). 63HO6cBU: filial kassasi (`cashbox_type: branch`) uchun `account_check_enabled` DOIM false va `cards: []` (filialda karta yo'q); `branch_account_check_enabled` eskirgan — doim false.",
   })
   async getShiftSettings(
     @Req() req: { user: JwtUser },
@@ -4827,7 +4827,7 @@ export class FinanceGatewayController {
     summary:
       "(kiZgTybn) Smena yopish sozlamalarini o'zgartirish — FAQAT superadmin",
     description:
-      "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, «Kun tartibi» `auto_open` va `late_alert` (ochish va yopish vaqti bir xil — 400 `SHIFT_SCHEDULE_CONFLICT` + `times`; ochish yoqiq-u vaqtsiz yoki xabar yoqiq-u kanalsiz — 400), `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`.",
+      "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, «Kun tartibi» `auto_open` va `late_alert` (ochish va yopish vaqti bir xil — 400 `SHIFT_SCHEDULE_CONFLICT` + `times`; ochish yoqiq-u vaqtsiz yoki xabar yoqiq-u kanalsiz — 400), `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`. 63HO6cBU: `branch_account_check_enabled` ESKIRGAN — qiymat tekshiriladi (boolean bo'lmasa 400), lekin saqlanmaydi; faqat shu kalit yuborilsa ham 200.",
   })
   async updateShiftSettings(
     @Req() req: { user: JwtUser },
@@ -5486,7 +5486,7 @@ export class FinanceGatewayController {
     summary:
       'Kassa kartalari va hisob raqamlari (balanslar, moslik nazorati) — asosiy yoki filial kassasi',
     description:
-      "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403.",
+      "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403. 63HO6cBU: `branch_id` bilan (filial kassasi) — `cards: []`, `cards_disabled: true` (filial kassasi naqd/kartaga ajralmaydi).",
   })
   @ApiQuery({ name: 'include_inactive', required: false, type: Boolean })
   @ApiQuery({
@@ -5516,7 +5516,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Yangi karta yoki hisob raqam (balans 0)',
     description:
-      'Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta.',
+      "Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta. 63HO6cBU: filial kassasiga (`branch_id`) karta yaratish — 400 «Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q».",
   })
   @ApiBody({ type: CreateCashboxCardRequestDto })
   createCashboxCard(
@@ -5716,7 +5716,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Kartani kassaning Asosiy kartasi qilish',
     description:
-      "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400.",
+      "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400. 63HO6cBU: filial kassasi kartasi — 400 (filialda karta amallari yo'q).",
   })
   @ApiParam({ name: 'id', description: 'Karta ID' })
   makeCashboxCardDefault(
@@ -5760,7 +5760,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "Kartadan kartaga o'tkazma (balance_card o'zgarmaydi)",
     description:
-      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi o'tkazma yozmaydi.",
+      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi o'tkazma yozmaydi. 63HO6cBU: filial kassasi kartalari — 400 (filialda karta amallari yo'q).",
   })
   @ApiHeader({ name: 'Idempotency-Key', required: false })
   @ApiBody({ type: TransferCashboxCardRequestDto })
@@ -5787,7 +5787,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Karta↔naqd konvertatsiya (kassaning umumiy balansi o`zgarmaydi)',
     description:
-      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi konvertatsiya yozmaydi.",
+      "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi konvertatsiya yozmaydi. 63HO6cBU: filial kassasi kartasi — 400 (filialda karta amallari yo'q).",
   })
   @ApiHeader({ name: 'Idempotency-Key', required: false })
   @ApiBody({ type: ConvertCashboxCardRequestDto })

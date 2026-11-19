@@ -91,6 +91,10 @@ describePg(
       const runner = db.createQueryRunner();
       await base105.up(runner);
       await details161.up(runner);
+      // 63HO6cBU (N1) — migratsiya 245 qo'shgan ustun (entity'da bor).
+      await runner.query(
+        'ALTER TABLE "finance_schema"."cashbox_cards" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamptz NULL',
+      );
       await runner.release();
 
       cards = new CashboxCardService(
@@ -684,6 +688,131 @@ describePg(
         )?.card_id,
       ).toBe(hqId);
       await expectInvariant();
+    });
+
+    it('⭐ N12 (MAIN) make-default: pul harakatlanmaydi, Σ == balance_card; eski Asosiy karta qoldig`i saqlanadi; ikkala ko`chirma to`g`ri; kartasiz to`lov — yangi Asosiyga; arxiv karta 400', async () => {
+      await seed();
+      const created: any = await cards.createCard({ name: 'Humo HQ' });
+      const humo = String(created.data.card.id);
+      const oldDef = await defaultIdOf();
+      await cards.transfer({
+        from_card_id: oldDef,
+        to_card_id: humo,
+        amount: 30_000,
+        comment: 'x',
+      });
+      // Kartasiz CLICK chiqim — eski Asosiy kartadan.
+      await finance.spendMoney({
+        user_id: '0',
+        cashbox_type: Cashbox_type.MAIN,
+        amount: 5_000,
+        type: PaymentMethod.CLICK,
+      });
+      let state = await expectInvariant();
+      expect(balances(state.list)).toEqual([
+        ['Asosiy karta', 65_000, true],
+        ['Humo HQ', 30_000, false],
+      ]);
+
+      const res: any = await cards.makeDefault({ id: humo, updated_by: '1' });
+      expect(res.data).toMatchObject({
+        changed: true,
+        card: { id: humo, is_default: true, balance: 30_000 },
+        previous_default: { id: oldDef, is_default: false, balance: 65_000 },
+      });
+      state = await expectInvariant();
+      expect(Number(state.cashbox.balance_card)).toBe(95_000);
+      expect(balances(state.list)).toEqual([
+        ['Humo HQ', 30_000, true],
+        ['Asosiy karta', 65_000, false],
+      ]);
+      // Eski Asosiy karta ko'chirmasi: kartasiz chiqim qatori unga yozildi.
+      const oldLedger: any = await cards.getLedger({ id: oldDef });
+      expect(oldLedger.data.summary).toMatchObject({
+        opening_balance: 100_000,
+        closing_balance: 65_000,
+        current_balance: 65_000,
+      });
+      expect(oldLedger.data.items.map((r: any) => r.kind)).toEqual([
+        'expense',
+        'transfer_out',
+      ]);
+      const newLedger: any = await cards.getLedger({ id: humo });
+      expect(newLedger.data.summary).toMatchObject({
+        opening_balance: 0,
+        current_balance: 30_000,
+      });
+
+      // Endi kartasiz CLICK kirim — yangi Asosiy (Humo) ga.
+      await finance.fillTheCashbox({
+        user_id: '0',
+        cashbox_type: Cashbox_type.MAIN,
+        amount: 1_000,
+        type: PaymentMethod.CLICK,
+      });
+      state = await expectInvariant();
+      expect(balances(state.list)).toEqual([
+        ['Humo HQ', 31_000, true],
+        ['Asosiy karta', 65_000, false],
+      ]);
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'finance.card_made_default' }),
+      );
+      // Takror — o'zgarish yo'q.
+      const again: any = await cards.makeDefault({ id: humo });
+      expect(again.data.changed).toBe(false);
+      // Arxivlangan karta asosiy bo'lmaydi.
+      const spare: any = await cards.createCard({ name: 'Zaxira' });
+      await cards.setCardActive({ id: spare.data.card.id, is_active: false });
+      await expect(
+        cards.makeDefault({ id: spare.data.card.id }),
+      ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      // Yaratishda «Asosiy karta qilish».
+      const fresh: any = await cards.createCard({
+        name: 'Visa yangi',
+        make_default: true,
+      });
+      expect(fresh.data.card).toMatchObject({ is_default: true, balance: 0 });
+      state = await expectInvariant();
+      expect(balances(state.list)[0]).toEqual(['Visa yangi', 0, true]);
+    });
+
+    it('N7: arxiv filial «Asosiy karta»si (qoldiq 0) o`chadi (soft); qoldig`i bor bo`lsa va MAIN Asosiy kartasi — 400', async () => {
+      await seed();
+      const box = await cashboxOf(BRANCH, Cashbox_type.BRANCH);
+      const saved = await db.getRepository(CashboxCard).save(
+        db.getRepository(CashboxCard).create({
+          cashbox_id: String(box.id),
+          name: 'Asosiy karta',
+          balance: 0,
+          is_default: true,
+          is_active: false,
+        }),
+      );
+      // Migratsiyadan oldingi karta qismi (50 000) hali bor — 400.
+      await expect(
+        cards.deleteCard({ id: String(saved.id) }),
+      ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      // Migratsiya 245 dan keyin: karta qismi jamiga o'tgan.
+      await db.query(
+        `UPDATE "finance_schema"."cashboxes"
+            SET balance_cash = balance_cash + balance_card, balance_card = 0
+          WHERE id = $1`,
+        [box.id],
+      );
+      await cards.deleteCard({ id: String(saved.id) });
+      const after = await db
+        .getRepository(CashboxCard)
+        .findOneByOrFail({ id: String(saved.id) });
+      expect(after).toMatchObject({ isDeleted: true, is_active: false });
+      expect(
+        Number((await cashboxOf(BRANCH, Cashbox_type.BRANCH)).balance),
+      ).toBe(300_000);
+      // MAIN Asosiy kartasi — avvalgidek 400.
+      const mainDefault = await defaultIdOf();
+      await expect(cards.deleteCard({ id: mainDefault })).rejects.toMatchObject(
+        { error: { statusCode: 400 } },
+      );
     });
 
     it('63HO6cBU: eski filial kartasi — Asosiy qilish, o`tkazma 400; MAIN make-default avvalgidek', async () => {

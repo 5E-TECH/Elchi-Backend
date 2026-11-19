@@ -97,6 +97,10 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
     const runner = db.createQueryRunner();
     await new CreateCashboxCards1716000000105().up(runner);
     await new CashboxCardDetails1716000000161().up(runner);
+    // 63HO6cBU (N1) — migratsiya 245 qo'shgan ustun (entity'da bor).
+    await runner.query(
+      'ALTER TABLE "finance_schema"."cashbox_cards" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamptz NULL',
+    );
     await runner.release();
 
     cards = new CashboxCardService(db, activityLog as never, realtime as never);

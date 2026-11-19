@@ -697,15 +697,8 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
         ai_check_enabled: true,
       }),
     );
-    expect(branch.data.cards.map((card: any) => card.name)).toEqual([
-      'Asosiy karta',
-      'Filial Humo',
-    ]);
-    for (const card of branch.data.cards) {
-      expect(card).toEqual(
-        expect.objectContaining({ photo_required: false, ai_enabled: false }),
-      );
-    }
+    // 63HO6cBU (N6) — filial kassasining kartalari yopish oynasida yo'q.
+    expect(branch.data.cards).toEqual([]);
   });
 
   it('BE-A: MAIN yopish (sukut) — har faol karta qoldig‘i va rasmi majburiy, AI pending; keyin yopiladi', async () => {
@@ -862,23 +855,21 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     );
     expect(mainStill.statusCode).toBe(400);
 
-    // Superadmin filial kalitini yoqadi — MAIN kaliti o'zgarmaydi.
+    // Eski FE filial kalitini yoqadi — 63HO6cBU (N6): eskirgan, saqlanmaydi.
     const patched = await setSettings({ branch_account_check_enabled: true });
     expect(patched.data).toEqual(
       expect.objectContaining({
         cashbox_type: 'main',
         account_check_enabled: true,
         main_account_check_enabled: true,
-        branch_account_check_enabled: true,
+        branch_account_check_enabled: false,
       }),
     );
     expect(
-      (
-        await db
-          .getRepository(FinanceSetting)
-          .findOneByOrFail({ key: 'shift.account_check.branch_enabled' })
-      ).value,
-    ).toBe(true);
+      await db
+        .getRepository(FinanceSetting)
+        .findOneBy({ key: 'shift.account_check.branch_enabled' }),
+    ).toBeNull();
     // 63HO6cBU — filial kaliti yoqilgan bo'lsa ham filial smenasida karta
     // qoldig'i so'ralmaydi: bitta «Sanalgan summa» bilan yopiladi.
     const third = await branch.openBranchShift();
@@ -927,7 +918,7 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     }
   });
 
-  it('BE-A: PATCH branch_account_check_enabled — faqat superadmin, boolean', async () => {
+  it('BE-A: PATCH branch_account_check_enabled — faqat superadmin, boolean; 63HO6cBU: eskirgan, saqlanmaydi', async () => {
     const denied = await rpcError(
       checks.updateSettings({
         requester_id: '2',
@@ -954,24 +945,19 @@ describePg('kiZgTybn — smena yopishda karta qoldiqlari (Postgres)', () => {
     const branch = (await checks.getSettings({
       cashbox_user_id: BRANCH,
     })) as Rpc;
+    // 63HO6cBU (N6) — filialda karta tasdiqlash doim o'chiq.
     expect(branch.data).toEqual(
       expect.objectContaining({
-        account_check_enabled: true,
+        account_check_enabled: false,
         main_account_check_enabled: false,
-        branch_account_check_enabled: true,
+        branch_account_check_enabled: false,
       }),
     );
     expect(activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'finance.shift_settings_updated',
-        old_value: expect.objectContaining({
-          account_check_enabled: true,
-          branch_account_check_enabled: false,
-        }),
-        new_value: expect.objectContaining({
-          account_check_enabled: false,
-          branch_account_check_enabled: true,
-        }),
+        old_value: expect.objectContaining({ account_check_enabled: true }),
+        new_value: expect.objectContaining({ account_check_enabled: false }),
       }),
     );
   });

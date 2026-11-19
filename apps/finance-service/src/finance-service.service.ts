@@ -1479,6 +1479,19 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       if (type === Cashbox_type.BRANCH) {
         result.add(String(h.id));
       } else if (
+        /**
+         * N10 — migratsiya 186 bog'lamagan eski kuryer to'lovi (`transfer_id`
+         * yo'q, qabul qiluvchi noma'lum): filialga bo'lishi mumkin — usul
+         * kuryerga ko'rsatilmaydi (xavfsiz tomon; SA/admin baribir ko'radi).
+         */
+        type === Cashbox_type.FOR_COURIER &&
+        h.source_type === Source_type.COURIER_PAYMENT &&
+        (h.transfer_id === null ||
+          h.transfer_id === undefined ||
+          h.transfer_id === '')
+      ) {
+        result.add(String(h.id));
+      } else if (
         type === Cashbox_type.FOR_COURIER &&
         typeof h.transfer_id === 'string' &&
         h.transfer_id !== ''
@@ -1872,10 +1885,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * Eski bo'lingan qoldiq keyingi harakatda jami saqlangan holda yig'iladi.
      */
     if (cashbox.cashbox_type === Cashbox_type.BRANCH) {
-      const nextTotal =
+      // N2: kasr (0,7 + 0,1) aniq jamini olishda 400 bermasin — tiyinga.
+      const nextTotal = FinanceServiceService.roundMoney(
         Number(cashbox.balance_cash) +
-        Number(cashbox.balance_card) +
-        sign * amount;
+          Number(cashbox.balance_card) +
+          sign * amount,
+      );
       if (!allowNegativeBalance && isExpense && nextTotal < 0) {
         throw new BadRequestException("Filial kassasida yetarli mablag' yo'q");
       }
@@ -1923,10 +1938,26 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         return this.successRes(exists, 200, 'Cashbox already exists');
       }
 
-      const balanceCash = Number(dto.balance_cash ?? 0);
-      const balanceCard = Number(dto.balance_card ?? 0);
-      const balance =
-        dto.balance !== undefined
+      /**
+       * 63HO6cBU (N8) — bitta jami kassalar (filial, kuryer, market): karta
+       * qismi naqdga qo'shiladi, `balance` = naqd. MAIN — avvalgidek.
+       */
+      const singleBucket = dto.cashbox_type !== Cashbox_type.MAIN;
+      const rawCash = Number(dto.balance_cash ?? 0);
+      const rawCard = Number(dto.balance_card ?? 0);
+      const onlyTotal =
+        dto.balance_cash == null &&
+        dto.balance_card == null &&
+        dto.balance !== undefined;
+      const balanceCash = singleBucket
+        ? FinanceServiceService.roundMoney(
+            onlyTotal ? Number(dto.balance) : rawCash + rawCard,
+          )
+        : rawCash;
+      const balanceCard = singleBucket ? 0 : rawCard;
+      const balance = singleBucket
+        ? balanceCash
+        : dto.balance !== undefined
           ? Number(dto.balance)
           : Number(balanceCash) + Number(balanceCard);
 
@@ -3966,8 +3997,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         opened_by_system: true,
         opened_at: new Date(),
         status: ShiftStatus.OPEN,
-        opening_balance_cash: Number(cashbox.balance_cash ?? 0),
-        opening_balance_card: Number(cashbox.balance_card ?? 0),
+        // 63HO6cBU (N5) — filial smenasi bitta jami bilan (openShift kabi).
+        ...(FinanceServiceService.shiftCashboxType(cashboxUserId) ===
+        Cashbox_type.BRANCH
+          ? {
+              opening_balance_cash: FinanceServiceService.roundMoney(
+                Number(cashbox.balance_cash ?? 0) +
+                  Number(cashbox.balance_card ?? 0),
+              ),
+              opening_balance_card: 0,
+            }
+          : {
+              opening_balance_cash: Number(cashbox.balance_cash ?? 0),
+              opening_balance_card: Number(cashbox.balance_card ?? 0),
+            }),
         comment: null,
         cashbox_user_id: cashboxUserId,
       });
@@ -6741,7 +6784,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * cashbox_debt_enabled`, mig 217). Client yo'q, id noto'g'ri, filial HQ yoki
    * xato — yopiq (`false`): avvalgi qat'iy xulq.
    */
-  private async isBranchCashboxDebtEnabled(branchId: string): Promise<boolean> {
+  async isBranchCashboxDebtEnabled(branchId: string): Promise<boolean> {
     if (!this.branchClient || !/^\d+$/.test(branchId)) return false;
     try {
       const response = await rmqSend<unknown>(

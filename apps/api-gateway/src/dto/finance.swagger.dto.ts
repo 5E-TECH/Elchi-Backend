@@ -1089,7 +1089,7 @@ export class PaymentFromCourierRequestDto {
   @ApiPropertyOptional({
     example: '3',
     description:
-      "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`; superadmin/admin — asosiy kassa, menejer — o'z filiali kassasi `?branch_id` siz). Faqat superadmin/admin'ning `click` qabulida (aks holda 400); berilmasa — Asosiy karta. 63HO6cBU: MENEJER yuborsa — e'tiborsiz (filial kassasida karta yo'q).",
+      "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`, asosiy kassa). Faqat superadmin/admin'ning `click` qabulida (aks holda 400); berilmasa — Asosiy karta. 63HO6cBU: MENEJER yuborsa — e'tiborsiz (filial kassasida karta yo'q).",
   })
   @IsOptional()
   @IsString()

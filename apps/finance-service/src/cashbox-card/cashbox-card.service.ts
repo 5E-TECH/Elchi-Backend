@@ -404,8 +404,9 @@ export async function sumNamedCardBalances(
  * O'ZGARTIRIB bo'lgan bo'lishi kerak (shu tranzaksiyada).
  *
  *   • `card_id` yo'q — Asosiy karta (avvalgi xatti-harakat, `null`);
- *   • faqat MAIN / BRANCH kassa (kuryer / market — 400) va `click` usuli
- *     (naqd / click_to_market — 400);
+ *   • 63HO6cBU: FILIAL (BRANCH) kassasi — `card_id` jimgina e'tiborsiz
+ *     (`null`, 400 emas); faqat MAIN kassa (kuryer / market — 400) va
+ *     `click` usuli (naqd / click_to_market — 400);
  *   • karta SHU kassaniki bo'lishi shart: boshqa kassa (masalan boshqa
  *     filial) kartasi — 403, mavjud emas — 404;
  *   • nomli karta: chiqimda kartada yetarli mablag' (aks holda 400), balans
@@ -1187,6 +1188,22 @@ export class CashboxCardService {
       if (from) {
         historyQb.andWhere('h.createdAt >= :from', { from });
         movementQb.andWhere('m.createdAt >= :from', { from });
+      }
+      /**
+       * 63HO6cBU (N1) — filial kartasi migratsiya 245 da nofaol qilingan:
+       * ko'chirma shu vaqtgacha. Keyingi filial qatorlari (bitta jami, karta
+       * yo'q) arxiv Asosiy kartaga yig'ilmaydi; qoldiq jamiga o'tgani —
+       * migratsiya harakati (o'sha vaqtda), shu bois joriy qoldiq 0 dan
+       * orqaga hisob to'g'ri. +1 ms: JS `Date` mikrosekundni qirqadi, migratsiya
+       * harakati esa aynan shu `now()` da yozilgan.
+       */
+      const cutoff =
+        cashbox.cashbox_type === Cashbox_type.BRANCH && card.deactivated_at
+          ? new Date(new Date(card.deactivated_at).getTime() + 1)
+          : null;
+      if (cutoff) {
+        historyQb.andWhere('h.createdAt <= :cutoff', { cutoff });
+        movementQb.andWhere('m.createdAt <= :cutoff', { cutoff });
       }
       const [histories, movements] = await Promise.all([
         historyQb
@@ -2054,7 +2071,18 @@ export class CashboxCardService {
             target = await lockTarget();
           }
 
-          if (card.is_default) {
+          /**
+           * 63HO6cBU (N7) — filial kassasida «asosiy qilish» yo'q (400),
+           * shuning uchun arxiv filial Asosiy kartasi qoldig'i 0 bo'lsa
+           * oddiy karta kabi (soft) o'chadi. MAIN — avvalgidek 400.
+           */
+          if (
+            card.is_default &&
+            !(
+              cashbox.cashbox_type === Cashbox_type.BRANCH &&
+              (await this.defaultBalance(manager, cashbox)) === 0
+            )
+          ) {
             throw new BadRequestException(
               "Asosiy kartani o'chirib bo'lmaydi — avval boshqa kartani asosiy qiling",
             );

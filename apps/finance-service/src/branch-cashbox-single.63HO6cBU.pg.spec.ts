@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { DataSource } from 'typeorm';
-import { Cashbox_type, Operation_type, PaymentMethod } from '@app/common';
+import {
+  Cashbox_type,
+  Operation_type,
+  PaymentMethod,
+  Source_type,
+} from '@app/common';
 import { FinanceServiceService } from './finance-service.service';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxCard } from './entities/cashbox-card.entity';
@@ -13,6 +18,8 @@ import { FinanceSetting } from './entities/finance-setting.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 import { PaymentCorrection } from './entities/payment-correction.entity';
 import { Shift } from './entities/shift.entity';
+import { ShiftScheduleClaim } from './entities/shift-schedule-claim.entity';
+import { ShiftAccountCheckService } from './shift-account-check/shift-account-check.service';
 import { CashboxReceiptService } from './cashbox-receipt/cashbox-receipt.service';
 import { CashboxCardService } from './cashbox-card/cashbox-card.service';
 import { FinanceNotificationService } from './notification/finance-notification.service';
@@ -35,7 +42,9 @@ import { projectReceiptsForViewer } from '../../api-gateway/src/finance-receipt-
  *  • filial smenasi: bitta «Sanalgan summa»;
  *  • filial kartalari: yangi karta / o'tkazma / konvertatsiya → 400.
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 const BRANCH = '15';
@@ -105,6 +114,7 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
         FinanceSetting,
         PaymentCorrection,
         Shift,
+        ShiftScheduleClaim,
       ],
       synchronize: true,
     });
@@ -187,7 +197,8 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
         "${schema}".financial_balance_history, "${schema}".payment_corrections,
         "${schema}".finance_settings, "${schema}".cashbox_cards,
         "${schema}".cashbox_card_movements,
-        "${schema}".cashbox_receipts, "${schema}".shifts
+        "${schema}".cashbox_receipts, "${schema}".shifts,
+        "${schema}".shift_schedule_claims
         RESTART IDENTITY CASCADE`,
     );
     await seed('0', Cashbox_type.MAIN, 1_000_000, 0);
@@ -705,6 +716,237 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
       cash: 0,
       card: 0,
     });
+  });
+
+  it('N2: kasr bo`lingan eski qoldiq (naqd 0,7 + karta 0,1) — aynan jami 0,8 olinadi (suzuvchi nuqta 400 bermaydi)', async () => {
+    await db.query(
+      `UPDATE "${schema}".cashboxes SET balance_cash = 0.7, balance_card = 0.1, balance = 0.8
+        WHERE user_id = $1 AND cashbox_type = 'branch'`,
+      [BRANCH],
+    );
+    const res = await adminTakes(0.8, PaymentMethod.CASH);
+    expect(res?.statusCode).toBe(200);
+    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual({
+      balance: 0,
+      cash: 0,
+      card: 0,
+    });
+    await assertInvariant();
+  });
+
+  it('N3: eski «O`tkazma» (click) qabulini tahrirlash — yangi qatorlar `cash`, kartasiz; tuzatish jurnalida ham `cash`; teskari qatorlar asl usulda', async () => {
+    const res = await managerReceives(200_000);
+    const transferId = res?.data?.transfer_id as string;
+    await db.query(
+      `UPDATE "${schema}".cashbox_history SET payment_method = 'click' WHERE transfer_id = $1`,
+      [transferId],
+    );
+    const courierLeg = await db.getRepository(CashboxHistory).findOneOrFail({
+      where: {
+        transfer_id: transferId,
+        operation_type: Operation_type.EXPENSE,
+      },
+    });
+    const corrected: any = await corrections.correctAmount({
+      history_id: String(courierLeg.id),
+      new_amount: 150_000,
+      reason: 'Summa noto`g`ri yozilgan',
+      idempotency_key: randomUUID(),
+      ...SA,
+    });
+    expect(corrected?.statusCode).toBe(201);
+    const [journal] = await db.getRepository(PaymentCorrection).find();
+    expect(journal.payment_method).toBe(PaymentMethod.CASH);
+    const rows = await db.getRepository(CashboxHistory).find({
+      where: { transfer_id: String(journal.replacement_transfer_id) },
+    });
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.payment_method).toBe(PaymentMethod.CASH);
+      expect(row.card_id ?? null).toBeNull();
+    }
+    const reversals = await db.getRepository(CashboxHistory).find({
+      where: { transfer_id: String(journal.reversal_transfer_id) },
+    });
+    expect(reversals.map((r) => r.payment_method)).toEqual([
+      PaymentMethod.CLICK,
+      PaymentMethod.CLICK,
+    ]);
+    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual({
+      balance: 150_000,
+      cash: 150_000,
+      card: 0,
+    });
+  });
+
+  it('N4: filial pulni HQ ga bergan, keyin noto`g`ri qabul qaytariladi — qarz o`chiq: 409, hech narsa o`zgarmaydi; «Kassa qarzga ishlaydi»: 201, filial jami manfiy', async () => {
+    const res = await managerReceives(200_000);
+    await adminTakes(200_000, PaymentMethod.CASH);
+    const courierLeg = await db.getRepository(CashboxHistory).findOneOrFail({
+      where: {
+        transfer_id: res?.data?.transfer_id as string,
+        operation_type: Operation_type.EXPENSE,
+      },
+    });
+    const reverse = () =>
+      corrections.reverse({
+        history_id: String(courierLeg.id),
+        reason: "Xato kiritilgan to'lov",
+        idempotency_key: randomUUID(),
+        ...SA,
+      });
+    const refused = await errorBody(reverse());
+    expect(refused.statusCode).toBe(409);
+    expect((await box(BRANCH, Cashbox_type.BRANCH)).balance).toBe(0);
+
+    branchDebt = true;
+    const reversed: any = await reverse();
+    expect(reversed?.statusCode).toBe(201);
+    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual({
+      balance: -200_000,
+      cash: -200_000,
+      card: 0,
+    });
+    expect((await box(COURIER, Cashbox_type.FOR_COURIER)).balance).toBe(
+      2_000_000,
+    );
+    await assertInvariant();
+  });
+
+  it('N5: avtomatik ochilgan filial smenasi — bitta jami (eski bo`lingan qoldiq ham), MAIN — avvalgidek', async () => {
+    await db.query(
+      `UPDATE "${schema}".cashboxes SET balance_cash = 30000, balance_card = 20000, balance = 50000
+        WHERE user_id = $1 AND cashbox_type = 'branch'`,
+      [BRANCH],
+    );
+    const opened = await service.autoOpenShift({
+      cashbox_user_id: BRANCH,
+      slot_key: '09:00',
+      slot_at: new Date(),
+    });
+    expect(opened.opened).toBe(true);
+    const shift = await db
+      .getRepository(Shift)
+      .findOneByOrFail({ id: String(opened.shift_id) });
+    expect([
+      Number(shift.opening_balance_cash),
+      Number(shift.opening_balance_card),
+    ]).toEqual([50_000, 0]);
+    await db.query(
+      `UPDATE "${schema}".cashboxes SET balance_cash = 700000, balance_card = 300000
+        WHERE user_id = '0'`,
+    );
+    const main = await service.autoOpenShift({
+      cashbox_user_id: '0',
+      slot_key: '09:00',
+      slot_at: new Date(),
+    });
+    const mainShift = await db
+      .getRepository(Shift)
+      .findOneByOrFail({ id: String(main.shift_id) });
+    expect([
+      Number(mainShift.opening_balance_cash),
+      Number(mainShift.opening_balance_card),
+    ]).toEqual([700_000, 300_000]);
+  });
+
+  it('N6: smena sozlamalari — filialda karta tasdiqlash hech qachon yoqilmaydi (eski `branch_account_check_enabled` saqlanmaydi), kartalar []', async () => {
+    const checks = new ShiftAccountCheckService(db, activityLog as never);
+    await checks.updateSettings({
+      requester_id: '1',
+      requester_roles: ['superadmin'],
+      branch_account_check_enabled: true,
+    });
+    const view: any = await checks.getSettings({ cashbox_user_id: BRANCH });
+    expect(view.data).toMatchObject({
+      cashbox_type: 'branch',
+      account_check_enabled: false,
+      branch_account_check_enabled: false,
+      cards: [],
+    });
+    await expect(
+      checks.updateSettings({
+        requester_id: '1',
+        requester_roles: ['superadmin'],
+        branch_account_check_enabled: 'ha',
+      }),
+    ).rejects.toMatchObject({ error: { statusCode: 400 } });
+  });
+
+  it('N8: POST /finance/cashbox — filial / kuryer / market kassasi karta qismi bilan yaratilsa, u naqdga qo`shiladi (balance = naqd); MAIN — avvalgidek', async () => {
+    const created: any = await service.createCashbox({
+      user_id: '77',
+      cashbox_type: Cashbox_type.BRANCH,
+      balance_cash: 1_000,
+      balance_card: 500,
+    });
+    expect(created.statusCode).toBe(201);
+    expect(await box('77', Cashbox_type.BRANCH)).toEqual({
+      balance: 1_500,
+      cash: 1_500,
+      card: 0,
+    });
+    await service.createCashbox({
+      user_id: '78',
+      cashbox_type: Cashbox_type.FOR_COURIER,
+      balance: 900,
+    });
+    expect(await box('78', Cashbox_type.FOR_COURIER)).toEqual({
+      balance: 900,
+      cash: 900,
+      card: 0,
+    });
+    await service.createCashbox({
+      user_id: '79',
+      cashbox_type: Cashbox_type.MAIN,
+      balance_cash: 1_000,
+      balance_card: 500,
+    });
+    expect(await box('79', Cashbox_type.MAIN)).toEqual({
+      balance: 1_500,
+      cash: 1_000,
+      card: 500,
+    });
+  });
+
+  it('N10: migratsiya 186 bog`lamagan eski kuryer to`lovi (transfer_id yo`q) — `branch_leg` (kuryerga usul ko`rsatilmaydi); bog`langan MAIN to`lovi — yo`q', async () => {
+    const res = await managerReceives(10_000);
+    const courierBox = await db.getRepository(Cashbox).findOneByOrFail({
+      user_id: COURIER,
+      cashbox_type: Cashbox_type.FOR_COURIER,
+    });
+    const legacy = await db.getRepository(CashboxHistory).save(
+      db.getRepository(CashboxHistory).create({
+        operation_type: Operation_type.EXPENSE,
+        cashbox_id: String(courierBox.id),
+        source_type: Source_type.COURIER_PAYMENT,
+        amount: 5_000,
+        balance_after: 0,
+        payment_method: PaymentMethod.CLICK,
+        transfer_id: null,
+      } as Partial<CashboxHistory>),
+    );
+    const mainPaid: any = await service.paymentsFromCourier({
+      courier_id: COURIER,
+      amount: 3_000,
+      payment_method: PaymentMethod.CLICK,
+      created_by: '1',
+      dedup_epoch: `gw:${randomUUID()}`,
+    });
+    const rows = await db.getRepository(CashboxHistory).find({
+      where: { cashbox_id: String(courierBox.id) },
+    });
+    const marked = await (service as any).withBranchLegs(
+      rows,
+      Cashbox_type.FOR_COURIER,
+    );
+    const flag = (transferId: string | null, id?: string) =>
+      marked.find((r: any) =>
+        id ? String(r.id) === id : r.transfer_id === transferId,
+      )?.branch_leg ?? false;
+    expect(flag(null, String(legacy.id))).toBe(true);
+    expect(flag(res?.data?.transfer_id)).toBe(true);
+    expect(flag(mainPaid?.data?.transfer_id)).toBe(false);
   });
 
   it('filial smenasi: ochilishda jami, yopishda bitta «Sanalgan summa» (karta 0, tafovut — jami bo`yicha)', async () => {

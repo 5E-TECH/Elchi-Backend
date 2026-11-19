@@ -21,7 +21,9 @@ import { FinancialBalanceHistory } from './entities/financial-balance-history.en
  * Daftar tomoni (`branch_payable` / `courier_receivable`) —
  * order-service `settlement-m4-manager-market.pg.spec.ts`.
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {

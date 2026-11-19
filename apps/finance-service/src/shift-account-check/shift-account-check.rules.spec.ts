@@ -124,7 +124,7 @@ describe('shift-account-check rules (kiZgTybn)', () => {
     });
   });
 
-  it('BE-A amaldagi sozlama: MAIN — asosiy kalit, filial — filial kaliti; master kalitlar umumiy', () => {
+  it('BE-A amaldagi sozlama: MAIN — asosiy kalit, filial — doim o`chiq (63HO6cBU); master kalitlar umumiy', () => {
     expect(effectiveShiftCheckSettings(SHIFT_CHECK_DEFAULTS, 'main')).toEqual({
       account_check_enabled: true,
       photo_required: true,
@@ -148,9 +148,10 @@ describe('shift-account-check rules (kiZgTybn)', () => {
       photo_required: false,
       ai_check_enabled: false,
     });
+    // 63HO6cBU (N6) — filial kaliti eskirgan: filialda karta tasdiqlash yo'q.
     expect(
       effectiveShiftCheckSettings(flipped, 'branch').account_check_enabled,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('BE-A yangi karta sukuti: MAIN — rasm + AI, filial — o‘chiq', () => {

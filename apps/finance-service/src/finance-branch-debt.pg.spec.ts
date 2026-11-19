@@ -23,7 +23,9 @@ import { Shift } from './entities/shift.entity';
  * filial HQ — avvalgidek 400. Haqiqiy Postgres
  * (`FINANCE_OPERATOR_PG_TEST_URI`).
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 const BRANCH = '15';

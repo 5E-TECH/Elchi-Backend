@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { Cashbox_type } from '@app/common';
+import {
+  Cashbox_type,
+  Operation_type,
+  PaymentMethod,
+  Source_type,
+} from '@app/common';
 import { BranchCashboxSingleBucket1716000000245 } from '../../../migrations/1716000000245-BranchCashboxSingleBucket';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxCard } from './entities/cashbox-card.entity';
+import { CashboxCardMovement } from './entities/cashbox-card-movement.entity';
+import { CashboxCardService } from './cashbox-card/cashbox-card.service';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift, ShiftStatus } from './entities/shift.entity';
 
@@ -53,7 +60,13 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
       type: 'postgres',
       url: url.toString(),
       schema: 'finance_schema',
-      entities: [Cashbox, CashboxHistory, CashboxCard, Shift],
+      entities: [
+        Cashbox,
+        CashboxHistory,
+        CashboxCard,
+        CashboxCardMovement,
+        Shift,
+      ],
       synchronize: false,
     });
     await db.initialize();
@@ -79,6 +92,8 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
     );
     await db.query(
       `TRUNCATE TABLE "finance_schema"."cashbox_cards",
+         "finance_schema"."cashbox_card_movements",
+         "finance_schema"."cashbox_history",
          "finance_schema"."shifts", "finance_schema"."cashboxes"
        RESTART IDENTITY CASCADE`,
     );
@@ -135,10 +150,12 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
         cashbox_user_id,
         ...(status === ShiftStatus.CLOSED ? { closed_at: new Date() } : {}),
       });
-    const [openBranch, closedBranch, openMain] = await shifts.save([
+    const [openBranch, closedBranch, openMain, openNoBox] = await shifts.save([
       shift('13', ShiftStatus.OPEN, 100_000, 250_000),
       shift('14', ShiftStatus.CLOSED, 1_000, 2_000),
       shift('0', ShiftStatus.OPEN, 200_000, 300_000),
+      // N9: kassa qatori yo'q filial (servis `shiftCashboxType` — BRANCH).
+      shift('16', ShiftStatus.OPEN, 3_000, 4_000),
     ]);
     ids = {
       main: String(main.id),
@@ -153,7 +170,34 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
       openBranch: String(openBranch.id),
       closedBranch: String(closedBranch.id),
       openMain: String(openMain.id),
+      openNoBox: String(openNoBox.id),
     };
+    // Migratsiyadan OLDINGI karta tarixi (b1): nomli kartaga 90 000, Asosiy
+    // kartaga (card_id NULL) 160 000 click kirim.
+    const history = db.getRepository(CashboxHistory);
+    const past = new Date(Date.now() - 86_400_000);
+    await history.save([
+      history.create({
+        operation_type: Operation_type.INCOME,
+        cashbox_id: ids.b1,
+        source_type: Source_type.COURIER_PAYMENT,
+        amount: 90_000,
+        balance_after: 0,
+        payment_method: PaymentMethod.CLICK,
+        card_id: ids.b1Named,
+        createdAt: past,
+      } as Partial<CashboxHistory>),
+      history.create({
+        operation_type: Operation_type.INCOME,
+        cashbox_id: ids.b1,
+        source_type: Source_type.COURIER_PAYMENT,
+        amount: 160_000,
+        balance_after: 0,
+        payment_method: PaymentMethod.CLICK,
+        card_id: null,
+        createdAt: past,
+      } as Partial<CashboxHistory>),
+    ]);
   };
 
   const boxOf = async (id: string) => {
@@ -190,12 +234,78 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
     expect(await shiftOf(ids.openBranch)).toEqual([350_000, 0]);
     expect(await shiftOf(ids.closedBranch)).toEqual([1_000, 2_000]);
     expect(await shiftOf(ids.openMain)).toEqual([200_000, 300_000]);
+    // N9: kassa qatori bo'lmagan filial smenasi ham (servis qoidasi).
+    expect(await shiftOf(ids.openNoBox)).toEqual([7_000, 0]);
+    // N1: har kartaga BITTA jurnal qatori (qayta yurganda ham).
+    const movements = await db.query(
+      `SELECT type, cashbox_id::text AS cashbox_id, from_card_id::text AS from_card,
+              amount::float AS amount, comment
+         FROM "finance_schema"."cashbox_card_movements" ORDER BY id`,
+    );
+    expect(movements).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'card_to_cash',
+          cashbox_id: ids.b1,
+          from_card: ids.b1Default,
+          amount: 160_000,
+          comment: "Migratsiya 245: karta qoldig'i jamiga",
+        },
+        expect.objectContaining({
+          type: 'card_to_cash',
+          cashbox_id: ids.b1,
+          from_card: ids.b1Named,
+          amount: 90_000,
+        }),
+      ]),
+    );
+    // b2 Asosiy kartasi yo'q (nomli ham) — uning karta qismi jurnalsiz.
+    expect(movements).toHaveLength(2);
   };
 
   it('up(): jami o`zgarmaydi, balance_card = 0, filial kartalari nofaol, ochiq smena jamiga', async () => {
     await seed();
     await run('up');
     await assertMigrated();
+  });
+
+  it('⭐ N1: eski filial karta ko`chirmasi — ochilish/yopilish to`g`ri (0 → +kirim → jamiga → 0); deploy`dan keyingi yangi filial qatori arxiv Asosiy kartaga yig`ilmaydi', async () => {
+    await seed();
+    await run('up');
+    // Deploy'dan keyin: card_id NULL click qator (masalan T6 / eski FE).
+    await db.getRepository(CashboxHistory).save(
+      db.getRepository(CashboxHistory).create({
+        operation_type: Operation_type.EXPENSE,
+        cashbox_id: ids.b1,
+        source_type: Source_type.BRANCH_TO_MAIN,
+        amount: 5_000,
+        balance_after: 0,
+        payment_method: PaymentMethod.CLICK,
+        card_id: null,
+        createdAt: new Date(Date.now() + 60_000),
+      } as Partial<CashboxHistory>),
+    );
+    const cards = new CashboxCardService(db, {} as never);
+    for (const [id, amount] of [
+      [ids.b1Default, 160_000],
+      [ids.b1Named, 90_000],
+    ] as const) {
+      const res: any = await cards.getLedger({ id });
+      const { items, summary } = res.data;
+      expect(items.map((r: any) => [r.kind, r.delta, r.balance_after])).toEqual(
+        [
+          ['card_to_cash', -amount, 0],
+          ['income', amount, amount],
+        ],
+      );
+      expect(summary).toMatchObject({
+        opening_balance: 0,
+        closing_balance: 0,
+        total_in: amount,
+        total_out: amount,
+        current_balance: 0,
+      });
+    }
   });
 
   it('idempotent: ikki marta yurgizilsa ham natija bir xil', async () => {
@@ -217,6 +327,11 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
     expect(await cardOf(ids.b1Default)).toEqual([0, true, false]);
     expect(await cardOf(ids.b1Archived)).toEqual([0, false, false]);
     expect(await shiftOf(ids.openBranch)).toEqual([100_000, 250_000]);
+    // N1: tiklangan kassaning migratsiya jurnal qatorlari o'chadi.
+    const [{ m }] = await db.query(
+      `SELECT count(*)::int AS m FROM "finance_schema"."cashbox_card_movements"`,
+    );
+    expect(m).toBe(0);
     const [{ n }] = await db.query(
       `SELECT count(*)::int AS n FROM information_schema.tables
         WHERE table_schema = 'finance_schema' AND table_name LIKE '%_backup_245'`,

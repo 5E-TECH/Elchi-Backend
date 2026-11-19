@@ -27,7 +27,9 @@ import { ShiftReportService } from '../shift-report/shift-report.service';
  * (FINANCE_OPERATOR_PG_TEST_URI bo'lmasa skip; o'z per-run sxemasida).
  * Kartaning backend qabul mezonlari (1–14).
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 const SA = { requester_id: '1', requester_roles: ['superadmin'] };

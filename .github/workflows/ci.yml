@@ -304,6 +304,12 @@ jobs:
           apps/finance-service/src/shift-auto-close/shift-auto-close-report.y8Tqm9Ap.pg.spec.ts
           apps/finance-service/src/cashbox-card-branch.Zv3MLn0a.pg.spec.ts
           apps/finance-service/src/history-branch-source.pg.spec.ts
+          apps/finance-service/src/branch-cashbox-single.63HO6cBU.pg.spec.ts
+          apps/finance-service/src/branch-cashbox-single.migration.pg.spec.ts
+          apps/finance-service/src/finance-branch-debt.pg.spec.ts
+          apps/finance-service/src/finance-branch-to-market.pg.spec.ts
+          apps/finance-service/src/finance-m4-manager-market.pg.spec.ts
+          apps/finance-service/src/payment-correction/payment-correction.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
           apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
           apps/ai-service/src/usage/ai-margin.pg.spec.ts

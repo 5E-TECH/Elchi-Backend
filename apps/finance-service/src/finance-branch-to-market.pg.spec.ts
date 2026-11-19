@@ -32,7 +32,9 @@ import { PaymentCorrectionService } from './payment-correction/payment-correctio
  * + `hq_to_market`), filial «Kassa qarzga ishlaydi», qo'riqchilar,
  * idempotentlik, chek va T6 tuzatish (rad).
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 const BRANCH = '15';

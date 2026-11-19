@@ -64,10 +64,11 @@ export function effectiveShiftCheckSettings(
   cashboxType: ShiftCheckCashboxType,
 ): ShiftCheckSettings {
   return {
+    // 63HO6cBU (N6) — filial kassasi bitta jami, kartasi yo'q: karta
+    // tasdiqlash rejimi filialda HECH QACHON yoqilmaydi (`branch_enabled`
+    // kaliti eskirgan, e'tiborsiz).
     account_check_enabled:
-      cashboxType === 'main'
-        ? global.account_check_enabled
-        : global.branch_account_check_enabled,
+      cashboxType === 'main' ? global.account_check_enabled : false,
     photo_required: global.photo_required,
     ai_check_enabled: global.ai_check_enabled,
   };
