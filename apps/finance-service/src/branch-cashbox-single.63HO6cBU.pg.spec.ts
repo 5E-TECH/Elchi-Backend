@@ -18,6 +18,7 @@ import { CashboxCardService } from './cashbox-card/cashbox-card.service';
 import { FinanceNotificationService } from './notification/finance-notification.service';
 import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 import { PaymentCorrectionService } from './payment-correction/payment-correction.service';
+import { projectReceiptsForViewer } from '../../api-gateway/src/finance-receipt-projection';
 
 /**
  * 63HO6cBU (P0, ega qarori 2026-11-17) — FILIAL kassasi naqd va kartaga
@@ -367,6 +368,143 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
     });
     expect((await box('0', Cashbox_type.MAIN)).card).toBe(300_000);
     await assertInvariant();
+  });
+
+  it('M1: my-cashbox (menejer, kuryer), getCashboxByUserId, findCashboxByUser (turli / tursiz) — `branch_leg` qo`yiladi, menejer/kuryer proyeksiyasida usul, karta, manba null', async () => {
+    await managerReceives(200_000, {
+      payment_method: PaymentMethod.CLICK,
+      card_id: '999',
+    });
+    // Eski qator: filial kartasi bilan click (migratsiyadan oldingi davr).
+    await db.query(
+      `UPDATE "${schema}".cashbox_history SET payment_method = 'click', card_id = 77, transfer_source_user_id = 7
+        WHERE cashbox_id = (SELECT id FROM "${schema}".cashboxes WHERE cashbox_type = 'branch')`,
+    );
+    await adminTakes(50_000, PaymentMethod.CLICK, {
+      transfer_source_user_id: '7',
+    });
+
+    const manager = (payload: unknown) =>
+      projectReceiptsForViewer(payload, {
+        roles: ['manager'],
+        branchId: BRANCH,
+        req: {},
+      }) as any;
+    const courier = (payload: unknown) =>
+      projectReceiptsForViewer(payload, {
+        roles: ['courier'],
+        branchId: null,
+        req: {},
+      }) as any;
+    const expectHidden = (rows: any[], expectedLen: number) => {
+      expect(rows).toHaveLength(expectedLen);
+      for (const row of rows) {
+        expect(row.branch_leg).toBe(true);
+        expect(row.payment_method).toBeNull();
+        expect(row.card_id).toBeNull();
+        expect(row.transfer_source_user_id ?? null).toBeNull();
+      }
+    };
+
+    // Menejer my-cashbox (filial kassasi).
+    const my: any = await service.myCashbox({
+      user_id: '25',
+      branch_id: BRANCH,
+      roles: ['manager'],
+    });
+    expectHidden(manager(my).data.cashboxHistory, 2);
+    // Kuryer my-cashbox (kuryer → filial qatori).
+    const myCourier: any = await service.myCashbox({
+      user_id: COURIER,
+      roles: ['courier'],
+    });
+    expectHidden(courier(myCourier).data.cashboxHistory, 1);
+    // getCashboxByUserId — BRANCH va FOR_COURIER.
+    const byIdBranch: any = await service.getCashboxByUserId({
+      id: BRANCH,
+      cashbox_type: Cashbox_type.BRANCH,
+    });
+    expectHidden(manager(byIdBranch).data.cashboxHistory, 2);
+    const byIdCourier: any = await service.getCashboxByUserId({
+      id: COURIER,
+      cashbox_type: Cashbox_type.FOR_COURIER,
+    });
+    expectHidden(manager(byIdCourier).data.cashboxHistory, 1);
+    // findCashboxByUser — turli va tursiz.
+    const typed: any = await service.findCashboxByUser({
+      user_id: BRANCH,
+      cashbox_type: Cashbox_type.BRANCH,
+      with_history: true,
+    });
+    expectHidden(manager(typed).data.history, 2);
+    const untyped: any = await service.findCashboxByUser({
+      user_id: COURIER,
+      with_history: true,
+    });
+    expectHidden(courier(untyped).data.history, 1);
+    // SA/A — usul saqlanadi.
+    const sa = projectReceiptsForViewer<any>(typed, {
+      roles: ['superadmin'],
+      branchId: null,
+      req: {},
+    });
+    expect(
+      sa.data.history.map((row: any) => row.payment_method).sort(),
+    ).toEqual(['click', 'click']);
+  });
+
+  it('M2: history/:id — filial qatorida `card` bloki hech qachon (na sintetik «Asosiy karta», na eski nomli karta); MAIN — avvalgidek', async () => {
+    const hq = await mainCard('HQ Uzcard');
+    await managerReceives(100_000);
+    await adminTakes(60_000, PaymentMethod.CLICK, { card_id: String(hq.id) });
+    const legs = await db.getRepository(CashboxHistory).find({
+      where: { source_type: 'branch_to_main' as never },
+      relations: ['cashbox'],
+      order: { id: 'ASC' },
+    });
+    const branchLeg = legs.find(
+      (l) => l.cashbox.cashbox_type === Cashbox_type.BRANCH,
+    )!;
+    const mainLeg = legs.find(
+      (l) => l.cashbox.cashbox_type === Cashbox_type.MAIN,
+    )!;
+    const branchDetail: any = await service.findHistoryById(
+      String(branchLeg.id),
+    );
+    expect(branchDetail.data.card).toBeNull();
+    expect(branchDetail.data.branch_leg).toBe(true);
+    const mainDetail: any = await service.findHistoryById(String(mainLeg.id));
+    expect(mainDetail.data.card).toMatchObject({ name: 'HQ Uzcard' });
+    expect(mainDetail.data.branch_leg).toBeUndefined();
+  });
+
+  it('m5: filial smena hisoboti — `card: null`, operatsiyalar faqat kirim/chiqim (usulsiz)', async () => {
+    const opened: any = await service.openShift({
+      opened_by: '8',
+      cashbox_user_id: BRANCH,
+    });
+    await managerReceives(300_000);
+    await adminTakes(100_000, PaymentMethod.CLICK);
+    const report: any = await service.getShiftReport({
+      shift_id: String(opened.data.id),
+      cashbox_user_id: BRANCH,
+    });
+    expect(report.data.cashbox_type).toBe('branch');
+    expect(report.data.card).toBeNull();
+    expect(report.data.operations).toEqual([
+      {
+        operation_type: 'income',
+        payment_method: null,
+        count: 1,
+        total: 300_000,
+      },
+      {
+        operation_type: 'expense',
+        payment_method: null,
+        count: 1,
+        total: 100_000,
+      },
+    ]);
   });
 
   it('tarix: filial oyog`i va kuryer→filial qatori `branch_leg: true` (gateway menejer/kuryerga usulni yashiradi); MAIN qatori — yo`q', async () => {

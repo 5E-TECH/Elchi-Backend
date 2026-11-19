@@ -128,10 +128,9 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
   }
 
   /**
-   * Zaxiradan tiklash: kassada karta qismi asl qiymatiga qaytadi, naqd —
-   * hozirgi jamidan uni ayirib (keyingi harakatlar saqlanadi, `balance`
-   * o'zgarmaydi); kartalar va ochiq smenalar — asl qiymatlar. Zaxira
-   * jadvallari olib tashlanadi.
+   * Zaxiradan tiklash (faqat jami o'zgarmagan kassalarda — pastdagi izoh):
+   * kassa, nomli kartalar va ochiq smena — asl bo'linish. Zaxira jadvallari
+   * olib tashlanadi. `balance` hech qachon o'zgarmaydi.
    */
   public async down(queryRunner: QueryRunner): Promise<void> {
     const restore = await this.lockTimeout(queryRunner);
@@ -146,19 +145,40 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
       await restore();
       return;
     }
-    await queryRunner.query(`
-      UPDATE "finance_schema"."cashboxes" cb
-         SET "balance_cash" = cb."balance_cash" + cb."balance_card" - b."balance_card",
-             "balance_card" = b."balance_card"
-        FROM "finance_schema"."branch_cashbox_backup_245" b
-       WHERE b."cashbox_id" = cb."id"
-    `);
+    /**
+     * Tiklash FAQAT xavfsiz kassalarda: jami (naqd + karta) up() dagi
+     * suratdan beri O'ZGARMAGAN. Filial pul sarflagan / olgan bo'lsa eski
+     * bo'linishni qaytarish naqdni chuqur manfiyga, kartaga esa yo'q pulni
+     * yozardi — eski kod «fantom» karta pulidan click chiqimga ruxsat berardi.
+     * Bunday kassalar bitta jamida (hammasi naqd, karta 0) qoladi, ularning
+     * nomli kartalari 0 va nofaol, ochiq smenasi — jami bilan.
+     * Tartib: kartalar va smenalar AVVAL (shart kassaning hozirgi holatiga
+     * qaraydi), kassa — oxirida.
+     */
+    const restorable = `
+      SELECT cb."id", cb."user_id"
+        FROM "finance_schema"."cashboxes" cb
+        JOIN "finance_schema"."branch_cashbox_backup_245" bc
+          ON bc."cashbox_id" = cb."id"
+       WHERE cb."cashbox_type" = 'branch'
+         AND cb."balance_cash" + cb."balance_card"
+             = bc."balance_cash" + bc."balance_card"`;
     await queryRunner.query(`
       UPDATE "finance_schema"."cashbox_cards" c
          SET "balance" = b."balance",
              "is_active" = b."is_active"
         FROM "finance_schema"."branch_card_backup_245" b
        WHERE b."card_id" = c."id"
+         AND (
+           c."cashbox_id" IN (SELECT r."id" FROM (${restorable}) r)
+           -- karta qismi bo'lmagan kassa (zaxirada yo'q): faqat pulsiz karta
+           OR (
+             b."balance" = 0
+             AND c."cashbox_id" NOT IN (
+               SELECT "cashbox_id" FROM "finance_schema"."branch_cashbox_backup_245"
+             )
+           )
+         )
     `);
     await queryRunner.query(`
       UPDATE "finance_schema"."shifts" s
@@ -166,6 +186,15 @@ export class BranchCashboxSingleBucket1716000000245 implements MigrationInterfac
              "opening_balance_card" = b."opening_balance_card"
         FROM "finance_schema"."branch_shift_backup_245" b
        WHERE b."shift_id" = s."id" AND s."status" = 'open'
+         AND s."cashbox_user_id" IN (SELECT r."user_id" FROM (${restorable}) r)
+    `);
+    await queryRunner.query(`
+      UPDATE "finance_schema"."cashboxes" cb
+         SET "balance_cash" = b."balance_cash",
+             "balance_card" = b."balance_card"
+        FROM "finance_schema"."branch_cashbox_backup_245" b
+       WHERE b."cashbox_id" = cb."id"
+         AND cb."id" IN (SELECT r."id" FROM (${restorable}) r)
     `);
     await queryRunner.query(
       `DROP TABLE IF EXISTS "finance_schema"."branch_shift_backup_245"`,

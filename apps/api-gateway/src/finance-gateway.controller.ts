@@ -2655,6 +2655,9 @@ export class FinanceGatewayController {
   @Get('cashbox/all-info')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU — menejer `allCashboxHistories` (filial tarixi): chek va filial
+  // oyog'i usuli / kartasi rol bo'yicha proyeksiya qilinadi.
+  @UseInterceptors(ReceiptProjectionInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all cashboxes total info' })
   async allCashboxesInfo(

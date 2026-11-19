@@ -205,20 +205,14 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
     await assertMigrated();
   });
 
-  it('down(): asl bo`linish tiklanadi (keyingi harakat saqlanadi), zaxira jadvallari o`chadi', async () => {
+  it('down(): jami o`zgarmagan kassada asl bo`linish tiklanadi (kassa, nomli karta, ochiq smena); zaxira jadvallari o`chadi; qayta down() xatosiz', async () => {
     await seed();
     await run('up');
-    // Migratsiyadan keyingi harakat: filialga +50 000 (jamiga).
-    await db.query(
-      `UPDATE "finance_schema"."cashboxes"
-          SET balance_cash = balance_cash + 50000, balance = balance + 50000
-        WHERE id = $1`,
-      [ids.b1],
-    );
     await run('down');
-    expect(await boxOf(ids.b1)).toEqual([400_000, 150_000, 250_000]);
+    expect(await boxOf(ids.b1)).toEqual([350_000, 100_000, 250_000]);
     expect(await boxOf(ids.b2)).toEqual([-30_000, -40_000, 10_000]);
     expect(await boxOf(ids.b3)).toEqual([70_000, 70_000, 0]);
+    expect(await boxOf(ids.main)).toEqual([500_000, 200_000, 300_000]);
     expect(await cardOf(ids.b1Named)).toEqual([90_000, true, false]);
     expect(await cardOf(ids.b1Default)).toEqual([0, true, false]);
     expect(await cardOf(ids.b1Archived)).toEqual([0, false, false]);
@@ -228,7 +222,28 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
         WHERE table_schema = 'finance_schema' AND table_name LIKE '%_backup_245'`,
     );
     expect(n).toBe(0);
-    // Qayta down() — xatosiz.
     await run('down');
+  });
+
+  it('⭐ up → filial pul sarfladi → down(): bo`linish TIKLANMAYDI (naqd manfiy / «fantom» karta yo`q) — eski kod karta chiqimini 400 bilan rad etadi', async () => {
+    await seed();
+    await run('up');
+    // up() dan keyin filial 299 999,65 so'm topshirdi (jami o'zgardi).
+    await db.query(
+      `UPDATE "finance_schema"."cashboxes"
+          SET balance_cash = balance_cash - 299999.65, balance = balance - 299999.65
+        WHERE id = $1`,
+      [ids.b1],
+    );
+    await run('down');
+    // Hammasi naqd, karta 0 — eski kod karta bo'lagidan click chiqimni
+    // (nextCard < 0) rad etadi, filial jami manfiyga tushmaydi.
+    expect(await boxOf(ids.b1)).toEqual([50_000.35, 50_000.35, 0]);
+    expect(await cardOf(ids.b1Named)).toEqual([0, false, false]);
+    expect(await cardOf(ids.b1Default)).toEqual([0, false, false]);
+    // Shu filialning ochiq smenasi — jami bilan qoladi.
+    expect(await shiftOf(ids.openBranch)).toEqual([350_000, 0]);
+    // Jami o'zgarmagan boshqa filial — tiklanadi.
+    expect(await boxOf(ids.b2)).toEqual([-30_000, -40_000, 10_000]);
   });
 });

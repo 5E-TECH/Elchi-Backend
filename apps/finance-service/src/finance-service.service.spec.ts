@@ -347,8 +347,11 @@ describe('FinanceServiceService.myCashbox', () => {
         },
       }),
     );
-    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi.
-    expect(response.data.cashboxHistory).toEqual([withUsers(branchPayment)]);
+    // vf4513Zn — tarix qatorlariga xodim/kontragent maydonlari qo'shiladi;
+    // 63HO6cBU — filial kassasi qatori `branch_leg: true` (proyeksiya uchun).
+    expect(response.data.cashboxHistory).toEqual([
+      { ...withUsers(branchPayment), branch_leg: true },
+    ]);
   });
 
   it('shows all courier cashbox history by default', async () => {

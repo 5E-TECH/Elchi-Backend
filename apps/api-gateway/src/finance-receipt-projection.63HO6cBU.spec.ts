@@ -28,7 +28,15 @@ describe('63HO6cBU — filial qatorlarida to`lov usuli rol bo`yicha', () => {
         },
       ],
       // Tafsilot (history/:id) shakli ham.
-      detail: { id: '9', branch_leg: true, payment_method: 'cash' },
+      detail: {
+        id: '9',
+        branch_leg: true,
+        payment_method: 'click',
+        card_id: null,
+        card: { id: null, name: 'Asosiy karta', is_default: true },
+        transfer_source_user_id: '7',
+        transfer_source_user: { id: '7', name: 'Ali' },
+      },
     },
   });
   const view = (roles: string[]) =>
@@ -52,7 +60,13 @@ describe('63HO6cBU — filial qatorlarida to`lov usuli rol bo`yicha', () => {
         payment_method: 'click',
         card_id: '3',
       });
-      expect(out.data.detail.payment_method).toBeNull();
+      expect(out.data.detail).toMatchObject({
+        payment_method: null,
+        card_id: null,
+        card: null,
+        transfer_source_user_id: null,
+        transfer_source_user: null,
+      });
     },
   );
 
@@ -62,6 +76,9 @@ describe('63HO6cBU — filial qatorlarida to`lov usuli rol bo`yicha', () => {
       payment_method: 'click',
       card_id: '7',
     });
-    expect(out.data.detail.payment_method).toBe('cash');
+    expect(out.data.detail).toMatchObject({
+      payment_method: 'click',
+      transfer_source_user_id: '7',
+    });
   });
 });

@@ -1459,26 +1459,37 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 63HO6cBU — kuryer kassasidagi to'lov qatorlari (kuryer → filial) uchun:
-   * qaysi `transfer_id` larda FILIAL (BRANCH) kassasi oyog'i bor. Faqat
-   * FOR_COURIER qatorlari tekshiriladi; xato — bo'sh to'plam (fail-open).
+   * 63HO6cBU — FILIAL oyog'i qatorlari (id lar): o'zi BRANCH kassasidagi
+   * qator, yoki kuryer kassasidagi to'lov qatori (kuryer → filial) — uning
+   * `transfer_id` sida BRANCH kassasi oyog'i bor. `fallbackType` — qatorlarda
+   * `cashbox` relation yuklanmagan yo'llar uchun (bitta kassa tarixi). Xato —
+   * faqat o'z turi bo'yicha (fail-open).
    */
-  private async loadBranchTransferIds(
+  private async branchLegIds(
     histories: CashboxHistory[],
+    fallbackType?: Cashbox_type | null,
   ): Promise<Set<string>> {
+    const typeOf = (h: CashboxHistory) =>
+      h?.cashbox?.cashbox_type ?? fallbackType ?? null;
+    const result = new Set<string>();
+    const courierRows: CashboxHistory[] = [];
+    for (const h of histories ?? []) {
+      if (!h) continue;
+      const type = typeOf(h);
+      if (type === Cashbox_type.BRANCH) {
+        result.add(String(h.id));
+      } else if (
+        type === Cashbox_type.FOR_COURIER &&
+        typeof h.transfer_id === 'string' &&
+        h.transfer_id !== ''
+      ) {
+        courierRows.push(h);
+      }
+    }
     const transferIds = [
-      ...new Set(
-        histories
-          .filter(
-            (h) =>
-              h?.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER &&
-              typeof h.transfer_id === 'string' &&
-              h.transfer_id !== '',
-          )
-          .map((h) => String(h.transfer_id)),
-      ),
+      ...new Set(courierRows.map((h) => String(h.transfer_id))),
     ];
-    if (!transferIds.length) return new Set();
+    if (!transferIds.length) return result;
     try {
       const rows: unknown = await this.historyRepo
         .createQueryBuilder('h')
@@ -1489,14 +1500,38 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           branch: Cashbox_type.BRANCH,
         })
         .getRawMany();
-      return new Set(
+      const branchTransfers = new Set(
         (Array.isArray(rows) ? rows : [])
           .map((row) => (row as { transfer_id?: unknown })?.transfer_id)
           .filter((id): id is string => typeof id === 'string'),
       );
+      for (const h of courierRows) {
+        if (branchTransfers.has(String(h.transfer_id))) {
+          result.add(String(h.id));
+        }
+      }
     } catch {
-      return new Set();
+      // fail-open: faqat o'z turi bo'yicha belgilangan.
     }
+    return result;
+  }
+
+  /**
+   * 63HO6cBU — tarix qatorlariga `branch_leg: true` (gateway menejer /
+   * kuryer ko'rinishida shu qatorlarda usul, karta va o'tkazma manbasini
+   * yashiradi). Barcha tarix yo'llari (my-cashbox, cashbox/main,
+   * cashbox/user/:id(/main), history, history/:id) shu orqali.
+   */
+  private async withBranchLegs<T extends CashboxHistory>(
+    histories: T[],
+    fallbackType?: Cashbox_type | null,
+  ): Promise<Array<T & { branch_leg?: true }>> {
+    if (!Array.isArray(histories) || !histories.length) return histories ?? [];
+    const legIds = await this.branchLegIds(histories, fallbackType);
+    if (!legIds.size) return histories;
+    return histories.map((h) =>
+      h && legIds.has(String(h.id)) ? { ...h, branch_leg: true as const } : h,
+    );
   }
 
   private async enrichHistoryWithUsers<T extends CashboxHistory>(
@@ -1559,11 +1594,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         : null;
     // 63HO6cBU (P0) — filial oyog'i belgisi (`branch_leg: true`): gateway
     // menejer / kuryer ko'rinishida shu qatorlarda to'lov usulini yashiradi.
-    const branchTransfers = await this.loadBranchTransferIds(histories);
+    const legIds = await this.branchLegIds(histories);
     const branchLegOf = (history: CashboxHistory) =>
-      history?.cashbox?.cashbox_type === Cashbox_type.BRANCH ||
-      (history?.transfer_id != null &&
-        branchTransfers.has(String(history.transfer_id)))
+      history && legIds.has(String(history.id))
         ? { branch_leg: true as const }
         : {};
     const ackOf = (history: CashboxHistory) =>
@@ -1973,9 +2006,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
         // (2crjWf7v) menejer kuryer kassasi tafsilotida ham «Noto'g'ri» belgisini ko'rsin.
         const history = await this.withCorrections(
-          cashbox.cashbox_type === Cashbox_type.FOR_COURIER
-            ? await this.withPaymentAcks(rows)
-            : rows,
+          await this.withBranchLegs(
+            cashbox.cashbox_type === Cashbox_type.FOR_COURIER
+              ? await this.withPaymentAcks(rows)
+              : rows,
+            cashbox.cashbox_type,
+          ),
           dto.include_receipts === true ? 'brief' : 'none',
         );
 
@@ -2050,9 +2086,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
       const [rows, total] = await historyQuery.getManyAndCount();
       const history = await this.withCorrections(
-        await this.withPaymentAcks(
-          rows,
-          (row) => row.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER,
+        await this.withBranchLegs(
+          await this.withPaymentAcks(
+            rows,
+            (row) => row.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER,
+          ),
         ),
         dto.include_receipts === true ? 'brief' : 'none',
       );
@@ -2988,10 +3026,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     try {
       if (history.payment_method !== PaymentMethod.CLICK) return null;
       const cashboxType = history.cashbox?.cashbox_type;
-      if (
-        cashboxType !== Cashbox_type.MAIN &&
-        cashboxType !== Cashbox_type.BRANCH
-      ) {
+      // 63HO6cBU (P0) — filial kassasida karta yo'q (bitta jami): filial
+      // qatorida karta bloki HECH QACHON (na sintetik «Asosiy karta», na eski
+      // nomli karta — hamma rol uchun).
+      if (cashboxType !== Cashbox_type.MAIN) {
         return null;
       }
       const card = await this.dataSource.manager.findOne(CashboxCard, {
@@ -4232,6 +4270,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           total: string;
         }>();
       const [named] = await this.withShiftUserNames([shift]);
+      const isBranchShift =
+        FinanceServiceService.shiftCashboxType(cashboxUserId) ===
+        Cashbox_type.BRANCH;
       // BE-B: qatorlarda `photo_status`, `late_upload_deadline`,
       // `late_uploaded`, `can_upload_late` (avto-yopilgan MAIN smenasi).
       const accounts = this.shiftAccountChecks
@@ -4287,24 +4328,51 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             closing_balance: shift.closing_balance_cash,
             discrepancy: shift.discrepancy_cash,
           },
-          card: {
-            opening_balance: shift.opening_balance_card,
-            total_income: shift.total_income_card,
-            total_expense: shift.total_expense_card,
-            expected_balance: shift.expected_balance_card,
-            closing_balance: shift.closing_balance_card,
-            discrepancy: shift.discrepancy_card,
-          },
+          // 63HO6cBU — filial smenasi bitta jami: karta bloki yo'q.
+          card: isBranchShift
+            ? null
+            : {
+                opening_balance: shift.opening_balance_card,
+                total_income: shift.total_income_card,
+                total_expense: shift.total_expense_card,
+                expected_balance: shift.expected_balance_card,
+                closing_balance: shift.closing_balance_card,
+                discrepancy: shift.discrepancy_card,
+              },
           accounts,
           accounts_summary: this.shiftAccountChecks
             ? this.shiftAccountChecks.summarize(accounts)
             : null,
-          operations: operations.map((row) => ({
-            operation_type: row.operation_type,
-            payment_method: row.payment_method,
-            count: Number(row.count) || 0,
-            total: FinanceServiceService.roundMoney(Number(row.total) || 0),
-          })),
+          operations: isBranchShift
+            ? // 63HO6cBU — filialda usul bo'yicha ajratma yo'q (menejer
+              // usulni ko'rmaydi): faqat kirim / chiqim.
+              [Operation_type.INCOME, Operation_type.EXPENSE]
+                .map((type) => {
+                  const rows = operations.filter(
+                    (row) => row.operation_type === type,
+                  );
+                  return {
+                    operation_type: type,
+                    payment_method: null,
+                    count: rows.reduce(
+                      (sum, row) => sum + (Number(row.count) || 0),
+                      0,
+                    ),
+                    total: FinanceServiceService.roundMoney(
+                      rows.reduce(
+                        (sum, row) => sum + (Number(row.total) || 0),
+                        0,
+                      ),
+                    ),
+                  };
+                })
+                .filter((row) => row.count > 0)
+            : operations.map((row) => ({
+                operation_type: row.operation_type,
+                payment_method: row.payment_method,
+                count: Number(row.count) || 0,
+                total: FinanceServiceService.roundMoney(Number(row.total) || 0),
+              })),
           operations_window: { from: shift.opened_at, to },
         },
         200,
@@ -4620,10 +4688,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         order: { createdAt: 'DESC' },
       });
       const { income, outcome } = this.calcIncomeOutcome(rawHistory);
-      const ackedHistory =
+      // 63HO6cBU — qatorlarda `cashbox` relation yo'q: kassa turi bo'yicha.
+      const ackedHistory = await this.withBranchLegs(
         cashbox.cashbox_type === Cashbox_type.FOR_COURIER
           ? await this.withPaymentAcks(rawHistory)
-          : rawHistory;
+          : rawHistory,
+        cashbox.cashbox_type,
+      );
 
       /**
        * (vf4513Zn) my-cashbox / kassa sahifasi tarixida KONTRAGENT ismi:

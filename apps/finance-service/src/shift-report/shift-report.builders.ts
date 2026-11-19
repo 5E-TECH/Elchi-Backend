@@ -168,6 +168,7 @@ export function buildSuperadminMessage(
   fileKey: string | null,
 ): ShiftReportMessage {
   const auto = snapshot.close_reason === 'auto';
+  const isBranch = snapshot.cashbox_type === 'branch';
   const statusCounts = new Map<string, number>();
   for (const line of snapshot.accounts) {
     statusCounts.set(
@@ -185,9 +186,14 @@ export function buildSuperadminMessage(
   const lines = [
     `${cashboxLabel(snapshot)} · ${tashkentDateTime(snapshot.opened_at)} → ${tashkentDateTime(snapshot.closed_at)}`,
     ...(auto ? [`⏰ ${autoClosedLabel(snapshot.closed_at)}`] : []),
-    `Naqd: ${formatSom(snapshot.cash.opening_balance)} → kutilgan ${formatSom(snapshot.cash.expected_balance)} (kirim ${formatSom(snapshot.cash.total_income)}, chiqim ${formatSom(snapshot.cash.total_expense)}); farq: ${discrepancyText(snapshot.cash.discrepancy)}`,
-    `Karta: ${formatSom(snapshot.card.opening_balance)} → kutilgan ${formatSom(snapshot.card.expected_balance)} (kirim ${formatSom(snapshot.card.total_income)}, chiqim ${formatSom(snapshot.card.total_expense)}); farq: ${discrepancyText(snapshot.card.discrepancy)}`,
-    ...(accountsText ? [accountsText] : []),
+    `${isBranch ? 'Jami' : 'Naqd'}: ${formatSom(snapshot.cash.opening_balance)} → kutilgan ${formatSom(snapshot.cash.expected_balance)} (kirim ${formatSom(snapshot.cash.total_income)}, chiqim ${formatSom(snapshot.cash.total_expense)}); farq: ${discrepancyText(snapshot.cash.discrepancy)}`,
+    // 63HO6cBU — filial smenasi bitta jami: karta qatori yo'q.
+    ...(isBranch
+      ? []
+      : [
+          `Karta: ${formatSom(snapshot.card.opening_balance)} → kutilgan ${formatSom(snapshot.card.expected_balance)} (kirim ${formatSom(snapshot.card.total_income)}, chiqim ${formatSom(snapshot.card.total_expense)}); farq: ${discrepancyText(snapshot.card.discrepancy)}`,
+        ]),
+    ...(accountsText && !isBranch ? [accountsText] : []),
     `Kuryerlar: ${snapshot.couriers.length} ta, ${formatSom(courierTotal)} · Marketlar: ${snapshot.markets.length} ta, ${formatSom(marketTotal)}`,
     ...(fileKey ? ["📎 To'liq hisobot ilovada."] : []),
   ];
@@ -202,7 +208,7 @@ export function buildSuperadminMessage(
       cashbox_type: snapshot.cashbox_type,
       cashbox_user_id: snapshot.cashbox_user_id,
       cash_discrepancy: snapshot.cash.discrepancy,
-      card_discrepancy: snapshot.card.discrepancy,
+      card_discrepancy: isBranch ? null : snapshot.card.discrepancy,
       couriers_count: snapshot.couriers.length,
       markets_count: snapshot.markets.length,
       ...(fileKey

@@ -28,7 +28,8 @@ import {
  *    `resolveOwnBranchId` bilan AYNI: JWT `branch_id`, bo'lmasa
  *    `branch.user.find_by_user`; aniqlanmasa — `null` (fail closed).
  *  - 63HO6cBU — SA/admin bo'lmagan ko'ruvchiga `branch_leg: true` qatorlarda
- *    `payment_method` / `card_id` — `null` (filial kassasi bitta jami).
+ *    `payment_method`, `card_id`, `card`, `transfer_source_user(_id)` —
+ *    `null` (filial kassasi bitta jami).
  */
 const MAX_DEPTH = 8;
 
@@ -37,6 +38,19 @@ export interface ReceiptViewer {
   branchId: string | null;
   req: OriginRequest;
 }
+
+/**
+ * 63HO6cBU — filial oyog'i qatorida menejer / kuryerdan yashiriladigan
+ * maydonlar: usul, karta (id va tafsilot bloki) va o'tkazma manbasi (u faqat
+ * naqdsiz to'lovda yoziladi — usulni oshkor qiladi).
+ */
+const BRANCH_LEG_HIDDEN_KEYS = new Set([
+  'payment_method',
+  'card_id',
+  'card',
+  'transfer_source_user_id',
+  'transfer_source_user',
+]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -89,7 +103,7 @@ function walk(value: unknown, viewer: ReceiptViewer, depth: number): unknown {
   // finance belgilaydi) to'lov usuli va karta qaytmaydi — eski qatorlarda ham.
   const hideMethod = value.branch_leg === true && !isPrivileged(viewer.roles);
   for (const [key, item] of Object.entries(value)) {
-    if (hideMethod && (key === 'payment_method' || key === 'card_id')) {
+    if (hideMethod && BRANCH_LEG_HIDDEN_KEYS.has(key)) {
       out[key] = null;
       continue;
     }
