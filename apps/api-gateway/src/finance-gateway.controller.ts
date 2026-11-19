@@ -372,6 +372,10 @@ export async function prepareReceiptAiImage(
   }
 }
 
+/** 63HO6cBU (PR-B) — filialda qo'lda kirim / chiqim yo'q. */
+const BRANCH_MANUAL_CASHBOX_FORBIDDEN_MESSAGE =
+  "Kassadan xarajat va kassani to'ldirish faqat HQ (superadmin/admin) uchun";
+
 @ApiTags('Finance')
 @Controller('finance')
 export class FinanceGatewayController {
@@ -3209,7 +3213,9 @@ export class FinanceGatewayController {
 
   @Patch('cashbox/spend')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU (P0, PR-B) — filialda «Kassadan xarajat» / «Kassani to'ldirish»
+  // yo'q: menejer — 403 (RolesGuard). Faqat HQ asosiy kassasi.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Spend money from main cashbox',
@@ -3227,15 +3233,12 @@ export class FinanceGatewayController {
     if (cashboxSpendCommentRequired() && !String(dto.comment ?? '').trim()) {
       throw new BadRequestException('Izoh majburiy');
     }
-    const isManager = this.isManager(req?.user);
-    const branchId = isManager
-      ? this.extractBranchId(req.user) ||
-        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
-      : '';
-    if (isManager && !branchId) {
-      throw new ForbiddenException("Managerning branch'i topilmadi");
+    // 63HO6cBU (PR-B) — guard'ni chetlab o'tadigan chaqiruvlar uchun ham:
+    // faqat HQ (superadmin/admin), faqat asosiy (MAIN) kassa.
+    if (!this.isPrivileged(req?.user)) {
+      throw new ForbiddenException(BRANCH_MANUAL_CASHBOX_FORBIDDEN_MESSAGE);
     }
-    const targetUserId = isManager ? branchId : req.user.sub;
+    const targetUserId = req.user.sub;
     const token = this.resolveTransferToken(idempotencyKey);
     const result = await this.send(
       { cmd: 'finance.cashbox.spend' },
@@ -3244,7 +3247,7 @@ export class FinanceGatewayController {
         user_id: targetUserId,
         created_by: req.user.sub,
         dedup_epoch: token,
-        ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
+        cashbox_type: Cashbox_type.MAIN,
         // IgR4FVsR — qo'lda operatsiya P&L daftariga AYNI tranzaksiyada
         // yoziladi (alohida POST /financial-balance/entries KERAK EMAS).
         financial_ledger: true,
@@ -3371,7 +3374,9 @@ export class FinanceGatewayController {
 
   @Patch('cashbox/fill')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU (P0, PR-B) — filialda «Kassadan xarajat» / «Kassani to'ldirish»
+  // yo'q: menejer — 403 (RolesGuard). Faqat HQ asosiy kassasi.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Fill main cashbox' })
   @ApiBody({ type: MainCashboxManualRequestDto })
@@ -3380,15 +3385,12 @@ export class FinanceGatewayController {
     @Body() dto: MainCashboxManualRequestDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    const isManager = this.isManager(req?.user);
-    const branchId = isManager
-      ? this.extractBranchId(req.user) ||
-        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
-      : '';
-    if (isManager && !branchId) {
-      throw new ForbiddenException("Managerning branch'i topilmadi");
+    // 63HO6cBU (PR-B) — guard'ni chetlab o'tadigan chaqiruvlar uchun ham:
+    // faqat HQ (superadmin/admin), faqat asosiy (MAIN) kassa.
+    if (!this.isPrivileged(req?.user)) {
+      throw new ForbiddenException(BRANCH_MANUAL_CASHBOX_FORBIDDEN_MESSAGE);
     }
-    const targetUserId = isManager ? branchId : req.user.sub;
+    const targetUserId = req.user.sub;
     const token = this.resolveTransferToken(idempotencyKey);
     return this.send(
       { cmd: 'finance.cashbox.fill' },
@@ -3397,7 +3399,7 @@ export class FinanceGatewayController {
         user_id: targetUserId,
         created_by: req.user.sub,
         dedup_epoch: token,
-        ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
+        cashbox_type: Cashbox_type.MAIN,
         // IgR4FVsR — qo'lda operatsiya P&L daftariga AYNI tranzaksiyada
         // yoziladi (alohida POST /financial-balance/entries KERAK EMAS).
         financial_ledger: true,
@@ -4853,12 +4855,13 @@ export class FinanceGatewayController {
 
   @Get('receipt-settings')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU (PR-B) — menejerda chek (manual_expense) yo'q → sozlamalar ham.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary: '(T3) Kassa cheki sozlamalari',
     description:
-      "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH).",
+      "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH). O'qish — superadmin/admin (menejer 403, 63HO6cBU).",
   })
   async getReceiptSettings() {
     return this.send({ cmd: 'finance.receipt.settings.get' }, {});
@@ -4890,14 +4893,16 @@ export class FinanceGatewayController {
 
   @Post('receipts')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU (PR-B) — menejerda qo'lda chiqim yo'q → `manual_expense` cheki
+  // ham yo'q (403).
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: UploadReceiptSwaggerDto })
   @ApiOperation({
     summary: '(T3) Kassa cheki rasmini yuklash (qoralama)',
     description:
-      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
+      "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: faqat superadmin/admin — har tur; menejer va boshqalar 403 (63HO6cBU: filialda «Kassadan xarajat» yo'q). Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
   })
   @UseInterceptors(
     FileInterceptor('photo', {
@@ -5852,12 +5857,13 @@ export class FinanceGatewayController {
 
   @Get('cashbox/expense-categories')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU (PR-B) — menejerda «Kassadan xarajat» yo'q → kategoriyalar ham.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Kassa xarajatlari kategoriyalari (chiqim oynasidagi tanlov)',
     description:
-      "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
+      "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladiganlar (superadmin, admin) ko'radi; menejer — 403 (63HO6cBU). `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
   })
   @ApiQuery({ name: 'include_deleted', required: false, type: Boolean })
   listCashboxExpenseCategories(

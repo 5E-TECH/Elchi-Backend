@@ -348,16 +348,12 @@ export class CashboxReceiptService {
     const roles = rolesOf(input?.requester_roles);
     const privileged =
       roles.includes(Roles.SUPERADMIN) || roles.includes(Roles.ADMIN);
-    let branchId: string | null = null;
+    // 63HO6cBU (P0, PR-B) — menejerda «Kassadan xarajat» yo'q, demak
+    // `manual_expense` cheki ham yo'q: chek yuklash faqat superadmin/admin.
     if (!privileged) {
-      if (!roles.includes(Roles.MANAGER) || kind !== 'manual_expense') {
-        forbidden('Bu turdagi chekni yuklashga ruxsat yo‘q');
-      }
-      branchId = text(input?.branch_id);
-      if (!/^\d+$/.test(branchId)) {
-        forbidden('Menejerning filiali topilmadi');
-      }
+      forbidden('Bu turdagi chekni yuklashga ruxsat yo‘q');
     }
+    const branchId: string | null = null;
     const settings = await this.loadSettings();
     if (!settings[receiptSettingGroupOf(kind)].photo_required) {
       receiptFail(400, RC.DISABLED);

@@ -22,6 +22,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-19 — Filialda «Kassadan xarajat» va «Kassani to'ldirish» yo'q — 63HO6cBU (PR-B)
+
+Deploy: **finance-service va api-gateway**, migratsiyasiz.
+
+- ⚠️ [gateway] `PATCH /finance/cashbox/spend` va `PATCH /finance/cashbox/fill` — endi faqat **SUPERADMIN / ADMIN** (asosiy kassa). **Menejer → 403.**
+- ⚠️ [finance] Filial kassasiga (`cashbox_type: branch`) qo'lda chiqim → 400 «Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi», kirim → 400 «Filial kassasini qo'lda to'ldirib bo'lmaydi».
+- ⚠️ [gateway] `GET /finance/cashbox/expense-categories` — menejer → 403 (SA/admin avvalgidek).
+- ⚠️ [gateway] `POST /finance/receipts` (chek yuklash) va `GET /finance/receipt-settings` — faqat SA/admin; menejer → 403 (`manual_expense` cheki menejerda yo'q).
+- 🟢 «Filial daromadini yechish» (o'z foydasi doirasida chiqim) — alohida karta (t7ewOeOP), hali yo'q.
+
+**Frontend action items:**
+- 🔧 Menejer interfeysidan «Kassadan xarajat», «Kassani to'ldirish», xarajat kategoriyalari va chek yuklashni olib tashlang.
+
 ### 2026-11-19 — P0: filial kassasi naqd/kartaga AJRALMAYDI (bitta jami) — 63HO6cBU
 
 Deploy: **finance-service va api-gateway** + **migratsiya 1716000000245** (`BranchCashboxSingleBucket`). Relizda 240–245 bitta tranzaksiyada (scripts/db-prepare.ts), kam yuklamali vaqtda. ⚠️ 241/243/244 indekslari CONCURRENTLY'siz — eski finance-service ishlab turgan paytda filial pul tranzaksiyasi bilan **deadlock** bo'lishi mumkin: shunda deploy'ni (db-prepare) qayta yurgizing (bitta tranzaksiya — yarim holat qolmaydi). Runbook: `npm run db:check-cashbox -- --snapshot=/tmp/cb-pre.json` migratsiyadan OLDIN, `-- --compare=/tmp/cb-pre.json` KEYIN (jami o'zgarmasligi kerak). **Orqaga qaytarish (revert):** kodni qaytargach `migration:revert` (245 `down()` — faqat jami o'zgarmagan kassalarda bo'linish tiklanadi); so'ng OCHIQ filial smenalarini yopib-qayta oching va arxiv filial karta ko'chirmalariga (ledger) qaramang — eski kod yangi kodning filial `click` qatorlarini karta harakati deb o'qiydi. Orqaga mos: eski FE so'rovlari 500 bermaydi — eskirgan maydonlar e'tiborsiz; FAQAT noto'g'ri formatdagi `card_id` / `branch_card_id` (raqamli ID emas) yoki bo'sh satr `payment_method` (SA/A) — DTO validatsiyasi **400** (avvalgidek).

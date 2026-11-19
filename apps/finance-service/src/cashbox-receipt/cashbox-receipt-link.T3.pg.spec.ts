@@ -360,27 +360,39 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     expect(await db.getRepository(CashboxHistory).count()).toBe(1);
   });
 
-  it('menejer: filial chiqimi — chek branch_id = filial', async () => {
-    const receiptId = await upload('manual_expense', '31', ['manager'], '15');
-    const res = await spend({
-      user_id: '15',
-      created_by: '31',
-      cashbox_type: Cashbox_type.BRANCH,
-      receipt_id: receiptId,
-    });
-    expect(res.statusCode).toBe(200);
-    expect((await receiptRow(receiptId)).branch_id).toBe('15');
+  it('63HO6cBU — menejer chek yuklay olmaydi (403), filial kassasidan qo`lda chiqim → 400; pul joyida', async () => {
+    await expect(
+      rpcError(
+        receipts.createDraft({
+          kind: 'manual_expense',
+          file_key: `cashbox-receipt-${randomUUID()}-receipt.jpg`,
+          file_sha256: 'e'.repeat(64),
+          mime: 'image/jpeg',
+          size_bytes: 1000,
+          requester_id: '31',
+          requester_roles: ['manager'],
+          branch_id: '15',
+        }),
+      ),
+    ).resolves.toMatchObject({ statusCode: 403 });
+    const before = await cashboxOf('15', Cashbox_type.BRANCH);
+    await expect(
+      rpcError(
+        spend({
+          user_id: '15',
+          created_by: '31',
+          cashbox_type: Cashbox_type.BRANCH,
+        }),
+      ),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    const after = await cashboxOf('15', Cashbox_type.BRANCH);
+    expect(Number(after.balance)).toBe(Number(before.balance));
   });
 
   // ─────────────── BE-C (ega 2026-11-10): chek faqat karta chiqimida ───────────────
 
   it.each([
     ['MAIN naqd', PaymentMethod.CASH, {}],
-    [
-      'filial (menejer) naqd',
-      PaymentMethod.CASH,
-      { user_id: '15', created_by: '31', cashbox_type: Cashbox_type.BRANCH },
-    ],
     ['MAIN click_to_market', PaymentMethod.CLICK_TO_MARKET, {}],
   ])(
     '⭐ BE-C %s + receipt_id → 400 RECEIPT_NOT_APPLICABLE; pul, tarix, P&L yozilmaydi, chek qoralama qoladi',
@@ -446,15 +458,6 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     const noType = await spend({ type: undefined });
     expect(noType.statusCode).toBe(200);
     expect(noType.data.receipt).toBeNull();
-    // Menejer: filial kassasidan naqd — ham chek so'ralmaydi.
-    const branch = await spend({
-      type: PaymentMethod.CASH,
-      user_id: '15',
-      created_by: '31',
-      cashbox_type: Cashbox_type.BRANCH,
-    });
-    expect(branch.statusCode).toBe(200);
-    expect(branch.data.receipt).toBeNull();
     expect(await db.getRepository(CashboxReceipt).count()).toBe(0);
   });
 
@@ -1388,25 +1391,19 @@ describePg('T3-2 chekni bog`lash — haqiqiy Postgres', () => {
     expect(await mainBalance()).toBe(before);
   });
 
-  it('xulosa by_branch: menejerning cheksiz qo`lda chiqimi filial kassasidan', async () => {
+  it('xulosa by_branch: filialda qo`lda chiqim yo`q (63HO6cBU) — by_branch bo`sh', async () => {
     await setSettings({ manual_expense: { photo_required: false } });
-    await spend({
-      user_id: '15',
-      created_by: '31',
-      cashbox_type: Cashbox_type.BRANCH,
-    });
-    // BE-C — filialning naqd chiqimi none ga kirmaydi.
-    await spend({
-      type: PaymentMethod.CASH,
-      user_id: '15',
-      created_by: '31',
-      cashbox_type: Cashbox_type.BRANCH,
-    });
+    await expect(
+      rpcError(
+        spend({
+          user_id: '15',
+          created_by: '31',
+          cashbox_type: Cashbox_type.BRANCH,
+        }),
+      ),
+    ).resolves.toMatchObject({ statusCode: 400 });
     const res = await summary();
-    expect(res.data.counts.none).toBe(1);
-    expect(res.data.by_branch).toEqual([
-      { branch_id: '15', counts: expect.objectContaining({ none: 1 }) },
-    ]);
+    expect(res.data.by_branch).toEqual([]);
   });
 
   it('duplicate_photo — faqat BIRIKTIRILGAN cheklar; shu rasmli qoralama sanalmaydi', async () => {

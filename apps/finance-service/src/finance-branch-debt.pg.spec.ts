@@ -221,14 +221,17 @@ describePg('Filial kassasi qarzga ishlaydi — haqiqiy Postgres', () => {
       0,
     );
 
-    // Qo'lda chiqim manfiy kassadan — avvalgidek 400.
+    // Qo'lda chiqim manfiy kassadan — avvalgidek 400 (63HO6cBU: filialda
+    // «Kassadan xarajat» yo'q — updateBalance MANUAL_EXPENSE bilan).
     await expect(
-      service.spendMoney({
+      service.updateBalance({
         user_id: BRANCH,
         amount: 1_000,
         cashbox_type: Cashbox_type.BRANCH,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.MANUAL_EXPENSE,
         created_by: '8',
-      } as never),
+      }),
     ).rejects.toMatchObject({
       error: {
         statusCode: 400,

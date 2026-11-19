@@ -1162,56 +1162,47 @@ describe('FinanceServiceService operator earnings & payments', () => {
 });
 
 describe('FinanceServiceService manual branch cashbox operations', () => {
-  it('records manager manual income in the branch cashbox with manager as creator', async () => {
+  it('63HO6cBU — menejer qo`lda kirim (BRANCH) → 400, updateBalance chaqirilmaydi', async () => {
     const manager = makeManager();
     const { service } = makeService(manager);
-    const updateBalance = jest
-      .spyOn(service, 'updateBalance')
-      .mockResolvedValue({ data: { id: 'history-1' } } as any);
+    const updateBalance = jest.spyOn(service, 'updateBalance');
 
-    await service.fillTheCashbox({
-      user_id: '13',
-      created_by: '54',
-      amount: 150000,
-      cashbox_type: 'branch' as any,
-    });
-
-    expect(updateBalance).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await expect(
+      service.fillTheCashbox({
         user_id: '13',
         created_by: '54',
         amount: 150000,
-        cashbox_type: 'branch',
-        source_type: 'manual_income',
-        operation_type: 'income',
+        cashbox_type: 'branch' as any,
       }),
-    );
+    ).rejects.toMatchObject({
+      error: {
+        statusCode: 400,
+        message: "Filial kassasini qo'lda to'ldirib bo'lmaydi",
+      },
+    });
+    expect(updateBalance).not.toHaveBeenCalled();
   });
 
-  it('records manager manual expense in the branch cashbox with manager as creator', async () => {
+  it('63HO6cBU — menejer qo`lda chiqim (BRANCH) → 400, updateBalance chaqirilmaydi', async () => {
     const manager = makeManager();
     const { service } = makeService(manager);
-    const updateBalance = jest
-      .spyOn(service, 'updateBalance')
-      .mockResolvedValue({ data: { id: 'history-2' } } as any);
+    const updateBalance = jest.spyOn(service, 'updateBalance');
 
-    await service.spendMoney({
-      user_id: '13',
-      created_by: '54',
-      amount: 50000,
-      cashbox_type: 'branch' as any,
-    });
-
-    expect(updateBalance).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await expect(
+      service.spendMoney({
         user_id: '13',
         created_by: '54',
-        amount: 50000,
-        cashbox_type: 'branch',
-        source_type: 'manual_expense',
-        operation_type: 'expense',
+        amount: 150000,
+        cashbox_type: 'branch' as any,
       }),
-    );
+    ).rejects.toMatchObject({
+      error: {
+        statusCode: 400,
+        message:
+          "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+      },
+    });
+    expect(updateBalance).not.toHaveBeenCalled();
   });
 
   it('carries the dedup token in dedup_epoch ONLY (not the bigint source_id)', async () => {

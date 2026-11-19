@@ -237,6 +237,12 @@ export type ShiftWithNames = Shift & {
   closed_by_name: string | null;
 };
 
+/** 63HO6cBU (PR-B) — filialda qo'lda chiqim / kirim yo'q. */
+export const BRANCH_MANUAL_EXPENSE_MESSAGE =
+  "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi";
+export const BRANCH_MANUAL_INCOME_MESSAGE =
+  "Filial kassasini qo'lda to'ldirib bo'lmaydi";
+
 @Injectable()
 export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private static readonly MAIN_CASHBOX_USER_ID = '0';
@@ -4935,6 +4941,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
+      // 63HO6cBU (P0, PR-B) — filialda «Kassadan xarajat» / «Kassani
+      // to'ldirish» YO'Q: filial kassasi faqat kuryer tushumi va HQ'ga
+      // topshirish bilan yuradi (barcha ichki chaqiruvchilar — MAIN).
+      if (targetCashboxType === Cashbox_type.BRANCH) {
+        throw new BadRequestException(BRANCH_MANUAL_EXPENSE_MESSAGE);
+      }
       const targetUserId =
         targetCashboxType === Cashbox_type.MAIN
           ? FinanceServiceService.MAIN_CASHBOX_USER_ID
@@ -5061,6 +5073,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
+      // 63HO6cBU (P0, PR-B) — filialda «Kassadan xarajat» / «Kassani
+      // to'ldirish» YO'Q: filial kassasi faqat kuryer tushumi va HQ'ga
+      // topshirish bilan yuradi (barcha ichki chaqiruvchilar — MAIN).
+      if (targetCashboxType === Cashbox_type.BRANCH) {
+        throw new BadRequestException(BRANCH_MANUAL_INCOME_MESSAGE);
+      }
       const targetUserId =
         targetCashboxType === Cashbox_type.MAIN
           ? FinanceServiceService.MAIN_CASHBOX_USER_ID
