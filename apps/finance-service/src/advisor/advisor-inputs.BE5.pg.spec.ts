@@ -184,6 +184,15 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
       expect(JSON.stringify(out)).not.toContain('+998');
     });
 
+    it('#726: filial smenasi faqat jami bo‘yicha — karta sanalmagan (NULL) kamomad emas, naqd 0 bo‘lsa fakt yo‘q', async () => {
+      // Filial kassasi: balance_card = 0, discrepancy_card NULL.
+      await shift('7', '2026-10-22T08:30:00Z', 0, null);
+      await shift('7', '2026-10-22T08:40:00Z', 0, null);
+      await shift('7', '2026-10-22T08:50:00Z', 0, null);
+      const out = await r1('2026-10-22T08:00:00Z');
+      expect(out.candidates).toEqual([]);
+    });
+
     it('3 ta mos smena ketma-ket manfiy → consecutive_negative; avtomatik yopilgan (NULL) ketma-ketlikni uzmaydi', async () => {
       const s1 = await shift('0', '2026-10-20T15:50:00Z', -10000, 0);
       await shift('0', '2026-10-21T15:50:00Z', null, null, {
@@ -1633,6 +1642,33 @@ describePg('AdvisorInputsService — haqiqiy Postgres (BE-5)', () => {
           [['amount'], -50000, 0, -50000],
           [['card'], null, 0, 0],
           [['card'], null, -100000, 0],
+        ]);
+      });
+
+      it('#726: filial kassasi smenasidagi karta tekshiruvi (eski qator) — R7 ochilmaydi, asosiy kassaniki ochiladi', async () => {
+        await db.query(
+          `INSERT INTO "finance_schema"."cashboxes" ("cashbox_type", "user_id") VALUES ('branch', 7)`,
+        );
+        const [{ id: branchCard }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."cashbox_cards" ("cashbox_id", "name", "last4")
+           SELECT "id", 'Filial karta', '5678' FROM "finance_schema"."cashboxes"
+            WHERE "cashbox_type" = 'branch' AND "user_id" = 7 RETURNING "id"::text AS id`,
+        );
+        const [{ id: branchShift }] = await db.query<Array<{ id: string }>>(
+          `INSERT INTO "finance_schema"."shifts" ("cashbox_user_id", "opened_at", "closed_at", "status")
+           VALUES (7, '2026-10-21T03:00:00Z', '2026-10-21T15:00:00Z', 'closed') RETURNING "id"::text AS id`,
+        );
+        await db.query(
+          `INSERT INTO "finance_schema"."shift_account_checks"
+             ("shift_id", "cashbox_card_id", "entered_balance", "ai_read_balance", "expected_balance",
+              "ai_status", "ai_checked_at", "confirmed_at", "ai_confidence", "ai_last4_detected")
+           VALUES ($1, $2, 1540000, 1500000, 0, 'mismatch', '2026-10-22T08:30:00Z', '2026-10-22T08:30:00Z', 0.9, '5678')`,
+          [branchShift, branchCard],
+        );
+        const main = await check({});
+        const out = await runR7('2026-10-22T08:00:00Z');
+        expect(out.candidates.map((c) => c.dedup_key)).toEqual([
+          `R7:card_check:${main.id}`,
         ]);
       });
 
