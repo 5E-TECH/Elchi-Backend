@@ -14,6 +14,7 @@ import {
   Between,
   DataSource,
   EntityManager,
+  EntityMetadataNotFoundError,
   FindOptionsOrder,
   FindOptionsWhere,
   In,
@@ -77,6 +78,7 @@ import {
   isTransferReceiptPaymentMethod,
   rmqSend,
   OutboxService,
+  OutboxEvent,
   tashkentDayRange,
   toPublicUserSummary,
   type PublicUserSummary,
@@ -229,6 +231,13 @@ export interface MarketPaymentInput {
    */
   payer_cashbox_type?: Cashbox_type;
   payer_user_id?: string;
+  /**
+   * 63HO6cBU (P0, PR-C) — filial to'lovchi bo'lsa MAJBURIY: gateway
+   * order-service'dan olgan filial ulushi (o'z filiali marketi uchun, pul
+   * filialda va HQ'ga berilmagan Σ market_amount). Summa undan oshsa 400;
+   * market «kassa qarzga ishlaydi» chegarasi menejerga qo'llanmaydi.
+   */
+  branch_share?: number;
 }
 
 /** (8OYPuz7J) Smena qatori + ochgan / yopgan xodim ismi (identity'dan). */
@@ -2030,6 +2039,52 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         metadata: { user_id: dto.user_id, cashbox_type: saved.cashbox_type },
       });
       return this.successRes(saved, 201, 'Cashbox created');
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /**
+   * 63HO6cBU (PR-C) — FOR_MARKET kassalari qoldig'i (HQ'ning marketga qarzi):
+   * `{ items: [{ market_id, balance }] }`. Kassasi yo'q market — balance 0.
+   * Faqat o'qiydi; ≤ 500 id.
+   */
+  async marketBalances(data: { market_ids?: unknown }) {
+    try {
+      const raw = Array.isArray(data?.market_ids) ? data.market_ids : [];
+      if (raw.length > 500) {
+        throw new BadRequestException("market_ids ro'yxati juda uzun");
+      }
+      const ids = [
+        ...new Set(
+          raw
+            .map((id) => String(id ?? '').trim())
+            .filter((id) => /^\d{1,18}$/.test(id))
+            .map((id) => FinanceServiceService.canonicalId(id)),
+        ),
+      ];
+      const rows = ids.length
+        ? await this.cashboxRepo.find({
+            where: {
+              user_id: In(ids),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              isDeleted: false,
+            },
+          })
+        : [];
+      const byId = new Map(
+        rows.map((row) => [String(row.user_id), Number(row.balance) || 0]),
+      );
+      return this.successRes(
+        {
+          items: ids.map((id) => ({
+            market_id: id,
+            balance: FinanceServiceService.roundMoney(byId.get(id) ?? 0),
+          })),
+        },
+        200,
+        'Market balances',
+      );
     } catch (error) {
       this.toRpcError(error);
     }
@@ -5187,9 +5242,153 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * request_id, so a redelivered outbox event is deduped by order-service's
    * runIdempotent and order_settlement is never advanced twice. (Audit I1/I2.)
    */
+  /**
+   * 63HO6cBU (PR-C) — filial → market to'lovining ulush chegarasi, POYGASIZ.
+   *
+   * Gateway ulushni so'rov boshida o'qiydi, daftar (order-service) esa
+   * to'lovni outbox orqali KEYINROQ qo'llaydi — ikki parallel (yoki tez
+   * ketma-ket) to'lov bir ulushni ikki marta ko'rib, ortiqcha to'lardi.
+   * Endi, pul tranzaksiyasi ichida:
+   *   1) `(filial, market)` advisory qulfi (shu juft to'lovlari navbat bilan;
+   *      filial kassasi qatori ham allaqachon qulflangan);
+   *   2) shu juftning hali «qo'llandi» deb tasdiqlanmagan `branch_to_market`
+   *      advance'lari (finance outbox: hali `published` bo'lmagani, yoshidan
+   *      qat'i nazar; > 200 — 503) — tokenlari bilan;
+   *   3) order-service'dan ulush + shu tokenlardan qaysilari qo'llangani
+   *      (bitta REPEATABLE READ surati);
+   *   4) «To'lash mumkin» = min(ulush − Σ qo'llanmagan pending,
+   *      max(marketga qarz, 0)); summa undan oshsa → 400 (xabarda faqat shu
+   *      summa). Order-service javob bermasa → 503 (pul ko'chmaydi).
+   * (X, M) qoldig'i (`order_settlement_branch_market_carry`) endi faqat
+   * himoya — normal holda paydo bo'lmaydi.
+   */
+  private async assertBranchMarketShareInTx(
+    manager: EntityManager,
+    branchId: string,
+    marketId: string,
+    amount: number,
+    marketBalance: number,
+  ): Promise<void> {
+    await manager.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+      [`63HO6cBU:branch_to_market:${branchId}:${marketId}`],
+    );
+    const pending = await this.pendingBranchMarketAdvances(
+      manager,
+      branchId,
+      marketId,
+    );
+    let reply: {
+      data?: { share?: unknown; applied_tokens?: unknown };
+    } | null = null;
+    try {
+      reply = await firstValueFrom(
+        this.orderClient
+          .send<{ data?: { share?: unknown; applied_tokens?: unknown } }>(
+            { cmd: 'order.settlement.branch_market_share' },
+            {
+              branch_id: branchId,
+              market_id: marketId,
+              pending_tokens: pending.map((item) => item.token),
+            },
+          )
+          .pipe(timeout(3000)),
+      );
+    } catch {
+      reply = null;
+    }
+    // B5 — `share` haqiqiy son bo'lishi shart (`null` → 0 emas).
+    const rawShare = reply?.data?.share;
+    const share = typeof rawShare === 'number' ? rawShare : Number.NaN;
+    if (!reply?.data || !Number.isFinite(share)) {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+    const applied = new Set(
+      Array.isArray(reply.data.applied_tokens)
+        ? reply.data.applied_tokens.map((token) => String(token))
+        : [],
+    );
+    const inFlight = pending
+      .filter((item) => !applied.has(item.token))
+      .reduce((sum, item) => sum + item.amount, 0);
+    const payable = FinanceServiceService.roundMoney(
+      Math.max(
+        Math.min(share - inFlight, Math.max(Number(marketBalance) || 0, 0)),
+        0,
+      ),
+    );
+    if (FinanceServiceService.roundMoney(amount) > payable) {
+      throw new BadRequestException(
+        `Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: ${payable} so'm)`,
+      );
+    }
+  }
+
+  /**
+   * Shu (filial, market) juftining finance outbox'idagi `branch_to_market`
+   * advance'lari — hali `published` bo'lmaganlari (relay `send` javobini
+   * kutadi, ya'ni `published` = qo'llangan). Pending'dan tezkor yo'l
+   * (`tryPublishAdvanceNow`) allaqachon qo'llaganlari order-service javobida
+   * `applied_tokens` bilan chiqarib tashlanadi.
+   */
+  private async pendingBranchMarketAdvances(
+    manager: EntityManager,
+    branchId: string,
+    marketId: string,
+  ): Promise<Array<{ token: string; amount: number }>> {
+    let rows: Array<{ token: string | null; amount: string | null }>;
+    try {
+      rows = await manager
+        .getRepository(OutboxEvent)
+        .createQueryBuilder('e')
+        .select(`e.payload->>'request_id'`, 'token')
+        .addSelect(`e.payload->>'amount'`, 'amount')
+        .where('e.pattern = :pattern', { pattern: 'order.settlement.advance' })
+        .andWhere(`e.payload->>'level' = 'branch_to_market'`)
+        .andWhere(`e.payload->>'match_value' = :match`, {
+          match: `${branchId}:${marketId}`,
+        })
+        // B4 — faqat hali yetkazilmagan hodisalar, YOSHIDAN qat'i nazar.
+        // `published` = order-service javob berdi (`send`, javob kutiladi;
+        // handler tranzaksiyasi commit bo'lgandan keyin) — ya'ni qo'llangan,
+        // ulushda allaqachon aks etgan. `failed` (poison) — hech qachon
+        // qo'llanmagan, ehtiyot uchun in-flight sanaladi.
+        .andWhere(`e.status IN ('pending', 'failed')`)
+        .orderBy('e.created_at', 'DESC')
+        .limit(201)
+        .getRawMany();
+    } catch (error) {
+      // Outbox entity'si ro'yxatdan o'tmagan (faqat test muhiti) — pending yo'q.
+      if (error instanceof EntityMetadataNotFoundError) return [];
+      throw error;
+    }
+    if (rows.length > 200) {
+      // B4 — fail-closed: barcha in-flight'ni hisobga ololmaymiz.
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+    return rows
+      .filter((row) => typeof row.token === 'string' && row.token !== '')
+      .map((row) => ({
+        token: String(row.token),
+        amount: Number(row.amount) || 0,
+      }));
+  }
+
   private async enqueueSettlementAdvance(
     manager: EntityManager,
-    level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market',
+    level:
+      | 'courier_to_branch'
+      | 'branch_to_hq'
+      | 'hq_to_market'
+      | 'branch_to_market',
     matchValue: string,
     amount: number,
     requesterId: string | null | undefined,
@@ -6909,6 +7108,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       }
   > {
     this.assertBigIntId(data.market_id, 'market_id');
+    /**
+     * 63HO6cBU (PR-C, B2) — KANONIK id: '0201' va '201' bitta market.
+     * order-service bigint bilan solishtiradi, finance esa qulf kaliti,
+     * pending `match_value` va advance'ni satrdan quradi — boshidagi nol
+     * in-flight ayirmasini chetlab o'tardi.
+     */
+    data = {
+      ...data,
+      market_id: FinanceServiceService.canonicalId(data.market_id),
+    };
     this.assertPositiveAmount(Number(data.amount));
     const transferSourceUserId = this.resolveTransferSourceUserId(data);
     const payer = this.resolveMarketPayer(data);
@@ -6985,11 +7194,33 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * haqiqiy takroriy so'rov baribir `idempotent` javobini oladi.
      * Admin market uchun «kassa qarzga ishlaydi» ni yoqqan bo'lsa — o'tadi.
      */
-    await this.assertMarketPayoutWithinDebt(
-      String(data.market_id),
-      Number(data.amount),
-      Number(marketCashbox.balance ?? 0),
-    );
+    if (payer.isBranch) {
+      /**
+       * 63HO6cBU (PR-C) — filial to'lovchi uchun bitta chegara:
+       * «To'lash mumkin» = min(filial ulushi − hali qo'llanmagan to'lovlar,
+       * max(marketga qarz, 0)).
+       *   • A1/B1 — market QARZIDAN ortiq hech qachon to'lanmaydi (HQ marketga
+       *     oldindan to'lagan bo'lsa ulush hali COURIER_SETTLED qatorlarni
+       *     ko'rsatadi, lekin market pulini olib bo'lgan). Market kassasi
+       *     qatori yuqorida FOR UPDATE — poygasiz. «Kassa qarzga ishlaydi»
+       *     sozlamasi menejerga qo'llanmaydi.
+       *   • ulush — (X, M) qulfi ostida (`assertBranchMarketShareInTx`).
+       * Y-5 — xabarda faqat shu min (marketning butun HQ qarzi chiqmaydi).
+       */
+      await this.assertBranchMarketShareInTx(
+        manager,
+        payer.userId,
+        String(data.market_id),
+        Number(data.amount),
+        Number(marketCashbox.balance ?? 0),
+      );
+    } else {
+      await this.assertMarketPayoutWithinDebt(
+        String(data.market_id),
+        Number(data.amount),
+        Number(marketCashbox.balance ?? 0),
+      );
+    }
 
     const transferId = opts.transferId ?? randomUUID();
 
@@ -7071,31 +7302,39 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * (token `:b`) — «HQ ga berilishi kerak» filial kassasidagi pul bilan
      * birga X ga kamayadi; so'ng odatdagi `hq_to_market`.
      */
-    const branchAdvancePayload = payer.isBranch
+    /**
+     * 63HO6cBU (PR-C) — filial kassasidan: BITTA bo'g'in `branch_to_market`
+     * (`"<filial>:<market>"`) — faqat shu filial ulushi qatorlari belgilanadi
+     * (M4 dagi ikki mustaqil FIFO — `branch_to_hq` + `hq_to_market` — boshqa
+     * market / filial qatorlarini yopardi). Olib ketish (pickup-visit)
+     * haqlari global — filial to'lovida ushlanmaydi.
+     */
+    const branchAdvancePayload: Record<string, unknown> | null = null;
+    const pickupFifoAmount =
+      opts.skipPickupFifo || payer.isBranch
+        ? 0
+        : await this.claimPickupFifoInTx(
+            manager,
+            String(data.market_id),
+            transferId,
+          );
+    const advancePayload = payer.isBranch
       ? await this.enqueueSettlementAdvance(
           manager,
-          'branch_to_hq',
-          payer.userId,
+          'branch_to_market',
+          `${payer.userId}:${String(data.market_id)}`,
           Number(data.amount),
           data.created_by,
-          dedupKey ? `${dedupKey}:b` : '',
+          dedupKey,
         )
-      : null;
-    const pickupFifoAmount = opts.skipPickupFifo
-      ? 0
-      : await this.claimPickupFifoInTx(
+      : await this.enqueueSettlementAdvance(
           manager,
+          'hq_to_market',
           String(data.market_id),
-          transferId,
+          this.addMoney(Number(data.amount), pickupFifoAmount),
+          data.created_by,
+          dedupKey,
         );
-    const advancePayload = await this.enqueueSettlementAdvance(
-      manager,
-      'hq_to_market',
-      String(data.market_id),
-      this.addMoney(Number(data.amount), pickupFifoAmount),
-      data.created_by,
-      dedupKey,
-    );
 
     if (opts.notify) {
       // (ePpLHPX2) `finance.payment_received` — puli kelgan tomon (market).
@@ -7151,9 +7390,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         "Marketga to'lov faqat asosiy yoki filial kassasidan qilinadi",
       );
     }
-    const userId = String(data.payer_user_id ?? '').trim();
-    this.assertBigIntId(userId, 'payer_user_id');
-    return { isBranch: true, userId };
+    const rawUserId = String(data.payer_user_id ?? '').trim();
+    this.assertBigIntId(rawUserId, 'payer_user_id');
+    return {
+      isBranch: true,
+      userId: FinanceServiceService.canonicalId(rawUserId),
+    };
+  }
+
+  /** Raqamli id'ning kanonik ko'rinishi (boshidagi nollarsiz): '0201' → '201'. */
+  private static canonicalId(value: unknown): string {
+    return String(BigInt(String(value).trim()));
   }
 
   async allCashboxesTotal(filters?: {

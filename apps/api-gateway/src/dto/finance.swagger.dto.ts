@@ -1111,16 +1111,25 @@ export class CourierPaymentAckRequestDto {
 export class PaymentToMarketRequestDto {
   @ApiProperty({ example: '2002' })
   @IsString()
-  @Matches(/^\d+$/)
+  // 63HO6cBU (PR-C, B2) — boshida nolsiz musbat int8 ('0201' → 400).
+  @Matches(/^[1-9]\d{0,17}$/, {
+    message: "market_id — boshida nolsiz musbat raqamli ID bo'lishi kerak",
+  })
   market_id!: string;
 
   @ApiProperty({ example: 500000 })
   @IsMoneyAmount('amount')
   amount!: number;
 
-  @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
+  @ApiPropertyOptional({
+    enum: PaymentMethod,
+    example: PaymentMethod.CASH,
+    description:
+      "Superadmin/admin uchun MAJBURIY (yo'q → 400). 63HO6cBU (PR-C): MENEJER yubormaydi — filial kassasi bitta jami, server `cash` yozadi (eski FE `cash`/`click` — e'tiborsiz, `click_to_market` → 400).",
+  })
+  @IsOptional()
   @IsEnum(PaymentMethod)
-  payment_method!: PaymentMethod;
+  payment_method?: PaymentMethod;
 
   @ApiPropertyOptional({ example: '2026-03-06T12:00:00Z' })
   @IsOptional()

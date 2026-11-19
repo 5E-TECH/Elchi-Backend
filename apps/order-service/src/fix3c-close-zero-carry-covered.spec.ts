@@ -1032,6 +1032,41 @@ describe('MONEY-02 — qoldiq qoplagan holatda oddiy FIFO sikli (kreditlar, HQ k
     expect(res.closed_count).toBe(2);
     expect(w.carryRow('courier_to_branch', COURIER_ID)?.amount).toBe(0);
   });
+
+  it('suzuvchi nuqta: qoldiq 0,30 = 0,10 + 0,20 (tiyinda teng) — 63HO6cBU (A3): FIFO butun tiyinda, sikl ikkalasini yopadi, qoldiq AYNAN 0; oddiy FIFO bilan bir xil (ilgari yarim yo`lda to`xtab not_fully_closed edi)', async () => {
+    const build = () => {
+      const w = makeWorld();
+      w.seedRow({ order_id: 'A', courier_amount: 0.1, branch_amount: 0.1 });
+      w.seedRow({ order_id: 'B', courier_amount: 0.2, branch_amount: 0.2 });
+      w.seedCarry({
+        level: 'courier_to_branch',
+        party_id: COURIER_ID,
+        branch_id: BRANCH,
+        amount: 0.3,
+      });
+      return w;
+    };
+    const a = build();
+    const b = build();
+    const legsA = a.recordPostLegs();
+    const legsB = b.recordPostLegs();
+
+    const res = await a.closeZero();
+    await b.courierPays(1, { force: true });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.closed_count).toBe(2);
+    expect(res.data.skipped_reason).toBeNull();
+    expect(a.rowOf('A')?.status).toBe(SettlementStatus.COURIER_SETTLED);
+    expect(a.rowOf('B')?.status).toBe(SettlementStatus.COURIER_SETTLED);
+    expect(a.carryRow('courier_to_branch', COURIER_ID)?.amount).toBe(0);
+    expect(ledgerView(a)).toEqual(ledgerView(b));
+    expect(legsA).toEqual([
+      'courier_to_branch:A:0.1',
+      'courier_to_branch:B:0.2',
+    ]);
+    expect(legsA).toEqual(legsB);
+  });
 });
 
 // ─────────────────────────── rad etiladigan holatlar ───────────────────────────
@@ -1120,20 +1155,6 @@ describe('MONEY-02 — qoldiq yig`indiga teng bo`lmasa hech narsa o`zgarmaydi', 
     });
 
     await expectRejected(w, 'carry_not_zero');
-  });
-
-  it('suzuvchi nuqta: qoldiq 0,30 = 0,10 + 0,20 (tiyinda teng), lekin oddiy sikl yarim yo`lda to`xtaydi — hammasi qaytariladi (not_fully_closed)', async () => {
-    const w = makeWorld();
-    w.seedRow({ order_id: 'A', courier_amount: 0.1, branch_amount: 0.1 });
-    w.seedRow({ order_id: 'B', courier_amount: 0.2, branch_amount: 0.2 });
-    w.seedCarry({
-      level: 'courier_to_branch',
-      party_id: COURIER_ID,
-      branch_id: BRANCH,
-      amount: 0.3,
-    });
-
-    await expectRejected(w, 'not_fully_closed');
   });
 
   it('kuryer kassasida pul bo`lsa ham order-service FAQAT daftarga qaraydi: Σ PENDING ≠ qoldiq — rad', async () => {

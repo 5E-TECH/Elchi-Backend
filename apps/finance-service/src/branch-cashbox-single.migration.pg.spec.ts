@@ -421,6 +421,65 @@ describePg('63HO6cBU migratsiya 245 — filial kassasi bitta jami', () => {
     ).toBeGreaterThanOrEqual(created);
   });
 
+  it('Low: tiklanmagan filial — up → pul sarflandi → down → eski kod click kirim (kartasiz) → up: Asosiy karta BIRINCHI kesimini saqlaydi, ko`chirmasi 0 dan ochilib 0 da yopiladi', async () => {
+    await seed();
+    await run('up');
+    const firstCut = (
+      await db.getRepository(CashboxCard).findOneByOrFail({ id: ids.b1Default })
+    ).deactivated_at;
+    // Yangi kod davri: filial jamidan 299 999,65 sarflandi (tiklanmaydi).
+    await db.query(
+      `UPDATE "finance_schema"."cashboxes"
+          SET balance_cash = balance_cash - 299999.65, balance = balance - 299999.65
+        WHERE id = $1`,
+      [ids.b1],
+    );
+    await run('down');
+    expect(await boxOf(ids.b1)).toEqual([50_000.35, 50_000.35, 0]);
+    // Eski kod (rollback'dan keyin): kartasiz click kirim 250 000 — Asosiy karta.
+    await db.getRepository(CashboxHistory).save(
+      db.getRepository(CashboxHistory).create({
+        operation_type: Operation_type.INCOME,
+        cashbox_id: ids.b1,
+        source_type: Source_type.COURIER_PAYMENT,
+        amount: 250_000,
+        balance_after: 0,
+        payment_method: PaymentMethod.CLICK,
+        card_id: null,
+        createdAt: new Date(Date.now() + 60_000),
+      } as Partial<CashboxHistory>),
+    );
+    await db.query(
+      `UPDATE "finance_schema"."cashboxes"
+          SET balance_card = balance_card + 250000, balance = balance + 250000
+        WHERE id = $1`,
+      [ids.b1],
+    );
+    // Qayta deploy.
+    await run('up');
+    expect(await boxOf(ids.b1)).toEqual([300_000.35, 300_000.35, 0]);
+    const card = await db
+      .getRepository(CashboxCard)
+      .findOneByOrFail({ id: ids.b1Default });
+    expect(new Date(card.deactivated_at as Date).getTime()).toBe(
+      new Date(firstCut as Date).getTime(),
+    );
+    const res: any = await new CashboxCardService(db, {} as never).getLedger({
+      id: ids.b1Default,
+    });
+    expect(res.data.summary).toMatchObject({
+      opening_balance: 0,
+      closing_balance: 0,
+      current_balance: 0,
+    });
+    expect(
+      res.data.items.map((r: any) => [r.kind, r.delta, r.balance_after]),
+    ).toEqual([
+      ['card_to_cash', -160_000, 0],
+      ['income', 160_000, 160_000],
+    ]);
+  });
+
   it('⭐ up → filial pul sarfladi → down(): bo`linish TIKLANMAYDI (naqd manfiy / «fantom» karta yo`q) — eski kod karta chiqimini 400 bilan rad etadi', async () => {
     await seed();
     await run('up');

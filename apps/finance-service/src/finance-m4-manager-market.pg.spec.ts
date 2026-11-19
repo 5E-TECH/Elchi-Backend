@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { DataSource } from 'typeorm';
 import {
   Cashbox_type,
   Operation_type,
+  OutboxEvent,
   PaymentMethod,
   Source_type,
 } from '@app/common';
@@ -31,7 +32,55 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
   let admin: DataSource;
   let db: DataSource;
   let service: FinanceServiceService;
-  const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
+  /**
+   * Outbox — haqiqiy `outbox_events` qatori (finance ulush tekshiruvi
+   * hali qo'llanmagan `branch_to_market` advance'larini shundan o'qiydi).
+   */
+  const outbox = {
+    enqueue: jest.fn(
+      async (
+        target: string,
+        pattern: string,
+        payload: unknown,
+        opts?: { manager?: { getRepository: DataSource['getRepository'] } },
+      ) => {
+        if (opts?.manager) {
+          await opts.manager
+            .getRepository(OutboxEvent)
+            .insert({ target, pattern, payload: payload as object });
+        }
+      },
+    ),
+  };
+  /** order-service taqlidi: (X, M) ulushi va qo'llangan tokenlar. */
+  const orderState = {
+    share: 1_000_000,
+    applied: new Set<string>(),
+    down: false,
+  };
+  const orderClient = {
+    send: jest.fn(
+      (pattern: { cmd?: string }, payload: Record<string, unknown>) => {
+        if (pattern?.cmd === 'order.settlement.branch_market_share') {
+          if (orderState.down) {
+            return throwError(() => new Error('order-service down'));
+          }
+          const pending = Array.isArray(payload?.pending_tokens)
+            ? (payload.pending_tokens as string[])
+            : [];
+          return of({
+            statusCode: 200,
+            data: {
+              in_branch: true,
+              share: orderState.share,
+              applied_tokens: pending.filter((t) => orderState.applied.has(t)),
+            },
+          });
+        }
+        return of({ statusCode: 200, data: {} });
+      },
+    ),
+  };
 
   beforeAll(async () => {
     admin = new DataSource({ type: 'postgres', url: pgUri });
@@ -41,7 +90,7 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       type: 'postgres',
       url: pgUri,
       schema,
-      entities: [Cashbox, CashboxHistory, FinancialBalanceHistory],
+      entities: [Cashbox, CashboxHistory, FinancialBalanceHistory, OutboxEvent],
       synchronize: true,
     });
     await db.initialize();
@@ -55,7 +104,7 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       db.getRepository(FinancialBalanceHistory),
       db,
       { log: jest.fn().mockResolvedValue(undefined) } as never,
-      { send: jest.fn(() => of({ statusCode: 200, data: {} })) } as never,
+      orderClient as never,
       { send: jest.fn(() => of({})) } as never,
       { send: jest.fn(() => of({})) } as never,
       outbox as never,
@@ -76,8 +125,13 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
 
   beforeEach(async () => {
     outbox.enqueue.mockClear();
+    orderClient.send.mockClear();
+    orderState.share = 1_000_000;
+    orderState.applied = new Set();
+    orderState.down = false;
     await db.query(
       `TRUNCATE TABLE "${schema}".cashbox_history,
+        "${schema}".outbox_events,
         "${schema}".financial_balance_history,
         "${schema}".cashboxes RESTART IDENTITY CASCADE`,
     );
@@ -254,6 +308,8 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         payer_user_id: '15',
         created_by: '15001',
         dedup_epoch: dedup,
+        // 63HO6cBU (PR-C) — gateway ulushi (finance o'zi qulf ostida qayta o'qiydi).
+        branch_share: orderState.share,
       });
 
     beforeEach(async () => {
@@ -263,7 +319,7 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       await seed('201', Cashbox_type.FOR_MARKET, 450_000);
     });
 
-    it('⭐ naqd: filial kassasi −X, market qarzi −X, HQ tegilmaydi; filial → HQ, HQ → market siljishlari', async () => {
+    it('⭐ naqd: filial kassasi −X, market qarzi −X, HQ tegilmaydi; bitta filial → market bo`g`ini (63HO6cBU)', async () => {
       const before = await companyCash();
       const res = await pay('gw:mp-1', 270_000);
 
@@ -295,9 +351,9 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         dedup_epoch: 'gw:mp-1',
       });
 
+      // 63HO6cBU (PR-C) — bitta bo'g'in: faqat (filial 15, market 201).
       expect(advances()).toEqual([
-        ['branch_to_hq', '15', 270_000, 'gw:mp-1:b'],
-        ['hq_to_market', '201', 270_000, 'gw:mp-1'],
+        ['branch_to_market', '15:201', 270_000, 'gw:mp-1'],
       ]);
     });
 
@@ -307,6 +363,195 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         balance: 150_000,
         cash: 150_000,
         card: 0,
+      });
+    });
+
+    it('⭐ poyga yo`q: birinchi to`lov daftarga hali tushmagan (outbox) — ikkinchisi ulushdan ayirilgan holda tekshiriladi; ortig`i 400, pul ko`chmaydi', async () => {
+      orderState.share = 100_000;
+      await pay('gw:race-1', 60_000);
+      // Daftar hali qo'llamagan: order-service ulushi hamon 100 000.
+      await expect(pay('gw:race-2', 60_000)).rejects.toMatchObject({
+        error: {
+          statusCode: 400,
+          // Y-5 — faqat «to'lash mumkin» (marketning butun qarzi 450 000 emas).
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 40000 so'm)",
+        },
+      });
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(240_000);
+      // Qolgan 40 000 — o'tadi.
+      await pay('gw:race-3', 40_000);
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(200_000);
+      await expect(pay('gw:race-4', 0.01)).rejects.toMatchObject({
+        error: { statusCode: 400 },
+      });
+      expect(advances().map((row) => row[2])).toEqual([60_000, 40_000]);
+    });
+
+    it('daftar qo`llagach (ulush kamaydi, token qo`llangan) — ikki marta ayirilmaydi', async () => {
+      orderState.share = 100_000;
+      await pay('gw:app-1', 60_000);
+      // order-service qo'lladi: ulush 40 000, token qo'llangan.
+      orderState.share = 40_000;
+      orderState.applied.add('gw:app-1');
+      await pay('gw:app-2', 40_000);
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(200_000);
+    });
+
+    it('⭐ parallel ikki to`lov (ulush 100 000, har biri 60 000) — faqat bittasi o`tadi', async () => {
+      orderState.share = 100_000;
+      const results = await Promise.allSettled([
+        pay('gw:par-1', 60_000),
+        pay('gw:par-2', 60_000),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      expect(rejected?.reason).toMatchObject({ error: { statusCode: 400 } });
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(240_000);
+      expect(advances()).toHaveLength(1);
+    });
+
+    it('order-service javob bermasa → 503, pul ko`chmaydi, daftar navbati yo`q', async () => {
+      orderState.down = true;
+      await expect(pay('gw:down-1', 10_000)).rejects.toMatchObject({
+        error: { statusCode: 503 },
+      });
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(300_000);
+      expect(await historyRows()).toHaveLength(0);
+      expect(advances()).toEqual([]);
+    });
+
+    it('⭐ A1/B1: marketga qarzdan ortiq hech qachon (HQ oldindan to`lagan) — 400, pul ko`chmaydi; qarz doirasida o`tadi', async () => {
+      // HQ market qarzini to'lab bo'lgan: FOR_MARKET 0, ulush esa hali bor.
+      await db.query(
+        `UPDATE "${schema}".cashboxes SET balance = 0, balance_cash = 0 WHERE user_id = '201'`,
+      );
+      orderState.share = 100_000;
+      await expect(pay('gw:debt-1', 100_000)).rejects.toMatchObject({
+        error: {
+          statusCode: 400,
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 0 so'm)",
+        },
+      });
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(300_000);
+      expect((await box('201', Cashbox_type.FOR_MARKET)).balance).toBe(0);
+      // Qarz 50 000: 60 000 — 400, 50 000 — o'tadi (ulushdan kichik).
+      await db.query(
+        `UPDATE "${schema}".cashboxes SET balance = 50000, balance_cash = 50000 WHERE user_id = '201'`,
+      );
+      await expect(pay('gw:debt-2', 60_000)).rejects.toMatchObject({
+        error: {
+          statusCode: 400,
+          // Y-5 — min(ulush 100 000, qarz 50 000).
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 50000 so'm)",
+        },
+      });
+      await pay('gw:debt-3', 50_000);
+      expect((await box('201', Cashbox_type.FOR_MARKET)).balance).toBe(0);
+      expect(advances()).toEqual([
+        ['branch_to_market', '15:201', 50_000, 'gw:debt-3'],
+      ]);
+    });
+
+    it('⭐ B2: boshida nolli market_id (`0201`) — kanonik `201`: in-flight ayiriladi, ortig`i 400; advance `15:201`', async () => {
+      orderState.share = 100_000;
+      await pay('gw:b2-1', 60_000);
+      await expect(
+        service.paymentsToMarket({
+          market_id: '0201',
+          amount: 60_000,
+          payment_method: PaymentMethod.CASH,
+          payer_cashbox_type: Cashbox_type.BRANCH,
+          payer_user_id: '015',
+          created_by: '15001',
+          dedup_epoch: 'gw:b2-2',
+        }),
+      ).rejects.toMatchObject({ error: { statusCode: 400 } });
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(240_000);
+      const shareCalls = orderClient.send.mock.calls
+        .filter(
+          (call) => call[0]?.cmd === 'order.settlement.branch_market_share',
+        )
+        .map((call) => [call[1].branch_id, call[1].market_id]);
+      expect(shareCalls).toEqual([
+        ['15', '201'],
+        ['15', '201'],
+      ]);
+      expect(advances()).toEqual([
+        ['branch_to_market', '15:201', 60_000, 'gw:b2-1'],
+      ]);
+    });
+
+    it('B4: yetkazilmagan (pending / failed) hodisa yoshidan qat`i nazar ayiriladi; published (qo`llangan) — yo`q; 200 dan ko`p yetkazilmagan — 503', async () => {
+      orderState.share = 100_000;
+      await db.getRepository(OutboxEvent).insert({
+        target: 'ORDER',
+        pattern: 'order.settlement.advance',
+        payload: {
+          level: 'branch_to_market',
+          match_value: '15:201',
+          amount: 70_000,
+          request_id: 'gw:old-1',
+        },
+        status: 'pending',
+        created_at: new Date(Date.now() - 30 * 86_400_000),
+      } as never);
+      await expect(pay('gw:b4-1', 40_000)).rejects.toMatchObject({
+        error: { statusCode: 400 },
+      });
+      await pay('gw:b4-2', 30_000);
+      // Y-1 — 201 ta published (allaqachon qo'llangan, ulushda aks etgan)
+      // hodisa SANALMAYDI: 503 yo'q, summasi ayirilmaydi. Poison (`failed`)
+      // — hech qachon qo'llanmagan, ayiriladi.
+      await db.query(
+        `INSERT INTO "${schema}".outbox_events (target, pattern, payload, status)
+         SELECT 'ORDER', 'order.settlement.advance',
+                jsonb_build_object('level', 'branch_to_market', 'match_value', '15:201',
+                                   'amount', 1000, 'request_id', 'pub-' || g),
+                'published'
+           FROM generate_series(1, 201) g`,
+      );
+      await db.query(
+        `INSERT INTO "${schema}".outbox_events (target, pattern, payload, status)
+         VALUES ('ORDER', 'order.settlement.advance',
+                 jsonb_build_object('level', 'branch_to_market', 'match_value', '15:201',
+                                    'amount', 5000, 'request_id', 'poison-1'),
+                 'failed')`,
+      );
+      // ulush 115 000 − pending (70 000 + 30 000) − failed 5 000 = 10 000.
+      orderState.share = 115_000;
+      await expect(pay('gw:b4-3', 10_000.01)).rejects.toMatchObject({
+        error: {
+          statusCode: 400,
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 10000 so'm)",
+        },
+      });
+      await pay('gw:b4-4', 10_000);
+      // 200 dan ko'p YETKAZILMAGAN — fail-closed 503.
+      await db.query(
+        `INSERT INTO "${schema}".outbox_events (target, pattern, payload, status)
+         SELECT 'ORDER', 'order.settlement.advance',
+                jsonb_build_object('level', 'branch_to_market', 'match_value', '15:201',
+                                   'amount', 0, 'request_id', 'bulk-' || g),
+                'pending'
+           FROM generate_series(1, 201) g`,
+      );
+      await expect(pay('gw:b4-5', 0.01)).rejects.toMatchObject({
+        error: { statusCode: 503 },
+      });
+    });
+
+    it('B5: order-service ulushi son emas (null) — 503 (0 deb olinmaydi)', async () => {
+      orderClient.send.mockImplementationOnce(() =>
+        of({ statusCode: 200, data: { in_branch: true, share: null } }),
+      );
+      await expect(pay('gw:b5-1', 10)).rejects.toMatchObject({
+        error: { statusCode: 503 },
       });
     });
 

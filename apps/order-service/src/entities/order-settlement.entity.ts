@@ -45,6 +45,15 @@ export const ORDER_SETTLEMENT_SALE_KIND: OrderSettlementKind = 'sale';
     where: `"extra_cost_approval_id" IS NOT NULL`,
   },
 )
+// 63HO6cBU (PR-C, C6) — migratsiya 246 dagi qisman indeks (filial → market
+// FIFO nomzodlari); entity'da e'lon qilinmasa migration:generate uni DROP qiladi.
+@Index(
+  'IDX_order_settlement_branch_market_open',
+  ['branch_id', 'market_id', 'createdAt', 'id'],
+  {
+    where: `"status" = 'courier_settled' AND "market_paid_by_branch_at" IS NULL AND "is_deleted" = false`,
+  },
+)
 @Index('IDX_order_settlement_status', ['status'])
 @Index('IDX_order_settlement_courier', ['courier_id'])
 @Index('IDX_order_settlement_branch', ['branch_id'])
@@ -119,4 +128,28 @@ export class OrderSettlement extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   hq_to_market_by!: string | null;
+
+  /**
+   * 63HO6cBU (PR-C) — market ulushini FILIAL o'z kassasidan to'lagan
+   * (menejer «Marketga to'lov»). Holat COURIER_SETTLED qoladi; filialning
+   * HQ'ga qarzi bu qatorda `branch_amount − market_amount`. NULL — yo'q.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  market_paid_by_branch_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  market_paid_by_branch_by!: string | null;
+
+  /**
+   * 63HO6cBU — market ulushining filial kassasidan to'langan qismi (qisman
+   * ham). To'liq bo'lsa `market_paid_by_branch_at` ham qo'yiladi.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  market_paid_by_branch_amount!: number;
 }

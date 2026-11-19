@@ -58,6 +58,17 @@ export class FinanceServiceController {
     );
   }
 
+  /** 63HO6cBU (PR-C) — market kassalari qoldig'i (menejer `payable` uchun). */
+  @MessagePattern({ cmd: 'finance.cashbox.market_balances' })
+  marketBalances(
+    @Payload() data: { market_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.marketBalances(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.cashbox.find_by_user' })
   findCashboxByUser(
     @Payload() data: FindCashboxByUserDto,
@@ -228,6 +239,8 @@ export class FinanceServiceController {
       // Audit M4 — menejer: o'z filial kassasidan (gateway JWT'dan qo'yadi).
       payer_cashbox_type?: Cashbox_type;
       payer_user_id?: string;
+      // 63HO6cBU (PR-C) — filial ulushi (gateway order-service'dan oladi).
+      branch_share?: number;
     },
     @Ctx() context: RmqContext,
   ) {
