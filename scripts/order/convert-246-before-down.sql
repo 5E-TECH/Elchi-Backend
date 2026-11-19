@@ -26,6 +26,15 @@
 -- → market yo'lini 503 bilan yopadi (WX-1 kill switch) — rollback yarim yo'lda
 -- to'xtasa ham menejer qayta to'lay olmaydi.
 --
+-- X737-4 — skript finance kassalari va outbox'ni, order daftarini qulflaydi:
+-- jonli yozuvchilar (to'lovlar, FIFO) qulf olinguncha (≤ 5 s, `lock_timeout`)
+-- va konvertatsiya davomida TO'XTAB turadi. Shuning uchun 3-qadam (xizmatlarni
+-- to'xtatish) shart — skript himoya, runbook o'rnini bosmaydi.
+--
+-- Qaytadan 246 up() kerak bo'lsa (fix-forward): avval
+--   psql -v ON_ERROR_STOP=1 -f scripts/order/reconcile-246-after-reup.sql
+-- (izdan filial to'lagan holatni tiklaydi va izni o'chiradi), so'ng migration:run.
+--
 --   • har filial X: COURIER_SETTLED qatorlarda filial to'lagan Σ qism
 --     + (X, ·) qoldig'i → branch_to_hq(X) qoldig'i (filial bu pulni HQ
 --     nomidan marketga bergan — HQ'ga qarzi shuncha kam);
@@ -46,6 +55,13 @@ BEGIN;
 -- WX-1 — jonli finance bo'lsa qulf cheksiz kutmasin va finance yozuvlarini
 -- to'sib turmasin: 5 s ichida olinmasa — xato, hech narsa o'zgarmaydi.
 SET LOCAL lock_timeout = '5s';
+
+-- X737-1 — jonli menejer to'lovi bilan poyga: to'lov tranzaksiyasi kassa
+-- qatorlarini share RPC'dan OLDIN `FOR UPDATE` qiladi, outbox'ga esa faqat
+-- oxirida yozadi (shungacha `outbox_events` da faqat ACCESS SHARE). Kassalarni
+-- EXCLUSIVE qulflash — har ochiq pul tranzaksiyasi tugashini kutish (va
+-- yangisini to'sish); shundan keyingina outbox tekshiruvi to'liq.
+LOCK TABLE "finance_schema"."cashboxes" IN EXCLUSIVE MODE;
 
 -- Y-3a — yetkazilmagan filial → market advance qolmagan bo'lsin (aks holda u
 -- konvertatsiyaga kirmaydi, eski kod esa uni abadiy 400 bilan ushlab, market

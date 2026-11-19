@@ -77,6 +77,28 @@ describePg(
       }
     };
 
+    const runSqlFile = async (file: string) => {
+      const runner = db.createQueryRunner();
+      await runner.connect();
+      try {
+        await runner.query(
+          readFileSync(
+            join(__dirname, '../../../../scripts/order', file),
+            'utf8',
+          ),
+        );
+      } catch (error) {
+        await runner.query('ROLLBACK');
+        throw error;
+      } finally {
+        await runner.release();
+      }
+    };
+    const pendingBranchToMarket = (status = 'pending') =>
+      db.query(`INSERT INTO "finance_schema"."outbox_events" (pattern, payload, status)
+        VALUES ('order.settlement.advance',
+                '{"level":"branch_to_market","match_value":"15:201","amount":20000}', '${status}')`);
+
     const hasCarryTable = async () =>
       (
         await db.query(
@@ -129,6 +151,15 @@ describePg(
       "payload" jsonb NOT NULL,
       "status" varchar(16) NOT NULL DEFAULT 'pending'
     )`);
+      // X737-1: finance pul tranzaksiyalari kassa qatorlarini FOR UPDATE qiladi.
+      await db.query(`CREATE TABLE "finance_schema"."cashboxes" (
+      "id" BIGSERIAL PRIMARY KEY,
+      "user_id" bigint NOT NULL,
+      "balance" numeric(14,2) NOT NULL DEFAULT 0
+    )`);
+      await db.query(
+        `INSERT INTO "finance_schema"."cashboxes" (user_id, balance) VALUES (15, 0)`,
+      );
     }, 60_000);
 
     afterAll(async () => {
@@ -196,6 +227,53 @@ describePg(
         ),
       ).toEqual([{ t: null }]);
     }, 20_000);
+
+    it('⭐ X737-1: menejer to`lovi (kassa FOR UPDATE, outbox hali yozilmagan) bilan poyga — skript kassalarni kutadi, keyin pending advance`ni ko`rib ABORT', async () => {
+      const payment = db.createQueryRunner();
+      await payment.connect();
+      await payment.startTransaction();
+      // To'lov: kassa qatori qulflangan, share RPC o'tdi, outbox'ga hali yo'q.
+      await payment.query(
+        `SELECT * FROM "finance_schema"."cashboxes" WHERE user_id = 15 FOR UPDATE`,
+      );
+      const started = Date.now();
+      const convert = runConvert().then(
+        () => null,
+        (error: Error) => error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await payment.query(`INSERT INTO "finance_schema"."outbox_events" (pattern, payload, status)
+        VALUES ('order.settlement.advance',
+                '{"level":"branch_to_market","match_value":"15:201","amount":70000}', 'pending')`);
+      await payment.commitTransaction();
+      await payment.release();
+      const error = await convert;
+      expect(error?.message).toMatch(/1 ta yetkazilmagan branch_to_market/);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(350);
+      expect(
+        await db.query(
+          `SELECT to_regclass('"order_schema"."order_settlement_246_conversion"') AS t`,
+        ),
+      ).toEqual([{ t: null }]);
+      await db.query(`DELETE FROM "finance_schema"."outbox_events"`);
+    }, 20_000);
+
+    it('⭐ X737-1 (ikkinchi himoya): finance outbox`da yetkazilmagan branch_to_market — down() RAD', async () => {
+      for (const status of ['pending', 'failed']) {
+        await pendingBranchToMarket(status);
+        await expect(run('down')).rejects.toThrow(
+          /1 ta yetkazilmagan branch_to_market/,
+        );
+        expect(await columns()).toHaveLength(3);
+        await db.query(`DELETE FROM "finance_schema"."outbox_events"`);
+      }
+      // Yetkazilgani (published) xalaqit bermaydi — tekshiruv keyingi
+      // (paid / carry) shartga o'tadi; bu yerda holat yo'q — down/up aylanadi.
+      await pendingBranchToMarket('published');
+      await run('down');
+      await run('up');
+      await db.query(`DELETE FROM "finance_schema"."outbox_events"`);
+    });
 
     it('⭐ C2: filial → market to`lov holati bor — down() RAD (konvertatsiyasiz); konvertatsiya skripti qoldiqlarga o`tkazadi, keyin down() o`tadi', async () => {
       await db.query(`UPDATE "order_schema"."order_settlement"
@@ -352,15 +430,63 @@ describePg(
       expect(n).toBe(1);
     });
 
-    it('⭐ Y-3d: konvertatsiya izi bor — qayta up() RAD (ulush qayta tirilmaydi); iz tozalangach up() o`tadi', async () => {
-      await expect(run('up')).rejects.toThrow(/up\(\) rad etildi/);
+    it('⭐ Y-3d / X737-3: konvertatsiya izi bor — up() RAD (skript nomi bilan); reconcile fail-closed, so`ng aniq tiklaydi va up() o`tadi', async () => {
+      await expect(run('up')).rejects.toThrow(/reconcile-246-after-reup\.sql/);
       expect(await columns()).toEqual([]);
-      await db.query(
-        `DELETE FROM "order_schema"."order_settlement_246_conversion"`,
+
+      // C2 dan keyin 2 va 3 buyurtma qatorlari o'chirilgan — daftar o'zgargan:
+      // reconcile ABORT, hech narsa o'zgarmaydi (ustunlar ham qo'shilmaydi).
+      await expect(runSqlFile('reconcile-246-after-reup.sql')).rejects.toThrow(
+        /2 ta qator konvertatsiyadan keyin o'zgargan/,
       );
-      await run('up');
+      expect(await columns()).toEqual([]);
+
+      // Qo'lda solishtirish: o'chirilgan qatorlar izdan olib tashlandi.
+      await db.query(`DELETE FROM "order_schema"."order_settlement_246_conversion"
+        WHERE kind = 'settlement_row'
+          AND settlement_id NOT IN (SELECT id FROM "order_schema"."order_settlement")`);
+      // Qoldiq eski kod tomonidan ishlatilgan bo'lsa — ABORT.
+      await db.query(`UPDATE "order_schema"."order_settlement_carry"
+        SET amount = 100 WHERE level = 'branch_to_hq' AND party_id = 15`);
+      await expect(runSqlFile('reconcile-246-after-reup.sql')).rejects.toThrow(
+        /1 ta qoldiq konvertatsiyadan keyin ishlatilgan/,
+      );
+      await db.query(`UPDATE "order_schema"."order_settlement_carry"
+        SET amount = 30500 WHERE level = 'branch_to_hq' AND party_id = 15`);
+
+      await runSqlFile('reconcile-246-after-reup.sql');
       expect(await columns()).toHaveLength(3);
-      await run('down');
+      // Konvertatsiyadan oldingi holat: qator filial to'lagan, qoldiqlar 0,
+      // (X, M) qoldig'i 500, iz bo'sh.
+      const [row] = await db.query(
+        `SELECT market_paid_by_branch_amount::float AS paid FROM "order_schema"."order_settlement"
+          WHERE order_id = 1`,
+      );
+      expect(row).toEqual({ paid: 30_000 });
+      expect(
+        await db.query(
+          `SELECT level, amount::float AS amount FROM "order_schema"."order_settlement_carry" ORDER BY level`,
+        ),
+      ).toEqual([
+        { level: 'branch_to_hq', amount: 0 },
+        { level: 'hq_to_market', amount: 0 },
+      ]);
+      expect(
+        await db.query(
+          `SELECT branch_id::text AS b, market_id::text AS m, amount::float AS amount
+             FROM "order_schema"."order_settlement_branch_market_carry"`,
+        ),
+      ).toEqual([{ b: '15', m: '201', amount: 500 }]);
+      const [{ n }] = await db.query(
+        `SELECT count(*)::int AS n FROM "order_schema"."order_settlement_246_conversion"`,
+      );
+      expect(n).toBe(0);
+
+      // 246 up() endi o'tadi (sxema bor — no-op); qayta reconcile — iz bo'sh.
+      await run('up');
+      await expect(runSqlFile('reconcile-246-after-reup.sql')).rejects.toThrow(
+        /iz bo'sh/,
+      );
     });
   },
 );

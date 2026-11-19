@@ -152,20 +152,42 @@ describe('OrderSettlementService settlement (FIFO)', () => {
         market_amount: 25,
         status: SettlementStatus.COURIER_SETTLED,
       },
+      // X737-5: kechiktirilgan E zanjir qatori (filial −E, market 0) — kredit.
+      {
+        order_id: '214',
+        kind: 'extra_cost_chain',
+        branch_id: '10',
+        branch_amount: -5,
+        market_amount: 0,
+        status: SettlementStatus.COURIER_SETTLED,
+      },
     ]);
 
     const res: any = await service.advanceSettlement({
       level: 'branch_to_hq',
       match_value: '10',
-      amount: 90,
+      amount: 85,
       requester_id: '1',
     });
 
-    expect(res.data.settled_order_ids).toEqual(['211', '212', '213']);
+    expect([...res.data.settled_order_ids].sort()).toEqual([
+      '211',
+      '212',
+      '213',
+      '214',
+    ]);
     // 0 va tiyindan kichik (money2 → 0) — MARKET_SETTLED.
     expect(store[0].status).toBe(SettlementStatus.MARKET_SETTLED);
     expect(store[1].status).toBe(SettlementStatus.MARKET_SETTLED);
     expect(store[2].status).toBe(SettlementStatus.BRANCH_SETTLED);
+    expect(store[3].status).toBe(SettlementStatus.MARKET_SETTLED);
+    // X737-5: HQ → market bosqichi ham (0 so'm) yopilgan deb belgilanadi.
+    for (const index of [0, 1, 3]) {
+      expect(store[index].hq_to_market_at).toBeInstanceOf(Date);
+      expect(store[index].hq_to_market_by).toBe('1');
+      expect(store[index].branch_to_hq_at).toBeInstanceOf(Date);
+    }
+    expect(store[2].hq_to_market_at ?? null).toBeNull();
   });
 
   it('advance branch→HQ only advances COURIER_SETTLED orders (state-only)', async () => {
