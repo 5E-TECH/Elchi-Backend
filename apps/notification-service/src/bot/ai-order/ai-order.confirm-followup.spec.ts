@@ -158,38 +158,38 @@ const row = (ctx: Ctx) => [...ctx.aiDrafts.rows.values()][0];
 const lastShownText = (ctx: Ctx) => shownTexts(ctx).at(-1) ?? '';
 
 /** `editMessage` (va ixtiyoriy `outbox.send`) shu matnda yiqiladi. */
+/**
+ * Haqiqiy shakl: `BotTransportService.editMessage` xatoni YUTADI va `false`
+ * qaytaradi (async) — `show` yangi xabarga (outbox) o'tadi; outbox shu
+ * matnda yiqiladi: `alsoReply` — har safar, aks holda faqat BIRINCHI marta.
+ */
 function breakShow(ctx: Ctx, needle: string, alsoReply = false) {
   const edit = ctx.transport.editMessage.getMockImplementation()!;
   ctx.transport.editMessage.mockImplementation(((
     chatId: string,
     messageId: string,
     body: { text?: string },
-  ) => {
-    if (body?.text?.includes(needle)) throw new Error('telegram 500');
-    return edit(chatId, messageId, body);
-  }) as never);
-  if (!alsoReply) return;
+  ) =>
+    body?.text?.includes(needle)
+      ? Promise.resolve(false)
+      : edit(chatId, messageId, body)) as never);
   const send = ctx.outbox.send.getMockImplementation()!;
-  ctx.outbox.send.mockImplementation(((message: { text?: string }) =>
-    message?.text?.includes(needle)
-      ? Promise.reject(new Error('outbox'))
-      : send(message as never)) as never);
+  let failed = false;
+  ctx.outbox.send.mockImplementation(((message: { text?: string }) => {
+    if (message?.text?.includes(needle) && (alsoReply || !failed)) {
+      failed = true;
+      return Promise.reject(new Error('outbox'));
+    }
+    return send(message as never);
+  }) as never);
 }
 
 describe('1) yaratilgan qoralama preview’ga qaytmaydi', () => {
   it('natija xabarini ko‘rsatish yiqilsa ham status `created` qoladi, belgi yo‘q', async () => {
     const { ctx, calls } = setup([preview()]);
     await send(ctx, ORDER_TEXT);
-    // Natija («yaratildi») xabari tahriri yiqiladi — ishchi catch'ga tushadi.
-    const edit = ctx.transport.editMessage.getMockImplementation()!;
-    ctx.transport.editMessage.mockImplementation(((
-      chatId: string,
-      messageId: string,
-      body: { text?: string },
-    ) => {
-      if (body?.text?.includes('yaratildi')) throw new Error('telegram 500');
-      return edit(chatId, messageId, body);
-    }) as never);
+    // Natija («yaratildi») xabari ko'rsatilmaydi — ishchi catch'ga tushadi.
+    breakShow(ctx, 'yaratildi');
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(calls.filter((c) => c.path === '/orders/ai-confirm')).toHaveLength(
       1,
@@ -299,6 +299,82 @@ describe('#720 review', () => {
         worker_token: 'token-new',
       }),
     );
+  });
+
+  it('PG-1/5: karta 3900 belgida kesilsa — tugmalar faqat TO‘LIQ ko‘rsatilganlarga; «yana N ta» matni ✅ xatti-harakatiga mos', async () => {
+    const long = (index: number): AiPreviewOrder =>
+      preview({
+        index,
+        customer_name: `Mijoz ${index + 1}`,
+        address: `Sintetik ko‘cha ${'uzun manzil '.repeat(9)}`.slice(0, 120),
+        items: Array.from({ length: 8 }, (_, k) => ({
+          name: `Namuna mahsulot uzun nomi ${k + 1} ${'x'.repeat(30)}`,
+          quantity: 1,
+          product_id: String(15 + k),
+        })),
+      });
+    const ten = [
+      ...Array.from({ length: 9 }, (_, i) => long(i)),
+      { ...noDistrict(), index: 9, customer_name: 'Mijoz 10' },
+    ];
+    const { ctx } = setup(ten, [new Error('timeout')]);
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    const card = lastShownText(ctx);
+    expect(card).not.toContain('<b>10)</b>');
+    expect(card).toContain('tayyorlari ham «✅ Yaratish» bilan yaratiladi');
+    expect(card).toContain('✅ «Yaratish» — 9 ta tayyor buyurtma');
+    const keys = Object.keys(buttons(ctx));
+    expect(keys).not.toContain('📍 10) Tumanni tanlash');
+    expect(keys).not.toContain('✏️ Tuzatish');
+    expect(keys).toEqual(['✅ Yaratish', '❌ Bekor', '🌐 Kabinetda yaratish']);
+  });
+
+  it('PG-3: message_id saqlash yiqilsa natija IKKINCHI marta yuborilmaydi', async () => {
+    const { ctx } = setup([preview()]);
+    await send(ctx, ORDER_TEXT);
+    // Tahrir o'tmaydi → yangi xabar; uning id sini yozish yiqiladi.
+    const edit = ctx.transport.editMessage.getMockImplementation()!;
+    ctx.transport.editMessage.mockImplementation(((
+      chatId: string,
+      messageId: string,
+      body: { text?: string },
+    ) =>
+      body?.text?.includes('yaratildi')
+        ? Promise.resolve(false)
+        : edit(chatId, messageId, body)) as never);
+    const update = ctx.aiDrafts.update.getMockImplementation()!;
+    ctx.aiDrafts.update.mockImplementation(((
+      where: never,
+      patch: Record<string, unknown>,
+    ) =>
+      'message_id' in patch && row(ctx).status === 'created'
+        ? Promise.reject(new Error('db'))
+        : update(where, patch as never)) as never);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('created');
+    expect(sentTexts(ctx).filter((t) => t.includes('yaratildi'))).toHaveLength(
+      1,
+    );
+  });
+
+  it('PG-4: boshqa replika yaratgan qoralama — tiklash natijani qayta yubormaydi', async () => {
+    const { ctx } = setup([preview()]);
+    await send(ctx, ORDER_TEXT);
+    // Bu ish `creating` da (o'z finish(created) i yo'q), qatorni esa boshqa
+    // replika `created` qilib, natijani o'zi ko'rsatgan.
+    const mine = { ...row(ctx), status: 'creating', worker_token: null };
+    Object.assign(row(ctx), {
+      status: 'created',
+      results: [{ index: 0, ok: true, order_id: '81' }],
+    });
+    const reply = jest.fn(() => Promise.resolve({ result: { message_id: 1 } }));
+    const service = ctx.aiService as unknown as {
+      recover: (...args: unknown[]) => Promise<void>;
+    };
+    await service.recover({ chatId: '40', reply }, mine, 'creating');
+    expect(reply).not.toHaveBeenCalled();
+    expect(row(ctx).status).toBe('created');
   });
 
   it('5: parse natijasi yozildi, karta ko‘rsatilmadi — `failed` ga aylanmaydi', async () => {

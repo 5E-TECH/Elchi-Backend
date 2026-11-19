@@ -13,6 +13,7 @@ import {
 import {
   TelegramAiDraft,
   TelegramAiDraftInput,
+  TelegramAiDraftMeta,
   TelegramAiDraftStatus,
 } from '../../entities/telegram-ai-draft.entity';
 import { BotActionsService } from '../bot-actions.service';
@@ -29,8 +30,10 @@ import type { InlineKeyboardButton } from '../telegram.types';
 import {
   AI_ACK_SERVER_ASKED_TEXT,
   AI_EDITS_NOT_APPLIED_TEXT,
+  type ConfirmExtra,
+  outcomeUnknown,
   AiAckEntry,
-  PREVIEW_MAX_ORDERS,
+  aiPreviewCard,
   confirmAttempted,
   confirmSendable,
   editedAfterAttempt,
@@ -84,6 +87,27 @@ import {
   parseEditValue,
   storedDistrictOptions,
 } from './ai-order-edit';
+import {
+  AI_OPERATOR_NONE_TEXT,
+  AI_OPERATOR_PHONE_RETRY_TEXT,
+  AI_OPERATOR_REJECTED_TEXT,
+  AI_RETRY_ALL_HINT_TEXT,
+  AI_RETRY_HINT_TEXT,
+  canChooseOperator,
+  chosenOperatorId,
+  isOperatorRejected,
+  isPhoneRetry,
+  isRetryableResult,
+  metaOf,
+  needsProfilePhone,
+  operatorButtonLabel,
+  operatorPhoneOf,
+  operatorPickerText,
+  operatorsFromResponse,
+  profileOf,
+  storedOperators,
+  userReason,
+} from './ai-order-operator';
 
 export const AI_ORDER_ACTIONS = {
   confirm: 'ai.ok',
@@ -111,6 +135,10 @@ export const AI_ORDER_ACTIONS = {
   district: 'ai.dist',
   /** Tuman tanlandi. */
   districtPick: 'ai.dpick',
+  /** «🎧 Operator» tanlash oynasi (faqat market). */
+  operator: 'ai.op',
+  /** Operator tanlandi (`{k, oid}`) yoki «Tanlamaslik» (`{k: -1}`). */
+  operatorPick: 'ai.opick',
 } as const;
 
 /**
@@ -177,6 +205,9 @@ export const AI_EMPTY_TEXT =
 export const AI_NETWORK_TEXT =
   '❌ AI bilan aloqa bo‘lmadi. Matningiz saqlangan — «🔁 Qayta urinish» ni bosing.';
 export const AI_CANCELLED_TEXT = '❌ Bekor qilindi — hech narsa yaratilmadi.';
+/** Bekor, lekin avval yuborilgan buyurtma bor (qisman / noma'lum natija). */
+export const AI_CANCELLED_PARTIAL_TEXT =
+  '❌ Qoralama yopildi. ⚠️ Yuborilgan buyurtmalarning bir qismi yaratilgan bo‘lishi mumkin — «Yangi buyurtmalar»ni tekshiring, matnni qayta yubormang.';
 /** Tuzatish: bir nechta buyurtma — qaysi biri. */
 export const AI_EDIT_CHOOSE_TEXT =
   '✏️ Qaysi buyurtmani tuzatamiz? (Boshqa o‘zgarishlar — matnni tuzatib qayta yuboring yoki kabinetda yarating.)';
@@ -275,6 +306,8 @@ interface ConfirmResult {
   index: number;
   ok: boolean;
   order_id?: string;
+  /** Xato kodi (`create_failed`, `validation_unavailable`, …). */
+  code?: string;
   reason?: string;
   idempotent_replay?: boolean;
 }
@@ -306,6 +339,8 @@ interface ConfirmResult {
 export class AiOrderService implements OnModuleDestroy {
   private readonly logger = new Logger(AiOrderService.name);
   private readonly inflight = new Set<Promise<void>>();
+  /** Shu replikada `created` ni yozgan (yoki yozishda yiqilgan) ishlar. */
+  private readonly finishingCreated = new WeakSet<TelegramAiDraft>();
   private ticking = false;
   private stopped = false;
 
@@ -353,6 +388,8 @@ export class AiOrderService implements OnModuleDestroy {
     ctx: BotContext,
     actorUserId: string,
     input: TelegramAiDraftInput,
+    /** Aktor roli — «🎧 Operator» tanlovi faqat market uchun. */
+    role?: string,
   ): Promise<void> {
     const draft: Partial<TelegramAiDraft> = {
       id: deterministicUuid(
@@ -361,7 +398,7 @@ export class AiOrderService implements OnModuleDestroy {
       chat_id: ctx.chatId,
       actor_user_id: actorUserId,
       status: 'parsing',
-      input,
+      input: { ...input, ...(role ? { meta: { role } } : {}) },
     };
     try {
       await this.drafts.insert(draft as never);
@@ -471,6 +508,10 @@ export class AiOrderService implements OnModuleDestroy {
         );
         if (shown) return;
       }
+      // Natija faqat SHU ish `created` ni yozgan (yoki yozish yiqilgan)
+      // bo'lsa qayta yuboriladi — boshqa replika yaratib, o'zi ko'rsatgan
+      // bo'lsa operator «✅ … yaratildi» ni ikki marta olmasin.
+      if (!this.finishingCreated.has(draft)) return;
       const row = await this.drafts.findOne({ where: { id: draft.id } });
       if (row?.status === 'created') await this.showCreated(ctx, row);
       return;
@@ -688,17 +729,22 @@ export class AiOrderService implements OnModuleDestroy {
       await this.show(ctx, draft, AI_EMPTY_TEXT, []);
       return;
     }
+    // «🎧 Operator» tanlovi — faqat market (market operatori operator_id
+    // YUBORMAYDI, FE shartnomasi). Ro'yxat olinmasa — tanlov yo'q.
+    const input = await this.withSelectableOperators(telegramId, draft);
     if (
       !(await this.finish(draft, {
         status: 'preview',
         orders,
         ai_draft_id: str(data.draft_id) || null,
         error: null,
+        input,
       }))
     ) {
       return;
     }
     draft.orders = orders;
+    draft.input = input;
     await this.showPreview(ctx, draft);
   }
 
@@ -846,8 +892,19 @@ export class AiOrderService implements OnModuleDestroy {
       const codes = ackByIndex.get(order.index);
       return codes?.length ? { ...rest, acked_checks: codes } : rest;
     });
+    // Rol «✅» paytidagi aktordan (qoralama yaratilgandan keyin o'zgargan
+    // bo'lishi mumkin) — operator_id faqat hozir market bo'lsa yuboriladi.
+    const actor = await Promise.resolve(ctx.actor?.()).catch(() => null);
+    const meta = metaOf(draft.input);
+    if (actor?.role && actor.role !== meta.role) {
+      draft.input = {
+        ...(draft.input ?? {}),
+        meta: { ...meta, role: actor.role },
+      };
+    }
     await this.drafts.update({ id: draft.id }, {
       orders: draft.orders,
+      input: draft.input,
     } as never);
     await this.show(ctx, draft, AI_CREATING_TEXT, []);
     this.schedule(draft.id, 'creating');
@@ -870,8 +927,12 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     const telegramId = ctx.fromId ?? ctx.chatId;
+    const meta = metaOf(draft.input);
+    // ODAM tanlovi / aktor profili — model chiqishidan EMAS.
+    const extra: ConfirmExtra = { operator_id: chosenOperatorId(meta) };
     let res: { status: number; body: unknown };
     try {
+      extra.operator_phone = await this.operatorPhoneFor(telegramId, meta);
       res = await this.gateway.request(
         telegramId,
         'POST',
@@ -879,7 +940,7 @@ export class AiOrderService implements OnModuleDestroy {
         {
           request_id: deterministicUuid(`telegram-ai:${draft.id}`),
           orders: ready.map((order) =>
-            toConfirmOrder(order, draft.ai_draft_id),
+            toConfirmOrder(order, draft.ai_draft_id, extra),
           ),
         },
         { timeoutMs: CONFIRM_TIMEOUT_MS },
@@ -920,15 +981,22 @@ export class AiOrderService implements OnModuleDestroy {
       return;
     }
     const results = body.data.results;
+    if (results.some((result) => isRetryableResult(meta, result))) {
+      await this.retryableResults(ctx, draft, ready, results, meta, extra);
+      return;
+    }
+    // `recover` uchun: `created` yozuvini SHU ish qildi (yoki yozish yiqildi).
+    this.finishingCreated.add(draft);
     if (
       !(await this.finish(draft, {
         status: 'created',
         results,
       }))
     ) {
+      this.finishingCreated.delete(draft);
       return;
     }
-    const { text, skipped } = this.createdSummary(previews, results);
+    const { text, skipped } = this.createdSummary(previews, results, extra);
     await this.show(
       ctx,
       draft,
@@ -945,6 +1013,8 @@ export class AiOrderService implements OnModuleDestroy {
   private createdSummary(
     previews: AiPreviewOrder[],
     results: ConfirmResult[],
+    /** Shu urinishdagi odam tanlovi (takroriy javob izini solishtirish uchun). */
+    extra: ConfirmExtra = {},
   ): { text: string; skipped: boolean } {
     const creatable = previews.filter(isCreatable);
     const ready = creatable.filter(isFullyAcked);
@@ -953,11 +1023,13 @@ export class AiOrderService implements OnModuleDestroy {
       const order = ready[result.index];
       const n = (order?.index ?? result.index) + 1;
       if (!result.ok)
-        return [`❌ ${n}) ${str(result.reason) || 'yaratilmadi'}`];
+        return [`❌ ${n}) ${userReason(result.reason) || 'yaratilmadi'}`];
       const line = `✅ ${n}) Buyurtma ${orderNumber(result.order_id)} ${result.idempotent_replay ? 'avval yaratilgan' : 'yaratildi'}`;
       // Takroriy javob — server birinchi urinish yukini qaytardi; undan
       // keyin qoralama o'zgargan bo'lsa tuzatishlar buyurtmada YO'Q.
-      return result.idempotent_replay && order && editedAfterAttempt(order)
+      return result.idempotent_replay &&
+        order &&
+        editedAfterAttempt(order, extra)
         ? [line, `⚠️ ${n}) ${AI_EDITS_NOT_APPLIED_TEXT}`]
         : [line];
     });
@@ -977,6 +1049,248 @@ export class AiOrderService implements OnModuleDestroy {
   }
 
   /**
+   * Market: tanlanadigan operatorlar (`GET /market-operators/selectable`,
+   * aktor JWT) `input.meta` ga. Market operatori / xato / bo'sh — tanlov
+   * yo'q (avvalgi meta tozalanadi).
+   */
+  private async withSelectableOperators(
+    telegramId: string,
+    draft: TelegramAiDraft,
+  ): Promise<TelegramAiDraftInput> {
+    const meta: TelegramAiDraftMeta = { ...metaOf(draft.input) };
+    delete meta.operators;
+    delete meta.operators_total;
+    delete meta.operator_id;
+    delete meta.operator_name;
+    if (canChooseOperator(meta)) {
+      try {
+        const res = await this.gateway.request(
+          telegramId,
+          'GET',
+          '/market-operators/selectable',
+        );
+        const { options, total } =
+          res.status < 400
+            ? operatorsFromResponse(res.body)
+            : { options: [], total: 0 };
+        if (options.length) {
+          meta.operators = options;
+          meta.operators_total = total;
+        }
+      } catch (error) {
+        // Ixtiyoriy qism: preview baribir ko'rsatiladi (parol talabi bo'lsa
+        // «✅ Yaratish» aniq ko'rsatma beradi).
+        this.logger.warn(
+          `ai draft ${draft.id}: operatorlar ro'yxati — ${error instanceof Error ? error.message : 'error'}`,
+        );
+      }
+    }
+    return { ...(draft.input ?? {}), meta };
+  }
+
+  /**
+   * ai-confirm `operator_phone` — aktor profilidan (`GET /auth/my-profile`),
+   * faqat kerak bo'lishi mumkin bo'lsa (`needsProfilePhone`). Xato — raqamsiz
+   * (server majburiy bo'lsa sababini qaytaradi). Parol xatosi — yuqoriga.
+   */
+  private async operatorPhoneFor(
+    telegramId: string,
+    meta: TelegramAiDraftMeta,
+  ): Promise<string | null> {
+    if (!needsProfilePhone(meta)) return null;
+    // Qoralama bo'yicha kesh (har «✅» da profil so'ralmasin); faqat
+    // muvaffaqiyatli javob keshlanadi — vaqtinchalik xato qayta so'raladi.
+    if (!meta.profile) {
+      try {
+        const res = await this.gateway.request(
+          telegramId,
+          'GET',
+          '/auth/my-profile',
+        );
+        if (res.status < 400) {
+          meta.profile = profileOf(
+            (res.body as { data?: unknown } | null)?.data,
+          );
+        }
+      } catch (error) {
+        if (error instanceof BotPasswordChangeRequiredError) throw error;
+        this.logger.warn(
+          `ai-confirm: profil raqami — ${error instanceof Error ? error.message : 'error'}`,
+        );
+      }
+    }
+    return operatorPhoneOf(meta, meta.profile ?? null);
+  }
+
+  /**
+   * Natijada qayta «✅» bilan hal bo'ladigan xato bor (`isRetryableResult` —
+   * hammasi server kalitidan OLDIN, buyurtma ANIQ yaratilmagan): qoralama
+   * `created` EMAS — preview'ga qaytadi. Javob kelgan va YARATILGAN
+   * buyurtmalar belgilanadi (`confirm_order_id` — «✅ Yaratilgan», tuzatish
+   * yopiq, keyingi bosishda server kaliti bilan takrorlanmaydi); yaratilmagan
+   * buyurtmalar belgisiz — tuzatsa bo'ladi. Rad etilgan operator tanlovi
+   * olib tashlanadi va ro'yxat yangilanadi.
+   */
+  private async retryableResults(
+    ctx: BotContext,
+    draft: TelegramAiDraft,
+    sent: AiPreviewOrder[],
+    results: ConfirmResult[],
+    meta: TelegramAiDraftMeta,
+    extra: ConfirmExtra,
+  ): Promise<void> {
+    const previews = (draft.orders ?? []) as AiPreviewOrder[];
+    const phoneRetry = results.some((result) => isPhoneRetry(meta, result));
+    const operatorRejected = results.some((result) =>
+      isOperatorRejected(meta, result),
+    );
+    const created = new Map<number, string>();
+    for (const result of results) {
+      const order = sent[result.index];
+      if (result.ok && order && str(result.order_id)) {
+        created.set(order.index, str(result.order_id));
+      }
+    }
+    let input: TelegramAiDraftInput = {
+      ...(draft.input ?? {}),
+      meta: { ...meta, ...(phoneRetry ? { operator_phone_needed: true } : {}) },
+    };
+    if (operatorRejected) {
+      // Tanlov olib tashlanadi, ro'yxat yangilanadi (operator o'chirilgan /
+      // nofaol bo'lishi mumkin).
+      input = await this.withSelectableOperators(ctx.fromId ?? ctx.chatId, {
+        ...draft,
+        input,
+      });
+    }
+    const orders = markConfirmAttempted(
+      previews,
+      sent.filter((order) => created.has(order.index)),
+      Date.now(),
+      extra,
+      created,
+    );
+    if (!(await this.finish(draft, { status: 'preview', orders, input }))) {
+      return;
+    }
+    draft.orders = orders;
+    draft.input = input;
+    const { text } = this.createdSummary(previews, results, extra);
+    await this.show(
+      ctx,
+      draft,
+      [
+        text,
+        '',
+        ...(phoneRetry ? [AI_OPERATOR_PHONE_RETRY_TEXT] : []),
+        ...(operatorRejected ? [AI_OPERATOR_REJECTED_TEXT] : []),
+        created.size ? AI_RETRY_HINT_TEXT : AI_RETRY_ALL_HINT_TEXT,
+      ].join('\n'),
+      await this.previewRows(ctx, draft),
+    );
+  }
+
+  /** «🎧 Operator» — tanlash oynasi (faqat market, belgisiz qoralama). */
+  async openOperators(ctx: BotContext, draftId: string): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const meta = metaOf(draft.input);
+    const options = storedOperators(meta);
+    if (
+      !canChooseOperator(meta) ||
+      !options.length ||
+      ((draft.orders ?? []) as AiPreviewOrder[]).some(outcomeUnknown)
+    ) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    const current = str(meta.operator_id);
+    const rows: InlineKeyboardButton[][] = [];
+    for (const [k, option] of options.entries()) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          `${option.id === current ? '• ' : ''}${option.name}`,
+          AI_ORDER_ACTIONS.operatorPick,
+          // `oid` — ro'yxat almashgan eski tugma boshqa operatorni qo'ymasin.
+          { k, oid: option.id },
+        ),
+      ]);
+    }
+    rows.push(
+      [
+        await this.button(
+          ctx,
+          draft,
+          AI_OPERATOR_NONE_TEXT,
+          AI_ORDER_ACTIONS.operatorPick,
+          { k: -1 },
+        ),
+      ],
+      [await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back)],
+    );
+    await this.show(ctx, draft, operatorPickerText(meta), rows, 'HTML');
+  }
+
+  /**
+   * Operator tanlandi (`k`, `oid`) yoki «🚫 Tanlamaslik» (`k: -1`) →
+   * `meta.operator_id`, preview qayta. Natijasi noma'lum urinish bo'lsa —
+   * o'zgartirilmaydi (server birinchi yukni eslaydi).
+   */
+  async pickOperator(
+    ctx: BotContext,
+    draftId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.clearInput(ctx);
+    const draft = await this.previewDraft(draftId);
+    if (!draft) {
+      await this.explainState(ctx, draftId);
+      return;
+    }
+    const meta = metaOf(draft.input);
+    if (
+      !canChooseOperator(meta) ||
+      ((draft.orders ?? []) as AiPreviewOrder[]).some(outcomeUnknown)
+    ) {
+      await this.showPreview(ctx, draft);
+      return;
+    }
+    let next: TelegramAiDraftMeta;
+    if (payload.k === -1) {
+      next = { ...meta, operator_id: null, operator_name: null };
+    } else {
+      const option = Number.isInteger(payload.k)
+        ? storedOperators(meta)[payload.k as number]
+        : undefined;
+      if (!option || option.id !== payload.oid) {
+        await this.openOperators(ctx, draftId);
+        return;
+      }
+      next = { ...meta, operator_id: option.id, operator_name: option.name };
+    }
+    const input = { ...(draft.input ?? {}), meta: next };
+    // Versiya sharti (`updated_at`): o'qishdan keyin qoralama o'zgargan
+    // bo'lsa (masalan orada «✅» → natijasi noma'lum urinish belgisi)
+    // tanlov yozilmaydi — belgilangan buyurtma operatori o'zgarmasin.
+    const res = await this.drafts.update(
+      { id: draft.id, status: 'preview', updated_at: draft.updated_at },
+      { input, updated_at: new Date() },
+    );
+    if (!res?.affected) {
+      await this.explainState(ctx, draft.id);
+      return;
+    }
+    draft.input = input;
+    await this.showPreview(ctx, draft);
+  }
+
+  /**
    * Buyurtmalar YARATILGAN, lekin natija xabari ko'rsatilmadi (show
    * yiqildi) — «⏳ Yaratilmoqda…» da qolmasin va operator matnni qayta
    * yuborib dublikat yaratmasin: saqlangan natija YANGI xabar bilan; bu
@@ -993,6 +1307,7 @@ export class AiOrderService implements OnModuleDestroy {
       const { text } = this.createdSummary(
         (row.orders ?? []) as AiPreviewOrder[],
         results,
+        { operator_id: chosenOperatorId(metaOf(row.input)) },
       );
       await ctx.reply(text || AI_ALREADY_CREATED_TEXT, {
         reply_markup: { inline_keyboard: [[this.cabinetCreateButton()]] },
@@ -1058,7 +1373,13 @@ export class AiOrderService implements OnModuleDestroy {
     return false;
   }
 
-  /** `❌ Bekor` — preview yopiladi, hech narsa yaratilmaydi. */
+  /**
+   * `❌ Bekor` — preview yopiladi. Avval ai-confirm'ga yuborilgan buyurtma
+   * bo'lsa (natijasi noma'lum yoki qisman yaratilgan) «hech narsa
+   * yaratilmadi» DEYILMAYDI: yaratilganlari ro'yxati + «Yangi
+   * buyurtmalar»ni tekshiring — operator matnni qayta yuborib dublikat
+   * yaratmasin.
+   */
   async close(ctx: BotContext, draftId: string) {
     await this.clearInput(ctx);
     const draft = await this.claim(
@@ -1070,7 +1391,23 @@ export class AiOrderService implements OnModuleDestroy {
       await this.explainState(ctx, draftId);
       return;
     }
-    await this.show(ctx, draft, AI_CANCELLED_TEXT, []);
+    const orders = (draft.orders ?? []) as AiPreviewOrder[];
+    if (!orders.some(confirmAttempted)) {
+      await this.show(ctx, draft, AI_CANCELLED_TEXT, []);
+      return;
+    }
+    const created = orders
+      .filter((order) => order.confirm_order_id)
+      .map(
+        (order) =>
+          `✅ ${order.index + 1}) Buyurtma ${orderNumber(order.confirm_order_id)} yaratilgan`,
+      );
+    await this.show(
+      ctx,
+      draft,
+      [AI_CANCELLED_PARTIAL_TEXT, ...created].join('\n'),
+      [[this.cabinetCreateButton()]],
+    );
   }
 
   /**
@@ -1084,12 +1421,12 @@ export class AiOrderService implements OnModuleDestroy {
       await this.explainState(ctx, draftId);
       return;
     }
-    // Kartada ko'rinadiganlar (avval kesish, keyin filtr — indekslar karta
-    // bilan mos). Natijasi noma'lum urinishdagi (belgili) buyurtma botda
+    // Kartada TO'LIQ ko'rinadiganlar (avval kesish, keyin filtr — indekslar
+    // karta bilan mos). Natijasi noma'lum urinishdagi (belgili) buyurtma botda
     // tuzatilmaydi; hammasi belgili — karta qayta; bitta qolsa — darhol
     // uning menyusi.
     const orders = ((draft.orders ?? []) as AiPreviewOrder[])
-      .slice(0, PREVIEW_MAX_ORDERS)
+      .slice(0, aiPreviewCard((draft.orders ?? []) as AiPreviewOrder[]).shown)
       .filter((o) => !confirmAttempted(o));
     if (!orders.length) {
       await this.showPreview(ctx, draft);
@@ -1798,6 +2135,7 @@ export class AiOrderService implements OnModuleDestroy {
         previews,
         confirmSendable(previews),
         Date.now(),
+        { operator_id: chosenOperatorId(metaOf(draft.input)) },
       );
     }
     if (!(await this.finish(draft, patch))) return false;
@@ -1832,9 +2170,9 @@ export class AiOrderService implements OnModuleDestroy {
     // Natijasi noma'lum urinishdagi (belgili) buyurtma — botda tuzatilmaydi
     // (keyingi «✅» da server birinchi yukni qaytaradi): uning 📍 / ❓
     // tugmalari yo'q. Yuborilmagan (belgisiz) buyurtmalar odatdagidek.
-    // Avval kartada ko'rinadiganlar (≤10), keyin belgisizlar — tugma kartada
-    // yo'q (11+) buyurtmaga ishora qilmasin.
-    const shown = orders.slice(0, PREVIEW_MAX_ORDERS);
+    // Avval kartada TO'LIQ ko'rinadiganlar (≤10 ta, ≤3900 belgi — aiPreviewCard),
+    // keyin belgisizlar — tugma kartada yo'q buyurtmaga ishora qilmasin.
+    const shown = orders.slice(0, aiPreviewCard(orders).shown);
     const editable = shown.filter((o) => !confirmAttempted(o));
     const locked = orders.some(confirmAttempted);
     const multi = orders.length > 1;
@@ -1860,6 +2198,23 @@ export class AiOrderService implements OnModuleDestroy {
           pickEntryLabel(order, item, multi),
           AI_ORDER_ACTIONS.item,
           { o: order.index, i: itemIndex },
+        ),
+      ]);
+    }
+    // «🎧 Operator» — faqat market, ro'yxat bo'lsa va natijasi noma'lum
+    // urinish bo'lmasa (tanlov hamma buyurtmaga — belgilisiga ham tegardi).
+    const meta = metaOf(draft.input);
+    if (
+      canChooseOperator(meta) &&
+      storedOperators(meta).length &&
+      !orders.some(outcomeUnknown)
+    ) {
+      rows.push([
+        await this.button(
+          ctx,
+          draft,
+          operatorButtonLabel(meta),
+          AI_ORDER_ACTIONS.operator,
         ),
       ]);
     }
@@ -1968,7 +2323,7 @@ export class AiOrderService implements OnModuleDestroy {
     patch: Partial<
       Pick<
         TelegramAiDraft,
-        'status' | 'orders' | 'ai_draft_id' | 'error' | 'results'
+        'status' | 'orders' | 'ai_draft_id' | 'error' | 'results' | 'input'
       >
     >,
   ): Promise<boolean> {
@@ -2070,7 +2425,15 @@ export class AiOrderService implements OnModuleDestroy {
       messageId = sent.result?.message_id ? String(sent.result.message_id) : '';
       if (messageId) {
         draft.message_id = messageId;
-        await this.drafts.update({ id: draft.id }, { message_id: messageId });
+        // Xabar YETKAZILDI — id ni saqlash yiqilsa ham `show` muvaffaqiyatli
+        // (aks holda ishchi tiklashda natijani ikkinchi marta yuborardi).
+        await this.drafts
+          .update({ id: draft.id }, { message_id: messageId })
+          .catch((error: unknown) =>
+            this.logger.warn(
+              `ai draft ${draft.id}: message_id saqlanmadi — ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
       }
     }
     const callbacks = rows

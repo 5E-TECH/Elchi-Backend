@@ -463,7 +463,13 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   dublikat yaratmasin. Da'vosi bo'shatilgan ishning yozuvi faqat qoralama
   hali o'sha holatda bo'lsa o'tadi (yangi «✅» da'vosi ustidan yozilmaydi);
   parse natijasi yozilib karta ko'rsatilmasa qoralama `failed` ga
-  aylanmaydi. Tugmalar faqat kartada ko'rinadigan (≤10) buyurtmalarga.
+  aylanmaydi. Tugmalar faqat kartada TO'LIQ ko'rsatilgan buyurtmalarga
+  (≤10 ta va ≤3900 belgi — blok sig'masa butunligicha tushadi, pastki
+  «✅ Yaratish — N ta» qatori doim qoladi). Ko'rsatilmaganlar: «… yana N ta
+  — tayyorlari ham «✅ Yaratish» bilan yaratiladi; ko'rish va tuzatish —
+  kabinetda» (xatti-harakat e7KhaeOO dan beri shu — matn moslandi). Natija
+  faqat SHU ish `created` ni yozgan bo'lsa tiklashda qayta yuboriladi;
+  `message_id` saqlanmasa ham xabar takrorlanmaydi.
 - **Reliz eslatmasi (#713/#714).** Eski kod bilan natijasi noma'lum
   urinishdan `preview` ga qaytgan qoralamalarda belgi YO'Q: ular muddati
   (24 soat) tugaguncha takroriy javob (`idempotent_replay`) muammosiga ochiq
@@ -493,6 +499,55 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   `AI_CHECK_EXEMPT_BY_EDIT` bilan bir xil); o'sha tumanni qayta tanlash —
   tahrir emas, «Baribir yaratamanmi?» qoladi. Server 409 so'rasa — oyna
   odatdagidek.
+- **«🎧 Operator» tanlovi (ai-confirm `orders[].operator_id`, #715).** Faqat
+  MARKET egasiga: parse'dan keyin `GET /market-operators/selectable` (aktor
+  JWT, `market_id` siz) — ≥1 operator bo'lsa kartada «🎧 Operator:
+  <ism|tanlanmagan>» → oyna (≤20, ortig'i «… yana N ta — kabinetda»),
+  «🚫 Tanlamaslik», «↩️ Orqaga». Amallar `ai.op`, `ai.opick` (`{k, oid}` —
+  ro'yxat almashgan eski tugma qo'llanmaydi; `{k: -1}` — tanlamaslik).
+  Tanlov QORALAMA bo'yicha bitta (hamma buyurtmaga) — `input.meta`
+  (`role`, `operators`, `operator_id`, `operator_name`); `operator_id` faqat
+  odam tanlaganda yuboriladi (model chiqishi uni bera olmaydi —
+  `toConfirmOrder` `extra` argumenti). Market operatori: ro'yxat
+  so'ralmaydi, tugma yo'q, `operator_id` YUBORILMAYDI (FE shartnomasi).
+  Natijasi noma'lum urinish bo'lsa tanlov yopiq.
+- **Operator raqami (`orders[].operator_phone`, #716).** Market: «✅» da
+  `GET /auth/my-profile` — `require_operator_phone` va doimiy raqam yo'q
+  bo'lsa marketning o'z raqami yuboriladi; talab qilmaydigan market — HECH
+  narsa yuborilmaydi (chekda 2-raqam paydo bo'lmasin). Market operatori:
+  market sozlamasi operatorga ko'rinmaydi — server «Operator telefon raqami
+  majburiy» desa (`create_failed`) natija qayta urinishli: qoralama
+  preview'da qoladi (`meta.operator_phone_needed`), keyingi «✅» operatorning
+  profil raqami bilan. Raqam bo'sh / normallashmasa — yuborilmaydi.
+- **Qayta urinishli natijalar (#721 review bilan).** Hammasi server
+  kalitidan OLDIN — buyurtma ANIQ yaratilmagan: `validation_unavailable`,
+  `not_started`, birinchi «Operator telefon raqami majburiy» (market egasi
+  ham — profil vaqtincha olinmagan bo'lishi mumkin; bir marta, keyingi «✅»
+  profil raqami bilan), rad etilgan operator tanlovi («Tanlangan operator …
+  faol emas» — tanlov olib tashlanadi, ro'yxat qayta olinadi, «🎧 Operator»
+  dan boshqasini tanlash mumkin). Qoralama `created` EMAS, preview'ga
+  qaytadi; faqat javob kelgan va YARATILGAN buyurtmalar belgilanadi
+  (`confirm_order_id` — kartada «✅ Yaratilgan: EL-… — tuzatish faqat
+  kabinetda», «Javob kelmadi» EMAS), yaratilmaganlari belgisiz — tuzatsa
+  bo'ladi. Xabarda natija qatorlari + «🔁 Ba'zi …» / «🔁 Buyurtmalar
+  yaratilmadi …» (hammasi yiqilgan bo'lsa). Yaratilganlari qayta bosishda
+  server kaliti bilan takrorlanmaydi (`idempotent_replay`); odam tanlovi
+  (operator) izga (`confirm_fp`) kiradi — almashtirilsa takroriy javobda
+  «Tuzatishlar qo'llanmadi». Boshqa `create_failed` — server sababi
+  `❌ N) …` (API maydon nomi — masalan «(operator_phone)» — ko'rsatilmaydi),
+  qayta urinish yo'q.
+- **«❌ Bekor» yuborilgandan keyin.** Qoralamada ai-confirm'ga yuborilgan
+  buyurtma bo'lsa (noma'lum natija yoki qisman yaratilgan) «hech narsa
+  yaratilmadi» DEYILMAYDI: «❌ Qoralama yopildi. ⚠️ … «Yangi buyurtmalar»ni
+  tekshiring» + yaratilganlari ro'yxati + kabinet — operator matnni qayta
+  yuborib dublikat yaratmasin.
+- Operator tanlovi yozuvi versiya sharti bilan (`updated_at`): o'qishdan
+  keyin qoralama o'zgargan bo'lsa (masalan orada «✅») yozilmaydi. Rol
+  «✅» paytida aktordan qayta o'qiladi (operator_id faqat hozir market
+  bo'lsa). Operator id shartnomasi `^[1-9]\d{0,18}$`, ≤ INT8_MAX. Profil
+  (`GET /auth/my-profile`) qoralama bo'yicha keshlanadi (faqat muvaffaqiyatli
+  javob). Operator tugmasi belgisi — «🎧» (mijoz qatoridagi «👤» bilan
+  adashmasin).
 
 ## 13. Skan Mini App (MWYaqprw) — chatda skan YO'Q
 
