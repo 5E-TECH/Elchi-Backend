@@ -45,6 +45,15 @@ export const ORDER_SETTLEMENT_SALE_KIND: OrderSettlementKind = 'sale';
     where: `"extra_cost_approval_id" IS NOT NULL`,
   },
 )
+// 63HO6cBU (PR-C, C6) — migratsiya 246 dagi qisman indeks (filial → market
+// FIFO nomzodlari); entity'da e'lon qilinmasa migration:generate uni DROP qiladi.
+@Index(
+  'IDX_order_settlement_branch_market_open',
+  ['branch_id', 'market_id', 'createdAt', 'id'],
+  {
+    where: `"status" = 'courier_settled' AND "market_paid_by_branch_at" IS NULL AND "is_deleted" = false`,
+  },
+)
 @Index('IDX_order_settlement_status', ['status'])
 @Index('IDX_order_settlement_courier', ['courier_id'])
 @Index('IDX_order_settlement_branch', ['branch_id'])

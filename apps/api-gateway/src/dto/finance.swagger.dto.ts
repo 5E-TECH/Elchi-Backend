@@ -1111,7 +1111,10 @@ export class CourierPaymentAckRequestDto {
 export class PaymentToMarketRequestDto {
   @ApiProperty({ example: '2002' })
   @IsString()
-  @Matches(/^\d+$/)
+  // 63HO6cBU (PR-C, B2) — boshida nolsiz musbat int8 ('0201' → 400).
+  @Matches(/^[1-9]\d{0,17}$/, {
+    message: "market_id — boshida nolsiz musbat raqamli ID bo'lishi kerak",
+  })
   market_id!: string;
 
   @ApiProperty({ example: 500000 })

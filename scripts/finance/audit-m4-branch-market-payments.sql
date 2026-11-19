@@ -32,7 +32,7 @@ SELECT 'hq_to_market: boshqa filial/HQ qatori' AS finding,
        p.history_id, p.paid_at, p.branch_id AS payer_branch_id, p.market_id,
        p.amount AS payment_amount,
        s."order_id", s."branch_id" AS row_branch_id, s."market_id" AS row_market_id,
-       s."market_amount", s."hq_to_market_at"
+       s."market_amount", s."hq_to_market_at" AS closed_at
   FROM branch_market_payments p
   JOIN "order_schema"."order_settlement" s
     ON s."market_id" = p.market_id
@@ -46,7 +46,7 @@ SELECT 'branch_to_hq: boshqa market qatori' AS finding,
        p.history_id, p.paid_at, p.branch_id, p.market_id,
        p.amount,
        s."order_id", s."branch_id", s."market_id",
-       s."market_amount", s."branch_to_hq_at"
+       s."market_amount", s."branch_to_hq_at" AS closed_at
   FROM branch_market_payments p
   JOIN "order_schema"."order_settlement" s
     ON s."branch_id" = p.branch_id

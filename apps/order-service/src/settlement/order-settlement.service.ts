@@ -1516,7 +1516,9 @@ export class OrderSettlementService {
         lock: { mode: 'pessimistic_write' },
       });
 
-      let remaining = lumpSum + carryBefore;
+      // A3: hisob butun tiyinda (suzuvchi nuqta: aniq 879 621,39 topshirilsa
+      // ham oxirgi qator 92 786,80000000005 sababli ochiq qolardi).
+      let remaining = money2(lumpSum + carryBefore);
       const now = new Date();
       const advanceRow = async (row: OrderSettlement): Promise<void> => {
         await repo.update(
@@ -1623,7 +1625,7 @@ export class OrderSettlementService {
       const fifoRows =
         params.requireZeroNet && carryCoveredTiyin === null ? [] : payables;
       for (const settlement of fifoRows) {
-        const legAmount = legOf(settlement);
+        const legAmount = money2(legOf(settlement));
         // Strict FIFO (Faza 4 / Audit I16): if the OLDEST still-unsettled order's
         // leg does not fully fit in the remaining lump-sum, STOP — never skip
         // ahead to settle a newer, smaller order before an older one. Skipping
@@ -1634,7 +1636,7 @@ export class OrderSettlementService {
         while (legAmount > remaining && credits.length) {
           const credit = credits.shift() as OrderSettlement;
           pulled.push(credit);
-          remaining -= legOf(credit);
+          remaining = money2(remaining - legOf(credit));
         }
         if (legAmount > remaining && legAmount > 0) {
           // Tortilgan kreditlar YOZILMAYDI: bu qator baribir sig'madi, demak
@@ -1643,13 +1645,13 @@ export class OrderSettlementService {
         }
         for (const credit of pulled) {
           await advanceRow(credit);
-          allocated += legOf(credit);
+          allocated = money2(allocated + legOf(credit));
         }
         await advanceRow(settlement);
         if (legAmount > 0) {
           await params.postLeg(tx, settlement, legAmount);
-          remaining -= legAmount;
-          allocated += legAmount;
+          remaining = money2(remaining - legAmount);
+          allocated = money2(allocated + legAmount);
         }
       }
 
@@ -1671,7 +1673,7 @@ export class OrderSettlementService {
       newCarry =
         carryBefore < 0
           ? Math.round((lumpSum + carryBefore - allocated) * 100) / 100
-          : Math.max(lumpSum + carryBefore - allocated, 0);
+          : Math.max(money2(lumpSum + carryBefore - allocated), 0);
       // MONEY-02: hammasi yopildi, yig'indi qoldiqqa butun tiyinda teng —
       // qoldiq to'liq sarflandi (suzuvchi nuqta qoldig'i yozilmasin).
       if (carryCoveredTiyin !== null && !zeroNetRejection) {
@@ -2447,11 +2449,13 @@ export class OrderSettlementService {
       }
       for (const row of candidates.filter((r) => due(r) >= 0)) {
         const need = due(row);
+        // A2: to'lov tugagach 0 so'mlik qatorlar ham belgilanmaydi (aks holda
+        // ular «filial to'lagan» bo'lib, rollback / retreat noto'g'ri 400 olardi).
+        if (remaining <= 0) break;
         if (need === 0) {
           await pay(row, 0, true);
           continue;
         }
-        if (remaining <= 0) break;
         const part = Math.min(remaining, need);
         await pay(row, part, part === need);
         remaining = money2(remaining - part);

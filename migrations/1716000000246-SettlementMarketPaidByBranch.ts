@@ -18,7 +18,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Faqat qo'shimchalar; backfill YO'Q (M4 dan beri qilingan tarixiy to'lovlar
  * qayta yozilmaydi — audit SQL: scripts/finance/audit-m4-branch-market-payments.sql).
  * `IF NOT EXISTS` — qayta yurgizish xatosiz. `lock_timeout` 5 s (241/243/244
- * kabi). Relizda kam yuklamali vaqtda. down(): hammasi olib tashlanadi.
+ * kabi). Relizda kam yuklamali vaqtda. down(): hammasi olib tashlanadi —
+ * faqat filial → market to'lov holati yo'q (yoki konvertatsiya qilingan) bo'lsa.
  */
 export class SettlementMarketPaidByBranch1716000000246 implements MigrationInterface {
   name = 'SettlementMarketPaidByBranch1716000000246';
@@ -56,8 +57,53 @@ export class SettlementMarketPaidByBranch1716000000246 implements MigrationInter
     await restore();
   }
 
+  /**
+   * C2 — filial → market to'lov holati bor bo'lsa down() RAD etadi: ustunlar
+   * jimgina o'chsa eski kod marketga ikkinchi marta to'lardi, filial esa HQ'ga
+   * to'lagan summasini yana qarz bo'lib qolardi. Avval konvertatsiya:
+   * `scripts/order/convert-246-before-down.sql` (filial to'lagan qism →
+   * `order_settlement_carry` branch_to_hq / hq_to_market), so'ng
+   * `MIGRATION_246_DOWN_CONVERTED=1` bilan down().
+   */
   public async down(queryRunner: QueryRunner): Promise<void> {
     const restore = await this.lockTimeout(queryRunner);
+    if (process.env.MIGRATION_246_DOWN_CONVERTED !== '1') {
+      const [{ has_column: hasColumn, has_carry: hasCarry }] =
+        (await queryRunner.query(`
+          SELECT EXISTS (
+                   SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'order_schema'
+                      AND table_name = 'order_settlement'
+                      AND column_name = 'market_paid_by_branch_amount'
+                 ) AS has_column,
+                 to_regclass('"order_schema"."order_settlement_branch_market_carry"')
+                   IS NOT NULL AS has_carry
+        `)) as Array<{ has_column: boolean; has_carry: boolean }>;
+      const [{ paid }] = hasColumn
+        ? ((await queryRunner.query(`
+            SELECT count(*)::int AS paid FROM "order_schema"."order_settlement"
+             WHERE "market_paid_by_branch_amount" <> 0
+                OR "market_paid_by_branch_at" IS NOT NULL
+          `)) as Array<{ paid: number }>)
+        : [{ paid: 0 }];
+      const [{ carried }] = hasCarry
+        ? ((await queryRunner.query(`
+            SELECT count(*)::int AS carried
+              FROM "order_schema"."order_settlement_branch_market_carry"
+             WHERE "amount" <> 0
+          `)) as Array<{ carried: number }>)
+        : [{ carried: 0 }];
+      if (paid > 0 || carried > 0) {
+        await restore();
+        throw new Error(
+          `Migratsiya 246 down() rad etildi: filial → market to'lov holati bor ` +
+            `(${paid} qator, ${carried} qoldiq). Avval ` +
+            `scripts/order/convert-246-before-down.sql ni yurgizing, so'ng ` +
+            `MIGRATION_246_DOWN_CONVERTED=1 bilan down() — aks holda eski kod ` +
+            `marketga ikkinchi marta to'laydi.`,
+        );
+      }
+    }
     await queryRunner.query(
       `DROP INDEX IF EXISTS "order_schema"."IDX_order_settlement_branch_market_open"`,
     );

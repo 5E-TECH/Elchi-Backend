@@ -658,5 +658,68 @@ describePg(
       // (75 000 − 75 000 = 0), r11 (20 000 − 5 000 qoldiqdan) — 15 000.
       expect(marketM.amount).toBeCloseTo(15_000, 2);
     });
+
+    it('A2: to`lov tugagach 0 so`mlik qatorlar «filial to`lagan» bo`lmaydi; keyingi to`lovda (pul bor paytda) belgilanadi', async () => {
+      const CS = SettlementStatus.COURIER_SETTLED;
+      await row('z1', {
+        home: '17',
+        branch: '17',
+        market: '205',
+        branchAmount: 12_000,
+        marketAmount: 10_000,
+        status: CS,
+      });
+      await row('z0', {
+        home: '17',
+        branch: '17',
+        market: '205',
+        branchAmount: 500,
+        marketAmount: 0,
+        status: CS,
+      });
+      await row('z2', {
+        home: '17',
+        branch: '17',
+        market: '205',
+        branchAmount: 6_000,
+        marketAmount: 5_000,
+        status: CS,
+      });
+      await managerPays('17', '205', 10_000, 'a2-1');
+      expect(await markedOf('z1')).toBe(true);
+      expect(await markedOf('z0')).toBe(false);
+      expect(await markedOf('z2')).toBe(false);
+      await managerPays('17', '205', 5_000, 'a2-2');
+      expect(await markedOf('z0')).toBe(true);
+      expect(await markedOf('z2')).toBe(true);
+    });
+
+    it('A3: FIFO butun tiyinda — aniq yig`indi (879 621,39) beshala qatorni yopadi, qoldiq 0', async () => {
+      const amounts = [241_770.93, 374_981.82, 98_719.71, 71_362.13, 92_786.8];
+      for (const [i, amount] of amounts.entries()) {
+        await row(`f${i}`, {
+          home: '18',
+          branch: '18',
+          market: '206',
+          branchAmount: amount,
+          marketAmount: 0,
+          status: SettlementStatus.COURIER_SETTLED,
+        });
+      }
+      const res: any = await service.advanceSettlement({
+        level: 'branch_to_hq',
+        match_value: '18',
+        amount: 879_621.39,
+        request_id: 'a3-1',
+        requester_id: '1',
+      });
+      expect(res.data.settled_order_ids).toHaveLength(5);
+      expect(res.data.leftover).toBe(0);
+      for (const i of amounts.keys()) {
+        expect(await statusOf(`f${i}`)).not.toBe(
+          SettlementStatus.COURIER_SETTLED,
+        );
+      }
+    });
   },
 );

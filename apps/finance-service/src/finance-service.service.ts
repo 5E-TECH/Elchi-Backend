@@ -2044,6 +2044,52 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * 63HO6cBU (PR-C) — FOR_MARKET kassalari qoldig'i (HQ'ning marketga qarzi):
+   * `{ items: [{ market_id, balance }] }`. Kassasi yo'q market — balance 0.
+   * Faqat o'qiydi; ≤ 500 id.
+   */
+  async marketBalances(data: { market_ids?: unknown }) {
+    try {
+      const raw = Array.isArray(data?.market_ids) ? data.market_ids : [];
+      if (raw.length > 500) {
+        throw new BadRequestException("market_ids ro'yxati juda uzun");
+      }
+      const ids = [
+        ...new Set(
+          raw
+            .map((id) => String(id ?? '').trim())
+            .filter((id) => /^\d{1,18}$/.test(id))
+            .map((id) => FinanceServiceService.canonicalId(id)),
+        ),
+      ];
+      const rows = ids.length
+        ? await this.cashboxRepo.find({
+            where: {
+              user_id: In(ids),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              isDeleted: false,
+            },
+          })
+        : [];
+      const byId = new Map(
+        rows.map((row) => [String(row.user_id), Number(row.balance) || 0]),
+      );
+      return this.successRes(
+        {
+          items: ids.map((id) => ({
+            market_id: id,
+            balance: FinanceServiceService.roundMoney(byId.get(id) ?? 0),
+          })),
+        },
+        200,
+        'Market balances',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
   async findCashboxByUser(dto: FindCashboxByUserDto) {
     try {
       this.assertBigIntId(dto.user_id, 'user_id');
@@ -5206,7 +5252,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    *   1) `(filial, market)` advisory qulfi (shu juft to'lovlari navbat bilan;
    *      filial kassasi qatori ham allaqachon qulflangan);
    *   2) shu juftning hali «qo'llandi» deb tasdiqlanmagan `branch_to_market`
-   *      advance'lari (finance outbox, oxirgi 7 kun) — tokenlari bilan;
+   *      advance'lari (finance outbox: yuborilmagani yoshidan qat'i nazar,
+   *      yuborilgani oxirgi 7 kun; > 200 — 503) — tokenlari bilan;
    *   3) order-service'dan ulush + shu tokenlardan qaysilari qo'llangani
    *      (bitta REPEATABLE READ surati);
    *   4) samarali ulush = ulush − Σ qo'llanmagan pending; summa undan
@@ -5248,7 +5295,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     } catch {
       reply = null;
     }
-    const share = Number(reply?.data?.share);
+    // B5 — `share` haqiqiy son bo'lishi shart (`null` → 0 emas).
+    const rawShare = reply?.data?.share;
+    const share = typeof rawShare === 'number' ? rawShare : Number.NaN;
     if (!reply?.data || !Number.isFinite(share)) {
       throw new RpcException({
         statusCode: 503,
@@ -5297,14 +5346,26 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         .andWhere(`e.payload->>'match_value' = :match`, {
           match: `${branchId}:${marketId}`,
         })
-        .andWhere(`e.created_at > now() - interval '7 days'`)
+        // B4 — yuborilmagan (pending) hodisa YOSHIDAN qat'i nazar; yuborilgan
+        // (hali qo'llanmagan bo'lishi mumkin) — oxirgi 7 kun.
+        .andWhere(
+          `(e.status = 'pending' OR e.created_at > now() - interval '7 days')`,
+        )
         .orderBy('e.created_at', 'DESC')
-        .limit(200)
+        .limit(201)
         .getRawMany();
     } catch (error) {
       // Outbox entity'si ro'yxatdan o'tmagan (faqat test muhiti) — pending yo'q.
       if (error instanceof EntityMetadataNotFoundError) return [];
       throw error;
+    }
+    if (rows.length > 200) {
+      // B4 — fail-closed: barcha in-flight'ni hisobga ololmaymiz.
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
     }
     return rows
       .filter((row) => typeof row.token === 'string' && row.token !== '')
@@ -7040,6 +7101,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       }
   > {
     this.assertBigIntId(data.market_id, 'market_id');
+    /**
+     * 63HO6cBU (PR-C, B2) — KANONIK id: '0201' va '201' bitta market.
+     * order-service bigint bilan solishtiradi, finance esa qulf kaliti,
+     * pending `match_value` va advance'ni satrdan quradi — boshidagi nol
+     * in-flight ayirmasini chetlab o'tardi.
+     */
+    data = {
+      ...data,
+      market_id: FinanceServiceService.canonicalId(data.market_id),
+    };
     this.assertPositiveAmount(Number(data.amount));
     const transferSourceUserId = this.resolveTransferSourceUserId(data);
     const payer = this.resolveMarketPayer(data);
@@ -7117,6 +7188,26 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * Admin market uchun «kassa qarzga ishlaydi» ni yoqqan bo'lsa — o'tadi.
      */
     if (payer.isBranch) {
+      /**
+       * 63HO6cBU (PR-C, A1/B1) — market QARZIDAN ortiq hech qachon to'lanmaydi
+       * (HQ marketga oldindan to'lagan bo'lsa ulush hali COURIER_SETTLED
+       * qatorlarni ko'rsatadi, lekin market pulini olib bo'lgan). Market
+       * kassasi qatori yuqorida FOR UPDATE — poygasiz. Market «Kassa qarzga
+       * ishlaydi» sozlamasi menejerga qo'llanmaydi.
+       */
+      const marketPayable = FinanceServiceService.roundMoney(
+        Number(marketCashbox.balance ?? 0),
+      );
+      if (
+        FinanceServiceService.roundMoney(Number(data.amount)) > marketPayable
+      ) {
+        throw new BadRequestException(
+          `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${Math.max(
+            marketPayable,
+            0,
+          )} so'm)`,
+        );
+      }
       // 63HO6cBU (PR-C) — filial faqat o'z ulushi doirasida to'laydi;
       // tekshiruv (X, M) qulfi ostida, hali qo'llanmagan to'lovlar ayirilgan.
       await this.assertBranchMarketShareInTx(
@@ -7301,9 +7392,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         "Marketga to'lov faqat asosiy yoki filial kassasidan qilinadi",
       );
     }
-    const userId = String(data.payer_user_id ?? '').trim();
-    this.assertBigIntId(userId, 'payer_user_id');
-    return { isBranch: true, userId };
+    const rawUserId = String(data.payer_user_id ?? '').trim();
+    this.assertBigIntId(rawUserId, 'payer_user_id');
+    return {
+      isBranch: true,
+      userId: FinanceServiceService.canonicalId(rawUserId),
+    };
+  }
+
+  /** Raqamli id'ning kanonik ko'rinishi (boshidagi nollarsiz): '0201' → '201'. */
+  private static canonicalId(value: unknown): string {
+    return String(BigInt(String(value).trim()));
   }
 
   async allCashboxesTotal(filters?: {

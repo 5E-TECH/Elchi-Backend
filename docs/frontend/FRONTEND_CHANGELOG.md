@@ -24,7 +24,7 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 ### 2026-11-19 — Menejer faqat o'z filiali marketlariga, filial ulushi doirasida to'laydi — 63HO6cBU (PR-C)
 
-Deploy: **order-service, finance-service, api-gateway** + **migratsiya 1716000000246** (`order_settlement.market_paid_by_branch_at/_by` — nullable, `market_paid_by_branch_amount` — `NOT NULL DEFAULT 0`; yangi `order_settlement_branch_market_carry` jadvali; qisman indeks; faqat qo'shimcha, backfill yo'q). Kam yuklamali vaqtda. PR-A (#726) va PR-B (#728) dan keyin chiqadi.
+Deploy: **order-service, finance-service, api-gateway** + **migratsiya 1716000000246** (`order_settlement.market_paid_by_branch_at/_by` — nullable, `market_paid_by_branch_amount` — `NOT NULL DEFAULT 0`; yangi `order_settlement_branch_market_carry` jadvali; qisman indeks; faqat qo'shimcha, backfill yo'q). Kam yuklamali vaqtda. PR-A (#726) va PR-B (#728) dan keyin chiqadi. order-service finance bilan birga yoki undan oldin chiqsin. ⚠️ **Orqaga qaytarish:** birinchi menejer to'lovidan keyin PR-C kodini qaytarish yoki migratsiya 246 `down()` — faqat konvertatsiya bilan: `scripts/order/convert-246-before-down.sql` (filial to'lagan qism → `order_settlement_carry` branch_to_hq / hq_to_market), so'ng `MIGRATION_246_DOWN_CONVERTED=1` bilan down(); konvertatsiyasiz down() rad etadi (aks holda eski kod marketga ikkinchi marta to'laydi).
 
 **Ta'riflar**
 - **Filial marketi** — o'chirilmagan buyurtmasida `orders.home_branch_id` = menejer filiali bo'lgan market.
@@ -38,10 +38,13 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
 **Endpointlar**
 - 🆕 [gateway] `GET /finance/cashbox/manager/markets` (faqat MANAGER).
   - Query: `search` (market nomi yoki id), `page`, `limit` (≤ 100).
-  - Javob: `data: { branch_id, items: [{ market_id, name, status, branch_share }], total_share, pagination: { total, page, limit, totalPages } }`.
+  - Javob: `data: { branch_id, items: [{ market_id, name, status, branch_share, payable }], total_share, total_payable, pagination: { total, page, limit, totalPages } }`.
+  - **`payable` — «To'lash mumkin»** = min(`branch_share`, max(marketga qarz, 0)). To'lov chegarasi aynan shu (marketga qarzdan ortiq hech qachon to'lanmaydi — HQ oldindan to'lagan bo'lsa ulush hali ko'rinishi mumkin).
+  - Identity'da yo'q (o'chirilgan) market ro'yxatda ham, to'lovda ham (403), ko'rishda ham (403) yo'q.
+  - Order-service yoki finance javob bermasa — **503**.
   - Tartib — ulush bo'yicha kamayib boradi. Ulushi 0 bo'lgan market ham ro'yxatda turadi, lekin unga to'lab bo'lmaydi.
 - ✏️ [gateway] `GET /finance/cashbox/user/:marketId` — menejer o'z filiali marketini ochsa, avvalgi 403 o'rniga 200 qaytadi:
-  - javob: `data: { cashbox: { id: null, user_id, cashbox_type: 'markets', balance: <filial ulushi>, balance_cash: <ulush>, balance_card: 0 }, branch_id, branch_share, user: { id, name, status }, history: [], cashboxHistory: [] }`;
+  - javob: `data: { cashbox: { id: null, user_id, cashbox_type: 'markets', balance: <filial ulushi>, balance_cash: <ulush>, balance_card: 0 }, branch_id, branch_share, payable, user: { id, name, status }, history: [], cashboxHistory: [] }`;
   - marketning umumiy qarzi va tarixi menejerga ko'rsatilmaydi;
   - filialga aloqasi yo'q market → avvalgidek 403.
 - ⚠️ [gateway] `POST /finance/cashbox/payment/market` — **MENEJER** uchun:
@@ -49,8 +52,10 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
   - `payment_method` yuborilmaydi. Eski FE yuborgan `cash`/`click`, `card_id`, `source_user_id` e'tiborsiz qoladi, server `cash` yozadi;
   - `click_to_market` → **400**;
   - filialga aloqasi yo'q market → **403** «Bu market sizning filialingizga buyurtma topshirmaydi — to'lov HQ orqali»;
-  - summa filial ulushidan oshsa → **400** «Summa filial ulushidan oshmasligi kerak (ulush: N so'm)». Market «Kassa qarzga ishlaydi» yoqilgan bo'lsa ham shu chegara amal qiladi.
-  - **Superadmin/admin** uchun `payment_method` endi DTO'da ixtiyoriy, lekin ular uchun **majburiy** (yo'q → 400). Ularning yo'li boshqa jihatdan o'zgarmagan.
+  - summa filial ulushidan oshsa → **400** «Summa filial ulushidan oshmasligi kerak (ulush: N so'm)»; marketga qarzdan oshsa → **400** «To'lov miqdori marketga qarzdan oshib ketdi (qarz: N so'm)». Market «Kassa qarzga ishlaydi» yoqilgan bo'lsa ham shu chegaralar amal qiladi. Ikkala tekshiruv finance'da (idempotentlikdan keyin) — takroriy Idempotency-Key bilan muvaffaqiyatli to'lov avvalgi natijani (200) oladi;
+  - `market_id` — boshida nolsiz musbat ID (`'0201'` → **400**);
+  - ulushni tekshirib bo'lmasa (order-service javob bermasa) → **503** «Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring», pul ko'chmaydi.
+  - **Superadmin/admin** uchun `payment_method` endi DTO'da ixtiyoriy, lekin ular uchun **majburiy** (yo'q → 400 «payment_method bo'lishi shart» — ilgari class-validator matni «payment_method must be one of …» edi). Ularning yo'li boshqa jihatdan o'zgarmagan.
 - 🟢 [ledger] Menejer to'lovi faqat shu filial va shu market qatorlariga yoziladi (eskisidan boshlab). Qator to'liq to'lansa — «market filial tomonidan to'langan»; qisman to'lov qatorning o'zida saqlanadi va boshqa market yoki filialga hech qachon o'tmaydi. Avval ikki mustaqil FIFO boshqa market va filial qatorlarini ham yopardi.
 - 🟢 [finance] Ulush chegarasi pul tranzaksiyasi ichida, (filial, market) qulfi ostida qayta tekshiriladi: daftarga hali tushmagan oldingi to'lovlar ayiriladi — parallel yoki tez ketma-ket ikki to'lov ulushdan oshmaydi (ortig'i **400** «Summa filial ulushidan oshmasligi kerak (ulush: N so'm)»). Ulushni tekshirib bo'lmasa (order-service javob bermasa) — **503** «Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring», pul ko'chmaydi.
 - 🟢 [ledger] (Himoya) Har ehtimolga ulushdan oshgan qism shu (filial, market) juftiga saqlanadi va keyingi shu market sotuvi uni qoplaydi.
@@ -62,8 +67,8 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
 - 🟢 Olib ketish (pickup-visit) haqlari filial to'lovida ushlanmaydi (global, HQ to'lovida).
 
 **Frontend action items:**
-- 🔧 `SettlementPickerDialog` (`give`, menejer): ro'yxatni `GET /finance/cashbox/manager/markets` dan oling va summa sifatida `branch_share` ni ko'rsating. Ro'yxat bo'sh bo'lsa — `EmptyState` «Bu filialga buyurtma topshiradigan market yo'q». `GET /markets` dan foydalanmang.
-- 🔧 `cashDetail.tsx?type=market` (menejer): summa chegarasi — `branch_share`. Usul va karta tanlovi yo'q. So'rov: `{ market_id, amount, comment?, payment_date? }`.
+- 🔧 `SettlementPickerDialog` (`give`, menejer): ro'yxatni `GET /finance/cashbox/manager/markets` dan oling va «To'lash mumkin» sifatida **`payable`** ni ko'rsating (`branch_share` emas — aks holda ekrandagi summa 400 beradi). Ro'yxat bo'sh bo'lsa — `EmptyState` «Bu filialga buyurtma topshiradigan market yo'q». `GET /markets` dan foydalanmang.
+- 🔧 `cashDetail.tsx?type=market` (menejer): summa chegarasi — **`payable`**. Usul va karta tanlovi yo'q. So'rov: `{ market_id, amount, comment?, payment_date? }`.
 - 🔧 e2e mock'larini shu javob shakllariga moslang; 403 holatini yashirmang.
 
 ### 2026-11-19 — Filialda «Kassadan xarajat» va «Kassani to'ldirish» yo'q — 63HO6cBU (PR-B)

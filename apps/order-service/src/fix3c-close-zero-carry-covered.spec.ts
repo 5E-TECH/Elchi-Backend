@@ -1122,7 +1122,7 @@ describe('MONEY-02 — qoldiq yig`indiga teng bo`lmasa hech narsa o`zgarmaydi', 
     await expectRejected(w, 'carry_not_zero');
   });
 
-  it('suzuvchi nuqta: qoldiq 0,30 = 0,10 + 0,20 (tiyinda teng), lekin oddiy sikl yarim yo`lda to`xtaydi — hammasi qaytariladi (not_fully_closed)', async () => {
+  it('suzuvchi nuqta: qoldiq 0,30 = 0,10 + 0,20 (tiyinda teng) — 63HO6cBU (A3): FIFO butun tiyinda, sikl ikkalasini yopadi, qoldiq 0 (ilgari yarim yo`lda to`xtab not_fully_closed edi)', async () => {
     const w = makeWorld();
     w.seedRow({ order_id: 'A', courier_amount: 0.1, branch_amount: 0.1 });
     w.seedRow({ order_id: 'B', courier_amount: 0.2, branch_amount: 0.2 });
@@ -1133,7 +1133,10 @@ describe('MONEY-02 — qoldiq yig`indiga teng bo`lmasa hech narsa o`zgarmaydi', 
       amount: 0.3,
     });
 
-    await expectRejected(w, 'not_fully_closed');
+    const res = await w.closeZero();
+
+    expect(res.closed_count).toBe(2);
+    expect(w.carryRow('courier_to_branch', COURIER_ID)?.amount).toBe(0);
   });
 
   it('kuryer kassasida pul bo`lsa ham order-service FAQAT daftarga qaraydi: Σ PENDING ≠ qoldiq — rad', async () => {

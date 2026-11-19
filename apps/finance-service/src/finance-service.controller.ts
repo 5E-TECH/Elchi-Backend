@@ -58,6 +58,17 @@ export class FinanceServiceController {
     );
   }
 
+  /** 63HO6cBU (PR-C) — market kassalari qoldig'i (menejer `payable` uchun). */
+  @MessagePattern({ cmd: 'finance.cashbox.market_balances' })
+  marketBalances(
+    @Payload() data: { market_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.marketBalances(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.cashbox.find_by_user' })
   findCashboxByUser(
     @Payload() data: FindCashboxByUserDto,
