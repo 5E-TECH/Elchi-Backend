@@ -659,7 +659,7 @@ describePg(
       expect(marketM.amount).toBeCloseTo(15_000, 2);
     });
 
-    it('A2: to`lov tugagach 0 so`mlik qatorlar «filial to`lagan» bo`lmaydi; keyingi to`lovda (pul bor paytda) belgilanadi', async () => {
+    it('A2 (Y-6): 0 so`mlik qatorlar hech qachon «filial to`lagan» bo`lmaydi (tugash nuqtasidan oldin ham); branch_to_hq da odatdagidek yopiladi', async () => {
       const CS = SettlementStatus.COURIER_SETTLED;
       await row('z1', {
         home: '17',
@@ -690,8 +690,34 @@ describePg(
       expect(await markedOf('z0')).toBe(false);
       expect(await markedOf('z2')).toBe(false);
       await managerPays('17', '205', 5_000, 'a2-2');
-      expect(await markedOf('z0')).toBe(true);
+      // z0 tugash nuqtasidan OLDIN turibdi (z2 to'landi) — baribir belgilanmaydi.
+      expect(await markedOf('z0')).toBe(false);
       expect(await markedOf('z2')).toBe(true);
+      // Filial HQ'ga: z1 (12 000 − 10 000) + z0 500 + z2 (6 000 − 5 000).
+      const res: any = await service.advanceSettlement({
+        level: 'branch_to_hq',
+        match_value: '17',
+        amount: 3_500,
+        request_id: 'a2-hq',
+        requester_id: '1',
+      });
+      expect(res.data.leftover).toBe(0);
+      // Filial to'lagan qatorlar — darhol MARKET_SETTLED; 0 so'mlik z0 —
+      // odatdagi yo'l: BRANCH_SETTLED, keyin HQ → market FIFO'si (keyingi
+      // to'lov) uni 0 so'm bilan yopadi.
+      expect(await statusOf('z1')).toBe(SettlementStatus.MARKET_SETTLED);
+      expect(await statusOf('z2')).toBe(SettlementStatus.MARKET_SETTLED);
+      expect(await statusOf('z0')).toBe(SettlementStatus.BRANCH_SETTLED);
+      const hq: any = await service.advanceSettlement({
+        level: 'hq_to_market',
+        match_value: '205',
+        amount: 1,
+        request_id: 'a2-m',
+        requester_id: '1',
+      });
+      expect(hq.data.allocated).toBe(0);
+      expect(await statusOf('z0')).toBe(SettlementStatus.MARKET_SETTLED);
+      expect(await markedOf('z0')).toBe(false);
     });
 
     it('A3: FIFO butun tiyinda — aniq yig`indi (879 621,39) beshala qatorni yopadi, qoldiq 0', async () => {

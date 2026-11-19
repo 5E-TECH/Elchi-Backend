@@ -5252,12 +5252,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    *   1) `(filial, market)` advisory qulfi (shu juft to'lovlari navbat bilan;
    *      filial kassasi qatori ham allaqachon qulflangan);
    *   2) shu juftning hali «qo'llandi» deb tasdiqlanmagan `branch_to_market`
-   *      advance'lari (finance outbox: yuborilmagani yoshidan qat'i nazar,
-   *      yuborilgani oxirgi 7 kun; > 200 — 503) — tokenlari bilan;
+   *      advance'lari (finance outbox: hali `published` bo'lmagani, yoshidan
+   *      qat'i nazar; > 200 — 503) — tokenlari bilan;
    *   3) order-service'dan ulush + shu tokenlardan qaysilari qo'llangani
    *      (bitta REPEATABLE READ surati);
-   *   4) samarali ulush = ulush − Σ qo'llanmagan pending; summa undan
-   *      oshsa → 400. Order-service javob bermasa → 503 (pul ko'chmaydi).
+   *   4) «To'lash mumkin» = min(ulush − Σ qo'llanmagan pending,
+   *      max(marketga qarz, 0)); summa undan oshsa → 400 (xabarda faqat shu
+   *      summa). Order-service javob bermasa → 503 (pul ko'chmaydi).
    * (X, M) qoldig'i (`order_settlement_branch_market_carry`) endi faqat
    * himoya — normal holda paydo bo'lmaydi.
    */
@@ -5266,6 +5267,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     branchId: string,
     marketId: string,
     amount: number,
+    marketBalance: number,
   ): Promise<void> {
     await manager.query(
       `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
@@ -5313,20 +5315,24 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     const inFlight = pending
       .filter((item) => !applied.has(item.token))
       .reduce((sum, item) => sum + item.amount, 0);
-    const effective = FinanceServiceService.roundMoney(share - inFlight);
-    if (FinanceServiceService.roundMoney(amount) > effective) {
+    const payable = FinanceServiceService.roundMoney(
+      Math.max(
+        Math.min(share - inFlight, Math.max(Number(marketBalance) || 0, 0)),
+        0,
+      ),
+    );
+    if (FinanceServiceService.roundMoney(amount) > payable) {
       throw new BadRequestException(
-        `Summa filial ulushidan oshmasligi kerak (ulush: ${FinanceServiceService.roundMoney(
-          Math.max(effective, 0),
-        )} so'm)`,
+        `Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: ${payable} so'm)`,
       );
     }
   }
 
   /**
    * Shu (filial, market) juftining finance outbox'idagi `branch_to_market`
-   * advance'lari (oxirgi 7 kun, holatidan qat'i nazar — «yuborildi» hali
-   * «qo'llandi» degani emas). Qo'llanganlari order-service javobida
+   * advance'lari — hali `published` bo'lmaganlari (relay `send` javobini
+   * kutadi, ya'ni `published` = qo'llangan). Pending'dan tezkor yo'l
+   * (`tryPublishAdvanceNow`) allaqachon qo'llaganlari order-service javobida
    * `applied_tokens` bilan chiqarib tashlanadi.
    */
   private async pendingBranchMarketAdvances(
@@ -5346,11 +5352,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         .andWhere(`e.payload->>'match_value' = :match`, {
           match: `${branchId}:${marketId}`,
         })
-        // B4 — yuborilmagan (pending) hodisa YOSHIDAN qat'i nazar; yuborilgan
-        // (hali qo'llanmagan bo'lishi mumkin) — oxirgi 7 kun.
-        .andWhere(
-          `(e.status = 'pending' OR e.created_at > now() - interval '7 days')`,
-        )
+        // B4 — faqat hali yetkazilmagan hodisalar, YOSHIDAN qat'i nazar.
+        // `published` = order-service javob berdi (`send`, javob kutiladi;
+        // handler tranzaksiyasi commit bo'lgandan keyin) — ya'ni qo'llangan,
+        // ulushda allaqachon aks etgan. `failed` (poison) — hech qachon
+        // qo'llanmagan, ehtiyot uchun in-flight sanaladi.
+        .andWhere(`e.status IN ('pending', 'failed')`)
         .orderBy('e.created_at', 'DESC')
         .limit(201)
         .getRawMany();
@@ -7189,32 +7196,23 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      */
     if (payer.isBranch) {
       /**
-       * 63HO6cBU (PR-C, A1/B1) — market QARZIDAN ortiq hech qachon to'lanmaydi
-       * (HQ marketga oldindan to'lagan bo'lsa ulush hali COURIER_SETTLED
-       * qatorlarni ko'rsatadi, lekin market pulini olib bo'lgan). Market
-       * kassasi qatori yuqorida FOR UPDATE — poygasiz. Market «Kassa qarzga
-       * ishlaydi» sozlamasi menejerga qo'llanmaydi.
+       * 63HO6cBU (PR-C) — filial to'lovchi uchun bitta chegara:
+       * «To'lash mumkin» = min(filial ulushi − hali qo'llanmagan to'lovlar,
+       * max(marketga qarz, 0)).
+       *   • A1/B1 — market QARZIDAN ortiq hech qachon to'lanmaydi (HQ marketga
+       *     oldindan to'lagan bo'lsa ulush hali COURIER_SETTLED qatorlarni
+       *     ko'rsatadi, lekin market pulini olib bo'lgan). Market kassasi
+       *     qatori yuqorida FOR UPDATE — poygasiz. «Kassa qarzga ishlaydi»
+       *     sozlamasi menejerga qo'llanmaydi.
+       *   • ulush — (X, M) qulfi ostida (`assertBranchMarketShareInTx`).
+       * Y-5 — xabarda faqat shu min (marketning butun HQ qarzi chiqmaydi).
        */
-      const marketPayable = FinanceServiceService.roundMoney(
-        Number(marketCashbox.balance ?? 0),
-      );
-      if (
-        FinanceServiceService.roundMoney(Number(data.amount)) > marketPayable
-      ) {
-        throw new BadRequestException(
-          `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${Math.max(
-            marketPayable,
-            0,
-          )} so'm)`,
-        );
-      }
-      // 63HO6cBU (PR-C) — filial faqat o'z ulushi doirasida to'laydi;
-      // tekshiruv (X, M) qulfi ostida, hali qo'llanmagan to'lovlar ayirilgan.
       await this.assertBranchMarketShareInTx(
         manager,
         payer.userId,
         String(data.market_id),
         Number(data.amount),
+        Number(marketCashbox.balance ?? 0),
       );
     } else {
       await this.assertMarketPayoutWithinDebt(

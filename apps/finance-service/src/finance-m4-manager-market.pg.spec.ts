@@ -373,8 +373,9 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       await expect(pay('gw:race-2', 60_000)).rejects.toMatchObject({
         error: {
           statusCode: 400,
+          // Y-5 — faqat «to'lash mumkin» (marketning butun qarzi 450 000 emas).
           message:
-            "Summa filial ulushidan oshmasligi kerak (ulush: 40000 so'm)",
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 40000 so'm)",
         },
       });
       expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(240_000);
@@ -431,7 +432,8 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       await expect(pay('gw:debt-1', 100_000)).rejects.toMatchObject({
         error: {
           statusCode: 400,
-          message: "To'lov miqdori marketga qarzdan oshib ketdi (qarz: 0 so'm)",
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 0 so'm)",
         },
       });
       expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(300_000);
@@ -441,7 +443,12 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         `UPDATE "${schema}".cashboxes SET balance = 50000, balance_cash = 50000 WHERE user_id = '201'`,
       );
       await expect(pay('gw:debt-2', 60_000)).rejects.toMatchObject({
-        error: { statusCode: 400 },
+        error: {
+          statusCode: 400,
+          // Y-5 — min(ulush 100 000, qarz 50 000).
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 50000 so'm)",
+        },
       });
       await pay('gw:debt-3', 50_000);
       expect((await box('201', Cashbox_type.FOR_MARKET)).balance).toBe(0);
@@ -479,7 +486,7 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       ]);
     });
 
-    it('B4: yuborilmagan (pending) eski hodisa ham ayiriladi; 200 dan ko`p in-flight — 503', async () => {
+    it('B4: yetkazilmagan (pending / failed) hodisa yoshidan qat`i nazar ayiriladi; published (qo`llangan) — yo`q; 200 dan ko`p yetkazilmagan — 503', async () => {
       orderState.share = 100_000;
       await db.getRepository(OutboxEvent).insert({
         target: 'ORDER',
@@ -497,15 +504,44 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         error: { statusCode: 400 },
       });
       await pay('gw:b4-2', 30_000);
+      // Y-1 — 201 ta published (allaqachon qo'llangan, ulushda aks etgan)
+      // hodisa SANALMAYDI: 503 yo'q, summasi ayirilmaydi. Poison (`failed`)
+      // — hech qachon qo'llanmagan, ayiriladi.
+      await db.query(
+        `INSERT INTO "${schema}".outbox_events (target, pattern, payload, status)
+         SELECT 'ORDER', 'order.settlement.advance',
+                jsonb_build_object('level', 'branch_to_market', 'match_value', '15:201',
+                                   'amount', 1000, 'request_id', 'pub-' || g),
+                'published'
+           FROM generate_series(1, 201) g`,
+      );
+      await db.query(
+        `INSERT INTO "${schema}".outbox_events (target, pattern, payload, status)
+         VALUES ('ORDER', 'order.settlement.advance',
+                 jsonb_build_object('level', 'branch_to_market', 'match_value', '15:201',
+                                    'amount', 5000, 'request_id', 'poison-1'),
+                 'failed')`,
+      );
+      // ulush 115 000 − pending (70 000 + 30 000) − failed 5 000 = 10 000.
+      orderState.share = 115_000;
+      await expect(pay('gw:b4-3', 10_000.01)).rejects.toMatchObject({
+        error: {
+          statusCode: 400,
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 10000 so'm)",
+        },
+      });
+      await pay('gw:b4-4', 10_000);
+      // 200 dan ko'p YETKAZILMAGAN — fail-closed 503.
       await db.query(
         `INSERT INTO "${schema}".outbox_events (target, pattern, payload, status)
          SELECT 'ORDER', 'order.settlement.advance',
                 jsonb_build_object('level', 'branch_to_market', 'match_value', '15:201',
                                    'amount', 0, 'request_id', 'bulk-' || g),
-                'sent'
+                'pending'
            FROM generate_series(1, 201) g`,
       );
-      await expect(pay('gw:b4-3', 0.01)).rejects.toMatchObject({
+      await expect(pay('gw:b4-5', 0.01)).rejects.toMatchObject({
         error: { statusCode: 503 },
       });
     });

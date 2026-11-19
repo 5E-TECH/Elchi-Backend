@@ -580,6 +580,172 @@ describe('63HO6cBU (PR-C) — menejer «Marketga to`lov»: faqat o`z filiali mar
     ).toEqual(['finance.cashbox.market_balances']);
   });
 
+  it('⭐ Y-2: 500 dan ortiq market — `market_balances` ≤ 500 lik bo`laklarda, natija birlashtiriladi (503 yo`q)', async () => {
+    const env = setup();
+    const ids = Array.from({ length: 1201 }, (_, i) => String(1000 + i));
+    route(env.orderClient, {
+      'order.settlement.branch_markets': () => ({
+        data: { items: ids.map((id) => ({ market_id: id, share: 10 })) },
+      }),
+    });
+    route(env.identityClient, {
+      'identity.market.find_by_ids': (payload: { ids: string[] }) => ({
+        data: payload.ids.map((id) => ({
+          id,
+          name: `M${id}`,
+          status: 'active',
+        })),
+      }),
+    });
+    route(env.financeClient, {
+      'finance.cashbox.market_balances': (payload: {
+        market_ids: string[];
+      }) => {
+        // Haqiqiy finance kabi: > 500 — 400.
+        if (payload.market_ids.length > 500) {
+          return throwError(() => new Error("market_ids ro'yxati juda uzun"));
+        }
+        return {
+          data: {
+            items: payload.market_ids.map((id) => ({
+              market_id: id,
+              balance: 7,
+            })),
+          },
+        };
+      },
+    });
+    const res: any = await env.controller.managerMarkets(manager15);
+    expect(
+      payloadsOf(env.financeClient, 'finance.cashbox.market_balances').map(
+        (payload: { market_ids: string[] }) => payload.market_ids.length,
+      ),
+    ).toEqual([500, 500, 201]);
+    expect(
+      payloadsOf(env.financeClient, 'finance.cashbox.market_balances').flatMap(
+        (payload: { market_ids: string[] }) => payload.market_ids,
+      ),
+    ).toEqual(ids);
+    expect(res.data.pagination).toMatchObject({ total: 1201 });
+    expect(res.data.total_share).toBe(12_010);
+    expect(res.data.total_payable).toBe(8_407);
+    expect(res.data.items[0]).toMatchObject({ branch_share: 10, payable: 7 });
+  });
+
+  describe('⭐ Y-7 / Z2: ro`yxat va ko`rish — order-service yoki finance xatosi → 503 (bo`sh ro`yxat / 500 / 504 emas)', () => {
+    const listEnv = (
+      branchMarkets: Handler,
+      balances: Handler = (payload: { market_ids: string[] }) => ({
+        data: {
+          items: payload.market_ids.map((id) => ({
+            market_id: id,
+            balance: 1,
+          })),
+        },
+      }),
+    ) => {
+      const env = setup();
+      route(env.orderClient, {
+        'order.settlement.branch_markets': branchMarkets,
+      });
+      route(env.identityClient, {
+        'identity.market.find_by_ids': () => ({
+          data: [{ id: '201', name: 'Alfa', status: 'active' }],
+        }),
+      });
+      route(env.financeClient, { 'finance.cashbox.market_balances': balances });
+      return env;
+    };
+    const unavailable = {
+      status: 503,
+      message:
+        "Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+    };
+    const ok = () => ({ data: { items: [{ market_id: '201', share: 5 }] } });
+
+    it.each([
+      ['order-service xom xato', () => throwError(() => new Error('boom'))],
+      ['order-service timeout', () => throwError(() => new TimeoutError())],
+      ['items massiv emas', () => ({ data: { items: null } })],
+      ['data yo`q', () => ({ statusCode: 200 })],
+    ])('GET manager/markets: %s → 503', async (_name, handler) => {
+      const env = listEnv(handler as Handler);
+      await expect(
+        env.controller.managerMarkets(manager15),
+      ).rejects.toMatchObject(unavailable);
+    });
+
+    it.each([
+      ['xato', () => throwError(() => new Error('finance down'))],
+      ['items massiv emas', () => ({ data: {} })],
+    ])(
+      'GET manager/markets: market_balances %s → 503',
+      async (_name, handler) => {
+        const env = listEnv(ok, handler as Handler);
+        await expect(
+          env.controller.managerMarkets(manager15),
+        ).rejects.toMatchObject(unavailable);
+      },
+    );
+
+    const viewEnv = (share: Handler, balances: Handler) => {
+      const env = setup();
+      jest
+        .spyOn(env.controller as any, 'resolveManagerBranchCashboxId')
+        .mockResolvedValue('');
+      jest
+        .spyOn(env.controller as any, 'canManagerAccessUser')
+        .mockResolvedValue(false);
+      route(env.orderClient, { 'order.settlement.branch_market_share': share });
+      route(env.identityClient, {
+        'identity.market.find_by_ids': () => ({
+          data: [{ id: '201', name: 'Alfa', status: 'active' }],
+        }),
+      });
+      route(env.financeClient, { 'finance.cashbox.market_balances': balances });
+      return env;
+    };
+    const goodShare = shareReply(true, 100);
+    const goodBalances = () => ({
+      data: { items: [{ market_id: '201', balance: 50 }] },
+    });
+
+    it.each([
+      [
+        'order-service xatosi',
+        () => throwError(() => new Error('boom')),
+        goodBalances,
+      ],
+      [
+        'order-service garbage (share null)',
+        () => ({ data: { in_branch: true, share: null } }),
+        goodBalances,
+      ],
+      [
+        'order-service garbage (in_branch yo`q)',
+        () => ({ data: { share: 5 } }),
+        goodBalances,
+      ],
+      [
+        'market_balances xatosi',
+        goodShare,
+        () => throwError(() => new Error('finance down')),
+      ],
+    ])(
+      'GET cashbox/user/:marketId (menejer): %s → 503',
+      async (_name, share, balances) => {
+        const env = viewEnv(share as Handler, balances as Handler);
+        await expect(
+          env.controller.findCashboxByUser(
+            '201',
+            { cashbox_type: 'markets' } as FindCashboxByUserQueryDto,
+            manager15,
+          ),
+        ).rejects.toMatchObject(unavailable);
+      },
+    );
+  });
+
   it('buildManagerMarketView: aloqasiz market — null (keyin avvalgi 403 tekshiruvi)', async () => {
     const env = setup();
     route(env.orderClient, {

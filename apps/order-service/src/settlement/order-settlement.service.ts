@@ -2449,13 +2449,11 @@ export class OrderSettlementService {
       }
       for (const row of candidates.filter((r) => due(r) >= 0)) {
         const need = due(row);
-        // A2: to'lov tugagach 0 so'mlik qatorlar ham belgilanmaydi (aks holda
-        // ular «filial to'lagan» bo'lib, rollback / retreat noto'g'ri 400 olardi).
+        // A2: 0 so'mlik qatorlar HECH QACHON belgilanmaydi (aks holda ular
+        // «filial to'lagan» bo'lib, rollback / retreat noto'g'ri 400 olardi);
+        // ular branch_to_hq / hq_to_market da odatdagidek yopiladi.
         if (remaining <= 0) break;
-        if (need === 0) {
-          await pay(row, 0, true);
-          continue;
-        }
+        if (need === 0) continue;
         const part = Math.min(remaining, need);
         await pay(row, part, part === need);
         remaining = money2(remaining - part);

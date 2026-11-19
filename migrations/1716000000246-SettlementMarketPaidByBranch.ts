@@ -20,12 +20,37 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `IF NOT EXISTS` — qayta yurgizish xatosiz. `lock_timeout` 5 s (241/243/244
  * kabi). Relizda kam yuklamali vaqtda. down(): hammasi olib tashlanadi —
  * faqat filial → market to'lov holati yo'q (yoki konvertatsiya qilingan) bo'lsa.
+ * up(): konvertatsiya izi bo'lsa rad etadi (Y-3d).
  */
 export class SettlementMarketPaidByBranch1716000000246 implements MigrationInterface {
   name = 'SettlementMarketPaidByBranch1716000000246';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const restore = await this.lockTimeout(queryRunner);
+    // Y-3d — konvertatsiya izi bor (246 avval konvertatsiya + down() bilan
+    // qaytarilgan): qayta up() filial to'lagan ulushlarni qayta tiriltiradi
+    // (filial HQ'ga ham, marketga ham to'lagan bo'lib chiqadi). Fail-closed:
+    // avval qayta solishtiring, so'ng izni tozalang.
+    const [{ has_trace: hasTrace }] = (await queryRunner.query(`
+      SELECT to_regclass('"order_schema"."order_settlement_246_conversion"')
+               IS NOT NULL AS has_trace
+    `)) as Array<{ has_trace: boolean }>;
+    if (hasTrace) {
+      const [{ traces }] = (await queryRunner.query(`
+        SELECT count(*)::int AS traces
+          FROM "order_schema"."order_settlement_246_conversion"
+      `)) as Array<{ traces: number }>;
+      if (traces > 0) {
+        await restore();
+        throw new Error(
+          `Migratsiya 246 up() rad etildi: oldingi konvertatsiya izi bor ` +
+            `(order_schema.order_settlement_246_conversion, ${traces} qator). ` +
+            `Avval qayta solishtiring (order_settlement_carry branch_to_hq / ` +
+            `hq_to_market qoldiqlari), so'ng izni tozalang — aks holda filial ` +
+            `to'lagan ulushlar qayta tiriladi.`,
+        );
+      }
+    }
     await queryRunner.query(`
       ALTER TABLE "order_schema"."order_settlement"
         ADD COLUMN IF NOT EXISTS "market_paid_by_branch_at" timestamptz NULL,
@@ -62,47 +87,47 @@ export class SettlementMarketPaidByBranch1716000000246 implements MigrationInter
    * jimgina o'chsa eski kod marketga ikkinchi marta to'lardi, filial esa HQ'ga
    * to'lagan summasini yana qarz bo'lib qolardi. Avval konvertatsiya:
    * `scripts/order/convert-246-before-down.sql` (filial to'lagan qism →
-   * `order_settlement_carry` branch_to_hq / hq_to_market), so'ng
-   * `MIGRATION_246_DOWN_CONVERTED=1` bilan down().
+   * `order_settlement_carry` branch_to_hq / hq_to_market) — shundan keyin
+   * tekshiruv o'zi o'tadi. Y-3c — chetlab o'tish (env) YO'Q: u faqat xavfli
+   * yo'lni ochardi. Konvertatsiya izi (`order_settlement_246_conversion`)
+   * down() da saqlanadi.
    */
   public async down(queryRunner: QueryRunner): Promise<void> {
     const restore = await this.lockTimeout(queryRunner);
-    if (process.env.MIGRATION_246_DOWN_CONVERTED !== '1') {
-      const [{ has_column: hasColumn, has_carry: hasCarry }] =
-        (await queryRunner.query(`
-          SELECT EXISTS (
-                   SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = 'order_schema'
-                      AND table_name = 'order_settlement'
-                      AND column_name = 'market_paid_by_branch_amount'
-                 ) AS has_column,
-                 to_regclass('"order_schema"."order_settlement_branch_market_carry"')
-                   IS NOT NULL AS has_carry
-        `)) as Array<{ has_column: boolean; has_carry: boolean }>;
-      const [{ paid }] = hasColumn
-        ? ((await queryRunner.query(`
-            SELECT count(*)::int AS paid FROM "order_schema"."order_settlement"
-             WHERE "market_paid_by_branch_amount" <> 0
-                OR "market_paid_by_branch_at" IS NOT NULL
-          `)) as Array<{ paid: number }>)
-        : [{ paid: 0 }];
-      const [{ carried }] = hasCarry
-        ? ((await queryRunner.query(`
-            SELECT count(*)::int AS carried
-              FROM "order_schema"."order_settlement_branch_market_carry"
-             WHERE "amount" <> 0
-          `)) as Array<{ carried: number }>)
-        : [{ carried: 0 }];
-      if (paid > 0 || carried > 0) {
-        await restore();
-        throw new Error(
-          `Migratsiya 246 down() rad etildi: filial → market to'lov holati bor ` +
-            `(${paid} qator, ${carried} qoldiq). Avval ` +
-            `scripts/order/convert-246-before-down.sql ni yurgizing, so'ng ` +
-            `MIGRATION_246_DOWN_CONVERTED=1 bilan down() — aks holda eski kod ` +
-            `marketga ikkinchi marta to'laydi.`,
-        );
-      }
+    const [{ has_column: hasColumn, has_carry: hasCarry }] =
+      (await queryRunner.query(`
+        SELECT EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = 'order_schema'
+                    AND table_name = 'order_settlement'
+                    AND column_name = 'market_paid_by_branch_amount'
+               ) AS has_column,
+               to_regclass('"order_schema"."order_settlement_branch_market_carry"')
+                 IS NOT NULL AS has_carry
+      `)) as Array<{ has_column: boolean; has_carry: boolean }>;
+    const [{ paid }] = hasColumn
+      ? ((await queryRunner.query(`
+          SELECT count(*)::int AS paid FROM "order_schema"."order_settlement"
+           WHERE "market_paid_by_branch_amount" <> 0
+              OR "market_paid_by_branch_at" IS NOT NULL
+        `)) as Array<{ paid: number }>)
+      : [{ paid: 0 }];
+    const [{ carried }] = hasCarry
+      ? ((await queryRunner.query(`
+          SELECT count(*)::int AS carried
+            FROM "order_schema"."order_settlement_branch_market_carry"
+           WHERE "amount" <> 0
+        `)) as Array<{ carried: number }>)
+      : [{ carried: 0 }];
+    if (paid > 0 || carried > 0) {
+      await restore();
+      throw new Error(
+        `Migratsiya 246 down() rad etildi: filial → market to'lov holati bor ` +
+          `(${paid} qator, ${carried} qoldiq). Avval ` +
+          `scripts/order/convert-246-before-down.sql ni yurgizing (tartib — ` +
+          `skript sarlavhasida), so'ng down() — aks holda eski kod marketga ` +
+          `ikkinchi marta to'laydi.`,
+      );
     }
     await queryRunner.query(
       `DROP INDEX IF EXISTS "order_schema"."IDX_order_settlement_branch_market_open"`,

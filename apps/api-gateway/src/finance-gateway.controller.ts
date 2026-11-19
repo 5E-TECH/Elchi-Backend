@@ -375,6 +375,8 @@ export async function prepareReceiptAiImage(
 /** 63HO6cBU (PR-C) — menejer o'z filiali bo'lmagan marketga. */
 const BRANCH_SHARE_UNAVAILABLE_MESSAGE =
   "Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring";
+/** `finance.cashbox.market_balances` bir chaqiruvdagi id chegarasi (finance: ≤ 500). */
+const MARKET_BALANCES_CHUNK = 500;
 const MANAGER_MARKET_FORBIDDEN_MESSAGE =
   "Bu market sizning filialingizga buyurtma topshirmaydi — to'lov HQ orqali";
 
@@ -2693,10 +2695,22 @@ export class FinanceGatewayController {
     if (!branchId) {
       throw new ForbiddenException("Managerning branch'i topilmadi");
     }
-    const res = await this.sendOrder<{
-      data?: { items?: Array<{ market_id: string; share: number }> };
-    }>({ cmd: 'order.settlement.branch_markets' }, { branch_id: branchId });
-    const rows = Array.isArray(res?.data?.items) ? res.data.items : [];
+    // Y-7 — order-service xatosi (timeout / 5xx) yoki javob shakli buzuq —
+    // 503 (bo'sh ro'yxat «market yo'q» deb ko'rinmasin).
+    let res:
+      | { data?: { items?: Array<{ market_id: string; share: number }> } }
+      | undefined;
+    try {
+      res = await this.sendOrder<{
+        data?: { items?: Array<{ market_id: string; share: number }> };
+      }>({ cmd: 'order.settlement.branch_markets' }, { branch_id: branchId });
+    } catch {
+      throw new ServiceUnavailableException(BRANCH_SHARE_UNAVAILABLE_MESSAGE);
+    }
+    if (!Array.isArray(res?.data?.items)) {
+      throw new ServiceUnavailableException(BRANCH_SHARE_UNAVAILABLE_MESSAGE);
+    }
+    const rows = res.data.items;
     const ids = rows.map((row) => String(row.market_id));
     const names = ids.length ? await this.loadMarketIdentities(ids) : null;
     const balances = ids.length
@@ -2822,18 +2836,38 @@ export class FinanceGatewayController {
     return !identities || identities.has(marketId);
   }
 
-  /** A1/B1 — FOR_MARKET qoldiqlari (HQ'ning marketga qarzi); xato — 503. */
+  /**
+   * A1/B1 — FOR_MARKET qoldiqlari (HQ'ning marketga qarzi); xato — 503.
+   * Y-2 — finance bir chaqiruvda ≤ 500 id qabul qiladi: bo'laklab,
+   * parallel so'raladi va birlashtiriladi.
+   */
   private async loadMarketBalances(
     ids: string[],
   ): Promise<Map<string, number>> {
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += MARKET_BALANCES_CHUNK) {
+      chunks.push(ids.slice(i, i + MARKET_BALANCES_CHUNK));
+    }
     try {
-      const res = await this.send<{
-        data?: { items?: Array<{ market_id?: unknown; balance?: unknown }> };
-      }>({ cmd: 'finance.cashbox.market_balances' }, { market_ids: ids });
-      const items = Array.isArray(res?.data?.items) ? res.data.items : [];
-      return new Map(
-        items.map((row) => [String(row.market_id), Number(row.balance) || 0]),
+      const replies = await Promise.all(
+        chunks.map((chunk) =>
+          this.send<{
+            data?: {
+              items?: Array<{ market_id?: unknown; balance?: unknown }>;
+            };
+          }>({ cmd: 'finance.cashbox.market_balances' }, { market_ids: chunk }),
+        ),
       );
+      const result = new Map<string, number>();
+      for (const res of replies) {
+        if (!Array.isArray(res?.data?.items)) {
+          throw new Error('market_balances: items massiv emas');
+        }
+        for (const row of res.data.items) {
+          result.set(String(row.market_id), Number(row.balance) || 0);
+        }
+      }
+      return result;
     } catch {
       throw new ServiceUnavailableException(BRANCH_SHARE_UNAVAILABLE_MESSAGE);
     }
