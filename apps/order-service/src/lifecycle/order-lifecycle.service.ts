@@ -2368,7 +2368,13 @@ export class OrderLifecycleService {
       order: { createdAt: 'ASC', id: 'ASC' },
       lock: { mode: 'pessimistic_write' },
     });
-    if (orderRows.some((row) => row?.market_paid_by_branch_at != null)) {
+    if (
+      orderRows.some(
+        (row) =>
+          row?.market_paid_by_branch_at != null ||
+          (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0,
+      )
+    ) {
       this.badRequest(
         "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
       );
@@ -6048,7 +6054,10 @@ export class OrderLifecycleService {
     }
     // 63HO6cBU (PR-C) — market ulushini filial o'z kassasidan to'lagan qator:
     // pul marketga ketgan, buyurtmani qaytarish daftarni buzadi.
-    if (existingSettlement?.market_paid_by_branch_at) {
+    if (
+      existingSettlement?.market_paid_by_branch_at ||
+      (Number(existingSettlement?.market_paid_by_branch_amount ?? 0) || 0) !== 0
+    ) {
       this.badRequest(
         "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
       );
@@ -7328,7 +7337,10 @@ export class OrderLifecycleService {
     }
     // 63HO6cBU (PR-C) — market ulushini filial o'z kassasidan to'lagan qator:
     // pul marketga ketgan, buyurtmani qaytarish daftarni buzadi.
-    if (row?.market_paid_by_branch_at) {
+    if (
+      row?.market_paid_by_branch_at ||
+      (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0
+    ) {
       this.badRequest(
         "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
       );

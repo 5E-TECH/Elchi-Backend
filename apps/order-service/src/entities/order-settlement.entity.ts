@@ -130,4 +130,17 @@ export class OrderSettlement extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   market_paid_by_branch_by!: string | null;
+
+  /**
+   * 63HO6cBU — market ulushining filial kassasidan to'langan qismi (qisman
+   * ham). To'liq bo'lsa `market_paid_by_branch_at` ham qo'yiladi.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  market_paid_by_branch_amount!: number;
 }

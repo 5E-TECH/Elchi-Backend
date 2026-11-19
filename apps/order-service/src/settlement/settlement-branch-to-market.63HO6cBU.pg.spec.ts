@@ -4,6 +4,7 @@ import { IdempotencyKey, SettlementStatus } from '@app/common';
 import { OrderSettlementService } from './order-settlement.service';
 import { OrderSettlement } from '../entities/order-settlement.entity';
 import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity';
+import { OrderSettlementBranchMarketCarry } from '../entities/order-settlement-branch-market-carry.entity';
 import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
@@ -64,6 +65,7 @@ describePg(
           Branch,
           OrderSettlement,
           OrderSettlementCarry,
+          OrderSettlementBranchMarketCarry,
           IdempotencyKey,
         ],
         synchronize: false,
@@ -262,12 +264,17 @@ describePg(
         requester_id: '1',
       });
     };
-    /** b) market: to'langan jami == yopilgan (MARKET_SETTLED yoki belgilangan) Σ + carry. */
+    /**
+     * b) market: to'langan jami == qoplangan: MARKET_SETTLED qatorlar Σ
+     * market_amount + boshqa qatorlarda filial to'lagan qism + HQ va (X, M)
+     * qoldiqlari.
+     */
     const marketCovered = async (market: string) => {
       const [r] = await db.query(
-        `SELECT COALESCE(SUM(market_amount), 0)::float AS s FROM "${schema}".order_settlement
-        WHERE market_id = $1 AND is_deleted = false
-          AND (status = 'market_settled' OR market_paid_by_branch_at IS NOT NULL)`,
+        `SELECT COALESCE(SUM(CASE WHEN status = 'market_settled' THEN market_amount
+                                  ELSE market_paid_by_branch_amount END), 0)::float AS s
+           FROM "${schema}".order_settlement
+          WHERE market_id = $1 AND is_deleted = false`,
         [market],
       );
       const [c] = await db.query(
@@ -275,8 +282,29 @@ describePg(
         WHERE level = 'hq_to_market' AND party_id = $1`,
         [market],
       );
-      return Math.round((Number(r.s) + Number(c.c)) * 100) / 100;
+      const [bm] = await db.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS c FROM "${schema}".order_settlement_branch_market_carry
+        WHERE market_id = $1`,
+        [market],
+      );
+      return Math.round((Number(r.s) + Number(c.c) + Number(bm.c)) * 100) / 100;
     };
+    const carryOf = async (level: string, party: string) => {
+      const [c] = await db.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS c FROM "${schema}".order_settlement_carry
+        WHERE level = $1 AND party_id = $2`,
+        [level, party],
+      );
+      return Number(c.c);
+    };
+    const paidOf = async (key: string) =>
+      Number(
+        (
+          await db
+            .getRepository(OrderSettlement)
+            .findOneByOrFail({ id: ids[key] })
+        ).market_paid_by_branch_amount,
+      );
     const expectInvariants = async () => {
       // e) filial kassasi == «HQ ga berilishi kerak» (X va Y).
       expect(await payable(X)).toBeCloseTo(cash[X], 2);
@@ -300,7 +328,9 @@ describePg(
         in_branch: true,
         share: 75_000,
       });
-      expect(await share(Y, N)).toMatchObject({ in_branch: false, share: 0 });
+      expect(await share(Y, N)).toEqual(
+        expect.objectContaining({ in_branch: false, share: 0 }),
+      );
       const list: any = await service.getBranchMarkets({ branch_id: X });
       expect(list.data.items).toEqual([
         { market_id: M, share: 115_000 },
@@ -309,52 +339,54 @@ describePg(
       await expectInvariants();
     });
 
-    it('1) qisman to`lov 100 000: r1 belgilanadi, qoldiq 20 000 — branch_to_hq(X) va hq_to_market(M) qoldig`iga; a) Δ payable = −100 000', async () => {
+    it('1) qisman to`lov 100 000: kredit r7 + r1 to`liq, r2 QISMAN (25 000 qatorning o`zida); ulush darhol 15 000; a) Δ payable = −100 000; boshqa qoldiqlar tegilmaydi', async () => {
       const before = await payable(X);
       const res: any = await managerPays(X, M, 100_000, 'p-1');
-      expect(res.data).toMatchObject({ allocated: 80_000, leftover: 20_000 });
+      expect(res.data).toMatchObject({ allocated: 100_000, leftover: 0 });
+      expect(await markedOf('r7')).toBe(true);
       expect(await markedOf('r1')).toBe(true);
       expect(await markedOf('r2')).toBe(false);
-      expect(await markedOf('r7')).toBe(false); // tortilgan kredit yozilmaydi
+      expect(await paidOf('r2')).toBe(25_000);
       expect(await statusOf('r1')).toBe(SettlementStatus.COURIER_SETTLED);
       expect((await payable(X)) - before).toBeCloseTo(-100_000, 2);
-      // Boshqa filial / market qatorlari tegilmagan.
+      expect(await share(X, M)).toMatchObject({ share: 15_000 });
+      // c, d) qisman qism boshqa bo'g'in qoldiqlariga O'TMAYDI.
+      expect(await carryOf('branch_to_hq', X)).toBe(0);
+      expect(await carryOf('hq_to_market', M)).toBe(0);
       for (const key of ['r3', 'r4', 'r5']) {
         expect(await markedOf(key)).toBe(false);
+        expect(await paidOf(key)).toBe(0);
         expect(await statusOf(key)).toBe(SettlementStatus.COURIER_SETTLED);
       }
-      expect(await share(X, M)).toMatchObject({
-        in_branch: true,
-        share: 35_000,
-      });
       await expectInvariants();
     });
 
-    it('2) takroriy token — ikki marta belgilamaydi; parallel ikki nusxa ham bitta', async () => {
+    it('2) takroriy token — ikki marta yozmaydi', async () => {
       const again: any = await managerPays(X, M, 100_000, 'p-1');
       expect(again.data.replayed).toBe(true);
+      expect(await paidOf('r2')).toBe(25_000);
       await expectInvariants();
     });
 
-    it('3) c) HQ hq_to_market (katta summa) belgilangan va X ning COURIER_SETTLED qatorlarini olmaydi — faqat HQ qatori r6', async () => {
-      // HQ M ga qarzi: r6 20 000 − qoldiq 20 000 (filial nomidan to'langan) = 0.
-      const res: any = await hqPaysMarket(M, 0.01, 'h-1');
+    it('3) c) HQ M ga o`z qarzini to`laydi — faqat r6 (HQ) yopiladi; X ning COURIER_SETTLED / qisman qatorlari va Y qatori olinmaydi', async () => {
+      const res: any = await hqPaysMarket(M, 20_000, 'h-1');
       expect(res.data.settled_order_ids).toHaveLength(1);
       expect(await statusOf('r6')).toBe(SettlementStatus.MARKET_SETTLED);
       for (const key of ['r1', 'r2', 'r4', 'r5', 'r7']) {
         expect(await statusOf(key)).toBe(SettlementStatus.COURIER_SETTLED);
       }
+      expect(await carryOf('hq_to_market', M)).toBe(0);
       await expectInvariants();
     });
 
-    it('4) qolgan ulush 35 000 (kredit bilan): r7 va r2 belgilanadi; ulush 0; a) Δ payable = −35 000', async () => {
+    it('4) qolgan ulush 15 000: r2 to`liq; ulush 0; a) Δ payable = −15 000', async () => {
       const before = await payable(X);
-      const res: any = await managerPays(X, M, 35_000, 'p-2');
-      expect(res.data).toMatchObject({ allocated: 35_000, leftover: 0 });
+      const res: any = await managerPays(X, M, 15_000, 'p-2');
+      expect(res.data).toMatchObject({ allocated: 15_000, leftover: 0 });
       expect(await markedOf('r2')).toBe(true);
-      expect(await markedOf('r7')).toBe(true);
-      expect((await payable(X)) - before).toBeCloseTo(-35_000, 2);
-      expect(await share(X, M)).toMatchObject({ in_branch: true, share: 0 });
+      expect(await paidOf('r2')).toBe(40_000);
+      expect((await payable(X)) - before).toBeCloseTo(-15_000, 2);
+      expect(await share(X, M)).toMatchObject({ share: 0 });
       await expectInvariants();
     });
 
@@ -366,7 +398,7 @@ describePg(
       await expectInvariants();
     });
 
-    it('6) d) admin X dan qisman, keyin to`liq oladi: belgilangan qatorlar faqat HQ ulushi bilan, MARKET_SETTLED; qolganlari BRANCH_SETTLED', async () => {
+    it('6) d) admin X dan qisman, keyin to`liq oladi: to`liq to`langan qatorlar HQ ulushi bilan MARKET_SETTLED; qolganlari BRANCH_SETTLED', async () => {
       const take = async (amount: number, token: string) => {
         cash[X] -= amount;
         return service.advanceSettlement({
@@ -377,9 +409,8 @@ describePg(
           requester_id: '1',
         });
       };
-      // Kassa: 245 000 − 135 000 = 110 000.
-      expect(cash[X]).toBe(110_000);
-      await take(10_000, 'b-1'); // + qoldiq 20 000 = 30 000: r1 (HQ ulushi 20 000) + r2 (10 000)
+      expect(cash[X]).toBe(130_000);
+      await take(30_000, 'b-1'); // r1 (HQ ulushi 20 000) + r2 (10 000)
       expect(await statusOf('r1')).toBe(SettlementStatus.MARKET_SETTLED);
       expect(await statusOf('r2')).toBe(SettlementStatus.MARKET_SETTLED);
       expect(await statusOf('r3')).toBe(SettlementStatus.COURIER_SETTLED);
@@ -392,20 +423,17 @@ describePg(
       await expectInvariants();
     });
 
-    it('7) HQ endi faqat o`z qarzini to`laydi: M — r5 (25 000), N — r3 (60 000); belgilangan qatorlar olinmaydi', async () => {
+    it('7) HQ endi faqat o`z qarzini to`laydi: M — r5 (25 000), N — r3 (60 000)', async () => {
       await hqPaysMarket(M, 25_000, 'h-2');
       await hqPaysMarket(N, 60_000, 'h-3');
       expect(await statusOf('r5')).toBe(SettlementStatus.MARKET_SETTLED);
       expect(await statusOf('r3')).toBe(SettlementStatus.MARKET_SETTLED);
-      // M: X 135 000 + Y 75 000 + HQ 25 000 = Σ market_amount (80+40−5+75+25+20).
-      expect(paid[M]).toBe(
-        80_000 + 40_000 - 5_000 + 75_000 + 25_000 + 20_000 + 0.01,
-      );
+      // M: X 115 000 + Y 75 000 + HQ (20 000 + 25 000) = Σ market_amount.
+      expect(paid[M]).toBe(80_000 + 40_000 - 5_000 + 75_000 + 25_000 + 20_000);
       await expectInvariants();
     });
 
-    it('8) T6 retreat: HQ marketga to`lovni qaytarish belgilangan qatorlarni qayta ochmaydi', async () => {
-      const before = await statusOf('r1');
+    it('8) T6 retreat: HQ marketga to`lovni qaytarish filial to`lagan qatorlarni qayta ochmaydi', async () => {
       await service.retreatSettlement({
         level: 'hq_to_market',
         match_value: M,
@@ -414,13 +442,15 @@ describePg(
         requester_id: '1',
       });
       paid[M] -= 25_000;
-      expect(await statusOf('r1')).toBe(before);
-      expect(await markedOf('r1')).toBe(true);
+      for (const key of ['r1', 'r2', 'r7']) {
+        expect(await statusOf(key)).toBe(SettlementStatus.MARKET_SETTLED);
+        expect(await markedOf(key)).toBe(true);
+      }
       expect(await statusOf('r5')).toBe(SettlementStatus.BRANCH_SETTLED);
       await expectInvariants();
     });
 
-    it('9) parallel ikki bir xil token — bitta belgilash', async () => {
+    it('9) parallel ikki bir xil token — bitta yozuv', async () => {
       await row('r8', {
         home: X,
         branch: X,
@@ -449,15 +479,120 @@ describePg(
       cash[X] -= 10_000;
       paid[N] = (paid[N] ?? 0) + 10_000;
       expect(await markedOf('r8')).toBe(true);
-      const [{ c }] = await db.query(
-        `SELECT COALESCE(SUM(amount),0)::float AS c FROM "${schema}".order_settlement_carry WHERE level = 'branch_to_hq' AND party_id = $1`,
-        [X],
-      );
-      expect(Number(c)).toBe(0);
+      expect(await paidOf('r8')).toBe(10_000);
       await expectInvariants();
     });
 
-    it('10) noto`g`ri tomon / summa → 400', async () => {
+    it('10) a, b) 10 ta ketma-ket kichik qisman to`lov: ulush har gal kamayadi (S − Σc), «HQ ga berilishi kerak» ham; yig`indi ulushdan oshmaydi', async () => {
+      await row('r9', {
+        home: X,
+        branch: X,
+        market: M,
+        branchAmount: 120_000,
+        marketAmount: 100_000,
+        status: SettlementStatus.COURIER_SETTLED,
+      });
+      await expectInvariants();
+      let expectedShare = 100_000;
+      for (let i = 1; i <= 10; i += 1) {
+        const before = await payable(X);
+        const { share: current } = await share(X, M);
+        expect(current).toBeCloseTo(expectedShare, 2);
+        // Gateway qoidasi: summa ≤ ulush.
+        expect(9_000 <= current).toBe(true);
+        await managerPays(X, M, 9_000, `small-${i}`);
+        expectedShare -= 9_000;
+        expect((await payable(X)) - before).toBeCloseTo(-9_000, 2);
+        const list: any = await service.getBranchMarkets({ branch_id: X });
+        expect(
+          list.data.items.find((item: any) => item.market_id === M).share,
+        ).toBeCloseTo(expectedShare, 2);
+        await expectInvariants();
+      }
+      // 11-chi: qolgan ulush 10 000 — 10 001 gateway'da 400 bo'ladi.
+      const { share: left } = await share(X, M);
+      expect(left).toBe(10_000);
+      expect(10_001 > left).toBe(true);
+      expect(await paidOf('r9')).toBe(90_000);
+      expect(await markedOf('r9')).toBe(false);
+      // c, d) boshqa bo'g'in qoldiqlari tegilmagan.
+      expect(await carryOf('branch_to_hq', X)).toBe(0);
+    });
+
+    it('11) d) qisman to`langan r9: admin olganda r8 (HQ ulushi 2 000) + r9 (HQ ulushi 20 000 + to`lanmagan market qismi 10 000) = 32 000, BRANCH_SETTLED; HQ marketga r9 bo`yicha faqat qolganini (10 000) to`laydi', async () => {
+      expect(cash[X]).toBe(32_000);
+      expect(await payable(X)).toBeCloseTo(32_000, 2);
+      cash[X] -= 32_000;
+      await service.advanceSettlement({
+        level: 'branch_to_hq',
+        match_value: X,
+        amount: 32_000,
+        request_id: 'b-3',
+        requester_id: '1',
+      });
+      expect(await statusOf('r8')).toBe(SettlementStatus.MARKET_SETTLED);
+      expect(await statusOf('r9')).toBe(SettlementStatus.BRANCH_SETTLED);
+      expect(await payable(X)).toBeCloseTo(0, 2);
+      expect(await carryOf('branch_to_hq', X)).toBe(0);
+      await expectInvariants();
+      // HQ M ga: r5 (retreat qayta ochgan 25 000) + r9 (100 000 − 90 000).
+      await hqPaysMarket(M, 35_000, 'h-4');
+      expect(await statusOf('r5')).toBe(SettlementStatus.MARKET_SETTLED);
+      expect(await statusOf('r9')).toBe(SettlementStatus.MARKET_SETTLED);
+      expect(await carryOf('hq_to_market', M)).toBe(0);
+      await expectInvariants();
+    });
+
+    it('12) poyga: ulushdan ortiq to`lov — ortig`i (X, M) qoldig`iga, boshqa joyga o`tmaydi; ulush va payable undan kamayadi; yangi (X, M) qatori paydo bo`lganda kaskad bilan qo`llanadi', async () => {
+      await row('r10', {
+        home: X,
+        branch: X,
+        market: M,
+        branchAmount: 60_000,
+        marketAmount: 50_000,
+        status: SettlementStatus.COURIER_SETTLED,
+      });
+      const res: any = await managerPays(X, M, 55_000, 'race-1');
+      expect(res.data).toMatchObject({ allocated: 50_000, leftover: 5_000 });
+      expect(await markedOf('r10')).toBe(true);
+      expect(await share(X, M)).toMatchObject({ share: -5_000 });
+      expect(await carryOf('branch_to_hq', X)).toBe(0);
+      expect(await carryOf('hq_to_market', M)).toBe(0);
+      await expectInvariants();
+      // Yangi (X, M) sotuvi — kuryer topshiradi: qoldiq faqat shu qatorga.
+      seq += 1;
+      const [order] = await db.query(
+        `INSERT INTO "${schema}".orders (market_id, customer_id, home_branch_id) VALUES ($1, 1, $2) RETURNING id`,
+        [M, X],
+      );
+      const saved = await db.getRepository(OrderSettlement).save(
+        db.getRepository(OrderSettlement).create({
+          order_id: String(order.id),
+          courier_id: '209',
+          branch_id: X,
+          market_id: M,
+          courier_amount: 24_000,
+          branch_amount: 24_000,
+          market_amount: 20_000,
+          status: SettlementStatus.PENDING,
+        }),
+      );
+      ids.r11 = String(saved.id);
+      await service.advanceSettlement({
+        level: 'courier_to_branch',
+        match_value: '209',
+        amount: 24_000,
+        request_id: 'c-11',
+        requester_id: '25',
+      });
+      cash[X] += 24_000;
+      expect(await statusOf('r11')).toBe(SettlementStatus.COURIER_SETTLED);
+      expect(await paidOf('r11')).toBe(5_000);
+      expect(await share(X, M)).toMatchObject({ share: 15_000 });
+      await expectInvariants();
+    });
+
+    it('13) noto`g`ri tomon / summa → 400', async () => {
       await expect(
         service.advanceSettlement({
           level: 'branch_to_market',
@@ -476,37 +611,35 @@ describePg(
       ).rejects.toMatchObject({ error: { statusCode: 400 } });
     });
 
-    it('11) rollback himoyasi: belgilangan qatorli buyurtma qaytarilmaydi (400), daftar o`zgarmaydi', async () => {
+    it('14) rollback himoyasi: filial qisman / to`liq to`lagan qatorli buyurtma qaytarilmaydi (400), daftar o`zgarmaydi', async () => {
       const lifecycle = Object.create(
         OrderLifecycleService.prototype,
       ) as Record<string, any>;
-      const r8 = await db
-        .getRepository(OrderSettlement)
-        .findOneByOrFail({ id: ids.r8 });
-      await expect(
-        db.transaction((tx) =>
-          lifecycle.resetSettlementOnRollback(tx, String(r8.order_id)),
-        ),
-      ).rejects.toMatchObject({ error: { statusCode: 400 } });
-      const after = await db
-        .getRepository(OrderSettlement)
-        .findOneByOrFail({ id: ids.r8 });
-      expect(after.isDeleted).toBe(false);
-      expect(Number(after.market_amount)).toBe(10_000);
+      for (const key of ['r8', 'r11']) {
+        const target = await db
+          .getRepository(OrderSettlement)
+          .findOneByOrFail({ id: ids[key] });
+        await expect(
+          db.transaction((tx) =>
+            lifecycle.resetSettlementOnRollback(tx, String(target.order_id)),
+          ),
+        ).rejects.toMatchObject({ error: { statusCode: 400 } });
+        const after = await db
+          .getRepository(OrderSettlement)
+          .findOneByOrFail({ id: ids[key] });
+        expect(after.isDeleted).toBe(false);
+      }
     });
 
-    it('12) moliyaviy xulosa: market qarzi belgilangan qatorlarsiz', async () => {
+    it('15) moliyaviy xulosa: filial va market summalari filial to`lagan qismsiz', async () => {
       const summary: any = await service.getFinancialBalanceSettlementSummary();
-      const marketsBody = JSON.stringify(summary?.data ?? summary);
-      expect(marketsBody).toBeTruthy();
-      const [r] = await db.query(
-        `SELECT COALESCE(SUM(market_amount) FILTER (WHERE market_paid_by_branch_at IS NULL), 0)::float AS open
-         FROM "${schema}".order_settlement
-        WHERE market_id = $1 AND is_deleted = false
-          AND status IN ('pending','courier_settled','branch_settled')`,
-        [N],
-      );
-      expect(Number(r.open)).toBe(0);
+      const data = summary.data;
+      const branchX = data.branches.find((b: any) => b.branch_id === X);
+      expect(branchX.amount).toBeCloseTo(await payable(X), 2);
+      const marketM = data.markets.find((m: any) => m.market_id === M);
+      // M bo'yicha ochiq: r10 (50 000 − 50 000 filial to'lagan = 0), r4
+      // (75 000 − 75 000 = 0), r11 (20 000 − 5 000 qoldiqdan) — 15 000.
+      expect(marketM.amount).toBeCloseTo(15_000, 2);
     });
   },
 );

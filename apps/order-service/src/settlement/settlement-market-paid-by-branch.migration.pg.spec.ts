@@ -3,8 +3,9 @@ import { DataSource } from 'typeorm';
 import { SettlementMarketPaidByBranch1716000000246 } from '../../../../migrations/1716000000246-SettlementMarketPaidByBranch';
 
 /**
- * 63HO6cBU (PR-C) — migratsiya 246: faqat qo'shimcha nullable ustunlar +
- * qisman indeks, backfill yo'q; qayta up() xatosiz; down() → toza; qayta
+ * 63HO6cBU (PR-C) — migratsiya 246: faqat qo'shimcha ustunlar (nullable
+ * `_at/_by`, `_amount` NOT NULL DEFAULT 0), (filial, market) qoldiq jadvali
+ * va qisman indeks, backfill yo'q; qayta up() xatosiz; down() → toza; qayta
  * down() xatosiz. Haqiqiy Postgres (`ORDER_SETTLEMENT_PG_TEST_URI`),
  * o'z vaqtinchalik bazasi (`order_schema` ga qattiq bog'langan).
  */
@@ -52,6 +53,14 @@ describePg(
         )
       ).length === 1;
 
+    const hasCarryTable = async () =>
+      (
+        await db.query(
+          `SELECT 1 FROM information_schema.tables WHERE table_schema = 'order_schema'
+            AND table_name = 'order_settlement_branch_market_carry'`,
+        )
+      ).length === 1;
+
     beforeAll(async () => {
       admin = new DataSource({ type: 'postgres', url: pgUri });
       await admin.initialize();
@@ -85,30 +94,46 @@ describePg(
       }
     });
 
-    it('up(): nullable ustunlar + indeks, backfill yo`q; qayta up() xatosiz', async () => {
+    it('up(): ustunlar + qoldiq jadvali + indeks, backfill yo`q; qayta up() xatosiz', async () => {
       await run('up');
       await run('up');
       expect(await columns()).toEqual([
+        ['market_paid_by_branch_amount', 'NO'],
         ['market_paid_by_branch_at', 'YES'],
         ['market_paid_by_branch_by', 'YES'],
       ]);
       expect(await hasIndex()).toBe(true);
+      expect(await hasCarryTable()).toBe(true);
       const [row] = await db.query(
-        `SELECT market_paid_by_branch_at, market_paid_by_branch_by, market_amount::float AS amount
+        `SELECT market_paid_by_branch_at, market_paid_by_branch_by,
+                market_paid_by_branch_amount::float AS paid, market_amount::float AS amount
          FROM "order_schema"."order_settlement"`,
       );
       expect(row).toEqual({
         market_paid_by_branch_at: null,
         market_paid_by_branch_by: null,
+        paid: 0,
         amount: 80000,
       });
+      // (filial, market) bo'yicha bitta qoldiq qatori.
+      await db.query(
+        `INSERT INTO "order_schema"."order_settlement_branch_market_carry" (branch_id, market_id, amount)
+         VALUES (15, 201, 0)`,
+      );
+      await expect(
+        db.query(
+          `INSERT INTO "order_schema"."order_settlement_branch_market_carry" (branch_id, market_id, amount)
+           VALUES (15, 201, 0)`,
+        ),
+      ).rejects.toThrow();
     });
 
-    it('down(): ustunlar va indeks olib tashlanadi; qayta down() xatosiz; ma`lumot saqlanadi', async () => {
+    it('down(): ustunlar, jadval va indeks olib tashlanadi; qayta down() xatosiz; ma`lumot saqlanadi', async () => {
       await run('down');
       await run('down');
       expect(await columns()).toEqual([]);
       expect(await hasIndex()).toBe(false);
+      expect(await hasCarryTable()).toBe(false);
       const [{ n }] = await db.query(
         `SELECT count(*)::int AS n FROM "order_schema"."order_settlement"`,
       );

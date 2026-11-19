@@ -41,6 +41,7 @@ import { OrderTracking } from './entities/order-tracking.entity';
 import { OrderCustodyEvent } from './entities/order-custody-event.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
 import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
+import { OrderSettlementBranchMarketCarry } from './entities/order-settlement-branch-market-carry.entity';
 import { Branch } from './entities/branch.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
@@ -119,6 +120,7 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
       OrderCustodyEvent,
       OrderSettlement,
       OrderSettlementCarry,
+      OrderSettlementBranchMarketCarry,
       Branch,
       BranchTransferBatch,
       BranchTransferBatchItem,
