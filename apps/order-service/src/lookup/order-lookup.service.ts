@@ -247,6 +247,48 @@ export class OrderLookupService implements OnModuleInit {
   }
 
   /**
+   * Rollback ruxsati (D1 / D4) — bir nechta foydalanuvchining HOZIRGI
+   * filiali, bitta so'rov (`branch.user.find_by_user_ids`, ≤ 500 id).
+   * `strict` — xato yutilmaydi (endpoint: «biriktirilmagan» bilan
+   * «branch-service javob bermadi» aralashmasin); aks holda bo'sh xarita.
+   */
+  async getBranchIdsByUserIds(
+    userIds: string[],
+    opts: { strict?: boolean } = {},
+  ): Promise<Map<string, string | null>> {
+    const ids = [
+      ...new Set(userIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    ];
+    const result = new Map<string, string | null>();
+    if (!ids.length) return result;
+    const call = rmqSend<{
+      data?: Array<{
+        user_id?: string | number;
+        branch?: { id?: string | number | null } | null;
+      }>;
+    }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user_ids' },
+      {
+        user_ids: ids,
+        requester: { id: 'system', roles: ['superadmin'] },
+      },
+      { attachRequestId: false, retries: 1 },
+    );
+    const response = opts.strict
+      ? await call
+      : await call.catch(() => ({ data: [] }));
+    for (const row of response?.data ?? []) {
+      const branchId = row?.branch?.id;
+      result.set(
+        String(row?.user_id ?? ''),
+        branchId === null || branchId === undefined ? null : String(branchId),
+      );
+    }
+    return result;
+  }
+
+  /**
    * LC-13 (fix3b) — tumandan viloyatni (`order.region_id`) aniqlash.
    *
    * `logistics.district.find_by_id`: avval `assigned_region` (tuman

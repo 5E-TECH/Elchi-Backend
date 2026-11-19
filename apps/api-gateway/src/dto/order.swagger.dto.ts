@@ -1300,9 +1300,53 @@ export class OrderReceiptMarketDto {
  * menejer / filial / kuryerga YO'Q; «Muammo bo'lsa» — `problem_contacts`
  * (har rolga).
  */
+/**
+ * (2026-11-19, D1–D4) Joriy foydalanuvchi buyurtmani qaytara oladimi —
+ * `POST /orders/rollback/:id` bilan AYNI qaror.
+ */
+export class OrderRollbackEligibilityDto {
+  @ApiProperty({ example: false })
+  allowed!: boolean;
+
+  @ApiProperty({
+    nullable: true,
+    example: 'SUPERADMIN_ONLY',
+    enum: [
+      'NOT_ALLOWED_ROLE',
+      'STATUS_NOT_ROLLBACKABLE',
+      'NO_SALE_RECORD',
+      'NO_PERMISSION',
+      'NOT_OWN_BRANCH',
+      'NOT_OWN_ORDER',
+      'PARCEL_NOT_IN_BRANCH',
+      'SUPERADMIN_ONLY',
+      'COURIER_REMITTED',
+      'CORRECTION_REQUIRED',
+    ],
+  })
+  code!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: 'Faqat superadmin qaytara oladi',
+    description: "Rad etilsa — FE oynada ko'rsatadigan o'zbekcha sabab.",
+  })
+  message!: string | null;
+}
+
 export class OrderReceiptFieldsDto {
   @ApiProperty({ example: '81' })
   id!: string;
+
+  @ApiPropertyOptional({
+    type: OrderRollbackEligibilityDto,
+    nullable: true,
+    description:
+      "(2026-11-19, D1–D4) `GET /orders`, `GET /orders/:id`, kuryer ro'yxatlari: joriy foydalanuvchi " +
+      'buyurtmani qaytara oladimi (`POST /orders/rollback/:id` bilan AYNI qaror). `null` — order-service ' +
+      "javob bermadi (noma'lum). Tugma `rollback.allowed` dan, sabab `rollback.message` dan.",
+  })
+  rollback?: OrderRollbackEligibilityDto | null;
 
   @ApiPropertyOptional({ example: 'EL-100081' })
   order_number?: string;

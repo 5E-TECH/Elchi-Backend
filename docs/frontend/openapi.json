@@ -6122,6 +6122,7 @@
     },
     "/orders/rollback/{id}": {
       "post": {
+        "description": "(2026-11-19, D1–D4) Ruxsat — ro'yxat/tafsilotdagi `rollback` maydoni bilan AYNI qaror (`code` + `message` 400/403 tanasida). MENEJER: faqat o‘z filiali, `can_sell_cancel` shart (aks holda 403 NO_PERMISSION); pul kuryerda yoki kuryer filialga topshirgan (kuryerga kredit) — ruxsat; HQ'ga o'tgan / market to'langan / filial marketga to'lagan — 400 SUPERADMIN_ONLY; bekor posilka faqat o'z filialida yoki o'z kuryerida (jo'natilgan — 400 PARCEL_NOT_IN_BRANCH). SUPERADMIN: barcha bosqich, naqd ko'chmaydi — daftar teskari (kuryer/filial kredit, market debet). KURYER: avvalgidek (topshirilgan pul — 400 COURIER_REMITTED). Timeout 60 s.",
         "operationId": "OrderGatewayController_rollbackOrder",
         "parameters": [
           {
@@ -30859,6 +30860,43 @@
           "items"
         ]
       },
+      "OrderRollbackEligibilityDto": {
+        "type": "object",
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "example": false
+          },
+          "code": {
+            "type": "string",
+            "nullable": true,
+            "example": "SUPERADMIN_ONLY",
+            "enum": [
+              "NOT_ALLOWED_ROLE",
+              "STATUS_NOT_ROLLBACKABLE",
+              "NO_SALE_RECORD",
+              "NO_PERMISSION",
+              "NOT_OWN_BRANCH",
+              "NOT_OWN_ORDER",
+              "PARCEL_NOT_IN_BRANCH",
+              "SUPERADMIN_ONLY",
+              "COURIER_REMITTED",
+              "CORRECTION_REQUIRED"
+            ]
+          },
+          "message": {
+            "type": "object",
+            "nullable": true,
+            "example": "Faqat superadmin qaytara oladi",
+            "description": "Rad etilsa — FE oynada ko'rsatadigan o'zbekcha sabab."
+          }
+        },
+        "required": [
+          "allowed",
+          "code",
+          "message"
+        ]
+      },
       "ProblemContactDto": {
         "type": "object",
         "properties": {
@@ -30917,6 +30955,16 @@
           "id": {
             "type": "string",
             "example": "81"
+          },
+          "rollback": {
+            "nullable": true,
+            "description": "(2026-11-19, D1–D4) `GET /orders`, `GET /orders/:id`, kuryer ro'yxatlari: joriy foydalanuvchi buyurtmani qaytara oladimi (`POST /orders/rollback/:id` bilan AYNI qaror). `null` — order-service javob bermadi (noma'lum). Tugma `rollback.allowed` dan, sabab `rollback.message` dan.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderRollbackEligibilityDto"
+              }
+            ]
           },
           "order_number": {
             "type": "string",

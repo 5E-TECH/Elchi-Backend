@@ -2,6 +2,22 @@ import { BadRequestException } from '@nestjs/common';
 import { of, throwError } from 'rxjs';
 import { OrderGatewayController } from './order-gateway.controller';
 
+/**
+ * D1–D4 (2026-11-19): ro'yxat qatorlariga `rollback` maydoni va sahifaga
+ * bitta `order.rollback_eligibility` so'rovi qo'shildi — bu spec ro'yxat
+ * so'rovining o'zini tekshiradi.
+ */
+const listCalls = (client: { send: jest.Mock }) =>
+  client.send.mock.calls.filter(
+    (call: any[]) => call[0]?.cmd !== 'order.rollback_eligibility',
+  );
+const stripRollback = (rows: any[]) =>
+  rows.map((row) => {
+    const rest = { ...(row ?? {}) };
+    delete rest.rollback;
+    return rest;
+  });
+
 describe('OrderGatewayController pagination', () => {
   const makeController = () => {
     const orderClient = { send: jest.fn() };
@@ -311,9 +327,9 @@ describe('OrderGatewayController pagination', () => {
     expect(payload.query.canceled_post_unassigned).toBeUndefined();
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.query.holder_type).toBeUndefined();
-    expect(orderClient.send).toHaveBeenCalledTimes(1);
+    expect(listCalls(orderClient)).toHaveLength(1);
     expect(logisticsClient.send).not.toHaveBeenCalled();
-    expect(response.data).toEqual([
+    expect(stripRollback(response.data)).toEqual([
       { id: '77', status: 'cancelled' },
       {
         id: '84',
@@ -387,10 +403,12 @@ describe('OrderGatewayController pagination', () => {
         limit: 10,
       }),
     );
-    expect(response.data).toEqual([{ id: '84', status: 'cancelled' }]);
+    expect(stripRollback(response.data)).toEqual([
+      { id: '84', status: 'cancelled' },
+    ]);
     expect(response.total).toBe(11);
     expect(response.has_prev).toBe(true);
-    expect(orderClient.send).toHaveBeenCalledTimes(1);
+    expect(listCalls(orderClient)).toHaveLength(1);
     expect(logisticsClient.send).not.toHaveBeenCalled();
   });
 
@@ -435,7 +453,7 @@ describe('OrderGatewayController pagination', () => {
       },
     );
 
-    expect(orderClient.send).toHaveBeenCalledTimes(1);
+    expect(listCalls(orderClient)).toHaveLength(1);
     expect(orderClient.send.mock.calls[0][1].query).toEqual(
       expect.objectContaining({
         status: ['cancelled'],
@@ -447,7 +465,7 @@ describe('OrderGatewayController pagination', () => {
       }),
     );
     expect(logisticsClient.send).not.toHaveBeenCalled();
-    expect(response.data.data).toEqual([
+    expect(stripRollback(response.data.data)).toEqual([
       expect.objectContaining({
         id: '84',
         status: 'cancelled',

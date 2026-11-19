@@ -51,6 +51,7 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { attachRollbackEligibility } from './order-rollback-field';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { SCAN_THROTTLE } from './auth/scan-throttle';
 import { AllowTelegramScanScope } from './auth/telegram-scan-scope.guard';
@@ -735,6 +736,22 @@ export class OrderGatewayController {
     }
 
     return value;
+  }
+
+  /**
+   * (2026-11-19, D1–D4) Qatorlarga `rollback: { allowed, code, message }` —
+   * joriy foydalanuvchi uchun, sahifaga bitta `order.rollback_eligibility`
+   * so'rovi (`order-rollback-field.ts`).
+   */
+  private withRollbackField<T>(
+    payload: T | Promise<T>,
+    user: JwtUser | undefined,
+  ): Promise<T> {
+    return Promise.resolve(payload).then((resolved) =>
+      attachRollbackEligibility(resolved, user, (pattern, data) =>
+        this.sendOrderWithTimeout(pattern, data),
+      ),
+    );
   }
 
   private async sendOrderWithTimeout(
@@ -5142,15 +5159,18 @@ export class OrderGatewayController {
 
       // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
       // T7: `problem_contacts` proyeksiyadan OLDIN.
-      return projectOrderPayloadForRoles(
-        roles,
-        await attachProblemContacts(this.problemContacts, {
-          data,
-          total,
-          page: pagination.page,
-          limit: pagination.limit,
-          ...paginationMeta,
-        }),
+      return this.withRollbackField(
+        projectOrderPayloadForRoles(
+          roles,
+          await attachProblemContacts(this.problemContacts, {
+            data,
+            total,
+            page: pagination.page,
+            limit: pagination.limit,
+            ...paginationMeta,
+          }),
+        ),
+        req?.user,
       );
     }
 
@@ -5169,17 +5189,20 @@ export class OrderGatewayController {
     ).then(async (response) => {
       // kH2zZsz3: ro'yxat qatorlari ham detal bilan AYNI rol proyeksiyasida.
       // T7: `problem_contacts` proyeksiyadan OLDIN.
-      return projectOrderPayloadForRoles(
-        roles,
-        await attachProblemContacts(
-          this.problemContacts,
-          this.withPaginationMeta(
-            request.logistRegionIds
-              ? this.keepLogistRegionRows(response, request.logistRegionIds)
-              : response,
-            pagination,
+      return this.withRollbackField(
+        projectOrderPayloadForRoles(
+          roles,
+          await attachProblemContacts(
+            this.problemContacts,
+            this.withPaginationMeta(
+              request.logistRegionIds
+                ? this.keepLogistRegionRows(response, request.logistRegionIds)
+                : response,
+              pagination,
+            ),
           ),
         ),
+        req?.user,
       );
     });
   }
@@ -6310,22 +6333,25 @@ export class OrderGatewayController {
       );
 
       // kH2zZsz3: kuryerning bekor qilinganlar tabi — market tarifisiz.
-      return projectOrderPayloadForRoles(
-        req?.user?.roles,
-        await attachProblemContacts(
-          this.problemContacts,
-          successRes(
-            {
-              data: legacyData,
-              total,
-              page: pagination.page,
-              limit: pagination.limit,
-              ...paginationMeta,
-            },
-            200,
-            'All my orders',
+      return this.withRollbackField(
+        projectOrderPayloadForRoles(
+          req?.user?.roles,
+          await attachProblemContacts(
+            this.problemContacts,
+            successRes(
+              {
+                data: legacyData,
+                total,
+                page: pagination.page,
+                limit: pagination.limit,
+                ...paginationMeta,
+              },
+              200,
+              'All my orders',
+            ),
           ),
         ),
+        req?.user,
       );
     }
 
@@ -6375,22 +6401,25 @@ export class OrderGatewayController {
 
       // T7: filial doirasi (menejer/filial) — market/operator telefonlarisiz,
       // `problem_contacts` proyeksiyadan OLDIN (kuryer yo'llari bilan bir xil).
-      return projectOrderPayloadForRoles(
-        req?.user?.roles,
-        await attachProblemContacts(
-          this.problemContacts,
-          successRes(
-            {
-              data: legacyData,
-              total,
-              page: currentPage,
-              limit: currentLimit,
-              ...paginationMeta,
-            },
-            200,
-            'All my orders',
+      return this.withRollbackField(
+        projectOrderPayloadForRoles(
+          req?.user?.roles,
+          await attachProblemContacts(
+            this.problemContacts,
+            successRes(
+              {
+                data: legacyData,
+                total,
+                page: currentPage,
+                limit: currentLimit,
+                ...paginationMeta,
+              },
+              200,
+              'All my orders',
+            ),
           ),
         ),
+        req?.user,
       );
     }
 
@@ -6451,22 +6480,25 @@ export class OrderGatewayController {
 
     // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
     // T7: `problem_contacts` proyeksiyadan OLDIN.
-    return projectOrderPayloadForRoles(
-      req?.user?.roles,
-      await attachProblemContacts(
-        this.problemContacts,
-        successRes(
-          {
-            data: legacyData,
-            total,
-            page: currentPage,
-            limit: currentLimit,
-            ...paginationMeta,
-          },
-          200,
-          'All my orders',
+    return this.withRollbackField(
+      projectOrderPayloadForRoles(
+        req?.user?.roles,
+        await attachProblemContacts(
+          this.problemContacts,
+          successRes(
+            {
+              data: legacyData,
+              total,
+              page: currentPage,
+              limit: currentLimit,
+              ...paginationMeta,
+            },
+            200,
+            'All my orders',
+          ),
         ),
       ),
+      req?.user,
     );
   }
 
@@ -7815,9 +7847,12 @@ export class OrderGatewayController {
     // kH2zZsz3: kuryer — market tarifi/filial ulushisiz, market — kuryer
     // tarifi/ulushi va filial ulushisiz (auth/order-role-projection).
     // T7: `problem_contacts` proyeksiyadan OLDIN.
-    return projectOrderPayloadForRoles(
-      req?.user?.roles,
-      await attachProblemContacts(this.problemContacts, response),
+    return this.withRollbackField(
+      projectOrderPayloadForRoles(
+        req?.user?.roles,
+        await attachProblemContacts(this.problemContacts, response),
+      ),
+      req?.user,
     );
   }
 
@@ -8468,6 +8503,14 @@ export class OrderGatewayController {
   @ApiOperation({
     summary:
       'Rollback sold/cancelled order to waiting/cancelled/cancelled_sent',
+    description:
+      "(2026-11-19, D1–D4) Ruxsat — ro'yxat/tafsilotdagi `rollback` maydoni bilan AYNI qaror " +
+      '(`code` + `message` 400/403 tanasida). MENEJER: faqat o‘z filiali, `can_sell_cancel` shart ' +
+      '(aks holda 403 NO_PERMISSION); pul kuryerda yoki kuryer filialga topshirgan (kuryerga kredit) — ' +
+      "ruxsat; HQ'ga o'tgan / market to'langan / filial marketga to'lagan — 400 SUPERADMIN_ONLY; bekor " +
+      "posilka faqat o'z filialida yoki o'z kuryerida (jo'natilgan — 400 PARCEL_NOT_IN_BRANCH). " +
+      "SUPERADMIN: barcha bosqich, naqd ko'chmaydi — daftar teskari (kuryer/filial kredit, market debet). " +
+      'KURYER: avvalgidek (topshirilgan pul — 400 COURIER_REMITTED). Timeout 60 s.',
   })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiBody({ type: RollbackOrderRequestDto, required: false })
@@ -8476,6 +8519,8 @@ export class OrderGatewayController {
     @Body() dto: RollbackOrderRequestDto,
     @Req() req: CourierOpRequest,
   ) {
+    // D1–D4 (2026-11-19): rollback daftar + kassa teskarisini bitta
+    // tranzaksiyada yozadi — sotish / bekor qilish bilan bir xil 60 s.
     return firstValueFrom(
       this.orderClient
         .send(
@@ -8496,7 +8541,7 @@ export class OrderGatewayController {
             ),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException(

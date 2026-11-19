@@ -22,6 +22,61 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+
+### 2026-11-19 — Buyurtma rollback: menejer, superadmin va kuryer qoidalari (ega qarorlari D1–D4)
+
+Deploy: **order-service, api-gateway** (migratsiya yo'q). Joriy prod relizidan KEYIN.
+
+**Qoidalar** — `POST /orders/rollback/:id` va ro'yxatdagi `rollback` maydoni AYNI funksiyadan (`evaluateRollbackEligibility`):
+
+| Aktor | Holat | Natija |
+|---|---|---|
+| Menejer (faqat o'z filiali; `can_sell_cancel` shart) | pul kuryerda (PENDING) | ✅ |
+| Menejer | **D1:** kuryer pulni filialga topshirgan (COURIER_SETTLED) | ✅ — topshirilgan summa kuryerning keyingi topshirig'iga kredit (superadmin M6 yo'li bilan bir xil) |
+| Menejer | pul HQ'ga o'tgan / market to'langan / filial marketga to'lagan (PR-C) | ❌ 400 `SUPERADMIN_ONLY` |
+| Menejer | **D4:** bekor buyurtma — posilka o'z filialida yoki o'z filiali kuryerida | ✅ |
+| Menejer, kuryer | **D4:** bekor posilka jo'natilgan (bekorlar paketi / pochta — `cancelled (sent)` yoki `canceled_post_id`), HQ'da, marketda, `closed` | ❌ 400 `PARCEL_NOT_IN_BRANCH` |
+| Superadmin | **D2:** hammasi — HQ'ga o'tgan, market to'langan, PR-C qatorlari ham | ✅ — naqd ko'chmaydi, daftar teskari (pastda) |
+| Kuryer | avvalgidek (faqat o'ziga biriktirilgan; topshirilgan pul) | ❌ 400 `COURIER_REMITTED` |
+
+M6 xavfsizlik sabablari (manfiy / kredit qator, filialsiz yoki HQ qatori, kuryer boshqa filialga o'tgan, snapshot mos emas) menejerga ham amal qiladi → 400 `SUPERADMIN_ONLY` (aniq sabab `message` da), superadminga → 400 `CORRECTION_REQUIRED`. Masalan: kuryer qo'shimcha xarajat bilan bekor qilib, o'sha kreditni topshiriqda ishlatgan buyurtma (S6) — avtomatik qaytarilmaydi.
+
+**Xato kodlari** (400 / 403 tanasida `code` + `message`; ro'yxatda `rollback.code` + `rollback.message` — matn AYNAN bir xil):
+
+| `code` | HTTP | Matn (sukut; aniq sabab bo'lsa `message` uni almashtiradi) |
+|---|---|---|
+| `NOT_ALLOWED_ROLE` | 403 | Buyurtmani qaytarish faqat superadmin, menejer va kuryer uchun |
+| `NO_PERMISSION` | 403 | Sizda buyurtmani sotish / bekor qilish huquqi yo'q — qaytarish ham mumkin emas |
+| `STATUS_NOT_ROLLBACKABLE` | 400 | Rollback mumkin emas (status: …) |
+| `NO_SALE_RECORD` | 400 | Bu buyurtma sotish amali orqali sotilmagan (sotuv vaqti yo'q) — … Superadminga murojaat qiling |
+| `NOT_OWN_BRANCH` | 400 | Buyurtma sizning filialingizga tegishli emas |
+| `NOT_OWN_ORDER` | 400 | Buyurtma sizga biriktirilmagan |
+| `PARCEL_NOT_IN_BRANCH` | 400 | Posilka filialdan jo'natilgan (bekorlar paketi, pochta, HQ yoki market) — qaytarib bo'lmaydi |
+| `SUPERADMIN_ONLY` | 400 | Faqat superadmin qaytara oladi (yoki aniq sabab: «Buyurtma puli bosh ofisga o'tgan — …», «Market to'langan buyurtmani …», M6 sababi) |
+| `COURIER_REMITTED` | 400 | Pul filialga topshirilgan — buyurtmani menejer yoki superadmin qaytaradi |
+| `CORRECTION_REQUIRED` | 400 | Hisob-kitob holati avtomatik qaytarishga yaramaydi — buxgalteriya tuzatishi kerak (yoki aniq M6 sababi) |
+
+**Superadmin (D2) — daftar teskarisi** (naqd ko'chmaydi; HQ neti 0, har tomon Σ saqlanadi — PG testda isbotlangan):
+- kuryerga kredit (`courier_to_branch` qoldig'i += `courier_amount`) — kuryer filialga topshirgan bo'lsa;
+- filialga kredit (`branch_to_hq` qoldig'i +=) — filial shu buyurtma bo'yicha AMALDA bergan pul: HQ'ga o'tgan / market to'langan qatorda `branch_amount` (HQ'ga to'lagani + marketga to'lagan P); kuryer topshirgan + filial marketga qisman P to'lagan qatorda faqat P;
+- marketga debet (`hq_to_market` qoldig'i −=, manfiy — keyingi HQ to'lovidan ayiriladi) — market AMALDA olgan pul: HQ to'lagan qatorda `market_amount`; filial to'lagan qatorda P;
+- (X, M) filial → market qoldig'i tegilmaydi.
+
+**Kassa tarixi (`cashbox_history`)** — har bosqichda bir xil, sotuv oyoqlarining ko'zgusi, `source_type: correction`, izoh «[ROLLBACK] …»:
+- market kassasi — chiqim (yig'ilgan − market tarifi). Market to'langan bo'lsa kassa **manfiyga** tushadi (market bizga qarzdor) — «Kassa qarzga ishlaydi» sozlamasidan qat'i nazar (tuzatish yozuvi). Shu market uchun menejerning «Marketga to'lov» chegarasi (`payable = min(ulush, max(qarz, 0))`) qarz yopilguncha 0 bo'ladi;
+- kuryer kassasi — chiqim (yig'ilgan − kuryer ulushi), agar sotuv kuryer kassasiga yozgan bo'lsa (topshirilgan bo'lsa kassa manfiy = kredit);
+- filial kassasi — chiqim, agar sotuv filial kassasiga yozgan bo'lsa (menejer / filial sotuvi);
+- HQ (MAIN) kassasiga yozuv YO'Q; qoldiqlar (kredit / debet) faqat daftarda — kassa tarixida ko'rinmaydi. Natija xabarida: «Kuryer filialga topshirgan N so'm …», «Filialga N so'm keyingi HQ topshirig'iga hisoblanadi», «Market N so'm oldindan olgan — keyingi to'lovidan ayiriladi».
+
+**Endpointlar**
+- ✏️ [gateway] `GET /orders` (hamma tablar va rollar), `GET /orders/:id`, kuryer ro'yxatlari (`GET /orders/courier/orders`, `GET /orders/courier-orders`): har buyurtmada **`rollback: { allowed, code, message }`** — joriy foydalanuvchi uchun. Sahifaga bitta qo'shimcha so'rov (N+1 yo'q). Order-service javob bermasa `rollback: null` (noma'lum). Rollback qila olmaydigan rol — `allowed: false, code: 'NOT_ALLOWED_ROLE'`. (`GET /scan/:token` javobida buyurtma amallari yo'q — maydon qo'shilmagan.)
+- ✏️ [gateway] `POST /orders/rollback/:id`: rad etilganda tanada `code` (yuqoridagi jadval); 403 — `NO_PERMISSION` / `NOT_ALLOWED_ROLE`. Timeout **60 s** (sotish / bekor qilishdagidek; avval 8 s). `Idempotency-Key` (mavjud): takror — avvalgi natija (200), ayni kalit boshqa tana bilan — 422, bajarilayotgan — 409.
+
+**Frontend action items:**
+- 🔧 «Qaytarish» (rollback) tugmasi — faqat **`rollback.allowed`** dan (`OrdersTable` / `pages/orders`, kuryer ro'yxati `RollbackOrderDialog`, buyurtma tafsiloti / tahriri `new_orders`). Status / rolga qarab o'zingiz hisoblamang. `rollback === null` — tugmani ko'rsatmang (yoki bosilganda server qaror qiladi).
+- 🔧 Ruxsat yo'q bo'lsa sabab — **`rollback.message`** (tooltip yoki o'chirilgan tugma ostida); 400/403 bo'lsa oynada javobdagi `message` ni ko'rsating (`code` bo'yicha alohida matn shart emas).
+- 🔧 Har rollback so'roviga **`Idempotency-Key`** (bitta bosish = bitta kalit; qayta urinishda o'sha kalit).
+- 🔧 Superadmin tasdiq oynasida: «Pul HQ'ga o'tgan / market to'langan buyurtma — naqd ko'chmaydi, kuryer/filial krediti va market qarzi daftarga yoziladi» ogohlantirishi.
 ### 2026-11-19 — Menejer faqat o'z filiali marketlariga, filial ulushi doirasida to'laydi — 63HO6cBU (PR-C)
 
 Deploy: **order-service, finance-service, api-gateway** + **migratsiya 1716000000246** (`order_settlement.market_paid_by_branch_at/_by` — nullable, `market_paid_by_branch_amount` — `NOT NULL DEFAULT 0`; yangi `order_settlement_branch_market_carry` jadvali; qisman indeks; faqat qo'shimcha, backfill yo'q). Kam yuklamali vaqtda. PR-A (#726) va PR-B (#728) dan keyin chiqadi. order-service finance bilan birga yoki undan oldin chiqsin. ⚠️ **Orqaga qaytarish** (birinchi menejer to'lovidan keyin PR-C kodini qaytarish yoki migratsiya 246 `down()`) — faqat shu tartibda, aks holda pul ikki marta to'lanadi:

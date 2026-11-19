@@ -858,6 +858,13 @@ function makeRollbackHarness(order: Row) {
     },
     orderSettlementRepo: { findOne: mocks.settlementFindOne },
     dataSource: { createQueryRunner: mocks.createQueryRunner },
+    // D3 (2026-11-19) — menejer huquqi (rollback eligibility).
+    lookup: {
+      getUserById: jest.fn().mockResolvedValue({ can_sell_cancel: true }),
+      getBranchAssignmentByUser: jest
+        .fn()
+        .mockResolvedValue({ branch_id: '77' }),
+    },
   });
   return { s, mocks };
 }
