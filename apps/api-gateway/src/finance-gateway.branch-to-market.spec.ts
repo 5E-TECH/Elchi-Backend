@@ -71,13 +71,22 @@ describe('branch-to-main — «Marketga o`tkazma» (gateway)', () => {
     ['market_id yo`q', { market_id: undefined }],
     ['market_id bo`sh', { market_id: '  ' }],
     ['karta (card_id)', { card_id: '3' }],
-    ['filial kartasi (branch_card_id)', { branch_card_id: '7' }],
   ])('%s → 400, finance`ga bormaydi', async (_label, extra) => {
     const { controller, finance } = make();
     await expect(
       controller.paymentBranchToMain(user(['superadmin']), body(extra)),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(finance.send).not.toHaveBeenCalled();
+  });
+
+  it('63HO6cBU — eski FE filial kartasi (branch_card_id) → 400 EMAS, e`tiborsiz (finance`ga uzatilmaydi)', async () => {
+    const { controller, finance } = make();
+    await controller.paymentBranchToMain(
+      user(['superadmin']),
+      body({ branch_card_id: '7' }),
+    );
+    expect(finance.send).toHaveBeenCalledTimes(1);
+    expect(lastPayload(finance)).not.toHaveProperty('branch_card_id');
   });
 
   it('⭐ (2026-11-12) chek — finance`ga receipt_id va chek siyosati bilan boradi («O`tkazma» dagidek)', async () => {

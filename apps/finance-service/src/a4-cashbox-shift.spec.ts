@@ -291,19 +291,19 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Naqd kassada yetarli mablag' yo'q",
+      message: "Filial kassasida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
     expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();
   });
 
-  it('spendMoney(BRANCH, type=click, karta 0) → 400 (kartada yetarli mablag yo‘q, CLICK varianti)', async () => {
+  it('spendMoney(BRANCH, type=click) — 63HO6cBU: karta bo`lagi yo`q, JAMIdan oshsa → 400', async () => {
     const env = makeEnv({ cashboxes: [branchCashbox(900_000, 0)] });
 
     const error = await rpcErrorOf(
       env.service.spendMoney({
         user_id: '15',
-        amount: 50_000,
+        amount: 900_001,
         type: 'click' as any,
         cashbox_type: 'branch' as any,
         created_by: '208',
@@ -312,7 +312,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Karta hisobida yetarli mablag' yo'q",
+      message: "Filial kassasida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });
@@ -416,7 +416,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Naqd kassada yetarli mablag' yo'q",
+      message: "Filial kassasida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });

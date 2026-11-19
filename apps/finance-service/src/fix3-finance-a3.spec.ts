@@ -606,7 +606,8 @@ describe('M12 — filial kassasi qo`lda chiqimda manfiyga tushmaydi', () => {
     expect(error).toBeInstanceOf(RpcException);
     expect((error as RpcException).getError()).toEqual({
       statusCode: 400,
-      message: "Naqd kassada yetarli mablag' yo'q",
+      // 63HO6cBU — filial kassasi bitta jami.
+      message: "Filial kassasida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
     expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();

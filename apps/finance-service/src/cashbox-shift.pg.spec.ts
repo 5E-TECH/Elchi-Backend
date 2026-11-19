@@ -431,19 +431,23 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
         cashbox_type: Cashbox_type.BRANCH,
       }),
     ).rejects.toMatchObject({
-      error: { statusCode: 400, message: "Naqd kassada yetarli mablag' yo'q" },
+      error: {
+        statusCode: 400,
+        message: "Filial kassasida yetarli mablag' yo'q",
+      },
     });
+    // 63HO6cBU — filial kassasi bitta jami: click ham JAMI bo'yicha.
     await expect(
       service.spendMoney({
         user_id: '15',
-        amount: 1,
+        amount: 100_001,
         type: PaymentMethod.CLICK,
         cashbox_type: Cashbox_type.BRANCH,
       }),
     ).rejects.toMatchObject({
       error: {
         statusCode: 400,
-        message: "Karta hisobida yetarli mablag' yo'q",
+        message: "Filial kassasida yetarli mablag' yo'q",
       },
     });
     const branchAfterManual = await cashboxRepo().findOneByOrFail({

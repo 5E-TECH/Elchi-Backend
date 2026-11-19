@@ -307,7 +307,7 @@ describe('Zv3MLn0a — /finance/cashbox/cards gateway kontrakti', () => {
     ]);
   });
 
-  it('to`lovlar: filial→HQ `branch_card_id` finance ga; kuryerdan qabul DTO `card_id` ni qabul qiladi (raqam bo`lmasa xato)', async () => {
+  it('to`lovlar: filial→HQ `card_id` finance ga, `branch_card_id` (63HO6cBU) — e`tiborsiz; kuryerdan qabul DTO `card_id` ni qabul qiladi (raqam bo`lmasa xato)', async () => {
     await request(app.getHttpServer())
       .post('/finance/cashbox/payment/branch-to-main')
       .send({
@@ -320,8 +320,8 @@ describe('Zv3MLn0a — /finance/cashbox/cards gateway kontrakti', () => {
     expect(lastCall()?.[1]).toMatchObject({
       branch_id: '13',
       card_id: '3',
-      branch_card_id: '7',
     });
+    expect(lastCall()?.[1]).not.toHaveProperty('branch_card_id');
 
     const dto = (body: Record<string, unknown>, cls: any) =>
       validate(plainToInstance(cls, body), {

@@ -59,6 +59,14 @@ export class CashboxCard extends BaseEntity {
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;
 
+  /**
+   * 63HO6cBU (N1, migratsiya 245) — filial kartasi nofaol qilingan vaqt.
+   * Karta ko'chirmasi filial kartasi uchun undan KEYINGI qatorlarni olmaydi
+   * (aks holda arxiv Asosiy karta `card_id` siz yangi qatorlarni yig'ardi).
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  deactivated_at!: Date | null;
+
   @Column({ type: 'int', default: 0 })
   sort_order!: number;
 

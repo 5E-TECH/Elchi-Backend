@@ -1042,9 +1042,15 @@ export class PaymentFromCourierRequestDto {
   @IsMoneyAmount('amount')
   amount!: number;
 
-  @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
+  @ApiPropertyOptional({
+    enum: PaymentMethod,
+    example: PaymentMethod.CASH,
+    description:
+      "63HO6cBU (P0) — superadmin/admin (HQ kuryeridan MAIN'ga) uchun MAJBURIY (yo'q → 400). MENEJER uchun YUBORILMAYDI: filial kassasi naqd/kartaga ajralmaydi, server o'zi `cash` yozadi (eski FE yuborgan `cash`/`click` e'tiborsiz; `click_to_market` → 400).",
+  })
+  @IsOptional()
   @IsEnum(PaymentMethod)
-  payment_method!: PaymentMethod;
+  payment_method?: PaymentMethod;
 
   @ApiPropertyOptional({ example: '2002' })
   @IsOptional()
@@ -1066,12 +1072,24 @@ export class PaymentFromCourierRequestDto {
   @ApiPropertyOptional({
     example: '3',
     description:
-      "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`; superadmin/admin — asosiy kassa, menejer — o'z filiali kassasi `?branch_id` siz). Faqat `click` to'lovida (aks holda 400); berilmasa — Asosiy karta. Boshqa kassa (filial) kartasi → 403.",
+      "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`, asosiy kassa). Faqat superadmin/admin'ning `click` qabulida (aks holda 400); berilmasa — Asosiy karta. 63HO6cBU: MENEJER yuborsa — e'tiborsiz (filial kassasida karta yo'q).",
   })
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)
   card_id?: string;
+
+  /** @deprecated 63HO6cBU — filial kartasi yo'q; qabul qilinadi, e'tiborsiz. */
+  @ApiPropertyOptional({
+    example: '7',
+    deprecated: true,
+    description:
+      "63HO6cBU (P0) — ESKIRGAN: filial kassasi naqd/kartaga ajralmaydi. Eski FE yuborsa 400 emas — jimgina e'tiborsiz.",
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  branch_card_id?: string;
 }
 
 /**
@@ -1183,7 +1201,7 @@ export class PaymentBranchToMainRequestDto {
   @ApiPropertyOptional({
     example: '7',
     description:
-      "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul filial kassasining va asosiy kassaning balance_card idan harakatlanadi. Naqd (cash) to'lovda e'tiborga olinmaydi.",
+      "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul filial kassasining JAMI qoldig'idan (63HO6cBU) va asosiy kassaning balance_card idan harakatlanadi. Naqd (cash) to'lovda e'tiborga olinmaydi.",
   })
   @IsOptional()
   @IsString()
@@ -1205,7 +1223,8 @@ export class PaymentBranchToMainRequestDto {
   @ApiPropertyOptional({
     example: '7',
     description:
-      "Zv3MLn0a — pul chiqadigan FILIAL kassasining kartasi ID si (`GET /finance/cashbox/cards?branch_id=`). Faqat `click` to'lovida; berilmasa — filialning Asosiy kartasi. Boshqa kassa kartasi → 403, mablag' yetmasa 400.",
+      "63HO6cBU (P0) — ESKIRGAN: filial kassasi naqd/kartaga ajralmaydi, pul filialning JAMI qoldig'idan yechiladi. Yuborilsa — jimgina e'tiborsiz (400 emas).",
+    deprecated: true,
   })
   @IsOptional()
   @IsString()
@@ -1217,7 +1236,7 @@ export class PaymentBranchToMainRequestDto {
   @ApiPropertyOptional({
     example: '2002',
     description:
-      "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda karta (`card_id` / `branch_card_id` → 400) yo'q; chek — «O'tkazma» bilan bir xil (`hq_transfer` sozlamasi, `receipt_id`). Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin.",
+      "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (jami) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda HQ kartasi (`card_id` → 400) yo'q, `branch_card_id` e'tiborsiz; chek — «O'tkazma» bilan bir xil (`hq_transfer` sozlamasi, `receipt_id`). Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin.",
   })
   @IsOptional()
   @IsString()
