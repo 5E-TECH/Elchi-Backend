@@ -558,9 +558,31 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * PR-D (A-5) — pul summasining yuqori chegarasi: gateway `MONEY_MAX` bilan
+   * bir xil (1e13 so'm — JS double tiyingacha aniq oraliq).
+   */
+  static readonly MONEY_MAX = 1e13;
+
   private assertPositiveAmount(value: number, fieldName = 'amount') {
     if (!Number.isFinite(value) || value <= 0) {
       throw new BadRequestException(`${fieldName} 0 dan katta bo'lishi kerak`);
+    }
+    /**
+     * PR-D (A-5): ko'pi bilan 2 xonali kasr — 0,005 so'm olish yaxlitlashda
+     * filialda 100,00 qoldirib MAIN ga +0,01 «yaratardi»; chegara —
+     * 1e19 `numeric` to'lib 500, 9e17 da double siljishi.
+     */
+    const cents = value * 100;
+    if (Math.abs(cents - Math.round(cents)) > 1e-6) {
+      throw new BadRequestException(
+        `${fieldName} — ko'pi bilan 2 xonali kasr (tiyin) bo'lishi kerak`,
+      );
+    }
+    if (value > FinanceServiceService.MONEY_MAX) {
+      throw new BadRequestException(
+        `${fieldName} ${FinanceServiceService.MONEY_MAX} so'mdan oshmasligi kerak`,
+      );
     }
   }
 

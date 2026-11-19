@@ -22,6 +22,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+
+### 2026-11-19 — Pul summalari: ko'pi bilan 2 kasr xonasi va yuqori chegara (PR-D, A-5)
+
+Deploy: **api-gateway, finance-service**, migratsiyasiz. Real summalarga ta'sir yo'q (so'm, tiyingacha).
+
+Muammo: pul DTO'lari `@Min(0.0000001)` va kasr/maksimum cheklovsiz edi — 0,005 so'm olish filialda 100,00 qoldirib MAIN ga +0,01 «yaratardi» (har chaqiruvda), `1e19` → 500 (numeric overflow), `9e17` → JS double siljishi.
+
+- ⚠️ [gateway] Quyidagi summalar endi **ko'pi bilan 2 kasr xonali** va **≤ 10 000 000 000 000** (1e13 so'm; JS double tiyingacha aniq oraliq — 1e15 da tiyin siljiydi) bo'lishi shart, aks holda **400** (validatsiya):
+  - musbat (≥ 0,01): `payment/courier`, `payment/market`, `payment/branch-to-main`, `cashbox/spend`, `cashbox/fill`, `cashbox/balance`, maosh `salary_amount`, kartalararo o'tkazma va konvertatsiya, T6 `new_amount`, investitsiya `amount`, `order/settlement/*` `amount`;
+  - ≥ 0: smena yopish `closing_balance_cash`, `closing_balance_card`, karta qoldig'i `entered_balance`, investor foyda ulushi `amount`;
+  - ishorali (±1e13): kassa yaratish `balance`, `balance_cash`, `balance_card`; smena ochish `opening_balance_*`; maosh `have_to_pay`, `increase_have_to_pay_by`; moliyaviy balans yozuvi `amount` (ilgari ±1e15).
+- ⚠️ [finance] RPC orqali to'g'ridan-to'g'ri kelgan summalar ham (to'lov, sotuv, maosh — `assertPositiveAmount`) 2 kasrdan ko'p yoki 1e13 dan katta bo'lsa 400.
+
+**Frontend action items:**
+- 🔧 Summa maydonlarida 2 kasr xonasidan ortig'ini kiritishga yo'l qo'ymang (yoki yuborishdan oldin tiyingacha yaxlitlang); 400 matnini foydalanuvchiga ko'rsating.
 ### 2026-11-19 — AI tasdiq: takror tuman/mahsulot tekshiruvidan ham oldin; takror xarajatga bog'lanadi
 
 Deploy: api-gateway (+ order-service — faqat ichki chegara). Migratsiyasiz. Javob shakli o'zgarmagan.
