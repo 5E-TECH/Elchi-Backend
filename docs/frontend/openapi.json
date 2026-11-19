@@ -32447,14 +32447,23 @@
           },
           "balance": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           },
           "balance_cash": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           },
           "balance_card": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           }
         },
@@ -32600,6 +32609,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 150000
           },
           "operation_type": {
@@ -32677,6 +32689,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 250000
           },
           "payment_method": {
@@ -32748,6 +32763,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 500000
           },
           "payment_method": {
@@ -32799,6 +32817,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 250000
           },
           "payment_method": {
@@ -32851,6 +32872,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": -50000,
             "description": "Signed amount: positive = income, negative = expense. Match the sign to source_type."
           },
@@ -32919,6 +32943,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 150000
           },
           "type": {
@@ -32960,6 +32987,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 150000
           },
           "type": {
@@ -33027,6 +33057,9 @@
           },
           "new_amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 450000,
             "description": "Yangi summa (> 0, ko'pi bilan 2 kasr). Eskisiga teng — 409 SAME_AMOUNT; `max` dan katta — 409 AMOUNT_EXCEEDS."
           }
@@ -33047,10 +33080,16 @@
           },
           "opening_balance_cash": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 100000
           },
           "opening_balance_card": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           },
           "comment": {
@@ -33069,6 +33108,9 @@
           },
           "entered_balance": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1250000,
             "description": "Kassir kiritgan qoldiq (so'm)"
           },
@@ -33106,11 +33148,17 @@
           },
           "closing_balance_cash": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 120000,
             "description": "Sanab topshirilgan naqd (MAJBURIY, ega S5). discrepancy_cash = shu − expected_balance_cash"
           },
           "closing_balance_card": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 50000,
             "description": "Sanab topshirilgan karta qoldig'i. Yuborilsa discrepancy_card hisoblanadi"
           },
@@ -33145,6 +33193,9 @@
           },
           "entered_balance": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1250000,
             "description": "Qoralama: kassir kiritgan qoldiq (yopishda qayta yuboriladi)"
           },
@@ -33168,6 +33219,9 @@
         "properties": {
           "entered_balance": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1250000,
             "description": "Karta qoldig'i (so'm), MAJBURIY, ≥ 0. Farq = shu qiymat − avto-yopish paytidagi snapshot `expected_balance`"
           },
@@ -33624,6 +33678,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 500000
           },
           "comment": {
@@ -33657,6 +33714,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 500000
           },
           "comment": {
@@ -33747,10 +33807,16 @@
           },
           "salary_amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 3000000
           },
           "have_to_pay": {
             "type": "number",
+            "minimum": -999999999999.99,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 3000000
           },
           "payment_day": {
@@ -33772,10 +33838,16 @@
           },
           "salary_amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 3500000
           },
           "have_to_pay": {
             "type": "number",
+            "minimum": -999999999999.99,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 1000000
           },
           "payment_day": {
@@ -33784,6 +33856,9 @@
           },
           "increase_have_to_pay_by": {
             "type": "number",
+            "minimum": -999999999999.99,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 250000
           }
         },
@@ -35865,6 +35940,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1500000,
             "description": "Total amount the provider remitted"
           },
@@ -36323,7 +36401,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0.01
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "invested_at": {
             "type": "string",
@@ -36347,7 +36427,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0.01
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "invested_at": {
             "type": "string",
@@ -36377,7 +36459,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0.01
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "invested_at": {
             "type": "string",
@@ -36396,7 +36480,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "percentage": {
             "type": "number",
@@ -36428,7 +36514,9 @@
         "properties": {
           "amount": {
             "type": "number",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "percentage": {
             "type": "number",
