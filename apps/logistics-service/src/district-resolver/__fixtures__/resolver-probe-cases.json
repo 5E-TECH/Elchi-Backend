@@ -6901,5 +6901,170 @@
    "reason": null
   },
   "note": "r16 guard: without another bare name the capital \"X T.\" stays AUTO (as dev)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Shahrisabz sh, Navoiy ko'chasi 5"
+  },
+  "seed": {
+   "sato": "1710405",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710405",
+   "reason": null
+  },
+  "note": "r17: dotless \"X sh\" at the end of a part = city mark (r16: candidates city + tuman)"
+ },
+ {
+  "q": {
+   "region_name": "Xorazm",
+   "full_address": "URGANCH sh"
+  },
+  "seed": {
+   "sato": "1733401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1733401",
+   "reason": null
+  },
+  "note": "r17: dotless \"sh\" at the end of the text = city mark"
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Mustaqillik 12, Kattaqo'rg'on sh"
+  },
+  "seed": {
+   "sato": "1718406",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718406",
+   "reason": null
+  },
+  "note": "r17: dotless \"sh\" after the name, end of text"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Shahrisabz sh Navoiy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r17 guard: \"sh\" followed by another word is not a mark (stays candidates)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Navoiy 5 sh, Shahrisabz"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "note": "r17 guard: \"sh\" after a number is not a mark (no place signal)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Чироқчи р-он, Навоий 3"
+  },
+  "seed": {
+   "sato": "1710242",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710242",
+   "reason": null
+  },
+  "note": "r17: \"р-он\" = \"р-н\" (tuman mark, r16: no place signal)"
+ },
+ {
+  "q": {
+   "region_name": "Namangan",
+   "full_address": "р-он Чуст, Мустақиллик 5"
+  },
+  "seed": {
+   "sato": "1714237",
+   "reason": null
+  },
+  "full": {
+   "sato": "1714237",
+   "reason": null
+  },
+  "note": "r17: \"р-он X\" (mark before the name) = tuman"
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "full_address": "Навоий 3, Ғиждувон Р-ОН"
+  },
+  "seed": {
+   "sato": "1706215",
+   "reason": null
+  },
+  "full": {
+   "sato": "1706215",
+   "reason": null
+  },
+  "note": "r17: upper-case \"Р-ОН\""
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Tayloq tumanidan, Buxoro sh., Bog'ishamol 3"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r17: only the origin (\"X tumanidan\") matched and another region's city is named - candidate, not AUTO (r16: AUTO Tayloq)"
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Tayloq tumani dan, Buxoro sh, Bog'ishamol 3"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r17: same with \"tumani dan\" and dotless \"sh\""
+ },
+ {
+  "q": {
+   "region_name": "Buxoro",
+   "full_address": "Peshku, ул. Ленина 4, с г. Peshku"
+  },
+  "seed": {
+   "sato": "1706240",
+   "reason": null
+  },
+  "full": {
+   "sato": "1706240",
+   "reason": null
+  },
+  "note": "r17 guard: origin name also written bare as the destination - AUTO kept (r15)"
  }
 ]
