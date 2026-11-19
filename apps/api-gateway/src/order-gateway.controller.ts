@@ -2160,8 +2160,9 @@ export class OrderGatewayController {
    * ai-confirm SERVER TOMONDA QAYTA TEKSHIRUVI uchun ma'lumot: partiyadagi
    * barcha tumanlar BITTA `logistics.district.find_by_ids`, barcha mahsulotlar
    * BITTA `catalog.product.find_by_ids` bilan o'qiladi (wgqxS0Cp #11).
-   * Istalgan biri ishlamasa `null` — chaqiruvchi hamma buyurtmani
-   * `validation_unavailable` qiladi (tekshiruvsiz yaratish YO'Q).
+   * Istalgan biri ishlamasa `null` — chaqiruvchi takror BO'LMAGAN hamma
+   * buyurtmani `validation_unavailable` qiladi (tekshiruvsiz yaratish YO'Q);
+   * takror bandlar (`loadAiReplays`) baribir `idempotent_replay`.
    */
   private async loadAiConfirmLookups(orders: AiConfirmOrderDto[]): Promise<{
     districts: Array<Record<string, unknown>>;
@@ -2241,7 +2242,7 @@ export class OrderGatewayController {
     },
   ): Promise<AiConfirmResult> {
     const { order, index } = item;
-    // Takror (`markAiReplays`): buyurtma ayni barqaror kalit bilan avval
+    // Takror (`loadAiReplays`): buyurtma ayni barqaror kalit bilan avval
     // yaratilgan — tekshiruvsiz, order-service javobidagi takror bilan AYNI shakl.
     if (item.replayOrderId) {
       return {
@@ -2378,8 +2379,13 @@ export class OrderGatewayController {
    * yozadi (draft ↔ buyurtma bog'lanishining asosiy manbai).
    * Fire-and-forget: javob kutilmaydi, xato faqat WARN — buyurtma natijasiga
    * TA'SIR QILMAYDI. ⚠️ Qayta urinish YO'Q (ai.* RPC).
-   * Cp2v3ZJ7: `idempotent_replay` (avval yaratilgan) natijalar QAYTA
-   * bog'lanmaydi — ular birinchi chaqiruvda bog'langan.
+   * `idempotent_replay` (avval yaratilgan) natijalar HAM bog'lanadi: 1-urinish
+   * `timeout_unknown` (ok:false) bo'lsa u bog'lanmagan — aks holda buyurtma
+   * draft'ga va AI xarajatiga HECH QACHON bog'lanmasdi. Takror bog'lash
+   * xavfsiz (idempotent): `ai_order_draft_item` — `ON CONFLICT (order_id)
+   * DO NOTHING` (narx faqat YANGI qatorga muzlatiladi, `charged_uzs` 0;
+   * birinchi bog'lanishdagi edited_fields saqlanadi), `ai_usage_log.order_ids`
+   * — `DISTINCT` birlashma.
    * NFiXfmq6: `ai_price_per_order` — market yozuvidagi narx (null — global);
    * ai-service uni har YANGI bog'langan buyurtmaga muzlatadi (`order_id`
    * UNIQUE — ikki marta chaqiruvda narx faqat bir marta qayd qilinadi).
@@ -2409,7 +2415,6 @@ export class OrderGatewayController {
       const result = results.get(index);
       const draftId = this.asStr(order?.draft_id).trim();
       if (!result?.ok || !result.order_id || !draftId) return;
-      if (result.idempotent_replay === true) return;
       const entry = byDraft.get(draftId) ?? { orderIds: [], items: [] };
       entry.orderIds.push(result.order_id);
       entry.items.push({
@@ -2488,27 +2493,37 @@ export class OrderGatewayController {
   /**
    * ai-confirm takrori — barqaror kalitlar (`ai:<market>:<draft>:<idx>`,
    * market — server aniqlagan) bo'yicha order-service'dan BITTA so'rov
-   * (`order.ai_confirm.completed`, faqat o'qish): `completed` bandlarga
-   * `replayOrderId` qo'yiladi. Kalitda market bor — boshqa market natijasi
-   * qaytmaydi. So'rov ishlamasa (timeout, eski order-service) — hech narsa
-   * belgilanmaydi va avvalgi yo'l (tekshiruvlar + `order.create`
+   * (`order.ai_confirm.completed`, faqat o'qish). Qaytaradi: so'rovdagi
+   * `orders[]` o'rni → avval yaratilgan buyurtma id'si. Kalitda market bor —
+   * boshqa market natijasi qaytmaydi. So'rov ishlamasa (timeout, eski
+   * order-service) — bo'sh Map va avvalgi yo'l (tekshiruvlar + `order.create`
    * idempotentligi) ishlaydi.
    */
-  private async markAiReplays(
-    eligible: EligibleAiOrder[],
+  private async loadAiReplays(
+    orders: AiConfirmOrderDto[],
     marketId: string,
-  ): Promise<void> {
-    const requestIds = eligible
-      .map((item) => item.stableRequestId)
-      .filter((id): id is string => Boolean(id));
-    if (requestIds.length === 0) return;
+  ): Promise<Map<number, string>> {
+    const keyByIndex = new Map<number, string>();
+    orders.forEach((order, index) => {
+      const key = aiStableRequestId(
+        marketId,
+        order?.draft_id,
+        order?.ai_item_index,
+      );
+      if (key) keyByIndex.set(index, key);
+    });
+    const replays = new Map<number, string>();
+    if (keyByIndex.size === 0) return replays;
     let response: unknown;
     try {
       response = await firstValueFrom(
         this.orderClient
           .send(
             { cmd: 'order.ai_confirm.completed' },
-            { market_id: marketId, request_ids: requestIds },
+            {
+              market_id: marketId,
+              request_ids: [...new Set(keyByIndex.values())],
+            },
           )
           .pipe(timeout(AI_REPLAY_LOOKUP_TIMEOUT_MS)),
       );
@@ -2516,7 +2531,7 @@ export class OrderGatewayController {
       this.logger.warn(
         `ai-confirm: takror tekshiruvi ishlamadi (${this.errorName(error)}) — odatiy yo'l`,
       );
-      return;
+      return replays;
     }
     const items = (response as { data?: { items?: unknown } } | null)?.data
       ?.items;
@@ -2530,12 +2545,11 @@ export class OrderGatewayController {
         byKey.set(requestId, orderId);
       }
     }
-    for (const item of eligible) {
-      const orderId = item.stableRequestId
-        ? byKey.get(item.stableRequestId)
-        : undefined;
-      if (orderId) item.replayOrderId = orderId;
+    for (const [index, key] of keyByIndex) {
+      const orderId = byKey.get(key);
+      if (orderId) replays.set(index, orderId);
     }
+    return replays;
   }
 
   /**
@@ -4100,11 +4114,20 @@ export class OrderGatewayController {
    * Tartib:
    *  1) Partiya darajasi (HECH NARSA yaratilishidan OLDIN, xato → 4xx):
    *     market (`resolveAiMarket`) va filial BIR MARTA aniqlanadi.
+   *     Market nofaol / `add_order` o'chiq — butun so'rov 400, takror ham
+   *     (ruxsat tekshiruvi; ataylab).
+   *  1b) Takror (`loadAiReplays`): ayni barqaror kalit bilan avval yaratilgan
+   *     band — quyidagi tuman/mahsulot, dublikat, operator, raqam va mijoz
+   *     tekshiruvlarisiz `{ok:true, order_id, idempotent_replay:true}`; AI ack
+   *     darvozalari va xarajat bog'lanishi esa unga ham ishlaydi. Bugungi
+   *     qabul yopiq bo'lsa ham (yangi buyurtma yaratilmaydi) — ok.
    *  2) Server tomonda qayta tekshiruv: tumanlar va mahsulotlar partiyaga
    *     BITTADAN RPC bilan o'qiladi; region_id DB'dagi tumandan, mahsulot
-   *     tanlangan marketniki bo'lishi shart. Istalgan RPC ishlamasa — hamma
-   *     buyurtma `validation_unavailable` (tekshiruvsiz yaratish YO'Q).
-   *  3) Dublikat: partiya ichida imzo bo'yicha (`duplicate_in_batch`),
+   *     tanlangan marketniki bo'lishi shart. Istalgan RPC ishlamasa —
+   *     takror bo'lmagan hamma buyurtma `validation_unavailable` (tekshiruvsiz
+   *     yaratish YO'Q). 1b) bilan parallel.
+   *  3) Dublikat: partiya ichida imzo bo'yicha (`duplicate_in_batch`; takror
+   *     bandlar imzosi oldindan band — `orders[]` tartibidan qat'i nazar),
    *     so'rovlar orasida `request_id='ai-dedupe:<sha256>'` — order-service
    *     10 daqiqa ichidagi takrorni yaratmaydi (`duplicate_recent`).
    *  4) Yaratish: 3 ta yo'lak (bir telefon — bitta yo'lak, ketma-ket),
@@ -4138,7 +4161,8 @@ export class OrderGatewayController {
       '{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason_code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija. ' +
       '`reason_code` (ixtiyoriy, UPPER_CASE, faqat `ok:false`) — `code` dan aniqroq sabab: `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`, ' +
       '`CHOSEN_OPERATOR_SELF_ONLY` (hammasida `code: "create_failed"`). Mijoz `reason` matnini tahlil qilmasin. ' +
-      'Takror (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) — `{ ok: true, order_id, idempotent_replay: true }`, operator/raqam qayta tekshirilmaydi.',
+      'Takror (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) — `{ ok: true, order_id, idempotent_replay: true }` — tuman/mahsulot, operator, operator raqami va mijoz qayta tekshirilmaydi; ' +
+      'tuman/mahsulot tekshiruvi ishlamasa ham (takror bo‘lmagan bandlar — `validation_unavailable`). Ayni mazmunli yangi band — `duplicate_in_batch`.',
   })
   @ApiConflictResponse({
     description:
@@ -4221,29 +4245,69 @@ export class OrderGatewayController {
 
     const results = new Map<number, AiConfirmResult>();
 
-    // 2) Server tomonda qayta tekshiruv (mijozga ishonilmaydi).
-    const lookups = await this.loadAiConfirmLookups(orders);
-    if (!lookups) {
-      return successRes({
-        results: orders.map((_order, index): AiConfirmResult => ({
-          index,
-          ok: false,
-          code: 'validation_unavailable',
-          reason: AI_CONFIRM_REASON_TEXT.validation_unavailable,
-        })),
-      });
-    }
-    const verdicts = verifyAiOrders(orders, {
-      marketId,
-      districts: lookups.districts,
-      products: lookups.products,
-    });
+    // Takror: ayni barqaror kalit (`ai:<market>:<draft>:<idx>`) bilan AVVAL
+    // yaratilgan bandlar — market/filial ruxsati tekshirilgach, lekin
+    // tuman/mahsulot, partiya dublikati, operator va raqam tekshiruvlaridan
+    // OLDIN. Natijasi noma'lum 1-urinishdan keyin mahsulot/tuman o'chirilsa,
+    // operator o'chirilsa yoki raqam majburiy bo'lib qolsa ham mavjud
+    // buyurtma `idempotent_replay` bo'lib qaytadi. Takror bandlar navbatda
+    // qoladi: AI ack darvozalari va xarajat bog'lanishi ular uchun ham.
+    // 2) Server tomonda qayta tekshiruv (mijozga ishonilmaydi) — takror
+    // bo'lmagan bandlar uchun; takror so'rovi bilan PARALLEL (ikkalasi
+    // mustaqil, faqat o'qish). Tekshiruvni o'qib bo'lmasa takror bo'lmagan
+    // bandlar `validation_unavailable` (tekshiruvsiz yaratish YO'Q), takror
+    // bandlar — baribir `idempotent_replay`.
+    const [replays, lookups] = await Promise.all([
+      this.loadAiReplays(orders, marketId),
+      this.loadAiConfirmLookups(orders),
+    ]);
+    const verdicts = lookups
+      ? verifyAiOrders(orders, {
+          marketId,
+          districts: lookups.districts,
+          products: lookups.products,
+        })
+      : [];
 
     // 3) Partiya ichidagi dublikat — bir xil imzoli ikkinchi buyurtma.
+    // Takror bandlarning imzosi OLDINDAN band qilinadi: ayni mazmunli YANGI
+    // band `orders[]` da takrordan oldin kelsa ham `duplicate_in_batch`
+    // (aks holda ikkinchi, bir xil buyurtma yaratilardi — order-service
+    // `ai-dedupe:<imzo>` qatlami faqat 10 daqiqa ushlaydi).
     const seenSignatures = new Set<string>();
+    for (const replayIndex of replays.keys()) {
+      seenSignatures.add(aiOrderSignature(marketId, orders[replayIndex]));
+    }
     const eligible: EligibleAiOrder[] = [];
     orders.forEach((order, index) => {
       const verdict = verdicts[index];
+      const replayOrderId = replays.get(index);
+      if (replayOrderId) {
+        // Tuman/mahsulot qayta tekshirilmaydi; imzo yuqorida band qilingan.
+        const signature = aiOrderSignature(marketId, order);
+        eligible.push({
+          index,
+          order,
+          signature,
+          // Faqat audit (edited_fields) uchun: tekshiruvdan o'tgan bo'lsa
+          // DB'dagi qiymat, aks holda so'rovdagi.
+          districtId: this.asStr(
+            verdict?.ok ? verdict.district_id : order.district_id,
+          ),
+          regionId: this.asStr(
+            verdict?.ok ? verdict.region_id : order.region_id,
+          ),
+          stableRequestId: aiStableRequestId(
+            marketId,
+            order.draft_id,
+            order.ai_item_index,
+          ),
+          aiAudit: null,
+          editedFields: null,
+          replayOrderId,
+        });
+        return;
+      }
       if (!verdict) {
         results.set(index, {
           index,
@@ -4288,11 +4352,6 @@ export class OrderGatewayController {
         editedFields: null,
       });
     });
-
-    // Takror: barqaror kalit bilan avval yaratilgan bandlar — operator/raqam
-    // tekshiruvlaridan OLDIN aniqlanadi (natijasi noma'lum 1-urinishdan keyin
-    // operator o'chirilsa ham mavjud buyurtma `idempotent_replay` bo'ladi).
-    await this.markAiReplays(eligible, marketId);
 
     // «Operator» tanlovi (`operator_id`) — yaratishdan va auditdan OLDIN,
     // partiyaga (market, operator_id) bo'yicha BIR MARTA. Rad etilgan

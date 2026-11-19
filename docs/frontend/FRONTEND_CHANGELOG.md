@@ -65,6 +65,78 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
 - 🔧 `cashDetail.tsx?type=market` (menejer): summa chegarasi — `branch_share`. Usul va karta tanlovi yo'q. So'rov: `{ market_id, amount, comment?, payment_date? }`.
 - 🔧 e2e mock'larini shu javob shakllariga moslang; 403 holatini yashirmang.
 
+### 2026-11-19 — Filialda «Kassadan xarajat» va «Kassani to'ldirish» yo'q — 63HO6cBU (PR-B)
+
+Deploy: **finance-service va api-gateway**, migratsiyasiz.
+
+- ⚠️ [gateway] `PATCH /finance/cashbox/spend` va `PATCH /finance/cashbox/fill` — endi faqat **SUPERADMIN / ADMIN** (asosiy kassa). **Menejer → 403.**
+- ⚠️ [finance] Filial kassasiga (`cashbox_type: branch`) qo'lda chiqim → 400 «Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi», kirim → 400 «Filial kassasini qo'lda to'ldirib bo'lmaydi».
+- ⚠️ [gateway] `GET /finance/cashbox/expense-categories` — menejer → 403 (SA/admin avvalgidek).
+- ⚠️ [gateway] `POST /finance/receipts` (chek yuklash) va `GET /finance/receipt-settings` — faqat SA/admin; menejer → 403 (`manual_expense` cheki menejerda yo'q).
+- 🟢 «Filial daromadini yechish» (o'z foydasi doirasida chiqim) — alohida karta (t7ewOeOP), hali yo'q.
+
+**Frontend action items:**
+- 🔧 Menejer interfeysidan «Kassadan xarajat», «Kassani to'ldirish», xarajat kategoriyalari va chek yuklashni olib tashlang.
+
+### 2026-11-19 — P0: filial kassasi naqd/kartaga AJRALMAYDI (bitta jami) — 63HO6cBU
+
+Deploy: **finance-service va api-gateway** + **migratsiya 1716000000245** (`BranchCashboxSingleBucket`). Relizda 240–245 bitta tranzaksiyada (scripts/db-prepare.ts), kam yuklamali vaqtda. ⚠️ 241/243/244 indekslari CONCURRENTLY'siz — eski finance-service ishlab turgan paytda filial pul tranzaksiyasi bilan **deadlock** bo'lishi mumkin: shunda deploy'ni (db-prepare) qayta yurgizing (bitta tranzaksiya — yarim holat qolmaydi). Runbook: `npm run db:check-cashbox -- --snapshot=/tmp/cb-pre.json` migratsiyadan OLDIN, `-- --compare=/tmp/cb-pre.json` KEYIN (jami o'zgarmasligi kerak). **Orqaga qaytarish (revert):** kodni qaytargach `migration:revert` (245 `down()` — faqat jami o'zgarmagan kassalarda bo'linish tiklanadi); so'ng OCHIQ filial smenalarini yopib-qayta oching va arxiv filial karta ko'chirmalariga (ledger) qaramang — eski kod yangi kodning filial `click` qatorlarini karta harakati deb o'qiydi. Orqaga mos: eski FE so'rovlari 500 bermaydi — eskirgan maydonlar e'tiborsiz; FAQAT noto'g'ri formatdagi `card_id` / `branch_card_id` (raqamli ID emas) yoki bo'sh satr `payment_method` (SA/A) — DTO validatsiyasi **400** (avvalgidek).
+
+Muammo: admin filialdan «O'tkazma» bilan pul olmoqchi bo'lganda filialning KARTA bo'lagi bo'sh bo'lsa 400 «Karta hisobida yetarli mablag' yo'q» qaytardi (menejer kuryer pulini odatda «naqd» deb qabul qiladi). Endi filial kassasi bitta jami: `balance_cash` = jami, `balance_card` doim 0 (FOR_COURIER / FOR_MARKET dagidek).
+
+- ⚠️ [gateway] `POST /finance/cashbox/payment/courier` — **MENEJER** uchun `payment_method` endi **YUBORILMAYDI** (DTO'da ixtiyoriy). Server o'zi `cash` yozadi. Menejer yuborsa ham: `cash` / `click` — e'tiborsiz (→ `cash`), `card_id`, `branch_card_id` — e'tiborsiz; `click_to_market` → **400** («Marketga o'tkazma» filialda yo'q); `receipt_id` → 400 (avvalgidek). **SUPERADMIN/ADMIN** (HQ kuryeridan MAIN'ga) uchun `payment_method` avvalgidek **MAJBURIY** (yo'q → 400), `card_id` (HQ kartasi) avvalgidek.
+- ✏️ [gateway] `POST /finance/cashbox/payment/branch-to-main` — filial oyog'i **JAMIdan** yechiladi (usuldan qat'i nazar). `payment_method` (`cash` | `click` | `click_to_market`) va `card_id` (HQ nomli kartasi) — avvalgidek, faqat MAIN oyog'iga ta'sir qiladi; tarixda SA/A uchun usul saqlanadi. `branch_card_id` — **eskirgan**, yuborilsa e'tiborsiz (ilgari `click_to_market` da 400 edi). Yetmasa (qarz o'chiq): 400 **«Filial kassasida yetarli mablag' yo'q»** (ilgari «Naqd kassada…» / «Karta hisobida…»). «Kassa qarzga ishlaydi» yoqilgan filialda — jamidan ortig'i ham o'tadi (filial manfiy).
+- ✏️ [finance] Filial kassasi javoblarida (`cashbox/my-cashbox`, `cashbox/main` (menejer), `cashbox/user/:id/main`, `all-info`, tarix `balance_*_after`) **`balance_card` doim 0**, `balance_cash` = `balance` (jami). Eski tarix qatorlari o'zgarmaydi.
+- ✏️ [gateway] Tarix (`GET /finance/history`, `history/:id`, `cashbox/my-cashbox`, `cashbox/main`, `cashbox/user/:id/main`, `cashbox/user/:user_id`, `cashbox/all-info` → `allCashboxHistories`) — har qatorda yangi ixtiyoriy **`branch_leg: true`** (filial kassasi qatori yoki kuryer → filial to'lovining kuryer qatori). **Kuryer** ko'rinishida bu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null` (eski qatorlarda ham). **Ega qarori (Q2): menejer va registrator usulni ko'radi** (SA/admin kabi) — filial kassasi baribir bitta jami. `branch_leg` belgisi qoladi: FE filial qatorida karta tanlovi/bloki ko'rsatmasin.
+- ✏️ [finance] `GET /finance/history/:id` — filial kassasi qatorida `card` bloki endi doim `null` (hamma rol uchun: filialda karta yo'q; «Asosiy karta» sintezi ham, eski nomli karta ham qaytmaydi). MAIN — o'zgarmagan.
+- ✏️ [finance] `GET /finance/shift/:id/report` — filial smenasida `card: null`; `operations[]` — tur × usul (menejer ham usulni ko'radi, ega qarori Q2), jami bitta. Telegram xabari va XLSX/PDF fayli: filialda bitta «Jami», «Karta» bo'limi va «Kartalar» varag'i yo'q.
+- ⚠️ [gateway] `GET /finance/cashbox/cards?branch_id=` (va menejer) — filial uchun `cards: []` (Asosiy karta yaratilmaydi), `balance_card: 0`, `total_card: 0`, `default_balance: 0`, `in_sync: true`, yangi **`cards_disabled: true`**. `include_inactive=true` — eski (nofaol) filial kartalari, `balance: 0`. Filial kartasida **yaratish, Asosiy qilish, faollashtirish, kartalararo o'tkazma, karta↔naqd konvertatsiyasi → 400** «Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q». Eski kartaning ko'chirmasi (`cards/:id/ledger`) va o'chirish (qoldiq 0) — ishlaydi. MAIN kartalari — o'zgarmagan.
+- ✏️ [finance] **Filial smenasi** — bitta «Sanalgan summa»: ochishda `opening_balance_cash` = jami, `opening_balance_card` = 0; yopishda `closing_balance_cash` = sanalgan jami (eski FE `closing_balance_card` ham yuborsa — jamiga qo'shiladi), `expected_balance_card` = 0, `discrepancy_card` = **null**, `total_*_card` = 0 (barcha kirim/chiqim `total_*_cash` da). Filial smenasida `accounts[]` (karta qoldig'i / skrinshot) **so'ralmaydi va e'tiborsiz** (filial `branch_account_check_enabled` yoqilgan bo'lsa ham). MAIN smenasi — o'zgarmagan.
+- 🟢 [migratsiya 245] Har filial kassasi: `balance_cash += balance_card`, `balance_card = 0` (`balance` o'zgarmaydi); filial kartalari nofaol, nomli qoldig'i 0 (o'chirilmaydi, tarix saqlanadi); ochiq filial smenasining ochilishdagi karta surati jamiga qo'shiladi. Idempotent, `down()` bilan.
+- 🟢 T6 tuzatish / qaytarish filial qabulida — jami bo'yicha (karta tekshirilmaydi). «Kassa qarzga ishlaydi» yoqilgan filialda qabulni qaytarish jami manfiyga tushirsa ham o'tadi (dev'dagi xulq); qarz o'chiq — 409 `INSUFFICIENT_BALANCE`. Eski «O'tkazma» (click) qabulini summa bo'yicha tahrirlashda yangi qatorlar `cash` bilan yoziladi (teskari qatorlar — asl usulda).
+- 🟢 [migratsiya 245] Har filial kartasining jamiga o'tgan qoldig'i karta ko'chirmasiga (`cards/:id/ledger`) bitta qator bo'lib yoziladi: «Migratsiya 245: karta qoldig'i jamiga» (`card_to_cash`). Eski filial kartasi ko'chirmasi migratsiya vaqtigacha (`deactivated_at`) — deploy'dan keyingi filial qatorlari arxiv «Asosiy karta»ga yig'ilmaydi.
+- ✏️ [finance] `GET /finance/shift/settings?cashbox_user_id=<filial>` — `account_check_enabled: false`, `cards: []` (filialda karta tasdiqlash rejimi yo'q). `branch_account_check_enabled` **eskirgan**: javobda doim `false`, PATCH'da qabul qilinadi (boolean bo'lmasa 400), lekin saqlanmaydi.
+- ✏️ [finance] Avtomatik ochilgan filial smenasi ham bitta jami bilan (`opening_balance_card: 0`).
+- ✏️ [finance] `DELETE /finance/cashbox/cards/:id` — arxiv filial «Asosiy karta»si qoldig'i 0 bo'lsa endi o'chadi (soft; ilgari doim 400). MAIN Asosiy kartasi — avvalgidek 400.
+- ✏️ [finance] `POST /finance/cashbox` (SA/A) — filial / kuryer / market kassasi `balance_card` bilan yaratilsa, u naqdga qo'shiladi (`balance` = `balance_cash`, `balance_card` = 0).
+- 🟢 Kuryer tarixida bog'lanmagan eski «kuryer → qabul qiluvchi» to'lov qatorlari (`transfer_id` yo'q, manba — kuryerning o'zi; filialga bo'lishi mumkin) ham `branch_leg: true` — kuryerga usul ko'rsatilmaydi (xavfsiz tomon). «Market sotuvda to'langan» kuryer qatorlari (manba — market) — usul ko'rinadi.
+
+**Frontend action items:**
+- 🔧 Menejer «Kuryerdan pul qabul qilish» oynasi: to'lov usuli (Naqd / O'tkazma / Marketga o'tkazma) va karta tanlovini **olib tashlang** — faqat summa (+ izoh, sana). So'rov: `{ courier_id, amount, comment?, payment_date? }`.
+- 🔧 Admin «Filialdan pul qabul qilish»: filial kartasi tanlovini (`branch_card_id`) **olib tashlang**; usul (Naqd / O'tkazma / Marketga o'tkazma) va HQ kartasi (`card_id`) — qoladi. Filialning mavjud summasini `balance` (jami) dan ko'rsating — naqd/karta bo'linmasi YO'Q.
+- 🔧 Filial kassasi sahifalari (menejer va admin): naqd/karta bo'linmasi va «Kartalar» bo'limini yashiring (`cards_disabled: true` bo'lsa). Filialda karta↔naqd va kartalararo tugmalari ko'rsatilmasin.
+- 🔧 Filial smenasini ochish/yopish: bitta «Sanalgan summa» maydoni (`closing_balance_cash`), karta maydoni va karta skrinshotlari yo'q.
+- 🔧 Kuryer tarixida `payment_method === null` qatorlarida usul ustunini bo'sh qoldiring (yoki «—»). Menejer usulni ko'radi (Naqd / O'tkazma / Marketga o'tkazma) — lekin filial kassasida karta tanlovi va «Kartalar» bo'limi yo'q.
+
+
+### 2026-11-19 — Pul summalari: ko'pi bilan 2 kasr xonasi va yuqori chegara (PR-D, A-5)
+
+Deploy: **api-gateway, finance-service**, migratsiyasiz. Real summalarga ta'sir yo'q (so'm, tiyingacha).
+
+Muammo: pul DTO'lari `@Min(0.0000001)` va kasr/maksimum cheklovsiz edi — 0,005 so'm olish filialda 100,00 qoldirib MAIN ga +0,01 «yaratardi» (har chaqiruvda), `1e19` → 500 (numeric overflow), `9e17` → JS double siljishi.
+
+- ⚠️ [gateway] Quyidagi summalar endi **ko'pi bilan 2 kasr xonali** va **≤ 10 000 000 000 000** (1e13 so'm; JS double tiyingacha aniq oraliq — 1e15 da tiyin siljiydi) bo'lishi shart, aks holda **400** (validatsiya):
+  - musbat (≥ 0,01): `payment/courier`, `payment/market`, `payment/branch-to-main`, `cashbox/spend`, `cashbox/fill`, `cashbox/balance`, kartalararo o'tkazma va konvertatsiya, T6 `new_amount`, integratsiya remittance `amount` (ilgari ≥ 1, kasr cheksiz);
+  - ≥ 0: smena yopish `closing_balance_cash`, `closing_balance_card`, karta qoldig'i `entered_balance`;
+  - ishorali (±1e13): kassa yaratish `balance`, `balance_cash`, `balance_card`; smena ochish `opening_balance_*`; moliyaviy balans yozuvi `amount` (ilgari ±1e15);
+  - `numeric(14,2)` ustunlar — chegara **999 999 999 999,99** (ilgari 1e12 dan kattasi DB'da 500): maosh `salary_amount` (≥ 0,01), `have_to_pay`, `increase_have_to_pay_by` (ishorali), investitsiya `amount` (≥ 0,01), foyda ulushi `amount` (≥ 0).
+  - Son bo'lmagan qiymat — bitta xabar «<maydon> son bo'lishi kerak»; `1e-7` kabi qiymatlar endi 400 (ilgari ba'zi maydonlarda 500). openapi.json da `minimum` / `maximum` / `multipleOf: 0.01`.
+- ⚠️ [finance] RPC orqali to'g'ridan-to'g'ri kelgan summalar ham (to'lov, sotuv, maosh — `assertPositiveAmount`) 2 kasrdan ko'p yoki 1e13 dan katta bo'lsa 400. Ichki HISOBLANGAN oyoqlarning float xatosi (masalan sotuv oyog'i `collectible − tariff − share`) uchun 0,01 tiyin tolerans — soxta rad yo'q.
+
+**Frontend action items:**
+- 🟢 FE butun so'm yuboradi — o'zgarish shart emas. Kasrli kiritish qo'shilsa: 2 xonadan ortig'iga yo'l qo'ymang, 400 matnini ko'rsating.
+### 2026-11-19 — AI tasdiq: takror tuman/mahsulot tekshiruvidan ham oldin; takror xarajatga bog'lanadi
+
+Deploy: api-gateway (+ order-service — faqat ichki chegara). Migratsiyasiz. Javob shakli o'zgarmagan.
+
+- 🔧 [gateway] `POST /orders/ai-confirm` takrori (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) endi market/filial ruxsatidan KEYIN, lekin tuman/mahsulot tekshiruvi, partiya dublikati, operator, operator raqami va mijoz tekshiruvlaridan OLDIN aniqlanadi: urinishlar orasida mahsulot yoki tuman o'chirilgan bo'lsa ham (yoki tuman/mahsulot xizmati javob bermasa ham) mavjud buyurtma `{ ok: true, order_id, idempotent_replay: true }`. Ilgari bunday takror `product_not_found` / `district_not_found` / `validation_unavailable` olardi. Yangi bandlar tekshiruvi o'zgarmagan; takror bandlarning imzosi partiyada oldindan band qilinadi — ayni mazmunli yangi band `orders[]` da takrordan OLDIN yoki KEYIN kelishidan qat'i nazar `duplicate_in_batch` (ikkinchi bir xil buyurtma yaratilmaydi). Takror so'rovi va tuman/mahsulot tekshiruvi parallel. AI ack darvozalari (400 `AI_DRAFT_*`, 409, 503) takrorda ham avvalgidek.
+- ⚠️ Cheklov (ataylab): market nofaol yoki `add_order` o'chiq bo'lsa — butun so'rov 400, takror ham (bu ruxsat tekshiruvi; takror ham o'tkazilmaydi).
+- 🟢 **Bugungi qabul yopiq** bo'lganda takror endi `ok: true, idempotent_replay: true` (ilgari — `ok: false, code: 'intake_closed'`): yangi buyurtma yaratilmaydi, faqat avval yaratilganining id'si qaytadi. #722 dan beri shunday; bu yerda hujjatlandi.
+- 🟢 Takror natija ham AI draft'iga va AI xarajatiga bog'lanadi (`ai.usage.link_orders`): 1-urinish `timeout_unknown` bo'lsa buyurtma ilgari HECH QACHON bog'lanmasdi (buyurtma bo'yicha AI xarajati yozilmasdi). Takror bog'lash idempotent — narx bir marta; hamma id bog'langan `ai_usage_log` qatori qayta yozilmaydi. ⚠️ 1-urinish `timeout_unknown` bo'lsa `ai_order_draft_item` qatori TAKROR paytida yoziladi: `created_at` (AI trace'dagi `confirmed_at`), muzlatilgan narx (o'sha paytdagi market narxi), `confirmed_by` va `edited_fields` / tuzatishlar — takror so'rovidan (1-urinishnikidan emas).
+- 🟢 `reason_code` faqat hujjatlangan uchta koddan biri (`OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`, `CHOSEN_OPERATOR_SELF_ONLY`) bo'lishi mumkin — boshqa ichki kodlar natijaga chiqmaydi.
+
+**Frontend / bot action items:** yo'q (takror natijasi avvalgidek `ok: true` — kartani muvaffaqiyat deb qulflang).
+
 ### 2026-11-18 — AI tasdiq: natijada `reason_code`; takror tekshiruvlardan oldin
 
 Deploy: **order-service va api-gateway** (yangi RMQ `order.ai_confirm.completed`; gateway eski order-service bilan ham ishlaydi — so'rov javob bermasa avvalgi yo'l). Migratsiyasiz. Orqaga mos — yangi maydon qo'shimcha.

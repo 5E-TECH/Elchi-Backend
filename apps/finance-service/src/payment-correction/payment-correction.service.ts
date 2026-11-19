@@ -131,6 +131,21 @@ function failCode(
 const opposite = (op: Operation_type) =>
   op === Operation_type.INCOME ? Operation_type.EXPENSE : Operation_type.INCOME;
 
+/**
+ * 63HO6cBU (N3) — tahrirdagi YANGI qator usuli: filial qabul qiluvchi bitta
+ * jami, «O'tkazma» (click) — `cash`; `click_to_market` va boshqa kassalar —
+ * asl usul. Teskari qatorlar asl usulda qoladi.
+ */
+function replacementMethod(
+  shape: TransferShape,
+  receiverBox: Cashbox,
+): PaymentMethod {
+  return receiverBox.cashbox_type === Cashbox_type.BRANCH &&
+    shape.payment_method !== PaymentMethod.CLICK_TO_MARKET
+    ? PaymentMethod.CASH
+    : shape.payment_method;
+}
+
 const isCardMethod = (method: PaymentMethod) =>
   method === PaymentMethod.CLICK || method === PaymentMethod.CLICK_TO_MARKET;
 
@@ -434,7 +449,14 @@ export class PaymentCorrectionService {
         const max = caps.length ? Math.min(...caps) : Number.POSITIVE_INFINITY;
         if (next > max) failCode(409, C.AMOUNT_EXCEEDS, { max });
       }
-      await this.assertFunds(tx, shape, receiverBox, input.newAmount);
+      // N4: «Kassa qarzga ishlaydi» filiali — qabulni qaytarish jami
+      // manfiyga tushirsa ham o'tadi (dev'dagi xulq); faqat shu kassa.
+      const debtBranchBoxId = await this.assertFunds(
+        tx,
+        shape,
+        receiverBox,
+        input.newAmount,
+      );
 
       // Jurnal qatori (id → dedup_epoch). UNIQUE — ikki superadmin bir vaqtda.
       const reversalTransferId = randomUUID();
@@ -450,7 +472,10 @@ export class PaymentCorrectionService {
           replacement_transfer_id: replacementTransferId,
           original_amount: X,
           new_amount: input.action === 'edit' ? input.newAmount : null,
-          payment_method: shape.payment_method,
+          payment_method:
+            input.action === 'edit'
+              ? replacementMethod(shape, receiverBox)
+              : shape.payment_method,
           counterparty_user_id: shape.counterpartyUserId,
           receiver_cashbox_id: String(receiverBox.id),
           reason: input.reason,
@@ -484,6 +509,7 @@ export class PaymentCorrectionService {
           epoch,
           reason: input.reason,
           requesterId: input.requesterId,
+          allowNegative: debtBranchBoxId === String(leg.cashbox_id),
         });
       }
 
@@ -604,6 +630,7 @@ export class PaymentCorrectionService {
       epoch: string;
       reason: string;
       requesterId: string;
+      allowNegative?: boolean;
     },
   ) {
     const amount = Number(leg.amount);
@@ -613,6 +640,7 @@ export class PaymentCorrectionService {
       amount,
       operation,
       leg.payment_method,
+      ctx.allowNegative === true,
     );
     // Karta — asl oyoqniki (faqat MAIN/BRANCH, click, nomli karta).
     const cardId =
@@ -669,7 +697,9 @@ export class PaymentCorrectionService {
         {
           courier_id: shape.counterpartyUserId,
           amount: ctx.amount,
-          payment_method: shape.payment_method,
+          // N3: filial qabul qiluvchi — bitta jami: eski «O'tkazma» qatori
+          // tahrirlansa ham yangi qator `cash`, kartasiz.
+          payment_method: replacementMethod(shape, receiverBox),
           payment_date: iso(original.payment_date),
           comment: original.comment ?? undefined,
           market_id: shape.marketLeg
@@ -679,7 +709,10 @@ export class PaymentCorrectionService {
           receiver_user_id: String(receiverBox.user_id),
           receiver_cashbox_type: receiverBox.cashbox_type,
           dedup_epoch: ctx.epoch,
-          card_id: shape.receiverLeg?.card_id ?? undefined,
+          card_id:
+            receiverBox.cashbox_type === Cashbox_type.BRANCH
+              ? undefined
+              : (shape.receiverLeg?.card_id ?? undefined),
         },
         {
           notify: false,
@@ -762,9 +795,12 @@ export class PaymentCorrectionService {
     shape: TransferShape,
     receiverBox: Cashbox,
     newAmount: number | null,
-  ) {
+  ): Promise<string | null> {
     const method = shape.payment_method;
-    const cardLeg = correctionCardLeg(shape);
+    // 63HO6cBU (P0) — filial kassasi bitta jami: karta (nomli / Asosiy)
+    // tekshirilmaydi, yetarlilik — JAMI bo'yicha.
+    const isBranch = receiverBox.cashbox_type === Cashbox_type.BRANCH;
+    const cardLeg = isBranch ? null : correctionCardLeg(shape);
     // O'chirilgan karta ham o'qiladi — aniq xato matni uchun.
     const card = cardLeg
       ? await tx.findOne(CashboxCard, {
@@ -786,22 +822,38 @@ export class PaymentCorrectionService {
       }
     }
     const peak = peakOutflow(shape, newAmount);
-    if (!(peak > 0)) return;
+    if (!(peak > 0)) return null;
+    /**
+     * N4 (qaror: dev'dagi xulq saqlanadi) — «Kassa qarzga ishlaydi» yoqilgan
+     * filial: jami manfiyga tushsa ham tuzatish o'tadi, teskari qatorlar shu
+     * kassani `allowNegativeOverride` bilan yozadi. Qarz o'chiq — 409.
+     */
+    if (
+      isBranch &&
+      (await this.finance.isBranchCashboxDebtEnabled(
+        String(receiverBox.user_id),
+      ))
+    ) {
+      return String(receiverBox.id);
+    }
     const insufficient = () =>
       failCode(409, C.INSUFFICIENT_BALANCE, { required: peak });
-    const bucket = isCardMethod(method)
-      ? Number(receiverBox.balance_card)
-      : Number(receiverBox.balance_cash);
+    const bucket = isBranch
+      ? Number(receiverBox.balance_cash) + Number(receiverBox.balance_card)
+      : isCardMethod(method)
+        ? Number(receiverBox.balance_card)
+        : Number(receiverBox.balance_cash);
     if (round2(bucket - peak) < 0) insufficient();
-    if (method !== PaymentMethod.CLICK) return;
+    if (isBranch || method !== PaymentMethod.CLICK) return null;
     if (card && !card.is_default) {
       if (round2(Number(card.balance) - peak) < 0) insufficient();
-      return;
+      return null;
     }
     const named = await sumNamedCardBalances(tx, String(receiverBox.id));
     if (round2(Number(receiverBox.balance_card) - named - peak) < 0) {
       insufficient();
     }
+    return null;
   }
 
   private async requireShift(tx: EntityManager, receiver: Cashbox) {

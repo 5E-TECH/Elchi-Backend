@@ -32,7 +32,9 @@ import { PaymentCorrectionService } from './payment-correction/payment-correctio
  * + `hq_to_market`), filial «Kassa qarzga ishlaydi», qo'riqchilar,
  * idempotentlik, chek va T6 tuzatish (rad).
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 const BRANCH = '15';
@@ -199,8 +201,8 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
         RESTART IDENTITY CASCADE`,
     );
     await seed('0', Cashbox_type.MAIN, 2_000_000, 500_000);
-    // Filial: naqd 4 mln, karta 300 000.
-    await seed(BRANCH, Cashbox_type.BRANCH, 4_000_000, 300_000);
+    // 63HO6cBU — filial kassasi bitta jami: 300 000 (karta bo'lagi 0).
+    await seed(BRANCH, Cashbox_type.BRANCH, 300_000, 0);
     // HQ marketga 1 mln qarz (market kassasi = HQ'ning marketga qarzi).
     await seed(MARKET, Cashbox_type.FOR_MARKET, 1_000_000);
   });
@@ -291,9 +293,9 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
 
   const assertUntouched = async () => {
     expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual({
-      balance: 4_300_000,
-      cash: 4_000_000,
-      card: 300_000,
+      balance: 300_000,
+      cash: 300_000,
+      card: 0,
     });
     expect(await box('0', Cashbox_type.MAIN)).toEqual({
       balance: 2_500_000,
@@ -308,18 +310,18 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     expect(followUp).not.toHaveBeenCalled();
   };
 
-  it('⭐ filial karta −X, MAIN sof 0 (+X/−X), market −X; 4 oyoq bitta transfer_id; 2 siljish; buyurtma sinxroni', async () => {
+  it('⭐ filial jami −X, MAIN sof 0 (+X/−X), market −X; 4 oyoq bitta transfer_id; 2 siljish; buyurtma sinxroni', async () => {
     const before = await companyCash();
 
     const res = await toMarket(250_000, 'gw:bm-1', { comment: 'Click' });
 
     expect(res?.statusCode).toBe(200);
     expect(res?.data?.transfer_id).toEqual(expect.any(String));
-    // Filial: naqd tegilmadi, karta −250 000.
+    // 63HO6cBU — filial: jami −250 000 (karta bo'lagi yo'q).
     expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual({
-      balance: 4_050_000,
-      cash: 4_000_000,
-      card: 50_000,
+      balance: 50_000,
+      cash: 50_000,
+      card: 0,
     });
     // MAIN: sof 0.
     expect(await box('0', Cashbox_type.MAIN)).toEqual({
@@ -416,23 +418,23 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     );
   });
 
-  it('«Kassa qarzga ishlaydi» o`chiq — filial kartasida yetmasa 400 (naqd bo`lsa ham), hech narsa yozilmaydi', async () => {
+  it('«Kassa qarzga ishlaydi» o`chiq — filial JAMIdan oshsa 400, hech narsa yozilmaydi', async () => {
     expect(await errorBody(toMarket(400_000, 'gw:bm-2'))).toMatchObject({
       statusCode: 400,
-      message: "Karta hisobida yetarli mablag' yo'q",
+      message: "Filial kassasida yetarli mablag' yo'q",
     });
     await assertUntouched();
   });
 
-  it('⭐ «Kassa qarzga ishlaydi» yoqiq — filial kartasi minusga, daftarga to`liq summa', async () => {
+  it('⭐ «Kassa qarzga ishlaydi» yoqiq — filial jami minusga, daftarga to`liq summa', async () => {
     branchDebt = true;
 
     await toMarket(400_000, 'gw:bm-3');
 
     expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual({
-      balance: 3_900_000,
-      cash: 4_000_000,
-      card: -100_000,
+      balance: -100_000,
+      cash: -100_000,
+      card: 0,
     });
     expect((await box(MARKET, Cashbox_type.FOR_MARKET)).balance).toBe(600_000);
     expect(advances()).toEqual([
@@ -441,12 +443,11 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     ]);
   });
 
-  it('pul nomli kartada — Asosiy karta (hosila) yetmasa 400, rollback; qarz rejimida o`tadi', async () => {
+  it('63HO6cBU — eski nomli filial kartasi va `branch_card_id` ahamiyatsiz: jami bo`yicha o`tadi', async () => {
     const branchBox = await db
       .getRepository(Cashbox)
       .findOneByOrFail({ user_id: BRANCH, cashbox_type: Cashbox_type.BRANCH });
-    // Karta bo'lagi 300 000, shundan 250 000 nomli kartada → Asosiy karta 50 000.
-    await db.getRepository(CashboxCard).save(
+    const named = await db.getRepository(CashboxCard).save(
       db.getRepository(CashboxCard).create({
         cashbox_id: String(branchBox.id),
         name: 'Uzcard filial',
@@ -456,21 +457,23 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
       }),
     );
 
-    expect(await errorBody(toMarket(100_000, 'gw:bm-named'))).toMatchObject({
-      statusCode: 400,
-      message:
-        "Filialning Asosiy kartasida yetarli mablag' yo'q! Mavjud: 50000 so'm, so'ralgan: 100000 so'm",
+    const res = await toMarket(300_000, 'gw:bm-named', {
+      branch_card_id: String(named.id),
     });
-    await assertUntouched();
-    expect(advances()).toEqual([]);
-
-    await toMarket(50_000, 'gw:bm-named-ok');
-    expect((await box(BRANCH, Cashbox_type.BRANCH)).card).toBe(250_000);
-
-    branchDebt = true;
-    await toMarket(100_000, 'gw:bm-named-debt');
-    expect((await box(BRANCH, Cashbox_type.BRANCH)).card).toBe(150_000);
-    expect((await box(MARKET, Cashbox_type.FOR_MARKET)).balance).toBe(850_000);
+    expect(res?.statusCode).toBe(200);
+    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual({
+      balance: 0,
+      cash: 0,
+      card: 0,
+    });
+    expect((await box(MARKET, Cashbox_type.FOR_MARKET)).balance).toBe(700_000);
+    // Filial kartasi qoldig'iga tegilmaydi (karta ishlatilmaydi).
+    expect(
+      Number(
+        (await db.getRepository(CashboxCard).findOneByOrFail({ id: named.id }))
+          .balance,
+      ),
+    ).toBe(250_000);
   });
 
   it('marketga qarzdan ortiq (market qarzga ishlamaydi) → 400, rollback', async () => {
@@ -484,7 +487,6 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
   it.each([
     ['market_id yo`q', { market_id: undefined }, 400],
     ['card_id bilan', { card_id: '3' }, 400],
-    ['branch_card_id bilan', { branch_card_id: '7' }, 400],
     ['market kassasi yo`q', { market_id: '999' }, 404],
   ])('%s → %s, hech narsa yozilmaydi', async (_label, extra, status) => {
     expect(
@@ -610,7 +612,7 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     const again = await toMarket(250_000, 'gw:bm-9');
 
     expect(again?.data).toMatchObject({ idempotent: true });
-    expect((await box(BRANCH, Cashbox_type.BRANCH)).card).toBe(50_000);
+    expect((await box(BRANCH, Cashbox_type.BRANCH)).balance).toBe(50_000);
     expect((await box(MARKET, Cashbox_type.FOR_MARKET)).balance).toBe(750_000);
     expect(await db.getRepository(CashboxHistory).count()).toBe(4);
     expect(advances()).toHaveLength(2);
@@ -620,22 +622,20 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
   it('oddiy filial → HQ (naqd / click) o`zgarmagan', async () => {
     await service.paymentFromBranchToMain({
       branch_id: BRANCH,
-      amount: 1_000_000,
+      amount: 200_000,
       payment_method: PaymentMethod.CASH,
       created_by: '1',
       dedup_epoch: 'gw:bm-10',
     });
     expect(await box(BRANCH, Cashbox_type.BRANCH)).toMatchObject({
-      cash: 3_000_000,
-      card: 300_000,
+      cash: 100_000,
+      card: 0,
     });
-    expect((await box('0', Cashbox_type.MAIN)).cash).toBe(3_000_000);
+    expect((await box('0', Cashbox_type.MAIN)).cash).toBe(2_200_000);
     expect((await box(MARKET, Cashbox_type.FOR_MARKET)).balance).toBe(
       1_000_000,
     );
-    expect(advances()).toEqual([
-      ['branch_to_hq', BRANCH, 1_000_000, 'gw:bm-10'],
-    ]);
+    expect(advances()).toEqual([['branch_to_hq', BRANCH, 200_000, 'gw:bm-10']]);
   });
 
   it('⭐ T6: to`rt oyoqning hech biri qaytarilmaydi / tuzatilmaydi — 409 NOT_CORRECTABLE, pul joyida', async () => {

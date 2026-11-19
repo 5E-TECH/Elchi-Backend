@@ -1908,9 +1908,11 @@ export class AdvisorInputsService {
 
     for (const r of cards) {
       const cashbox = cashboxRef(r.owner, types.get(r.owner));
-      const branch: AiAdvisorRef | null =
-        cashbox.type === 'branch' ? { id: r.owner, name: null } : null;
-      if (branch) names.wantBranch(branch.id);
+      // #726: filial kassasi bitta jami (balance_card doim 0, filial
+      // smenasida karta sanalmaydi) - karta qoldig'i tekshiruvi filialda
+      // R7 ochmaydi (eski / aralash qatorlar bo'lsa ham).
+      if (cashbox.type === 'branch') continue;
+      const branch: AiAdvisorRef | null = null;
       const entered = money(r.entered_balance);
       const read = money(r.ai_read_balance);
       const expected = moneyOrNull(r.expected_balance);

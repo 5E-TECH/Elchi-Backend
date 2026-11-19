@@ -277,13 +277,13 @@ afterEach(() => {
 });
 
 describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i bilan', () => {
-  it('spendMoney(BRANCH, naqd, balansdan katta) → 400 (yetarli mablag yo‘q), hech narsa saqlanmaydi', async () => {
+  it('63HO6cBU — spendMoney(BRANCH) → 400 (filialda xarajat yo`q), hech narsa saqlanmaydi', async () => {
     const env = makeEnv({ cashboxes: [branchCashbox(100_000)] });
 
     const error = await rpcErrorOf(
       env.service.spendMoney({
         user_id: '15',
-        amount: 500_000,
+        amount: 500,
         cashbox_type: 'branch' as any,
         created_by: '208',
       }),
@@ -291,19 +291,19 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Naqd kassada yetarli mablag' yo'q",
+      message:
+        "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
-    expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();
   });
 
-  it('spendMoney(BRANCH, type=click, karta 0) → 400 (kartada yetarli mablag yo‘q, CLICK varianti)', async () => {
+  it('63HO6cBU — fillTheCashbox(BRANCH) → 400 (filialni qo`lda to`ldirib bo`lmaydi)', async () => {
     const env = makeEnv({ cashboxes: [branchCashbox(900_000, 0)] });
 
     const error = await rpcErrorOf(
-      env.service.spendMoney({
+      env.service.fillTheCashbox({
         user_id: '15',
-        amount: 50_000,
+        amount: 900_001,
         type: 'click' as any,
         cashbox_type: 'branch' as any,
         created_by: '208',
@@ -312,7 +312,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Karta hisobida yetarli mablag' yo'q",
+      message: "Filial kassasini qo'lda to'ldirib bo'lmaydi",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });
@@ -416,7 +416,7 @@ describe('i75GDixP — filial kassasi: manfiy ruxsat faqat aniq tizim bayrog`i b
 
     expect(error).toEqual({
       statusCode: 400,
-      message: "Naqd kassada yetarli mablag' yo'q",
+      message: "Filial kassasida yetarli mablag' yo'q",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
   });
@@ -617,7 +617,7 @@ describe('QTCUUgjA — smena darvozasi (FINANCE_REQUIRE_OPEN_SHIFT)', () => {
     expect(env.manager.save).not.toHaveBeenCalled();
   });
 
-  it('spendMoney/fillTheCashbox (MAIN) smenasiz → 400; BRANCH (menejer) darvozalanmaydi', async () => {
+  it('spendMoney/fillTheCashbox (MAIN) smenasiz → 400; BRANCH — 63HO6cBU: smenadan qat`i nazar 400', async () => {
     process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'true';
     const env = makeEnv({
       cashboxes: [mainCashbox(), branchCashbox(100_000)],
@@ -633,12 +633,16 @@ describe('QTCUUgjA — smena darvozasi (FINANCE_REQUIRE_OPEN_SHIFT)', () => {
     expect(spend.message).toMatch(/^Smena ochilmagan/);
     expect(fill.message).toMatch(/^Smena ochilmagan/);
 
-    const branchSpend: any = await env.service.spendMoney({
-      user_id: '15',
-      amount: 1_000,
-      cashbox_type: 'branch' as any,
-    });
-    expect(branchSpend.statusCode).toBe(200);
+    const branchSpend = await rpcErrorOf(
+      env.service.spendMoney({
+        user_id: '15',
+        amount: 1_000,
+        cashbox_type: 'branch' as any,
+      }),
+    );
+    expect(branchSpend.message).toBe(
+      "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+    );
   });
 
   it('spendMoney (MAIN) ochiq smena bilan o`tadi', async () => {
@@ -752,42 +756,31 @@ describe('R6 (QTCUUgjA) — filial (BRANCH) kassasi smenasi: FINANCE_REQUIRE_OPE
     });
   });
 
-  it('menejer spend/fill (BRANCH) smenasiz → 400; filial smenasi bilan o`tadi', async () => {
+  it('63HO6cBU — menejer spend/fill (BRANCH): filial smenasi bo`lsa ham 400', async () => {
     process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
-    const closed = makeEnv({
+    const open = makeEnv({
       cashboxes: [branchCashbox(100_000)],
-      openShifts: { '0': openMainShift() },
+      openShifts: { '15': branchShift() },
     });
     const spend = await rpcErrorOf(
-      closed.service.spendMoney({
+      open.service.spendMoney({
         user_id: '15',
         amount: 1_000,
         cashbox_type: 'branch' as any,
       }),
     );
     const fill = await rpcErrorOf(
-      closed.service.fillTheCashbox({
+      open.service.fillTheCashbox({
         user_id: '15',
         amount: 1_000,
         cashbox_type: 'branch' as any,
       }),
     );
-    expect(spend.message).toMatch(/filial kassasida/);
-    expect(fill.message).toMatch(/filial kassasida/);
-
-    const open = makeEnv({
-      cashboxes: [branchCashbox(100_000)],
-      openShifts: { '15': branchShift() },
-    });
-    const res: any = await open.service.spendMoney({
-      user_id: '15',
-      amount: 1_000,
-      cashbox_type: 'branch' as any,
-    });
-    expect(res.statusCode).toBe(200);
-    expect(savedCashbox(open.manager, 'br-15')).toMatchObject({
-      balance_cash: 99_000,
-    });
+    expect(spend.message).toBe(
+      "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+    );
+    expect(fill.message).toBe("Filial kassasini qo'lda to'ldirib bo'lmaydi");
+    expect(open.manager.save).not.toHaveBeenCalled();
   });
 
   it('⭐ (2026-11-07) filialdan HQ ga: filial smenasi YOPIQ, MAIN smenasi ochiq → o`tadi, pul filialdan MAIN ga ko`chadi', async () => {

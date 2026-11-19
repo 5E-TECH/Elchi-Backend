@@ -8,8 +8,10 @@ import { of } from 'rxjs';
 import { Order } from '../entities/order.entity';
 import { OrderLifecycleService } from '../lifecycle/order-lifecycle.service';
 import { OrderServiceController } from '../order-service.controller';
+import { AI_MAX_ORDERS_PER_PARSE } from '@app/common';
 import {
   AI_SIGNATURE_TTL_MS,
+  COMPLETED_LOOKUP_MAX,
   isAiStableRequestId,
   runWithAiSignature,
   sanitizeAiAuditMetadata,
@@ -222,6 +224,24 @@ describe('order.ai_confirm.completed — takror tekshiruvdan OLDIN (faqat o‘qi
       `order.create:${pending}`,
     ]);
     expect(idem.tryAcquire).not.toHaveBeenCalled();
+  });
+
+  it('to‘liq partiya (AI_MAX_ORDERS_PER_PARSE) — har kalit so‘raladi, kesilmaydi', async () => {
+    expect(COMPLETED_LOOKUP_MAX).toBeGreaterThanOrEqual(
+      AI_MAX_ORDERS_PER_PARSE,
+    );
+    const { controller, idem } = setup();
+    const keys = Array.from(
+      { length: AI_MAX_ORDERS_PER_PARSE },
+      (_, i) => `ai:${MARKET}:${DRAFT}:${i}`,
+    );
+    await controller.aiConfirmCompleted(
+      { market_id: MARKET, request_ids: keys },
+      ctx,
+    );
+    expect(idem.findCompleted).toHaveBeenCalledWith(
+      keys.map((key) => `order.create:${key}`),
+    );
   });
 
   it('yaroqsiz market / ro‘yxat — bo‘sh, DB so‘ralmaydi', async () => {

@@ -590,42 +590,50 @@ describe('M12 — filial kassasi qo`lda chiqimda manfiyga tushmaydi', () => {
     balance_card: 0,
   });
 
-  it('menejerning MANUAL_EXPENSE i kassadan oshsa → 400, kassa saqlanmaydi', async () => {
+  it('MANUAL_EXPENSE (updateBalance) filial kassasidan oshsa → 400, kassa saqlanmaydi', async () => {
+    const env = makeService();
+    env.manager.findOne.mockResolvedValueOnce(branchCashbox());
+
+    const error: unknown = await env.service
+      .updateBalance({
+        user_id: '15',
+        cashbox_type: 'branch' as any,
+        amount: 500_000,
+        operation_type: 'expense' as any,
+        source_type: 'manual_expense' as any,
+        created_by: '208',
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(RpcException);
+    // Xabar matni PR-A (bitta jami) bilan o'zgaradi — mazmun tekshiriladi.
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/yetarli mablag' yo'q/),
+    });
+    expect(env.manager.save).not.toHaveBeenCalled();
+    expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();
+  });
+
+  it('63HO6cBU — menejer «Kassadan xarajat» (spendMoney BRANCH) → 400, kassa saqlanmaydi', async () => {
     const env = makeService();
     env.manager.findOne.mockResolvedValueOnce(branchCashbox());
 
     const error: unknown = await env.service
       .spendMoney({
         user_id: '15',
-        amount: 500_000,
+        amount: 40_000,
         cashbox_type: 'branch' as any,
         created_by: '208',
       })
       .catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(RpcException);
     expect((error as RpcException).getError()).toEqual({
       statusCode: 400,
-      message: "Naqd kassada yetarli mablag' yo'q",
+      message:
+        "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
     });
     expect(env.manager.save).not.toHaveBeenCalled();
-    expect(env.queryRunner.rollbackTransaction).toHaveBeenCalled();
-  });
-
-  it('kassa yetarli bo`lsa qo`lda chiqim avvalgidek o`tadi', async () => {
-    const env = makeService();
-    env.manager.findOne.mockResolvedValueOnce(branchCashbox());
-
-    await env.service.spendMoney({
-      user_id: '15',
-      amount: 40_000,
-      cashbox_type: 'branch' as any,
-      created_by: '208',
-    });
-
-    expect(env.manager.save).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'br-15', balance_cash: 60_000 }),
-    );
   });
 
   it.each(['sell', 'extra_cost', 'correction', 'cancel'])(

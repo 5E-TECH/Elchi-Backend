@@ -267,11 +267,17 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
         user_id: '15',
         cashbox_type: Cashbox_type.BRANCH,
       });
+    // 63HO6cBU — filialda «Kassadan xarajat» yo'q; smena darvozasi filial
+    // kassasidagi qo'lda chiqim (updateBalance, require_open_shift) bilan
+    // tekshiriladi.
     const branchSpend = () =>
-      service.spendMoney({
+      service.updateBalance({
         user_id: '15',
         amount: 10_000,
         cashbox_type: Cashbox_type.BRANCH,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.MANUAL_EXPENSE,
+        require_open_shift: true,
         created_by: '25',
       });
 
@@ -431,19 +437,28 @@ describePg('A4 — kassa/smena, haqiqiy Postgres', () => {
         cashbox_type: Cashbox_type.BRANCH,
       }),
     ).rejects.toMatchObject({
-      error: { statusCode: 400, message: "Naqd kassada yetarli mablag' yo'q" },
+      error: {
+        statusCode: 400,
+        // 63HO6cBU (PR-B) — filialda qo'lda chiqim umuman yo'q.
+        message:
+          "Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi",
+      },
     });
+    // Qo'lda chiqim qatori (updateBalance MANUAL_EXPENSE) — manfiyga tushmaydi.
     await expect(
-      service.spendMoney({
+      service.updateBalance({
         user_id: '15',
-        amount: 1,
+        amount: 100_001,
         type: PaymentMethod.CLICK,
         cashbox_type: Cashbox_type.BRANCH,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.MANUAL_EXPENSE,
+        allow_negative: true,
       }),
     ).rejects.toMatchObject({
       error: {
         statusCode: 400,
-        message: "Karta hisobida yetarli mablag' yo'q",
+        message: "Filial kassasida yetarli mablag' yo'q",
       },
     });
     const branchAfterManual = await cashboxRepo().findOneByOrFail({

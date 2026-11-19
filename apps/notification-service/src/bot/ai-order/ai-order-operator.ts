@@ -49,6 +49,9 @@ export const AI_OPERATOR_PHONE_RETRY_TEXT =
   '📞 Marketda operator raqami majburiy — qayta bosilganda profilingizdagi raqam yuboriladi.';
 export const AI_OPERATOR_REJECTED_TEXT =
   '🎧 Tanlangan operator qabul qilinmadi — tanlov olib tashlandi, «🎧 Operator» dan boshqasini tanlang yoki shundayicha yarating.';
+/** Natijasi noma'lum buyurtma bor — «🎧 Operator» yopiq. */
+export const AI_OPERATOR_REJECTED_LOCKED_TEXT =
+  '🎧 Tanlangan operator qabul qilinmadi — tanlov olib tashlandi; «✅ Yaratish» operatorsiz yuboradi, boshqa operator — kabinetda.';
 
 const clip = (value: unknown, max: number): string => {
   const text =
@@ -110,11 +113,17 @@ export const operatorButtonLabel = (meta: TelegramAiDraftMeta): string =>
   `🎧 Operator: ${clip(meta.operator_name, 30) || 'tanlanmagan'}`;
 
 /** Tanlash oynasi matni (HTML). */
-export function operatorPickerText(meta: TelegramAiDraftMeta): string {
+export function operatorPickerText(
+  meta: TelegramAiDraftMeta,
+  /** Ba'zi buyurtmalar allaqachon yaratilgan — tanlov ularga tegmaydi. */
+  partial = false,
+): string {
   const shown = storedOperators(meta).length;
   const hidden = Math.trunc(Number(meta.operators_total) || 0) - shown;
   return [
-    '🎧 <b>Buyurtma operatori</b> — ro‘yxatdagi hamma buyurtmaga qo‘yiladi.',
+    partial
+      ? '🎧 <b>Buyurtma operatori</b> — hali yaratilmagan buyurtmalarga qo‘yiladi (yaratilganlari o‘zgarmaydi).'
+      : '🎧 <b>Buyurtma operatori</b> — ro‘yxatdagi hamma buyurtmaga qo‘yiladi.',
     `Hozir: ${escapeTelegramHtml(clip(meta.operator_name, 60)) || 'tanlanmagan'}`,
     ...(hidden > 0
       ? [`… yana ${hidden} ta — kerakli operator bo‘lmasa kabinetda yarating.`]
@@ -128,16 +137,20 @@ export const chosenOperatorId = (meta: TelegramAiDraftMeta): string | null =>
 
 /** Profil (`GET /auth/my-profile` `data`) → kesh (`meta.profile`). */
 export function profileOf(profile: unknown): {
-  phone: string | null;
+  phone: string;
   required: boolean;
-} {
+} | null {
   const p = (profile ?? {}) as {
     phone_number?: unknown;
     require_operator_phone?: unknown;
     default_operator_phone?: unknown;
   };
+  // Raqam normallashmasa — keshlanmaydi (null): keyingi «✅» qayta so'raydi
+  // (profil tuzatilgan bo'lishi mumkin).
+  const phone = normalizeUzPhone(p.phone_number);
+  if (!phone) return null;
   return {
-    phone: normalizeUzPhone(p.phone_number),
+    phone,
     required:
       p.require_operator_phone === true &&
       !normalizeUzPhone(p.default_operator_phone),
@@ -190,6 +203,10 @@ function reasonKind(result: ResultLike): 'phone' | 'operator' | null {
       return 'phone';
     return OPERATOR_REJECTED_CODES.has(result.reason_code) ? 'operator' : null;
   }
+  // Matn zaxirasi faqat `create_failed` uchun: masalan operator tekshiruvi
+  // ishlamasa gateway `validation_unavailable` + «Tanlangan operatorni
+  // tekshirib bo'lmadi…» qaytaradi — bu rad etish EMAS (tanlov saqlanadi).
+  if (result.code !== 'create_failed') return null;
   const reason = typeof result.reason === 'string' ? result.reason : '';
   if (OPERATOR_PHONE_REQUIRED_RE.test(reason)) return 'phone';
   return OPERATOR_REJECTED_RE.test(reason) ? 'operator' : null;
@@ -239,5 +256,7 @@ export function isRetryableResult(
  */
 export const userReason = (reason: unknown): string =>
   (typeof reason === 'string' ? reason : '')
-    .replace(/\s*\([a-z][a-z0-9_]*\)/g, '')
+    // Faqat API maydon nomlari (pastki chiziqli: «(operator_phone)»), oddiy
+    // so'zlar («(raqam)», «(viloyat)») qoladi.
+    .replace(/\s*\([a-z][a-z0-9]*(?:_[a-z0-9]+)+\)/g, '')
     .trim();

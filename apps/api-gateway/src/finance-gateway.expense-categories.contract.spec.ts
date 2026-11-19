@@ -81,11 +81,10 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
       >
     ).at(-1);
 
-  it('GET — superadmin/admin/menejer ko`radi; include_deleted faqat superadminga o`tadi', async () => {
+  it('GET — superadmin/admin ko`radi (menejer 403, 63HO6cBU); include_deleted faqat superadminga o`tadi', async () => {
     for (const [role, expected] of [
       ['superadmin', true],
       ['admin', false],
-      ['manager', false],
     ] as const) {
       finance.send.mockClear();
       const res = await request(http())
@@ -104,7 +103,7 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
       .set('x-test-role', 'superadmin');
     expect(lastCall()?.[1]).toEqual({ include_deleted: false });
 
-    for (const role of ['courier', 'market', 'registrator']) {
+    for (const role of ['manager', 'courier', 'market', 'registrator']) {
       const res = await request(http())
         .get('/finance/cashbox/expense-categories')
         .set('x-test-role', role);
@@ -218,7 +217,7 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
     expect(finance.send).not.toHaveBeenCalled();
   });
 
-  it('rollar metadata: ro`yxat — superadmin/admin/menejer, CUD — faqat superadmin', () => {
+  it('rollar metadata: ro`yxat — superadmin/admin (63HO6cBU), CUD — faqat superadmin', () => {
     const rolesOf = (method: string): unknown =>
       Reflect.getMetadata(
         ROLES_KEY,
@@ -230,7 +229,6 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
     expect(rolesOf('listCashboxExpenseCategories')).toEqual([
       'superadmin',
       'admin',
-      'manager',
     ]);
     for (const method of [
       'createCashboxExpenseCategory',
@@ -239,11 +237,12 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
     ]) {
       expect(rolesOf(method)).toEqual(['superadmin']);
     }
-    // Chiqim marshruti rollari o'zgarmagan.
-    expect(rolesOf('spendMoney')).toEqual(['superadmin', 'admin', 'manager']);
+    // 63HO6cBU — chiqim / kirim faqat HQ.
+    expect(rolesOf('spendMoney')).toEqual(['superadmin', 'admin']);
+    expect(rolesOf('fillCashbox')).toEqual(['superadmin', 'admin']);
   });
 
-  it('⭐ PATCH /cashbox/spend — expense_category_id finance ga uzatiladi (menejer ham)', async () => {
+  it('⭐ PATCH /cashbox/spend — expense_category_id finance ga uzatiladi; menejer — 403 (63HO6cBU)', async () => {
     await request(http())
       .patch('/finance/cashbox/spend')
       .set('Idempotency-Key', 'k-spend-1')
@@ -258,18 +257,17 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
         created_by: '9',
         dedup_epoch: 'k-spend-1',
         financial_ledger: true,
+        cashbox_type: 'main',
       }),
     ]);
 
-    await request(http())
+    finance.send.mockClear();
+    const manager = await request(http())
       .patch('/finance/cashbox/spend')
       .set('x-test-role', 'manager')
       .send({ amount: 1_000, expense_category_id: '5' });
-    expect(lastCall()?.[1]).toMatchObject({
-      user_id: '13',
-      cashbox_type: 'branch',
-      expense_category_id: '5',
-    });
+    expect(manager.status).toBe(403);
+    expect(finance.send).not.toHaveBeenCalled();
   });
 
   it('⭐ (2026-10-22) spend: kategoriya MAJBURIY — yo`q bo`lsa 400 «Xarajat kategoriyasini tanlang» (bitta xabar), finance ga hech narsa ketmaydi', async () => {
@@ -288,12 +286,12 @@ describe('Elchi Pochta №1 — /finance/cashbox/expense-categories gateway kont
         'Xarajat kategoriyasini tanlang',
       ]);
     }
-    // Menejer ham.
+    // Menejer — 403 (63HO6cBU: filialda chiqim yo'q).
     const manager = await request(http())
       .patch('/finance/cashbox/spend')
       .set('x-test-role', 'manager')
       .send({ amount: 1_000 });
-    expect(manager.status).toBe(400);
+    expect(manager.status).toBe(403);
     expect(finance.send).not.toHaveBeenCalled();
   });
 

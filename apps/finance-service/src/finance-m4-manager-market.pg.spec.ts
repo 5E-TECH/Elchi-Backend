@@ -21,7 +21,9 @@ import { FinancialBalanceHistory } from './entities/financial-balance-history.en
  * Daftar tomoni (`branch_payable` / `courier_receivable`) —
  * order-service `settlement-m4-manager-market.pg.spec.ts`.
  */
-const pgUri = process.env.FINANCE_OPERATOR_PG_TEST_URI;
+// CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
+const pgUri =
+  process.env.FINANCE_OPERATOR_PG_TEST_URI ?? process.env.FINANCE_PG_TEST_URI;
 const describePg = pgUri ? describe : describe.skip;
 
 describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
@@ -258,7 +260,8 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
 
     beforeEach(async () => {
       await seed('0', Cashbox_type.MAIN, 1_000_000, 1_000_000);
-      await seed('15', Cashbox_type.BRANCH, 500_000, 200_000);
+      // 63HO6cBU — filial kassasi bitta jami (karta bo'lagi 0).
+      await seed('15', Cashbox_type.BRANCH, 300_000, 0);
       await seed('201', Cashbox_type.FOR_MARKET, 450_000);
     });
 
@@ -268,9 +271,9 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
 
       expect(res?.statusCode).toBe(200);
       expect(await box('15', Cashbox_type.BRANCH)).toEqual({
-        balance: 430_000,
-        cash: 230_000,
-        card: 200_000,
+        balance: 30_000,
+        cash: 30_000,
+        card: 0,
       });
       expect((await box('201', Cashbox_type.FOR_MARKET)).balance).toBe(180_000);
       expect(await box('0', Cashbox_type.MAIN)).toEqual({
@@ -300,26 +303,26 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       ]);
     });
 
-    it('karta (click): filial karta chelagidan', async () => {
+    it('63HO6cBU — karta (click) ham filial JAMIdan', async () => {
       await pay('gw:mp-2', 150_000, PaymentMethod.CLICK);
       expect(await box('15', Cashbox_type.BRANCH)).toEqual({
-        balance: 550_000,
-        cash: 500_000,
-        card: 50_000,
+        balance: 150_000,
+        cash: 150_000,
+        card: 0,
       });
     });
 
     it('filial kassasida yetmasa → 400 (HQ da pul bo`lsa ham), rollback', async () => {
       await expect(
-        pay('gw:mp-3', 300_000, PaymentMethod.CLICK),
+        pay('gw:mp-3', 300_001, PaymentMethod.CLICK),
       ).rejects.toMatchObject({ error: { statusCode: 400 } });
-      await expect(pay('gw:mp-4', 500_001)).rejects.toMatchObject({
+      await expect(pay('gw:mp-4', 300_001)).rejects.toMatchObject({
         error: { statusCode: 400 },
       });
       expect(await box('15', Cashbox_type.BRANCH)).toEqual({
-        balance: 700_000,
-        cash: 500_000,
-        card: 200_000,
+        balance: 300_000,
+        cash: 300_000,
+        card: 0,
       });
       expect((await box('201', Cashbox_type.FOR_MARKET)).balance).toBe(450_000);
       expect(await historyRows()).toHaveLength(0);
@@ -330,10 +333,10 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       await pay('gw:mp-5', 100_000);
       const again = await pay('gw:mp-5', 100_000);
       expect(again?.data).toMatchObject({ idempotent: true });
-      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(400_000);
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(200_000);
 
       await pay('gw:mp-6', 100_000);
-      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(300_000);
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(100_000);
       expect((await box('201', Cashbox_type.FOR_MARKET)).balance).toBe(250_000);
     });
 
@@ -359,7 +362,7 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         dedup_epoch: 'gw:mp-8',
       });
       expect((await box('0', Cashbox_type.MAIN)).cash).toBe(900_000);
-      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(500_000);
+      expect((await box('15', Cashbox_type.BRANCH)).cash).toBe(300_000);
       expect(advances()).toEqual([['hq_to_market', '201', 100_000, 'gw:mp-8']]);
     });
   });

@@ -454,9 +454,11 @@ outstanding orders oldest-first and advances each order's `SettlementStatus`.
 - **Dates:** send plain `YYYY-MM-DD` — `GET /finance/cashbox/user/{id}` accepts
   `fromDate`/`toDate`, and the financial-balance history/analytics/top-impacts
   endpoints treat `YYYY-MM-DD` as a whole Tashkent day.
-- **Manager manual expense** (`PATCH /finance/cashbox/spend` on a BRANCH
-  cashbox) can no longer take the balance below zero (400 "Insufficient cash
-  balance").
+- **Manual spend / fill is MAIN-only (63HO6cBU, 2026-11-19):**
+  `PATCH /finance/cashbox/spend` and `PATCH /finance/cashbox/fill` are
+  SUPERADMIN / ADMIN only (manager → 403); a BRANCH cashbox is never spent
+  from or filled manually (finance → 400). Branch money moves only via courier
+  receipts and branch → HQ / market payments.
 - **Expense category (2026-10-22):** `PATCH /finance/cashbox/spend` REQUIRES
   `expense_category_id` (numeric string from `GET
   /finance/cashbox/expense-categories`) — missing → `400 { message: 'Xarajat

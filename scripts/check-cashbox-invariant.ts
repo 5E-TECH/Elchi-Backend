@@ -185,8 +185,11 @@ async function main(): Promise<void> {
     FROM ${SCHEMA}.cashboxes cb
     WHERE cb.is_deleted = false
       AND (
-        (cb.cashbox_type::text IN ('main', 'branch')
+        (cb.cashbox_type::text = 'main'
           AND (cb.balance_cash < 0 OR cb.balance_card < 0))
+        -- 63HO6cBU: filial kassasi bitta jami — karta qismi 0 bo'lishi shart.
+        OR (cb.cashbox_type::text = 'branch'
+          AND (cb.balance_cash < 0 OR cb.balance_card <> 0))
         OR (cb.cashbox_type::text IN ('couriers', 'markets')
           AND cb.balance_card <> 0)
       )

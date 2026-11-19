@@ -206,7 +206,8 @@ function settingsView(
   return {
     ...effectiveShiftCheckSettings(global, cashboxType),
     main_account_check_enabled: global.account_check_enabled,
-    branch_account_check_enabled: global.branch_account_check_enabled,
+    // 63HO6cBU (N6) — eskirgan, filialda karta tasdiqlash yo'q.
+    branch_account_check_enabled: false,
   };
 }
 
@@ -422,9 +423,11 @@ export class ShiftAccountCheckService {
       const cashbox = await this.findCashbox(manager, cashboxUserId);
       // BE-A: yopish oynasi MAIN «Asosiy karta»sini ham ko'rsin.
       if (cashbox) await this.ensureMainDefaultCard(manager, cashbox);
-      const cards = cashbox
-        ? await this.activeCards(manager, String(cashbox.id))
-        : [];
+      // 63HO6cBU (N6) — filial kassasining kartalari yo'q (bitta jami).
+      const cards =
+        cashbox && cashboxType === 'main'
+          ? await this.activeCards(manager, String(cashbox.id))
+          : [];
       const automation = await this.loadAutomationSettings(manager);
       return successRes(
         {
@@ -497,12 +500,9 @@ export class ShiftAccountCheckService {
       if (accountCheck !== undefined) {
         globals.push([SHIFT_SETTING_KEYS.accountCheckEnabled, accountCheck]);
       }
-      if (branchAccountCheck !== undefined) {
-        globals.push([
-          SHIFT_SETTING_KEYS.branchAccountCheckEnabled,
-          branchAccountCheck,
-        ]);
-      }
+      // 63HO6cBU (N6) — `branch_account_check_enabled` ESKIRGAN: qiymat
+      // tekshiriladi (boolean bo'lmasa 400, avvalgidek), lekin saqlanmaydi —
+      // filial kassasida karta tasdiqlash yo'q.
       if (photo !== undefined) {
         globals.push([SHIFT_SETTING_KEYS.photoRequired, photo]);
       }
@@ -570,8 +570,30 @@ export class ShiftAccountCheckService {
         }
         throw error;
       }
-      if (!globals.length && !cardPatches.length && !automation.length) {
+      if (
+        !globals.length &&
+        !cardPatches.length &&
+        !automation.length &&
+        // N6: faqat eskirgan filial kaliti — 400 emas, jim e'tiborsiz.
+        branchAccountCheck === undefined
+      ) {
         throw new BadRequestException("O'zgartiriladigan sozlama berilmadi");
+      }
+      // Y-4: faqat eskirgan filial kaliti — hech narsa o'zgarmaydi: tranzaksiya
+      // va audit yozuvisiz joriy ko'rinish (old == new audit yozilmasin).
+      if (!globals.length && !cardPatches.length && !automation.length) {
+        const current = await this.loadGlobalSettings();
+        return successRes(
+          {
+            ...current,
+            ...(await this.loadAutomationSettings()),
+            ...settingsView(current, 'main'),
+            cashbox_type: 'main',
+            cards: [],
+          },
+          200,
+          'Shift check settings updated',
+        );
       }
 
       const before = {
@@ -1282,6 +1304,12 @@ export class ShiftAccountCheckService {
     rawAccounts: unknown,
     closedBy: string,
   ): Promise<Record<string, unknown> | null> {
+    // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: filial
+    // smenasida karta qoldig'i / skrinshoti tasdiqlanmaydi (eski FE
+    // `accounts` yuborsa — e'tiborsiz).
+    if (cashboxTypeFor(shiftCashboxUserId(shift)) === Cashbox_type.BRANCH) {
+      return null;
+    }
     const settings = await this.loadSettingsFor(
       shiftCashboxUserId(shift),
       manager,
@@ -1457,6 +1485,12 @@ export class ShiftAccountCheckService {
     manager: EntityManager,
     shift: Shift,
   ): Promise<Record<string, unknown> | null> {
+    // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: filial
+    // smenasida karta qoldig'i / skrinshoti tasdiqlanmaydi (eski FE
+    // `accounts` yuborsa — e'tiborsiz).
+    if (cashboxTypeFor(shiftCashboxUserId(shift)) === Cashbox_type.BRANCH) {
+      return null;
+    }
     const settings = await this.loadSettingsFor(
       shiftCashboxUserId(shift),
       manager,

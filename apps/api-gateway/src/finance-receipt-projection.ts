@@ -27,6 +27,10 @@ import {
  *    ko'rinishi; boshqasi `null`. Filial — handler'lardagi
  *    `resolveOwnBranchId` bilan AYNI: JWT `branch_id`, bo'lmasa
  *    `branch.user.find_by_user`; aniqlanmasa — `null` (fail closed).
+ *  - 63HO6cBU — KURYERGA (SA/admin/menejer/registrator bo'lmagan ko'ruvchi)
+ *    `branch_leg: true` qatorlarda `payment_method`, `card_id`, `card`,
+ *    `transfer_source_user(_id)` — `null`. Ega qarori (Q2): menejer va
+ *    registrator usulni ko'radi — filial kassasi baribir bitta jami.
  */
 const MAX_DEPTH = 8;
 
@@ -35,6 +39,19 @@ export interface ReceiptViewer {
   branchId: string | null;
   req: OriginRequest;
 }
+
+/**
+ * 63HO6cBU — filial oyog'i qatorida kuryerdan yashiriladigan
+ * maydonlar: usul, karta (id va tafsilot bloki) va o'tkazma manbasi (u faqat
+ * naqdsiz to'lovda yoziladi — usulni oshkor qiladi).
+ */
+const BRANCH_LEG_HIDDEN_KEYS = new Set([
+  'payment_method',
+  'card_id',
+  'card',
+  'transfer_source_user_id',
+  'transfer_source_user',
+]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -48,6 +65,12 @@ export const canSeeReceipts = (roles: string[]) =>
 
 const isPrivileged = (roles: string[]) =>
   roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+
+/** 63HO6cBU (ega qarori, Q2) — filial oyog'ida usulni ko'radiganlar. */
+const canSeeBranchLegMethod = (roles: string[]) =>
+  isPrivileged(roles) ||
+  roles.includes(RoleEnum.MANAGER) ||
+  roles.includes(RoleEnum.REGISTRATOR);
 
 /** To'liq chek ko'rinishi → FE shakli (`photo_url`, rolga mos `can_reanalyze`). */
 export function projectFullReceipt(
@@ -82,7 +105,16 @@ function walk(value: unknown, viewer: ReceiptViewer, depth: number): unknown {
   }
   if (!isObject(value)) return value;
   const out: Record<string, unknown> = {};
+  // 63HO6cBU (P0) — FILIAL oyog'i qatorlarida (`branch_leg`, finance
+  // belgilaydi) kuryerga to'lov usuli va karta qaytmaydi — eski qatorlarda
+  // ham. Menejer / registrator ko'radi (ega qarori, Q2).
+  const hideMethod =
+    value.branch_leg === true && !canSeeBranchLegMethod(viewer.roles);
   for (const [key, item] of Object.entries(value)) {
+    if (hideMethod && BRANCH_LEG_HIDDEN_KEYS.has(key)) {
+      out[key] = null;
+      continue;
+    }
     if (key === 'receipt') {
       if (!canSeeReceipts(viewer.roles)) continue;
       out.receipt =

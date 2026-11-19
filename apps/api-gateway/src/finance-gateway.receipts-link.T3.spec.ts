@@ -122,6 +122,8 @@ describe('T3-2 — tarixdagi receipt proyeksiyasi', () => {
       'findCashboxByUser',
       'myCashbox',
       'cashboxByUserId',
+      // 63HO6cBU — menejer filial tarixi (allCashboxHistories).
+      'allCashboxesInfo',
     ]) {
       const handler = Object.getOwnPropertyDescriptor(
         FinanceGatewayController.prototype,

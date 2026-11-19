@@ -1,5 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
-import type { IdempotencyService } from '@app/common';
+import { AI_MAX_ORDERS_PER_PARSE, type IdempotencyService } from '@app/common';
 
 /**
  * ai-confirm → `order.create` ikki qatlamli dublikat himoyasi
@@ -62,8 +62,12 @@ function orderIdOf(response: unknown): string | null {
   return typeof id === 'string' || typeof id === 'number' ? String(id) : null;
 }
 
-/** Bir so'rovda ko'pi bilan shuncha kalit (ai-confirm partiyasi ≤ 10). */
-const COMPLETED_LOOKUP_MAX = 50;
+/**
+ * Bir so'rovda ko'pi bilan shuncha kalit — ai-confirm partiyasining DTO
+ * chegarasi (`AI_MAX_ORDERS_PER_PARSE`, hozir 30) bilan AYNI: partiyadagi
+ * har band tekshiriladi, kesilib qolmaydi.
+ */
+export const COMPLETED_LOOKUP_MAX = AI_MAX_ORDERS_PER_PARSE;
 
 /**
  * ai-confirm TAKRORI — qayta tekshiruvlardan OLDIN (`order.ai_confirm.completed`).
