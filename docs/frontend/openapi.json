@@ -9455,7 +9455,7 @@
     },
     "/finance/cashbox/payment/market": {
       "post": {
-        "description": "Superadmin/admin — HQ asosiy kassasidan. (2026-11-11, audit M4) Menejer — O'Z FILIAL KASSASIDAN (filial JWT/branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Menejer yo'lida: filial kassasida yetarli naqd/karta bo'lishi shart (yo'q → 400, HQ kassasiga tegilmaydi), `card_id` — filial kassasining kartasi (`GET /finance/cashbox/cards?cashbox_id=<filial kassa id>`), filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`). Daftar: filial → HQ va HQ → market bo'g'inlari AYNI summaga yopiladi — «HQ ga berilishi kerak» filial kassasidagi pul bilan birga kamayadi.",
+        "description": "63HO6cBU (P0, PR-C): MENEJER faqat O'Z FILIALI marketiga (`GET /finance/cashbox/manager/markets`; boshqasi → 403) va faqat FILIAL ULUSHI doirasida (ortig'i → 400; market «kassa qarzga ishlaydi» ham chegarani oshirmaydi); usul/karta yuborilmaydi (server `cash`; `click_to_market` → 400); daftarda faqat shu filial × shu market qatorlari belgilanadi. Superadmin/admin — HQ asosiy kassasidan (`payment_method` majburiy). (2026-11-11, audit M4) Menejer — O'Z FILIAL KASSASIDAN (filial JWT/branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Menejer yo'lida: filial kassasida yetarli naqd/karta bo'lishi shart (yo'q → 400, HQ kassasiga tegilmaydi), `card_id` — filial kassasining kartasi (`GET /finance/cashbox/cards?cashbox_id=<filial kassa id>`), filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`). Daftar: filial → HQ va HQ → market bo'g'inlari AYNI summaga yopiladi — «HQ ga berilishi kerak» filial kassasidagi pul bilan birga kamayadi.",
         "operationId": "FinanceGatewayController_paymentToMarket",
         "parameters": [
           {
@@ -9658,6 +9658,55 @@
         "x-roles": [
           "superadmin",
           "admin",
+          "manager"
+        ]
+      }
+    },
+    "/finance/cashbox/manager/markets": {
+      "get": {
+        "description": "Filial marketi — o'chirilmagan buyurtmasida `orders.home_branch_id` = menejer filiali. `branch_share` — filial ULUSHI: shu filial yig'gan va HQ'ga hali bermagan (COURIER_SETTLED), filial hali to'lamagan Σ market_amount (buyurtma `home_branch_id` = filial va daftar `branch_id` = filial). Ulush 0 bo'lgan market ham ro'yxatda (to'lov — 400). Kamayish tartibida. `search` — market nomi (yoki id), `page` / `limit` (≤ 100). Javob: `{ branch_id, items: [{ market_id, name, status, branch_share }], total_share, pagination }`.",
+        "operationId": "FinanceGatewayController_managerMarkets",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Menejer: o'z filiali marketlari va filial ulushi (63HO6cBU)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
           "manager"
         ]
       }
@@ -32750,7 +32799,8 @@
               "click",
               "click_to_market"
             ],
-            "example": "cash"
+            "example": "cash",
+            "description": "Superadmin/admin uchun MAJBURIY (yo'q → 400). 63HO6cBU (PR-C): MENEJER yubormaydi — filial kassasi bitta jami, server `cash` yozadi (eski FE `cash`/`click` — e'tiborsiz, `click_to_market` → 400)."
           },
           "payment_date": {
             "type": "string",
@@ -32773,8 +32823,7 @@
         },
         "required": [
           "market_id",
-          "amount",
-          "payment_method"
+          "amount"
         ]
       },
       "PaymentBranchToMainRequestDto": {

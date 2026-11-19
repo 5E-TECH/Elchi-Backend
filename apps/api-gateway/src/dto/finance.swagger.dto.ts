@@ -1119,9 +1119,15 @@ export class PaymentToMarketRequestDto {
   @Min(0.0000001)
   amount!: number;
 
-  @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
+  @ApiPropertyOptional({
+    enum: PaymentMethod,
+    example: PaymentMethod.CASH,
+    description:
+      "Superadmin/admin uchun MAJBURIY (yo'q → 400). 63HO6cBU (PR-C): MENEJER yubormaydi — filial kassasi bitta jami, server `cash` yozadi (eski FE `cash`/`click` — e'tiborsiz, `click_to_market` → 400).",
+  })
+  @IsOptional()
   @IsEnum(PaymentMethod)
-  payment_method!: PaymentMethod;
+  payment_method?: PaymentMethod;
 
   @ApiPropertyOptional({ example: '2026-03-06T12:00:00Z' })
   @IsOptional()

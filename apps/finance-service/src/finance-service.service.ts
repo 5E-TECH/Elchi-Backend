@@ -224,6 +224,13 @@ export interface MarketPaymentInput {
    */
   payer_cashbox_type?: Cashbox_type;
   payer_user_id?: string;
+  /**
+   * 63HO6cBU (P0, PR-C) — filial to'lovchi bo'lsa MAJBURIY: gateway
+   * order-service'dan olgan filial ulushi (o'z filiali marketi uchun, pul
+   * filialda va HQ'ga berilmagan Σ market_amount). Summa undan oshsa 400;
+   * market «kassa qarzga ishlaydi» chegarasi menejerga qo'llanmaydi.
+   */
+  branch_share?: number;
 }
 
 /** (8OYPuz7J) Smena qatori + ochgan / yopgan xodim ismi (identity'dan). */
@@ -4903,7 +4910,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    */
   private async enqueueSettlementAdvance(
     manager: EntityManager,
-    level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market',
+    level:
+      | 'courier_to_branch'
+      | 'branch_to_hq'
+      | 'hq_to_market'
+      | 'branch_to_market',
     matchValue: string,
     amount: number,
     requesterId: string | null | undefined,
@@ -6725,11 +6736,28 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * haqiqiy takroriy so'rov baribir `idempotent` javobini oladi.
      * Admin market uchun «kassa qarzga ishlaydi» ni yoqqan bo'lsa — o'tadi.
      */
-    await this.assertMarketPayoutWithinDebt(
-      String(data.market_id),
-      Number(data.amount),
-      Number(marketCashbox.balance ?? 0),
-    );
+    if (payer.isBranch) {
+      // 63HO6cBU (PR-C) — filial faqat o'z ulushi doirasida to'laydi.
+      const share = Number(data.branch_share);
+      if (data.branch_share == null || !Number.isFinite(share)) {
+        throw new BadRequestException(
+          'Filial ulushi aniqlanmadi — marketga to`lovni qayta urinib ko`ring',
+        );
+      }
+      if (Number(data.amount) > share) {
+        throw new BadRequestException(
+          `Summa filial ulushidan oshmasligi kerak (ulush: ${FinanceServiceService.roundMoney(
+            Math.max(share, 0),
+          )} so'm)`,
+        );
+      }
+    } else {
+      await this.assertMarketPayoutWithinDebt(
+        String(data.market_id),
+        Number(data.amount),
+        Number(marketCashbox.balance ?? 0),
+      );
+    }
 
     const transferId = opts.transferId ?? randomUUID();
 
@@ -6811,31 +6839,39 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * (token `:b`) — «HQ ga berilishi kerak» filial kassasidagi pul bilan
      * birga X ga kamayadi; so'ng odatdagi `hq_to_market`.
      */
-    const branchAdvancePayload = payer.isBranch
+    /**
+     * 63HO6cBU (PR-C) — filial kassasidan: BITTA bo'g'in `branch_to_market`
+     * (`"<filial>:<market>"`) — faqat shu filial ulushi qatorlari belgilanadi
+     * (M4 dagi ikki mustaqil FIFO — `branch_to_hq` + `hq_to_market` — boshqa
+     * market / filial qatorlarini yopardi). Olib ketish (pickup-visit)
+     * haqlari global — filial to'lovida ushlanmaydi.
+     */
+    const branchAdvancePayload: Record<string, unknown> | null = null;
+    const pickupFifoAmount =
+      opts.skipPickupFifo || payer.isBranch
+        ? 0
+        : await this.claimPickupFifoInTx(
+            manager,
+            String(data.market_id),
+            transferId,
+          );
+    const advancePayload = payer.isBranch
       ? await this.enqueueSettlementAdvance(
           manager,
-          'branch_to_hq',
-          payer.userId,
+          'branch_to_market',
+          `${payer.userId}:${String(data.market_id)}`,
           Number(data.amount),
           data.created_by,
-          dedupKey ? `${dedupKey}:b` : '',
+          dedupKey,
         )
-      : null;
-    const pickupFifoAmount = opts.skipPickupFifo
-      ? 0
-      : await this.claimPickupFifoInTx(
+      : await this.enqueueSettlementAdvance(
           manager,
+          'hq_to_market',
           String(data.market_id),
-          transferId,
+          this.addMoney(Number(data.amount), pickupFifoAmount),
+          data.created_by,
+          dedupKey,
         );
-    const advancePayload = await this.enqueueSettlementAdvance(
-      manager,
-      'hq_to_market',
-      String(data.market_id),
-      this.addMoney(Number(data.amount), pickupFifoAmount),
-      data.created_by,
-      dedupKey,
-    );
 
     if (opts.notify) {
       // (ePpLHPX2) `finance.payment_received` — puli kelgan tomon (market).

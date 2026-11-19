@@ -760,6 +760,7 @@ describe('M4 — "Marketga o`tkazma" (click_to_market)', () => {
       payer_cashbox_type: 'branch' as any,
       payer_user_id: '15',
       dedup_epoch: 'tok-9',
+      branch_share: 100_000,
     });
 
     expect(res.statusCode).toBe(200);
@@ -777,11 +778,51 @@ describe('M4 — "Marketga o`tkazma" (click_to_market)', () => {
         call[2].level,
         call[2].request_id,
       ]),
-    ).toEqual([
-      ['branch_to_hq', 'tok-9:b'],
-      ['hq_to_market', 'tok-9'],
-    ]);
+    ).toEqual([['branch_to_market', 'tok-9']]);
+    // 63HO6cBU (PR-C) — bitta bo'g'in: faqat (filial, market) qatorlari.
+    expect(env.outbox.enqueue.mock.calls[0][2]).toMatchObject({
+      match_value: '15:201',
+      amount: 100_000,
+    });
   });
+
+  it.each([
+    ['ulush berilmagan', {}],
+    ['ulushdan ortiq', { branch_share: 99_999.99 }],
+  ])(
+    '63HO6cBU — filial to`lovchi: %s → 400, kassa saqlanmaydi, daftar navbati yo`q',
+    async (_label, extra) => {
+      const env = makeService();
+      env.manager.findOne
+        .mockResolvedValueOnce({
+          id: 'br-15',
+          user_id: '15',
+          cashbox_type: 'branch',
+          balance: 400_000,
+          balance_cash: 400_000,
+          balance_card: 0,
+        })
+        .mockResolvedValueOnce(marketCashbox(1_000_000))
+        .mockResolvedValueOnce(null);
+      jest.spyOn(env.service, 'requireOpenShift').mockResolvedValue(undefined);
+      const error: unknown = await env.service
+        .paymentsToMarket({
+          market_id: '201',
+          amount: 100_000,
+          payment_method: 'cash' as any,
+          payer_cashbox_type: 'branch' as any,
+          payer_user_id: '15',
+          dedup_epoch: 'tok-11',
+          ...(extra as any),
+        })
+        .catch((caught: unknown) => caught);
+      expect((error as RpcException).getError()).toMatchObject({
+        statusCode: 400,
+      });
+      expect(env.outbox.enqueue).not.toHaveBeenCalled();
+      expect(env.manager.save).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     [{ payer_cashbox_type: 'branch' }],

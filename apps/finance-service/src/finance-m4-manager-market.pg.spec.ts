@@ -252,6 +252,8 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         payer_user_id: '15',
         created_by: '15001',
         dedup_epoch: dedup,
+        // 63HO6cBU (PR-C) — gateway order-service'dan oladigan filial ulushi.
+        branch_share: 1_000_000,
       });
 
     beforeEach(async () => {
@@ -260,7 +262,7 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
       await seed('201', Cashbox_type.FOR_MARKET, 450_000);
     });
 
-    it('⭐ naqd: filial kassasi −X, market qarzi −X, HQ tegilmaydi; filial → HQ, HQ → market siljishlari', async () => {
+    it('⭐ naqd: filial kassasi −X, market qarzi −X, HQ tegilmaydi; bitta filial → market bo`g`ini (63HO6cBU)', async () => {
       const before = await companyCash();
       const res = await pay('gw:mp-1', 270_000);
 
@@ -292,9 +294,9 @@ describePg('M4 — menejer orqali marketga to`lov — haqiqiy Postgres', () => {
         dedup_epoch: 'gw:mp-1',
       });
 
+      // 63HO6cBU (PR-C) — bitta bo'g'in: faqat (filial 15, market 201).
       expect(advances()).toEqual([
-        ['branch_to_hq', '15', 270_000, 'gw:mp-1:b'],
-        ['hq_to_market', '201', 270_000, 'gw:mp-1'],
+        ['branch_to_market', '15:201', 270_000, 'gw:mp-1'],
       ]);
     });
 

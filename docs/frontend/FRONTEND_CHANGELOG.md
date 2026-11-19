@@ -22,6 +22,48 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-19 — Menejer faqat o'z filiali marketlariga, filial ulushi doirasida to'laydi — 63HO6cBU (PR-C)
+
+Deploy: **order-service, finance-service, api-gateway** + **migratsiya 1716000000246** (`order_settlement.market_paid_by_branch_at/_by` — nullable ustunlar + qisman indeks, backfill yo'q). Kam yuklamali vaqtda. PR-A (#726) va PR-B (#728) dan keyin chiqadi.
+
+**Ta'riflar**
+- **Filial marketi** — o'chirilmagan buyurtmasida `orders.home_branch_id` = menejer filiali bo'lgan market.
+- **Filial ulushi** (`branch_share`) — pul hali filialda (kuryerdan qabul qilingan, HQ'ga berilmagan) va filial hali to'lamagan Σ `market_amount`. Hisobga faqat quyidagi daftar qatorlari kiradi:
+  - buyurtmaning `home_branch_id` = filial;
+  - daftar qatorining `branch_id` = filial;
+  - holati `COURIER_SETTLED`.
+- Manfiy qo'shimcha xarajat qatorlari ulushni kamaytiradi.
+- X filialda yaratilgan, lekin uni boshqa filial yoki HQ yetkazgan buyurtma X ulushiga kirmaydi — u HQ orqali to'lanadi.
+
+**Endpointlar**
+- 🆕 [gateway] `GET /finance/cashbox/manager/markets` (faqat MANAGER).
+  - Query: `search` (market nomi yoki id), `page`, `limit` (≤ 100).
+  - Javob: `data: { branch_id, items: [{ market_id, name, status, branch_share }], total_share, pagination: { total, page, limit, totalPages } }`.
+  - Tartib — ulush bo'yicha kamayib boradi. Ulushi 0 bo'lgan market ham ro'yxatda turadi, lekin unga to'lab bo'lmaydi.
+- ✏️ [gateway] `GET /finance/cashbox/user/:marketId` — menejer o'z filiali marketini ochsa, avvalgi 403 o'rniga 200 qaytadi:
+  - javob: `data: { cashbox: { id: null, user_id, cashbox_type: 'markets', balance: <filial ulushi>, balance_cash: <ulush>, balance_card: 0 }, branch_id, branch_share, user: { id, name, status }, history: [], cashboxHistory: [] }`;
+  - marketning umumiy qarzi va tarixi menejerga ko'rsatilmaydi;
+  - filialga aloqasi yo'q market → avvalgidek 403.
+- ⚠️ [gateway] `POST /finance/cashbox/payment/market` — **MENEJER** uchun:
+  - so'rov: `{ market_id, amount, comment?, payment_date? }`;
+  - `payment_method` yuborilmaydi. Eski FE yuborgan `cash`/`click`, `card_id`, `source_user_id` e'tiborsiz qoladi, server `cash` yozadi;
+  - `click_to_market` → **400**;
+  - filialga aloqasi yo'q market → **403** «Bu market sizning filialingizga buyurtma topshirmaydi — to'lov HQ orqali»;
+  - summa filial ulushidan oshsa → **400** «Summa filial ulushidan oshmasligi kerak (ulush: N so'm)». Market «Kassa qarzga ishlaydi» yoqilgan bo'lsa ham shu chegara amal qiladi.
+  - **Superadmin/admin** uchun `payment_method` endi DTO'da ixtiyoriy, lekin ular uchun **majburiy** (yo'q → 400). Ularning yo'li boshqa jihatdan o'zgarmagan.
+- 🟢 [ledger] Menejer to'lovi faqat shu filial va shu market qatorlarini «market filial tomonidan to'langan» deb belgilaydi. Avval ikki mustaqil FIFO boshqa market va filial qatorlarini ham yopardi.
+- 🟢 [ledger] Menejer to'lovidan keyin «HQ ga berilishi kerak» (`branch_summary.branch_payable`, `all-info`) aynan to'langan summaga kamayadi:
+  - qolgan qarz faqat HQ ulushi (`branch_amount − market_amount`);
+  - admin filialdan pul olganda bu qatorlar darhol «market to'landi» holatiga o'tadi va HQ ularni marketga qayta to'lamaydi;
+  - HQ'ning market qarzi (moliyaviy balans) ham shunga kamayadi.
+- 🟢 Market ulushi filial tomonidan to'langan buyurtmani rollback qilib bo'lmaydi (400). Filialdan marketga to'lovni T6 bilan tuzatish yoki qaytarish ham avvalgidek yopiq.
+- 🟢 Olib ketish (pickup-visit) haqlari filial to'lovida ushlanmaydi (global, HQ to'lovida).
+
+**Frontend action items:**
+- 🔧 `SettlementPickerDialog` (`give`, menejer): ro'yxatni `GET /finance/cashbox/manager/markets` dan oling va summa sifatida `branch_share` ni ko'rsating. Ro'yxat bo'sh bo'lsa — `EmptyState` «Bu filialga buyurtma topshiradigan market yo'q». `GET /markets` dan foydalanmang.
+- 🔧 `cashDetail.tsx?type=market` (menejer): summa chegarasi — `branch_share`. Usul va karta tanlovi yo'q. So'rov: `{ market_id, amount, comment?, payment_date? }`.
+- 🔧 e2e mock'larini shu javob shakllariga moslang; 403 holatini yashirmang.
+
 ### 2026-11-18 — AI tasdiq: natijada `reason_code`; takror tekshiruvlardan oldin
 
 Deploy: **order-service va api-gateway** (yangi RMQ `order.ai_confirm.completed`; gateway eski order-service bilan ham ishlaydi — so'rov javob bermasa avvalgi yo'l). Migratsiyasiz. Orqaga mos — yangi maydon qo'shimcha.

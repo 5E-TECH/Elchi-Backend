@@ -228,6 +228,8 @@ export class FinanceServiceController {
       // Audit M4 — menejer: o'z filial kassasidan (gateway JWT'dan qo'yadi).
       payer_cashbox_type?: Cashbox_type;
       payer_user_id?: string;
+      // 63HO6cBU (PR-C) — filial ulushi (gateway order-service'dan oladi).
+      branch_share?: number;
     },
     @Ctx() context: RmqContext,
   ) {

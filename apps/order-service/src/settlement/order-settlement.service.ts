@@ -7,6 +7,7 @@ import {
   DataSource,
   EntityManager,
   In,
+  IsNull,
   QueryFailedError,
   Repository,
 } from 'typeorm';
@@ -44,12 +45,54 @@ import { successRes } from '../../../../libs/common/helpers/response';
  */
 type SettlementLevel = 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
 
+/** 63HO6cBU (PR-C) — market ulushi filial kassasidan to'langanmi. */
+export function isMarketPaidByBranch(
+  settlement: Pick<OrderSettlement, 'market_paid_by_branch_at'>,
+): boolean {
+  return settlement.market_paid_by_branch_at != null;
+}
+
+/**
+ * 63HO6cBU — filialning HQ'ga shu qator bo'yicha qarzi: oddiy qatorda
+ * `branch_amount`, market ulushini filial to'lagan qatorda — faqat HQ ulushi
+ * (`branch_amount − market_amount`).
+ */
+export function branchToHqLeg(
+  settlement: Pick<
+    OrderSettlement,
+    'branch_amount' | 'market_amount' | 'market_paid_by_branch_at'
+  >,
+): number {
+  const branch = Number(settlement.branch_amount ?? 0) || 0;
+  if (!isMarketPaidByBranch(settlement)) return branch;
+  return (
+    Math.round((branch - (Number(settlement.market_amount ?? 0) || 0)) * 100) /
+    100
+  );
+}
+
+/** SQL: filialning HQ'ga qarzi (alias `settlement`) — `branchToHqLeg` bilan bir xil. */
+const BRANCH_PAYABLE_SUM_SQL = `COALESCE(SUM(settlement.branch_amount - CASE WHEN settlement.market_paid_by_branch_at IS NOT NULL THEN settlement.market_amount ELSE 0 END), 0)`;
+
 /** jtB0i4y3 — jurnal tavsifidagi bo'g'in nomi. */
-const SETTLEMENT_LEVEL_UZ: Readonly<Record<SettlementLevel, string>> = {
+const SETTLEMENT_LEVEL_UZ: Readonly<
+  Record<SettlementLevel | 'branch_to_market', string>
+> = {
   courier_to_branch: 'kuryer → filial',
   branch_to_hq: 'filial → HQ',
   hq_to_market: 'HQ → market',
+  branch_to_market: 'filial → market',
 };
+
+/** 63HO6cBU (PR-C) — `branch_to_market` tomoni: `"<filial>:<market>"`. */
+export function parseBranchMarketParty(
+  value: unknown,
+): { branchId: string; marketId: string } | null {
+  const text = typeof value === 'string' ? value.trim() : '';
+  const match = /^(\d{1,18}):(\d{1,18})$/.exec(text);
+  if (!match || /^0+$/.test(match[1]) || /^0+$/.test(match[2])) return null;
+  return { branchId: match[1], marketId: match[2] };
+}
 
 /** jtB0i4y3 — metadata'dagi buyurtma id ro'yxati chegarasi (qator shishmasin). */
 const SETTLEMENT_AUDIT_ORDER_IDS_MAX = 200;
@@ -506,7 +549,8 @@ export class OrderSettlementService {
       this.orderSettlementRepo
         .createQueryBuilder('settlement')
         .select('settlement.branch_id', 'branch_id')
-        .addSelect('COALESCE(SUM(settlement.branch_amount), 0)', 'amount')
+        // 63HO6cBU — filial market ulushini to'lagan qatorda faqat HQ ulushi.
+        .addSelect(BRANCH_PAYABLE_SUM_SQL, 'amount')
         .addSelect(
           `COALESCE(SUM(settlement.branch_amount) FILTER (WHERE ${PROVIDER_HELD_ROW_SQL}), 0)`,
           'provider_held',
@@ -524,7 +568,11 @@ export class OrderSettlementService {
       this.orderSettlementRepo
         .createQueryBuilder('settlement')
         .select('settlement.market_id', 'market_id')
-        .addSelect('COALESCE(SUM(settlement.market_amount), 0)', 'amount')
+        // 63HO6cBU — market ulushini filial to'lagan qator endi qarz emas.
+        .addSelect(
+          'COALESCE(SUM(settlement.market_amount) FILTER (WHERE settlement.market_paid_by_branch_at IS NULL), 0)',
+          'amount',
+        )
         .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
         .andWhere('settlement.market_id IS NOT NULL')
         .andWhere('settlement.status IN (:...statuses)', {
@@ -726,7 +774,13 @@ export class OrderSettlementService {
     ): Promise<number> => {
       const qb = this.orderSettlementRepo
         .createQueryBuilder('settlement')
-        .select(`COALESCE(SUM(settlement.${column}), 0)`, 'amount')
+        .select(
+          // 63HO6cBU — filial market ulushini to'lagan qatorda faqat HQ ulushi.
+          column === 'branch_amount'
+            ? BRANCH_PAYABLE_SUM_SQL
+            : `COALESCE(SUM(settlement.${column}), 0)`,
+          'amount',
+        )
         .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
         .andWhere('settlement.status IN (:...statuses)', { statuses });
       apply(qb);
@@ -1290,6 +1344,12 @@ export class OrderSettlementService {
      * Kaskad va sof-nol yopish bermaydi — ular kassa to'lovi emas.
      */
     unapplied?: { level: SettlementLevel; dedupEpoch: string };
+    /**
+     * 63HO6cBU (PR-C) — qator oyog'i `amountField` dan boshqacha hisoblansa
+     * (filial market ulushini o'zi to'lagan qatorda `branch_to_hq` oyog'i =
+     * branch_amount − market_amount).
+     */
+    legOf?: (settlement: OrderSettlement) => number;
   }): Promise<{
     settled_order_ids: string[];
     allocated: number;
@@ -1424,7 +1484,9 @@ export class OrderSettlementService {
        * yetib bormasdi (jonli holat aynan shunday edi).
        */
       const legOf = (row: OrderSettlement): number =>
-        Number(row[params.amountField] ?? 0) || 0;
+        params.legOf
+          ? params.legOf(row)
+          : Number(row[params.amountField] ?? 0) || 0;
       const credits = candidates.filter((row) => legOf(row) < 0);
       const payables = candidates.filter((row) => legOf(row) >= 0);
       /**
@@ -1948,12 +2010,19 @@ export class OrderSettlementService {
    * double-post the same handover. (Audit I1/I2.)
    */
   async advanceSettlement(data: {
-    level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
+    level:
+      | 'courier_to_branch'
+      | 'branch_to_hq'
+      | 'hq_to_market'
+      | 'branch_to_market';
     match_value: string;
     amount: number;
     requester_id?: string;
     request_id?: string;
   }) {
+    if (data?.level === 'branch_to_market') {
+      return this.advanceBranchToMarket(data);
+    }
     const requesterId = String(data?.requester_id ?? 'system');
     const matchValue = String(data?.match_value ?? '').trim();
     const amount = Number(data?.amount ?? 0);
@@ -2017,6 +2086,8 @@ export class OrderSettlementService {
         fromStatus: cfg.fromStatus,
         toStatus: cfg.toStatus,
         amountField: cfg.amountField,
+        // 63HO6cBU — filial to'lagan qatorning oyog'i / HQ to'lovi filtri.
+        legOf: 'legOf' in cfg ? cfg.legOf : undefined,
         lumpSum: amount,
         requesterId,
         postLeg: noPost,
@@ -2103,6 +2174,319 @@ export class OrderSettlementService {
     delete publicResult.touched;
     delete publicResult.carryPersisted;
     return successRes(publicResult, 200, 'Settlement advanced');
+  }
+
+  /**
+   * 63HO6cBU (P0, PR-C) — `branch_to_market`: filial menejeri X filial
+   * kassasidan M marketga to'ladi («Marketga to'lov», `match_value` =
+   * `"X:M"`). Kassa allaqachon ko'chgan (finance) — bu yerda faqat daftar.
+   *
+   * BITTA bo'g'in (ilgari ikki mustaqil FIFO: `branch_to_hq` X bo'yicha
+   * HAR market qatorini, `hq_to_market` M bo'yicha HAR filial / HQ qatorini
+   * yopardi). Endi faqat FILIAL ULUSHI qatorlari:
+   *   order.home_branch_id = X AND settlement.branch_id = X AND market_id = M
+   *   AND status = COURIER_SETTLED AND market_paid_by_branch_at IS NULL
+   * (`getBranchMarketShare` bilan AYNAN bir xil filtr). Qatorlar FIFO
+   * (createdAt, id) bilan `market_amount` bo'yicha (manfiy oyoq — kredit,
+   * `runFifoSettlement` dagi qoida) «market filial tomonidan to'langan» deb
+   * BELGILANADI, holat COURIER_SETTLED qoladi: filialning HQ'ga qarzi shu
+   * qatorda `branch_amount − market_amount` (HQ ulushi) bo'ladi, filial HQ'ga
+   * topshirganda (`branch_to_hq`) qator darhol MARKET_SETTLED.
+   *
+   * Qisman to'lov qoldig'i `c` (keyingi qatorga yetmagan qism) — pul
+   * marketga yetgan, lekin qatorga bog'lanmagan: u «filial HQ nomidan
+   * marketga to'lagan» deb ikki qoldiqqa yoziladi — `branch_to_hq`(X) += c
+   * (filialning HQ'ga qarzi c ga kamayadi) va `hq_to_market`(M) += c (HQ'ning
+   * M ga qarzi c ga kamayadi). Shu bilan filial kassasi va daftar har doim
+   * mos, ikki marta to'lov yo'q, HQ ulushi saqlanadi.
+   *
+   * Idempotent: `request_id` (M8 belgisi, oddiy advance bilan bir pattern) —
+   * takror va parallel nusxa ikki marta belgilamaydi.
+   */
+  private async advanceBranchToMarket(data: {
+    match_value: string;
+    amount: number;
+    requester_id?: string;
+    request_id?: string;
+  }) {
+    const party = parseBranchMarketParty(data?.match_value);
+    const amount = Math.round(Number(data?.amount ?? 0) * 100) / 100;
+    if (!party || !(amount > 0)) {
+      this.badRequest(
+        "branch_to_market: match_value '<filial>:<market>' va musbat summa bo'lishi kerak",
+      );
+    }
+    const { branchId, marketId } = party;
+    const requesterId = String(data?.requester_id ?? 'system');
+    const stampBy = /^\d+$/.test(requesterId) ? requesterId : null;
+    const token = String(data?.request_id ?? '').trim();
+    const appliedKey = token ? this.advanceAppliedKey(token) : undefined;
+    if (appliedKey) {
+      const applied = await this.findAppliedAdvance(appliedKey);
+      if (applied) {
+        this.logger.warn(
+          `order.settlement.advance replay ignored (already applied): level=branch_to_market match=${branchId}:${marketId}`,
+        );
+        return applied;
+      }
+    }
+    const carryEnabled = await this.isCarryTableStrict();
+    const round2 = (value: number) => Math.round(value * 100) / 100;
+    const settledOrderIds: string[] = [];
+    let allocated = 0;
+    let leftover = 0;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const tx = queryRunner.manager;
+      if (appliedKey) {
+        await this.claimAdvanceToken(tx, appliedKey);
+      }
+      const repo = tx.getRepository(OrderSettlement);
+      const candidates = await repo
+        .createQueryBuilder('s')
+        .innerJoin(Order, 'o', 'o.id = s.order_id')
+        .where('s.isDeleted = :deleted', { deleted: false })
+        .andWhere('s.branch_id = :branchId', { branchId })
+        .andWhere('s.market_id = :marketId', { marketId })
+        .andWhere('s.status = :status', {
+          status: SettlementStatus.COURIER_SETTLED,
+        })
+        .andWhere('s.market_paid_by_branch_at IS NULL')
+        .andWhere('o.home_branch_id = :branchId', { branchId })
+        .orderBy('s.createdAt', 'ASC')
+        .addOrderBy('s.id', 'ASC')
+        .setLock('pessimistic_write', undefined, ['s'])
+        .getMany();
+
+      const legOf = (row: OrderSettlement) =>
+        Number(row.market_amount ?? 0) || 0;
+      const credits = candidates.filter((row) => legOf(row) < 0);
+      const payables = candidates.filter((row) => legOf(row) >= 0);
+      const now = new Date();
+      const mark = async (row: OrderSettlement) => {
+        await repo.update(
+          {
+            id: row.id,
+            status: SettlementStatus.COURIER_SETTLED,
+            market_paid_by_branch_at: IsNull(),
+          },
+          { market_paid_by_branch_at: now, market_paid_by_branch_by: stampBy },
+        );
+        if (!settledOrderIds.includes(String(row.order_id))) {
+          settledOrderIds.push(String(row.order_id));
+        }
+      };
+      let remaining = amount;
+      for (const row of payables) {
+        const leg = legOf(row);
+        const pulled: OrderSettlement[] = [];
+        while (leg > remaining && credits.length) {
+          const credit = credits.shift() as OrderSettlement;
+          pulled.push(credit);
+          remaining = round2(remaining - legOf(credit));
+        }
+        if (leg > remaining && leg > 0) {
+          break; // Qat'iy FIFO — keyingi (kichikroq) qatorga sakramaydi.
+        }
+        for (const credit of pulled) {
+          await mark(credit);
+          allocated = round2(allocated + legOf(credit));
+        }
+        await mark(row);
+        remaining = round2(remaining - leg);
+        allocated = round2(allocated + leg);
+      }
+      leftover = round2(amount - allocated);
+
+      if (leftover > 0) {
+        if (!carryEnabled) {
+          // Qoldiq jadvali yo'q (eski baza) — daftar kassadan orqada qoladi.
+          throw new RpcException({
+            statusCode: 500,
+            message:
+              "Taqsimlanmagan qoldiq jadvali yo'q — filialning marketga to'lovi daftarga yozilmadi",
+          });
+        }
+        const carryRepo = tx.getRepository(OrderSettlementCarry);
+        for (const [level, partyId] of [
+          ['branch_to_hq', branchId],
+          ['hq_to_market', marketId],
+        ] as const) {
+          await carryRepo
+            .createQueryBuilder()
+            .insert()
+            .values({ level, party_id: partyId, branch_id: null, amount: 0 })
+            .orIgnore()
+            .execute();
+          const carry = await carryRepo.findOne({
+            where: { level, party_id: partyId },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (carry) {
+            await carryRepo.update(
+              { id: carry.id },
+              { amount: round2((Number(carry.amount) || 0) + leftover) },
+            );
+          }
+        }
+      }
+
+      if (appliedKey) {
+        await tx.getRepository(IdempotencyKey).update(
+          { key: appliedKey },
+          {
+            response: {
+              settled_order_ids: settledOrderIds,
+              allocated,
+              leftover,
+            },
+          },
+        );
+      }
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof AdvanceAlreadyAppliedError && appliedKey) {
+        return (
+          (await this.findAppliedAdvance(appliedKey)) ??
+          successRes(
+            {
+              settled_order_ids: [],
+              allocated: 0,
+              leftover: 0,
+              replayed: true,
+            },
+            200,
+            'Settlement already advanced',
+          )
+        );
+      }
+      if (error instanceof RpcException) throw error;
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    const result = { settled_order_ids: settledOrderIds, allocated, leftover };
+    await this.auditSettlement({
+      level: 'branch_to_market',
+      matchValue: `${branchId}:${marketId}`,
+      amount,
+      requesterId,
+      requestId: token || null,
+      result,
+    });
+    return successRes(result, 200, 'Settlement advanced');
+  }
+
+  /**
+   * 63HO6cBU (PR-C) — X filialning marketlari: o'chirilmagan buyurtmasida
+   * `orders.home_branch_id = X` bo'lgan marketlar, har biriga FILIAL ULUSHI
+   * (`advanceBranchToMarket` bilan AYNAN bir xil filtr): Σ market_amount,
+   * order.home_branch_id = X, settlement.branch_id = X, COURIER_SETTLED,
+   * filial hali to'lamagan. FAQAT O'QIYDI. Ulush 0 bo'lgan market ham
+   * ro'yxatda (ko'rinadi, to'lov — 400).
+   */
+  async getBranchMarkets(data: { branch_id?: string | null }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    if (!/^\d{1,18}$/.test(branchId) || /^0+$/.test(branchId)) {
+      this.badRequest("branch_id raqamli ID bo'lishi kerak");
+    }
+    const orders = this.tableOf(Order);
+    const settlements = this.tableOf(OrderSettlement);
+    const rows = await this.dataSource.query<
+      Array<{ market_id: string; share: string | null }>
+    >(
+      `SELECT m.market_id::text AS market_id, COALESCE(sh.share, 0)::text AS share
+         FROM (SELECT DISTINCT o."market_id"
+                 FROM ${orders} o
+                WHERE o."home_branch_id" = $1
+                  AND o."is_deleted" = false
+                  AND o."market_id" IS NOT NULL) m
+         LEFT JOIN (
+           SELECT s."market_id", SUM(s."market_amount") AS share
+             FROM ${settlements} s
+             JOIN ${orders} o ON o."id" = s."order_id"
+            WHERE o."home_branch_id" = $1
+              AND s."branch_id" = $1
+              AND s."status" = 'courier_settled'
+              AND s."market_paid_by_branch_at" IS NULL
+              AND s."is_deleted" = false
+            GROUP BY s."market_id") sh ON sh."market_id" = m."market_id"
+        ORDER BY COALESCE(sh.share, 0) DESC, m.market_id ASC`,
+      [branchId],
+    );
+    return successRes(
+      {
+        branch_id: branchId,
+        items: rows.map((row) => ({
+          market_id: String(row.market_id),
+          share: Math.round((Number(row.share) || 0) * 100) / 100,
+        })),
+      },
+      200,
+      'Branch markets',
+    );
+  }
+
+  /** Xom SQL uchun jadval nomi (schema bilan; spec'lar boshqa schema ishlatadi). */
+  private tableOf(entity: typeof Order | typeof OrderSettlement): string {
+    const meta = this.dataSource.getMetadata(entity);
+    return meta.schema
+      ? `"${meta.schema}"."${meta.tableName}"`
+      : `"${meta.tableName}"`;
+  }
+
+  /** 63HO6cBU (PR-C) — bitta market: X filialnikimi va filial ulushi. */
+  async getBranchMarketShare(data: {
+    branch_id?: string | null;
+    market_id?: string | null;
+  }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const marketId = String(data?.market_id ?? '').trim();
+    const isId = (v: string) => /^\d{1,18}$/.test(v) && !/^0+$/.test(v);
+    if (!isId(branchId) || !isId(marketId)) {
+      this.badRequest("branch_id va market_id raqamli ID bo'lishi kerak");
+    }
+    const orders = this.tableOf(Order);
+    const settlements = this.tableOf(OrderSettlement);
+    const [row] = await this.dataSource.query<
+      Array<{ in_branch: boolean; share: string | null }>
+    >(
+      `SELECT EXISTS (
+                SELECT 1 FROM ${orders} o
+                 WHERE o."home_branch_id" = $1 AND o."market_id" = $2
+                   AND o."is_deleted" = false
+              ) AS in_branch,
+              (SELECT COALESCE(SUM(s."market_amount"), 0)
+                 FROM ${settlements} s
+                 JOIN ${orders} o ON o."id" = s."order_id"
+                WHERE o."home_branch_id" = $1
+                  AND s."branch_id" = $1
+                  AND s."market_id" = $2
+                  AND s."status" = 'courier_settled'
+                  AND s."market_paid_by_branch_at" IS NULL
+                  AND s."is_deleted" = false)::text AS share`,
+      [branchId, marketId],
+    );
+    return successRes(
+      {
+        branch_id: branchId,
+        market_id: marketId,
+        in_branch: row?.in_branch === true,
+        share: Math.round((Number(row?.share) || 0) * 100) / 100,
+      },
+      200,
+      'Branch market share',
+    );
   }
 
   /**
@@ -2247,6 +2631,10 @@ export class OrderSettlementService {
         const qb = repo
           .createQueryBuilder('s')
           .where('s.isDeleted = :deleted', { deleted: false })
+          // 63HO6cBU — market ulushini filial to'lagan qator qayta ochilmaydi
+          // (kuryer qaytarishi ham, HQ marketga to'lovi qaytarishi ham uni
+          // ololmaydi: market puli filialdan allaqachon ketgan).
+          .andWhere('s.market_paid_by_branch_at IS NULL')
           .orderBy('s.createdAt', 'ASC')
           .addOrderBy('s.id', 'ASC')
           .setLock('pessimistic_write');
@@ -2479,7 +2867,7 @@ export class OrderSettlementService {
    *   boshlagan xodim (raqam bo'lmasa — `system`, outbox relay — NULL).
    */
   private async auditSettlement(input: {
-    level: SettlementLevel;
+    level: SettlementLevel | 'branch_to_market';
     matchValue: string;
     amount: number;
     requesterId: string | null;
@@ -2558,7 +2946,16 @@ export class OrderSettlementService {
         carryLevel: 'branch_to_hq' as const,
         matchColumn: 'branch_id' as const,
         fromStatus: SettlementStatus.COURIER_SETTLED,
-        toStatus: () => SettlementStatus.BRANCH_SETTLED,
+        /**
+         * 63HO6cBU (PR-C) — market ulushini filial o'zi to'lagan qator
+         * (`market_paid_by_branch_at`) HQ'ga yetgach darhol MARKET_SETTLED:
+         * HQ uni marketga qayta to'lamaydi. Oyog'i — faqat HQ ulushi.
+         */
+        toStatus: (settlement: OrderSettlement) =>
+          isMarketPaidByBranch(settlement)
+            ? SettlementStatus.MARKET_SETTLED
+            : SettlementStatus.BRANCH_SETTLED,
+        legOf: branchToHqLeg,
         amountField: 'branch_amount' as const,
         stamp: (now: Date) => ({
           branch_to_hq_at: now,
@@ -2569,6 +2966,9 @@ export class OrderSettlementService {
         carryLevel: 'hq_to_market' as const,
         matchColumn: 'market_id' as const,
         fromStatus: SettlementStatus.BRANCH_SETTLED,
+        // 63HO6cBU — filial to'lagan (belgilangan) qator HQ to'loviga hech
+        // qachon tushmaydi: u `branch_to_hq` da to'g'ridan-to'g'ri
+        // MARKET_SETTLED bo'ladi, BRANCH_SETTLED bo'lmaydi.
         toStatus: () => SettlementStatus.MARKET_SETTLED,
         amountField: 'market_amount' as const,
         stamp: (now: Date) => ({

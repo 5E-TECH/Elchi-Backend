@@ -372,6 +372,10 @@ export async function prepareReceiptAiImage(
   }
 }
 
+/** 63HO6cBU (PR-C) — menejer o'z filiali bo'lmagan marketga. */
+const MANAGER_MARKET_FORBIDDEN_MESSAGE =
+  "Bu market sizning filialingizga buyurtma topshirmaydi — to'lov HQ orqali";
+
 @ApiTags('Finance')
 @Controller('finance')
 export class FinanceGatewayController {
@@ -1878,6 +1882,23 @@ export class FinanceGatewayController {
           Boolean(managerBranchCashboxId) ||
           (await this.canManagerAccessUser(req?.user, user_id));
         if (!managerCanAccess) {
+          /**
+           * 63HO6cBU (P0, PR-C) — menejer O'Z FILIALI marketini (buyurtmasida
+           * `home_branch_id` = filial) ochadi: market kassasi o'rniga FILIAL
+           * ULUSHI (pul filialda, HQ'ga berilmagan Σ market_amount) qaytadi —
+           * marketning umumiy qarzi va boshqa filial / HQ to'lovlari
+           * ko'rsatilmaydi. Boshqa market — avvalgidek 403.
+           */
+          if (
+            !query.cashbox_type ||
+            query.cashbox_type === Cashbox_type.FOR_MARKET
+          ) {
+            const marketView = await this.buildManagerMarketView(
+              req.user,
+              user_id,
+            ).catch(() => null);
+            if (marketView) return marketView;
+          }
           throw new ForbiddenException(
             "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
           );
@@ -2495,7 +2516,7 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'Payment to market',
     description:
-      "Superadmin/admin — HQ asosiy kassasidan. (2026-11-11, audit M4) Menejer — O'Z FILIAL KASSASIDAN (filial JWT/branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Menejer yo'lida: filial kassasida yetarli naqd/karta bo'lishi shart (yo'q → 400, HQ kassasiga tegilmaydi), `card_id` — filial kassasining kartasi (`GET /finance/cashbox/cards?cashbox_id=<filial kassa id>`), filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`). Daftar: filial → HQ va HQ → market bo'g'inlari AYNI summaga yopiladi — «HQ ga berilishi kerak» filial kassasidagi pul bilan birga kamayadi.",
+      "63HO6cBU (P0, PR-C): MENEJER faqat O'Z FILIALI marketiga (`GET /finance/cashbox/manager/markets`; boshqasi → 403) va faqat FILIAL ULUSHI doirasida (ortig'i → 400; market «kassa qarzga ishlaydi» ham chegarani oshirmaydi); usul/karta yuborilmaydi (server `cash`; `click_to_market` → 400); daftarda faqat shu filial × shu market qatorlari belgilanadi. Superadmin/admin — HQ asosiy kassasidan (`payment_method` majburiy). (2026-11-11, audit M4) Menejer — O'Z FILIAL KASSASIDAN (filial JWT/branch-service'dan aniqlanadi, so'rovda berilmaydi; filial topilmasa 403). Menejer yo'lida: filial kassasida yetarli naqd/karta bo'lishi shart (yo'q → 400, HQ kassasiga tegilmaydi), `card_id` — filial kassasining kartasi (`GET /finance/cashbox/cards?cashbox_id=<filial kassa id>`), filial smenasi — `FINANCE_REQUIRE_OPEN_SHIFT=all` da shart (`BRANCH_SHIFT_REQUIRED`). Daftar: filial → HQ va HQ → market bo'g'inlari AYNI summaga yopiladi — «HQ ga berilishi kerak» filial kassasidagi pul bilan birga kamayadi.",
   })
   @ApiBody({ type: PaymentToMarketRequestDto })
   async paymentToMarket(
@@ -2509,11 +2530,41 @@ export class FinanceGatewayController {
      * qaysi kassadan chiqishini finance `payer_*` bilan biladi.
      */
     let payerBranchId = '';
+    let branchShare: number | null = null;
     if (this.isManager(req?.user)) {
+      /**
+       * 63HO6cBU (P0, PR-C) — menejer faqat O'Z FILIALI marketiga
+       * (`orders.home_branch_id` = filial) va faqat FILIAL ULUSHI doirasida
+       * to'laydi. Usul / karta yo'q (filial kassasi bitta jami): server
+       * `cash` yozadi; «Marketga o'tkazma» — 400.
+       */
+      if (dto.payment_method === PaymentMethod.CLICK_TO_MARKET) {
+        throw new BadRequestException(
+          "Filialdan marketga to'lov faqat summa bilan — «Marketga o'tkazma» yo'q",
+        );
+      }
       payerBranchId = await this.resolveOwnBranchId(req.user);
       if (!payerBranchId) {
         throw new ForbiddenException("Managerning branch'i topilmadi");
       }
+      const share = await this.loadBranchMarketShare(
+        payerBranchId,
+        dto.market_id,
+      );
+      if (!share.in_branch) {
+        throw new ForbiddenException(MANAGER_MARKET_FORBIDDEN_MESSAGE);
+      }
+      if (Number(dto.amount) > share.share) {
+        throw new BadRequestException(
+          `Summa filial ulushidan oshmasligi kerak (ulush: ${Math.max(
+            share.share,
+            0,
+          )} so'm)`,
+        );
+      }
+      branchShare = share.share;
+    } else if (!dto.payment_method) {
+      throw new BadRequestException("payment_method bo'lishi shart");
     }
     const token = this.resolveTransferToken(idempotencyKey);
     // (3PE0B03q) "O'tkazma manbasi" finance'ga `transfer_source_user_id`
@@ -2527,13 +2578,16 @@ export class FinanceGatewayController {
         ...payment,
         created_by: req.user.sub,
         dedup_epoch: token,
-        ...(transferSourceUserId
+        ...(transferSourceUserId && !payerBranchId
           ? { transfer_source_user_id: transferSourceUserId }
           : {}),
         ...(payerBranchId
           ? {
+              payment_method: PaymentMethod.CASH,
+              card_id: undefined,
               payer_cashbox_type: Cashbox_type.BRANCH,
               payer_user_id: payerBranchId,
+              branch_share: branchShare,
             }
           : {}),
       },
@@ -2541,6 +2595,163 @@ export class FinanceGatewayController {
     // HQ → market settlement advance is enqueued by finance-service via the
     // transactional outbox in the same tx as the cashbox move (Faza 2a).
     return result;
+  }
+
+  /**
+   * 63HO6cBU (PR-C) — menejerning o'z filiali marketi sahifasi
+   * (`GET cashbox/user/:marketId`): `cashbox_type: 'markets'`, summa — filial
+   * ulushi. Market filialniki emas (yoki filial topilmadi) — `null` (chaqiruvchi
+   * avvalgi tekshiruvga o'tadi — u 403 beradi).
+   */
+  private async buildManagerMarketView(user: JwtUser, marketId: string) {
+    if (!/^\d{1,18}$/.test(String(marketId ?? ''))) return null;
+    const branchId = await this.resolveOwnBranchId(user);
+    if (!branchId) return null;
+    const share = await this.loadBranchMarketShare(branchId, marketId);
+    if (!share.in_branch) return null;
+    let market: { id: string; name: string | null; status: string | null } = {
+      id: String(marketId),
+      name: null,
+      status: null,
+    };
+    try {
+      const res = await this.sendIdentity<{
+        data?: Array<Record<string, unknown>>;
+      }>({ cmd: 'identity.market.find_by_ids' }, { ids: [String(marketId)] });
+      const row = Array.isArray(res?.data) ? res.data[0] : null;
+      if (row) {
+        market = {
+          id: String(marketId),
+          name: typeof row.name === 'string' ? row.name : null,
+          status: typeof row.status === 'string' ? row.status : null,
+        };
+      }
+    } catch {
+      // Ism — fail-open (summa va ruxsat baribir order-service'dan).
+    }
+    return {
+      statusCode: 200,
+      message: 'Branch market share',
+      data: {
+        cashbox: {
+          id: null,
+          user_id: String(marketId),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          balance: share.share,
+          balance_cash: share.share,
+          balance_card: 0,
+        },
+        branch_id: branchId,
+        branch_share: share.share,
+        user: market,
+        history: [],
+        cashboxHistory: [],
+      },
+    };
+  }
+
+  /**
+   * 63HO6cBU (PR-C) — GET /finance/cashbox/manager/markets: menejerning
+   * filiali marketlari va har biriga filial ulushi (qidiruv — market nomi,
+   * sahifalash gateway'da). Ulush kamayish tartibida.
+   */
+  private async listManagerMarkets(
+    user: JwtUser,
+    query: { search?: string; page?: number | string; limit?: number | string },
+  ) {
+    const branchId = await this.resolveOwnBranchId(user);
+    if (!branchId) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
+    const res = await this.sendOrder<{
+      data?: { items?: Array<{ market_id: string; share: number }> };
+    }>({ cmd: 'order.settlement.branch_markets' }, { branch_id: branchId });
+    const rows = Array.isArray(res?.data?.items) ? res.data.items : [];
+    const names = new Map<
+      string,
+      { name: string | null; status: string | null }
+    >();
+    if (rows.length) {
+      try {
+        const ids = rows.map((row) => String(row.market_id));
+        const found = await this.sendIdentity<{
+          data?: Array<Record<string, unknown>>;
+        }>({ cmd: 'identity.market.find_by_ids' }, { ids });
+        for (const row of Array.isArray(found?.data) ? found.data : []) {
+          names.set(String(row.id), {
+            name: typeof row.name === 'string' ? row.name : null,
+            status: typeof row.status === 'string' ? row.status : null,
+          });
+        }
+      } catch {
+        // Ism — fail-open.
+      }
+    }
+    const search = String(query?.search ?? '')
+      .trim()
+      .toLowerCase();
+    const all = rows
+      .map((row) => ({
+        market_id: String(row.market_id),
+        name: names.get(String(row.market_id))?.name ?? null,
+        status: names.get(String(row.market_id))?.status ?? null,
+        branch_share: Number(row.share) || 0,
+      }))
+      // O'chirilgan market (identity'da yo'q) — ro'yxatda emas.
+      .filter((row) => names.size === 0 || names.has(row.market_id))
+      .filter(
+        (row) =>
+          !search ||
+          String(row.name ?? '')
+            .toLowerCase()
+            .includes(search) ||
+          row.market_id === search,
+      );
+    const limit = Math.min(
+      Math.max(Math.floor(Number(query?.limit) || 20), 1),
+      100,
+    );
+    const page = Math.max(Math.floor(Number(query?.page) || 1), 1);
+    const total = all.length;
+    return {
+      statusCode: 200,
+      message: 'Branch markets',
+      data: {
+        branch_id: branchId,
+        items: all.slice((page - 1) * limit, page * limit),
+        total_share:
+          Math.round(
+            all.reduce((sum, row) => sum + row.branch_share, 0) * 100,
+          ) / 100,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: total ? Math.ceil(total / limit) : 0,
+        },
+      },
+    };
+  }
+
+  /**
+   * 63HO6cBU (PR-C) — order-service: market shu filialnikimi
+   * (`orders.home_branch_id`) va filial ulushi (pul filialda, HQ'ga berilmagan
+   * Σ market_amount). Xato — uzatiladi (fail-closed).
+   */
+  private async loadBranchMarketShare(
+    branchId: string,
+    marketId: string,
+  ): Promise<{ in_branch: boolean; share: number }> {
+    const res = await this.sendOrder<{
+      data?: { in_branch?: unknown; share?: unknown };
+    }>(
+      { cmd: 'order.settlement.branch_market_share' },
+      { branch_id: branchId, market_id: String(marketId ?? '') },
+    );
+    return {
+      in_branch: res?.data?.in_branch === true,
+      share: Number(res?.data?.share ?? 0) || 0,
+    };
   }
 
   @Post('cashbox/payment/branch-to-main')
@@ -2754,6 +2965,27 @@ export class FinanceGatewayController {
     }
 
     return financeResponse;
+  }
+
+  @Get('cashbox/manager/markets')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Menejer: o'z filiali marketlari va filial ulushi (63HO6cBU)",
+    description:
+      "Filial marketi — o'chirilmagan buyurtmasida `orders.home_branch_id` = menejer filiali. `branch_share` — filial ULUSHI: shu filial yig'gan va HQ'ga hali bermagan (COURIER_SETTLED), filial hali to'lamagan Σ market_amount (buyurtma `home_branch_id` = filial va daftar `branch_id` = filial). Ulush 0 bo'lgan market ham ro'yxatda (to'lov — 400). Kamayish tartibida. `search` — market nomi (yoki id), `page` / `limit` (≤ 100). Javob: `{ branch_id, items: [{ market_id, name, status, branch_share }], total_share, pagination }`.",
+  })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  async managerMarkets(
+    @Req() req: { user: JwtUser },
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.listManagerMarkets(req.user, { search, page, limit });
   }
 
   @Get('cashbox/manager/settlement')

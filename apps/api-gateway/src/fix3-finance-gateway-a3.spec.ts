@@ -288,7 +288,7 @@ describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
   });
 });
 
-describe('M4 (2026-11-11) — menejer «Marketga to`lov» o`z filial kassasidan', () => {
+describe('63HO6cBU (PR-C) — menejer «Marketga to`lov»: faqat o`z filiali marketi, filial ulushi doirasida', () => {
   const body = {
     market_id: '201',
     amount: 300_000,
@@ -298,18 +298,31 @@ describe('M4 (2026-11-11) — menejer «Marketga to`lov» o`z filial kassasidan'
   const managerWithoutJwtBranch = {
     user: { sub: '208', roles: ['manager'] },
   } as any;
-
-  it('menejer — finance`ga payer = filial kassasi (filial JWT`dan)', async () => {
+  const shareReply =
+    (inBranch: boolean, share: number) =>
+    (payload: { branch_id: string; market_id: string }) => ({
+      data: { ...payload, in_branch: inBranch, share },
+    });
+  const okEnv = (inBranch = true, share = 500_000) => {
     const env = setup();
+    route(env.orderClient, {
+      'order.settlement.branch_market_share': shareReply(inBranch, share),
+    });
     route(env.financeClient, {
       'finance.cashbox.payment_market': () => ({ statusCode: 200 }),
     });
+    return env;
+  };
 
+  it('o`z filiali marketi, ulush doirasida — finance`ga payer = filial, `cash`, branch_share', async () => {
+    const env = okEnv();
     await env.controller.paymentToMarket(manager15, body, 'idem-m4');
-
+    expect(
+      payloadOf(env.orderClient, 'order.settlement.branch_market_share'),
+    ).toEqual({ branch_id: '15', market_id: '201' });
     expect(
       payloadOf(env.financeClient, 'finance.cashbox.payment_market'),
-    ).toEqual({
+    ).toMatchObject({
       market_id: '201',
       amount: 300_000,
       payment_method: 'cash',
@@ -317,20 +330,72 @@ describe('M4 (2026-11-11) — menejer «Marketga to`lov» o`z filial kassasidan'
       dedup_epoch: 'idem-m4',
       payer_cashbox_type: 'branch',
       payer_user_id: '15',
+      branch_share: 500_000,
     });
   });
 
+  it('eski FE `click` + `card_id` + `source_user_id` — e`tiborsiz: `cash`, karta va manba uzatilmaydi', async () => {
+    const env = okEnv();
+    await env.controller.paymentToMarket(manager15, {
+      ...body,
+      payment_method: 'click',
+      card_id: '7',
+      source_user_id: '9',
+    });
+    const payload = payloadOf(
+      env.financeClient,
+      'finance.cashbox.payment_market',
+    );
+    expect(payload.payment_method).toBe('cash');
+    expect(payload.card_id).toBeUndefined();
+    expect(payload).not.toHaveProperty('transfer_source_user_id');
+  });
+
+  it('usulsiz (yangi FE) — ham `cash`', async () => {
+    const env = okEnv();
+    const { payment_method: _omit, ...noMethod } = body;
+    void _omit;
+    await env.controller.paymentToMarket(manager15, noMethod);
+    expect(
+      payloadOf(env.financeClient, 'finance.cashbox.payment_market')
+        .payment_method,
+    ).toBe('cash');
+  });
+
+  it('filialga aloqasiz market → 403, finance chaqirilmaydi', async () => {
+    const env = okEnv(false, 0);
+    await expect(
+      env.controller.paymentToMarket(manager15, body),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(env.financeClient.send).not.toHaveBeenCalled();
+  });
+
+  it('ulushdan ortiq → 400, finance chaqirilmaydi', async () => {
+    const env = okEnv(true, 299_999.99);
+    await expect(
+      env.controller.paymentToMarket(manager15, body),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(env.financeClient.send).not.toHaveBeenCalled();
+  });
+
+  it('«Marketga o`tkazma» (click_to_market) → 400, ulush ham so`ralmaydi', async () => {
+    const env = okEnv();
+    await expect(
+      env.controller.paymentToMarket(manager15, {
+        ...body,
+        payment_method: 'click_to_market',
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(env.orderClient.send).not.toHaveBeenCalled();
+    expect(env.financeClient.send).not.toHaveBeenCalled();
+  });
+
   it('menejer filiali JWT`da yo`q — branch-service`dan aniqlanadi', async () => {
-    const env = setup();
+    const env = okEnv();
     route(env.branchClient, {
       'branch.user.find_by_user': () => ({ data: { branch_id: '15' } }),
     });
-    route(env.financeClient, {
-      'finance.cashbox.payment_market': () => ({ statusCode: 200 }),
-    });
-
     await env.controller.paymentToMarket(managerWithoutJwtBranch, body);
-
     expect(
       payloadOf(env.financeClient, 'finance.cashbox.payment_market'),
     ).toEqual(
@@ -346,27 +411,113 @@ describe('M4 (2026-11-11) — menejer «Marketga to`lov» o`z filial kassasidan'
     route(env.branchClient, {
       'branch.user.find_by_user': () => ({ data: null }),
     });
-
     await expect(
       env.controller.paymentToMarket(managerWithoutJwtBranch, body),
     ).rejects.toMatchObject({ status: 403 });
     expect(env.financeClient.send).not.toHaveBeenCalled();
   });
 
-  it('superadmin — HQ kassasidan (payer yuborilmaydi)', async () => {
-    const env = setup();
-    route(env.financeClient, {
-      'finance.cashbox.payment_market': () => ({ statusCode: 200 }),
-    });
-
+  it('superadmin — HQ kassasidan (payer / ulush yuborilmaydi, order so`ralmaydi); usulsiz → 400', async () => {
+    const env = okEnv();
     await env.controller.paymentToMarket(superadmin, body, 'idem-hq');
-
     const payload = payloadOf(
       env.financeClient,
       'finance.cashbox.payment_market',
     );
     expect(payload).not.toHaveProperty('payer_cashbox_type');
-    expect(payload).not.toHaveProperty('payer_user_id');
+    expect(payload).not.toHaveProperty('branch_share');
+    expect(env.orderClient.send).not.toHaveBeenCalled();
+    const { payment_method: _omit, ...noMethod } = body;
+    void _omit;
+    await expect(
+      env.controller.paymentToMarket(superadmin, noMethod),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('GET manager/markets — nomlar, qidiruv, sahifalash, jami ulush', async () => {
+    const env = setup();
+    route(env.orderClient, {
+      'order.settlement.branch_markets': () => ({
+        data: {
+          items: [
+            { market_id: '201', share: 300_000 },
+            { market_id: '202', share: 50_000 },
+            { market_id: '203', share: 0 },
+          ],
+        },
+      }),
+    });
+    route(env.identityClient, {
+      'identity.market.find_by_ids': () => ({
+        data: [
+          { id: '201', name: 'Alfa', status: 'active', phone_number: 'x' },
+          { id: '202', name: 'Beta', status: 'active' },
+          { id: '203', name: 'Alfa-2', status: 'blocked' },
+        ],
+      }),
+    });
+    const all: any = await env.controller.managerMarkets(manager15);
+    expect(all.data).toMatchObject({
+      branch_id: '15',
+      total_share: 350_000,
+      pagination: { total: 3, page: 1, limit: 20, totalPages: 1 },
+    });
+    expect(all.data.items[0]).toEqual({
+      market_id: '201',
+      name: 'Alfa',
+      status: 'active',
+      branch_share: 300_000,
+    });
+    const found: any = await env.controller.managerMarkets(
+      manager15,
+      'alfa',
+      '2',
+      '1',
+    );
+    expect(found.data.items).toEqual([
+      expect.objectContaining({ market_id: '203', branch_share: 0 }),
+    ]);
+    expect(found.data.pagination).toMatchObject({ total: 2, totalPages: 2 });
+  });
+
+  it('GET cashbox/user/:marketId (menejer, o`z marketi) — summa = filial ulushi, market umumiy qarzi so`ralmaydi', async () => {
+    const env = setup();
+    jest
+      .spyOn(env.controller as any, 'resolveManagerBranchCashboxId')
+      .mockResolvedValue('');
+    jest
+      .spyOn(env.controller as any, 'canManagerAccessUser')
+      .mockResolvedValue(false);
+    route(env.orderClient, {
+      'order.settlement.branch_market_share': shareReply(true, 120_000),
+    });
+    route(env.identityClient, {
+      'identity.market.find_by_ids': () => ({
+        data: [{ id: '201', name: 'Alfa', status: 'active' }],
+      }),
+    });
+    const res: any = await env.controller.findCashboxByUser(
+      '201',
+      { cashbox_type: 'markets' } as FindCashboxByUserQueryDto,
+      manager15,
+    );
+    expect(res.data).toMatchObject({
+      cashbox: { cashbox_type: 'markets', balance: 120_000 },
+      branch_share: 120_000,
+      user: { id: '201', name: 'Alfa' },
+      history: [],
+    });
+    expect(env.financeClient.send).not.toHaveBeenCalled();
+  });
+
+  it('buildManagerMarketView: aloqasiz market — null (keyin avvalgi 403 tekshiruvi)', async () => {
+    const env = setup();
+    route(env.orderClient, {
+      'order.settlement.branch_market_share': shareReply(false, 0),
+    });
+    await expect(
+      (env.controller as any).buildManagerMarketView(manager15.user, '999'),
+    ).resolves.toBeNull();
   });
 });
 

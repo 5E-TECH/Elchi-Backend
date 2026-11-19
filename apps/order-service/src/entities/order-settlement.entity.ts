@@ -119,4 +119,15 @@ export class OrderSettlement extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   hq_to_market_by!: string | null;
+
+  /**
+   * 63HO6cBU (PR-C) — market ulushini FILIAL o'z kassasidan to'lagan
+   * (menejer «Marketga to'lov»). Holat COURIER_SETTLED qoladi; filialning
+   * HQ'ga qarzi bu qatorda `branch_amount − market_amount`. NULL — yo'q.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  market_paid_by_branch_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  market_paid_by_branch_by!: string | null;
 }
