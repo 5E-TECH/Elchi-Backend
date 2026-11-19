@@ -3443,14 +3443,14 @@
    "address": "Malik ko'chasi 5"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1718233",
+   "reason": null
   },
   "full": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1718233",
+   "reason": null
   },
-  "note": "r14 S1 (was r7 S2 accepted residual, AUTO 1718233): a capital \"T.\" alone never gives AUTO and sets no kind - candidates (city + tuman)"
+  "note": "r15 S1 (r14: candidates): capital \"X T.\" accepted per name - AUTO 1718233 as dev"
  },
  {
   "q": {
@@ -6113,14 +6113,14 @@
    "address": "Mustaqillik 12, Dinov Т."
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1722210",
+   "reason": null
   },
   "full": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1722210",
+   "reason": null
   },
-  "note": "r14 S1: a capital \"Т.\" alone never gives AUTO - candidates (dev: not found; head: AUTO 1722210)"
+  "note": "r15 S1 (r14: candidates): \"Dinov\" is not in PERSON_NAME_WORDS - Denov by geoFold (dev: not found)"
  },
  {
   "q": {
@@ -6128,14 +6128,14 @@
    "full_address": "Kasbi T., Navoiy 5"
   },
   "seed": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1710237",
+   "reason": null
   },
   "full": {
-   "sato": null,
-   "reason": "district_ambiguous"
+   "sato": "1710237",
+   "reason": null
   },
-  "note": "r14 S1: a capital \"T.\" alone never gives AUTO - candidates (dev/head: AUTO 1710237)"
+  "note": "r15 S1 (r14: candidates): capital \"X T.\" of a non-person name, nothing else in the text - AUTO as dev"
  },
  {
   "q": {
@@ -6301,5 +6301,290 @@
    "reason": null
   },
   "note": "r14 S4: a newline separates parts like a comma (as dev)"
+ },
+ {
+  "q": {
+   "region_name": "Namangan",
+   "full_address": "Mingbuloq T., Navoiy ko'chasi 5"
+  },
+  "seed": {
+   "sato": "1714204",
+   "reason": null
+  },
+  "full": {
+   "sato": "1714204",
+   "reason": null
+  },
+  "note": "r15 S1: capital \"X T.\" of a non-person district name with no other bare place name - AUTO again (as dev; r14: candidates)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Qarshi T., Navoiy 5"
+  },
+  "seed": {
+   "sato": "1710224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710224",
+   "reason": null
+  },
+  "note": "r15 S1: accepted capital \"X T.\" sets the tuman kind again (as dev; r14: candidates)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Sirg'ali T., Navoiy ko'chasi 5"
+  },
+  "seed": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726283",
+   "reason": null
+  },
+  "note": "r15 S1: accepted capital \"X T.\" (dev: candidates [1712401] - the street; r14: candidates)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Kasbi T., Navoiy 5, oluvchi Karimov T."
+  },
+  "seed": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "note": "r15 S1: a recipient elsewhere does not block the accepted \"X T.\" (as dev; r14: candidates)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Furqat T., Navoiy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r15 S1: common person name (PERSON_NAME_WORDS) + capital \"T.\" - candidates (dev: AUTO 1730238)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Kitob T., Navoiy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r15 S1: common person name + capital \"T.\" - candidates (dev: AUTO 1710232)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qarshi, Navoiy 5, Kasbi T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r15 S1: another bare place name in the text - capital \"X T.\" stays candidates (dev: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "oluvchi Kasbi T., Navoiy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "note": "r15 S1: recipient word before \"X T.\" - not a place (dev: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Navro'z 4-uy, Kasbi tumaniga boradigan yo'lda"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r15 S2: landmark \"X tumaniga boradigan yo'lda\" - candidates (dev/r14: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Navro'z 4-uy, Qamashi tumani bilan chegarada"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r15 S2: landmark \"X tumani bilan chegarada\" - candidates (dev/r14: AUTO 1710220)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Mustaqillik 12, Payariq tumaniga boradigan yo'lda, Jomboy sh."
+  },
+  "seed": {
+   "sato": "1718209",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718209",
+   "reason": null
+  },
+  "note": "r15 S2 guard: the marked main name wins over the landmark (dev: AUTO 1718224 - the landmark)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Бандихан р-н рядом Jarqo'rg'on sh."
+  },
+  "seed": {
+   "sato": "1722212",
+   "reason": null
+  },
+  "full": {
+   "sato": "1722212",
+   "reason": null
+  },
+  "note": "r15 S2: comma-less \"X р-н рядом Y sh.\" - X is the landmark, Y the address (dev: AUTO 1722212; r14: cross_region_confusable)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "otpravitel Do'stlik sh., Forish, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1708235",
+   "reason": null
+  },
+  "full": {
+   "sato": "1708235",
+   "reason": null
+  },
+  "note": "r15: \"otpravitel X sh.\" is the origin - the bare destination (as dev; r14: candidates)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "jo'natuvchi: Buloqboshi sh., Asaka, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1703224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1703224",
+   "reason": null
+  },
+  "note": "r15: \"jo'natuvchi: X sh.\" is the origin (as dev; r14: candidates)"
+ },
+ {
+  "q": {
+   "region_name": "Jizzax",
+   "full_address": "otpravitel Do'stlik sh., Navro'z MFY 4-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "note": "r15: the origin alone is never AUTO (dev/r14: AUTO 1708215)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "рядом с г. Карши"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "note": "r15: origin \"рядом с г. X\" feeds neither method 4 nor the place signal (dev: AUTO 1710401; r14: AUTO 1710224)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "возле г. Карши"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "note": "r15: origin \"возле г. X\" is never AUTO (dev: AUTO 1710401; r14: AUTO 1710224)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "рядом с г. Карши, Navoiy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "note": "r15: origin only, region given (dev: AUTO 1710401; r14: AUTO 1710224)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "из г. Карши, Navoiy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r15: the origin's \"г.\" does not make the street \"Navoiy 5\" a district (dev: AUTO 1710401; r14: AUTO 1712401)"
  }
 ]
