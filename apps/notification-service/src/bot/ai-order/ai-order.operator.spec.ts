@@ -16,6 +16,7 @@ import {
 import {
   AI_CANCELLED_PARTIAL_TEXT,
   AI_CANCELLED_TEXT,
+  AI_EXPIRED_TEXT,
 } from './ai-order.service';
 import {
   AI_EDITS_NOT_APPLIED_TEXT,
@@ -657,21 +658,43 @@ describe('#721 review', () => {
     expect(lastShown(ctx)).not.toContain(`⚠️ 2) ${AI_EDITS_NOT_APPLIED_TEXT}`);
   });
 
-  it('S1: tanlov o‘qilgandan keyin qoralama o‘zgarsa (versiya) — yozilmaydi', async () => {
+  it('S1: tanlov o‘qilgandan keyin noma‘lum natija belgisi paydo bo‘lsa — yozilmaydi, joriy karta (eskirgan EMAS)', async () => {
     const { ctx } = setup();
     await send(ctx, ORDER_TEXT);
     await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     const picker = buttons(ctx);
-    // Orada boshqa yozuv (masalan «✅» → noma'lum natija belgisi).
+    // Orada «✅» → timeout → noma'lum natija belgisi (o'qishdan KEYIN).
     const original = ctx.aiDrafts.findOne.getMockImplementation()!;
     ctx.aiDrafts.findOne.mockImplementationOnce((args) =>
       original(args).then((draft) => {
-        row(ctx).updated_at = new Date(Date.now() + 1000);
+        row(ctx).orders[0] = {
+          ...row(ctx).orders[0],
+          confirm_attempted_at: Date.now(),
+        };
         return draft;
       }),
     );
     await press(ctx, picker['Operator 02']);
     expect(row(ctx).input.meta.operator_id).toBeUndefined();
+    expect(shownTexts(ctx)).not.toContain(AI_EXPIRED_TEXT);
+    expect(lastShown(ctx)).toContain('Javob kelmadi');
+  });
+
+  it('S1: SQL now() bilan yozilgan qoralamada ham tanlov yoziladi (vaqt tengligi shart emas)', async () => {
+    const { ctx } = setup();
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+    const picker = buttons(ctx);
+    const original = ctx.aiDrafts.findOne.getMockImplementation()!;
+    ctx.aiDrafts.findOne.mockImplementationOnce((args) =>
+      original(args).then((draft) => {
+        // Mikrosekundli now() — JS Date bilan teng chiqmaydigan qiymat.
+        row(ctx).updated_at = new Date(Date.now() + 1);
+        return draft;
+      }),
+    );
+    await press(ctx, picker['Operator 02']);
+    expect(row(ctx).input.meta.operator_id).toBe('301');
   });
 
   it('⭐ S2: tanlangan operator rad etildi — qayta urinishli: tanlov olib tashlanadi, ro‘yxat yangilanadi', async () => {
@@ -801,6 +824,251 @@ describe('#721 review', () => {
     });
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(sentOrder(calls)).not.toHaveProperty('operator_id');
+  });
+});
+
+describe('BLOCKER: qayta urinishli partiyada natijasi NOMA‘LUM buyurtma qulflanadi', () => {
+  const batch =
+    (...rows: Array<Record<string, unknown>>) =>
+    (): Reply => ({ status: 200, body: { data: { results: rows } } });
+  const orders = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      preview({
+        index: i,
+        customer_name: i ? `Mijoz ${i + 1}` : 'Test Mijoz',
+        phone_number: `+99890000000${i + 1}`,
+      }),
+    );
+
+  it('⭐ [timeout_unknown, not_started] — 1-buyurtma qulflangan («Javob kelmadi»), 🎧 yopiq, ✏️ faqat 2-si; «❌» ikki marta ham ogohlantiradi', async () => {
+    const { ctx } = setup({
+      orders: orders(2),
+      confirm: [
+        batch(
+          {
+            index: 0,
+            ok: false,
+            code: 'timeout_unknown',
+            reason: 'Natija noma’lum',
+          },
+          {
+            index: 1,
+            ok: false,
+            code: 'not_started',
+            reason: 'Vaqt yetmadi',
+          },
+        ),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    const card = buttons(ctx);
+    await press(ctx, card['✅ Yaratish']);
+    expect(row(ctx).status).toBe('preview');
+    expect(typeof row(ctx).orders[0].confirm_attempted_at).toBe('number');
+    expect(row(ctx).orders[0].confirm_order_id).toBeUndefined();
+    expect(row(ctx).orders[1].confirm_attempted_at).toBeUndefined();
+    expect(lastShown(ctx)).toContain(AI_RETRY_HINT_TEXT);
+    expect(lastShown(ctx)).not.toContain(AI_RETRY_ALL_HINT_TEXT);
+    const keys = Object.keys(buttons(ctx));
+    expect(keys.some((k) => k.startsWith('🎧'))).toBe(false);
+    await press(ctx, buttons(ctx)['✏️ Tuzatish']);
+    expect(lastShown(ctx)).toContain('2-buyurtma</b> — nimani tuzatamiz?');
+    // Eski kartaning 🎧 tugmasi — tanlov yo'q.
+    await press(ctx, card['🎧 Operator: tanlanmagan']);
+    expect(Object.keys(buttons(ctx)).some((k) => k === 'Operator 01')).toBe(
+      false,
+    );
+    await press(ctx, buttons(ctx)['❌ Bekor']);
+    expect(lastShown(ctx)).toContain(AI_CANCELLED_PARTIAL_TEXT);
+    await press(ctx, card['❌ Bekor']);
+    expect(lastShown(ctx)).toContain(AI_CANCELLED_PARTIAL_TEXT);
+    expect(shownTexts(ctx)).not.toContain(AI_CANCELLED_TEXT);
+  });
+
+  it('⭐ [ok, duplicate_in_progress, validation_unavailable] — 1 yaratilgan, 2 noma‘lum (qulf), 3 belgisiz', async () => {
+    const { ctx } = setup({
+      orders: orders(3),
+      confirm: [
+        batch(
+          { index: 0, ok: true, order_id: '81' },
+          {
+            index: 1,
+            ok: false,
+            code: 'duplicate_in_progress',
+            reason: 'Xuddi shu buyurtma hozir yaratilmoqda',
+          },
+          {
+            index: 2,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: 'tekshirib bo‘lmadi',
+          },
+        ),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    const [first, second, third] = row(ctx).orders as AiPreviewOrder[];
+    expect(first.confirm_order_id).toBe('81');
+    expect(typeof second.confirm_attempted_at).toBe('number');
+    expect(second.confirm_order_id).toBeUndefined();
+    expect(third.confirm_attempted_at).toBeUndefined();
+    expect(lastShown(ctx)).toContain(
+      '❌ 2) Xuddi shu buyurtma hozir yaratilmoqda',
+    );
+    await press(ctx, buttons(ctx)['✏️ Tuzatish']);
+    expect(lastShown(ctx)).toContain('3-buyurtma</b> — nimani tuzatamiz?');
+  });
+
+  it('natija yo‘q (server kamroq natija qaytardi) — noma‘lum, qulf', async () => {
+    const { ctx } = setup({
+      orders: orders(2),
+      confirm: [
+        batch({
+          index: 1,
+          ok: false,
+          code: 'not_started',
+          reason: 'Vaqt yetmadi',
+        }),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(typeof row(ctx).orders[0].confirm_attempted_at).toBe('number');
+    expect(row(ctx).orders[1].confirm_attempted_at).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'reason_code (#722)',
+      {
+        reason: 'Operator mos emas',
+        reason_code: 'CHOSEN_OPERATOR_NOT_SELECTABLE',
+      },
+    ],
+    [
+      'matn zaxirasi (eski gateway)',
+      { reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' },
+    ],
+  ])(
+    'operator rad etildi (%s) + noma‘lum natija — 1-si qulf, matn «🎧 Operator» ni taklif qilmaydi',
+    async (_n, rejection) => {
+      const { ctx } = setup({
+        orders: orders(2),
+        confirm: [
+          batch(
+            {
+              index: 0,
+              ok: false,
+              code: 'timeout_unknown',
+              reason: 'Natija noma’lum',
+            },
+            { index: 1, ok: false, code: 'create_failed', ...rejection },
+          ),
+        ],
+      });
+      await send(ctx, ORDER_TEXT);
+      await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+      await press(ctx, buttons(ctx)['Operator 01']);
+      await press(ctx, buttons(ctx)['✅ Yaratish']);
+      expect(row(ctx).status).toBe('preview');
+      expect(row(ctx).input.meta.operator_id).toBeUndefined();
+      expect(typeof row(ctx).orders[0].confirm_attempted_at).toBe('number');
+      expect(row(ctx).orders[1].confirm_attempted_at).toBeUndefined();
+      expect(lastShown(ctx)).not.toContain(AI_OPERATOR_REJECTED_TEXT);
+      expect(lastShown(ctx)).toContain('operatorsiz yuboradi');
+    },
+  );
+
+  it('noma‘lum reason_code + NOT_CREATED kodi — ANIQ yaratilmagan (belgisiz); timeout_unknown / duplicate_in_progress / natija yo‘q — noma‘lum', async () => {
+    const { ctx } = setup({
+      orders: orders(5),
+      confirm: [
+        batch(
+          {
+            index: 0,
+            ok: false,
+            code: 'create_failed',
+            reason: 'Yangi sabab',
+            reason_code: 'SOMETHING_NEW',
+          },
+          {
+            index: 1,
+            ok: false,
+            code: 'not_started',
+            reason: 'Vaqt yetmadi',
+            reason_code: 'SOMETHING_NEW',
+          },
+          {
+            index: 2,
+            ok: false,
+            code: 'timeout_unknown',
+            reason: 'Natija noma’lum',
+            reason_code: 'SOMETHING_NEW',
+          },
+          {
+            index: 3,
+            ok: false,
+            code: 'duplicate_in_progress',
+            reason: 'Yaratilmoqda',
+          },
+          // index 4 — natija yo'q.
+        ),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('preview');
+    const marked = (row(ctx).orders as AiPreviewOrder[]).map(
+      (o) => typeof o.confirm_attempted_at === 'number',
+    );
+    expect(marked).toEqual([false, false, true, true, true]);
+    expect(lastShown(ctx)).toContain('❌ 1) Yangi sabab');
+  });
+
+  it('nit: profil raqami normallashmasa keshlanmaydi; userReason oddiy qavsdagi so‘zni qoldiradi', async () => {
+    const { ctx, calls } = setup({
+      profile: () => ({
+        status: 200,
+        body: { data: { phone_number: 'abc', require_operator_phone: true } },
+      }),
+      confirm: [
+        batch({
+          index: 0,
+          ok: false,
+          code: 'validation_unavailable',
+          reason: 'x',
+        }),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(calls.filter((c) => c.path === '/auth/my-profile')).toHaveLength(2);
+    expect(userReason('Tuman (viloyat) topilmadi (district_id)')).toBe(
+      'Tuman (viloyat) topilmadi',
+    );
+  });
+
+  it('nit: qisman yaratilgandan keyin tanlash oynasi «hali yaratilmagan buyurtmalarga» deydi', async () => {
+    const { ctx } = setup({
+      orders: orders(2),
+      confirm: [
+        batch(
+          { index: 0, ok: true, order_id: '81' },
+          {
+            index: 1,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: 'x',
+          },
+        ),
+      ],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+    expect(lastShown(ctx)).toContain('hali yaratilmagan buyurtmalarga');
   });
 });
 
