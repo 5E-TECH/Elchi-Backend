@@ -22,7 +22,7 @@ import {
   IsMoneyAmount,
   IsMoneyNonNegative,
   IsMoneySigned,
-  MONEY_MAX,
+  MONEY_MAX_NUMERIC_14_2,
 } from './money.validators';
 import {
   CASHBOX_RECEIPT_FILTER_STATUSES,
@@ -415,18 +415,7 @@ export class CloseShiftRequestDto {
       'Sanab topshirilgan naqd (MAJBURIY, ega S5). discrepancy_cash = shu − expected_balance_cash',
   })
   @IsDefined({ message: CLOSING_BALANCE_CASH_REQUIRED_MESSAGE })
-  @Type(() => Number)
-  @IsNumber(
-    { maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false },
-    {
-      message:
-        "closing_balance_cash son bo'lishi kerak (ko'pi bilan 2 xonali kasr)",
-    },
-  )
-  @Min(0, { message: "closing_balance_cash manfiy bo'lmasligi kerak" })
-  @Max(MONEY_MAX, {
-    message: `closing_balance_cash ${MONEY_MAX} so'mdan oshmasligi kerak`,
-  })
+  @IsMoneyNonNegative('closing_balance_cash')
   closing_balance_cash!: number;
 
   @ApiPropertyOptional({
@@ -551,9 +540,7 @@ export class ShiftLatePhotoRequestDto {
       ? undefined
       : Number(value),
   )
-  @IsNumber({ maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false })
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsMoneyNonNegative('entered_balance', { coerce: false })
   entered_balance!: number;
 
   @ApiPropertyOptional({
@@ -985,12 +972,12 @@ export class CreateSalaryRequestDto {
   user_id!: string;
 
   @ApiProperty({ example: 3000000 })
-  @IsMoneyAmount('salary_amount')
+  @IsMoneyAmount('salary_amount', { max: MONEY_MAX_NUMERIC_14_2 })
   salary_amount!: number;
 
   @ApiPropertyOptional({ example: 3000000 })
   @IsOptional()
-  @IsMoneySigned('have_to_pay')
+  @IsMoneySigned('have_to_pay', { max: MONEY_MAX_NUMERIC_14_2 })
   have_to_pay?: number;
 
   @ApiPropertyOptional({ example: 10 })
@@ -1010,12 +997,12 @@ export class UpdateSalaryRequestDto {
 
   @ApiPropertyOptional({ example: 3500000 })
   @IsOptional()
-  @IsMoneyAmount('salary_amount')
+  @IsMoneyAmount('salary_amount', { max: MONEY_MAX_NUMERIC_14_2 })
   salary_amount?: number;
 
   @ApiPropertyOptional({ example: 1000000 })
   @IsOptional()
-  @IsMoneySigned('have_to_pay')
+  @IsMoneySigned('have_to_pay', { max: MONEY_MAX_NUMERIC_14_2 })
   have_to_pay?: number;
 
   @ApiPropertyOptional({ example: 12 })
@@ -1028,7 +1015,9 @@ export class UpdateSalaryRequestDto {
 
   @ApiPropertyOptional({ example: 250000 })
   @IsOptional()
-  @IsMoneySigned('increase_have_to_pay_by')
+  @IsMoneySigned('increase_have_to_pay_by', {
+    max: MONEY_MAX_NUMERIC_14_2,
+  })
   increase_have_to_pay_by?: number;
 }
 

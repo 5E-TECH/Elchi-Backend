@@ -30,13 +30,15 @@ Deploy: **api-gateway, finance-service**, migratsiyasiz. Real summalarga ta'sir 
 Muammo: pul DTO'lari `@Min(0.0000001)` va kasr/maksimum cheklovsiz edi — 0,005 so'm olish filialda 100,00 qoldirib MAIN ga +0,01 «yaratardi» (har chaqiruvda), `1e19` → 500 (numeric overflow), `9e17` → JS double siljishi.
 
 - ⚠️ [gateway] Quyidagi summalar endi **ko'pi bilan 2 kasr xonali** va **≤ 10 000 000 000 000** (1e13 so'm; JS double tiyingacha aniq oraliq — 1e15 da tiyin siljiydi) bo'lishi shart, aks holda **400** (validatsiya):
-  - musbat (≥ 0,01): `payment/courier`, `payment/market`, `payment/branch-to-main`, `cashbox/spend`, `cashbox/fill`, `cashbox/balance`, maosh `salary_amount`, kartalararo o'tkazma va konvertatsiya, T6 `new_amount`, investitsiya `amount`, `order/settlement/*` `amount`;
-  - ≥ 0: smena yopish `closing_balance_cash`, `closing_balance_card`, karta qoldig'i `entered_balance`, investor foyda ulushi `amount`;
-  - ishorali (±1e13): kassa yaratish `balance`, `balance_cash`, `balance_card`; smena ochish `opening_balance_*`; maosh `have_to_pay`, `increase_have_to_pay_by`; moliyaviy balans yozuvi `amount` (ilgari ±1e15).
-- ⚠️ [finance] RPC orqali to'g'ridan-to'g'ri kelgan summalar ham (to'lov, sotuv, maosh — `assertPositiveAmount`) 2 kasrdan ko'p yoki 1e13 dan katta bo'lsa 400.
+  - musbat (≥ 0,01): `payment/courier`, `payment/market`, `payment/branch-to-main`, `cashbox/spend`, `cashbox/fill`, `cashbox/balance`, kartalararo o'tkazma va konvertatsiya, T6 `new_amount`, integratsiya remittance `amount` (ilgari ≥ 1, kasr cheksiz);
+  - ≥ 0: smena yopish `closing_balance_cash`, `closing_balance_card`, karta qoldig'i `entered_balance`;
+  - ishorali (±1e13): kassa yaratish `balance`, `balance_cash`, `balance_card`; smena ochish `opening_balance_*`; moliyaviy balans yozuvi `amount` (ilgari ±1e15);
+  - `numeric(14,2)` ustunlar — chegara **999 999 999 999,99** (ilgari 1e12 dan kattasi DB'da 500): maosh `salary_amount` (≥ 0,01), `have_to_pay`, `increase_have_to_pay_by` (ishorali), investitsiya `amount` (≥ 0,01), foyda ulushi `amount` (≥ 0).
+  - Son bo'lmagan qiymat — bitta xabar «<maydon> son bo'lishi kerak»; `1e-7` kabi qiymatlar endi 400 (ilgari ba'zi maydonlarda 500). openapi.json da `minimum` / `maximum` / `multipleOf: 0.01`.
+- ⚠️ [finance] RPC orqali to'g'ridan-to'g'ri kelgan summalar ham (to'lov, sotuv, maosh — `assertPositiveAmount`) 2 kasrdan ko'p yoki 1e13 dan katta bo'lsa 400. Ichki HISOBLANGAN oyoqlarning float xatosi (masalan sotuv oyog'i `collectible − tariff − share`) uchun 0,01 tiyin tolerans — soxta rad yo'q.
 
 **Frontend action items:**
-- 🔧 Summa maydonlarida 2 kasr xonasidan ortig'ini kiritishga yo'l qo'ymang (yoki yuborishdan oldin tiyingacha yaxlitlang); 400 matnini foydalanuvchiga ko'rsating.
+- 🟢 FE butun so'm yuboradi — o'zgarish shart emas. Kasrli kiritish qo'shilsa: 2 xonadan ortig'iga yo'l qo'ymang, 400 matnini ko'rsating.
 ### 2026-11-19 — AI tasdiq: takror tuman/mahsulot tekshiruvidan ham oldin; takror xarajatga bog'lanadi
 
 Deploy: api-gateway (+ order-service — faqat ichki chegara). Migratsiyasiz. Javob shakli o'zgarmagan.

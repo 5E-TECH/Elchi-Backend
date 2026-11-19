@@ -45,4 +45,32 @@ describe('PR-D — finance assertPositiveAmount', () => {
       "salary_amount — ko'pi bilan 2 xonali kasr (tiyin) bo'lishi kerak",
     );
   });
+  it('B1: katta aniq qiymatlar va HISOBLANGAN oyoqlar soxta rad etilmaydi (outbox cheksiz qayta urinmasin)', () => {
+    for (const good of [
+      569_244_786.94, 4_737_337_519.56, 9_999_999_999_999.99,
+    ]) {
+      expect(check(good)).not.toThrow();
+    }
+    // order-service sotuv oyog'i: collectible − marketTariff − share (numeric(14,2)).
+    const leg = 98_765_432_109.87 - 1_234_567.89 - 45_678.12;
+    expect(check(leg)).not.toThrow();
+    let rejected = 0;
+    for (let i = 0; i < 20_000; i += 1) {
+      const a = Number((((i * 7_919) % 99_991) * 1_000_003.37).toFixed(2));
+      const b = Number((((i * 104_729) % 9_973) * 101.11).toFixed(2));
+      const c = Number(((i % 997) * 13.07).toFixed(2));
+      const value = a - b - c;
+      if (value <= 0) continue;
+      try {
+        service.assertPositiveAmount(value);
+      } catch {
+        rejected += 1;
+      }
+    }
+    expect(rejected).toBe(0);
+    // Haqiqiy kasr xatolari hali rad.
+    for (const bad of [0.005, 1.005, 0.009, 1e8 + 0.005]) {
+      expect(check(bad)).toThrow(BadRequestException);
+    }
+  });
 });

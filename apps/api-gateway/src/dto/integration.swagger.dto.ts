@@ -5,7 +5,6 @@ import {
   IsIn,
   IsInt,
   IsNotEmpty,
-  IsNumber,
   IsObject,
   IsOptional,
   IsString,
@@ -14,6 +13,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { IsMoneyAmount } from './money.validators';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 type IntegrationType = 'api' | 'webhook' | 'ftp';
@@ -827,8 +827,9 @@ export class CreateRemittanceRequestDto {
     example: 1500000,
     description: 'Total amount the provider remitted',
   })
-  @IsNumber()
-  @Min(1)
+  // PR-D (S3): summa xom holda finance.cashbox.fill ga ketadi — 2 kasr va
+  // chegara shu yerda (aks holda yozuv tushib, kassa fill rad etilardi).
+  @IsMoneyAmount('amount', { coerce: false })
   amount!: number;
 
   @ApiPropertyOptional({ example: 'PAY-2026-06-04-001' })

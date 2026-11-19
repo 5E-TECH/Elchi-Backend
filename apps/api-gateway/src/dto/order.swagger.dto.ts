@@ -20,7 +20,6 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { IsMoneyAmount } from './money.validators';
 import { Transform, Type } from 'class-transformer';
 import {
   CancelReason,
@@ -1245,7 +1244,8 @@ export class CreateOrderByTelegramBotRequestDto {
  */
 class SettlementAmountDto {
   @ApiProperty({ description: 'Amount to settle in som (>= 0.01, 2 dp)' })
-  @IsMoneyAmount('amount', false)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01) // (qGaxcaD4) Nol summali hisob-kitob yozuvi yaratilmasin.
   amount!: number;
 }
 

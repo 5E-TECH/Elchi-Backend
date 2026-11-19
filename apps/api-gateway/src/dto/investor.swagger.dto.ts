@@ -21,7 +21,11 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { IsMoneyAmount, IsMoneyNonNegative } from './money.validators';
+import {
+  IsMoneyAmount,
+  IsMoneyNonNegative,
+  MONEY_MAX_NUMERIC_14_2,
+} from './money.validators';
 
 /** vpKijXce: users.id — musbat butun son (raqam yoki satr qabul qilinadi). */
 const LINKED_USER_ID_RE = /^[1-9]\d{0,18}$/;
@@ -132,7 +136,7 @@ export class CreateInvestmentDto {
   branch_id?: string;
 
   @ApiProperty({ minimum: 0.01 })
-  @IsMoneyAmount('amount', false)
+  @IsMoneyAmount('amount', { coerce: false, max: MONEY_MAX_NUMERIC_14_2 })
   amount!: number;
 
   @ApiProperty({ example: '2026-03-25T00:00:00.000Z' })
@@ -158,7 +162,7 @@ export class UpdateInvestmentDto {
 
   @ApiPropertyOptional({ minimum: 0.01 })
   @IsOptional()
-  @IsMoneyAmount('amount', false)
+  @IsMoneyAmount('amount', { coerce: false, max: MONEY_MAX_NUMERIC_14_2 })
   amount?: number;
 
   @ApiPropertyOptional({ example: '2026-03-25T00:00:00.000Z' })
@@ -178,7 +182,7 @@ export class CreateProfitShareDto {
   investor_id!: string;
 
   @ApiProperty({ minimum: 0 })
-  @IsMoneyNonNegative('amount', false)
+  @IsMoneyNonNegative('amount', { coerce: false, max: MONEY_MAX_NUMERIC_14_2 })
   amount!: number;
 
   @ApiProperty({ minimum: 0, maximum: 100 })

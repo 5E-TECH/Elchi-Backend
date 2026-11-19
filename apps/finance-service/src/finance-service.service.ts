@@ -82,6 +82,12 @@ import {
   toPublicUserSummary,
   type PublicUserSummary,
 } from '@app/common';
+// PR-D: alohida yo'l — `jest.mock('@app/common')` qiladigan spec'lar ham ko'rsin.
+import {
+  MONEY_MAX,
+  formatMoneyLimit,
+  isNearCents,
+} from '@app/common/finance/money';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { randomUUID } from 'node:crypto';
@@ -558,11 +564,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * PR-D (A-5) — pul summasining yuqori chegarasi: gateway `MONEY_MAX` bilan
-   * bir xil (1e13 so'm — JS double tiyingacha aniq oraliq).
-   */
-  static readonly MONEY_MAX = 1e13;
+  /** PR-D (A-5) — pul summasining yuqori chegarasi (`@app/common` MONEY_MAX). */
+  static readonly MONEY_MAX = MONEY_MAX;
 
   private assertPositiveAmount(value: number, fieldName = 'amount') {
     if (!Number.isFinite(value) || value <= 0) {
@@ -570,18 +573,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
     /**
      * PR-D (A-5): ko'pi bilan 2 xonali kasr — 0,005 so'm olish yaxlitlashda
-     * filialda 100,00 qoldirib MAIN ga +0,01 «yaratardi»; chegara —
-     * 1e19 `numeric` to'lib 500, 9e17 da double siljishi.
+     * tiyin «yaratardi»; chegara — 1e19 `numeric` to'lib 500, 9e17 da double
+     * siljishi. Tolerans (`isNearCents`): ichki HISOBLANGAN oyoqlar
+     * (order-service sotuv oyog'i `collectible − tariff − share`, outbox
+     * orqali — rad etilsa cheksiz qayta urinadi) float xatosi bilan keladi;
+     * aniq tiyindagi qiymat esa doim o'tadi.
      */
-    const cents = value * 100;
-    if (Math.abs(cents - Math.round(cents)) > 1e-6) {
+    if (!isNearCents(value)) {
       throw new BadRequestException(
         `${fieldName} — ko'pi bilan 2 xonali kasr (tiyin) bo'lishi kerak`,
       );
     }
-    if (value > FinanceServiceService.MONEY_MAX) {
+    if (value > MONEY_MAX) {
       throw new BadRequestException(
-        `${fieldName} ${FinanceServiceService.MONEY_MAX} so'mdan oshmasligi kerak`,
+        `${fieldName} ${formatMoneyLimit(MONEY_MAX)} so'mdan oshmasligi kerak`,
       );
     }
   }

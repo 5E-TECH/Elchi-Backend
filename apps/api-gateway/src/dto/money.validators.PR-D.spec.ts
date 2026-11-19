@@ -3,6 +3,7 @@ import { validateSync } from 'class-validator';
 import {
   CloseShiftRequestDto,
   CorrectPaymentAmountRequestDto,
+  CreateSalaryRequestDto,
   CreateCashboxRequestDto,
   MainCashboxManualRequestDto,
   PaymentBranchToMainRequestDto,
@@ -11,8 +12,8 @@ import {
   RecordFinancialBalanceRequestDto,
 } from './finance.swagger.dto';
 import { CreateInvestmentDto } from './investor.swagger.dto';
-import { SettlementBranchToHqDto } from './order.swagger.dto';
-import { MONEY_MAX } from './money.validators';
+import { CreateRemittanceRequestDto } from './integration.swagger.dto';
+import { MONEY_MAX, MONEY_MAX_NUMERIC_14_2 } from './money.validators';
 
 /**
  * PR-D (A-5) — pul DTO'lari: ko'pi bilan 2 kasr xonasi va `MONEY_MAX`
@@ -25,7 +26,8 @@ const errorsOf = (cls: new () => object, body: Record<string, unknown>) =>
     error.property === 'amount' ||
     error.property === 'new_amount' ||
     error.property === 'closing_balance_cash' ||
-    error.property === 'balance_cash'
+    error.property === 'balance_cash' ||
+    error.property === 'salary_amount'
       ? Object.values(error.constraints ?? {})
       : [],
   );
@@ -103,11 +105,86 @@ describe('PR-D — pul summalari: 2 kasr xonasi va yuqori chegara', () => {
     ).not.toEqual([]);
   });
 
-  it('investitsiya va settlement: JSON son (satr avvalgidek rad etiladi), 2 kasr, chegara', () => {
+  it('S1: 1e-7 / 5e-7 / "1e-7" / −1e-7 — TypeError (500) emas, 400 xabari', () => {
+    for (const bad of [1e-7, 5e-7, '1e-7', -1e-7]) {
+      for (const [, cls, base] of amountDtos) {
+        expect(() => errorsOf(cls, { ...base, amount: bad })).not.toThrow();
+        expect(errorsOf(cls, { ...base, amount: bad }).length).toBeGreaterThan(
+          0,
+        );
+      }
+      expect(() =>
+        errorsOf(CloseShiftRequestDto, { closing_balance_cash: bad }),
+      ).not.toThrow();
+      expect(
+        errorsOf(CloseShiftRequestDto, { closing_balance_cash: bad }),
+      ).not.toEqual([]);
+    }
+  });
+
+  it('B1/S1: katta aniq tiyinli qiymatlar soxta rad etilmaydi (569244786.94, 4737337519.56, 9999999999999.99)', () => {
+    for (const good of [
+      569_244_786.94, 4_737_337_519.56, 9_999_999_999_999.99,
+    ]) {
+      expect(
+        errorsOf(PaymentFromCourierRequestDto, {
+          courier_id: '5',
+          amount: good,
+        }),
+      ).toEqual([]);
+    }
+    for (const bad of [0.009, 1.005, 0.1 + 0.2]) {
+      expect(
+        errorsOf(PaymentFromCourierRequestDto, {
+          courier_id: '5',
+          amount: bad,
+        }),
+      ).not.toEqual([]);
+    }
+  });
+
+  it('nit: noto`g`ri format ("100,5") — faqat «son bo`lishi kerak» (kasr xabari qo`shilmaydi)', () => {
+    const messages = errorsOf(PaymentFromCourierRequestDto, {
+      courier_id: '5',
+      amount: '100,5',
+    });
+    expect(messages).toContain("amount son bo'lishi kerak");
+    expect(messages.join(' ')).not.toContain('kasr');
+  });
+
+  it('S2: numeric(14,2) ustunlar — maosh va investitsiya ≤ 999 999 999 999,99', () => {
+    expect(MONEY_MAX_NUMERIC_14_2).toBe(999_999_999_999.99);
+    const salary = { user_id: '5', salary_amount: 5e12 };
+    expect(errorsOf(CreateSalaryRequestDto, salary)).toContain(
+      "salary_amount 999 999 999 999,99 so'mdan oshmasligi kerak",
+    );
+    expect(
+      errorsOf(CreateSalaryRequestDto, { ...salary, salary_amount: 5_000_000 }),
+    ).toEqual([]);
+    expect(errorsOf(CreateInvestmentDto, { amount: 5e12 })).not.toEqual([]);
     expect(errorsOf(CreateInvestmentDto, { amount: 1_000.5 })).toEqual([]);
+    // JSON son kutiladi — satr avvalgidek rad etiladi.
     expect(errorsOf(CreateInvestmentDto, { amount: '1000' })).not.toEqual([]);
-    expect(errorsOf(CreateInvestmentDto, { amount: 1e19 })).not.toEqual([]);
-    expect(errorsOf(SettlementBranchToHqDto, { amount: 10 })).toEqual([]);
-    expect(errorsOf(SettlementBranchToHqDto, { amount: 9e17 })).not.toEqual([]);
+  });
+
+  it('S3: integratsiya remittance — 2 kasr va chegara (finance.cashbox.fill gacha yetmaydi)', () => {
+    expect(errorsOf(CreateRemittanceRequestDto, { amount: 1.005 })).not.toEqual(
+      [],
+    );
+    expect(errorsOf(CreateRemittanceRequestDto, { amount: 1e19 })).not.toEqual(
+      [],
+    );
+    expect(errorsOf(CreateRemittanceRequestDto, { amount: 1_500_000 })).toEqual(
+      [],
+    );
+  });
+
+  it('chegara xabari o`qiladigan formatda', () => {
+    expect(
+      errorsOf(PaymentFromCourierRequestDto, { courier_id: '5', amount: 1e14 }),
+    ).toContain("amount 10 000 000 000 000 so'mdan oshmasligi kerak");
+    expect(
+      errorsOf(RecordFinancialBalanceRequestDto, { amount: -1e14 }),
+    ).toContain("amount −10 000 000 000 000 so'mdan kam bo'lmasligi kerak");
   });
 });
