@@ -586,6 +586,25 @@ function stripOriginClauses(translitText: string): string {
   return out;
 }
 
+/**
+ * r16: mo'ljal bo'laklari (translit matnda) - "Шават р-н рядом", "X tumaniga
+ * boradigan yo'lda", "mo'ljal: X tumani" - 4-usulning joy belgisi va tur
+ * ulardan olinmaydi ("Gulzor ko'chasi 1, Шават р-н рядом" - G'uzor emas).
+ */
+const LANDMARK_CLAUSE_RES: readonly RegExp[] = [
+  new RegExp(
+    `[a-z-]+\\s*(?:-\\s*)?(?:tumani|tuman|tumaniga|tumanida|tumanidagi|tum\\.|rayon[a-z]*|r-n|sh\\.?|shahri|shahar|g\\.)\\s+(?:[a-z]+\\s+)?(?:${[...LANDMARK_AFTER_WORDS].join('|')})(?![a-z])`,
+    'g',
+  ),
+  /(?:^|[^a-z])(?:moljal|orientir|oriyentir)[\s:,-]*[a-z-]+(?:\s+(?:tumani|tuman|tumaniga|tumanidagi|tum\.|rayon[a-z]*|r-n|sh\.?|shahri|shahar))?(?![a-z])/g,
+];
+/** r16: jo'natish joyi + mo'ljal bo'laklarisiz matn (`stripOriginClauses`). */
+function stripNonDestClauses(translitText: string): string {
+  let out = stripOriginClauses(translitText);
+  for (const re of LANDMARK_CLAUSE_RES) out = out.replace(re, ' ');
+  return out;
+}
+
 function senderAt(
   tokens: readonly string[],
   i: number,
@@ -753,7 +772,7 @@ function capitalAbbrNames(text: string): Set<string> {
  * tashlanadi (yalang'och raqib nom bo'lib ham qolmaydi).
  */
 const RECIPIENT_INITIAL_RE =
-  /((?<![\p{L}\p{M}])(?:oluvchi(?:si)?|qabul\s+qiluvchi(?:si)?|mijoz|ismi?|fio|f\.i\.o\.?|klient|poluchatel|kimga|олувчи(?:си)?|қабул\s+қилувчи(?:си)?|мижоз|исми?|получател[ьяю]|получ\.|клиент|имя|фио|ф\.и\.о\.?|кому)(?![\p{L}\p{M}])\s*[:\-\u2013\u2014]?\s*)((?:[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,}\s+)?[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,})(?:\s*-\s*|\.\s*|\s+)[Tt\u0422\u0442]\./giu;
+  /((?<![\p{L}\p{M}])(?:oluvchi(?:si)?|qabul\s+qiluvchi(?:si)?|buyurtmachi(?:si)?|xaridor(?:i)?|mijoz|ismi?|fio|f\.i\.o\.?|klient|poluchatel|kimga|олувчи(?:си)?|қабул\s+қилувчи(?:си)?|мижоз|исми?|получател[ьяю]|получ\.|клиент|имя|фио|ф\.и\.о\.?|кому|буюртмачи(?:си)?|харидор(?:и)?|заказчик(?:а|у)?|покупател[ьяю])(?![\p{L}\p{M}])\s*[:\-\u2013\u2014]?\s*)((?:[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,}\s+)?[\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,})(?:\s*-\s*|\.\s*|\s+)[Tt\u0422\u0442]\./giu;
 function dropRecipientInitials(text: string): string {
   return text.replace(RECIPIENT_INITIAL_RE, '$1');
 }
@@ -1506,7 +1525,9 @@ export function resolveDistrictText(
     heads?: ReadonlySet<string>,
   ): DistrictKind | null =>
     wantedKind(
-      translit(text),
+      // r16: tur jo'natish joyi / mo'ljal belgisidan olinmaydi
+      // ("jo'natuvchi: Kasbi sh." - Qarshi shahri emas).
+      stripNonDestClauses(translit(text)),
       // r14 (S1): katta "T." ("Furqat T.") turni belgilamaydi.
       namedT(text, TUMAN_T_ABBR_RE, (_w, cap) => !cap) ||
         suffixFor(text, heads) ||
@@ -1602,12 +1623,21 @@ export function resolveDistrictText(
   // PLACE-SIGNAL (BeePost :1596-1601): "tuman/shahar" so'zi yoki
   // district_name bo'lmasa — oddiy ko'cha so'zi jimgina TUMANga aylanmaydi.
   const placeText = `${q.full_address}, ${q.address}`;
+  // r16: jo'natish joyining belgisi ("jo'natuvchi: Kasbi tumani", "из г.
+  // Касби") joy belgisi emas - 2b'da ham (r15 da faqat 4-usulda edi).
   const strictPlaceSignal =
-    !!q.district_name || PLACE_STRICT_RE.test(translit(placeText));
-  /** r15: jo'natish joyi bo'laklarisiz (`stripOriginClauses`) - 4-usul uchun. */
-  const strictNoOrigin =
     !!q.district_name ||
     PLACE_STRICT_RE.test(stripOriginClauses(translit(placeText)));
+  /** r16: jo'natish joyi bilan birga (faqat yagona aniq nom uchun, 2b). */
+  const strictWithOrigin =
+    strictPlaceSignal || PLACE_STRICT_RE.test(translit(placeText));
+  /**
+   * r15/r16: 4-usul uchun - jo'natish joyi va mo'ljal bo'laklarisiz
+   * ("Gulzor ko'chasi 1, Шават р-н рядом").
+   */
+  const strictNoOrigin =
+    !!q.district_name ||
+    PLACE_STRICT_RE.test(stripNonDestClauses(translit(placeText)));
   /**
    * r12: 2b zaif moslik uchun PR'dagi yangi belgilar. "Y tumanida/tum." -
    * faqat Y topilgan nom bo'lsa. "Y t." - Y topilgan nom yoki qidiruv
@@ -2237,6 +2267,35 @@ export function resolveDistrictText(
     // oluvchi so'zi yo'q (`dropRecipientInitials` olib tashlagan) va matnda
     // boshqa yalang'och joy nomi yo'q bo'lsa: "Kasbi T., Navoiy 5" - avto,
     // "Furqat T., Navoiy 5" / "Qarshi, Navoiy 5, Kasbi T." - nomzod.
+    const acceptedCap = new Set<string>();
+    /**
+     * r16: 2b qidiruvi 4 harfdan qisqa nomlarni ko'rmaydi ("Pop", "So'x") -
+     * yalang'och shunday nom ham boshqa joy nomi ("Мингбулак T., Pop, ...").
+     */
+    let shortBare: boolean | null = null;
+    const shortBareName = (): boolean => {
+      if (shortBare !== null) return shortBare;
+      const shortSkels = new Set(
+        pool
+          .filter((o) => o.skel.length >= 2 && o.skel.length < 4)
+          .map((o) => o.skel),
+      );
+      shortBare = tokenInfos.some(({ tokens, sepBefore }) =>
+        tokens.some((t, j) => {
+          if (!shortSkels.has(t)) return false;
+          const next = sepBefore.has(j + 1) ? '' : (tokens[j + 1] ?? '');
+          return (
+            !STREET_AFTER_WORDS.has(next) &&
+            !STREET_BEFORE_WORDS.has(
+              sepBefore.has(j) ? '' : (tokens[j - 1] ?? ''),
+            ) &&
+            !houseNumberAt(tokens, j + 1, sepBefore) &&
+            !(next === 'tumani' && tokens[j + 2] === TUMAN_T_ABBR_TOKEN)
+          );
+        }),
+      );
+      return shortBare;
+    };
     for (const d of strong) {
       if (!capMarked.has(d.id) || firmMarked.has(d.id)) continue;
       const word = newMarkWord.get(d.id) ?? d.skel;
@@ -2249,17 +2308,21 @@ export function resolveDistrictText(
       ) {
         continue;
       }
-      const otherBare = [...strong, ...weak].some(
-        (o) =>
-          o !== d &&
-          !o.regionNamed &&
-          plainWeak.has(o.id) &&
-          !originMarked.has(o.id),
-      );
+      const otherBare =
+        [...strong, ...weak].some(
+          (o) =>
+            o !== d &&
+            !o.regionNamed &&
+            plainWeak.has(o.id) &&
+            !originMarked.has(o.id),
+        ) || shortBareName();
       if (otherBare) continue;
       firmMarked.add(d.id);
       addressKind.set(d.id, 'tuman');
-      for (const l of lasts) capNames.delete(l);
+      for (const l of lasts) {
+        capNames.delete(l);
+        acceptedCap.add(l);
+      }
     }
     const landmarks = [...landmarkMarked.values()].filter(
       (d) => !strong.includes(d) && !weak.includes(d),
@@ -2279,6 +2342,9 @@ export function resolveDistrictText(
      * ko'chasi 5, oluvchi Navbahor T." (orada ko'cha, katta "T.") - raqib.
      */
     const lowerAbbr = lowerAbbrNames(addressTexts.join(', '));
+    // r16: viloyat konteksti ("Samarqand, Urgut T., ...") - qabul qilingan
+    // katta "X T." ham kichik "t." kabi.
+    const leadAbbr = new Set([...lowerAbbr, ...acceptedCap]);
     const regionLead = (d: PreparedDistrict): boolean => {
       const occ = plainAt.get(d.id) ?? [];
       return (
@@ -2291,7 +2357,7 @@ export function resolveDistrictText(
             o.sep &&
             !!a &&
             a.d.region_id === d.region_id &&
-            lowerAbbr.has(a.last)
+            leadAbbr.has(a.last)
           );
         })
       );
@@ -2358,7 +2424,7 @@ export function resolveDistrictText(
           const a = o.lead ? abbrAt.get(`${o.li}:${o.end}`) : undefined;
           return !(
             a &&
-            lowerAbbr.has(a.last) &&
+            leadAbbr.has(a.last) &&
             isTashkentSato(idx.regionById.get(a.d.region_id)?.sato)
           );
         }) ||
@@ -2379,7 +2445,7 @@ export function resolveDistrictText(
           hasOrigin: originInText,
           leadRegion: (li, j) => {
             const a = abbrAt.get(`${li}:${j}`);
-            return a && lowerAbbr.has(a.last) ? a.d.region_id : null;
+            return a && leadAbbr.has(a.last) ? a.d.region_id : null;
           },
         });
       if (!conflict) {
@@ -2442,19 +2508,26 @@ export function resolveDistrictText(
       // gorod, ..." / "Termez tumani, ..."), yoki faqat havzadan tashqaridagi
       // "Name T." (S2) va manzilda yashirin joy nomi bo'lsa ("Sirdaryo,
       // Yangiyer, ..., Нишон T.") - avto emas.
-      const signal = weakSignal(matches, true, landmarks);
+      // r16: belgi faqat jo'natish joyiniki ("..., с г. Джамбай") - yagona,
+      // uy raqamisiz, turi aniq (shahar/tuman egizagi yo'q) va viloyat nomli
+      // bo'lmagan yalang'och nom uchungina belgi (dev kabi: "Payariq, ...").
+      // "Qarshi, ..., jo'natuvchi: Kasbi tumani" (Qarshi shahar ham, tuman
+      // ham), "Samarqand, ..., jo'natuvchi: X tumani" - avto emas.
+      const originOnlySignal =
+        !strictPlaceSignal &&
+        strictWithOrigin &&
+        matches.length === 1 &&
+        !matches[0].regionNamed &&
+        plainWeak.has(matches[0].id) &&
+        !hasKindTwin(matches[0]);
+      const signal = weakSignal(
+        matches,
+        true,
+        landmarks,
+        strictPlaceSignal || originOnlySignal,
+      );
       if (signal === 'none') forceCandidate = true;
       if (signal === 'rival' || signal === 'soft') candidateOnly = true;
-      // r15: belgi faqat jo'natish joyiniki ("из г. Карши") va moslik uy
-      // raqamli ko'cha ("Navoiy 5") - avto emas. Yalang'och nom ("Payariq,
-      // ..., с г. Джамбай") esa dev kabi qoladi.
-      if (
-        strictPlaceSignal &&
-        !strictNoOrigin &&
-        matches.some((d) => !plainWeak.has(d.id))
-      ) {
-        candidateOnly = true;
-      }
       if (matches.some((d) => softTumanT.has(d.id))) candidateOnly = true;
       // Operator tuman nomini yozgan, lekin u topilmadi — manzildagi so'z
       // bilan almashtirish TAXMIN.
@@ -2515,7 +2588,13 @@ export function resolveDistrictText(
         // belgi emas (dev kabi nomzod); "Пахтаабад, Мархамат туманига
         // яқин" - yashirin boshqa joy nomi bilan avto emas.
         const signal = weakSignal(matches, false, landmarkList, strictNoOrigin);
-        if (signal === 'none') forceCandidate = true;
+        // r16: faqat mo'ljalning o'zi topilgan bo'lsa ("Kasbi tumani tomonga")
+        // - belgi mo'ljalniki: nomzod (avvalgidek), "belgisiz" emas.
+        if (signal === 'none') {
+          if (matches.every((d) => landmarkList.includes(d))) {
+            candidateOnly = true;
+          } else forceCandidate = true;
+        }
         if (signal === 'rival' || signal === 'soft') candidateOnly = true;
         // r15: 4-usul jo'natish joyining o'zini ("из г. Карши") topdi - avto
         // emas.
