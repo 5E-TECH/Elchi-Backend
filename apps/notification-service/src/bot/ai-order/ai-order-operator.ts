@@ -203,6 +203,10 @@ function reasonKind(result: ResultLike): 'phone' | 'operator' | null {
       return 'phone';
     return OPERATOR_REJECTED_CODES.has(result.reason_code) ? 'operator' : null;
   }
+  // Matn zaxirasi faqat `create_failed` uchun: masalan operator tekshiruvi
+  // ishlamasa gateway `validation_unavailable` + «Tanlangan operatorni
+  // tekshirib bo'lmadi…» qaytaradi — bu rad etish EMAS (tanlov saqlanadi).
+  if (result.code !== 'create_failed') return null;
   const reason = typeof result.reason === 'string' ? result.reason : '';
   if (OPERATOR_PHONE_REQUIRED_RE.test(reason)) return 'phone';
   return OPERATOR_REJECTED_RE.test(reason) ? 'operator' : null;

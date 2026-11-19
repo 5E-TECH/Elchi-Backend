@@ -532,7 +532,10 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   yubormaydi — amalda kelmaydi, kelsa NOT_SELECTABLE kabi). Noma'lum
   `reason_code` — umumiy xato (`code` bo'yicha), matnga QARALMAYDI. Matn
   bo'yicha aniqlash («Operator telefon raqami majburiy», «Tanlangan
-  operator …») — faqat `reason_code` yo'q bo'lsa (eski gateway) zaxira.
+  operator …») — faqat `reason_code` yo'q bo'lsa (eski gateway) va
+  `code = 'create_failed'` bo'lsa zaxira (operator tekshiruvi ishlamasa
+  gateway `validation_unavailable` + «Tanlangan operatorni tekshirib
+  bo'lmadi…» qaytaradi — bu rad etish EMAS, tanlov saqlanadi).
   Operator rad etildi, lekin bot tanlov yubormagan — umumiy xato (qayta
   urinish ma'nosiz). Qoralama `created` EMAS, preview'ga qaytadi.
   **Natija holati (#724) — `code` bo'yicha, `reason_code` ga bog'liq
@@ -546,9 +549,10 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   `duplicate_in_progress`, noma'lum kod yoki natija umuman yo'q —
   NOMA'LUM: «Javob kelmadi» belgisi, tuzatish va «🎧 Operator» yopiq
   (server kaliti birinchi yukni qaytaradi). Xabarda natija qatorlari +
-  «🔁 Ba'zi …» (yaratilgan yoki noma'lum bor) / «🔁 Buyurtmalar
-  yaratilmadi …» (hammasi ANIQ yaratilmagan). Operator rad etilgan, lekin
-  noma'lum buyurtma bor — matn «🎧 Operator» ni taklif qilmaydi («✅»
+  «🔁 Ba'zi …» (qoralamada yaratilgan yoki noma'lum buyurtma bor — OLDINGI
+  urinishlarniki ham) / «🔁 Buyurtmalar yaratilmadi …» (hech qaysi buyurtma
+  belgilanmagan). Operator rad etilgan, lekin qoralamada (oldingi
+  urinishdan ham) noma'lum buyurtma bor — matn «🎧 Operator» ni taklif qilmaydi («✅»
   operatorsiz yuboradi, boshqasi — kabinetda). Qisman yaratilgandan keyin
   tanlash oynasi «hali yaratilmagan buyurtmalarga». Yaratilganlari qayta bosishda
   server kaliti bilan takrorlanmaydi (`idempotent_replay`); odam tanlovi
@@ -567,7 +571,9 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   `confirm_order_id` yo'q) YO'Q. `updated_at` tengligi ishlatilmaydi (SQL
   `now()` mikrosekundi JS Date bilan hech qachon teng chiqmasdi; versiya
   ustuni — migratsiya). Shart o'tmasa, qoralama hali `preview` bo'lsa —
-  joriy karta («eskirgan, qayta yuboring» EMAS — qayta yuborish dublikat). Rol
+  joriy karta («eskirgan, qayta yuboring» EMAS — qayta yuborish dublikat).
+  Faqat `meta.operator_id` / `meta.operator_name` yoziladi (`jsonb_set` +
+  `||`) — `input` ning qolgani eski nusxa bilan ustidan yozilmaydi. Rol
   «✅» paytida aktordan qayta o'qiladi (operator_id faqat hozir market
   bo'lsa). Operator id shartnomasi `^[1-9]\d{0,18}$`, ≤ INT8_MAX. Profil
   (`GET /auth/my-profile`) qoralama bo'yicha keshlanadi (faqat muvaffaqiyatli
