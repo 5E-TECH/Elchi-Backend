@@ -22,6 +22,28 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-19 — P0: filial kassasi naqd/kartaga AJRALMAYDI (bitta jami) — 63HO6cBU
+
+Deploy: **finance-service va api-gateway** + **migratsiya 1716000000245** (`BranchCashboxSingleBucket`). Relizda 240–245 bitta tranzaksiyada (scripts/db-prepare.ts), kam yuklamali vaqtda. Orqaga mos: eski FE so'rovlari 400/500 bermaydi (eskirgan maydonlar e'tiborsiz).
+
+Muammo: admin filialdan «O'tkazma» bilan pul olmoqchi bo'lganda filialning KARTA bo'lagi bo'sh bo'lsa 400 «Karta hisobida yetarli mablag' yo'q» qaytardi (menejer kuryer pulini odatda «naqd» deb qabul qiladi). Endi filial kassasi bitta jami: `balance_cash` = jami, `balance_card` doim 0 (FOR_COURIER / FOR_MARKET dagidek).
+
+- ⚠️ [gateway] `POST /finance/cashbox/payment/courier` — **MENEJER** uchun `payment_method` endi **YUBORILMAYDI** (DTO'da ixtiyoriy). Server o'zi `cash` yozadi. Menejer yuborsa ham: `cash` / `click` — e'tiborsiz (→ `cash`), `card_id`, `branch_card_id` — e'tiborsiz; `click_to_market` → **400** («Marketga o'tkazma» filialda yo'q); `receipt_id` → 400 (avvalgidek). **SUPERADMIN/ADMIN** (HQ kuryeridan MAIN'ga) uchun `payment_method` avvalgidek **MAJBURIY** (yo'q → 400), `card_id` (HQ kartasi) avvalgidek.
+- ✏️ [gateway] `POST /finance/cashbox/payment/branch-to-main` — filial oyog'i **JAMIdan** yechiladi (usuldan qat'i nazar). `payment_method` (`cash` | `click` | `click_to_market`) va `card_id` (HQ nomli kartasi) — avvalgidek, faqat MAIN oyog'iga ta'sir qiladi; tarixda SA/A uchun usul saqlanadi. `branch_card_id` — **eskirgan**, yuborilsa e'tiborsiz (ilgari `click_to_market` da 400 edi). Yetmasa (qarz o'chiq): 400 **«Filial kassasida yetarli mablag' yo'q»** (ilgari «Naqd kassada…» / «Karta hisobida…»). «Kassa qarzga ishlaydi» yoqilgan filialda — jamidan ortig'i ham o'tadi (filial manfiy).
+- ✏️ [finance] Filial kassasi javoblarida (`cashbox/my-cashbox`, `cashbox/main` (menejer), `cashbox/user/:id/main`, `all-info`, tarix `balance_*_after`) **`balance_card` doim 0**, `balance_cash` = `balance` (jami). Eski tarix qatorlari o'zgarmaydi.
+- ✏️ [gateway] Tarix (`GET /finance/history`, `history/:id`, `cashbox/my-cashbox`, `cashbox/main`, `cashbox/user/:id/main`, `cashbox/user/:user_id`) — har qatorda yangi ixtiyoriy **`branch_leg: true`** (filial kassasi qatori yoki kuryer → filial to'lovining kuryer qatori). **Menejer, kuryer, registrator** ko'rinishida bu qatorlarda `payment_method: null`, `card_id: null` (eski qatorlarda ham). SA/admin — usul saqlanadi.
+- ⚠️ [gateway] `GET /finance/cashbox/cards?branch_id=` (va menejer) — filial uchun `cards: []` (Asosiy karta yaratilmaydi), `balance_card: 0`, `total_card: 0`, `default_balance: 0`, `in_sync: true`, yangi **`cards_disabled: true`**. `include_inactive=true` — eski (nofaol) filial kartalari, `balance: 0`. Filial kartasida **yaratish, Asosiy qilish, faollashtirish, kartalararo o'tkazma, karta↔naqd konvertatsiyasi → 400** «Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q». Eski kartaning ko'chirmasi (`cards/:id/ledger`) va o'chirish (qoldiq 0) — ishlaydi. MAIN kartalari — o'zgarmagan.
+- ✏️ [finance] **Filial smenasi** — bitta «Sanalgan summa»: ochishda `opening_balance_cash` = jami, `opening_balance_card` = 0; yopishda `closing_balance_cash` = sanalgan jami (eski FE `closing_balance_card` ham yuborsa — jamiga qo'shiladi), `expected_balance_card` = 0, `discrepancy_card` = **null**, `total_*_card` = 0 (barcha kirim/chiqim `total_*_cash` da). Filial smenasida `accounts[]` (karta qoldig'i / skrinshot) **so'ralmaydi va e'tiborsiz** (filial `branch_account_check_enabled` yoqilgan bo'lsa ham). MAIN smenasi — o'zgarmagan.
+- 🟢 [migratsiya 245] Har filial kassasi: `balance_cash += balance_card`, `balance_card = 0` (`balance` o'zgarmaydi); filial kartalari nofaol, nomli qoldig'i 0 (o'chirilmaydi, tarix saqlanadi); ochiq filial smenasining ochilishdagi karta surati jamiga qo'shiladi. Idempotent, `down()` bilan.
+- 🟢 T6 tuzatish / qaytarish filial qabulida — jami bo'yicha (karta tekshirilmaydi).
+
+**Frontend action items:**
+- 🔧 Menejer «Kuryerdan pul qabul qilish» oynasi: to'lov usuli (Naqd / O'tkazma / Marketga o'tkazma) va karta tanlovini **olib tashlang** — faqat summa (+ izoh, sana). So'rov: `{ courier_id, amount, comment?, payment_date? }`.
+- 🔧 Admin «Filialdan pul qabul qilish»: filial kartasi tanlovini (`branch_card_id`) **olib tashlang**; usul (Naqd / O'tkazma / Marketga o'tkazma) va HQ kartasi (`card_id`) — qoladi. Filialning mavjud summasini `balance` (jami) dan ko'rsating — naqd/karta bo'linmasi YO'Q.
+- 🔧 Filial kassasi sahifalari (menejer va admin): naqd/karta bo'linmasi va «Kartalar» bo'limini yashiring (`cards_disabled: true` bo'lsa). Filialda karta↔naqd va kartalararo tugmalari ko'rsatilmasin.
+- 🔧 Filial smenasini ochish/yopish: bitta «Sanalgan summa» maydoni (`closing_balance_cash`), karta maydoni va karta skrinshotlari yo'q.
+- 🔧 Menejer / kuryer tarixida `payment_method === null` qatorlarida usul ustunini bo'sh qoldiring (yoki «—»).
+
 ### 2026-11-18 — AI tasdiq: natijada `reason_code`; takror tekshiruvlardan oldin
 
 Deploy: **order-service va api-gateway** (yangi RMQ `order.ai_confirm.completed`; gateway eski order-service bilan ham ishlaydi — so'rov javob bermasa avvalgi yo'l). Migratsiyasiz. Orqaga mos — yangi maydon qo'shimcha.

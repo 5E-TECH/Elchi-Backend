@@ -454,8 +454,11 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
       receiver_cashbox_type: Cashbox_type.BRANCH,
       payment_method: PaymentMethod.CLICK,
     });
+    // 63HO6cBU — filial kassasi bitta jami (usuldan qat'i nazar).
     expect(await box('15', Cashbox_type.BRANCH)).toMatchObject({
-      card: 200_000,
+      balance: 200_000,
+      cash: 200_000,
+      card: 0,
     });
     const leg = await legOf(tid, Cashbox_type.FOR_COURIER);
     outbox.enqueue.mockClear();
@@ -465,7 +468,11 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     });
 
     expect(res.statusCode).toBe(201);
-    expect(await box('15', Cashbox_type.BRANCH)).toMatchObject({ card: 0 });
+    expect(await box('15', Cashbox_type.BRANCH)).toMatchObject({
+      balance: 0,
+      cash: 0,
+      card: 0,
+    });
     expect(enqueued('order.settlement.retreat')).toEqual([
       expect.objectContaining({
         level: 'courier_to_branch',

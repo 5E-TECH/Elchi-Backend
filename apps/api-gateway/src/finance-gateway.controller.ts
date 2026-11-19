@@ -2362,11 +2362,23 @@ export class FinanceGatewayController {
         message: CASHBOX_RECEIPT_MESSAGES.RECEIPT_NOT_APPLICABLE,
       });
     }
+    /**
+     * 63HO6cBU (P0, ega qarori 2026-11-17) — menejer kuryerdan pulni faqat
+     * SUMMA bilan qabul qiladi: usul olinmaydi, server o'zi `cash` yozadi
+     * (filial kassasi naqd/kartaga ajralmaydi). Eski FE yuborgan
+     * `payment_method: 'cash' | 'click'`, `card_id`, `branch_card_id` —
+     * e'tiborsiz; «Marketga o'tkazma» (`click_to_market`) menejerga yopiq —
+     * 400. SA/A (HQ kuryeridan MAIN'ga) — usul MAJBURIY (pastda).
+     */
+    if (isManager && dto.payment_method === PaymentMethod.CLICK_TO_MARKET) {
+      throw new BadRequestException(
+        "Menejer kuryerdan pulni faqat summa bilan qabul qiladi — «Marketga o'tkazma» filialda yo'q",
+      );
+    }
+    if (!isManager && !dto.payment_method) {
+      throw new BadRequestException("payment_method bo'lishi shart");
+    }
     if (isManager) {
-      // Audit M4 (2026-11-11): menejer "Marketga o'tkazma" (click_to_market)
-      // ham qila oladi — filial kassasi sof 0, finance shu tranzaksiyada
-      // filial → HQ daftar siljishini ham navbatga qo'yadi (soxta filial
-      // qarzi qolmaydi).
       receiverBranchId =
         this.extractBranchId(req.user) ||
         (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
@@ -2398,14 +2410,20 @@ export class FinanceGatewayController {
     }
 
     const token = this.resolveTransferToken(idempotencyKey);
+    // 63HO6cBU — `branch_card_id` (eski FE) hech qachon uzatilmaydi.
+    const payload: Partial<PaymentFromCourierRequestDto> = { ...dto };
+    delete payload.branch_card_id;
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_courier' },
       {
-        ...dto,
+        ...payload,
         created_by: req.user.sub,
         dedup_epoch: token,
         ...(isManager
           ? {
+              payment_method: PaymentMethod.CASH,
+              card_id: undefined,
+              market_id: undefined,
               receiver_user_id: receiverBranchId,
               receiver_cashbox_type: Cashbox_type.BRANCH,
             }
@@ -2586,9 +2604,10 @@ export class FinanceGatewayController {
           "«Marketga o'tkazma» da market_id bo'lishi shart",
         );
       }
-      if (dto.card_id || dto.branch_card_id) {
+      // 63HO6cBU — `branch_card_id` (filial kartasi) endi e'tiborsiz.
+      if (dto.card_id) {
         throw new BadRequestException(
-          "«Marketga o'tkazma» da karta tanlanmaydi (card_id / branch_card_id faqat click to'lovida)",
+          "«Marketga o'tkazma» da karta tanlanmaydi (card_id faqat click to'lovida)",
         );
       }
     } else if (marketId) {
@@ -2624,8 +2643,8 @@ export class FinanceGatewayController {
         ...(dto.receipt_id ? { receipt_id: dto.receipt_id } : {}),
         // 3PE0B03q — CLICK pul asosiy kassaning qaysi nomli kartasiga.
         ...(dto.card_id ? { card_id: dto.card_id } : {}),
-        // Zv3MLn0a — CLICK pul filial kassasining qaysi kartasidan chiqdi.
-        ...(dto.branch_card_id ? { branch_card_id: dto.branch_card_id } : {}),
+        // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: eski FE
+        // yuborgan `branch_card_id` finance'ga uzatilmaydi (e'tiborsiz).
       },
     );
     // branch → HQ settlement advance is enqueued by finance-service via the

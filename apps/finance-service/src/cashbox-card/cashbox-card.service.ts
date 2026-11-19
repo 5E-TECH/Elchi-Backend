@@ -81,6 +81,20 @@ export const CARD_LAST4_MESSAGE =
   "last4 — aniq 4 ta raqam (to'liq karta yoki hisob raqami qabul qilinmaydi)";
 
 /**
+ * 63HO6cBU (P0, 2026-11-17) — filial (BRANCH) kassasi naqd/kartaga
+ * ajralmaydi: filial kartalari nofaol, yangi karta, Asosiy qilish, faollash,
+ * kartalararo o'tkazma va karta↔naqd konvertatsiyasi YO'Q. MAIN — avvalgidek.
+ */
+export const BRANCH_CARDS_DISABLED_MESSAGE =
+  "Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q";
+
+function assertCardsEnabledFor(cashbox: Pick<Cashbox, 'cashbox_type'>): void {
+  if (cashbox.cashbox_type === Cashbox_type.BRANCH) {
+    throw new BadRequestException(BRANCH_CARDS_DISABLED_MESSAGE);
+  }
+}
+
+/**
  * Zv3MLn0a — kartalar amalining kassa doirasi: `branch_id` — filial (BRANCH)
  * kassasi (filial kassasining `user_id` si = filial ID), yo'q — MAIN.
  */
@@ -419,11 +433,14 @@ export async function applyCashboxCardSelection(
   if (input.card_id === undefined || input.card_id === null) {
     return null;
   }
+  // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi (bitta jami):
+  // filial kartalari ishlatilmaydi. Eski FE yuborgan `card_id` /
+  // `branch_card_id` jimgina e'tiborsiz qoladi (400/500 emas).
+  if (cashbox.cashbox_type === Cashbox_type.BRANCH) {
+    return null;
+  }
   const cardId = assertId(input.card_id, 'card_id');
-  if (
-    cashbox.cashbox_type !== Cashbox_type.MAIN &&
-    cashbox.cashbox_type !== Cashbox_type.BRANCH
-  ) {
+  if (cashbox.cashbox_type !== Cashbox_type.MAIN) {
     throw new BadRequestException(
       'card_id faqat asosiy (MAIN) yoki filial (BRANCH) kassa operatsiyasida beriladi',
     );
@@ -441,11 +458,7 @@ export async function applyCashboxCardSelection(
     throw new NotFoundException('Karta topilmadi');
   }
   if (String(card.cashbox_id) !== String(cashbox.id)) {
-    forbidden(
-      cashbox.cashbox_type === Cashbox_type.BRANCH
-        ? CARD_SCOPE_FORBIDDEN_MESSAGE
-        : 'Bu karta asosiy kassaga tegishli emas',
-    );
+    forbidden('Bu karta asosiy kassaga tegishli emas');
   }
   if (!card.is_active && !card.is_default) {
     throw new BadRequestException(
@@ -947,6 +960,30 @@ export class CashboxCardService {
       return await this.withScopeLock(
         input,
         async (manager, cashbox) => {
+          // 63HO6cBU — filial kassasida karta yuritilmaydi: Asosiy karta
+          // yaratilmaydi, faqat (nofaol) eski kartalar ro'yxati — balans 0.
+          if (cashbox.cashbox_type === Cashbox_type.BRANCH) {
+            const archived = includeInactive
+              ? await manager.find(CashboxCard, {
+                  where: { cashbox_id: String(cashbox.id), isDeleted: false },
+                  order: { is_default: 'DESC', sort_order: 'ASC', id: 'ASC' },
+                })
+              : [];
+            return successRes(
+              {
+                ...cashboxScopeView(cashbox),
+                cards: archived.map((card) => this.view(card, 0)),
+                balance_card: 0,
+                named_total: 0,
+                default_balance: 0,
+                total_card: 0,
+                in_sync: true,
+                cards_disabled: true,
+              },
+              200,
+              'Cards',
+            );
+          }
           const def = await this.ensureDefaultCard(manager, cashbox);
           const cards = await manager.find(CashboxCard, {
             where: {
@@ -1300,6 +1337,7 @@ export class CashboxCardService {
       const outcome = await this.withScopeLock(
         input,
         async (manager, cashbox) => {
+          assertCardsEnabledFor(cashbox);
           await this.ensureDefaultCard(manager, cashbox);
           if (await this.findDuplicateName(manager, String(cashbox.id), name)) {
             conflict(`"${name}" nomli karta allaqachon bor`);
@@ -1519,6 +1557,7 @@ export class CashboxCardService {
         cardId,
         input,
         async (manager, cashbox) => {
+          assertCardsEnabledFor(cashbox);
           const target = await this.lockCard(
             manager,
             String(cashbox.id),
@@ -1591,6 +1630,9 @@ export class CashboxCardService {
         cardId,
         input,
         async (manager, cashbox) => {
+          if (input.is_active === true) {
+            assertCardsEnabledFor(cashbox);
+          }
           const locked = await this.lockCard(
             manager,
             String(cashbox.id),
@@ -1670,6 +1712,7 @@ export class CashboxCardService {
         fromId,
         input,
         async (manager, cashbox) => {
+          assertCardsEnabledFor(cashbox);
           const cashboxId = String(cashbox.id);
           const replay = await this.findMovementByToken(
             manager,
@@ -1803,6 +1846,7 @@ export class CashboxCardService {
         cardId,
         input,
         async (manager, cashbox) => {
+          assertCardsEnabledFor(cashbox);
           const cashboxId = String(cashbox.id);
           const replay = await this.findMovementByToken(
             manager,

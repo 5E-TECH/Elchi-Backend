@@ -32,7 +32,6 @@ import { Shift, ShiftStatus } from './entities/shift.entity';
 import {
   applyCashboxCardSelection,
   DEFAULT_CARD_NAME,
-  sumNamedCardBalances,
 } from './cashbox-card/cashbox-card.service';
 import { CashboxCard } from './entities/cashbox-card.entity';
 import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
@@ -1459,6 +1458,47 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * 63HO6cBU — kuryer kassasidagi to'lov qatorlari (kuryer → filial) uchun:
+   * qaysi `transfer_id` larda FILIAL (BRANCH) kassasi oyog'i bor. Faqat
+   * FOR_COURIER qatorlari tekshiriladi; xato — bo'sh to'plam (fail-open).
+   */
+  private async loadBranchTransferIds(
+    histories: CashboxHistory[],
+  ): Promise<Set<string>> {
+    const transferIds = [
+      ...new Set(
+        histories
+          .filter(
+            (h) =>
+              h?.cashbox?.cashbox_type === Cashbox_type.FOR_COURIER &&
+              typeof h.transfer_id === 'string' &&
+              h.transfer_id !== '',
+          )
+          .map((h) => String(h.transfer_id)),
+      ),
+    ];
+    if (!transferIds.length) return new Set();
+    try {
+      const rows: unknown = await this.historyRepo
+        .createQueryBuilder('h')
+        .innerJoin(Cashbox, 'cb', 'cb.id = h.cashbox_id')
+        .select('DISTINCT h.transfer_id', 'transfer_id')
+        .where('h.transfer_id IN (:...transferIds)', { transferIds })
+        .andWhere('cb.cashbox_type = :branch', {
+          branch: Cashbox_type.BRANCH,
+        })
+        .getRawMany();
+      return new Set(
+        (Array.isArray(rows) ? rows : [])
+          .map((row) => (row as { transfer_id?: unknown })?.transfer_id)
+          .filter((id): id is string => typeof id === 'string'),
+      );
+    } catch {
+      return new Set();
+    }
+  }
+
   private async enrichHistoryWithUsers<T extends CashboxHistory>(
     histories: T[],
     // (vf4513Zn) `getCashboxByUserId` kvitansiya javobini allaqachon
@@ -1517,6 +1557,15 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       courierPaymentIds.length
         ? await this.courierAcks.flags(courierPaymentIds).catch(() => null)
         : null;
+    // 63HO6cBU (P0) — filial oyog'i belgisi (`branch_leg: true`): gateway
+    // menejer / kuryer ko'rinishida shu qatorlarda to'lov usulini yashiradi.
+    const branchTransfers = await this.loadBranchTransferIds(histories);
+    const branchLegOf = (history: CashboxHistory) =>
+      history?.cashbox?.cashbox_type === Cashbox_type.BRANCH ||
+      (history?.transfer_id != null &&
+        branchTransfers.has(String(history.transfer_id)))
+        ? { branch_leg: true as const }
+        : {};
     const ackOf = (history: CashboxHistory) =>
       acks &&
       history.source_type === Source_type.COURIER_PAYMENT &&
@@ -1539,6 +1588,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         return {
           ...history,
           ...ackOf(history),
+          ...branchLegOf(history),
           createdByUser,
           created_by_user: createdByUser,
           sourceUser,
@@ -1553,6 +1603,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return {
         ...history,
         ...ackOf(history),
+        ...branchLegOf(history),
         createdByUser,
         created_by_user: createdByUser,
         sourceUser,
@@ -1774,6 +1825,32 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     // ishlaydi», tizim oyoqlari) kirim ham, natija hali manfiy bo'lsa, 400
     // bilan rad etilardi — menejer kuryer pulini qabul qila olmasdi.
     const isExpense = sign < 0;
+
+    /**
+     * 63HO6cBU (P0, 2026-11-17) — FILIAL (BRANCH) kassasi ham naqd/kartaga
+     * AJRALMAYDI: bitta jami chelak (`balance_cash`), `balance_card` doim 0.
+     * Menejer kuryer pulini usulsiz qabul qiladi; usulni HQ (admin) filialdan
+     * olayotganda (branch-to-main) faqat MAIN oyog'ida belgilaydi. Ilgari
+     * filialning karta bo'lagi bo'sh bo'lsa «O'tkazma» bilan pul olib
+     * bo'lmasdi (400 «Karta hisobida yetarli mablag' yo'q»).
+     *
+     * Chiqim tekshiruvi JAMI bo'yicha; `allowNegativeOverride` (tizim
+     * oyoqlari, «Kassa qarzga ishlaydi») avvalgidek manfiyga ruxsat beradi.
+     * Eski bo'lingan qoldiq keyingi harakatda jami saqlangan holda yig'iladi.
+     */
+    if (cashbox.cashbox_type === Cashbox_type.BRANCH) {
+      const nextTotal =
+        Number(cashbox.balance_cash) +
+        Number(cashbox.balance_card) +
+        sign * amount;
+      if (!allowNegativeBalance && isExpense && nextTotal < 0) {
+        throw new BadRequestException("Filial kassasida yetarli mablag' yo'q");
+      }
+      cashbox.balance_cash = nextTotal;
+      cashbox.balance_card = 0;
+      this.normalizeBalance(cashbox);
+      return;
+    }
     if (resolvedMethod === PaymentMethod.CASH) {
       const nextCash = Number(cashbox.balance_cash) + sign * amount;
       if (!allowNegativeBalance && isExpense && nextCash < 0) {
@@ -3389,14 +3466,29 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           opened_by: dto.opened_by,
           opened_at: new Date(),
           status: ShiftStatus.OPEN,
-          opening_balance_cash:
-            dto.opening_balance_cash != null
-              ? Number(dto.opening_balance_cash)
-              : Number(cashbox?.balance_cash ?? 0),
-          opening_balance_card:
-            dto.opening_balance_card != null
-              ? Number(dto.opening_balance_card)
-              : Number(cashbox?.balance_card ?? 0),
+          // 63HO6cBU — filial smenasi bitta jami bilan ochiladi (karta 0).
+          ...(FinanceServiceService.shiftCashboxType(cashboxUserId) ===
+          Cashbox_type.BRANCH
+            ? {
+                opening_balance_cash:
+                  dto.opening_balance_cash != null ||
+                  dto.opening_balance_card != null
+                    ? Number(dto.opening_balance_cash ?? 0) +
+                      Number(dto.opening_balance_card ?? 0)
+                    : Number(cashbox?.balance_cash ?? 0) +
+                      Number(cashbox?.balance_card ?? 0),
+                opening_balance_card: 0,
+              }
+            : {
+                opening_balance_cash:
+                  dto.opening_balance_cash != null
+                    ? Number(dto.opening_balance_cash)
+                    : Number(cashbox?.balance_cash ?? 0),
+                opening_balance_card:
+                  dto.opening_balance_card != null
+                    ? Number(dto.opening_balance_card)
+                    : Number(cashbox?.balance_card ?? 0),
+              }),
           comment: dto.comment ?? null,
           // Smena qaysi kassaga tegishli (audit M7). Berilmasa — markaziy MAIN
           // kassa: smena ochish huquqi bor rollar (superadmin/admin/registrator)
@@ -4016,6 +4108,46 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
      * ko'rinmasin (closing_balance avvalgidek 0 yoziladi).
      */
     const round = (value: number) => FinanceServiceService.roundMoney(value);
+
+    /**
+     * 63HO6cBU (P0) — FILIAL smenasi bitta jami bilan: kassa naqd/kartaga
+     * ajralmaydi, shuning uchun kutilgan qoldiq = ochilishdagi JAMI (naqd +
+     * eski karta surati) + barcha kirim − barcha chiqim; sanalgan summa —
+     * bitta «Sanalgan summa» (eski FE karta maydonini yuborsa — jamiga
+     * qo'shiladi). Karta maydonlari 0, karta tafovuti NULL.
+     */
+    if (
+      FinanceServiceService.shiftCashboxType(shiftCashboxUserId) ===
+      Cashbox_type.BRANCH
+    ) {
+      const incomeAll = totalIncomeCash + totalIncomeCard;
+      const expenseAll = totalExpenseCash + totalExpenseCard;
+      const expectedTotal = round(
+        Number(shift.opening_balance_cash ?? 0) +
+          Number(shift.opening_balance_card ?? 0) +
+          incomeAll -
+          expenseAll,
+      );
+      const countedTotal =
+        countedCash == null && countedCard == null
+          ? null
+          : round(Number(countedCash ?? 0) + Number(countedCard ?? 0));
+      shift.closed_at = closeTime;
+      shift.status = ShiftStatus.CLOSED;
+      shift.total_income_cash = round(incomeAll);
+      shift.total_income_card = 0;
+      shift.total_expense_cash = round(expenseAll);
+      shift.total_expense_card = 0;
+      shift.closing_balance_cash = countedTotal ?? 0;
+      shift.closing_balance_card = 0;
+      shift.expected_balance_cash = expectedTotal;
+      shift.expected_balance_card = 0;
+      shift.discrepancy_cash =
+        countedTotal == null ? null : round(countedTotal - expectedTotal);
+      shift.discrepancy_card = null;
+      return;
+    }
+
     const expectedCash = round(
       Number(shift.opening_balance_cash ?? 0) +
         totalIncomeCash -
@@ -5893,24 +6025,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         data.payment_method ?? PaymentMethod.CASH,
         branchDebtEnabled,
       );
-      // Zv3MLn0a — filial oyog'i: tanlangan filial kartasidan (yo'q — Asosiy).
-      const branchCardId = await applyCashboxCardSelection(
-        queryRunner.manager,
-        branchCashbox,
-        {
-          card_id: data.branch_card_id ?? null,
-          operation: Operation_type.EXPENSE,
-          amount: Number(data.amount),
-          payment_method: data.payment_method ?? PaymentMethod.CASH,
-          allow_negative_default: branchDebtEnabled,
-        },
-      );
+      // 63HO6cBU — filial oyog'i JAMIdan yechiladi; filial kartasi yo'q,
+      // eski FE `branch_card_id` yuborsa e'tiborsiz qoladi.
       await queryRunner.manager.save(branchCashbox);
 
       const branchHistory = queryRunner.manager.create(CashboxHistory, {
         operation_type: Operation_type.EXPENSE,
         cashbox_id: branchCashbox.id,
-        card_id: branchCardId,
+        card_id: null,
         source_type: Source_type.BRANCH_TO_MAIN,
         source_id: paymentSourceId,
         dedup_epoch: dedupKey,
@@ -6105,9 +6227,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         );
       }
       this.assertBigIntId(marketId, 'market_id');
-      if (data.card_id || data.branch_card_id) {
+      // 63HO6cBU — `branch_card_id` (filial kartasi) endi jimgina e'tiborsiz
+      // (filial kassasida karta yo'q); HQ kartasi (`card_id`) bu yo'lda yo'q.
+      if (data.card_id) {
         throw new BadRequestException(
-          "«Marketga o'tkazma» da karta tanlanmaydi (card_id / branch_card_id faqat click to'lovida)",
+          "«Marketga o'tkazma» da karta tanlanmaydi (card_id faqat click to'lovida)",
         );
       }
       const amount = Number(data.amount);
@@ -6237,26 +6361,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         method,
         branchDebtEnabled,
       );
-      // Pul Asosiy kartadan chiqadi (hosila: karta bo'lagi − nomli kartalar).
-      // Jami karta yetsa ham pul nomli kartalarda bo'lsa Asosiy karta minusga
-      // tushardi — karta daftari buzilardi. Qarz rejimi o'chiq — qat'iy
-      // (oddiy filial → HQ da Asosiy karta tanlanganidagi tekshiruv bilan bir xil).
-      if (!branchDebtEnabled) {
-        const named = await sumNamedCardBalances(
-          manager,
-          String(branchCashbox.id),
-        );
-        const defaultCardAfter = FinanceServiceService.roundMoney(
-          Number(branchCashbox.balance_card) - named,
-        );
-        if (defaultCardAfter < 0) {
-          throw new BadRequestException(
-            `Filialning Asosiy kartasida yetarli mablag' yo'q! Mavjud: ${FinanceServiceService.roundMoney(
-              defaultCardAfter + amount,
-            )} so'm, so'ralgan: ${amount} so'm`,
-          );
-        }
-      }
+      // 63HO6cBU — filial kassasi bitta jami: nomli/Asosiy karta tekshiruvi
+      // YO'Q (jami tekshiruvi `updateBalancesByMethod` da).
       await manager.save(branchCashbox);
       const branchHistory = await manager.save(
         manager.create(CashboxHistory, {

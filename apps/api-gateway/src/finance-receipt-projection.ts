@@ -27,6 +27,8 @@ import {
  *    ko'rinishi; boshqasi `null`. Filial — handler'lardagi
  *    `resolveOwnBranchId` bilan AYNI: JWT `branch_id`, bo'lmasa
  *    `branch.user.find_by_user`; aniqlanmasa — `null` (fail closed).
+ *  - 63HO6cBU — SA/admin bo'lmagan ko'ruvchiga `branch_leg: true` qatorlarda
+ *    `payment_method` / `card_id` — `null` (filial kassasi bitta jami).
  */
 const MAX_DEPTH = 8;
 
@@ -82,7 +84,15 @@ function walk(value: unknown, viewer: ReceiptViewer, depth: number): unknown {
   }
   if (!isObject(value)) return value;
   const out: Record<string, unknown> = {};
+  // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: menejer / kuryer
+  // (SA/admin emas) ko'rinishida FILIAL oyog'i qatorlarida (`branch_leg`,
+  // finance belgilaydi) to'lov usuli va karta qaytmaydi — eski qatorlarda ham.
+  const hideMethod = value.branch_leg === true && !isPrivileged(viewer.roles);
   for (const [key, item] of Object.entries(value)) {
+    if (hideMethod && (key === 'payment_method' || key === 'card_id')) {
+      out[key] = null;
+      continue;
+    }
     if (key === 'receipt') {
       if (!canSeeReceipts(viewer.roles)) continue;
       out.receipt =

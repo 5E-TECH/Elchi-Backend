@@ -1282,6 +1282,12 @@ export class ShiftAccountCheckService {
     rawAccounts: unknown,
     closedBy: string,
   ): Promise<Record<string, unknown> | null> {
+    // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: filial
+    // smenasida karta qoldig'i / skrinshoti tasdiqlanmaydi (eski FE
+    // `accounts` yuborsa — e'tiborsiz).
+    if (cashboxTypeFor(shiftCashboxUserId(shift)) === Cashbox_type.BRANCH) {
+      return null;
+    }
     const settings = await this.loadSettingsFor(
       shiftCashboxUserId(shift),
       manager,
@@ -1457,6 +1463,12 @@ export class ShiftAccountCheckService {
     manager: EntityManager,
     shift: Shift,
   ): Promise<Record<string, unknown> | null> {
+    // 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: filial
+    // smenasida karta qoldig'i / skrinshoti tasdiqlanmaydi (eski FE
+    // `accounts` yuborsa — e'tiborsiz).
+    if (cashboxTypeFor(shiftCashboxUserId(shift)) === Cashbox_type.BRANCH) {
+      return null;
+    }
     const settings = await this.loadSettingsFor(
       shiftCashboxUserId(shift),
       manager,

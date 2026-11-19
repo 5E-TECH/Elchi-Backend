@@ -764,7 +764,10 @@ export class PaymentCorrectionService {
     newAmount: number | null,
   ) {
     const method = shape.payment_method;
-    const cardLeg = correctionCardLeg(shape);
+    // 63HO6cBU (P0) — filial kassasi bitta jami: karta (nomli / Asosiy)
+    // tekshirilmaydi, yetarlilik — JAMI bo'yicha.
+    const isBranch = receiverBox.cashbox_type === Cashbox_type.BRANCH;
+    const cardLeg = isBranch ? null : correctionCardLeg(shape);
     // O'chirilgan karta ham o'qiladi — aniq xato matni uchun.
     const card = cardLeg
       ? await tx.findOne(CashboxCard, {
@@ -789,11 +792,13 @@ export class PaymentCorrectionService {
     if (!(peak > 0)) return;
     const insufficient = () =>
       failCode(409, C.INSUFFICIENT_BALANCE, { required: peak });
-    const bucket = isCardMethod(method)
-      ? Number(receiverBox.balance_card)
-      : Number(receiverBox.balance_cash);
+    const bucket = isBranch
+      ? Number(receiverBox.balance_cash) + Number(receiverBox.balance_card)
+      : isCardMethod(method)
+        ? Number(receiverBox.balance_card)
+        : Number(receiverBox.balance_cash);
     if (round2(bucket - peak) < 0) insufficient();
-    if (method !== PaymentMethod.CLICK) return;
+    if (isBranch || method !== PaymentMethod.CLICK) return;
     if (card && !card.is_default) {
       if (round2(Number(card.balance) - peak) < 0) insufficient();
       return;
