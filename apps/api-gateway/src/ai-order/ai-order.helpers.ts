@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { TimeoutError } from 'rxjs';
-import { readOrderIntakeClosed } from '@app/common';
+import { ORDER_CREATE_ERROR_CODES, readOrderIntakeClosed } from '@app/common';
 import {
   AI_VERIFY_REASON_TEXT,
   type AiVerifyFailureCode,
@@ -264,6 +264,38 @@ function clip(text: string): string {
 }
 
 /**
+ * `reason_code` ga chiqishi MUMKIN bo'lgan kodlar — faqat buyurtma
+ * yaratish kontrakti (`ORDER_CREATE_ERROR_CODES`, FRONTEND_CHANGELOG'da
+ * hujjatlangan). `PUBLIC_ERROR_CODES` EMAS: u butun so'rov xato tanasi
+ * uchun (ORDER_INTAKE_CLOSED, AI_CHECKS_* va h.k. — ularning o'z
+ * maydonlari va semantikasi bor, bitta buyurtma natijasiga mos emas);
+ * yangi kod per-order kontraktga ONGLI ravishda qo'shilsin.
+ */
+const REASON_CODE_ALLOWLIST: ReadonlySet<string> = new Set(
+  Object.values(ORDER_CREATE_ERROR_CODES),
+);
+
+/**
+ * Gateway O'ZI tashlagan xato (`HttpException` nusxasi) tanasidagi `code`
+ * oq ro'yxatda bo'lsa → natijadagi `reason_code` (masalan
+ * `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`). Mijozlar
+ * (Telegram bot, FE) o'zbekcha `reason` matnini tahlil qilmasin. RMQ'dan
+ * kelgan oddiy obyekt kodlari (servis ichki tafsiloti) va ro'yxatda yo'q
+ * kodlar o'tkazilmaydi.
+ */
+function reasonCodeOf(error: unknown): { reason_code?: string } {
+  if (!(error instanceof HttpException)) return {};
+  const response = error.getResponse();
+  const code =
+    response && typeof response === 'object'
+      ? (response as { code?: unknown }).code
+      : undefined;
+  return typeof code === 'string' && REASON_CODE_ALLOWLIST.has(code)
+    ? { reason_code: code }
+    : {};
+}
+
+/**
  * Bitta buyurtmani yaratishdagi xato → `{code, reason}`.
  *
  * ⚠️ Timeout — `timeout_unknown`: order.create ketgan bo'lishi mumkin, ya'ni
@@ -284,28 +316,6 @@ function clip(text: string): string {
  * (`ServiceUnavailableException` → `validation_unavailable`) matni va
  * identity'ning telefon-boshqa-rolda (409) matni o'tkaziladi.
  */
-/** #658 xato kontrakti: UPPER_CASE mashina kodi. */
-const PUBLIC_REASON_CODE_RE = /^[A-Z][A-Z0-9_]{2,63}$/;
-
-/**
- * Gateway O'ZI tashlagan xato (`HttpException` nusxasi) tanasidagi
- * UPPER_CASE `code` → natijadagi `reason_code` (masalan
- * `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`). Mijozlar
- * (Telegram bot, FE) o'zbekcha `reason` matnini tahlil qilmasin. RMQ'dan
- * kelgan oddiy obyekt kodlari (servis ichki tafsiloti) o'tkazilmaydi.
- */
-function reasonCodeOf(error: unknown): { reason_code?: string } {
-  if (!(error instanceof HttpException)) return {};
-  const response = error.getResponse();
-  const code =
-    response && typeof response === 'object'
-      ? (response as { code?: unknown }).code
-      : undefined;
-  return typeof code === 'string' && PUBLIC_REASON_CODE_RE.test(code)
-    ? { reason_code: code }
-    : {};
-}
-
 export function toConfirmFailure(error: unknown): {
   code: AiConfirmFailureCode;
   reason: string;

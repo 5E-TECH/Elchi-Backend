@@ -1,4 +1,9 @@
-import { escapeTelegramHtml, normalizeUzPhone, Roles } from '@app/common';
+import {
+  escapeTelegramHtml,
+  normalizeUzPhone,
+  ORDER_CREATE_ERROR_CODES,
+  Roles,
+} from '@app/common';
 import type { TelegramAiDraftMeta } from '../../entities/telegram-ai-draft.entity';
 
 /**
@@ -21,10 +26,10 @@ import type { TelegramAiDraftMeta } from '../../entities/telegram-ai-draft.entit
 /** Tanlash oynasida ko'pi bilan shuncha operator (ortig'i — kabinetda). */
 export const AI_OPERATOR_MAX_OPTIONS = 20;
 
-/** ai-confirm 400 matni (gateway `OPERATOR_PHONE_REQUIRED_MESSAGE`). */
+/** ZAXIRA (eski gateway, `reason_code` yo'q): ai-confirm 400 matni (`OPERATOR_PHONE_REQUIRED_MESSAGE`). */
 export const OPERATOR_PHONE_REQUIRED_RE = /operator telefon raqami majburiy/i;
 /**
- * ai-confirm 400 matni — tanlangan operator rad etildi (gateway
+ * ZAXIRA (`reason_code` yo'q): ai-confirm 400 matni — tanlangan operator rad etildi (gateway
  * `CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE` / `…_ID_FORMAT_MESSAGE`).
  */
 export const OPERATOR_REJECTED_RE =
@@ -44,6 +49,9 @@ export const AI_OPERATOR_PHONE_RETRY_TEXT =
   '📞 Marketda operator raqami majburiy — qayta bosilganda profilingizdagi raqam yuboriladi.';
 export const AI_OPERATOR_REJECTED_TEXT =
   '🎧 Tanlangan operator qabul qilinmadi — tanlov olib tashlandi, «🎧 Operator» dan boshqasini tanlang yoki shundayicha yarating.';
+/** Natijasi noma'lum buyurtma bor — «🎧 Operator» yopiq. */
+export const AI_OPERATOR_REJECTED_LOCKED_TEXT =
+  '🎧 Tanlangan operator qabul qilinmadi — tanlov olib tashlandi; «✅ Yaratish» operatorsiz yuboradi, boshqa operator — kabinetda.';
 
 const clip = (value: unknown, max: number): string => {
   const text =
@@ -105,11 +113,17 @@ export const operatorButtonLabel = (meta: TelegramAiDraftMeta): string =>
   `🎧 Operator: ${clip(meta.operator_name, 30) || 'tanlanmagan'}`;
 
 /** Tanlash oynasi matni (HTML). */
-export function operatorPickerText(meta: TelegramAiDraftMeta): string {
+export function operatorPickerText(
+  meta: TelegramAiDraftMeta,
+  /** Ba'zi buyurtmalar allaqachon yaratilgan — tanlov ularga tegmaydi. */
+  partial = false,
+): string {
   const shown = storedOperators(meta).length;
   const hidden = Math.trunc(Number(meta.operators_total) || 0) - shown;
   return [
-    '🎧 <b>Buyurtma operatori</b> — ro‘yxatdagi hamma buyurtmaga qo‘yiladi.',
+    partial
+      ? '🎧 <b>Buyurtma operatori</b> — hali yaratilmagan buyurtmalarga qo‘yiladi (yaratilganlari o‘zgarmaydi).'
+      : '🎧 <b>Buyurtma operatori</b> — ro‘yxatdagi hamma buyurtmaga qo‘yiladi.',
     `Hozir: ${escapeTelegramHtml(clip(meta.operator_name, 60)) || 'tanlanmagan'}`,
     ...(hidden > 0
       ? [`… yana ${hidden} ta — kerakli operator bo‘lmasa kabinetda yarating.`]
@@ -123,16 +137,20 @@ export const chosenOperatorId = (meta: TelegramAiDraftMeta): string | null =>
 
 /** Profil (`GET /auth/my-profile` `data`) → kesh (`meta.profile`). */
 export function profileOf(profile: unknown): {
-  phone: string | null;
+  phone: string;
   required: boolean;
-} {
+} | null {
   const p = (profile ?? {}) as {
     phone_number?: unknown;
     require_operator_phone?: unknown;
     default_operator_phone?: unknown;
   };
+  // Raqam normallashmasa — keshlanmaydi (null): keyingi «✅» qayta so'raydi
+  // (profil tuzatilgan bo'lishi mumkin).
+  const phone = normalizeUzPhone(p.phone_number);
+  if (!phone) return null;
   return {
-    phone: normalizeUzPhone(p.phone_number),
+    phone,
     required:
       p.require_operator_phone === true &&
       !normalizeUzPhone(p.default_operator_phone),
@@ -159,7 +177,40 @@ export function operatorPhoneOf(
 export const needsProfilePhone = (meta: TelegramAiDraftMeta): boolean =>
   meta.role === Roles.MARKET || meta.operator_phone_needed === true;
 
-type ResultLike = { ok?: boolean; code?: unknown; reason?: unknown };
+type ResultLike = {
+  ok?: boolean;
+  code?: unknown;
+  reason?: unknown;
+  /** #722: mashina o'qiydigan sabab (faqat `ok:false` da). */
+  reason_code?: unknown;
+};
+
+/** Operator tanlovi rad etilganini bildiruvchi `reason_code` lar. */
+const OPERATOR_REJECTED_CODES: ReadonlySet<string> = new Set([
+  ORDER_CREATE_ERROR_CODES.CHOSEN_OPERATOR_NOT_SELECTABLE,
+  // Market operatori operator_id yubormaydi — amalda kelmaydi; kelsa ham
+  // NOT_SELECTABLE kabi (tanlov olib tashlanadi, ro'yxat yangilanadi).
+  ORDER_CREATE_ERROR_CODES.CHOSEN_OPERATOR_SELF_ONLY,
+]);
+
+/**
+ * Natija sababi: `reason_code` (#722) bo'lsa — FAQAT u (noma'lum kod →
+ * `null`, umumiy xato); yo'q bo'lsa (eski gateway) — matn bo'yicha zaxira.
+ */
+function reasonKind(result: ResultLike): 'phone' | 'operator' | null {
+  if (typeof result.reason_code === 'string' && result.reason_code) {
+    if (result.reason_code === ORDER_CREATE_ERROR_CODES.OPERATOR_PHONE_REQUIRED)
+      return 'phone';
+    return OPERATOR_REJECTED_CODES.has(result.reason_code) ? 'operator' : null;
+  }
+  // Matn zaxirasi faqat `create_failed` uchun: masalan operator tekshiruvi
+  // ishlamasa gateway `validation_unavailable` + «Tanlangan operatorni
+  // tekshirib bo'lmadi…» qaytaradi — bu rad etish EMAS (tanlov saqlanadi).
+  if (result.code !== 'create_failed') return null;
+  const reason = typeof result.reason === 'string' ? result.reason : '';
+  if (OPERATOR_PHONE_REQUIRED_RE.test(reason)) return 'phone';
+  return OPERATOR_REJECTED_RE.test(reason) ? 'operator' : null;
+}
 
 /** «Operator raqami majburiy» — hali qayta urinilmagan bo'lsa (har ikki rol). */
 export const isPhoneRetry = (
@@ -168,18 +219,20 @@ export const isPhoneRetry = (
 ): boolean =>
   !result.ok &&
   meta.operator_phone_needed !== true &&
-  typeof result.reason === 'string' &&
-  OPERATOR_PHONE_REQUIRED_RE.test(result.reason);
+  reasonKind(result) === 'phone';
 
-/** Odam tanlagan operator rad etildi (kalitdan oldin — qayta xavfsiz). */
+/**
+ * Odam tanlagan operator rad etildi (kalitdan oldin — qayta xavfsiz).
+ * Tanlov yuborilmagan bo'lsa qayta urinish ma'nosiz (ayni javob) — umumiy
+ * xato.
+ */
 export const isOperatorRejected = (
   meta: TelegramAiDraftMeta,
   result: ResultLike,
 ): boolean =>
   !result.ok &&
   chosenOperatorId(meta) !== null &&
-  typeof result.reason === 'string' &&
-  OPERATOR_REJECTED_RE.test(result.reason);
+  reasonKind(result) === 'operator';
 
 /**
  * Qayta «✅» bilan hal bo'ladigan natija (server kalitidan OLDIN, buyurtma
@@ -203,5 +256,7 @@ export function isRetryableResult(
  */
 export const userReason = (reason: unknown): string =>
   (typeof reason === 'string' ? reason : '')
-    .replace(/\s*\([a-z][a-z0-9_]*\)/g, '')
+    // Faqat API maydon nomlari (pastki chiziqli: «(operator_phone)»), oddiy
+    // so'zlar («(raqam)», «(viloyat)») qoladi.
+    .replace(/\s*\([a-z][a-z0-9]*(?:_[a-z0-9]+)+\)/g, '')
     .trim();

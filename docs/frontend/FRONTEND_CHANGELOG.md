@@ -52,6 +52,18 @@ Muammo: admin filialdan «O'tkazma» bilan pul olmoqchi bo'lganda filialning KAR
 - 🔧 Filial smenasini ochish/yopish: bitta «Sanalgan summa» maydoni (`closing_balance_cash`), karta maydoni va karta skrinshotlari yo'q.
 - 🔧 Menejer / kuryer tarixida `payment_method === null` qatorlarida usul ustunini bo'sh qoldiring (yoki «—»).
 
+### 2026-11-19 — AI tasdiq: takror tuman/mahsulot tekshiruvidan ham oldin; takror xarajatga bog'lanadi
+
+Deploy: api-gateway (+ order-service — faqat ichki chegara). Migratsiyasiz. Javob shakli o'zgarmagan.
+
+- 🔧 [gateway] `POST /orders/ai-confirm` takrori (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) endi market/filial ruxsatidan KEYIN, lekin tuman/mahsulot tekshiruvi, partiya dublikati, operator, operator raqami va mijoz tekshiruvlaridan OLDIN aniqlanadi: urinishlar orasida mahsulot yoki tuman o'chirilgan bo'lsa ham (yoki tuman/mahsulot xizmati javob bermasa ham) mavjud buyurtma `{ ok: true, order_id, idempotent_replay: true }`. Ilgari bunday takror `product_not_found` / `district_not_found` / `validation_unavailable` olardi. Yangi bandlar tekshiruvi o'zgarmagan; takror bandlarning imzosi partiyada oldindan band qilinadi — ayni mazmunli yangi band `orders[]` da takrordan OLDIN yoki KEYIN kelishidan qat'i nazar `duplicate_in_batch` (ikkinchi bir xil buyurtma yaratilmaydi). Takror so'rovi va tuman/mahsulot tekshiruvi parallel. AI ack darvozalari (400 `AI_DRAFT_*`, 409, 503) takrorda ham avvalgidek.
+- ⚠️ Cheklov (ataylab): market nofaol yoki `add_order` o'chiq bo'lsa — butun so'rov 400, takror ham (bu ruxsat tekshiruvi; takror ham o'tkazilmaydi).
+- 🟢 **Bugungi qabul yopiq** bo'lganda takror endi `ok: true, idempotent_replay: true` (ilgari — `ok: false, code: 'intake_closed'`): yangi buyurtma yaratilmaydi, faqat avval yaratilganining id'si qaytadi. #722 dan beri shunday; bu yerda hujjatlandi.
+- 🟢 Takror natija ham AI draft'iga va AI xarajatiga bog'lanadi (`ai.usage.link_orders`): 1-urinish `timeout_unknown` bo'lsa buyurtma ilgari HECH QACHON bog'lanmasdi (buyurtma bo'yicha AI xarajati yozilmasdi). Takror bog'lash idempotent — narx bir marta; hamma id bog'langan `ai_usage_log` qatori qayta yozilmaydi. ⚠️ 1-urinish `timeout_unknown` bo'lsa `ai_order_draft_item` qatori TAKROR paytida yoziladi: `created_at` (AI trace'dagi `confirmed_at`), muzlatilgan narx (o'sha paytdagi market narxi), `confirmed_by` va `edited_fields` / tuzatishlar — takror so'rovidan (1-urinishnikidan emas).
+- 🟢 `reason_code` faqat hujjatlangan uchta koddan biri (`OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`, `CHOSEN_OPERATOR_SELF_ONLY`) bo'lishi mumkin — boshqa ichki kodlar natijaga chiqmaydi.
+
+**Frontend / bot action items:** yo'q (takror natijasi avvalgidek `ok: true` — kartani muvaffaqiyat deb qulflang).
+
 ### 2026-11-18 — AI tasdiq: natijada `reason_code`; takror tekshiruvlardan oldin
 
 Deploy: **order-service va api-gateway** (yangi RMQ `order.ai_confirm.completed`; gateway eski order-service bilan ham ishlaydi — so'rov javob bermasa avvalgi yo'l). Migratsiyasiz. Orqaga mos — yangi maydon qo'shimcha.

@@ -16,6 +16,7 @@ import {
 import { firstValueFrom, TimeoutError } from 'rxjs';
 import {
   executeIdempotent,
+  ORDER_CREATE_ERROR_CODES,
   type IdempotencyService,
   type RmqService,
 } from '@app/common';
@@ -279,6 +280,46 @@ describe('ai-order.helpers', () => {
         code: 'create_failed',
         reason: 'oddiy',
       });
+    });
+
+    it('reason_code — faqat ORDER_CREATE_ERROR_CODES oq ro`yxati (boshqa UPPER_CASE kod o`tmaydi)', () => {
+      for (const code of Object.values(ORDER_CREATE_ERROR_CODES)) {
+        expect(
+          toConfirmFailure(
+            new BadRequestException({ statusCode: 400, message: 'm', code }),
+          ),
+        ).toMatchObject({ reason_code: code });
+      }
+      for (const [error, code] of [
+        [
+          new BadRequestException({
+            statusCode: 400,
+            message: 'm',
+            code: 'AI_DRAFT_REQUIRED',
+          }),
+          'AI_DRAFT_REQUIRED',
+        ],
+        [
+          new ForbiddenException({
+            statusCode: 403,
+            message: 'm',
+            code: 'SOME_INTERNAL_CODE',
+          }),
+          'SOME_INTERNAL_CODE',
+        ],
+        [
+          new ServiceUnavailableException({
+            statusCode: 503,
+            message: 'm',
+            code: 'ORDER_INTAKE_CLOSED',
+          }),
+          'ORDER_INTAKE_CLOSED',
+        ],
+      ] as const) {
+        const failure = toConfirmFailure(error);
+        expect(failure).not.toHaveProperty('reason_code');
+        expect(JSON.stringify(failure)).not.toContain(code);
+      }
     });
 
     it('gateway o`zi tashlagan 503 (ServiceUnavailableException) — validation_unavailable, matni bilan', () => {

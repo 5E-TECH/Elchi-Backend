@@ -90,6 +90,7 @@ import {
 import {
   AI_OPERATOR_NONE_TEXT,
   AI_OPERATOR_PHONE_RETRY_TEXT,
+  AI_OPERATOR_REJECTED_LOCKED_TEXT,
   AI_OPERATOR_REJECTED_TEXT,
   AI_RETRY_ALL_HINT_TEXT,
   AI_RETRY_HINT_TEXT,
@@ -250,6 +251,25 @@ const RETRYABLE_REASONS = new Set(['network', 'ai_error']);
  * `cancelled`, …) qoralama HECH QACHON qaytmaydi — masalan natija xabari
  * yuborilmay qolsa (show xatosi) buyurtma allaqachon yaratilgan.
  */
+/**
+ * ai-confirm natija kodlari (gateway `AiConfirmFailureCode`), ular bo'lsa
+ * buyurtma ANIQ yaratilmagan. Ro'yxatda YO'Q kodlar (`timeout_unknown`,
+ * `duplicate_in_progress`, kelajakdagi / noma'lum kod) yoki natija yo'q —
+ * NOMA'LUM: buyurtma belgilanadi, botda tuzatish yopiladi.
+ */
+const NOT_CREATED_CODES: ReadonlySet<string> = new Set([
+  'validation_unavailable',
+  'not_started',
+  'create_failed',
+  'intake_closed',
+  'duplicate_in_batch',
+  'duplicate_recent',
+  'district_not_found',
+  'district_mismatch',
+  'product_not_found',
+  'product_foreign',
+]);
+
 const PREVIEW_FROM_STATUSES: TelegramAiDraftStatus[] = [
   'parsing',
   'creating',
@@ -309,6 +329,8 @@ interface ConfirmResult {
   /** Xato kodi (`create_failed`, `validation_unavailable`, …). */
   code?: string;
   reason?: string;
+  /** #722: mashina o'qiydigan sabab (`ORDER_CREATE_ERROR_CODES`, ok:false). */
+  reason_code?: string;
   idempotent_replay?: boolean;
 }
 
@@ -1030,7 +1052,7 @@ export class AiOrderService implements OnModuleDestroy {
       return result.idempotent_replay &&
         order &&
         editedAfterAttempt(order, extra)
-        ? [line, `⚠️ ${n}) ${AI_EDITS_NOT_APPLIED_TEXT}`]
+        ? [line, AI_EDITS_NOT_APPLIED_TEXT.replace(/^⚠️ /, `⚠️ ${n}) `)]
         : [line];
     });
     for (const order of unacked) {
@@ -1144,13 +1166,25 @@ export class AiOrderService implements OnModuleDestroy {
     const operatorRejected = results.some((result) =>
       isOperatorRejected(meta, result),
     );
+    // Yuborilgan har buyurtma: YARATILGAN (order_id) / ANIQ yaratilmagan
+    // (`NOT_CREATED_CODES`) / qolgani — natija NOMA'LUM (timeout_unknown,
+    // duplicate_in_progress, noma'lum kod, natija yo'q): belgi bilan
+    // (`confirm_order_id` siz) — tuzatish yopiq, chunki server kaliti
+    // birinchi yukni qaytaradi (#713/#714 B1).
     const created = new Map<number, string>();
-    for (const result of results) {
-      const order = sent[result.index];
-      if (result.ok && order && str(result.order_id)) {
+    const unknown = new Set<number>();
+    sent.forEach((order, i) => {
+      const result = results.find((r) => r.index === i);
+      if (result?.ok && str(result.order_id)) {
         created.set(order.index, str(result.order_id));
+      } else if (
+        !result ||
+        result.ok ||
+        !NOT_CREATED_CODES.has(str(result.code))
+      ) {
+        unknown.add(order.index);
       }
-    }
+    });
     let input: TelegramAiDraftInput = {
       ...(draft.input ?? {}),
       meta: { ...meta, ...(phoneRetry ? { operator_phone_needed: true } : {}) },
@@ -1165,7 +1199,9 @@ export class AiOrderService implements OnModuleDestroy {
     }
     const orders = markConfirmAttempted(
       previews,
-      sent.filter((order) => created.has(order.index)),
+      sent.filter(
+        (order) => created.has(order.index) || unknown.has(order.index),
+      ),
       Date.now(),
       extra,
       created,
@@ -1183,8 +1219,19 @@ export class AiOrderService implements OnModuleDestroy {
         text,
         '',
         ...(phoneRetry ? [AI_OPERATOR_PHONE_RETRY_TEXT] : []),
-        ...(operatorRejected ? [AI_OPERATOR_REJECTED_TEXT] : []),
-        created.size ? AI_RETRY_HINT_TEXT : AI_RETRY_ALL_HINT_TEXT,
+        // Matnlar BUTUN qoralama bo'yicha (shu urinish emas): oldingi
+        // urinishdan qolgan belgilar ham hisobga olinadi. Natijasi noma'lum
+        // buyurtma bo'lsa «🎧 Operator» yopiq — matn shunga mos.
+        ...(operatorRejected
+          ? [
+              orders.some(outcomeUnknown)
+                ? AI_OPERATOR_REJECTED_LOCKED_TEXT
+                : AI_OPERATOR_REJECTED_TEXT,
+            ]
+          : []),
+        orders.some(confirmAttempted)
+          ? AI_RETRY_HINT_TEXT
+          : AI_RETRY_ALL_HINT_TEXT,
       ].join('\n'),
       await this.previewRows(ctx, draft),
     );
@@ -1234,7 +1281,18 @@ export class AiOrderService implements OnModuleDestroy {
       ],
       [await this.button(ctx, draft, '↩️ Orqaga', AI_ORDER_ACTIONS.back)],
     );
-    await this.show(ctx, draft, operatorPickerText(meta), rows, 'HTML');
+    await this.show(
+      ctx,
+      draft,
+      operatorPickerText(
+        meta,
+        ((draft.orders ?? []) as AiPreviewOrder[]).some(
+          (o) => o.confirm_order_id,
+        ),
+      ),
+      rows,
+      'HTML',
+    );
   }
 
   /**
@@ -1275,15 +1333,42 @@ export class AiOrderService implements OnModuleDestroy {
       next = { ...meta, operator_id: option.id, operator_name: option.name };
     }
     const input = { ...(draft.input ?? {}), meta: next };
-    // Versiya sharti (`updated_at`): o'qishdan keyin qoralama o'zgargan
-    // bo'lsa (masalan orada «✅» → natijasi noma'lum urinish belgisi)
-    // tanlov yozilmaydi — belgilangan buyurtma operatori o'zgarmasin.
-    const res = await this.drafts.update(
-      { id: draft.id, status: 'preview', updated_at: draft.updated_at },
-      { input, updated_at: new Date() },
+    // Qoida WHERE ichida (versiya/vaqt tengligi emas — SQL now() mikrosekund
+    // aniqligi JS Date bilan hech qachon teng chiqmasdi): `preview` va
+    // natijasi NOMA'LUM buyurtma (confirm_attempted_at bor, confirm_order_id
+    // yo'q) YO'Q. O'qishdan keyin orada «✅» → noma'lum natija bo'lsa tanlov
+    // yozilmaydi — belgilangan buyurtma operatori o'zgarmasin. Faqat
+    // `meta.operator_id` / `meta.operator_name` yoziladi (jsonb `||`):
+    // `input` ning qolgani (masalan parallel yozilgan profil keshi, ro'yxat)
+    // eski nusxa bilan ustidan yozilmaydi.
+    const rows = rowsOf<{ id: string }>(
+      await this.drafts.query(
+        `UPDATE "notification_schema"."telegram_ai_drafts"
+            SET "input" = jsonb_set(COALESCE("input", '{}'::jsonb), '{meta}',
+                  COALESCE("input"->'meta', '{}'::jsonb) || $2::jsonb),
+                "updated_at" = now()
+          WHERE "id" = $1 AND "status" = 'preview' AND "expires_at" > now()
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_array_elements(COALESCE("orders", '[]'::jsonb)) o
+               WHERE o->>'confirm_attempted_at' IS NOT NULL
+                 AND o->>'confirm_order_id' IS NULL)
+        RETURNING "id"`,
+        [
+          draft.id,
+          JSON.stringify({
+            operator_id: next.operator_id ?? null,
+            operator_name: next.operator_name ?? null,
+          }),
+        ],
+      ),
     );
-    if (!res?.affected) {
-      await this.explainState(ctx, draft.id);
+    if (!rows.length) {
+      // Qoralama hali `preview` bo'lsa — joriy karta (u noma'lum natijali
+      // buyurtmani ko'rsatadi); «eskirgan, qayta yuboring» DEYILMAYDI —
+      // qayta yuborish dublikat yaratardi.
+      const fresh = await this.previewDraft(draft.id);
+      if (fresh) await this.showPreview(ctx, fresh);
+      else await this.explainState(ctx, draft.id);
       return;
     }
     draft.input = input;
@@ -1396,18 +1481,9 @@ export class AiOrderService implements OnModuleDestroy {
       await this.show(ctx, draft, AI_CANCELLED_TEXT, []);
       return;
     }
-    const created = orders
-      .filter((order) => order.confirm_order_id)
-      .map(
-        (order) =>
-          `✅ ${order.index + 1}) Buyurtma ${orderNumber(order.confirm_order_id)} yaratilgan`,
-      );
-    await this.show(
-      ctx,
-      draft,
-      [AI_CANCELLED_PARTIAL_TEXT, ...created].join('\n'),
-      [[this.cabinetCreateButton()]],
-    );
+    await this.show(ctx, draft, this.cancelledText(orders), [
+      [this.cabinetCreateButton()],
+    ]);
   }
 
   /**
@@ -2287,9 +2363,27 @@ export class AiOrderService implements OnModuleDestroy {
       creating: AI_CREATING_TEXT,
       parsing: AI_WORKING_TEXT,
       created: AI_ALREADY_CREATED_TEXT,
-      cancelled: AI_CANCELLED_TEXT,
+      cancelled: this.cancelledText((draft.orders ?? []) as AiPreviewOrder[]),
     };
     await ctx.reply(text[draft.status] ?? AI_EXPIRED_TEXT);
+  }
+
+  /**
+   * Bekor qilingan qoralama matni: ai-confirm'ga yuborilgan buyurtma bo'lsa
+   * (noma'lum / qisman) «hech narsa yaratilmadi» EMAS — ogohlantirish +
+   * yaratilganlari.
+   */
+  private cancelledText(orders: AiPreviewOrder[]): string {
+    if (!orders.some(confirmAttempted)) return AI_CANCELLED_TEXT;
+    return [
+      AI_CANCELLED_PARTIAL_TEXT,
+      ...orders
+        .filter((order) => order.confirm_order_id)
+        .map(
+          (order) =>
+            `✅ ${order.index + 1}) Buyurtma ${orderNumber(order.confirm_order_id)} yaratilgan`,
+        ),
+    ].join('\n');
   }
 
   private async claim(

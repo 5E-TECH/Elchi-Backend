@@ -286,6 +286,8 @@ describe('AiUsageService (lYVuADRE)', () => {
       expect(sql).toContain('UPDATE ai_schema.ai_usage_log');
       expect(sql).toContain('$2::bigint[]');
       expect(sql).toContain('WHERE draft_id = $1 AND market_id = $3');
+      // Takror (hamma id bog'langan) — qator qayta yozilmaydi.
+      expect(sql).toContain('AND NOT (order_ids @> $2::bigint[])');
       expect(params).toEqual([DRAFT, ['101', '102'], '12']);
     });
 

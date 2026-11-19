@@ -8,7 +8,6 @@ import {
 } from '../testing/bot-kit-spec';
 import {
   AI_CONFIRM_UNKNOWN_LINE,
-  AI_EDITS_NOT_APPLIED_TEXT,
   type AiPreviewOrder,
   confirmFingerprint,
   markConfirmAttempted,
@@ -205,7 +204,7 @@ describe('noma‘lum natijali ai-confirm — tuzatish yopiladi (regressiya)', ()
       sentItems(confirms(calls)[0]),
     );
     expect(lastShown(ctx)).toContain('avval yaratilgan');
-    expect(lastShown(ctx)).not.toContain(AI_EDITS_NOT_APPLIED_TEXT);
+    expect(lastShown(ctx)).not.toContain("Tuzatishlar qo'llanmadi");
     // Belgi ai-confirm'ga yuborilmaydi.
     expect(JSON.stringify(confirms(calls)[1].body)).not.toContain('confirm_');
   });
@@ -302,6 +301,6 @@ describe('noma‘lum natijali ai-confirm — tuzatish yopiladi (regressiya)', ()
     await send(ctx, ORDER_TEXT);
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     expect(lastShown(ctx)).toContain('avval yaratilgan');
-    expect(lastShown(ctx)).toContain(AI_EDITS_NOT_APPLIED_TEXT);
+    expect(lastShown(ctx)).toContain("⚠️ 1) Tuzatishlar qo'llanmadi");
   });
 });
