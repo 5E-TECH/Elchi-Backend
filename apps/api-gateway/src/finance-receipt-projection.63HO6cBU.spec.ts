@@ -1,10 +1,10 @@
 import { projectReceiptsForViewer } from './finance-receipt-projection';
 
 /**
- * 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: menejer va kuryer
+ * 63HO6cBU (P0) — filial kassasi naqd/kartaga ajralmaydi: KURYER
  * ko'rinishida FILIAL oyog'i qatorlarida (`branch_leg: true`, finance
  * belgilaydi) `payment_method` va `card_id` qaytmaydi (eski qatorlarda ham);
- * SA/admin — usul saqlanadi.
+ * SA/admin va — ega qarori (Q2) — menejer / registrator usulni ko'radi.
  */
 describe('63HO6cBU — filial qatorlarida to`lov usuli rol bo`yicha', () => {
   const payload = () => ({
@@ -46,7 +46,7 @@ describe('63HO6cBU — filial qatorlarida to`lov usuli rol bo`yicha', () => {
       req: {},
     });
 
-  it.each([['manager'], ['courier'], ['registrator']])(
+  it.each([['courier']])(
     '%s — filial qatorida usul va karta null; boshqa qator tegilmaydi',
     (role) => {
       const out = view([role]);
@@ -70,15 +70,25 @@ describe('63HO6cBU — filial qatorlarida to`lov usuli rol bo`yicha', () => {
     },
   );
 
-  it.each([['superadmin'], ['admin']])('%s — usul saqlanadi', (role) => {
-    const out = view([role]);
-    expect(out.data.items[0]).toMatchObject({
+  it.each([['superadmin'], ['admin'], ['manager'], ['registrator']])(
+    '%s — usul saqlanadi (menejer / registrator — ega qarori Q2)',
+    (role) => {
+      const out = view([role]);
+      expect(out.data.items[0]).toMatchObject({
+        payment_method: 'click',
+        card_id: '7',
+      });
+      expect(out.data.detail).toMatchObject({
+        payment_method: 'click',
+        transfer_source_user_id: '7',
+      });
+      expect(out.data.items[0].branch_leg).toBe(true);
+    },
+  );
+
+  it('kuryer + menejer roli birga — menejer sifatida ko`radi', () => {
+    expect(view(['courier', 'manager']).data.items[0]).toMatchObject({
       payment_method: 'click',
-      card_id: '7',
-    });
-    expect(out.data.detail).toMatchObject({
-      payment_method: 'click',
-      transfer_source_user_id: '7',
     });
   });
 });

@@ -382,7 +382,7 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
     await assertInvariant();
   });
 
-  it('M1: my-cashbox (menejer, kuryer), getCashboxByUserId, findCashboxByUser (turli / tursiz) — `branch_leg` qo`yiladi, menejer/kuryer proyeksiyasida usul, karta, manba null', async () => {
+  it('M1: my-cashbox (menejer, kuryer), getCashboxByUserId, findCashboxByUser (turli / tursiz) — `branch_leg` qo`yiladi; kuryer proyeksiyasida usul, karta, manba null, menejer — ko`radi (ega qarori Q2)', async () => {
     await managerReceives(200_000, {
       payment_method: PaymentMethod.CLICK,
       card_id: '999',
@@ -408,6 +408,13 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
         branchId: null,
         req: {},
       }) as any;
+    const expectShown = (rows: any[], expectedLen: number) => {
+      expect(rows).toHaveLength(expectedLen);
+      for (const row of rows) {
+        expect(row.branch_leg).toBe(true);
+        expect(row.payment_method).toBe('click');
+      }
+    };
     const expectHidden = (rows: any[], expectedLen: number) => {
       expect(rows).toHaveLength(expectedLen);
       for (const row of rows) {
@@ -424,7 +431,7 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
       branch_id: BRANCH,
       roles: ['manager'],
     });
-    expectHidden(manager(my).data.cashboxHistory, 2);
+    expectShown(manager(my).data.cashboxHistory, 2);
     // Kuryer my-cashbox (kuryer → filial qatori).
     const myCourier: any = await service.myCashbox({
       user_id: COURIER,
@@ -436,19 +443,21 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
       id: BRANCH,
       cashbox_type: Cashbox_type.BRANCH,
     });
-    expectHidden(manager(byIdBranch).data.cashboxHistory, 2);
+    expectShown(manager(byIdBranch).data.cashboxHistory, 2);
     const byIdCourier: any = await service.getCashboxByUserId({
       id: COURIER,
       cashbox_type: Cashbox_type.FOR_COURIER,
     });
-    expectHidden(manager(byIdCourier).data.cashboxHistory, 1);
+    expectShown(manager(byIdCourier).data.cashboxHistory, 1);
+    expectHidden(courier(byIdCourier).data.cashboxHistory, 1);
     // findCashboxByUser — turli va tursiz.
     const typed: any = await service.findCashboxByUser({
       user_id: BRANCH,
       cashbox_type: Cashbox_type.BRANCH,
       with_history: true,
     });
-    expectHidden(manager(typed).data.history, 2);
+    expectShown(manager(typed).data.history, 2);
+    expectHidden(courier(typed).data.history, 2);
     const untyped: any = await service.findCashboxByUser({
       user_id: COURIER,
       with_history: true,
@@ -463,6 +472,74 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
     expect(
       sa.data.history.map((row: any) => row.payment_method).sort(),
     ).toEqual(['click', 'click']);
+  });
+
+  it('⭐ ega qarori (Q2): menejer filial oyog`ida usulni ko`radi — my-cashbox / cashbox/main / history / history/:id / all-info: cash, click, click_to_market; kuryer — null', async () => {
+    await managerReceives(1_000_000);
+    await adminTakes(100_000, PaymentMethod.CASH);
+    await adminTakes(200_000, PaymentMethod.CLICK);
+    await adminTakes(300_000, PaymentMethod.CLICK_TO_MARKET, {
+      market_id: MARKET,
+    });
+    const view = (payload: unknown, roles: string[]) =>
+      projectReceiptsForViewer(payload, {
+        roles,
+        branchId: roles.includes('manager') ? BRANCH : null,
+        req: {},
+      });
+    /** Javobdagi filial `branch_to_main` qatorlari: summa → usul. */
+    const methodsOf = (payload: unknown): Record<number, unknown> => {
+      const found: Record<number, unknown> = {};
+      const visit = (value: unknown, depth: number) => {
+        if (depth > 8 || !value || typeof value !== 'object') return;
+        if (Array.isArray(value)) {
+          for (const item of value) visit(item, depth + 1);
+          return;
+        }
+        const row = value as Record<string, unknown>;
+        if (row.branch_leg === true && row.source_type === 'branch_to_main') {
+          found[Number(row.amount)] = row.payment_method;
+        }
+        for (const item of Object.values(row)) visit(item, depth + 1);
+      };
+      visit(payload, 0);
+      return found;
+    };
+    const expected = {
+      100000: 'cash',
+      200000: 'click',
+      300000: 'click_to_market',
+    };
+    const hidden = { 100000: null, 200000: null, 300000: null };
+    const responses: unknown[] = [
+      await service.myCashbox({
+        user_id: '25',
+        branch_id: BRANCH,
+        roles: ['manager'],
+      }),
+      await service.getCashboxByUserId({
+        id: BRANCH,
+        cashbox_type: Cashbox_type.BRANCH,
+      }),
+      await service.findAllHistory({ cashbox_type: Cashbox_type.BRANCH }),
+      await service.allCashboxesTotal({}),
+    ];
+    for (const response of responses) {
+      expect(methodsOf(view(response, ['manager']))).toEqual(expected);
+      expect(methodsOf(view(response, ['registrator']))).toEqual(expected);
+      expect(methodsOf(view(response, ['courier']))).toEqual(hidden);
+    }
+    // history/:id — har filial oyog'i alohida.
+    const legs = await branchLegs();
+    for (const leg of legs.filter((l) => l.source_type === 'branch_to_main')) {
+      const detail = await service.findHistoryById(String(leg.id));
+      const amount = Number(leg.amount) as keyof typeof expected;
+      expect((view(detail, ['manager']) as any).data.payment_method).toBe(
+        expected[amount],
+      );
+      expect((view(detail, ['courier']) as any).data.payment_method).toBeNull();
+      expect((view(detail, ['manager']) as any).data.card).toBeNull();
+    }
   });
 
   it('M2: history/:id — filial qatorida `card` bloki hech qachon (na sintetik «Asosiy karta», na eski nomli karta); MAIN — avvalgidek', async () => {
@@ -490,7 +567,7 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
     expect(mainDetail.data.branch_leg).toBeUndefined();
   });
 
-  it('m5: filial smena hisoboti — `card: null`, operatsiyalar faqat kirim/chiqim (usulsiz)', async () => {
+  it('m5: filial smena hisoboti — `card: null`; operatsiyalar usul bo`yicha (ega qarori Q2 — menejer usulni ko`radi)', async () => {
     const opened: any = await service.openShift({
       opened_by: '8',
       cashbox_user_id: BRANCH,
@@ -506,13 +583,13 @@ describePg('63HO6cBU — filial kassasi bitta jami (haqiqiy Postgres)', () => {
     expect(report.data.operations).toEqual([
       {
         operation_type: 'income',
-        payment_method: null,
+        payment_method: 'cash',
         count: 1,
         total: 300_000,
       },
       {
         operation_type: 'expense',
-        payment_method: null,
+        payment_method: 'click',
         count: 1,
         total: 100_000,
       },

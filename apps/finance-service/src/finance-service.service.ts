@@ -4429,36 +4429,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           accounts_summary: this.shiftAccountChecks
             ? this.shiftAccountChecks.summarize(accounts)
             : null,
-          operations: isBranchShift
-            ? // 63HO6cBU — filialda usul bo'yicha ajratma yo'q (menejer
-              // usulni ko'rmaydi): faqat kirim / chiqim.
-              [Operation_type.INCOME, Operation_type.EXPENSE]
-                .map((type) => {
-                  const rows = operations.filter(
-                    (row) => row.operation_type === type,
-                  );
-                  return {
-                    operation_type: type,
-                    payment_method: null,
-                    count: rows.reduce(
-                      (sum, row) => sum + (Number(row.count) || 0),
-                      0,
-                    ),
-                    total: FinanceServiceService.roundMoney(
-                      rows.reduce(
-                        (sum, row) => sum + (Number(row.total) || 0),
-                        0,
-                      ),
-                    ),
-                  };
-                })
-                .filter((row) => row.count > 0)
-            : operations.map((row) => ({
-                operation_type: row.operation_type,
-                payment_method: row.payment_method,
-                count: Number(row.count) || 0,
-                total: FinanceServiceService.roundMoney(Number(row.total) || 0),
-              })),
+          // 63HO6cBU (ega qarori, Q2): usul menejerga ham ko'rinadi — filial
+          // smenasida ham kirim/chiqim usul bo'yicha (jami bitta, karta yo'q).
+          operations: operations.map((row) => ({
+            operation_type: row.operation_type,
+            payment_method: row.payment_method,
+            count: Number(row.count) || 0,
+            total: FinanceServiceService.roundMoney(Number(row.total) || 0),
+          })),
           operations_window: { from: shift.opened_at, to },
         },
         200,
@@ -7272,7 +7250,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           // Faqat musbat kassalar — HQ marketlarga to'lashi kerak (audit M16).
           marketPayableTotal,
           ...(periodTotals ?? {}),
-          allCashboxHistories,
+          // 63HO6cBU — `branch_leg` (qatorlarda `cashbox` relation bor).
+          allCashboxHistories: await this.withBranchLegs(allCashboxHistories),
           pagination: {
             total,
             page,
