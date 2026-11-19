@@ -19,6 +19,12 @@ import {
   ValidateNested,
 } from 'class-validator';
 import {
+  IsMoneyAmount,
+  IsMoneyNonNegative,
+  IsMoneySigned,
+  MONEY_MAX_NUMERIC_14_2,
+} from './money.validators';
+import {
   CASHBOX_RECEIPT_FILTER_STATUSES,
   CASHBOX_RECEIPT_KINDS,
   Cashbox_type,
@@ -41,20 +47,17 @@ export class CreateCashboxRequestDto {
 
   @ApiPropertyOptional({ example: 0 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('balance')
   balance?: number;
 
   @ApiPropertyOptional({ example: 0 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('balance_cash')
   balance_cash?: number;
 
   @ApiPropertyOptional({ example: 0 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('balance_card')
   balance_card?: number;
 }
 
@@ -160,9 +163,7 @@ export class UpdateCashboxBalanceRequestDto {
   cashbox_type?: Cashbox_type;
 
   @ApiProperty({ example: 150000 })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
+  @IsMoneyAmount('amount')
   amount!: number;
 
   @ApiProperty({ enum: Operation_type, example: Operation_type.INCOME })
@@ -359,14 +360,12 @@ export class OpenShiftRequestDto {
 
   @ApiPropertyOptional({ example: 100000 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('opening_balance_cash')
   opening_balance_cash?: number;
 
   @ApiPropertyOptional({ example: 0 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('opening_balance_card')
   opening_balance_card?: number;
 
   @ApiPropertyOptional({ example: 'Kunlik smena ochildi' })
@@ -416,9 +415,7 @@ export class CloseShiftRequestDto {
       'Sanab topshirilgan naqd (MAJBURIY, ega S5). discrepancy_cash = shu − expected_balance_cash',
   })
   @IsDefined({ message: CLOSING_BALANCE_CASH_REQUIRED_MESSAGE })
-  @Type(() => Number)
-  @IsNumber({}, { message: "closing_balance_cash son bo'lishi kerak" })
-  @Min(0, { message: "closing_balance_cash manfiy bo'lmasligi kerak" })
+  @IsMoneyNonNegative('closing_balance_cash')
   closing_balance_cash!: number;
 
   @ApiPropertyOptional({
@@ -427,9 +424,7 @@ export class CloseShiftRequestDto {
       "Sanab topshirilgan karta qoldig'i. Yuborilsa discrepancy_card hisoblanadi",
   })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
+  @IsMoneyNonNegative('closing_balance_card')
   closing_balance_card?: number;
 
   @ApiPropertyOptional({ example: 'Smena yopildi' })
@@ -461,9 +456,7 @@ export class CloseShiftAccountRequestDto {
     example: 1250000,
     description: "Kassir kiritgan qoldiq (so'm)",
   })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
+  @IsMoneyNonNegative('entered_balance')
   entered_balance!: number;
 
   @ApiPropertyOptional({
@@ -504,9 +497,7 @@ export class ShiftAccountPhotoRequestDto {
     description: 'Qoralama: kassir kiritgan qoldiq (yopishda qayta yuboriladi)',
   })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
+  @IsMoneyNonNegative('entered_balance')
   entered_balance?: number;
 
   @ApiPropertyOptional({ example: 'Izoh' })
@@ -549,8 +540,7 @@ export class ShiftLatePhotoRequestDto {
       ? undefined
       : Number(value),
   )
-  @IsNumber({ allowNaN: false, allowInfinity: false })
-  @Min(0)
+  @IsMoneyNonNegative('entered_balance', { coerce: false })
   entered_balance!: number;
 
   @ApiPropertyOptional({
@@ -982,15 +972,12 @@ export class CreateSalaryRequestDto {
   user_id!: string;
 
   @ApiProperty({ example: 3000000 })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
+  @IsMoneyAmount('salary_amount', { max: MONEY_MAX_NUMERIC_14_2 })
   salary_amount!: number;
 
   @ApiPropertyOptional({ example: 3000000 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('have_to_pay', { max: MONEY_MAX_NUMERIC_14_2 })
   have_to_pay?: number;
 
   @ApiPropertyOptional({ example: 10 })
@@ -1010,15 +997,12 @@ export class UpdateSalaryRequestDto {
 
   @ApiPropertyOptional({ example: 3500000 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
+  @IsMoneyAmount('salary_amount', { max: MONEY_MAX_NUMERIC_14_2 })
   salary_amount?: number;
 
   @ApiPropertyOptional({ example: 1000000 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('have_to_pay', { max: MONEY_MAX_NUMERIC_14_2 })
   have_to_pay?: number;
 
   @ApiPropertyOptional({ example: 12 })
@@ -1031,8 +1015,9 @@ export class UpdateSalaryRequestDto {
 
   @ApiPropertyOptional({ example: 250000 })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsMoneySigned('increase_have_to_pay_by', {
+    max: MONEY_MAX_NUMERIC_14_2,
+  })
   increase_have_to_pay_by?: number;
 }
 
@@ -1054,9 +1039,7 @@ export class PaymentFromCourierRequestDto {
   courier_id!: string;
 
   @ApiProperty({ example: 250000 })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
+  @IsMoneyAmount('amount')
   amount!: number;
 
   @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
@@ -1114,9 +1097,7 @@ export class PaymentToMarketRequestDto {
   market_id!: string;
 
   @ApiProperty({ example: 500000 })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
+  @IsMoneyAmount('amount')
   amount!: number;
 
   @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
@@ -1178,9 +1159,7 @@ export class PaymentBranchToMainRequestDto {
   branch_id!: string;
 
   @ApiProperty({ example: 250000 })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
+  @IsMoneyAmount('amount')
   amount!: number;
 
   @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
@@ -1324,9 +1303,7 @@ export class CashboxAllInfoQueryDto {
 
 export class MainCashboxManualRequestDto {
   @ApiProperty({ example: 150000 })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0.0000001)
+  @IsMoneyAmount('amount')
   amount!: number;
 
   @ApiPropertyOptional({ enum: PaymentMethod, example: PaymentMethod.CASH })
@@ -1608,9 +1585,7 @@ export class TransferCashboxCardRequestDto {
   to_card_id!: string;
 
   @ApiProperty({ example: 500000 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @IsMoneyAmount('amount')
   amount!: number;
 
   @ApiProperty({
@@ -1641,9 +1616,7 @@ export class ConvertCashboxCardRequestDto {
   card_id!: string;
 
   @ApiProperty({ example: 500000 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @IsMoneyAmount('amount')
   amount!: number;
 
   @ApiProperty({
@@ -1705,10 +1678,7 @@ export class RecordFinancialBalanceRequestDto {
     description:
       'Signed amount: positive = income, negative = expense. Match the sign to source_type.',
   })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(-1e15)
-  @Max(1e15)
+  @IsMoneySigned('amount')
   amount!: number;
 
   @ApiProperty({
@@ -2016,9 +1986,7 @@ export class CorrectPaymentAmountRequestDto extends ReversePaymentRequestDto {
     description:
       "Yangi summa (> 0, ko'pi bilan 2 kasr). Eskisiga teng — 409 SAME_AMOUNT; `max` dan katta — 409 AMOUNT_EXCEEDS.",
   })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @IsMoneyAmount('new_amount')
   new_amount!: number;
 }
 
