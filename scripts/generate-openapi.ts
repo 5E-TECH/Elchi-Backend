@@ -37,6 +37,7 @@ const ENV_DEFAULTS: Record<string, string> = {
   RABBITMQ_C2C_QUEUE: 'c2c_queue',
   RABBITMQ_SEARCH_QUEUE: 'search_queue',
   RABBITMQ_AI_QUEUE: 'ai_queue',
+  RABBITMQ_AI_FAST_QUEUE: 'ai_fast_queue',
 };
 for (const [key, value] of Object.entries(ENV_DEFAULTS)) {
   if (!process.env[key]) process.env[key] = value;

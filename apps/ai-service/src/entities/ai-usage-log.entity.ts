@@ -161,4 +161,21 @@ export class AiUsageLog extends BaseEntity {
    */
   @Column({ type: 'int', nullable: true })
   latency_ms!: number | null;
+
+  /**
+   * «AI kalit va modellar» (migratsiya 228): chaqiruv qaysi kalit bilan
+   * ketgani — workspace bo'yicha solishtirish va oldin/keyin tahlili. Kalit
+   * qiymati EMAS: UI qatori id'si, manba (`ui`/`env`), iz, sozlama versiyasi.
+   */
+  @Column({ type: 'uuid', nullable: true })
+  key_id!: string | null;
+
+  @Column({ type: 'varchar', length: 8, nullable: true })
+  key_source!: 'ui' | 'env' | null;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  key_fingerprint!: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  config_version!: number | null;
 }

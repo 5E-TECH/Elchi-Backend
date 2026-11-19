@@ -11,6 +11,7 @@ type C = { id: string; text: string; phones: string[]; keep?: string[] };
 type Case = { text: string; phones: string[]; keep?: string[]; tag?: string };
 const P = (n: string) => `+998${n}`;
 const NB = '\u00a0';
+const NNB = '\u202f';
 
 const PRIVACY_CASES: C[] = [
   // A. prefixed
@@ -762,6 +763,310 @@ const PRIVACY_CASES: C[] = [
     text: 'Aziza 901234000',
     phones: [P('901234000')],
   },
+  // #647 round 3 (N4): ikkinchi telefon `/ - .` bilan yopishgan — birinchisi
+  // sana deb qolmaydi.
+  {
+    id: 'N4a Tel: dashes / dashes',
+    text: 'Tel: 90-123-12-11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4b spaces / dashes',
+    text: '90 123 12 11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4c name spaces / dots',
+    text: 'Aziza 90 123 12 11/93.765.43.21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4d spaces - dashes',
+    text: '90 123 12 11-93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4e spaces . dashes',
+    text: '90 123 12 11.93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4f Tel: spaces / dashes',
+    text: 'Tel: 90 123 12 11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4g Telefon: dashes / dashes',
+    text: 'Telefon: 90-123-25-11/97-111-22-33',
+    phones: [P('901232511'), P('971112233')],
+  },
+  {
+    id: 'N4h dashes / dashes',
+    text: '90-123-12-11/93-765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4i spaces / 2 spaces',
+    text: '90 123 12 11/93  765 43 21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4j spaces / spaced dash',
+    text: '90 123 12 11/93 - 765-43-21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4k spaces / NBSP dashes',
+    text: `90 123 12 11/93${NB}-${NB}765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4l spaces / NNBSP',
+    text: `90 123 12 11/93${NNB}765${NNB}43${NNB}21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4m spaces / NNBSP dashes',
+    text: `Aziza 90 123 12 11/93${NNB}-${NNB}765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4r Tel: NNBSP / dashes',
+    text: `Tel: 90${NNB}123${NNB}12${NNB}11/93-765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4s NNBSP-grouped date-like phone (no word)',
+    text: `90${NNB}123${NNB}12${NNB}11/93-765-43-21`,
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4n Tel: 75 000 14.11 (phone word wins)',
+    text: 'Tel: 75 000 14.11',
+    phones: [P('750001411')],
+  },
+  {
+    id: 'N4o list 2-3-2-2 / 2-3-2-2',
+    text: '90 123 45 67/91 234 56 78',
+    phones: [P('901234567'), P('912345678')],
+  },
+  {
+    id: 'N4p list comma',
+    text: '90 123 12 11, 93 765 43 21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  {
+    id: 'N4q list /+998',
+    text: '90 123 12 11/+998 93 765 43 21',
+    phones: [P('901231211'), P('937654321')],
+  },
+  // #647 round 4 (P1): birinchi va oxirgi ajratgich `.` — telefon (dev ham maskalagan).
+  {
+    id: 'R4P1a dot first+last, space middle',
+    text: 'Aziza 90.123 14.11',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R4P1b dot first+last, dash middle',
+    text: 'Aziza 90.123-14.11',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R4P1c Mijoz: dot/space/dot',
+    text: 'Mijoz: 91.734 13.12, Chilonzor',
+    phones: [P('917341312')],
+  },
+  {
+    id: 'R4P1d Cyrillic name dot/space/dot',
+    text: 'Азиза 93.765 31.12 kuni',
+    phones: [P('937653112')],
+  },
+  {
+    id: 'R4P1e bare Telefon dot/space/dot',
+    text: 'Telefon 93.765 31.12',
+    phones: [P('937653112')],
+  },
+  {
+    id: 'R4P1f tg: 8 dot/dash/dot',
+    text: 'tg: 8 93.635-31.07',
+    phones: [P('936353107')],
+  },
+  {
+    id: 'R4P1g dot/space/dot + sentence dot',
+    text: 'Mijoz Aziza 90.123 14.11. Chilonzor',
+    phones: [P('901231411')],
+  },
+  // #647 round 4: telefon so'zidan keyin `8 `/`0 ` trunk prefiksi; `/` bilan yopishgan 2-2-2-3 ikkinchi telefon.
+  {
+    id: 'R4Xa Tel: 8 + 2-3-2-2 date-like',
+    text: 'Tel: 8 90 000 12 11',
+    phones: [P('900001211')],
+  },
+  {
+    id: 'R4Xb Telefon: 0 + dot date-like',
+    text: 'Telefon: 0 90 123 12.11',
+    phones: [P('901231211')],
+  },
+  {
+    id: 'R4Xc raqami: 0 + dot date-like',
+    text: 'raqami: 0 90 123 12.11',
+    phones: [P('901231211')],
+  },
+  {
+    id: 'R4Xd Телефон 0 + dashes',
+    text: 'Телефон 0 67-000-18-05',
+    phones: [P('670001805')],
+  },
+  {
+    id: 'R4Xe Tel: 8 + NBSP trunk',
+    text: `Tel: 8${NB}90 000 12 11`,
+    phones: [P('900001211')],
+  },
+  {
+    id: 'R4Xf 2-3-2-2 / 2-2-2-3',
+    text: 'Aziza 90 123 14 11/97 76 54 321',
+    phones: [P('901231411'), P('977654321')],
+  },
+  {
+    id: 'R4Xg 2-3-2-2 / 2-2-2-3 dashes',
+    text: 'Aziza 90 123 14 11/97-76-54-321',
+    phones: [P('901231411'), P('977654321')],
+  },
+  // #703 round 5: `8` prefiksli / yaxlit `CCNNN` shakl dev (194296bb)
+  // tanimagan ajratgich bilan, narx dalilisiz — dev'dagidek telefon.
+  {
+    id: 'R5a 8 + 2-3-2-2 slash date-like',
+    text: 'Aziza 890 123 14/11',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R5b contiguous CCNNN slash',
+    text: 'Aziza 90123 14/11',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R5c 8- dashes + slash',
+    text: '8-90-123-14/11 Chilonzor',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R5d 8 + NBSP groups',
+    text: `Aziza 890${NB}123${NB}14${NB}11`,
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R5e contiguous + 2 spaces',
+    text: 'Aziza 90123  14 11',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R5f 8 + en dashes',
+    text: 'Aziza 890\u2013123\u201314\u201311',
+    phones: [P('901231411')],
+  },
+  {
+    id: 'R5g 8 + slashes',
+    text: 'Mijoz 890/123/14/11',
+    phones: [P('901231411')],
+  },
+  // #703 round 5 (guarded-span): narx + sana sifatida saqlangan asosiy
+  // moslik ichida boshlanadigan 2-2-2-3 nomzod keyingi telefonni yutmaydi.
+  {
+    id: 'R5h price+date then phone (en dash)',
+    text: 'Atir 75000 \u2013 20-11 91 234 56 78 Aziza',
+    phones: [P('912345678')],
+    keep: ['75000 \u2013 20-11'],
+  },
+  {
+    id: 'R5i price+date (2 spaces) then phone',
+    text: 'Narxi 850 000  20-11 91 234 56 78',
+    phones: [P('912345678')],
+    keep: ['850 000  20-11'],
+  },
+  {
+    id: 'R5j price+date (slash) then phone',
+    text: 'Atir 75000 / 20 11 90 123 45 67',
+    phones: [P('901234567')],
+    keep: ['75000 / 20 11'],
+  },
+  {
+    id: 'R5k dev price+date then phone',
+    text: 'Narxi 90 000  20-11 91 234 56 78',
+    phones: [P('912345678')],
+    keep: ['90 000  20-11'],
+  },
+  // #710 review: himoyalangan oraliq ichida boshlangan YOLG'IZ nomzod —
+  // dev'dagidek telefon (faqat keyingi telefonni yutsa tashlanadi).
+  {
+    id: 'R5l lone guarded-alt (price + 3-2-2-3)',
+    text: 'Atir 75 000 \u2013 20 12 34 567',
+    phones: [P('201234567')],
+    keep: ['75 000'],
+  },
+  {
+    id: 'R5m price+ISO date then phone (en dashes)',
+    text: 'Atir 90 000 2025-07-20. 696\u201328\u201306\u201301 kuni',
+    phones: [P('696280601')],
+    keep: ['90 000 2025-07-20'],
+  },
+  {
+    id: 'R5n house no + phone',
+    text: 'Mijoz uy 20 - 901 25 06 45',
+    phones: [P('901250645')],
+  },
+  {
+    id: 'R5o ISO date + phone',
+    text: 'Yetkazish 2025-11-20 - 901 25 06 45',
+    phones: [P('901250645')],
+    keep: ['2025-11-20'],
+  },
+  {
+    id: 'R5p kv + dashed phone',
+    text: 'Kv 77 - 901-25-06-45',
+    phones: [P('901250645')],
+  },
+  {
+    id: 'R5q ISO date / phone',
+    text: 'Jami: 2025-11-20 / 789 10 01 55',
+    phones: [P('789100155')],
+    keep: ['2025-11-20'],
+  },
+  {
+    id: 'R5r bare 998 after slash',
+    text: 'Narxi 50 / 998 20\u201304\u201307\u2013965',
+    phones: [P('200407965')],
+  },
+  {
+    id: 'R5s F: price (2 spaces) + 2-2-2-3',
+    text: 'Aziza 90 000  20 11 23 456',
+    phones: [P('201123456')],
+    keep: ['90 000'],
+  },
+  {
+    id: 'R5t F: price + dashed date-like',
+    text: 'Narxi 90 000  20-11 23 456',
+    phones: [P('201123456')],
+    keep: ['90 000'],
+  },
+  {
+    id: 'R5u F: contiguous price + en dash',
+    text: 'Aziza 75000 \u2013 20-11 23 456',
+    phones: [P('201123456')],
+    keep: ['75000'],
+  },
+  {
+    id: 'R5v same-start lone candidate stays a phone',
+    text: 'Trek 998880002 /204',
+    phones: [P('880002204')],
+  },
+  // #710 review r2: post-filter faqat KESISHGAN keyingi nomzodda ishlaydi —
+  // keyinroq turgan alohida telefon yolg'iz nomzodni tashlatmaydi.
+  {
+    id: 'R5w lone guarded-alt + later separate phone',
+    text: 'Atir 75 000 \u2013 20 12 34 567, tel 90 123 45 67',
+    phones: [P('201234567'), P('901234567')],
+    keep: ['75 000'],
+  },
 ];
 
 const amountsOnly: { id: string; text: string; keep: string }[] = [
@@ -1394,6 +1699,339 @@ const AMOUNT_CASES: Case[] = [
     keep: ['905 000 000 so‘m'],
     tag: 'round 2',
   },
+  // --- #647 round 3 (N3): 8+kod bilan boshlanadigan va yaxlit CC000 narx + sana ---
+  {
+    text: 'Narxi 850 000 25/11 kuni',
+    phones: [],
+    keep: ['850 000 25/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Atir 890 000 14/11',
+    phones: [],
+    keep: ['890 000 14/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Jami 899 000 01/12',
+    phones: [],
+    keep: ['899 000 01/12'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Atir 875 000 14/11/2026 gacha',
+    phones: [],
+    keep: ['875 000 14/11/2026'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Atir 75000 14/11',
+    phones: [],
+    keep: ['75000 14/11'],
+    tag: 'round 3',
+  },
+  {
+    text: '2 ta 50000 25/11 kuni',
+    phones: [],
+    keep: ['50000 25/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Narxi 90000 12/11 da olib keling',
+    phones: [],
+    keep: ['90000 12/11'],
+    tag: 'round 3',
+  },
+  {
+    text: 'Narxi 75000  14 11',
+    phones: [],
+    keep: ['75000  14 11'],
+    tag: 'round 3',
+  },
+  {
+    text: `Atir 850${NB}000 14.11`,
+    phones: [],
+    keep: [`850${NB}000 14.11`],
+    tag: 'round 3',
+  },
+  {
+    text: `Atir 850${NNB}000 14.11`,
+    phones: [],
+    keep: [`850${NNB}000 14.11`],
+    tag: 'round 3',
+  },
+  {
+    text: `Narxi 75000${NB}${NB}14 11`,
+    phones: [],
+    keep: [`75000${NB}${NB}14 11`],
+    tag: 'round 3',
+  },
+  {
+    text: `Atir 75000${NNB}14/11`,
+    phones: [],
+    keep: [`75000${NNB}14/11`],
+    tag: 'round 3',
+  },
+  {
+    text: 'Narxi 850 000 – 25 – 11 kuni',
+    phones: [],
+    keep: ['850 000 – 25 – 11'],
+    tag: 'round 3',
+  },
+  // dev (21190eef) ham maskalagan: yaxlit/8-prefiksli shakl dev tanigan
+  // ajratgich bilan — telefon (maxfiylik dev'dan pasaymaydi).
+  {
+    text: 'Aziza 90123 14.11',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 890 123 14.11',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 90000 14 11',
+    phones: [P('900001411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 890 123 14 11',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: '8-90-123-14-11 Chilonzor',
+    phones: [P('901231411')],
+    tag: 'round 3',
+  },
+  {
+    text: '+998 90 000 14/11',
+    phones: [P('900001411')],
+    tag: 'round 3',
+  },
+  {
+    text: 'Aziza 0 (90) 000 14 11',
+    phones: [P('900001411')],
+    tag: 'round 3',
+  },
+  // #647 round 4 (A1): million narx + sana — o'rta `0NN 000` guruhi `0` prefiksli telefon emas.
+  {
+    text: 'Narxi 1 090 000 14/11',
+    phones: [],
+    keep: ['1 090 000 14/11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Jami 2 050 000 25/11 kuni',
+    phones: [],
+    keep: ['2 050 000 25/11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 1.090.000 14/11',
+    phones: [],
+    keep: ['1.090.000 14/11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 1 090 000 14/11/2026',
+    phones: [],
+    keep: ['1 090 000 14/11/2026'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Divan 3 070 000 01/12 gacha',
+    phones: [],
+    keep: ['3 070 000 01/12'],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 1${NB}090${NB}000 14.11`,
+    phones: [],
+    keep: [`1${NB}090${NB}000 14.11`],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 1${NNB}090${NNB}000 14.11`,
+    phones: [],
+    keep: [`1${NNB}090${NNB}000 14.11`],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 12 090 000 – 14 – 11',
+    phones: [],
+    keep: ['12 090 000 – 14 – 11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 5 090 000 14 11',
+    phones: [P('900001411')],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 0 (90) 000 14/11',
+    phones: [P('900001411')],
+    tag: 'round 4',
+  },
+  // #647 round 4 (A2): narx + ISO sana keng ajratgich bilan (2 bo'shliq, ` - `, NBSP).
+  {
+    text: 'Narxi 20 000  2026-11-14',
+    phones: [],
+    keep: ['20 000  2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 75 000 - 2026-11-14',
+    phones: [],
+    keep: ['75 000 - 2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Nike narxi 77  000 2026-11-13',
+    phones: [],
+    keep: ['77  000 2026-11-13'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi: 50 000 - 2026-11-20',
+    phones: [],
+    keep: ['50 000 - 2026-11-20'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 850 000  2026-11-14',
+    phones: [],
+    keep: ['850 000  2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 850${NB}000 2026-11-14`,
+    phones: [],
+    keep: [`850${NB}000 2026-11-14`],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 850${NNB}000 2026-11-14`,
+    phones: [],
+    keep: [`850${NNB}000 2026-11-14`],
+    tag: 'round 4',
+  },
+  {
+    text: `Narxi 75${NNB}000 2026-11-14`,
+    phones: [],
+    keep: [`75${NNB}000 2026-11-14`],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 75000  2026-11-14',
+    phones: [],
+    keep: ['75000  2026-11-14'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 90 123 2026',
+    phones: [P('901232026')],
+    tag: 'round 4',
+  },
+  {
+    text: 'Aziza 90-123-2026, Chilonzor',
+    phones: [P('901232026')],
+    tag: 'round 4',
+  },
+  // #647 round 4: dev (21190eef) bilan teng narx gap'lari — KNOWN_AMOUNT_GAPS da.
+  {
+    text: 'Narxi 90000 14.11',
+    phones: [],
+    keep: ['90000 14.11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 850 000 14 11',
+    phones: [],
+    keep: ['850 000 14 11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Narxi 1 090 000 14.11',
+    phones: [],
+    keep: ['1 090 000 14.11'],
+    tag: 'round 4',
+  },
+  {
+    text: 'Atir 75.500 14.11',
+    phones: [],
+    keep: ['75.500 14.11'],
+    tag: 'round 4',
+  },
+  // #703 round 5: `8` prefiksli / yaxlit shakl o'rta `000` siz — dev
+  // (194296bb) ham telefon deb maskalaydi (KNOWN_AMOUNT_GAPS).
+  {
+    text: 'Narxi 875 500 14/11',
+    phones: [],
+    keep: ['875 500 14/11'],
+    tag: 'round 5',
+  },
+  {
+    text: 'Jami 75500 14/11',
+    phones: [],
+    keep: ['75500 14/11'],
+    tag: 'round 5',
+  },
+  {
+    text: 'Atir 875 500 14/11/2026 gacha',
+    phones: [],
+    keep: ['875 500 14/11/2026'],
+    tag: 'round 5',
+  },
+  {
+    text: 'Narxi 875 500  2026-11-14',
+    phones: [],
+    keep: ['875 500  2026-11-14'],
+    tag: 'round 5',
+  },
+  // #710 review round 2: himoyalangan oraliq boshida 1-4 raqam (uy/kv
+  // raqami) — ichida boshlangan nomzod telefonning o'zi; keyingi son
+  // (narx/id) uning dumi bilan "telefon" yasab, telefonni ochib, narxni
+  // yo'qotmasin. Dev (194296bb ham, b4311ebf ham) aynan shunday.
+  {
+    text: "Mijoz uy 20 - 901 25 06 75 1500000 so'm",
+    phones: [P('901250675')],
+    keep: ['1500000'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'Kv 33 / 901 25 06 75 2500000',
+    phones: [P('901250675')],
+    keep: ['2500000'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'uy 20 - 901 25 06 75 85000 20 dona',
+    phones: [P('901250675')],
+    keep: ['85000 20'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'Krossovka 42 20\u2013776-11-07-75 5102932!',
+    phones: [P('776110775')],
+    keep: ['5102932'],
+    tag: '#710 r2',
+  },
+  // Uzun nomzod tashlansa, bir joyda boshlangan qisqa `998 20 05 22`
+  // qoldig'i soxta `+998998200522` tokeni bo'lmasin.
+  {
+    text: "Uy 33 / 998 20 05 22 894 - 1500000 so'm",
+    phones: [P('200522894')],
+    keep: ['1500000'],
+    tag: '#710 r2',
+  },
+  {
+    text: 'Dostavka 95 / 998 20-05-22-894-99000  20-01',
+    phones: [P('200522894')],
+    keep: ['99000  20-01'],
+    tag: '#710 r2',
+  },
 ];
 
 /**
@@ -1402,16 +2040,49 @@ const AMOUNT_CASES: Case[] = [
  * - prefikssiz 3-3-3 telefon so'zisiz (dev'da ham maskalanmasdi) —
  *   `Malibu 335 450 990` narx bo'lishi mumkin;
  * - `…000` bilan tugagan yaxlit 9 raqam telefon so'zisiz (dev maskalardi —
- *   ATAYLAB: `Malibu 335450000` narxini yo'qotish qimmatroq).
+ *   ATAYLAB: `Malibu 335450000` narxini yo'qotish qimmatroq);
+ * - NBSP/NNBSP bilan guruhlangan, oxiri sanaga o'xshash (`90 123 12 11`)
+ *   prefikssiz telefon so'zisiz — dev ham maskalamagan (NBSP'ni tanimasdi),
+ *   narx + sanadan (`90 500 12 11`) farqlab bo'lmaydi.
  */
-const KNOWN_PRIVACY_GAPS: ReadonlySet<string> = new Set<string>([
-  'B54 3-3-3 no word',
-  'B55 3-3-3 dashes no word',
-  'B61 3-3-3 local Cyrillic around',
-  'S4c name …000 (no phone word)',
+/** id → ochiq qoladigan telefonlar (`'all'` — korpusdagi hammasi). */
+const KNOWN_PRIVACY_GAPS: ReadonlyMap<string, string[] | 'all'> = new Map<
+  string,
+  string[] | 'all'
+>([
+  ['B54 3-3-3 no word', 'all'],
+  ['B55 3-3-3 dashes no word', 'all'],
+  ['B61 3-3-3 local Cyrillic around', 'all'],
+  ['S4c name …000 (no phone word)', 'all'],
+  ['N4s NNBSP-grouped date-like phone (no word)', [P('901231211')]],
 ]);
-/** Hozircha bo'sh (STIR/Trek/ID #647 round 2 da tuzatildi). */
-const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([]);
+/**
+ * Narx + sana, dev (21190eef) ham telefon deb maskalagan — dev tanigan
+ * ajratgich bilan telefondan farqlab bo'lmaydi (`Aziza 90000 14.11`,
+ * `Aziza 90.123 14.11` telefon bo'lishi mumkin). Summa so'zi bu shakllarda
+ * ataylab hisobga olinmaydi.
+ * #703 round 5: `8` prefiksli / yaxlit shakl o'rta `000` siz
+ * (`Narxi 875 500 14/11`) — dev (194296bb) ham telefon deb maskalaydi;
+ * `Aziza 890 123 14/11` dan farqlab bo'lmaydi.
+ */
+const KNOWN_AMOUNT_GAPS: ReadonlySet<string> = new Set<string>([
+  'Narxi 90000 14.11',
+  'Narxi 850 000 14 11',
+  'Narxi 1 090 000 14.11',
+  'Atir 75.500 14.11',
+  'Narxi 875 500 14/11',
+  'Jami 75500 14/11',
+  'Atir 875 500 14/11/2026 gacha',
+  'Narxi 875 500  2026-11-14',
+]);
+
+/** KNOWN_AMOUNT_GAPS: aniq maskalangan matn (#710 review S3). */
+const KNOWN_AMOUNT_GAP_MASKED: ReadonlyMap<string, string> = new Map([
+  ['Narxi 875 500 14/11', 'Narxi [TEL_1]'],
+  ['Jami 75500 14/11', 'Jami [TEL_1]'],
+  ['Atir 875 500 14/11/2026 gacha', 'Atir [TEL_1]/2026 gacha'],
+  ['Narxi 875 500  2026-11-14', 'Narxi [TEL_1]-11-14'],
+]);
 
 /** Log matnida milliy 9 raqam (ajratgichlarsiz ham) qolmaganmi. */
 const logLeaks = (log: string, phones: string[]) =>
@@ -1423,10 +2094,14 @@ describe('maskPhones — maxfiylik korpusi (#647)', () => {
     const got = [...tokens.values()];
     const missed = c.phones.filter((p) => !got.includes(p));
     if (KNOWN_PRIVACY_GAPS.has(c.id)) {
-      // Gap hali ham ochiq — tuzatilgan bo'lsa ro'yxatdan olib tashlang.
-      expect(missed).not.toEqual([]);
+      // Gap hali ham ochiq — aynan hamma telefon ochiq qoladi; tuzatilgan
+      // (yoki qisman o'zgargan) bo'lsa ro'yxatni yangilang.
+      const open = KNOWN_PRIVACY_GAPS.get(c.id);
+      expect(missed).toEqual(open === 'all' ? c.phones : open);
     } else {
       expect({ missed, masked }).toEqual({ missed: [], masked });
+      // Aniq: kutilmagan qo'shimcha token ham yo'q.
+      expect([...got].sort()).toEqual([...c.phones].sort());
       for (const k of c.keep ?? []) expect(masked).toContain(k);
     }
     // Log maskalash HAR DOIM telefonni yashiradi (pul qo'riqchisisiz),
@@ -1436,7 +2111,9 @@ describe('maskPhones — maxfiylik korpusi (#647)', () => {
 
   it('KNOWN_PRIVACY_GAPS dagi har bir id korpusda bor', () => {
     const ids = new Set(PRIVACY_CASES.map((c) => c.id));
-    expect([...KNOWN_PRIVACY_GAPS].filter((id) => !ids.has(id))).toEqual([]);
+    expect([...KNOWN_PRIVACY_GAPS.keys()].filter((id) => !ids.has(id))).toEqual(
+      [],
+    );
   });
 
   it.each(amountsOnly.map((m) => [m.id, m] as const))(
@@ -1445,6 +2122,32 @@ describe('maskPhones — maxfiylik korpusi (#647)', () => {
       expect(maskPhones(m.text).masked).toContain(m.keep);
     },
   );
+});
+
+// #710 review r2: id/summa bilan BIR JOYDA boshlangan nomzod (`start >= s0`)
+// keyingi telefonni yutmaydi. Faqat maskPhones: log/model yo'lida (pul
+// qo'riqchisisiz) bu zanjir dev'dagidek hali ochiq — alohida follow-up.
+const SAME_START_CASES: C[] = [
+  {
+    id: 'R5x id + 998-prefixed phone',
+    text: 'Buyurtma raqami 998335797 - 998 98 180 64 87 Aziza',
+    phones: [P('981806487')],
+    keep: ['998335797'],
+  },
+  {
+    id: 'R5y STIR + 998 glued phone',
+    text: 'STIR 998633913 - 998 743107455',
+    phones: [P('743107455')],
+    keep: ['998633913'],
+  },
+];
+
+describe('maskPhones — bir joyda boshlangan himoya (#710)', () => {
+  it.each(SAME_START_CASES.map((c) => [c.id, c] as const))('%s', (_id, c) => {
+    const { masked, tokens } = maskPhones(c.text);
+    expect([...tokens.values()].sort()).toEqual([...c.phones].sort());
+    for (const k of c.keep ?? []) expect(masked).toContain(k);
+  });
 });
 
 describe('maskPhones — summa korpusi (#647)', () => {
@@ -1459,8 +2162,15 @@ describe('maskPhones — summa korpusi (#647)', () => {
         lost: (c.keep ?? []).filter((k) => !masked.includes(k)),
       };
       if (KNOWN_AMOUNT_GAPS.has(c.text)) {
-        // Gap hali ham ochiq — tuzatilgan bo'lsa ro'yxatdan olib tashlang.
-        expect(result).not.toEqual({ extra: [], missed: [], lost: [] });
+        // Gap hali ham ochiq — aynan: narx telefon deb maskalanadi (yo'qoladi),
+        // boshqa hech narsa o'zgarmaydi. Tuzatilsa ro'yxatdan olib tashlang.
+        expect({ missed: result.missed, lost: result.lost }).toEqual({
+          missed: [],
+          lost: c.keep ?? [],
+        });
+        expect(result.extra).toHaveLength(1);
+        const want = KNOWN_AMOUNT_GAP_MASKED.get(c.text);
+        if (want !== undefined) expect(masked).toBe(want);
         return;
       }
       expect(result).toEqual({ extra: [], missed: [], lost: [] });

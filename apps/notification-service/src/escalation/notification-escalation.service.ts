@@ -123,8 +123,20 @@ export class NotificationEscalationService {
     if (!ids.length) return { checked: 0, escalated: 0 };
 
     const rows = await this.notifications.find({ where: { id: In(ids) } });
+    // (BE-5 round-4) Katalogda eskalatsiyasi o'chirilgan tur (masalan
+    // `ai.advisor_alert`) — oldin navbatga tushgan hodisa bo'lsa ham SMS yo'q.
+    const optedOut = rows.filter(
+      (row) => findNotificationType(row.type)?.escalation === false,
+    );
+    if (optedOut.length) {
+      await this.patch(
+        optedOut.map((row) => String(row.id)),
+        { escalation: 'skipped', escalation_reason: 'type_opt_out' },
+      );
+    }
     const due = rows.filter(
       (row) =>
+        findNotificationType(row.type)?.escalation !== false &&
         row.priority === NotificationPriority.CRITICAL &&
         !row.isDeleted &&
         // O'qilgan xabar eskalatsiya qilinmaydi (TC10).

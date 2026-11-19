@@ -360,6 +360,20 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'wallet',
     'blue',
   ),
+  // F2qp6FtE: market o'z operatoriga to'lovni yozdi / yozuvni bekor qildi
+  // (Elchi kassasiga ta'sir qilmaydi — faqat hisob yozuvi).
+  'finance.operator_payment_recorded': entry(
+    "Operatorga to'lov yozildi",
+    'finance',
+    'wallet',
+    'blue',
+  ),
+  'finance.operator_payment_cancelled': entry(
+    "Operatorga to'lov bekor qilindi",
+    'finance',
+    'undo',
+    'rose',
+  ),
   'finance.balance_update': entry(
     "Balans o'zgartirildi",
     'finance',
@@ -396,6 +410,87 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'finance',
     'settings',
     'violet',
+  ),
+  // AI kalit va modellar (be-brief §7, «AI kalit va modellar» UI). Bu
+  // qatorlar ops Telegram xabari manbai (scripts/ai-config-alert.sh).
+  'ai.key.add': entry("AI kaliti qo'shildi", 'integration', 'key', 'green'),
+  'ai.key.replace': entry(
+    'AI kaliti almashtirildi',
+    'integration',
+    'key',
+    'amber',
+  ),
+  'ai.key.restore': entry(
+    'Oldingi AI kalitiga qaytarildi',
+    'integration',
+    'undo',
+    'amber',
+  ),
+  'ai.key.deactivate': entry(
+    "AI kaliti o'chirildi",
+    'integration',
+    'x',
+    'rose',
+  ),
+  'ai.key.forget': entry(
+    "Oldingi AI kaliti o'chirib tashlandi",
+    'integration',
+    'trash',
+    'slate',
+  ),
+  'ai.key.verify': entry(
+    'AI kaliti tekshirildi',
+    'integration',
+    'check',
+    'blue',
+  ),
+  'ai.key.runtime_failure': entry(
+    'AI kaliti ishlamay qoldi (Anthropic rad etdi)',
+    'integration',
+    'alert',
+    'red',
+  ),
+  'ai.key.unreadable': entry(
+    "Saqlangan AI kalitini ochib bo'lmadi",
+    'integration',
+    'alert',
+    'red',
+  ),
+  'ai.key.attempt_rejected': entry(
+    'AI kaliti rad etildi (urinish)',
+    'integration',
+    'x',
+    'rose',
+  ),
+  'ai.key.reencrypt': entry(
+    'AI kaliti qayta shifrlandi',
+    'integration',
+    'refresh',
+    'slate',
+  ),
+  'ai.config.stale': entry(
+    "AI sozlamasi o'qilmadi (oxirgi ma'lum holat)",
+    'integration',
+    'alert',
+    'amber',
+  ),
+  'ai.models.update': entry(
+    "AI modeli o'zgartirildi",
+    'integration',
+    'settings',
+    'violet',
+  ),
+  'ai.models.auto_revert': entry(
+    'AI modeli avtomatik qaytarildi',
+    'integration',
+    'undo',
+    'red',
+  ),
+  'ai.models.unavailable': entry(
+    'AI modeli mavjud emas',
+    'integration',
+    'alert',
+    'red',
   ),
 
   // ---- kirish ----
@@ -533,6 +628,13 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'logistics',
     'tag',
     'amber',
+  ),
+  // (B0ILd7YI) rejalashtirilgan tarif versiyasi bekor qilindi.
+  'logistics.delivery_tariff_cancelled': entry(
+    'Rejalashtirilgan yetkazish tarifi bekor qilindi',
+    'logistics',
+    'close',
+    'red',
   ),
   'logistics.delivery_pricing_settings_updated': entry(
     "Yetkazish narxi sozlamalari o'zgardi",

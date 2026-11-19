@@ -10,6 +10,7 @@ import {
   Group_type,
   executeAndAck,
   ActivityLogQuery,
+  NOTIFICATION_BOT_RECHECK_PATTERN,
 } from '@app/common';
 import { NotificationServiceService } from './notification-service.service';
 import { NotificationInboxService } from './notification-inbox.service';
@@ -71,6 +72,27 @@ export class NotificationServiceController {
       bot: this.botRuntime.health(),
       timestamp: new Date().toISOString(),
     }));
+  }
+
+  /**
+   * (BOT-DIAG-BE) «Tizim holati» → «Qayta tekshirish» (gateway
+   * `POST /health/notification-bot/recheck`, faqat superadmin). Token rad
+   * etilmagan bo'lsa getMe HOZIR yurgiziladi; rad etilgan bo'lsa tekshiruv
+   * yo'q — `bot.restart_required: true`, `rechecked: false`. Javob shakli
+   * `notification.health` bilan bir xil (+ `rechecked`).
+   */
+  @MessagePattern({ cmd: NOTIFICATION_BOT_RECHECK_PATTERN })
+  recheckBot(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, async () => {
+      const { rechecked, ...bot } = await this.botRuntime.recheck();
+      return {
+        service: 'notification-service',
+        status: this.botRuntime.isDegraded() ? 'degraded' : 'ok',
+        bot,
+        rechecked,
+        timestamp: new Date().toISOString(),
+      };
+    });
   }
 
   // (qXlFQp8Q) HTTP yo'li (POST /notifications) yopiq — 410 Gone; gateway bu

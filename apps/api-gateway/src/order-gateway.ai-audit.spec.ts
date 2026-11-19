@@ -103,6 +103,18 @@ function setup(
     if (pattern.cmd === 'identity.customer.create') {
       return of({ data: { id: `c${payload.dto?.phone_number}` } });
     }
+    if (pattern.cmd === 'identity.market_operator.selectable') {
+      // «Operator» tanlovi: MARKET_ID ning yagona faol operatori (sintetik).
+      const rows = [{ id: '31', name: 'Operator Bir' }];
+      return of({
+        data: {
+          items:
+            payload.market_id === MARKET_ID
+              ? rows.filter((row) => row.id === payload.operator_id)
+              : [],
+        },
+      });
+    }
     if (pattern.cmd === 'identity.market.find_by_id') {
       return of({
         data: {
@@ -118,7 +130,12 @@ function setup(
     return of({ data: null });
   });
   let next = 5000;
-  orderC.send.mockImplementation(() => of({ data: { id: String(next++) } }));
+  orderC.send.mockImplementation((pattern) =>
+    // Takror so'rovi (`loadAiReplays`): avval yaratilgan band yo'q.
+    pattern.cmd === 'order.ai_confirm.completed'
+      ? of({ data: { items: [] } })
+      : of({ data: { id: String(next++) } }),
+  );
   ai.send.mockImplementation((pattern) => {
     if (pattern.cmd === 'ai.draft.confirm_context') {
       return opts.contextError
@@ -154,7 +171,12 @@ function setup(
     asClient(fake()),
     asClient(ai),
     asClient(catalog),
-    { get: jest.fn(() => undefined) } as unknown as ConfigService,
+    // AI ack S2: darvoza majburiy rejimda (sukut — log-only).
+    {
+      get: jest.fn((key: string) =>
+        key === 'AI_ACK_CHECKS_ENFORCE' ? 'on' : undefined,
+      ),
+    } as unknown as ConfigService,
     { getState: jest.fn(() => 'enabled') } as unknown as AiStatusPoller,
   );
   const creates = () =>
@@ -268,8 +290,35 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
     ).toContain('ai_item_index');
   });
 
-  it('ai-service ishlamasa ham buyurtma yaratiladi (ai_draft_verified:false, edited_fields:null)', async () => {
+  it('AI ack: ai-service ishlamasa — FAIL-CLOSED 503 AI_CHECKS_UNAVAILABLE, hech narsa yaratilmaydi', async () => {
     const fx = setup({ contextError: true });
+    const err = await fx.controller
+      .aiConfirm({ orders: [order(0)] }, marketReq)
+      .then(
+        () => null,
+        (e: { getStatus(): number; getResponse(): unknown }) => e,
+      );
+    expect(err?.getStatus()).toBe(503);
+    expect(err?.getResponse()).toMatchObject({
+      code: 'AI_CHECKS_UNAVAILABLE',
+      retryable: true,
+      retry_after_seconds: expect.any(Number),
+    });
+    expect(fx.creates()).toHaveLength(0);
+  });
+
+  it('AI ack: draft shu market uchun topilmadi — 400 AI_DRAFT_NOT_FOUND, yaratilmaydi', async () => {
+    const fx = setup({ contexts: { drafts: [] } });
+    await expect(
+      fx.controller.aiConfirm({ orders: [order(0), order(1)] }, marketReq),
+    ).rejects.toMatchObject({
+      response: { code: 'AI_DRAFT_NOT_FOUND', indexes: [0, 1] },
+    });
+    expect(fx.creates()).toHaveLength(0);
+  });
+
+  it('AI ack: eski draft (snapshot yo‘q) — fail-open, ai_audit.checks_unverified=true', async () => {
+    const fx = setup({ contexts: { drafts: [{ draft_id: DRAFT }] } });
     const res = await fx.controller.aiConfirm(
       { orders: [order(0)] },
       marketReq,
@@ -278,20 +327,23 @@ describe('ai-confirm — AI audit metadata (vncdmXOy)', () => {
     expect(fx.creates()[0][1].ai_audit).toMatchObject({
       ai: true,
       ai_draft_id: DRAFT,
-      ai_draft_verified: false,
+      ai_draft_verified: true,
       edited_fields: null,
-      model: null,
+      checks_unverified: true,
     });
   });
 
-  it('TC2: draft_id’siz buyurtma — ai_audit YUBORILMAYDI', async () => {
+  it('TC2: draft_id’siz buyurtma — 400 AI_DRAFT_REQUIRED, yaratilmaydi', async () => {
     const fx = setup();
-    await fx.controller.aiConfirm(
-      { orders: [order(0, { draft_id: undefined, ai_item_index: undefined })] },
-      marketReq,
-    );
-    expect(fx.creates()[0][1]).not.toHaveProperty('ai_audit');
-    expect(fx.creates()[0][1].request_id).toMatch(/^ai-dedupe:[0-9a-f]{64}$/);
+    await expect(
+      fx.controller.aiConfirm(
+        {
+          orders: [order(0, { draft_id: undefined, ai_item_index: undefined })],
+        },
+        marketReq,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'AI_DRAFT_REQUIRED' } });
+    expect(fx.creates()).toHaveLength(0);
   });
 
   it('link_orders: draft ↔ buyurtma items (edited_fields bilan) va confirmed_by', async () => {
@@ -342,7 +394,7 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
     expect(a.ai_signature).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('TC2: takror javob (idempotent_replay) → ok:true, idempotent_replay:true, birinchi order_id; xarajatga qayta bog‘lanmaydi', async () => {
+  it('TC2: takror javob (idempotent_replay) → ok:true, idempotent_replay:true, birinchi order_id; bog‘lanish takrorlanadi (idempotent)', async () => {
     const fx = setup();
     fx.orderC.send.mockImplementation(() =>
       of({ data: { id: '4242' }, idempotent_replay: true }),
@@ -357,17 +409,32 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
       order_id: '4242',
       idempotent_replay: true,
     });
-    expect(
-      fx.ai.send.mock.calls.filter(([p]) => p.cmd === 'ai.usage.link_orders'),
-    ).toHaveLength(0);
+    // 1-urinish timeout_unknown bo'lgan bo'lishi mumkin — takror ham
+    // bog'lanadi (ai-service: ON CONFLICT (order_id) DO NOTHING, DISTINCT).
+    const links = fx.ai.send.mock.calls.filter(
+      ([p]) => p.cmd === 'ai.usage.link_orders',
+    );
+    expect(links).toHaveLength(1);
+    expect(links[0][1]).toMatchObject({ order_ids: ['4242'] });
   });
 
-  it('TC3: bir xil draft+index bilan ikki marta chaqiruv → pul (narx qaydi) FAQAT BIR marta: link_orders bitta, market narxi bilan', async () => {
+  it('TC3: bir xil draft+index bilan ikki marta chaqiruv → AYNI buyurtma, link_orders ikkalasida ham AYNI order_id bilan (narx ai-service’da bir marta)', async () => {
     const fx = setup({ marketAiPrice: 450 });
     // order-service `executeIdempotent` emulyatsiyasi: request_id → bitta buyurtma.
     const byKey = new Map<string, string>();
     let next = 7000;
-    fx.orderC.send.mockImplementation((_p, payload) => {
+    fx.orderC.send.mockImplementation((p, payload) => {
+      // `order.ai_confirm.completed` — tugagan barqaror kalitlar (faqat o'qish).
+      if (p.cmd === 'order.ai_confirm.completed') {
+        const ids = (payload.request_ids ?? []) as string[];
+        return of({
+          data: {
+            items: ids
+              .filter((id) => byKey.has(id))
+              .map((id) => ({ request_id: id, order_id: byKey.get(id) })),
+          },
+        });
+      }
       const key = String(payload.request_id);
       const existing = byKey.get(key);
       if (existing) {
@@ -399,13 +466,15 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
     });
     expect(byKey.size).toBe(1);
 
-    // Narx (pul) qaydi faqat YANGI buyurtma uchun — bitta link_orders.
-    // ai-service tomonda `order_id` UNIQUE + ON CONFLICT DO NOTHING
-    // (ai-draft.pg.spec "narx BIR MARTA qayd qilinadi") ikkinchi qatlam.
+    // Takror ham bog'lanadi (1-urinish natijasi noma'lum bo'lsa bog'lanmagan
+    // bo'lardi). Narx (pul) qaydi baribir BIR marta: ai-service'da
+    // `order_id` UNIQUE + ON CONFLICT DO NOTHING (ai-draft.pg.spec "narx BIR
+    // MARTA qayd qilinadi"); ikkala xabar ham AYNI order_id bilan.
     const links = fx.ai.send.mock.calls.filter(
       ([p]) => p.cmd === 'ai.usage.link_orders',
     );
-    expect(links).toHaveLength(1);
+    expect(links).toHaveLength(2);
+    expect(links[1][1]).toEqual(links[0][1]);
     expect(links[0][1]).toEqual(
       expect.objectContaining({
         draft_id: DRAFT,
@@ -548,5 +617,71 @@ describe('GET /orders/:id/ai-trace (vncdmXOy TC7/TC8)', () => {
     await expect(fx.controller.aiTrace('abc')).rejects.toBeInstanceOf(
       BadRequestException,
     );
+  });
+});
+
+describe('ai-confirm audit — «Operator» tanlovi (operator_id)', () => {
+  /** AI preview'da operator matni bor (sintetik). */
+  const contextsWithOperator = (text: string | null) => ({
+    drafts: [
+      {
+        draft_id: DRAFT,
+        model: 'claude-sonnet-5',
+        prompt_version: '2026-09-27.1',
+        preview_count: 10,
+        cost_uzs: 1280,
+        previews: Array.from({ length: 10 }, (_, i) => ({
+          ...snapshotFor(i),
+          operator: text,
+        })),
+      },
+    ],
+  });
+  const linkItems = (ai: Fake) =>
+    ai.send.mock.calls.find(([p]) => p.cmd === 'ai.usage.link_orders')?.[1]
+      ?.items as Array<Record<string, unknown>>;
+  /** Birinchi `order.create` payloadining audit uchun kerakli qismi. */
+  const firstCreate = (fx: ReturnType<typeof setup>) =>
+    fx.creates()[0][1] as {
+      dto: { operator?: unknown };
+      ai_audit: { edited_fields?: unknown };
+    };
+
+  it('operator_id berilsa audit saqlanadigan ismni ko‘radi (e’tiborsiz matnni emas)', async () => {
+    const fx = setup({ contexts: contextsWithOperator('operator x') });
+    // Matn AI taklifi bilan bir xil, lekin buyurtmaga tanlangan operator ismi yoziladi.
+    await fx.controller.aiConfirm(
+      { orders: [order(0, { operator_id: '31', operator: 'operator x' })] },
+      marketReq,
+    );
+
+    const payload = firstCreate(fx);
+    expect(payload.dto.operator).toBe('Operator Bir');
+    expect(payload.ai_audit.edited_fields).toEqual(['operator']);
+    expect(linkItems(fx.ai)[0].field_corrections).toEqual({
+      operator: { ai: 'operator x', final: 'Operator Bir' },
+    });
+  });
+
+  it('matn tozalanib operator tanlansa final — tanlangan ism (null EMAS)', async () => {
+    const fx = setup({ contexts: contextsWithOperator('operator x') });
+    await fx.controller.aiConfirm(
+      { orders: [order(0, { operator_id: '31' })] },
+      marketReq,
+    );
+
+    expect(linkItems(fx.ai)[0].field_corrections).toEqual({
+      operator: { ai: 'operator x', final: 'Operator Bir' },
+    });
+  });
+
+  it('AI matni tanlangan operator ismiga teng bo‘lsa — tahrir emas', async () => {
+    const fx = setup({ contexts: contextsWithOperator('Operator Bir') });
+    await fx.controller.aiConfirm(
+      { orders: [order(0, { operator_id: '31', operator: 'boshqa' })] },
+      marketReq,
+    );
+
+    expect(firstCreate(fx).ai_audit.edited_fields).toEqual([]);
   });
 });

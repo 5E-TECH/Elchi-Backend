@@ -22,6 +22,355 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-19 — Filialda «Kassadan xarajat» va «Kassani to'ldirish» yo'q — 63HO6cBU (PR-B)
+
+Deploy: **finance-service va api-gateway**, migratsiyasiz.
+
+- ⚠️ [gateway] `PATCH /finance/cashbox/spend` va `PATCH /finance/cashbox/fill` — endi faqat **SUPERADMIN / ADMIN** (asosiy kassa). **Menejer → 403.**
+- ⚠️ [finance] Filial kassasiga (`cashbox_type: branch`) qo'lda chiqim → 400 «Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi», kirim → 400 «Filial kassasini qo'lda to'ldirib bo'lmaydi».
+- ⚠️ [gateway] `GET /finance/cashbox/expense-categories` — menejer → 403 (SA/admin avvalgidek).
+- ⚠️ [gateway] `POST /finance/receipts` (chek yuklash) va `GET /finance/receipt-settings` — faqat SA/admin; menejer → 403 (`manual_expense` cheki menejerda yo'q).
+- 🟢 «Filial daromadini yechish» (o'z foydasi doirasida chiqim) — alohida karta (t7ewOeOP), hali yo'q.
+
+**Frontend action items:**
+- 🔧 Menejer interfeysidan «Kassadan xarajat», «Kassani to'ldirish», xarajat kategoriyalari va chek yuklashni olib tashlang.
+
+### 2026-11-19 — P0: filial kassasi naqd/kartaga AJRALMAYDI (bitta jami) — 63HO6cBU
+
+Deploy: **finance-service va api-gateway** + **migratsiya 1716000000245** (`BranchCashboxSingleBucket`). Relizda 240–245 bitta tranzaksiyada (scripts/db-prepare.ts), kam yuklamali vaqtda. ⚠️ 241/243/244 indekslari CONCURRENTLY'siz — eski finance-service ishlab turgan paytda filial pul tranzaksiyasi bilan **deadlock** bo'lishi mumkin: shunda deploy'ni (db-prepare) qayta yurgizing (bitta tranzaksiya — yarim holat qolmaydi). Runbook: `npm run db:check-cashbox -- --snapshot=/tmp/cb-pre.json` migratsiyadan OLDIN, `-- --compare=/tmp/cb-pre.json` KEYIN (jami o'zgarmasligi kerak). **Orqaga qaytarish (revert):** kodni qaytargach `migration:revert` (245 `down()` — faqat jami o'zgarmagan kassalarda bo'linish tiklanadi); so'ng OCHIQ filial smenalarini yopib-qayta oching va arxiv filial karta ko'chirmalariga (ledger) qaramang — eski kod yangi kodning filial `click` qatorlarini karta harakati deb o'qiydi. Orqaga mos: eski FE so'rovlari 500 bermaydi — eskirgan maydonlar e'tiborsiz; FAQAT noto'g'ri formatdagi `card_id` / `branch_card_id` (raqamli ID emas) yoki bo'sh satr `payment_method` (SA/A) — DTO validatsiyasi **400** (avvalgidek).
+
+Muammo: admin filialdan «O'tkazma» bilan pul olmoqchi bo'lganda filialning KARTA bo'lagi bo'sh bo'lsa 400 «Karta hisobida yetarli mablag' yo'q» qaytardi (menejer kuryer pulini odatda «naqd» deb qabul qiladi). Endi filial kassasi bitta jami: `balance_cash` = jami, `balance_card` doim 0 (FOR_COURIER / FOR_MARKET dagidek).
+
+- ⚠️ [gateway] `POST /finance/cashbox/payment/courier` — **MENEJER** uchun `payment_method` endi **YUBORILMAYDI** (DTO'da ixtiyoriy). Server o'zi `cash` yozadi. Menejer yuborsa ham: `cash` / `click` — e'tiborsiz (→ `cash`), `card_id`, `branch_card_id` — e'tiborsiz; `click_to_market` → **400** («Marketga o'tkazma» filialda yo'q); `receipt_id` → 400 (avvalgidek). **SUPERADMIN/ADMIN** (HQ kuryeridan MAIN'ga) uchun `payment_method` avvalgidek **MAJBURIY** (yo'q → 400), `card_id` (HQ kartasi) avvalgidek.
+- ✏️ [gateway] `POST /finance/cashbox/payment/branch-to-main` — filial oyog'i **JAMIdan** yechiladi (usuldan qat'i nazar). `payment_method` (`cash` | `click` | `click_to_market`) va `card_id` (HQ nomli kartasi) — avvalgidek, faqat MAIN oyog'iga ta'sir qiladi; tarixda SA/A uchun usul saqlanadi. `branch_card_id` — **eskirgan**, yuborilsa e'tiborsiz (ilgari `click_to_market` da 400 edi). Yetmasa (qarz o'chiq): 400 **«Filial kassasida yetarli mablag' yo'q»** (ilgari «Naqd kassada…» / «Karta hisobida…»). «Kassa qarzga ishlaydi» yoqilgan filialda — jamidan ortig'i ham o'tadi (filial manfiy).
+- ✏️ [finance] Filial kassasi javoblarida (`cashbox/my-cashbox`, `cashbox/main` (menejer), `cashbox/user/:id/main`, `all-info`, tarix `balance_*_after`) **`balance_card` doim 0**, `balance_cash` = `balance` (jami). Eski tarix qatorlari o'zgarmaydi.
+- ✏️ [gateway] Tarix (`GET /finance/history`, `history/:id`, `cashbox/my-cashbox`, `cashbox/main`, `cashbox/user/:id/main`, `cashbox/user/:user_id`, `cashbox/all-info` → `allCashboxHistories`) — har qatorda yangi ixtiyoriy **`branch_leg: true`** (filial kassasi qatori yoki kuryer → filial to'lovining kuryer qatori). **Kuryer** ko'rinishida bu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null` (eski qatorlarda ham). **Ega qarori (Q2): menejer va registrator usulni ko'radi** (SA/admin kabi) — filial kassasi baribir bitta jami. `branch_leg` belgisi qoladi: FE filial qatorida karta tanlovi/bloki ko'rsatmasin.
+- ✏️ [finance] `GET /finance/history/:id` — filial kassasi qatorida `card` bloki endi doim `null` (hamma rol uchun: filialda karta yo'q; «Asosiy karta» sintezi ham, eski nomli karta ham qaytmaydi). MAIN — o'zgarmagan.
+- ✏️ [finance] `GET /finance/shift/:id/report` — filial smenasida `card: null`; `operations[]` — tur × usul (menejer ham usulni ko'radi, ega qarori Q2), jami bitta. Telegram xabari va XLSX/PDF fayli: filialda bitta «Jami», «Karta» bo'limi va «Kartalar» varag'i yo'q.
+- ⚠️ [gateway] `GET /finance/cashbox/cards?branch_id=` (va menejer) — filial uchun `cards: []` (Asosiy karta yaratilmaydi), `balance_card: 0`, `total_card: 0`, `default_balance: 0`, `in_sync: true`, yangi **`cards_disabled: true`**. `include_inactive=true` — eski (nofaol) filial kartalari, `balance: 0`. Filial kartasida **yaratish, Asosiy qilish, faollashtirish, kartalararo o'tkazma, karta↔naqd konvertatsiyasi → 400** «Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q». Eski kartaning ko'chirmasi (`cards/:id/ledger`) va o'chirish (qoldiq 0) — ishlaydi. MAIN kartalari — o'zgarmagan.
+- ✏️ [finance] **Filial smenasi** — bitta «Sanalgan summa»: ochishda `opening_balance_cash` = jami, `opening_balance_card` = 0; yopishda `closing_balance_cash` = sanalgan jami (eski FE `closing_balance_card` ham yuborsa — jamiga qo'shiladi), `expected_balance_card` = 0, `discrepancy_card` = **null**, `total_*_card` = 0 (barcha kirim/chiqim `total_*_cash` da). Filial smenasida `accounts[]` (karta qoldig'i / skrinshot) **so'ralmaydi va e'tiborsiz** (filial `branch_account_check_enabled` yoqilgan bo'lsa ham). MAIN smenasi — o'zgarmagan.
+- 🟢 [migratsiya 245] Har filial kassasi: `balance_cash += balance_card`, `balance_card = 0` (`balance` o'zgarmaydi); filial kartalari nofaol, nomli qoldig'i 0 (o'chirilmaydi, tarix saqlanadi); ochiq filial smenasining ochilishdagi karta surati jamiga qo'shiladi. Idempotent, `down()` bilan.
+- 🟢 T6 tuzatish / qaytarish filial qabulida — jami bo'yicha (karta tekshirilmaydi). «Kassa qarzga ishlaydi» yoqilgan filialda qabulni qaytarish jami manfiyga tushirsa ham o'tadi (dev'dagi xulq); qarz o'chiq — 409 `INSUFFICIENT_BALANCE`. Eski «O'tkazma» (click) qabulini summa bo'yicha tahrirlashda yangi qatorlar `cash` bilan yoziladi (teskari qatorlar — asl usulda).
+- 🟢 [migratsiya 245] Har filial kartasining jamiga o'tgan qoldig'i karta ko'chirmasiga (`cards/:id/ledger`) bitta qator bo'lib yoziladi: «Migratsiya 245: karta qoldig'i jamiga» (`card_to_cash`). Eski filial kartasi ko'chirmasi migratsiya vaqtigacha (`deactivated_at`) — deploy'dan keyingi filial qatorlari arxiv «Asosiy karta»ga yig'ilmaydi.
+- ✏️ [finance] `GET /finance/shift/settings?cashbox_user_id=<filial>` — `account_check_enabled: false`, `cards: []` (filialda karta tasdiqlash rejimi yo'q). `branch_account_check_enabled` **eskirgan**: javobda doim `false`, PATCH'da qabul qilinadi (boolean bo'lmasa 400), lekin saqlanmaydi.
+- ✏️ [finance] Avtomatik ochilgan filial smenasi ham bitta jami bilan (`opening_balance_card: 0`).
+- ✏️ [finance] `DELETE /finance/cashbox/cards/:id` — arxiv filial «Asosiy karta»si qoldig'i 0 bo'lsa endi o'chadi (soft; ilgari doim 400). MAIN Asosiy kartasi — avvalgidek 400.
+- ✏️ [finance] `POST /finance/cashbox` (SA/A) — filial / kuryer / market kassasi `balance_card` bilan yaratilsa, u naqdga qo'shiladi (`balance` = `balance_cash`, `balance_card` = 0).
+- 🟢 Kuryer tarixida bog'lanmagan eski «kuryer → qabul qiluvchi» to'lov qatorlari (`transfer_id` yo'q, manba — kuryerning o'zi; filialga bo'lishi mumkin) ham `branch_leg: true` — kuryerga usul ko'rsatilmaydi (xavfsiz tomon). «Market sotuvda to'langan» kuryer qatorlari (manba — market) — usul ko'rinadi.
+
+**Frontend action items:**
+- 🔧 Menejer «Kuryerdan pul qabul qilish» oynasi: to'lov usuli (Naqd / O'tkazma / Marketga o'tkazma) va karta tanlovini **olib tashlang** — faqat summa (+ izoh, sana). So'rov: `{ courier_id, amount, comment?, payment_date? }`.
+- 🔧 Admin «Filialdan pul qabul qilish»: filial kartasi tanlovini (`branch_card_id`) **olib tashlang**; usul (Naqd / O'tkazma / Marketga o'tkazma) va HQ kartasi (`card_id`) — qoladi. Filialning mavjud summasini `balance` (jami) dan ko'rsating — naqd/karta bo'linmasi YO'Q.
+- 🔧 Filial kassasi sahifalari (menejer va admin): naqd/karta bo'linmasi va «Kartalar» bo'limini yashiring (`cards_disabled: true` bo'lsa). Filialda karta↔naqd va kartalararo tugmalari ko'rsatilmasin.
+- 🔧 Filial smenasini ochish/yopish: bitta «Sanalgan summa» maydoni (`closing_balance_cash`), karta maydoni va karta skrinshotlari yo'q.
+- 🔧 Kuryer tarixida `payment_method === null` qatorlarida usul ustunini bo'sh qoldiring (yoki «—»). Menejer usulni ko'radi (Naqd / O'tkazma / Marketga o'tkazma) — lekin filial kassasida karta tanlovi va «Kartalar» bo'limi yo'q.
+
+
+### 2026-11-19 — Pul summalari: ko'pi bilan 2 kasr xonasi va yuqori chegara (PR-D, A-5)
+
+Deploy: **api-gateway, finance-service**, migratsiyasiz. Real summalarga ta'sir yo'q (so'm, tiyingacha).
+
+Muammo: pul DTO'lari `@Min(0.0000001)` va kasr/maksimum cheklovsiz edi — 0,005 so'm olish filialda 100,00 qoldirib MAIN ga +0,01 «yaratardi» (har chaqiruvda), `1e19` → 500 (numeric overflow), `9e17` → JS double siljishi.
+
+- ⚠️ [gateway] Quyidagi summalar endi **ko'pi bilan 2 kasr xonali** va **≤ 10 000 000 000 000** (1e13 so'm; JS double tiyingacha aniq oraliq — 1e15 da tiyin siljiydi) bo'lishi shart, aks holda **400** (validatsiya):
+  - musbat (≥ 0,01): `payment/courier`, `payment/market`, `payment/branch-to-main`, `cashbox/spend`, `cashbox/fill`, `cashbox/balance`, kartalararo o'tkazma va konvertatsiya, T6 `new_amount`, integratsiya remittance `amount` (ilgari ≥ 1, kasr cheksiz);
+  - ≥ 0: smena yopish `closing_balance_cash`, `closing_balance_card`, karta qoldig'i `entered_balance`;
+  - ishorali (±1e13): kassa yaratish `balance`, `balance_cash`, `balance_card`; smena ochish `opening_balance_*`; moliyaviy balans yozuvi `amount` (ilgari ±1e15);
+  - `numeric(14,2)` ustunlar — chegara **999 999 999 999,99** (ilgari 1e12 dan kattasi DB'da 500): maosh `salary_amount` (≥ 0,01), `have_to_pay`, `increase_have_to_pay_by` (ishorali), investitsiya `amount` (≥ 0,01), foyda ulushi `amount` (≥ 0).
+  - Son bo'lmagan qiymat — bitta xabar «<maydon> son bo'lishi kerak»; `1e-7` kabi qiymatlar endi 400 (ilgari ba'zi maydonlarda 500). openapi.json da `minimum` / `maximum` / `multipleOf: 0.01`.
+- ⚠️ [finance] RPC orqali to'g'ridan-to'g'ri kelgan summalar ham (to'lov, sotuv, maosh — `assertPositiveAmount`) 2 kasrdan ko'p yoki 1e13 dan katta bo'lsa 400. Ichki HISOBLANGAN oyoqlarning float xatosi (masalan sotuv oyog'i `collectible − tariff − share`) uchun 0,01 tiyin tolerans — soxta rad yo'q.
+
+**Frontend action items:**
+- 🟢 FE butun so'm yuboradi — o'zgarish shart emas. Kasrli kiritish qo'shilsa: 2 xonadan ortig'iga yo'l qo'ymang, 400 matnini ko'rsating.
+### 2026-11-19 — AI tasdiq: takror tuman/mahsulot tekshiruvidan ham oldin; takror xarajatga bog'lanadi
+
+Deploy: api-gateway (+ order-service — faqat ichki chegara). Migratsiyasiz. Javob shakli o'zgarmagan.
+
+- 🔧 [gateway] `POST /orders/ai-confirm` takrori (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) endi market/filial ruxsatidan KEYIN, lekin tuman/mahsulot tekshiruvi, partiya dublikati, operator, operator raqami va mijoz tekshiruvlaridan OLDIN aniqlanadi: urinishlar orasida mahsulot yoki tuman o'chirilgan bo'lsa ham (yoki tuman/mahsulot xizmati javob bermasa ham) mavjud buyurtma `{ ok: true, order_id, idempotent_replay: true }`. Ilgari bunday takror `product_not_found` / `district_not_found` / `validation_unavailable` olardi. Yangi bandlar tekshiruvi o'zgarmagan; takror bandlarning imzosi partiyada oldindan band qilinadi — ayni mazmunli yangi band `orders[]` da takrordan OLDIN yoki KEYIN kelishidan qat'i nazar `duplicate_in_batch` (ikkinchi bir xil buyurtma yaratilmaydi). Takror so'rovi va tuman/mahsulot tekshiruvi parallel. AI ack darvozalari (400 `AI_DRAFT_*`, 409, 503) takrorda ham avvalgidek.
+- ⚠️ Cheklov (ataylab): market nofaol yoki `add_order` o'chiq bo'lsa — butun so'rov 400, takror ham (bu ruxsat tekshiruvi; takror ham o'tkazilmaydi).
+- 🟢 **Bugungi qabul yopiq** bo'lganda takror endi `ok: true, idempotent_replay: true` (ilgari — `ok: false, code: 'intake_closed'`): yangi buyurtma yaratilmaydi, faqat avval yaratilganining id'si qaytadi. #722 dan beri shunday; bu yerda hujjatlandi.
+- 🟢 Takror natija ham AI draft'iga va AI xarajatiga bog'lanadi (`ai.usage.link_orders`): 1-urinish `timeout_unknown` bo'lsa buyurtma ilgari HECH QACHON bog'lanmasdi (buyurtma bo'yicha AI xarajati yozilmasdi). Takror bog'lash idempotent — narx bir marta; hamma id bog'langan `ai_usage_log` qatori qayta yozilmaydi. ⚠️ 1-urinish `timeout_unknown` bo'lsa `ai_order_draft_item` qatori TAKROR paytida yoziladi: `created_at` (AI trace'dagi `confirmed_at`), muzlatilgan narx (o'sha paytdagi market narxi), `confirmed_by` va `edited_fields` / tuzatishlar — takror so'rovidan (1-urinishnikidan emas).
+- 🟢 `reason_code` faqat hujjatlangan uchta koddan biri (`OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`, `CHOSEN_OPERATOR_SELF_ONLY`) bo'lishi mumkin — boshqa ichki kodlar natijaga chiqmaydi.
+
+**Frontend / bot action items:** yo'q (takror natijasi avvalgidek `ok: true` — kartani muvaffaqiyat deb qulflang).
+
+### 2026-11-18 — AI tasdiq: natijada `reason_code`; takror tekshiruvlardan oldin
+
+Deploy: **order-service va api-gateway** (yangi RMQ `order.ai_confirm.completed`; gateway eski order-service bilan ham ishlaydi — so'rov javob bermasa avvalgi yo'l). Migratsiyasiz. Orqaga mos — yangi maydon qo'shimcha.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — `results[]` da yangi ixtiyoriy **`reason_code`** (UPPER_CASE, #658 kontrakti; faqat `ok: false` da, bo'lsa). `code` va `reason` O'ZGARMAGAN (`code: 'create_failed'`), `reason_code` — aniqroq sabab:
+  - `OPERATOR_PHONE_REQUIRED` — market operator raqamini majburiy qilgan, doimiy raqam yo'q, `operator_phone` yuborilmagan;
+  - `CHOSEN_OPERATOR_NOT_SELECTABLE` — `operator_id` buyurtma marketining faol operatori emas;
+  - `CHOSEN_OPERATOR_SELF_ONLY` — market operatori boshqa operatorni tanlagan.
+  Mijozlar (FE, Telegram bot) o'zbekcha `reason` matnini TAHLIL QILMASIN — `reason_code` ni tekshirsin (`reason` faqat ko'rsatish uchun). Kelajakda boshqa kodlar qo'shilishi mumkin — noma'lum `reason_code` ni `code` bo'yicha umumiy xato deb ko'rsating.
+- ✏️ [gateway] `POST /orders` (va `PUT /orders/:id/operator` dagi operator tekshiruvi) 400 tanasida endi `code`: yuqoridagi uchta kod (matn o'zgarmagan).
+- 🔧 [gateway] **Takror tartibi:** ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan bo'lsa (masalan natijasi noma'lum 1-urinish, keyin «✅» qayta), endi operator, operator raqami va mijoz QAYTA TEKSHIRILMAYDI — darhol `{ ok: true, order_id, idempotent_replay: true }`. Ilgari operator orada o'chirilsa yoki market raqamni majburiy qilsa, mavjud buyurtma `create_failed` bo'lib ko'rinardi. Yangi bandlar uchun tekshiruvlar o'zgarmagan; takror faqat shu market (server aniqlagan) kalitlari bo'yicha. AI ack darvozalari (400/409/503) takrorda ham avvalgidek.
+
+**Frontend / bot action items:**
+- 🔧 Telegram bot (#721): operator raqami / operator xatosini `reason` matni bilan emas, `results[i].reason_code === 'OPERATOR_PHONE_REQUIRED'` va `reason_code === 'CHOSEN_OPERATOR_NOT_SELECTABLE' || reason_code === 'CHOSEN_OPERATOR_SELF_ONLY'` bilan aniqlasin (`ok === false`). `reason_code` yo'q eski gateway uchun — matn bo'yicha fallback vaqtincha qolishi mumkin.
+
+### 2026-11-18 — AI tasdiq: mavjud mijozni tanlash (`orders[].customer_id`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `customer_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — berilmagan; boshqa qiymat — butun so'rov 400). Egalik `POST /orders` `customer_id` bilan **AYNI** (`resolveScopedCustomerId`, `GET /customers/suggest` qoidasi): superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa.
+  - ⚠️ Farq: `POST /orders` da tasdiqlanmagan id `customer` obyekti bo'lsa jimgina e'tiborsiz qoladi (telefon yo'li). ai-confirm'da `customer` doim bor, shu sabab tasdiqlanmagan id (boshqa rollar uchun: begona yoki mavjud bo'lmagan mijoz) **shu buyurtmani rad etadi**: `{ index, ok: false, code: 'create_failed', reason: 'customer_id qabul qilinmadi: …' }` (POST /orders 403 matni). Superadmin/admin — id tekshirilmaydi, POST /orders kabi (mavjudligi ham). Tekshiruv xizmati (order yoki identity) javob bermasa — `{ code: 'validation_unavailable', reason: "Mijozni tekshirib bo'lmadi — …" }` (fail-closed; buyurtma ANIQ yaratilmagan, qayta yuborish mumkin). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
+  - Qabul qilinsa buyurtma o'sha kartaga yoziladi, yangi karta ochilmaydi; `customer.name`/`phone_number` kartaga yozilmaydi — **AI o'qigan telefon saqlanmaydi**, buyurtmada kartadagi telefon bo'ladi; `customer.address`, `customer.extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi, market tomoni faqat o'z marketidagi mijozni). `customer` obyekti baribir majburiy.
+  - Berilmasa — avvalgi xulq (telefon bo'yicha).
+- ⚠️ [gateway] **`POST /orders` va `POST /orders/external` `customer_id` formati qat'iylashdi** (external DTO uni `OmitType` orqali meros oladi; ilgari faqat «satr» edi). Endi **400**: raqam bo'lmagan qiymatlar (`'abc'`, `'EXT-77'`, UUID, `'-1'`, `'1.5'`, `'1e3'`, `'+120'`), boshida nolli `'0120'`, `'0'`, int8 maksimumidan (`9223372036854775807`) kattasi, xavfsiz bo'lmagan JSON son (> 2^53). Ruxsat: musbat int8 satr, JSON xavfsiz butun son (`120` → `'120'`), chetida bo'shliqli `' 120 '` (trim qilinadi), bo'sh satr — berilmagan. Market roli JWT bilan `POST /orders/external` ga o'z (raqam bo'lmagan) mijoz identifikatorini `customer_id` da yuborayotgan tashqi mijoz endi 400 oladi — `customer` obyektini yuborsin.
+- 🟢 ai-confirm natijasida gateway'ning o'z 403 xatolari (shu jumladan «Mijoz kartasini yangilab bo'lmaydi…») endi `reason` da asl matni bilan (ilgari umumiy «Buyurtma yaratilmadi»); gateway'ning o'z 503 xatosi (yaratishdan oldingi tekshiruv) — `validation_unavailable` + matn.
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`customer_id` yubormaydi).
+
+**Frontend action items:**
+- 🔧 AI panelida mijoz telefoni bo'yicha `GET /customers/suggest` taklifini tanlash → `orders[i].customer_id` (va `customer.phone_number` — taklifdagi to'liq telefon).
+- 🔧 `customer_id` tanlangan kartada AI o'qigan telefonni emas, **kartadagi telefonni** ko'rsating (buyurtmaga o'sha yoziladi); AI telefoni boshqacha bo'lsa operator buni ko'rsin (kerak bo'lsa tanlovni bekor qilib, yangi mijoz sifatida yuborsin).
+- 🔧 `customer_id` tanlanganda `orders[i].customer.phone_number` ga **kartadagi telefonni** (va ismni) qo'ying: buyurtma kartaning ism/telefonini oladi, AI auditi (`edited_fields`, `field_corrections`) esa so'rovdagi `customer` ni AI taklifi bilan solishtiradi — so'rovda kartadan boshqa qiymat qolsa audit buyurtmaga yozilmagan qiymatni ko'rsatadi (soxta tuzatish yoki yashirin farq). Kartadagisi qo'yilsa audit buyurtmadagi haqiqiy qiymatni aks ettiradi. (Boshqa market mijozi uchun bu baribir shart — telefon kartaga TO'LIQ mos kelishi kerak.)
+
+### 2026-11-18 — AI tasdiq: operator raqami (`orders[].operator_phone`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- 🔧 [gateway] **Xato tuzatildi:** market profilida `require_operator_phone=true` va `default_operator_phone` bo'sh bo'lsa, `POST /orders/ai-confirm` dagi HAR buyurtma `{ ok: false, code: 'create_failed', reason: 'Operator telefon raqami majburiy…' }` bo'lardi — AI DTO'sida raqam maydoni yo'q edi (yuborilsa 400 «should not exist»).
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_phone` (string). Qoida `POST /orders` `operator_phone` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveOrderOperatorPhones`): `"90 123 45 67"`, `"0901234567"` → `+998XXXXXXXXX`; noto'g'ri shakl — butun so'rov 400; bo'sh satr — yuborilmagan. Market doimiy raqami bo'lsa u 1-raqam, bu — 2-raqam (bir xil bo'lsa takrorlanmaydi); majburiy va doimiy raqam yo'q bo'lsa bu raqam MAJBURIY va 1-raqam — yuborilmasa shu buyurtma `create_failed` (yuqoridagi matn), qolganlari yaratiladi. `secondary_operator_phone` AI'da yo'q.
+- ⚠️ Telegram bot AI yo'li ham `ai-confirm` orqali yaratadi va `operator_phone` yubormaydi — bunday marketlarda bot AI buyurtmalari hozircha ham `create_failed` (alohida ish; bot `POST /orders/telegram/bot/create` yo'li 400 bermaydi).
+- 🟢 openapi.json: `operator_phone` (`AiConfirmOrderDto`, `CreateOrderRequestDto`) va `secondary_operator_phone` endi `"type": "string", "nullable": true` (ilgari xato `"object"` — TS `string | null` metadata'si). Kontrakt o'zgarmagan; kod generatori ishlatilsa tiplarni qayta yarating.
+
+**Frontend action items:**
+- 🔧 AI panelida operator raqami maydoni (qo'lda forma kabi; market `require_operator_phone && !default_operator_phone` bo'lsa majburiy) → `orders[i].operator_phone`.
+
+### 2026-11-18 — AI tasdiq: «Operator» tanlovi (`orders[].operator_id`)
+
+Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — har buyurtmada ixtiyoriy `operator_id` (string — musbat int8: boshida nolsiz, ≤ `9223372036854775807`; JSON son faqat xavfsiz butun bo'lsa; bo'sh satr — tanlanmagan; boshqa qiymat — butun so'rov 400). ⚠️ Shu format `POST /orders` `operator_id` ga ham qo'llanadi: ilgari `'0120'` muvaffaqiyatli o'tardi (120 ga normallashtirilib) — endi **400** (avval ishlagan va endi rad etiladigan yagona sinf); `'0'` avvaldan 400; int8 dan katta qiymat ilgari DB'gacha yetib 22003 xato berardi — endi DTO'da 400; `' 31 '` (chetida bo'shliq) endi qabul qilinadi (trim). Qoida `POST /orders` `operator_id` bilan **AYNI** (umumiy DTO tekshiruvi va `resolveChosenOrderOperator`): buyurtma marketining faol, o'chirilmagan operatori (`GET /market-operators/selectable` ro'yxati); market operatori faqat o'zini; superadmin/admin ham tekshiriladi. To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (yuborilgan `operator` matni e'tiborsiz) — komissiya shu operatorga.
+  - Xato: `POST /orders` dagi 400 matni ai-confirm'da **shu buyurtma natijasi** bo'ladi — `{ index, ok: false, code: 'create_failed', reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' }` (market operatori boshqasini tanlasa — `reason: "Market operatori faqat o'zini operator qilib tanlay oladi"`). Mijoz ham, buyurtma ham yaratilmaydi; partiyaning qolgani yaratiladi.
+  - Operatorni tekshirib bo'lmasa (identity xatosi/timeout) — `{ ok: false, code: 'validation_unavailable', reason: 'Tanlangan operatorni tekshirib bo‘lmadi — …' }`: buyurtma ANIQ yaratilmagan (operatorsiz ham saqlanmaydi), qayta yuborish mumkin.
+  - Tekshiruv partiya boshida, bir xil `operator_id` uchun bir marta. AI auditida (`edited_fields`, `field_corrections`) `operator` — buyurtmaga yozilgan tanlangan operator ismi.
+  - Berilmasa — avvalgi xulq o'zgarmagan (`operator` matni; market operatori — o'zi; qolganlar — operatorsiz).
+- 🟢 Telegram bot AI yo'li o'zgarmagan (`operator_id`, `customer_id`, `operator_phone` yubormaydi — kalitlar oq ro'yxati testi bilan qotirilgan).
+
+**Frontend action items:**
+- 🔧 AI panelida har buyurtma kartasiga «Operator» select (`GET /market-operators/selectable`, qo'lda forma bilan bir xil) → `orders[i].operator_id`.
+- ⚠️ `operator_id` ni AI `operator` matnidan HECH QACHON avtomatik tanlamang (matn model chiqishi — ishonchsiz); faqat odam select'da tanlasin. Market operatori rolida select ko'rsatmang va `operator_id` yubormang (u baribir o'zi bo'ladi; boshqasi — `create_failed`).
+
+### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizod so'rovi tezlashtirildi
+
+Deploy: finance-service + **migratsiya 1716000000244** (`cashbox_history (cashbox_id, createdAt, id) WHERE balance_after <= 0 AND is_deleted = false` — qisman indeks). Relizda 240–244 bitta tranzaksiyada, 244 eng oxirida (qurilish vaqtida yozish kutadi, o'qish kutmaydi; kam yuklamali vaqtda).
+
+- 🟢 Natijalar o'zgarmaydi, faqat tezlik.
+
+**Frontend action items:** yo'q.
+
+### 2026-11-18 — AI maslahatchi (BE-5): bildirishnoma urinishlari va SMS eskalatsiyasi (review round-4)
+
+Deploy: ai-service + notification-service, migratsiyasiz.
+
+- 🔧 Jiddiy ogohlantirish bildirishnomasi notification-service tomonidan RAD ETILSA (4xx javobi) — qayta urinish oralig'i o'sadi (30 daqiqa, 1 soat, 2 soat, 4 soat); 5 urinishdan keyin to'xtatiladi (log'da `ai_advisor_notify_gave_up`). Xizmat vaqtincha YETIB BO'LMASA yoki nosoz bo'lsa (timeout / RabbitMQ uzilishi / 5xx) — urinish sanalmaydi, har 30 daqiqada qayta uriniladi (24 soatgacha): uzilishdan keyin xabar baribir yetadi. Bitta ogohlantirishga xos 5xx boshqalarini to'smaydi (navbat oxiriga, partiya davom etadi). R6 Telegram'i tunda (Toshkent 22:00–09:00) yuborilmaydi — qayta urinishlar ham: 09:00 gacha — o'sha kuni 09:00 da, 22:00 dan keyin — ertasi kuni 09:00 da; 09:00–22:00 — darhol. 09:00 Telegram'i ko'pi bilan bir marta yuboriladi; yetkazilmasa, qayta urinishlar due + 35 soatgacha (ertasi kuni 20:00 gacha) davom etadi, keyin tashlanadi. Ogohlantirishning o'zi ro'yxatda qoladi. Xatoli ogohlantirishlar yangi jiddiy ogohlantirishlar bildirishnomasini kechiktirmaydi. R6 09:00 Telegram'i uchun ham xuddi shu qoida.
+- 🔧 Tunda ochilgan R6 ning birinchi yuborishi yiqilib, 09:00 dan keyin qayta urinilsa — Telegram ham yetadi (ilgari yo'qolishi mumkin edi).
+- 🔒 `ai.advisor_alert` turi uchun SMS eskalatsiyasi navbatda qolib ketgan eski hodisalarda ham ishlamaydi (`delivery.escalation: "skipped"`, `escalation_reason: "type_opt_out"`).
+- 🟢 `GET /notifications/types` javobida `ai.advisor_alert` uchun `escalation: false` maydoni bor (qo'shimcha, ixtiyoriy): «bu tur SMS eskalatsiyasiz». FE turlarini generatsiya qilishda `escalation?: boolean` deb qo'shing.
+
+**Frontend action items:** yo'q (ixtiyoriy: `escalation?: boolean` turga).
+
+### 2026-11-18 — AI maslahatchi (BE-5): review round-4 tuzatishlari
+
+Deploy: api-gateway + ai-service + finance-service, migratsiyasiz.
+
+- 🔧 **R1:** yopilgandan keyin ochilgan yangi «smena kamomadi» ogohlantirishi endi faqat YANGI smenalarni hisoblaydi (`facts.shifts_count`, `total_difference`, `evidence.rows`, `closed_by`). Ilgari yopilgan ogohlantirishdagi smena yangisida qayta sanalardi (masalan `occurrences: 1`, lekin `shifts_count: 2`). Ketma-ketlik konteksti — `facts.streak_length` / `streak_total`; `consecutive_negative` da `headline_amount = streak_total` (sarlavha bilan bir xil, yopilgan smenalar ham kiradi), `total_difference`/`shifts_count`/`evidence` esa faqat yangi smenalar.
+- 🔧 Qoidalar tekshiruvi: butun tekshiruvning umumiy vaqt byudjeti bor (SQL ≤ 22 s, nomlar bilan ≤ 28 s; har SQL ifoda qolgan byudjet bilan cheklanadi, qulf kutish ≤ 2 s; istisno — kunlik R6 hisoboti hali byudjetdan tashqarida, faqat byudjet tugagan bo'lsa boshlanmaydi). Sekin/qulflangan jadval yoki osilgan xizmat (filial/foydalanuvchi nomlari) faqat ta'sirlangan qoidalarni `error` qiladi — byudjet tugasa keyingi qoidalar shu tick o'tkaziladi; muvaffaqiyatli qoidalar (masalan R1) kursori saqlanadi. Nomlar null bo'lib qolishi mumkin (FE allaqachon `#id` ko'rsatadi).
+- 🔒 **`/activity-logs`:** `ai` xizmati yozuvlari (`ai.advisor.*`, `ai.cap.raise`) endi FAQAT SUPERADMIN ga. ADMIN so'rovida bu yozuvlar yo'q, `?service=ai` — bo'sh ro'yxat (403 emas). Ega qarori 2026-11-18.
+- 🔧 R6 (kunlik): bitta o'tkazib yuborilgan tungi tekshiruv (xizmat vaqtincha javob bermasa) o'sha kunning R6 bildirishnomasini endi yo'qotmaydi — keyingi kunda ikkala kun ham xabar qilinadi (7 kunlik oynada).
+- 🟢 openapi: `/ai/advisor/*` javob sxemalari (`200` endi bo'sh emas), `from`/`to` — `format: date`.
+
+**Frontend action items:** yo'q (ADMIN faoliyat jurnalida `ai` xizmati filtrini yashirish mumkin).
+
+### 2026-11-18 — AI maslahatchi (BE-5): R2/R4/R5 epizodlari — shartnoma v0.4
+
+Ega qarori 2026-11-18. Deploy: ai-service + finance-service + **migratsiya 1716000000243** (`cashbox_history (cashbox_id, createdAt, id)` indeksi). Relizda 240–244 BITTA tranzaksiyada yuradi — SHARE qulflar partiya commit bo'lguncha turadi (`cashbox_history` ga yozish kutadi, o'qish kutmaydi): kam yuklamali vaqtda, 243/244 eng oxirida.
+
+- ✏️ **Topshirish chegarasi (R2, R5):** «topshirilmagan kunlar» faqat o'sha kun boshidagi qoldiqning kamida **80%** i topshirilganda (bir kundagi topshirishlar yig'indisi) nolga tushadi; kichikroq topshirishlar epizodni yangilamaydi, kunlar sanalishda davom etadi. Yangi sozlamalar: `rules.R2.min_handover_pct`, `rules.R5.min_transfer_pct` (sukut 80, 1–100, `limits` da `unit: "percent"` — **yangi birlik**). UI'da hozircha KO'RSATILMAYDI (FE sozlamalar dialogida yashiring). `rule.thresholds` va `evidence.min_handover_pct` / `evidence.min_transfer_pct` da snapshot. R4 (market to'lovi) o'zgarmaydi — har qanday to'lov.
+- ✏️ **R2 o'sish:** faqat o'sish triggeri — epizod o'sish qatorining boshlangan kuni; kuniga qisman topshirish «N marta» ni ko'paytirmaydi va yopilgandan keyin har kuni yangi ogohlantirish ochmaydi. Sarlavha: «{kuryer}: {qoldiq} so'm — qarz N kun ketma-ket o'sgan»; o'sish bo'lmasa `facts.growth_days = 0`.
+- ✏️ **Bekor turgan kassa (R2/R4/R5):** hammasi topshirilib (qoldiq 0) keyin yangi pul tushsa — kunlar o'sha paytdan sanaladi (darhol «12 kundan beri» emas). R5 epizodi `balance_uzs` chegarasiga bog'liq emas (chegara o'zgarsa yopilgan qayta ochilmaydi).
+- ✏️ **T6 qaytarish:** qaytarilgan to'lov kuni endi 80% ga yetmay qolsa (kun yig'indisi bo'yicha) — epizod qaytarish lahzasidan boshlanadi (ogohlantirish abadiy jim qolmaydi). Qaytarishdan keyin ham kun ≥ 80% bo'lsa — kunlar sanog'i o'zgarmaydi. `evidence.last_handover` — oxirgi amal qiluvchi (qaytarilmagan) topshirish, avvalgidek.
+- ✏️ **T6 tahriri 80% chegarasidan o'tsa** (masalan 900k → 700k): o'sha kun endi hisoblanmaydi, kunlar oldingi chegaradan sanaladi — admin tahriridan keyin darhol jiddiy R2 ochilishi mumkin (kutilgan xulq). Teskari tahrir (700k → 900k) chegarani qaytaradi.
+- ✏️ **R4:** 80% qoidasi yo'q (har qanday to'lov), lekin «bekor turgan kassa» qoidasi R4 ga ham tegishli: qarz to'liq to'langandan keyingi birinchi sotuvdan sanaladi (v0.3 da oxirgi to'lovdan edi — 1 kun farq qilishi mumkin).
+- 🟢 «Hisoblanadigan topshirish» oxirgi **90 kun** ichida qidiriladi (chegaralar ≤ 60 kun); 90 kun ichida bo'lmasa — kunlar musbat qoldiq qatori boshidan.
+- 🟢 Yangilanishdan keyin (kalit formati o'zgargani uchun) ochiq R2/R4/R5 da «N marta» bir marta +1 bo'lishi mumkin; yopilgan (hal qilingan / ahamiyatsiz) ogohlantirish shu sabab bilan QAYTA OCHILMAYDI.
+- ✏️ **T6 tahriri (summa tuzatish):** almashtiruvchi to'lov «oxirgi topshirish» sanasini oldinga surmaydi — `evidence.last_handover.at` va epizod asl (birinchi) to'lov vaqtida qoladi (summa — yangi), kunlar nolga tushmaydi, «N marta» oshmaydi.
+- 🟢 Ism/filial qidiruvi vaqtincha yiqilsa — ochiq ogohlantirishdagi nom va filial (`branch_id` filtri, `facts.branch`) saqlanadi (`#90` ga almashmaydi); sarlavha shu nomlar bilan, yangi raqamlar bilan qayta yoziladi.
+- 🟢 `finance_cashbox_daily` da yo'q kun — o'sish tekshiruvida o'tkazib yuboriladi (uzluksiz kunlar talab qilinadi), avvalgidek.
+
+### 2026-11-18 — Bildirishnomalar: o'chirish / o'qildi belgisi yetkazish holatini bosib ketmaydi (#699 follow-up)
+
+Deploy: notification-service, migratsiyasiz.
+
+- 🔧 `DELETE /notifications/inbox/:id` va o'qildi belgisi endi faqat o'z ustunini yozadi: ayni paytda yuborilayotgan Telegram/push holati (`delivery`) yo'qolmaydi (ilgari kam hollarda DM jim tushib qolardi). Javoblar o'zgarmagan.
+- 🟢 Ichki `delivery_only` (faqat mavjud qatorga yetkazish): faqat tashqi shaxsiy kanallar (Telegram DM, push) — realtime toast, SMS va eskalatsiya yo'q; qatori yo'q qabul qiluvchilar javobda `skipped_no_row`.
+
+### 2026-11-18 — AI maslahatchi (BE-5): migratsiya 241 — holat ustunlari va qoida indekslari
+
+Deploy: **migratsiya 1716000000241** (finance-service/ai-service kodi o'zgarmaydi) — relizda OXIRGI migratsiya bo'lsin, kam yuklamali vaqtda. Idempotent; indeks qurilishi davomida `cashbox_history` / `shifts` ga yozish kutadi (db-prepare bitta tranzaksiyasida — butun partiya commit'igacha). O'lchov: 10M tarix / 1M smena — R3 indeksi ~1–2 s, R1 ~1 s. `lock_timeout` 5 s: ochiq pul yozuvi tranzaksiyasi bo'lsa migratsiya uzoq kutmay yiqiladi — qayta yurgiziladi.
+
+- 🔧 `ai_advisor_rule_state.last_failed` / `failures` — eski 226 ni yurgizgan bazalarda yetishmasdi (qoidalar holati saqlanmasdi).
+- ⚡ R3 (g'ayrioddiy xarajat) va R1 (smena kamomadi) tekshiruvlari indeks bilan (o'lchov: R3 8.7 s → 0.6 s, R1 0.29 s → 0.4 ms).
+
+**Frontend action items:** yo'q.
+
+### 2026-11-18 — Operatorga to'lov: market o'zi yozadi, Elchi kassasiga ta'sir qilmaydi (F2qp6FtE)
+
+Ega qarori (2026-11-16): har market o'z operatoriga O'ZI, istagan vaqtida to'laydi. Bu Elchi Asosiy kassasiga ta'sir qilmaydi — kassa faqat market bilan Elchi o'rtasidagi oldi-berdi. Tizim faqat ma'lumot saqlaydi: operator qancha ishlab topgani va qanchasi to'lab berilgani.
+Deploy tartibi: migration-runner (**migratsiya 1716000000242**) → finance-service → api-gateway → frontend.
+
+- ⚠️ [gateway] `POST /finance/operator-payments` endi **faqat MARKET** (ilgari SUPERADMIN/ADMIN, pul Asosiy kassadan naqd chiqib «Maosh» xarajati bo'lib yozilardi). Superadmin/admin — 403; operator ID yozib to'lash yo'li yo'q. Eski RMQ `finance.operator.payment.create` — **410**, hech narsa yozmaydi (deploy oynasidagi eski gateway uchun).
+  - Tana: `{ operator_id, amount, paid_at?, note? }` — `amount` > 0, ko'pi bilan 2 kasr; `paid_at` `YYYY-MM-DD` (Toshkent kuni, sukut — bugun, kelajak — 400); `note` ≤ 500. `market_id` YUBORILMAYDI (JWT `sub`; tanada — 400). Operator — shu marketning o'chirilmagan operatori (faol yoki nofaol), aks holda **404**.
+  - `Idempotency-Key` sarlavhasi **majburiy** (1–255): ayni kalit bilan takror — **200**, o'sha yozuv, `data.idempotent: true`; ayni kalit boshqa summa yoki operator bilan (yoki takrorda `paid_at` berilib, boshqa sana bilan) — **409**; izoh solishtirilmaydi. Yangi yozuv — **201**.
+  - Qoldiqdan oshsa ham yoziladi (avans) — «Qoldiq» manfiy bo'ladi.
+  - Javob `data` (`OperatorPaymentViewDto`): `id, operator_id, operator_name, market_id, amount, paid_at, note, source ('market' | 'elchi'), affects_cashbox, recorded_by_role, created_at, status ('active' | 'cancelled'), cancelled_at, cancelled_by_role, cancel_reason, can_cancel, idempotent`.
+  - Kassa, kassa tarixi, P&L daftari, xarajat va smenaga **tegmaydi** (DB CHECK: `source = 'market'` yozuvi `affects_cashbox = false`).
+- 🆕 [gateway] `POST /finance/operator-payments/:id/cancel` `{ reason }` (MARKET, **200**) — xato yozuvni bekor qilish: qator qoladi (`status: cancelled`, `cancelled_at`, `cancel_reason`), «To'landi» ga kirmaydi. Sabab majburiy (3–500 belgi). Faqat shu market yozgan yozuv (begona yoki yo'q — 404); eski Elchi yozuvi (`source: elchi`) — **409**. Takror — 200, `idempotent: true`.
+- 🆕 [gateway] `GET /finance/operator-payments/balances` (MARKET) → `{ items: [{ operator_id, operator_name, status, earned, paid, balance, payments_count, last_paid_at }], totals: { earned, paid, balance } }` — marketning barcha o'chirilmagan operatorlari. `earned` — «Ishlab topdi» (`/me/balance` bilan AYNI qoida), `paid` — «To'landi» (bekor qilinmagan, eski Elchi to'lovlari ham), `balance` = earned − paid (manfiy — ortiqcha to'langan, xato emas).
+- 🆕 [gateway] `GET /finance/operator-payments?operator_id&page&limit` (MARKET; limit 1–100, sukut 20) → `{ items: OperatorPaymentViewDto[], pagination: { total, page, limit, totalPages } }` — to'lov sanasi bo'yicha yangisi tepada; shu market yozganlari + uning operatorlariga Elchi eski yo'lda yozganlari (`source: elchi`, `affects_cashbox` — Asosiy kassadan chiqqanmi). Bekor qilinganlar ham chiqadi. Begona `operator_id` — 404.
+- ✏️ [finance] `GET /finance/operators/me/balance` va `/operators/:id/balance`: `paid` bekor qilingan yozuvlarni chiqarib tashlaydi; summalar tiyin aniqligida. `/me/payments` va `/operators/:id/payments` qatorlari: tartib `paid_at DESC, id DESC`; eski maydonlar saqlangan + `paid_at`, `source`, `affects_cashbox`, `recorded_by_role`, `status`, `cancelled_at`, `cancelled_by_role`, `cancel_reason` (`idempotency_key`, `cancelled_by_id` qaytmaydi).
+- 🟢 [activity-log] Yangi fe'llar: `finance.operator_payment_recorded` «Operatorga to'lov yozildi», `finance.operator_payment_cancelled` «Operatorga to'lov bekor qilindi» (`entity_type: OperatorPayment`).
+- 🟢 Migratsiya 242: mavjud to'lovlar `source = 'elchi'`, `affects_cashbox` — ma'lumotdan (kassa tarixi yoki P&L qatori bor — true), `paid_at` — yozilgan kunning Toshkent sanasi. Eski to'lovlar, ularning kassa harakati va «Maosh» xarajatlari o'zgarmaydi.
+
+**Frontend action items:**
+- 🔧 Market «Operatorlar» (`/market-operators`): har operatorda «Ishlab topdi / To'landi / Qoldiq», «To'lov yozish» (tasdiq oynasi — Elchi kassasiga ta'sir qilmaydi), to'lovlar tarixi va «Bekor qilish» (sabab bilan). `Idempotency-Key` — bitta mantiqiy to'lov uchun bitta kalit.
+- 🔧 Operator «Daromadim»: `GET /finance/operators/me/balance` + `/me/payments` (faqat o'qish; bekor qilinganlar belgisi bilan).
+- 🔧 Ops «Moliya operatorlari» tabi va `/finance-operators` olib tashlanadi (yo'naltiriladi) — superadmin endi operatorga to'lamaydi.
+
+### 2026-11-18 — AI maslahatchi (BE-5): R6 09:00 Telegram inbox qatorini qayta ko'tarmaydi
+
+- 🔧 (#655 N1 tuzatish) Tunda ochilgan R6 ning 09:00 dagi Telegram xabari ilova ichidagi `ai.advisor_alert` qatorini endi QAYTA KO'TARMAYDI: o'qilgan holati, inbox tartibi (`createdAt`), `data.count` va matn o'zgarmaydi — qatorga faqat `telegram` kanali qo'shiladi. Ilgari 09:00 da qator «o'qilmagan» bo'lib tepaga chiqardi (`count: 2`). Foydalanuvchi o'chirgan qator QAYTA PAYDO BO'LMAYDI (Telegram baribir yuboriladi).
+- 🟢 notification-service: ichki `notification.dispatch` ga ixtiyoriy `delivery_only: true` (gateway HTTP'da yo'q). FE'dan ish talab qilinmaydi.
+
+### 2026-11-17 — Kuryer skani = qabul: yo'ldagi pochtadan olish, «Yo'lda» va «Qabul qilish» qadami yo'q (COURIER-SCAN)
+
+Ega (2026-11-17): HQ pochtani filialga jo'natdi — menejer hali qabul qilmagan bo'lsa ham filial kuryeri buyurtmani skanerlab oladi; skan = qabul; olgandan keyin holat «Yo'lda» ga qaytmaydi, «Qabul qilish» chiqmaydi, darhol «Sotish» / «Bekor qilish».
+Deploy: order-service, logistics-service, notification-service, api-gateway + migration-runner (**migratsiya 1716000000240**). Eski FE bu backend bilan ishlayveradi (skan bilan olingan qator endi `waiting` — eski FE ham «Sotish / Bekor» ko'rsatadi).
+
+- ✏️ [logistics] `POST /orders/scan-assign` — muvaffaqiyatli skandan keyin buyurtma DOIM `waiting` + kuryerda (`courier_id`, `holder_type: COURIER`, `holder_courier_id`), ilgari `on the road` edi (6qypMFeT, bekor qilindi). Javob `data`: avvalgi maydonlar + `status: "waiting"`.
+  - Filial kuryeri o'z filialiga kelgan HQ → filial o'tkazma pochtasidagi (`courier_id` '0', `sent`) yo'ldagi buyurtmani menejer qabul qilmasdan oladi: skan shu bitta buyurtmani filialga qabul qiladi va kuryerga beradi. Pochtani butunlay qabul qilish menejerda qoladi; oxirgi yo'ldagi buyurtma olinsa pochta o'zi `received` bo'ladi va filialga «Pochta filialga yetib keldi» xabari bir marta ketadi (son — pochtaning `order_quantity`).
+  - Kuryerning o'zidagi yo'ldagi buyurtmani (menejer biriktirgan, «Pochta → HQ kuryeri») qayta skanlash — **qabul**: `waiting`, javobda `data.accepted: true`, `idempotent: false`. O'z `waiting` buyurtmasi — avvalgidek `idempotent: true`.
+  - Kuryer pochtasi: bugungi `sent` → bugungi `received` → yangi pochta darhol `received`; `sent` pochtada yo'ldagi qolmasa u yopiladi (bo'sh «yo'ldagi» kuryer pochtasi qolmaydi).
+  - 🆕 409 `data.reason = order_marked_not_arrived` «Bu buyurtma «kelmagan» deb belgilangan — menejer belgini olib tashlasin» (`details`: `order_id`, `post_id`) — o'tkazma pochtasidagi `return_requested` buyurtma.
+  - 🆕 409 `courier_scan_receive_failed` «Buyurtmani filialga qabul qilib bo'lmadi — qayta skanerlang» (`details`: `order_id`, `post_id`) — kamdan-kam (qabul yozuvi o'tmadi).
+  - Ikki kuryer bir vaqtda skanlasa — biri 200, ikkinchisi 400 «Buyurtma allaqachon boshqa kuryerga biriktirilgan». Boshqa filial kuryeri — 403, boshqa viloyat — 403 `district_not_served_by_branch` (filialga ham qabul qilinmaydi), HQ kuryeri yo'ldagi buyurtmani avvalgidek olmaydi.
+- 🆕 [logistics] `PATCH /post/receive/:id` `{ order_ids, scan: true }` (menejerning «Pochtadan qabul»i): kuryer skan bilan olib ketgan buyurtma skanlansa — 400 `data.reason = order_taken_by_courier` «Bu buyurtmani kuryer <ism> skan bilan olgan» (`details`: `order_id`, `post_id`, `courier_id`, `courier_name`), ilgari `order_not_in_post`. Bulk qabul kuryer olganlarga tegmaydi (ular pochtada yo'q), qisman qabulda «kelmagan» belgisi ham faqat pochtada qolganlarga.
+- ✏️ [order] Tarix (`GET /orders/:id/tracking`): yangi amallar —
+  - `courier_scan_received` «Kuryer <ism> skan bilan oldi» (`metadata`: `post_id`, `courier_name`) — har kuryer skani; filial qabul qilgan `waiting` buyurtma uchun `from_status = to_status = waiting` qatori (`old_value.courier_id` / `new_value.courier_id`);
+  - `branch_post_received_by_courier_scan` «Kuryer <ism> skani bilan filialga qabul qilindi» (`metadata`: `post_id`, `branch_name`, `courier_name`) — o'tkazma pochtasidan olishda birinchi qator;
+  - kuryer skani endi «Kuryer pochtani qabul qildi» (`post_received`) deb yozilmaydi; «Kutilmoqda → Yo'lda → Kutilmoqda» izi yo'q.
+- ✏️ [order/gateway] Kuryer ro'yxati (`GET /orders/courier/orders`), tab sonlari va `/region/my/district-stats`: skan bilan olingan posilka endi oddiy `waiting` qator. 6qypMFeT istisnosi (`isCourierScanTakenOrder`, `scan_taken_courier_id`) faqat deploy oynasi uchun (migratsiya yurgandan servislar qayta ishga tushguncha eski kod yozgan `on the road` skan qatorlari ro'yxatdan yo'qolmasin) **bir reliz saqlanadi**, keyingi relizda olib tashlanadi; FE uchun farq yo'q. Migratsiya 240 hamon `on the road` turgan shunday qatorlarni `waiting` ga o'tkazadi (tarixga `courier_scan_received`, tizim nomidan) va yo'ldagisi qolmagan `sent` kuryer pochtalarini yopadi.
+- 🟢 [notification] Mini App «✅ Tayyor» xulosasi kuryerdagi `waiting` (va eski `on the road`) buyurtmalarni sanaydi; e'tiborsizlar matni «… tasi sizda emas …».
+- 🟢 [gateway] `POST /orders/sell|partly-sell|cancel/:id` — skan bilan olingan buyurtma `waiting`, avtomatik qabul chaqirilmaydi (bir bosishda). Avtomatik qabul (2026-11-12) skansiz biriktirilgan `on the road` buyurtmalar uchun qoladi; uning xato matni: «… buyurtma QR kodini skanerlang yoki qayta urinib ko'ring» (`auto_receive_failed`).
+- 🟢 Hamkor webhook'lari qisqaradi: skan bilan olingan buyurtmada `on_the_road` → `waiting` almashinuvi endi yo'q (o'tkazma pochtasidan olinganda bitta `waiting`, keyin natija). Marketga `order.on_way` faqat jo'natishda; skanda `order.assigned_to_courier`.
+
+**Frontend action items:**
+- 🔧 Kuryer ro'yxati: «Qabul qilish» tugmasi (`PATCH /post/receive/:id` `scan:true`) olib tashlanadi — faol qatorda faqat «Sotish» + «Bekor qilish».
+- 🔧 `/scan/:token`: o'z buyurtmasi (`waiting` / `on the road` / `waiting_customer`) — «Sotish / Bekor qilish»; «O'zimga olish»dan keyin shu sahifada qoladi. `/scan` dagi kuryer «Qabul qilish» rejimi olib tashlanadi; «O'zimga olish» rejimida o'z yo'ldagi buyurtmasi — `accepted: true` («sizga biriktirildi»).
+- 🔧 `/courier-bulk`: «Pochta hali qabul qilinmagan» to'sig'i olib tashlanadi.
+- 🔧 Yorliq: `waiting` + kuryer — «Kuryerda»; yangi tarix amallari (uz/ru/en). `order_taken_by_courier` / `order_marked_not_arrived` — boshqa skan xatolari kabi backend `message` matni ko'rsatiladi.
+
+### 2026-11-17 — Yetkazish tariflari: rejalashtirilgan tarif versiyasini bekor qilish (B0ILd7YI)
+
+Maqsad: «Hududlar → Yetkazish tariflari» (`/delivery-tariffs`)da kelajak sanaga rejalashtirilgan tarif xato kiritilsa, uni kuchga kirishidan oldin bekor qilish (hozir faqat ustidan yangi versiya yozish mumkin edi).
+Deploy: migration-runner (migratsiya **235**), logistics-service, keyin api-gateway.
+
+- 🆕 [gateway → logistics] `POST /delivery/tariffs/:id/cancel` (SUPERADMIN, ADMIN — tarif tahrirlash bilan bir xil; tanasiz, **200**). Faqat hali kuchga kirmagan versiya (`is_scheduled: true` — `valid_from` kelajakda, faol) bekor qilinadi; shart DB soati bilan bitta `UPDATE` ichida — kuchga kirgan versiya hech qachon bekor qilinmaydi. Qator **o'chirilmaydi**: `is_active: false`, `cancelled_at`, `cancelled_by`; hozirgi tarif va narx hisobi o'zgarmaydi.
+  - Javob `data` — versiya qatori + `is_current: false`, `is_scheduled: false`, `is_cancelled: true`, `already_cancelled`, `created_by_name`, `cancelled_by_name`.
+  - **Takror so'rov** (vaqt tugagach qayta bosish, ikki admin bir vaqtda) — xato emas: 200, o'sha qator, `already_cancelled: true`, jurnal ikkinchi marta yozilmaydi.
+  - Xatolar: 400 (`id` musbat butun son emas), 404 (versiya yo'q), **409** — versiya allaqachon kuchga kirgan (`message`: «… bekor qilib bo'lmaydi. Narxni o'zgartirish uchun yangi versiya yarating») yoki boshqa sabab bilan nofaol.
+  - Jurnal: `logistics.delivery_tariff_cancelled` («Rejalashtirilgan yetkazish tarifi bekor qilindi»), eski/yangi qiymat bilan.
+- ✏️ `GET /delivery/tariffs` — `data.versions[]` ga `is_cancelled` (bool), har qatorda `cancelled_at` / `cancelled_by` (bekor qilinmagan — `null`) va `cancelled_by_name` (gateway, identity'dan; topilmasa `null`). Bekor qilingan versiya ro'yxatda qoladi (`is_current: false`, `is_scheduled: false`).
+- 🟢 `PATCH /delivery/pricing-settings` («Qoidalarni saqlash») takror so'rovga allaqachon chidamli — o'zgartirilmadi: qiymatlar mutlaq (delta emas), so'rovlar advisory qulf bilan ketma-ket, hech narsa o'zgarmasa versiya ham, jurnal ham yo'q (`message`: «Sozlamalar o'zgarmadi»). Ya'ni vaqt tugagach o'sha qiymatlar bilan qayta yuborish ikkinchi bir xil versiya yaratmaydi — `Idempotency-Key` kerak emas. `min_delivery_price` va `extra_cost_limit_amount` (migratsiya 183) shu PATCH / GET'da allaqachon bor.
+
+**Frontend action items** (`/delivery-tariffs`, superadmin va admin):
+- 🔧 «Rejalashtirilgan: …» qatori (va tarixdagi «Rejalashtirilgan» belgili versiya) yonida «Bekor qilish» — `useConfirm` (`tone: "danger"`) → `POST /delivery/tariffs/:id/cancel`; muvaffaqiyatda tariflar keshini yangilash. `already_cancelled: true` ham muvaffaqiyat. 409 — `message` ni `notify.error` bilan (ro'yxatni qayta o'qish — versiya kuchga kirgan).
+- 🔧 Tarixda `is_cancelled: true` versiyasi — «Bekor qilingan» belgisi (+ `cancelled_by_name`, `cancelled_at`).
+
+### 2026-11-17 — Menejer o'z filiali xodimlarini boshqaradi: huquq hozirgi filial bo'yicha, `created_by` emas (KQINMdeQ)
+
+Ega (2026-11-17): menejer **o'z filialidagi barcha** xodimlarni tahrirlay olishi kerak (boshqa menejerlardan tashqari), kim yaratganidan qat'i nazar; boshqa filialga o'tkazilgan xodim bilan esa hech narsa qila olmaydi.
+Deploy: api-gateway va identity-service. Migratsiya **yo'q**.
+
+- ✏️ [gateway + identity] `PATCH /users/:id`, `POST /users/:id/password/resend-sms`, `GET /users/:id/password/sms-status` — MANAGER: o'zi yoki **hozir** o'z filialining faol a'zosi (`branch_users`, har so'rovda bazadan, JWT'dan emas) bo'lgan **kuryer yoki ro'yxatchi**. `created_by` ruxsat ham bermaydi, cheklamaydi ham:
+  - admin yaratgan kuryer va `created_by = NULL` eski xodim o'z filialida — endi **200** (ilgari identity 403 «Manager faqat o'zi yaratgan userlarni yangilay oladi»);
+  - parol SMS — kuryer **va ro'yxatchi** (ilgari faqat o'zi yaratgan kuryer, «Menejer faqat o'z kuryeriga parol yubora oladi»);
+  - shu filialdagi boshqa menejer, admin, superadmin, market (o'zi yaratgani ham), operator, investor, logist — **403**;
+  - boshqa filialga o'tkazilgan xodim (o'zi yaratgan bo'lsa ham), boshqa filial foydalanuvchisi (IDOR), filialga biriktirilmagan menejer, branch-service xatosi — **403** (500 emas, fail-closed). Tekshiruv gateway'da (identity'ga so'rov ketmaydi) va identity'da (ikkinchi qavat).
+  - Tahrir oynasidagi maydonlar to'plami o'zgarmagan (maosh, to'lov kuni, tarif, `add_order`, holat — avvalgidek). Alohida amallar menejerga avvalgidek yopiq: `DELETE /users/:id`, `PATCH /users/:id/status`, `PATCH /users/:id/role`, `couriers/:id/regions`, `couriers/:id/branch`, `branches/:id/users`.
+- ✏️ `GET /users/:id` — MANAGER: filial turi cheklovi (faqat REGIONAL/HYBRID) **olib tashlandi** — har filial turida o'z filiali a'zosi ochiladi (filialdagi boshqa menejerlar ham, faqat ko'rish). O'zi yaratgan market — avvalgidek ochiladi (faqat ko'rish). Boshqa filial foydalanuvchisi / branch-service xatosi — 403.
+- 🆕 `can_manage: boolean` — `GET /users/:id` javobida va `GET /users` ning har qatorida: so'rovchi shu foydalanuvchini `PATCH /users/:id` orqali boshqara oladimi. Superadmin — hammasi `true`; admin — o'zi va admin/superadmin bo'lmaganlar; menejer — o'zi va hozir o'z filialidagi kuryer/ro'yxatchi (boshqa menejer va o'zi yaratgan market — `false`). Faqat ko'rsatish uchun: haqiqiy ruxsat har so'rovda qayta tekshiriladi.
+- 🟢 `GET /users` ro'yxat ko'lami **o'zgarmagan** (filial a'zolari + o'zi yaratgan marketlar). Bola filiallar «o'z filiali»ga kirmaydi.
+
+**Frontend action items:**
+- 🔧 `User` turiga `can_manage?: boolean`. Foydalanuvchi tafsilotida «Tahrirlash» va «Parolni tiklash va SMS yuborish» — `can_manage` bo'yicha (maydon kelmasa — zaxira: menejer ko'ruvchiga market va boshqa menejerda yashirin).
+- 🔧 Parol SMS menejerda: kuryer **va ro'yxatchi**.
+- 🔧 Saqlashda 403 (oyna ochiq turganda xodim boshqa filialga o'tkazilgan) — xabar + tafsilot so'rovini yangilash (sahifa 403 xato holatini ko'rsatadi).
+
+### 2026-11-17 — Baza tozalanishidan keyin yo'qolgan seed'lar tiklandi (migratsiyalar 232–234)
+
+Muammo: prod bazasi 2026-11-11..14 da tozalanganda migratsiyalar «bajarilgan» bo'lib qolgan, ular yozgan yoki foydalanuvchi yaratishda bir marta yoziladigan qatorlar esa qaytmagan (230 — xarajat kategoriyalari, 231 — «Hisob qoidalari» davomi). Uchta joy:
+- Toshkent shahri «shahar zonasi» belgisi (`logistics_schema.regions.is_city_zone`) — viloyatlarni seed qayta yaratadi, belgini emas: Toshkent ichidagi yetkazish jimgina «center» / «address» bilan hisoblanadi (`city` 35 000 o'rniga 40 000 / 60 000), `city_route: false`, `GET /public/delivery-tariffs` da hamma viloyat `is_city_zone: false`.
+- HQ filiali viloyati (`branch_schema.branches.region_id`) — qayta yaratilgan HQ viloyatsiz yoki eski (o'chgan) viloyat id'siga ishora qiladi: HQ kuryeriga biriktirish / skan 400 «HQ filialiga viloyat biriktirilmagan …» (`branch_region_missing`) yoki 403 `hq_courier_region_only`.
+- Kuryer, market va menejerli filial kassalari (`finance_schema.cashboxes`) — sotuv, qisman sotuv, rollback 404 «Market kassasi topilmadi» / «Kuryer kassasi topilmadi», kuryerdan pul qabul qilish, marketga to'lov, admin kassa tafsiloti 404.
+
+Deploy: migration-runner (servis kodi o'zgarmagan). API va javob shakli **o'zgarmadi**.
+
+- 🟢 [logistics] Migratsiya 232: birorta viloyatda shahar zonasi bo'lmasa (o'chirilgani ham hisob) — belgi faqat o'chirilmagan Toshkent SHAHRI (SOATO 1726) qatoriga qo'yiladi; Toshkent viloyati (`Toshkent`, 1727) — yo'q. Zona bor bazada hech narsa o'zgarmaydi.
+- 🟢 [branch] Migratsiya 233: o'chirilmagan HQ viloyati bo'sh yoki mavjud bo'lmagan viloyatga ishora qilsa — Toshkent shahri yoziladi. Qo'lda qo'yilgan tirik viloyatga, o'chirilgan HQ qatoriga va boshqa filiallarga tegilmaydi.
+- 🟢 [finance] Migratsiya 234: o'chirilmagan har kuryer / market uchun va menejeri bor har HQ bo'lmagan filial uchun shu turdagi kassa umuman bo'lmasa — **0 balans** bilan kassa qo'shiladi. Qo'lda o'chirilgan kassa tiriltirilmaydi, mavjud kassa va balanslarga tegilmaydi, tarix qatori yozilmaydi; MAIN kassani finance-service o'zi yaratadi.
+- 🟢 Deploy'dan keyin (qo'lda, superadmin): «Yetkazish tariflari» kalkulyatorida Toshkent → Toshkent `city` bo'lishini, `/dispatch` / `/scan` da HQ kuryeriga biriktirish ishlashini tekshiring. Tiklangan kassalar 0 dan boshlanadi — haqiqiy qarz / naqd pul qo'lda solishtiriladi. Logist biriktiruvi (`/regions/logist-assignment`) va tuman qayta biriktiruvlari tiklanmaydi (admin qarori) — kerak bo'lsa ekrandan qayta qiling.
+
+### 2026-11-17 — «Tizim holati»: Telegram bot nosozligi sababi va «Qayta tekshirish» (BOT-DIAG-BE)
+
+Ega (2026-11-17): «Tizim holati»da NOTIFICATION «Ishlamayapti — Xizmat o'zini nosoz deb bildirdi» — sababini ko'rmoqchi; faqat superadminga.
+Deploy: notification-service, keyin api-gateway. Migratsiya **yo'q**. Ochiq `GET /health/readiness` **o'zgarmagan** (NOTIFICATION qatori avvalgidek faqat `error: "reported degraded"`, `error_kind: "reported"` — oFfOWGuo).
+
+- 🆕 [gateway → notification] `GET /health/notification-bot` (faqat SUPERADMIN; tokensiz 401, boshqa rollar 403). Javob:
+  `{ status: "ok" | "degraded", bot: { enabled, mode, healthy, username, reason, checked_at, error_kind, error_status, error_text, restart_required }, timestamp }`.
+  - `status` — readiness bilan bir xil (`degraded` = token sozlangan, lekin Telegram `getMe` o'tmagan).
+  - `checked_at` — oxirgi token tekshiruvi (ISO; davriy tekshiruv har 5 daqiqada); `null` — hali tekshirilmagan / token yo'q.
+  - `error_kind` — `token_rejected` (Telegram 401/404) · `timeout` · `network` (DNS, ulanish rad etildi/uzildi) · `telegram_error` (boshqa HTTP xato — `error_status`: 429, 5xx …) · `unknown` (kutilmagan); sog' — `null`.
+  - `error_status` — Telegram HTTP statusi yoki `null` (javob kelmagan / sog').
+  - `error_text` — qisqa texnik matn (inglizcha, ≤ 200 belgi, token yashirilgan), masalan `Telegram getMe failed (0): fetch failed (ENOTFOUND)`; sog' — `null`.
+  - `restart_required: true` — token rad etilgan: qayta tekshirish befoyda, yangi token bilan notification-service restart kerak.
+- 🆕 `POST /health/notification-bot/recheck` (faqat SUPERADMIN, tanasiz, **200**) — token rad etilmagan bo'lsa `getMe` HOZIR yurgiziladi (ko'pi bilan 3,5 s), javob — yuqoridagi shakl + `rechecked: true`. Token rad etilgan bo'lsa tekshirilmaydi: `rechecked: false`, `bot.restart_required: true`. Global per-IP limit amal qiladi (429 bo'lishi mumkin).
+- 🟢 Xatolar: bildirishnoma xizmati javob bermasa (GET 3 s, POST 5 s) yoki bog'lanib bo'lmasa — **503**, `message` o'zbekcha («Bildirishnoma xizmati javob bermadi — bot holatini hozir bilib bo'lmaydi …» / «… bilan bog'lanib bo'lmadi …»). Eski notification-service bilan (deploy oralig'ida) GET yangi maydonlarda `null`/`false` qaytaradi, POST — 503.
+- 🟢 `GET /notifications/health` (ochiq) — `bot` endi faqat eski maydonlar bilan (`enabled, mode, healthy, username, reason`); yangi diagnostika maydonlari unga chiqmaydi. Frontend bu yo'ldan foydalanmaydi.
+
+**Frontend action items** (`/ops?tab=system` — «Tizim holati», faqat superadmin; boshqa rollarda so'ralmaydi):
+- 🔧 NOTIFICATION qatori `down` / `error_kind: "reported"` bo'lganda «Bot holati» bloki: `GET /health/notification-bot`. Matn tavsiyasi (`error_kind` bo'yicha; `error_text` — faqat yig'iladigan «Texnik tafsilot» ichida, `formatDateTimeLocalized(checked_at)` — «Oxirgi tekshiruv»):
+  - `token_rejected` — «Bot tokeni rad etildi» · «Telegram tokenni qabul qilmadi (HTTP {error_status}). BotFather'dan yangi token olib, serverga yozing va bildirishnoma xizmatini qayta ishga tushiring.»
+  - `timeout` — «Telegram javob bermadi» · «Telegram belgilangan vaqtda javob bermadi. Odatda vaqtinchalik — birozdan keyin qayta tekshiring.»
+  - `network` — «Telegram'ga ulanib bo'lmadi» · «Serverdan Telegram'ga ulanish yo'q (tarmoq yoki DNS). Server internetini tekshiring.»
+  - `telegram_error` — «Telegram xato qaytardi» · «Telegram HTTP {error_status} qaytardi. 429 — so'rovlar ko'p, biroz kuting; 5xx — Telegram tomonidagi nosozlik.»
+  - `unknown` — «Kutilmagan xato» · «Texnik tafsilotni dasturchiga yuboring.»
+  - `healthy: null`, `enabled: true` — «Hali tekshirilmagan»; `enabled: false` — «Bot o'chiq» (`reason`).
+- 🔧 «Qayta tekshirish» tugmasi → `POST /health/notification-bot/recheck`, javobdagi holat bilan blok yangilanadi (readiness ham qayta so'raladi). `restart_required: true` bo'lsa tugma o'rniga izoh: «Qayta tekshirish yordam bermaydi — yangi token bilan xizmatni qayta ishga tushiring.» 503 — `message` ni `notify.error` bilan.
+
+### 2026-11-17 — «Hisob qoidalari» faol qatori tiklandi (migratsiya 231)
+
+Muammo (prod, 2026-11-17): «Hududlar → Yetkazish tariflari»da «Hisob qoidalarini yuklab bo'lmadi — Yetkazish narxi sozlamalari topilmadi (migratsiya 1716000000142 yurgizilmagan?)». Shu bo'lim yuklanmagani uchun «necha kg dan keyin qo'shimcha haq» (`first_kg_included`) va boshqa qoidalarni kiritib ham, o'zgartirib ham bo'lmaydi. Sabab — migratsiya 230 dagi holat: baza tozalanganda `logistics_schema.delivery_pricing_settings` qatorlari ketgan, 142 esa «bajarilgan» bo'lib qolgan. Faol sozlamasiz `GET` / `PATCH /delivery/pricing-settings` va narx hisobi (`quote`, `quote/by-tariff`, sotuvdagi `sale_quote`) 409 qaytaradi.
+Deploy: migration-runner (logistics-service kodi o'zgarmagan). API va javob shakli **o'zgarmadi**.
+
+- 🟢 [logistics] Migratsiya 231 faqat faol qator UMUMAN bo'lmagan bazada ishlaydi: nofaol versiyalar bo'lsa — eng so'nggisi qiymatlari bilan yangi faol qator; umuman qator bo'lmasa — 142 seed'i (birinchi **1 kg** bazada, hajm bo'luvchisi 5000, 0.1 kg qadam, 500 ga yaxlitlash, PICKUP 20 000 / 10+ tekin, express × 1.4; `volumetric_from_kg` 0, `min_delivery_price` / `extra_cost_limit_amount` bo'sh). `created_by` bo'sh — «O'zgarishlar tarixi»da muallifsiz versiya. Faol qator bor bazada hech narsa o'zgarmaydi; tariflarga tegilmaydi.
+- 🟢 Deploy'dan keyin superadmin «Hisob qoidalari»ni tekshirib, kerakli qiymatlarni (masalan, «necha kg dan keyin qo'shimcha haq») ekrandan qo'yadi — har o'zgarish yangi versiya.
+
+### 2026-11-17 — Yo'ldagi paketni bekor qilish taqiqlandi (oP02jE2P)
+
+Maqsad: jo'natilgan paket bekor qilinib, posilkalar tizimda manba filialda «yangi» bo'lib qolmasin (aslida ular yo'lda yoki manzil filialda).
+Deploy: order-service + branch-service (gateway — Swagger matni). Migratsiya **yo'q**. So'rov va muvaffaqiyat javobi o'zgarmadi.
+
+- ⚠️ [branch, order] `POST /transfer-batches/:id/cancel` — endi faqat hali jo'natilmagan (`PENDING`) paket bekor qilinadi. Jo'natilgan (`SENT`: yo'lda yoki qisman qabul qilingan) paket — **409** «Paket yo'lda — jo'natilgan paketni bekor qilib bo'lmaydi …», `data: { reason: "batch_in_transit", details: { batch_id, status } }`. Hech kimga ruxsat yo'q, superadmin va adminga ham (avval `SENT` ham bekor qilinardi).
+- ✏️ Qolgan holat xatolariga `data.reason` qo'shildi, status kodi avvalgidek 400: `batch_received` (qabul qilingan), `batch_already_cancelled` (allaqachon bekor), `batch_not_cancellable` (boshqa holat). Matnlar o'zbekcha («Qabul qilingan paketni bekor qilib bo'lmaydi», «Paket allaqachon bekor qilingan»).
+- 🟢 Kim bekor qila oladi — o'zgarmagan: superadmin, admin va paketni yig'gan (manba) filialning registratori yoki menejeri (yoki menejer daraxti); boshqasi — 403. Boshqa filial xodimiga holat oshkor qilinmaydi (403 holat tekshiruvidan oldin).
+- 🟢 order-service holatni paket qatorini qulflab qayta tekshiradi: tekshiruv bilan bekor qilish orasida jo'natilgan paket ham bekor bo'lmaydi (bunday kamyob holatda 409 `data.reason` siz kelishi mumkin).
+
+**Frontend action items:**
+- 🔧 «Paketni bekor qilish» paket sahifasiga (`/batches/:id`) ko'chadi: tugma faqat `PENDING` paketda, tasdiq oynasida paket raqami, yo'nalishi, holati, buyurtmalar soni va sabab (≥ 10 belgi). 409 / `batch_in_transit` — «Paket yo'lda» matni; `/batches` pastidagi qo'lda raqam formasi olib tashlanadi.
+
 ### 2026-11-16 — Operatori yo'q buyurtmaga keyin operator biriktirish
 
 Egasi (2026-11-16): «buyurtma yaratayorganda operatorni o'zi yaratsa operator tomonidan yaratilsin, operator tanlanmasa shu buyurtmaga operator biriktirib qo'yish imkoni bo'lishi kerak». Yaratishdagi tanlov (`POST /orders` `operator_id`) va market operatorining o'zi yozilishi avvaldan bor; yangisi — keyin biriktirish.
@@ -116,7 +465,11 @@ Shartnoma v0.3 §5, §7.1–7.3, §7.5. Deploy: api-gateway + ai-service, migrat
 - 🆕 `GET /ai/advisor/alerts?status&severity&rule_key&from&to&q&sort_by&sort_dir&page&limit` — `{items, meta{page, limit, total, totalPages}, counts{by_status}}`. Holatni o'zgartirmaydi. `counts.by_status` — `status` filtrisiz. Saralash oxirida doim `id DESC`. Noto'g'ri query — kodsiz 400.
 - 🆕 `GET /ai/advisor/alerts/:id[?include=history]` — tafsilot; `new` bo'lsa atomik `new → seen` (`seen_at`, `seen_by`), audit yo'q. ⚠️ prefetch/hover'da yubormang. 3 daqiqadan eski `pending` izoh — `failed` + `explanation_error: "error"`; `pending` da `explanation_poll_after_ms: 2000`. 404 `AI_ADVISOR_ALERT_NOT_FOUND`.
 - 🆕 `PATCH /ai/advisor/alerts/:id {status: resolved|dismissed, note?}` — `resolved` uchun izoh 3–500 (trim) majburiy → 400 `AI_ADVISOR_NOTE_INVALID {reason, min_length, max_length}`; `dismissed` — ixtiyoriy ≤ 500. Ayni foydalanuvchi ayni holatni qayta yuborsa — 200 (idempotent). Boshqa holat / boshqa superadmin yopgan — 409 `AI_ADVISOR_ALERT_CLOSED {alert_status}`. Javob — yangilangan tafsilot. Audit `ai.advisor.alert.resolve|dismiss` (`/activity-logs` da `ai` xizmati — 4-qism).
+- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\t`, `\n`, `\r` dan tashqari) → 400; `page` ≤ 1 000 000.
+- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
+- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
 - 🟢 `explain` (AI izohi) — 5-qism; hozircha `explanation_status` doim `none`.
+
 ### 2026-11-14 — AI maslahatchi (BE-5, 2c review tuzatishlari): R7/R8 semantikasi — shartnoma v0.4 uchun
 
 #653 mustaqil review (FE sessiya) va ega qarori asosida. Deploy: ai-service + finance-service, migratsiyasiz.
@@ -158,6 +511,84 @@ Deploy: ai-service + finance-service, migratsiya **226** (`ai_schema.ai_advisor_
 - ✏️ R3 `scope: category` dalilida har qatorning `cashbox_name` va `href` — o'sha qator kassasidan (ilgari trigger kassasi). R6: `subject.name = "Butun tizim"`, `first_fact_at` = davr boshi.
 - 🟢 R6: 02:30 ishi o'tkazib yuborilsa keyingi ishda o'tgan kunlar (≤ 7) va hafta ham tekshiriladi.
 
+### 2026-11-14 — «Hududlar»: yetishmagan 25 tuman qo'shildi, avtomatik biriktirish ogohlantirishi (D1)
+
+Ega qarori (2026-11-14): rasmiy SOATO'dagi yetishmagan 25 tuman/shahar («Farg'ona shahri», «Zomin tumani», «Xiva shahri» …) prod'ga qo'shiladi va viloyat filialiga AVTOMATIK biriktiriladi; ops tasdiqlaguncha superadmin/admin ogohlantirish ko'radi.
+Biriktirish — VILOYAT qoidasi (district-coverage.ts, anKpzwxk): tuman buyurtmasini xizmat viloyati (`assigned_region ?? region_id`) dagi HAR QANDAY faol REGIONAL/HYBRID filial ko'radi. Eski `districts.serving_branch_id` qamrovga ta'sir qilmaydi — ogohlantirishdagi filial undan EMAS, viloyat qoidasidan CHAQIRUV paytida hisoblanadi.
+Deploy: logistics-service + api-gateway, migratsiya **227** (`logistics_schema.districts`: `assignment_review_required` sukut `false`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at`). ⚠️ Migratsiya logistics-service qayta ishga tushishidan OLDIN — qatorlar servis ishga tushganda seed bilan qo'shiladi.
+
+- 🆕 `GET /region/district-coverage` (SUPERADMIN, ADMIN) → `data`:
+  `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city' | 'tuman' | null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1' | 'no_branch_found', flagged_at }], checked_at }`.
+  `missing_official` — rasmiy ro'yxatda bor, bazada yo'q birliklar (deploy'dan keyin odatda bo'sh); `region.id` — bazada viloyat bo'lmasa `null`.
+  `region` — geografik viloyat; `service_region` — buyurtmani yo'naltiradigan xizmat viloyati (tuman boshqa viloyatga o'tkazilgan bo'lsa farq qiladi).
+  `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o'sish tartibida) — ularning HAR BIRI tuman buyurtmalarini ko'radi; `serving_branch` — ulardan biri (ko'rsatish uchun). `serving_branch: null` + `reason: 'no_branch_found'` — FAQAT xizmat viloyatida faol filial yo'q bo'lsa (buyurtmani faqat HQ ko'radi).
+  Filial xizmati javob bermasa — **503** (boshqa qamrov tekshiruvlari bilan bir xil): «filial yo'q» deb ko'rsatmang, «qayta urinish» bering.
+- 🆕 `POST /region/district/:id/confirm-assignment` (SUPERADMIN, ADMIN) — idempotent 200: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }`; audit yoziladi. Ikki admin bir vaqtda bossa — ikkalasi 200, audit bitta, ikkalasi yutgan tasdiqning `confirmed_by/at` ni oladi. Tuman yo'q — 404.
+- ✏️ `PATCH /district/:id` (`assigned_region`) — «O'zgartirish» shu yerga: viloyat o'zgarsa belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).
+- ✏️ `PUT /branches/:id/districts` (eskirgan) — tanlangan (yoki filialdan olingan) tumanlarning belgisi ham tushadi (audit: `cleared_by_reassign`). Filial o'chirilishi / nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI — tekshiruv baribir kerak; ogohlantirishdagi filial viloyat qoidasidan qayta hisoblanadi.
+- ✏️ `GET /district`, `GET /district/:id`, `GET /district/sato/:code`, `GET /region`, `GET /region/:id` (tumanlar) — har tumanda yangi maydonlar `assignment_review_required: boolean`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` — **faqat SUPERADMIN/ADMIN** javobida; MARKET, COURIER, MARKET_OPERATOR, MANAGER, REGISTRATOR javobida bu maydonlar YO'Q.
+
+**Frontend action items:**
+- 🔧 «Hududlar»: `review_required` bo'sh bo'lmasa banner + ro'yxat (tuman, xizmat viloyati, filial(lar) — `region_branches`, sabab); «Tasdiqlash» → confirm-assignment; «O'zgartirish» → `PATCH /district/:id` (viloyat). `no_branch_found` — «Filial yo'q · Faqat Toshkent HQ ko'radi», qizil. 503 — xato holati, «filial yo'q» EMAS.
+- 🔧 Tuman ro'yxatida `assignment_review_required` — sariq belgi (faqat admin; boshqa rollarda maydon yo'q — `undefined` ni `false` deb oling).
+
+### 2026-11-15 — AI kalit va modellar (BE-1c): UI kaliti haqiqatan ishlatiladi; `ai.status` qo'shimchalari
+
+Deploy: ai-service. Migratsiya yo'q (228 ustunlari endi yoziladi). `AI_CONFIG_UI_ENABLED=false` (prod sukuti) — xulq bayt-aniq o'zgarmagan (golden test).
+
+- ✏️ UI'dan qo'shilgan kalit qayta ishga tushirishsiz keyingi AI so'rovida ishlatiladi (15 s yangilanish, yozuvdan keyin darhol). Ustuvorlik: UI kaliti > server kaliti > yo'q. UI kaliti rad etilsa / pul tugasa / ruxsat bo'lmasa / ochilmasa — AI **to'xtaydi** (server kalitiga avtomatik o'tmaydi), ops xabari va inbox; «Kalitni o'chirish» → server kaliti darhol.
+- ✏️ `GET /ai/config` `runtime`: `config_stale`, `config_loaded_at`, `disabled_reason` endi ishlayotgan (xotiradagi) holatdan; `key.effective_source` ham. Haqiqiy so'rovdagi xato: `verify.origin: "runtime"`.
+- 🟢 `ai.status` / gateway AI holati (qo'shimcha, eski maydonlar o'zgarmagan): `key_source`, `key_verify_state`, `disabled_reason`, `unavailable_slots`, `models_all`. Buyurtma/rasm modeli mavjud bo'lmasa (`model_unavailable`) AI buyurtma uchun o'chiq.
+
+**Frontend action items:** yo'q (fragment v0.2 dagi shakllar).
+
+### 2026-11-15 — AI kalit va modellar (BE-1e): inbox xabarlari, ops alert, deploy
+
+Deploy: ai-service. Migratsiya yo'q. Ops: `scripts/ai-config-alert.sh` (host cron), `docs/ops/ai-config.md`.
+
+- 🆕 Bildirishnoma turlari (superadmin + admin, `category: system`, o'chirib bo'lmaydi): `ai.key_alert` (kalit qo'shildi / almashtirildi / qaytarildi / o'chirildi / ishlamay qoldi / ochilmadi — runtime nosozligi `critical`, qolgani `high`) va `ai.model_alert` (BE-2/BE-4 dan). `data`: `{action, audit_id, hint}` — kalit qiymati yo'q. Matn (title/body) o'zbekcha, ai-service'dan.
+- 🟢 Kalitni tekshirish (`verify`) va rad etilgan urinish inbox'ga KETMAYDI (rad etilgan urinishlar faqat ops chatga, soatiga yig'ma).
+
+**Frontend action items:**
+- 🔧 Inbox: `ai.key_alert` / `ai.model_alert` qatoridan «Ops → AI kalit va modellar» sahifasiga havola (`data.audit_id` — tarixdagi qator id'si).
+
+### 2026-11-15 — AI kalit va modellar (BE-1d): `/ai/config*` endpointlari (gateway)
+
+Deploy: **ai-service OLDIN** (BE-1b), keyin api-gateway. Yangi navbat `ai_config_queue` (env `RABBITMQ_AI_CONFIG_QUEUE`, sukut). Shakllar — openapi-fragment v0.2 (`openapi.json` yangilandi). Hammasi **faqat SUPERADMIN** (ADMIN — 403 kodsiz).
+
+- 🆕 `GET /ai/config` → `{statusCode, message, data: AiConfigView}`. Flag o'chiq bo'lsa ham ishlaydi (faqat ko'rish).
+- 🆕 `PUT /ai/config/key` `{key_envelope, label?, version}` — kalit FAQAT muhrlangan konvertda (`AiKeyEnvelope`: `v:1, kid, alg:"RSA-OAEP-256+A256GCM", ek (400–700), iv (16), ct (40–1024)`, base64url). Tanada `api_key` bo'lsa — 400 (noma'lum maydon).
+- 🆕 `POST /ai/config/key/verify` (tanasiz), `POST /ai/config/key/restore-previous` `{version}`, `POST /ai/config/key/deactivate` `{version, reason?}`, `DELETE /ai/config/key/previous?version=N`, `GET /ai/config/history?limit=&cursor=`.
+- ✏️ Muvaffaqiyatli yozuv javobi — yangilangan `AiConfigView` (`data`), qayta GET shart emas.
+- ✏️ Xatolar: `{statusCode, message, code, …}` — maydonlar faqat oq ro'yxatdan (`version`, `field`, `retry_after_seconds`, `slot`, `model`, `reason`). **Hech biri 401 emas.** 504 — kodsiz: hech narsa o'zgarmagan (ai-service 6,5 s dan keyin COMMIT qilmaydi) → `GET /ai/config` ni qayta o'qing (va kerak bo'lsa izni solishtiring).
+- 🟢 Gateway cheklovi: `/ai/config/key*` — bitta foydalanuvchiga daqiqasiga 10, bitta IP'ga 30 (umumiy hisob) → 429 (kodsiz, `Retry-After`). ai-service cheklovi (`AI_KEY_ATTEMPTS_EXCEEDED`, 5/daqiqa) alohida.
+- 🟢 CORS: `X-Step-Up-Token` ruxsat etildi (step-up BE-5 da; hozircha gateway `step_up: false` yuboradi — `AI_CONFIG_STEP_UP_REQUIRED=true` muhitda kalit amallari `403 AI_STEP_UP_REQUIRED` oladi).
+- 🟢 Yozuvdan keyin gateway AI holatini darhol yangilaydi (`/orders/ai-availability`, `/health`).
+
+**Frontend action items:**
+- 🔧 Mock'larni real endpointga ulash (shakllar fragment bilan bir xil). Swagger DTO nomlari: `AiKeySetDto`, `AiKeyEnvelopeDto`, `AiVersionedDto`, `AiDeactivateDto`.
+
+### 2026-11-15 — AI kalit va modellar (BE-1b): ai-service kalit saqlash va `ai.config.*` RMQ handler'lari
+
+Deploy: ai-service (gateway'dan OLDIN), migratsiya **228** (`ai_schema.ai_provider_keys`, `ai_runtime_settings`, `ai_config_attempts`; `ai_usage_log` + `key_id`, `key_source`, `key_fingerprint`, `config_version`). HTTP endpointlar hali YO'Q — BE-1d (gateway) da. `AI_CONFIG_UI_ENABLED` sukut `false`: prod'da xulq o'zgarmaydi.
+
+- 🟢 Javob shakllari fragment v0.2 bo'yicha: har yozuv (`PUT /ai/config/key`, `POST …/verify`, `…/restore-previous`, `…/deactivate`, `DELETE …/previous`) muvaffaqiyatda yangilangan `AiConfigView` qaytaradi; `GET /ai/config/history` — `{items, next_cursor}` (limit 1–50, sukut 10).
+- 🟢 `POST /ai/config/key/verify`: aniq rad (401/402/403/400) ham **200** — natija `key.active.verify.state` (yoki UI kaliti yo'q bo'lsa `key.env.verify`) da; Anthropic javob bermasa/429 — `state: "unavailable"` + `error_code`. Versiya (`version.key`) oshmaydi.
+- 🟢 Kalit nomi berilmasa view'da `label: "Anthropic kaliti"`.
+- 🟢 BE-1 da `models.slots` faqat o'qish uchun (env/sukut; `ui_model: null`, `health` nol); `permissions.models: false`. Sonnet 5 qatorida `warnings: ["price_unconfirmed"]` (narx o'zgarmagan). To'liq katalog/PATCH/taxmin — BE-2.
+- 🟢 Kutilmagan ichki xato — 500, `code` yo'q (qolgan hamma xatoda `code` bor).
+
+**Frontend action items:** yo'q (endpointlar BE-1d bilan keladi; mock'lar fragment bo'yicha).
+
+### 2026-11-15 — AI kalit va modellar (BE-1a): umumiy asos, API o'zgarishi YO'Q
+
+Spec «AI kalit va modellar» v0.2 (`openapi-fragment.json` v0.2). Bu PR faqat `libs/common` (endpoint, migratsiya, deploy o'zgarishi yo'q); endpointlar BE-1b/BE-1d da.
+
+- 🟢 Xato kodlari (`AI_CONFIG_*`, `AI_KEY_*`, `AI_MODEL_*`, `AI_STEP_UP_REQUIRED`) gateway oq ro'yxatiga qo'shildi: `version` (409 `AI_CONFIG_CONFLICT`), `field` (400 `AI_CONFIG_INVALID`), `retry_after_seconds` (429), `slot/model/reason` (400 `AI_MODEL_NOT_ALLOWED`). Hech biri 401 emas.
+- 🟢 Kalit formati va erkin matn qoidalari (`libs/common/src/ai/ai-key-format.ts`) — FE `src/entities/ai-config/validation.ts` bilan bir xil bo'lishi kerak: trim, `^sk-ant-[A-Za-z0-9_-]+$`, 40–256; `sk-ant-admin…` → `AI_KEY_ADMIN_KEY`; `sk-ant-oat…`/`sk-ant-ort…` → `AI_KEY_OAUTH_TOKEN`; iz = SHA-256 ning 12 hex belgisi, 4 tadan bo'sh joy bilan (`fingerprintOf('abc') === 'ba78 16bf 8f01'`); `label`/`reason` da `sk-ant-` yoki 40+ belgilik `[A-Za-z0-9_-]` ketma-ketlik → `AI_CONFIG_INVALID {field}`. Jadvalli test: `ai-key-format.spec.ts` (`AI_KEY_FORMAT_TABLE`) — FE testiga shu qatorlarni ko'chiring.
+
+**Frontend action items:** yo'q (FE mock'lar fragment v0.2 bo'yicha qoladi).
+
 ### 2026-11-14 — Chek AI: so'mda bo'lmagan chekda farq yo'q; smena skrinshoti: ishonchsiz o'qish = «o'qib bo'lmadi»
 
 Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir martalik skript: `scripts/finance/fix-receipt-foreign-currency.sql`.
@@ -166,9 +597,6 @@ Deploy: finance-service + ai-service. Migratsiya YO'Q; eski qatorlar uchun bir m
 - 🟢 Chek tekshiruvi xulosasi (`GET /finance/receipts/summary` → `mismatch_total`, `top`): bunday cheklar summaga va top-15 ga kirmaydi; `counts.mismatch` da qoladi. AI yordamchining `get_receipt_checks` vositasi ham xuddi shunday.
 - 🟢 Smena karta skrinshoti: AI ishonch qaytarmasa (`confidence` yo'q) — `ai_status: "unreadable"` (ilgari `match`/`mismatch` bo'lib o'tib ketardi). Yangi status yo'q.
 
-- ✏️ (review round-2) `from`/`to` — aniq kalendar kuni (2026-02-30, 0000-… → 400, ilgari 500); `from–to` ≤ 366 kun ikkala chet bilan; `q` va `note` da boshqaruv belgilari (`\n`, `\t` dan tashqari) → 400; `page` ≤ 1 000 000.
-- ✏️ PATCH: ayni foydalanuvchi ayni holatni qayta yuborsa — izoh qanday bo'lmasin 200 (o'zgarishsiz); boshqa SA yopilgan ogohlantirishga — 409 (izoh xatosidan oldin). Javob `message: "AI advisor alert"`.
-- 🟢 `meta.total` endi `counts.by_status` dan (bir-biriga doim mos); jamidan tashqari sahifa — `items: []`.
 **Frontend action items:**
 - 🔧 `ai_status === "mismatch"` va `ai.difference === null` bo'lishi mumkin — farq ustunida «—», `error_reason === "currency_not_uzs"` uchun matn tavsiya: «Chek so'mda emas ({currency}) — summani qo'lda tekshiring».
 
@@ -186,6 +614,68 @@ API shartnomasi «AI maslahatchi — ogohlantirishlar (R1–R8)» v0.3 §7.6–7
 
 **Frontend action items:**
 - 🔧 Qoidalar oynasi: forma chegaralari `limits.rules` dan; 400 `field` bo'yicha xato maydon ostida; 409 → sozlamalarni qayta o'qish. `severity` PATCH'da yuborilmasin.
+
+### 2026-11-14 — AI buyurtma: `district_low_confidence` va `price_check` endi tasdiq talab qiladi (`ack_checks`, 409 `CHECKS_NOT_ACKNOWLEDGED`)
+
+Ega qarori (2026-11-14): AI ogohlantirishlaridan FAQAT ikkitasi BLOKLOVCHI — tuman aniq emas (`district_low_confidence`) va summa matndagidan farq qiladi / juda katta (`price_check`). Qolganlari (`qty_check`, `duplicate_items`, `phone_is_market`, `same_phone_multi`) — avvalgidek yumshoq ogohlantirish, tasdiq so'ralmaydi.
+Migratsiya YO'Q. `openapi.json` yangilandi.
+
+**Deploy tartibi (MUHIM):**
+1. **ai-service** (yangi TEZ navbat iste'molchisi `ai_fast_queue` ni ochadi; `confirm_context` endi `created_at` / `snapshot_state` ham qaytaradi) + **order-service** (#649).
+2. **notification-service** (bot: ko'rsatilgan ogohlantirishgagina ack, 409/503/400 ishlovi).
+3. **api-gateway** — `AI_ACK_CHECKS_ENFORCE=off` (sukut) bilan: darvozalar faqat WARN `ai_ack would_409/would_400/would_503` + `ai_confirm_ack_total` hisoblagichi, buyurtmalar avvalgidek yaratiladi.
+4. FE (quyidagi action item'lar) prod'da bo'lgach — `AI_ACK_CHECKS_ENFORCE=on` (faqat api-gateway qayta yaratiladi).
+
+Yangi env: `RABBITMQ_AI_FAST_QUEUE` (sukut `ai_fast_queue`; gateway + ai-service), `AI_FAST_PREFETCH` (ai-service, sukut 32), `AI_ACK_CHECKS_ENFORCE` (gateway, `on`/`off`, sukut `off`).
+⚠️ Gateway ai-service'dan OLDIN chiqsa: ai-confirm'ning `confirm_context` so'rovi tez navbatda javobsiz qoladi → `off` rejimda faqat WARN `would_503` (yaratish davom etadi), `on` rejimda 503. Shuning uchun avval ai-service.
+
+- ✏️ `POST /orders/ai-confirm` → `orders[]` ga ixtiyoriy `ack_checks: string[]` (≤10 ta, kod satrlari): operator ko'rib «Baribir yaratish»ni tasdiqlagan bloklovchi kodlar. Ortiqcha / yumshoq kodlar e'tiborsiz.
+- ⚠️ Qaysi kod kerakligini server O'ZI biladi — ai-parse paytida saqlangan preview snapshot'idan (`check_codes`); FE yuborgan `checks` ga ishonilmaydi. Snapshot'da bloklovchi kod bo'lsa va u `ack_checks` da yo'q bo'lsa — **butun so'rov 409**, HECH QAYSI buyurtma yaratilmaydi:
+  ```json
+  { "statusCode": 409, "code": "CHECKS_NOT_ACKNOWLEDGED",
+    "message": "AI ogohlantirishlari tasdiqlanmagan: tuman yoki summani tekshirib, «Baribir yaratish»ni bosing",
+    "missing": ["district_low_confidence", "price_check"],
+    "orders": [{ "index": 0, "missing": ["district_low_confidence"] },
+               { "index": 2, "missing": ["price_check"] }] }
+  ```
+  `missing` — barcha tasdiqlanmagan kodlar (takrorsiz); `orders[].index` — so'rovdagi `orders[]` o'rni (preview `index` emas).
+- ⚠️ Idempotent takror (ayni `draft_id` + `ai_item_index` qayta yuborilsa) ham ack darvozasidan O'TADI — `ack_checks` siz takror ham 409 oladi (avval yaratilgan buyurtma natijasi faqat darvozadan keyin qaytadi).
+- 🟢 Tahrir istisnosi: operator tegishli maydonni O'ZI o'zgartirgan bo'lsa (server hisoblagan `edited_fields`), tasdiq shart emas — tuman (`district_id`) almashtirilsa `district_low_confidence`, summa (`total_price`) o'zgartirilsa `price_check` talab qilinmaydi. Viloyat / manzil tahriri tuman tekshiruvini olib tashlamaydi.
+- ⚠️ `draft_id` va `ai_item_index` endi MAJBURIY (Swagger'da `required`) — bo'lmasa **400** `{ code: "AI_DRAFT_REQUIRED", indexes: number[] }` (so'rovdagi `orders[]` o'rinlari), hech narsa yaratilmaydi.
+- ⚠️ `draft_id` shu market uchun ai-service'da topilmasa (soxta yoki saqlanmagan) — **400** `{ code: "AI_DRAFT_NOT_FOUND", indexes: number[] }`.
+- ⚠️ YANGI: draft topildi, lekin saqlangan preview'da bunday `ai_item_index` yo'q (masalan 29) — **400** `{ code: "AI_DRAFT_ITEM_NOT_FOUND", indexes: number[] }`. Uchala 400 da ham hech narsa yaratilmaydi; FE matni: «AI natijasi topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating».
+- ⚠️ Maydon nomi o'zgardi (round-3): 400 xatolarida ro'yxat — `indexes` (avval `orders`). `orders` faqat 409 `CHECKS_NOT_ACKNOWLEDGED` da (`[{ index, missing }]`).
+- ⚠️ ai-confirm ai-service ishlab turishini talab qiladi: saqlangan tekshiruvlarni o'qib bo'lmasa (timeout / xato) yoki draft YOSH (< 2 daqiqa) bo'lib, preview snapshot'i hali saqlanmagan bo'lsa — **FAIL-CLOSED 503** `{ code: "AI_CHECKS_UNAVAILABLE", retryable: true, retry_after_seconds: 5 }` + sarlavha `Retry-After: 5`, hech narsa yaratilmaydi; FE `retry_after_seconds` dan keyin qayta yuboradi.
+- 🟢 Orqaga moslik (fail-open, audit'da `checks_unverified: true`, WARN log + `ai_confirm_ack_total{outcome="fail_open_*"}`): feature'dan oldingi snapshot (`check_codes` yo'q), retention tozalagan snapshot, yoki snapshot yo'q va draft 2 daqiqadan eski.
+- 🟢 Telegram bot: preview'da tekshiruvlar oddiy tilda «⚠️» qatorlari. Bloklovchi bo'lsa «✅ Yaratish» avval «Baribir yaratamanmi?» oynasini ko'rsatadi — unda tasdiqlanadigan HAR buyurtma aniq ro'yxatda («12) ⚠️ ism, telefon» + «⚠️ …» qatorlari, ≤10 ta); ack FAQAT shu ro'yxatdagilarga yuboriladi. Ro'yxat sig'masa «Ha» yo'q — kabinetga yo'naltiradi. 409 da server `missing` bilan oyna qayta; 503 — «birozdan so'ng qayta urinib ko'ring»; 400 `AI_DRAFT_*` — «AI natijasi topilmadi — matnni qayta yuboring yoki kabinetda yarating».
+
+**Frontend action items:**
+- 🔧 Kartada `district_low_confidence` yoki `price_check` bo'lsa (va operator tuman / summani o'zgartirmagan bo'lsa) «Yaratish»dan oldin tasdiq oynasi (yoki kartadagi «Tekshirdim» belgisi) ko'rsating va shu buyurtmaning `ack_checks` ga AYNAN o'sha kodlarni yuboring. Faqat operatorga KO'RSATILGAN ogohlantirishni tasdiqlang.
+- 🔧 409 `CHECKS_NOT_ACKNOWLEDGED` ni ishlang: `orders[].index` bo'yicha kartalarni belgilang, `missing` kodlari uchun tasdiq so'rang va so'rovni (`ack_checks` bilan) qayta yuboring — so'rovdagi boshqa buyurtmalar ham yaratilmagan.
+- 🔧 503 `AI_CHECKS_UNAVAILABLE` — «Qayta urinish» (`retry_after_seconds` / `Retry-After`); 400 `AI_DRAFT_REQUIRED` — FE xatosi (har buyurtmaga `draft_id` + `ai_item_index` yuboring); 400 `AI_DRAFT_NOT_FOUND` / `AI_DRAFT_ITEM_NOT_FOUND` — yuqoridagi matn, `indexes[]` bo'yicha kartalarni belgilang.
+- 🔧 400 xatolarida `orders` emas, `indexes` o'qing.
+
+### 2026-11-14 — AI preview: tuman qanday aniqlangani, viloyat taxmini, yumshoq tekshiruvlar (`checks[]`)
+
+Deploy: ai-service + order-service + logistics-service + api-gateway. Migratsiya YO'Q. Yangi maydonlar QO'SHIMCHA; `ready`/`issues` qoidasi o'zgarmadi. ⚠️ Lekin `region_inferred` yo'li ilgari tumansiz (`district_missing`) qoladigan ayrim buyurtmalarni endi tuman bilan qaytaradi (`ready=true`) — bunday buyurtmada `district_low_confidence` bor. Telegram bot `checks[]` ni bu yozuvda o'qimaydi — bot ogohlantirishi va qayta tasdiq alohida PR'da (#658). Prompt versiyasi `2026-11-14.1` (dostavka qoidasi).
+
+- ✏️ `POST /orders/ai-parse` → `data.orders[]` ga:
+  - `district_match: { method, ai_text, score } | null` — tuman avto-tanlanganda: `method` = `exact` | `alias` | `address` | `fuzzy` | `llm` (`partial` turida ham bor, lekin hozir chiqmaydi — unga tayanmang); `ai_text` — AI o'qigan tuman matni (≤ 80 belgi, `exact` da ham); `score` 0..1 faqat `fuzzy`/`address`, aks holda `null`. Tuman tanlanmagan bo'lsa `null`.
+  - `region_inferred: boolean` — viloyat matnda aytilmagan, AI uni tumandan chiqargan (qisqartmalar — «Sam. vil.», «Sam. Xonobod», «Nam.», «QR», «РК», «Т.обл», «T.sh», «Qashqa», «Qoraqalpoq» — aytilgan hisoblanadi). Faqat shunda logistics qulflangan viloyatdan tashqaridagi ANIQ moslikka o'ta oladi (boshqa holatda «Toshkent shahri Xonobod» — avvalgidek tuman yo'q); boshqa viloyatlarda o'xshash nom bo'lsa («Mirobod»/«Mirzaobod») — avto-tanlov YO'Q, nomzodlar. Viloyat almashtirilganda (tuman topilmay nomzodlar qaytsa ham) `region_given: false`.
+  - `checks: AiCheck[]` — YUMSHOQ tekshiruvlar (tasdiqni bloklamaydi):
+    - `{ code: 'district_low_confidence' }` — tuman `address`/`fuzzy`/`llm` bilan yoki `region_inferred` sababli viloyat almashtirilib tanlangan (Toshkent shahri ↔ viloyati umumiy hovuzidagi tanlov bu belgini BERMAYDI);
+    - `{ code: 'price_check', kind: 'mismatch' | 'too_high', mentions: number[] }` — matndagi summa eslatmalari (so'm, takrorsiz) `total_price` bilan mos emas (faqat bitta buyurtmali matn) yoki summa > 100 mln va matndan kelib chiqmaydi. Qoida: summa = mahsulot + dostavka, oldindan to'lov/zaklad/«click orqali o'tkazdi»/«оплачено» ayirilmaydi; «donasi X» faqat miqdorga ko'paytirilgan holda, «jami X» faqat o'zi; dostavka jami ichida bo'lsa («Jami 170 000 (dostavka 20 000 bilan)», «shundan dostavka», «включая доставку») — jamiga qo'shilmaydi; dostavka tarifi ro'yxati («Toshkent 20 000, viloyatlarga 35 000») — har tarif alohida (yig'indisi emas); ko'p mahsulotda har biri o'z miqdori bilan; «X emas» — X hisobga olinmaydi; telefon raqami summa emas. Narx noaniq bo'lsa (oraliq, «...dan ...gacha», «yoki», summaga yaqin chegirma/aksiya so'zi yoki ikki xil summa bilan, eski/yangi narx) `mismatch` chiqmaydi — shablon pastidagi alohida «Aksiya!» qatori noaniq qilmaydi;
+    - `{ code: 'qty_check', item_index }` — miqdor > 10 yoki narxning ming/mln qismiga teng («150 ming» → miqdor 150; dona narxi — «2 ta televizor 2 mln dan» — va matnda aniq aytilgan miqdor — «2 ta» — belgilanmaydi);
+    - `{ code: 'duplicate_items', item_indexes }` — bir xil mahsulot qatorlari (birlashtirilmaydi);
+    - `{ code: 'phone_is_market' }` — mijoz telefoni market akkauntining raqamlari (asosiy, qo'shimcha, `default_operator_phone`, «muammo» raqami) bilan bir xil; market operatorlarining shaxsiy raqamlari tekshirilmaydi;
+    - `{ code: 'same_phone_multi', other_index }` — shu parse'da shu telefon boshqa buyurtmada ham.
+- ⚠️ **Noma'lum `code` e'tiborsiz qoldirilsin** — ro'yxat kengayadi.
+
+**Frontend action items:**
+- 🔧 Tuman maydoni yonida «AI o'qigan: {ai_text}»; `district_low_confidence` — sariq belgi.
+- 🔧 «Viloyat matnda yo'q — AI taxmin qildi» ishorasi: `region_inferred || !region_given` (faqat `!region_given` emas).
+- 🔧 `price_check` — summa yonida sariq ogohlantirish (`mentions` bilan: «Matnda: 150 000»); `too_high` — «Summa juda katta».
+- 🔧 Qolgan kodlar — tegishli maydon yonida ogohlantirish matni.
 
 ### 2026-11-14 — Carrier akkaunt: «Rollback» toggle (sukut o'chiq, kompaniyadan yashirin)
 

@@ -4,9 +4,15 @@
  * Kirish = model chiqaradigan (sanitize'dan keyingi) maydonlar: region_name,
  * district_name, address, full_address. Kutilgan javob — real geografiya
  * bo'yicha to'g'ri tuman (SOATO), seed fayli
- * (apps/logistics-service/src/data/regions-districts.data.ts, 181 tuman) ga
+ * (apps/logistics-service/src/data/regions-districts.data.ts, 206 tuman) ga
  * nisbatan. Seed'da YO'Q tuman — `mode: 'not_in_db'` (to'g'ri xulq: jimgina
  * boshqa tumanni tanlamaslik).
+ *
+ * D1 (#656): seed'ga rasmiy SOATO'dagi 25 qator qo'shildi — ilgari
+ * 'not_in_db' bo'lgan 7 holat endi 'auto' (rasmiy kod). Tur aytilmagan
+ * yalang'och shahar nomi ("Urganch", "Yangiyo'l", "Xiva" …) endi tuman va
+ * "X shahri" qatorining IKKALASIGA mos keladi — 'ask' (operator tanlaydi;
+ * ikkala qator bir xil xizmat viloyatiga yo'naltiriladi).
  *
  * mode:
  *  - 'auto'      — matn yetarli aniq; to'g'ri tuman avtomatik tanlanishi kerak.
@@ -304,7 +310,7 @@ export const DISTRICT_CASES: DistrictCase[] = [
     group: 'russian',
     note: 'Ургенч',
     input: { region_name: 'Xorazm', district_name: 'Ургенч' },
-    expect: { mode: 'auto', satos: A('1733217') },
+    expect: { mode: 'ask', satos: ['1733217', '1733401'] },
   },
   {
     id: 'D10',
@@ -332,14 +338,14 @@ export const DISTRICT_CASES: DistrictCase[] = [
     group: 'russian',
     note: 'Бекабад',
     input: { region_name: 'Toshkent viloyati', district_name: 'Бекабад' },
-    expect: { mode: 'auto', satos: A('1727220') },
+    expect: { mode: 'ask', satos: ['1727220', '1727413'] },
   },
   {
     id: 'D14',
     group: 'russian',
     note: 'Янгиюль',
     input: { region_name: 'Toshkent viloyati', district_name: 'Янгиюль' },
-    expect: { mode: 'auto', satos: A('1727259') },
+    expect: { mode: 'ask', satos: ['1727259', '1727424'] },
   },
   {
     id: 'D15',
@@ -353,7 +359,7 @@ export const DISTRICT_CASES: DistrictCase[] = [
     group: 'russian',
     note: 'Термез',
     input: { region_name: 'Surxondaryo', district_name: 'Термез' },
-    expect: { mode: 'auto', satos: A('1722220') },
+    expect: { mode: 'ask', satos: ['1722220', '1722401'] },
   },
   {
     id: 'D17',
@@ -458,21 +464,24 @@ export const DISTRICT_CASES: DistrictCase[] = [
     group: 'same-name',
     note: "Toshkent viloyati + Yangiyo'l",
     input: { region_name: 'Toshkent viloyati', district_name: "Yangiyo'l" },
-    expect: { mode: 'auto', satos: A('1727259') },
+    expect: { mode: 'ask', satos: ['1727259', '1727424'] },
   },
   {
     id: 'E06',
     group: 'same-name',
     note: "Yangiyo'l viloyatsiz",
     input: { region_name: null, district_name: "Yangiyo'l" },
-    expect: { mode: 'auto', satos: A('1727259') },
+    expect: { mode: 'ask', satos: ['1727259', '1727424'] },
   },
   {
     id: 'E07',
     group: 'same-name',
+    // D1 (#656) dan keyin 'ask': rezolver tuman tanlamagani uchun model
+    // aytgan viloyat (1726) qoladi; ikkala nomzod ham Toshkent viloyatida
+    // (1727). Shuning uchun regionSato tekshirilmaydi (ilgari 'auto' da 1727).
     note: "model xato viloyat: Toshkent shahri + Yangiyo'l",
     input: { region_name: 'Toshkent shahri', district_name: "Yangiyo'l" },
-    expect: { mode: 'auto', satos: A('1727259'), regionSato: '1727' },
+    expect: { mode: 'ask', satos: ['1727259', '1727424'] },
   },
   {
     id: 'E08',
@@ -515,12 +524,12 @@ export const DISTRICT_CASES: DistrictCase[] = [
   {
     id: 'E13',
     group: 'same-name',
-    note: "O'rta Chirchiq tumani — seed'da YO'Q",
+    note: "O'rta Chirchiq tumani (D1: seed'ga qo'shildi)",
     input: {
       region_name: 'Toshkent viloyati',
       district_name: "O'rta Chirchiq tumani",
     },
-    expect: { mode: 'not_in_db', officialSato: '1727253' },
+    expect: { mode: 'auto', satos: A('1727253') },
   },
   {
     id: 'E14',
@@ -546,9 +555,9 @@ export const DISTRICT_CASES: DistrictCase[] = [
   {
     id: 'E17',
     group: 'same-name',
-    note: "Farg'ona shahri — seed'da shahar qatori YO'Q",
+    note: "Farg'ona shahri (D1: shahar qatori seed'ga qo'shildi)",
     input: { region_name: "Farg'ona", district_name: "Farg'ona shahri" },
-    expect: { mode: 'not_in_db', officialSato: '1730401' },
+    expect: { mode: 'auto', satos: A('1730401') },
   },
   {
     id: 'E18',
@@ -581,9 +590,9 @@ export const DISTRICT_CASES: DistrictCase[] = [
   {
     id: 'E22',
     group: 'same-name',
-    note: "Quvasoy shahri — seed'da YO'Q (Quva — boshqa tuman)",
+    note: "Quvasoy shahri (D1: seed'ga qo'shildi; Quva — boshqa tuman)",
     input: { region_name: "Farg'ona", district_name: 'Quvasoy shahri' },
-    expect: { mode: 'not_in_db', officialSato: '1730408' },
+    expect: { mode: 'auto', satos: A('1730408') },
   },
   {
     id: 'E23',
@@ -623,30 +632,30 @@ export const DISTRICT_CASES: DistrictCase[] = [
   {
     id: 'E29',
     group: 'same-name',
-    note: 'Shahrisabz tumani (seed: faqat Shahrisabz shahri 1710405)',
+    note: "Shahrisabz tumani (D1: tuman qatori seed'ga qo'shildi)",
     input: { region_name: 'Qashqadaryo', district_name: 'Shahrisabz tumani' },
-    expect: { mode: 'not_in_db', officialSato: '1710245' },
+    expect: { mode: 'auto', satos: A('1710245') },
   },
   {
     id: 'E28',
     group: 'same-name',
-    note: 'Urganch shahri (seed: faqat Urganch 1733217)',
+    note: "Urganch shahri (D1: shahar qatori seed'ga qo'shildi)",
     input: { region_name: 'Xorazm', district_name: 'Urganch shahri' },
-    expect: { mode: 'not_in_db', officialSato: '1733401' },
+    expect: { mode: 'auto', satos: A('1733401') },
   },
 
   // ── F. Manzildagi ko'cha/mahalla nomi = boshqa tuman nomi (2-usul) ──
   {
     id: 'F01',
     group: 'street-name',
-    note: "Jizzax + Zomin (seed'da YO'Q) + 'Paxtakor mahallasi'",
+    note: "Jizzax + Zomin (D1: seed'ga qo'shildi) + 'Paxtakor mahallasi'",
     input: {
       region_name: 'Jizzax',
       district_name: 'Zomin',
       address: 'Paxtakor mahallasi, 12-uy',
       full_address: 'Jizzax Zomin Paxtakor mahallasi, 12-uy',
     },
-    expect: { mode: 'not_in_db', officialSato: '1708218' },
+    expect: { mode: 'auto', satos: A('1708218') },
   },
   {
     id: 'F02',
@@ -687,14 +696,14 @@ export const DISTRICT_CASES: DistrictCase[] = [
   {
     id: 'F05',
     group: 'street-name',
-    note: "viloyatsiz 'Uychi tumani' (seed'da YO'Q) + 'Navoiy ko'chasi'",
+    note: "viloyatsiz 'Uychi tumani' (D1: seed'ga qo'shildi) + 'Navoiy ko'chasi'",
     input: {
       region_name: null,
       district_name: 'Uychi tumani',
       address: "Navoiy ko'chasi 15-uy",
       full_address: "Uychi tumani Navoiy ko'chasi 15-uy",
     },
-    expect: { mode: 'not_in_db', officialSato: '1714229' },
+    expect: { mode: 'auto', satos: A('1714229') },
   },
   {
     id: 'F06',
@@ -742,7 +751,7 @@ export const DISTRICT_CASES: DistrictCase[] = [
       address: "Sirdaryo ko'chasi 4",
       full_address: "Sirdaryo Gulistan Sirdaryo ko'chasi 4",
     },
-    expect: { mode: 'auto', satos: A('1724220') },
+    expect: { mode: 'ask', satos: ['1724220', '1724401'] },
   },
   {
     id: 'F12',
@@ -867,7 +876,7 @@ export const DISTRICT_CASES: DistrictCase[] = [
     group: 'typo',
     note: 'Xiva (DB: Khiva)',
     input: { region_name: 'Xorazm', district_name: 'Xiva' },
-    expect: { mode: 'auto', satos: A('1733226') },
+    expect: { mode: 'ask', satos: ['1733226', '1733406'] },
   },
   {
     id: 'G10',
@@ -939,14 +948,14 @@ export const DISTRICT_CASES: DistrictCase[] = [
     group: 'uz-cyrillic',
     note: 'Хоразм + Хива',
     input: { region_name: 'Хоразм', district_name: 'Хива' },
-    expect: { mode: 'auto', satos: A('1733226') },
+    expect: { mode: 'ask', satos: ['1733226', '1733406'] },
   },
   {
     id: 'H07',
     group: 'uz-cyrillic',
     note: 'Қашқадарё + Шаҳрисабз',
     input: { region_name: 'Қашқадарё', district_name: 'Шаҳрисабз' },
-    expect: { mode: 'auto', satos: A('1710405') },
+    expect: { mode: 'ask', satos: ['1710405', '1710245'] },
   },
   {
     id: 'H08',

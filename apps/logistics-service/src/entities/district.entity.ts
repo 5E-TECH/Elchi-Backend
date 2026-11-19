@@ -15,6 +15,10 @@ import { Region } from './region.entity';
   unique: true,
   where: `"sato_code" IS NOT NULL AND "sato_code" <> '' AND "is_deleted" = false`,
 })
+/** D1: «tekshirilmagan» tumanlar — qisman indeks, migratsiya 1716000000227. */
+@Index('IDX_DISTRICT_ASSIGNMENT_REVIEW', ['assignment_review_required'], {
+  where: `"assignment_review_required" = true`,
+})
 export class District extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
@@ -45,6 +49,34 @@ export class District extends BaseEntity {
    */
   @Column({ type: 'bigint', nullable: true })
   serving_branch_id!: string | null;
+
+  /**
+   * D1: tuman seed bilan qo'shilib viloyatga AVTOMATIK biriktirilgan, ops
+   * hali tasdiqlamagan — «Hududlar» sahifasida superadmin/admin
+   * ogohlantirish ko'radi. Tasdiq (`confirm_assignment`), viloyatni
+   * o'zgartirish (`PATCH /district/:id`) yoki qayta biriktirish
+   * (`set_serving_branch`) tushiradi; `clear_serving_branch` TUSHIRMAYDI
+   * (filial yo'qoldi — tekshiruv baribir kerak). Migratsiya 1716000000227.
+   */
+  @Column({ type: 'boolean', default: false })
+  assignment_review_required!: boolean;
+
+  /**
+   * Seed `auto_assigned_D1` yozadi (eski qatorlarda `no_branch_found` ham
+   * bo'lishi mumkin); belgi tushgach ham saqlanadi. Ogohlantirish javobidagi
+   * `reason` esa chaqiruv paytida viloyat qoidasidan hisoblanadi.
+   */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  assignment_review_reason!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  assignment_flagged_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  assignment_confirmed_by!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  assignment_confirmed_at!: Date | null;
 
   @ManyToOne(() => Region, (region) => region.districts, {
     onDelete: 'CASCADE',

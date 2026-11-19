@@ -113,7 +113,37 @@ export interface AiOrderPreview {
    * enum; maydon qiymati null qoldirilgan). Bo'sh massiv — ogohlantirish yo'q.
    */
   warnings: AiExtractWarning[];
+  /**
+   * P1-7 (D6): tuman qanday aniqlangani — faqat `district_id` bo'lsa,
+   * aks holda null. `ai_text` — AI o'qigan tuman matni (≤ 80 belgi).
+   */
+  district_match: AiDistrictMatch | null;
+  /** P1-7: viloyat matnda aytilmagan, AI uni tumandan chiqargan. */
+  region_inferred: boolean;
+  /**
+   * P1-7: YUMSHOQ tekshiruvlar — `ready`/`issues` ga ta'sir qilmaydi.
+   * ⚠️ Ro'yxat kengayadi: noma'lum `code` ni FE/bot e'tiborsiz qoldiradi.
+   */
+  checks: AiCheck[];
 }
+
+export type AiDistrictMatchMethod =
+  'exact' | 'alias' | 'partial' | 'address' | 'fuzzy' | 'llm';
+
+export interface AiDistrictMatch {
+  method: AiDistrictMatchMethod;
+  ai_text: string | null;
+  /** 0..1 — faqat fuzzy/address, aks holda null. */
+  score: number | null;
+}
+
+export type AiCheck =
+  | { code: 'district_low_confidence' }
+  | { code: 'price_check'; kind: 'mismatch' | 'too_high'; mentions: number[] }
+  | { code: 'qty_check'; item_index: number }
+  | { code: 'duplicate_items'; item_indexes: number[] }
+  | { code: 'phone_is_market' }
+  | { code: 'same_phone_multi'; other_index: number };
 
 /** `logistics.district.resolve_by_text` so'rovining bitta elementi (C7). */
 export interface DistrictTextQuery {
@@ -121,6 +151,8 @@ export interface DistrictTextQuery {
   district_name?: string;
   address?: string;
   full_address?: string;
+  /** P1-7: viloyat AI taxmini — logistics qulfdan aniq moslik bilan chiqa oladi. */
+  region_inferred?: boolean;
 }
 
 /**
@@ -151,6 +183,12 @@ export interface DistrictTextResolution {
     | 'sato_mismatch';
   /** 5Z1ZvvzE: order-service ichida — tuman LLM fallback'i tanladi. */
   llm_picked?: boolean;
+  /** P1-7 (logistics): avto-tanlov usuli. */
+  match?: {
+    method: Exclude<AiDistrictMatchMethod, 'llm'>;
+    score: number | null;
+    region_switched?: boolean;
+  };
 }
 
 /** `order.ai_resolve_preview` so'rovi (gateway → order-service). */

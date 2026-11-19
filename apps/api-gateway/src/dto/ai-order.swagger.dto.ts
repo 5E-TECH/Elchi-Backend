@@ -35,6 +35,12 @@ import {
   type OrderFulfillmentMode,
   Where_deliver,
 } from '@app/common';
+import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
+import { OptionalOperatorPhone } from '../order-create/order-operator-phone';
+import {
+  CUSTOMER_ID_FORMAT_MESSAGE,
+  OptionalPositiveInt8Id,
+} from '../order-create/positive-int8-id';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -236,6 +242,32 @@ export class AiConfirmOrderDto {
   @Type(() => AiConfirmCustomerDto)
   customer!: AiConfirmCustomerDto;
 
+  /**
+   * Mavjud mijozni tanlash (`GET /customers/suggest`) — `POST /orders`
+   * `customer_id` bilan AYNI egalik qoidasi (`createOrderInternal` →
+   * `resolveScopedCustomerId`). FARQ: POST /orders da tasdiqlanmagan id
+   * `customer` obyekti bo'lsa jimgina e'tiborsiz qoladi (telefon yo'li);
+   * ai-confirm'da `customer` DOIM bor, shu sabab tasdiqlanmagan id shu
+   * buyurtmani RAD etadi — operator tanlagan mijoz o'rniga boshqasiga
+   * yozilmasin.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    example: '120',
+    description:
+      'Mavjud mijoz ID si (GET /customers/suggest taklifidan). Egalik POST /orders `customer_id` bilan AYNI: superadmin/admin — istalgan mijoz; ' +
+      "boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa. " +
+      'Tasdiqlanmasa (boshqa rollar uchun: begona yoki mavjud bo‘lmagan mijoz; superadmin/admin — id tekshirilmaydi, POST /orders kabi) SHU buyurtma yaratilmaydi: ' +
+      '`ok: false, code: "create_failed"`, `reason` — POST /orders 403 matni («customer_id qabul qilinmadi: …»); ' +
+      'tekshiruv xizmati (order/identity) javob bermasa — `code: "validation_unavailable"` («Mijozni tekshirib bo‘lmadi …», buyurtma ANIQ yaratilmagan). Partiyaning qolgani yaratiladi. ' +
+      'Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (AI o‘qigan telefon saqlanmaydi — kartadagi telefon ishlatiladi; yangi karta ham ochilmaydi); ' +
+      "`customer.address`/`extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi). " +
+      '`customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun), aks holda 400 (DTO). ' +
+      'Berilmasa — avvalgi xulq (telefon bo‘yicha).',
+  })
+  @OptionalPositiveInt8Id(CUSTOMER_ID_FORMAT_MESSAGE)
+  customer_id?: string;
+
   @ApiProperty({ example: '12', description: 'Tuman ID (raqam)' })
   @IsString({ message: "district_id matn bo'lishi kerak" })
   @Matches(DIGITS_RE, {
@@ -252,21 +284,26 @@ export class AiConfirmOrderDto {
   @IsString({ message: "region_id matn bo'lishi kerak" })
   region_id?: string;
 
-  @ApiPropertyOptional({
+  // (AI ack S5) Swagger'da MAJBURIY; runtime tekshiruvi kontrollerda (400
+  // `AI_DRAFT_REQUIRED` + `indexes` shakli saqlanishi uchun class-validator
+  // `@IsOptional` qoladi).
+  @ApiProperty({
+    required: true,
     example: '3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c',
     description:
-      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun.',
+      'ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED` (`indexes`). Shu market uchun topilmasa — 400 `AI_DRAFT_NOT_FOUND`.',
   })
   @IsOptional()
   @IsUUID('all', { message: "draft_id UUID bo'lishi kerak" })
   draft_id?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
+    required: true,
     example: 0,
     minimum: 0,
     maximum: AI_MAX_ORDERS_PER_PARSE - 1,
     description:
-      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG.',
+      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`; saqlangan preview’da bunday `index` bo‘lmasa 400 `AI_DRAFT_ITEM_NOT_FOUND` (`indexes`). Qayta yuborishda O‘ZGARTIRMANG.',
   })
   @IsOptional()
   @IsInt({ message: "ai_item_index butun son bo'lishi kerak" })
@@ -275,6 +312,37 @@ export class AiConfirmOrderDto {
     message: `ai_item_index ${AI_MAX_ORDERS_PER_PARSE - 1} dan oshmasligi kerak`,
   })
   ai_item_index?: number;
+
+  /**
+   * AI ack (ega qarori 2026-11-14): operator ko'rib, «baribir yaratish»ni
+   * tasdiqlagan BLOKLOVCHI tekshiruv kodlari. Qaysi kod kerakligini server
+   * o'zi saqlangan snapshot'dan biladi — bu ro'yxat faqat tasdiq.
+   */
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['district_low_confidence', 'price_check'],
+    maxItems: 10,
+    description:
+      'Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). ' +
+      'Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). ' +
+      'Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `CHECKS_NOT_ACKNOWLEDGED` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. ' +
+      'Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. ' +
+      'Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.',
+  })
+  @IsOptional()
+  @IsArray({ message: "ack_checks massiv bo'lishi kerak" })
+  @ArrayMaxSize(10, {
+    message: "ack_checks 10 tadan ortiq bo'lmasligi kerak",
+  })
+  @IsString({
+    each: true,
+    message: "ack_checks elementlari matn bo'lishi kerak",
+  })
+  @Matches(/^[a-z][a-z_]{0,31}$/, {
+    each: true,
+    message: "ack_checks elementi tekshiruv kodi bo'lishi kerak",
+  })
+  ack_checks?: string[];
 
   @ApiProperty({
     type: () => [AiConfirmItemDto],
@@ -356,12 +424,55 @@ export class AiConfirmOrderDto {
     example: 'sevinch',
     maxLength: 100,
     description:
-      'Operator nomi — FAQAT matn (varchar). operator_id ga HECH QACHON bog‘lanmaydi.',
+      'Operator nomi — FAQAT matn (varchar); matndan operator_id HECH QACHON aniqlanmaydi. ' +
+      '`operator_id` berilsa bu matn e’tiborsiz — buyurtmaga tanlangan operator ismi yoziladi (POST /orders bilan bir xil).',
   })
   @IsOptional()
   @IsString({ message: "Operator matn bo'lishi kerak" })
   @MaxLength(100, { message: 'Operator nomi 100 belgidan oshmasligi kerak' })
   operator?: string;
+
+  /**
+   * Formadagi «Operator» tanlovi — `POST /orders` `operator_id` bilan AYNI
+   * (DTO tekshiruvi umumiy, server tekshiruvi `createOrderInternal` dagi
+   * `resolveChosenOrderOperator`). Har buyurtmaga ALOHIDA.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    example: '26',
+    description:
+      'Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan) — POST /orders `operator_id` bilan AYNI qoida. ' +
+      "Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART (superadmin/admin ham tekshiriladi); market operatori faqat o'zini tanlay oladi. " +
+      'Aks holda SHU buyurtma yaratilmaydi: natijada `ok: false, code: "create_failed"`, `reason` — POST /orders 400 matni ' +
+      '(«Tanlangan operator bu marketga tegishli emas yoki faol emas» yoki «Market operatori faqat o‘zini operator qilib tanlay oladi»); ' +
+      'partiyadagi boshqa buyurtmalar yaratiladi. Operatorni tekshirib bo‘lmasa (identity javob bermadi) — `code: "validation_unavailable"`, buyurtma ANIQ yaratilmagan, qayta yuboring. ' +
+      'To‘g‘ri bo‘lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e’tiborsiz; AI auditida ham shu ism). ' +
+      'Musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa) — aks holda 400 (DTO). Bo‘sh satr — tanlanmagan. ' +
+      'Berilmasa — avvalgi xulq (`operator` matni; market operatori — o‘zi; qolganlar — operatorsiz). ' +
+      '⚠️ Faqat odam select’da tanlaydi: AI `operator` matnidan operator_id ni AVTOMATIK tanlamang; market operatori roli uni yubormasin (u baribir o‘zi).',
+  })
+  @OptionalChosenOperatorId()
+  operator_id?: string | null;
+
+  /**
+   * VRyloH62 — formadagi operator raqami, `POST /orders` `operator_phone`
+   * bilan AYNI (DTO tekshiruvi umumiy, 1-/2-raqam qarori
+   * `createOrderInternal` dagi `resolveOrderOperatorPhones`). Ilgari bu
+   * maydon yo'q edi — `require_operator_phone=true` va doimiy raqamsiz
+   * marketda veb AI buyurtmasi DOIM `create_failed` bo'lardi.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    example: '+998901234567',
+    description:
+      'Operator raqami — POST /orders `operator_phone` bilan AYNI qoida (normallashtiriladi: "90 123 45 67", "0901234567" → +998XXXXXXXXX; noto‘g‘ri shakl — 400, bo‘sh satr — yuborilmagan). ' +
+      'Market `default_operator_phone` bo‘lsa u 1-raqam, bu esa 2-raqam (bir xil bo‘lsa takrorlanmaydi); ' +
+      '`require_operator_phone=true` va default yo‘q bo‘lsa MAJBURIY va 1-raqam bo‘ladi — yuborilmasa SHU buyurtma `ok: false, code: "create_failed"`, ' +
+      '`reason` — POST /orders 400 matni («Operator telefon raqami majburiy…»).',
+  })
+  @OptionalOperatorPhone()
+  operator_phone?: string | null;
 
   @ApiPropertyOptional({
     enum: ORDER_FULFILLMENT_MODES,

@@ -212,5 +212,11 @@ services:
 
   ai-service:
     <<: *stg-svc-limits
-    env_file: !override .env.staging
+    # «AI kalit va modellar»: ANTHROPIC_API_KEY va AI_KEY_ENCRYPTION_SECRET_FILE —
+    # `.env.staging.ai-secrets` da (ixtiyoriy). Master sir fayli: ./secrets/ai/ai_key_master
+    # (prod bilan bir xil bind, prod'dagidan BOSHQA qiymat).
+    env_file: !override
+      - .env.staging
+      - path: .env.staging.ai-secrets
+        required: false
     environment: *stg-env

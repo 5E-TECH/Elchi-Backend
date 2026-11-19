@@ -340,9 +340,12 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 2, default: 'uz' })
   language: string;
 
-  // Kim bu foydalanuvchini YARATGAN (#3). Manager faqat O'ZI yaratgan
-  // foydalanuvchilarni tahrirlay oladi. NULL = eski/tizim yaratgan yoki noma'lum
-  // (bunday yozuvni manager tahrirlay olmaydi). bigint -> TS'da string.
+  // Kim bu foydalanuvchini YARATGAN (#3) — ma'lumot va audit uchun. KQINMdeQ
+  // (2026-11-17) dan menejer huquqi bunga BOG'LIQ EMAS: menejer HOZIR o'z
+  // filialidagi kuryer/ro'yxatchini boshqaradi (branch_users), kim yaratganidan
+  // qat'i nazar. Yagona istisno: menejer o'zi yaratgan marketni ko'radi
+  // (2026-11-12, tahrir yo'q). NULL = eski/tizim yaratgan yoki noma'lum.
+  // bigint -> TS'da string.
   @Column({ type: 'bigint', nullable: true })
   created_by: string | null;
 }

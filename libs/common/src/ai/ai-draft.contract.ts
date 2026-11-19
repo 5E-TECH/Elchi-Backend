@@ -44,6 +44,18 @@ export interface AiDraftPreviewSnapshot {
   operator: string | null;
   is_replacement: boolean;
   items: { name: string; product_id: string | null; quantity: number }[];
+  /**
+   * P1-7 (D6) — ixtiyoriy (eski snapshot'larda yo'q): tuman usuli, AI
+   * o'qigan tuman matni va ball; viloyat AI taxminimi; yumshoq tekshiruv
+   * kodlari. Eval va aniqlik tahlili uchun.
+   */
+  district_match?: {
+    method: string;
+    ai_text: string | null;
+    score: number | null;
+  } | null;
+  region_inferred?: boolean;
+  check_codes?: string[];
 }
 
 /**
@@ -96,7 +108,22 @@ export interface AiDraftConfirmContext {
   cost_uzs: number;
   /** Retention tugagan yoki preview yetib kelmagan bo'lsa null. */
   previews: AiDraftPreviewSnapshot[] | null;
+  /**
+   * (AI ack S1) Draft yaratilgan vaqt (ISO). Ixtiyoriy — eski ai-service
+   * yubormaydi.
+   */
+  created_at?: string | null;
+  /**
+   * (AI ack S1) Snapshot holati: `present` — `resolved_preview` bor;
+   * `pending` — hali yetib kelmagan (attach_preview fire-and-forget, poyga
+   * yoki yo'qolgan); `purged` — retention tozalagan (`text_purged_at`).
+   * Ixtiyoriy — eski ai-service yubormaydi.
+   */
+  snapshot_state?: AiDraftSnapshotState;
 }
+
+/** (AI ack S1) `AiDraftConfirmContext.snapshot_state`. */
+export type AiDraftSnapshotState = 'present' | 'pending' | 'purged';
 
 export interface AiDraftConfirmContextResponse {
   drafts: AiDraftConfirmContext[];
@@ -142,3 +169,76 @@ export interface AiDraftTrace {
     order_cost_uzs: number;
   };
 }
+
+/**
+ * AI tekshiruvini TASDIQLASH (ack, ega qarori 2026-11-14): faqat shu
+ * kodlar BLOKLAYDI — preview'da bo'lsa ai-confirm `orders[].ack_checks`
+ * da ularni kutadi, aks holda 409 `CHECKS_NOT_ACKNOWLEDGED`. Qolgan
+ * kodlar (qty_check, duplicate_items, phone_is_market, same_phone_multi)
+ * — yumshoq ogohlantirish, ack so'ralmaydi.
+ * ⚠️ Kodlar SERVERDA saqlangan snapshot'dan (`check_codes`) olinadi —
+ * mijoz yuborgan `checks` ga ishonilmaydi.
+ */
+export const AI_BLOCKING_CHECK_CODES = [
+  'district_low_confidence',
+  'price_check',
+] as const;
+
+export type AiBlockingCheckCode = (typeof AI_BLOCKING_CHECK_CODES)[number];
+
+/**
+ * Operator tekshiruv tegishli maydonni O'ZI tuzatgan bo'lsa (server
+ * hisoblagan `edited_fields` da bor), ack shart emas: tuman almashtirildi →
+ * `district_low_confidence` endi taalluqli emas; summa o'zgartirildi →
+ * `price_check` ham.
+ */
+export const AI_CHECK_EXEMPT_BY_EDIT: Readonly<
+  Record<AiBlockingCheckCode, AiAuditedField>
+> = {
+  district_low_confidence: 'district_id',
+  price_check: 'total_price',
+};
+
+/** ai-confirm 409 xato kodi (tanada `missing` va `orders`). */
+export const AI_CHECKS_NOT_ACKNOWLEDGED = 'CHECKS_NOT_ACKNOWLEDGED';
+
+/**
+ * ai-confirm 503 (FE sessiya / ega, 2026-11-15): tekshiruvlarni ai-service'dan
+ * o'qib bo'lmadi (timeout / xato) — FAIL-CLOSED, hech narsa yaratilmaydi;
+ * `retryable: true`, `retry_after_seconds`.
+ */
+export const AI_CHECKS_UNAVAILABLE = 'AI_CHECKS_UNAVAILABLE';
+
+/**
+ * ai-confirm 400: buyurtmada `draft_id` yoki `ai_item_index` yo'q — ack
+ * talabini chetlab o'tish yo'li bo'lmasin (`indexes` — so'rovdagi o'rinlar).
+ */
+export const AI_DRAFT_REQUIRED = 'AI_DRAFT_REQUIRED';
+
+/**
+ * ai-confirm 400 (FE sessiya / ega, 2026-11-15): ai-service ishlab turibdi,
+ * lekin `draft_id` shu market uchun topilmadi (soxta yoki saqlanmagan) —
+ * hech narsa yaratilmaydi; operator AI'ni qayta yurgizadi yoki qo'lda
+ * yaratadi (`indexes` — so'rovdagi o'rinlar).
+ */
+export const AI_DRAFT_NOT_FOUND = 'AI_DRAFT_NOT_FOUND';
+
+/**
+ * ai-confirm 400 (AI ack B2): draft topildi, snapshot bor, lekin unda
+ * `index === ai_item_index` yozuv yo'q (soxta / chegaradan tashqari
+ * indeks) — hech narsa yaratilmaydi (`indexes` — so'rovdagi o'rinlar).
+ */
+export const AI_DRAFT_ITEM_NOT_FOUND = 'AI_DRAFT_ITEM_NOT_FOUND';
+
+/**
+ * (AI ack B1) ai-service'ning TEZ navbati (RMQ id `AI_FAST`, env
+ * `RABBITMQ_AI_FAST_QUEUE`, sukut `ai_fast_queue`): faqat arzon DB amallari
+ * — Claude chaqiruvlari (prefetch 8) ortida kutmasin. ai-service shu
+ * naqshlarni ESKI `ai_queue` da ham qabul qiladi (rolling deploy).
+ */
+export const AI_FAST_RMQ_NAME = 'AI_FAST';
+export const AI_FAST_PATTERNS = [
+  'ai.draft.confirm_context',
+  'ai.draft.attach_preview',
+  'ai.usage.link_orders',
+] as const;

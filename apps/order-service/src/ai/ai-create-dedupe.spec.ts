@@ -8,8 +8,10 @@ import { of } from 'rxjs';
 import { Order } from '../entities/order.entity';
 import { OrderLifecycleService } from '../lifecycle/order-lifecycle.service';
 import { OrderServiceController } from '../order-service.controller';
+import { AI_MAX_ORDERS_PER_PARSE } from '@app/common';
 import {
   AI_SIGNATURE_TTL_MS,
+  COMPLETED_LOOKUP_MAX,
   isAiStableRequestId,
   runWithAiSignature,
   sanitizeAiAuditMetadata,
@@ -99,6 +101,15 @@ function memoryIdempotency() {
       rows.set(key, { status: 'failed', error, at: Date.now() });
       return Promise.resolve();
     }),
+    findCompleted: jest.fn((keys: string[]) =>
+      Promise.resolve(
+        new Map(
+          keys
+            .filter((key) => rows.get(key)?.status === 'completed')
+            .map((key) => [key, rows.get(key)?.response] as const),
+        ),
+      ),
+    ),
   };
   return service;
 }
@@ -154,6 +165,97 @@ describe('isAiStableRequestId', () => {
     [undefined, false],
   ])('%s → %s', (id, expected) => {
     expect(isAiStableRequestId(id)).toBe(expected);
+  });
+});
+
+describe('order.ai_confirm.completed — takror tekshiruvdan OLDIN (faqat o‘qish)', () => {
+  const OTHER_MARKET = '122';
+  const create = (
+    c: OrderServiceController,
+    requestId: string,
+    market = MARKET,
+  ) =>
+    c.create(
+      {
+        dto: { ...DTO, market_id: market },
+        requester: REQUESTER,
+        request_id: requestId,
+      },
+      ctx,
+    );
+  type Items = {
+    data: { items: Array<{ request_id: string; order_id: string }> };
+  };
+
+  it('faqat SHU market kalitining tugagan natijasi — order_id, tana emas; kalit egallanmaydi', async () => {
+    const { controller, idem } = setup();
+    const done = (await create(controller, STABLE)) as { data: { id: string } };
+    const foreign = `ai:${OTHER_MARKET}:${DRAFT}:0`;
+    await create(controller, foreign, OTHER_MARKET);
+    // Hali bajarilayotgan kalit (tugamagan) — qaytmaydi.
+    const pending = `ai:${MARKET}:${DRAFT}:1`;
+    idem.rows.set(`order.create:${pending}`, {
+      status: 'in_progress',
+      at: Date.now(),
+    });
+    idem.tryAcquire.mockClear();
+
+    const res = (await controller.aiConfirmCompleted(
+      {
+        market_id: MARKET,
+        request_ids: [
+          STABLE,
+          foreign,
+          pending,
+          `ai-dedupe:${SIG}`,
+          'x',
+          STABLE,
+        ],
+      },
+      ctx,
+    )) as Items;
+
+    expect(res.data.items).toEqual([
+      { request_id: STABLE, order_id: done.data.id },
+    ]);
+    // Begona market kaliti umuman so'ralmaydi.
+    expect(idem.findCompleted).toHaveBeenCalledWith([
+      `order.create:${STABLE}`,
+      `order.create:${pending}`,
+    ]);
+    expect(idem.tryAcquire).not.toHaveBeenCalled();
+  });
+
+  it('to‘liq partiya (AI_MAX_ORDERS_PER_PARSE) — har kalit so‘raladi, kesilmaydi', async () => {
+    expect(COMPLETED_LOOKUP_MAX).toBeGreaterThanOrEqual(
+      AI_MAX_ORDERS_PER_PARSE,
+    );
+    const { controller, idem } = setup();
+    const keys = Array.from(
+      { length: AI_MAX_ORDERS_PER_PARSE },
+      (_, i) => `ai:${MARKET}:${DRAFT}:${i}`,
+    );
+    await controller.aiConfirmCompleted(
+      { market_id: MARKET, request_ids: keys },
+      ctx,
+    );
+    expect(idem.findCompleted).toHaveBeenCalledWith(
+      keys.map((key) => `order.create:${key}`),
+    );
+  });
+
+  it('yaroqsiz market / ro‘yxat — bo‘sh, DB so‘ralmaydi', async () => {
+    const { controller, idem } = setup();
+    for (const data of [
+      { market_id: 'x', request_ids: [STABLE] },
+      { market_id: MARKET, request_ids: 'nope' },
+      {},
+    ]) {
+      expect(
+        ((await controller.aiConfirmCompleted(data, ctx)) as Items).data.items,
+      ).toEqual([]);
+    }
+    expect(idem.findCompleted).not.toHaveBeenCalled();
   });
 });
 

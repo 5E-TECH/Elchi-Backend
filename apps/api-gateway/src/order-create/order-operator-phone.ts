@@ -1,5 +1,7 @@
-import { BadRequestException } from '@nestjs/common';
-import { normalizeUzPhone } from '@app/common';
+import { applyDecorators, BadRequestException } from '@nestjs/common';
+import { Transform } from 'class-transformer';
+import { IsOptional, IsString, Matches } from 'class-validator';
+import { normalizeUzPhone, ORDER_CREATE_ERROR_CODES } from '@app/common';
 
 /**
  * VRyloH62 — buyurtmadagi operator raqamlari (yorliq/chekdagi "Muammo
@@ -39,6 +41,32 @@ export type OrderOperatorPhones = {
 export const OPERATOR_PHONE_REQUIRED_MESSAGE =
   'Operator telefon raqami majburiy. Market profilida doimiy operator raqamini kiriting yoki buyurtmada raqam yuboring (operator_phone)';
 
+export const OPERATOR_PHONE_FORMAT_MESSAGE =
+  "Telefon raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak";
+
+/**
+ * Formadagi operator raqami maydonining DTO tekshiruvi — `POST /orders`
+ * (`operator_phone`, `secondary_operator_phone`) va `POST /orders/ai-confirm`
+ * (`orders[].operator_phone`) uchun AYNI qoida (bir joyda — DTO'lar ajralib
+ * ketmasin). Swagger tavsifi har DTO'ning o'zida.
+ *  • bo'sh satr/bo'shliq — yuborilmagan (`undefined`);
+ *  • aks holda umumiy `normalizeUzPhone` bilan kanonik `+998XXXXXXXXX`
+ *    ("90 123 45 67", "0901234567", "+998 90 …"); keltirib bo'lmasa qiymat
+ *    o'zgarmaydi va 400.
+ */
+export function OptionalOperatorPhone(): PropertyDecorator {
+  return applyDecorators(
+    Transform(({ value }: { value: unknown }): unknown =>
+      typeof value === 'string' && value.trim() === ''
+        ? undefined
+        : (normalizeUzPhone(value) ?? value),
+    ),
+    IsOptional(),
+    IsString(),
+    Matches(/^\+998\d{9}$/, { message: OPERATOR_PHONE_FORMAT_MESSAGE }),
+  );
+}
+
 function canonical(value: unknown): string {
   return normalizeUzPhone(value) ?? '';
 }
@@ -56,7 +84,11 @@ export function resolveOrderOperatorPhones(params: {
   if (params.market?.require_operator_phone === true && !marketDefault) {
     if (!formInput) {
       if (params.strict) {
-        throw new BadRequestException(OPERATOR_PHONE_REQUIRED_MESSAGE);
+        throw new BadRequestException({
+          statusCode: 400,
+          message: OPERATOR_PHONE_REQUIRED_MESSAGE,
+          code: ORDER_CREATE_ERROR_CODES.OPERATOR_PHONE_REQUIRED,
+        });
       }
       return { operator_phone: null, secondary_operator_phone: null };
     }

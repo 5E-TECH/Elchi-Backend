@@ -63,6 +63,7 @@ type SendPayload = {
   draft_id?: string;
   order_ids?: string[];
   market_id?: string;
+  draft_ids?: string[];
 };
 
 type Fake = { send: jest.Mock<Observable<unknown>, [Pattern, SendPayload]> };
@@ -72,9 +73,9 @@ const fakeClient = (): Fake => ({
 });
 const asClient = (fake: Fake) => fake as unknown as ClientProxy;
 
-/** jest asimmetrik matcher'i `any` qaytaradi — `unknown` ga toraytiriladi. */
-const stringContaining = (fragment: string): unknown =>
-  expect.stringContaining(fragment);
+/** `ai.draft.confirm_context` javobi: so'ralgan draftlar (snapshot'siz). */
+const knownDrafts = (payload: SendPayload) =>
+  (payload.draft_ids ?? []).map((draft_id) => ({ draft_id }));
 
 const MARKET_ID = '77';
 
@@ -90,6 +91,8 @@ const PRODUCTS = [
   { id: '16', name: 'Krem', user_id: MARKET_ID },
   { id: '99', name: 'Boshqa market mahsuloti', user_id: '555' },
 ];
+
+const DEFAULT_DRAFT_ID = 'dddddddd-0000-4000-8000-000000000000';
 
 const phoneFor = (n: number) => `+998901${String(n).padStart(6, '0')}`;
 
@@ -115,6 +118,9 @@ const confirmOrder = (
     items: [{ product_id: '15', quantity: 1 }],
     total_price: 100000 + n,
     where_deliver: Where_deliver.CENTER,
+    // AI ack: ai-confirm draft'ga bog'langan buyurtmani talab qiladi.
+    draft_id: DEFAULT_DRAFT_ID,
+    ai_item_index: n,
     ...rest,
   };
 };
@@ -127,7 +133,12 @@ const makeController = () => {
   const file = fakeClient();
   const ai = fakeClient();
   const catalog = fakeClient();
-  const config = { get: jest.fn(() => undefined) };
+  // AI ack S2: darvoza majburiy rejimda (sukut — log-only).
+  const config = {
+    get: jest.fn((key: string) =>
+      key === 'AI_ACK_CHECKS_ENFORCE' ? 'on' : undefined,
+    ),
+  };
   const poller = { getState: jest.fn(() => 'enabled') };
 
   logistics.send.mockImplementation((_pattern, payload) =>
@@ -158,8 +169,19 @@ const makeController = () => {
     return of({ data: null });
   });
   let nextOrderId = 1000;
-  order.send.mockImplementation(() => of({ id: String(nextOrderId++) }));
-  ai.send.mockImplementation(() => of({ updated: 1 }));
+  order.send.mockImplementation((pattern) =>
+    // Takror so'rovi (`loadAiReplays`): avval yaratilgan band yo'q.
+    pattern.cmd === 'order.ai_confirm.completed'
+      ? of({ data: { items: [] } })
+      : of({ id: String(nextOrderId++) }),
+  );
+  // AI ack: ai-confirm draft'ni ai-service'dan oladi — so'ralgan har draft
+  // "eski" (snapshot'siz) sifatida qaytadi (tasdiq so'ralmaydi).
+  ai.send.mockImplementation((pattern, payload) =>
+    pattern.cmd === 'ai.draft.confirm_context'
+      ? of({ drafts: knownDrafts(payload) })
+      : of({ updated: 1 }),
+  );
 
   const controller = new OrderGatewayController(
     asClient(order),
@@ -562,26 +584,56 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
       },
       marketReq,
     );
+    // AI ack: draft_id + ai_item_index endi majburiy — BARQAROR kalit
+    // (`ai:<market>:<draft>:<idx>`) qaytarishi muvaffaqiyat (idempotent).
     expect(res.data.results[0]).toEqual({
       index: 0,
-      ok: false,
-      code: 'duplicate_recent',
+      ok: true,
       order_id: '555',
-      reason: stringContaining('#555'),
+      idempotent_replay: true,
     });
-    // Dublikat yangi buyurtma emas — xarajatga bog'lanmaydi.
-    expect(sendsOf(fx.ai, 'ai.usage.link_orders')).toHaveLength(0);
+    // Takror ham bog'lanadi (1-urinish timeout_unknown bo'lgan bo'lishi
+    // mumkin); ai-service tomonda ON CONFLICT / DISTINCT — narx qayta
+    // qayd qilinmaydi.
+    const links = sendsOf(fx.ai, 'ai.usage.link_orders');
+    expect(links).toHaveLength(1);
+    expect(links[0][1]).toMatchObject({ order_ids: ['555'] });
   });
 
-  it('#13 dedupe kaliti: request_id = "ai-dedupe:<sha256>", takror yuborishda AYNAN bir xil', async () => {
+  it('dedupe kaliti: request_id = "ai:<market>:<draft>:<idx>", takror yuborishda AYNAN bir xil', async () => {
     const fx = makeController();
     await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
     await fx.controller.aiConfirm({ orders: [confirmOrder(1)] }, marketReq);
     const [first, second] = orderCreateCalls(fx.order).map(
       ([, payload]) => payload.request_id,
     );
-    expect(first).toMatch(/^ai-dedupe:[0-9a-f]{64}$/);
+    expect(first).toBe(`ai:${MARKET_ID}:${DEFAULT_DRAFT_ID}:1`);
     expect(second).toBe(first);
+  });
+
+  it('AI ack: draft_id yoki ai_item_index yo‘q buyurtma → 400 AI_DRAFT_REQUIRED, hech narsa yaratilmaydi', async () => {
+    const fx = makeController();
+    const err = await fx.controller
+      .aiConfirm(
+        {
+          orders: [
+            confirmOrder(1),
+            confirmOrder(2, { draft_id: undefined }),
+            confirmOrder(3, { ai_item_index: undefined }),
+          ],
+        },
+        marketReq,
+      )
+      .then(
+        () => null,
+        (e: { getStatus(): number; getResponse(): unknown }) => e,
+      );
+    expect(err?.getStatus()).toBe(400);
+    expect(err?.getResponse()).toMatchObject({
+      code: 'AI_DRAFT_REQUIRED',
+      indexes: [1, 2],
+    });
+    expect(orderCreateCalls(fx.order)).toHaveLength(0);
   });
 
   // gpCIsGjH: POST /orders endi DOIM `request_id` yuboradi (kalitsiz —
@@ -734,7 +786,6 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
           confirmOrder(2, { draft_id: draftA }),
           confirmOrder(3, { draft_id: draftB }),
           confirmOrder(4, { draft_id: draftB }),
-          confirmOrder(5),
         ],
       },
       marketReq,
@@ -744,7 +795,7 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
     const links = sendsOf(fx.ai, 'ai.usage.link_orders');
     expect(links).toHaveLength(2);
     // vncdmXOy: shu xabarda draft ↔ buyurtma (items) va tasdiqlagan.
-    // ai_item_index yuborilmagan (eski frontend) → item_index/edited_fields null.
+    // Saqlangan preview yo'q (soxta ai-service) → edited_fields null.
     expect(links.map(([, payload]) => payload)).toEqual(
       expect.arrayContaining([
         {
@@ -753,13 +804,13 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
           market_id: MARKET_ID,
           items: [
             {
-              item_index: null,
+              item_index: 1,
               order_id: ids[0],
               edited_fields: null,
               field_corrections: null,
             },
             {
-              item_index: null,
+              item_index: 2,
               order_id: ids[1],
               edited_fields: null,
               field_corrections: null,
@@ -775,7 +826,7 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
           market_id: MARKET_ID,
           items: [
             {
-              item_index: null,
+              item_index: 3,
               order_id: ids[2],
               edited_fields: null,
               field_corrections: null,
@@ -790,7 +841,11 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
 
   it('link_orders xatosi natijaga ta’sir qilmaydi', async () => {
     const fx = makeController();
-    fx.ai.send.mockImplementation(() => throwError(() => new Error('ai down')));
+    fx.ai.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'ai.usage.link_orders'
+        ? throwError(() => new Error('ai down'))
+        : of({ drafts: knownDrafts(payload) }),
+    );
     const res = await fx.controller.aiConfirm(
       {
         orders: [

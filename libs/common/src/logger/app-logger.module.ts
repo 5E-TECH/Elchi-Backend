@@ -3,6 +3,7 @@ import { LoggerModule, Params } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { requestContext } from '../context/request-context';
+import { scrubAiKeysDeep } from '../ai/ai-key-format';
 
 export interface AppLoggerOptions {
   /** Service name embedded in every log entry. */
@@ -61,7 +62,30 @@ export const PINO_REDACT_PATHS: readonly string[] = [
   '*.raw_orders',
   'previews',
   '*.previews',
+  // AI kalit sozlamasi (be-brief §7): kalit, shifrmatn va muhrlangan konvert.
+  'api_key',
+  '*.*.api_key',
+  'secret_enc',
+  '*.secret_enc',
+  '*.*.secret_enc',
+  'key_envelope',
+  '*.key_envelope',
 ];
+
+/**
+ * Pino `hooks.logMethod`: yo'l bo'yicha redaksiyadan tashqari QIYMAT
+ * bo'yicha tozalash — chuqur ichki obyekt yoki xato matnidagi
+ * `sk-ant-…` ham `sk-ant-[REDACTED]` bo'ladi (be-brief §7).
+ */
+export function scrubLogArgs(args: unknown[]): unknown[] {
+  let changed = false;
+  const out = args.map((a) => {
+    const s = scrubAiKeysDeep(a);
+    if (s !== a) changed = true;
+    return s;
+  });
+  return changed ? out : args;
+}
 
 /**
  * Shared Pino configuration used by every service. Centralised here so the
@@ -110,6 +134,11 @@ export class AppLoggerModule {
         redact: {
           paths: [...PINO_REDACT_PATHS],
           censor: '[REDACTED]',
+        },
+        hooks: {
+          logMethod(args, method) {
+            return method.apply(this, scrubLogArgs(args));
+          },
         },
         // x-request-id roundtrips through gateway → RMQ → service; if absent,
         // generate one so every line still has a correlation key.

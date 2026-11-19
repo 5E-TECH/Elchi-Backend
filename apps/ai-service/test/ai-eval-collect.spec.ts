@@ -1,9 +1,11 @@
 import {
+  COLLECT_SQL,
   UNEDITED_SAMPLE_SQL,
   confirmedPreview,
   hasUnnamedOrder,
   maskCandidateText,
   maskDeep,
+  nameVariants,
   namesOf,
   parseIntFlag,
   scrubCorrections,
@@ -276,5 +278,457 @@ describe('ai-eval-collect: PII (review round-2)', () => {
     for (const bad of ['', 'abc', '30d', '-5', '1.5', '0', '91']) {
       expect(parseIntFlag(bad, 30, 1, 90)).toBeNull();
     }
+  });
+});
+
+/** Review round-3 (N3, should-fix) — hammasi sintetik ma'lumot. */
+describe('ai-eval-collect: PII (review round-3)', () => {
+  const masked = (text: string, names: string[]): string =>
+    maskCandidateText(text, names);
+
+  it('N3: uy/xonadon raqami — egalik qo‘shimchasi (-i/-si, -и/-си)', () => {
+    expect(
+      masked(
+        'Yunusobod 4-kvartal 12-uyi 5-xonadoni, mo‘ljal: uyi 12, xonadoni 45, kvartirasi 7. Юнусобод 4-мавзе 12-уйи 5-хонадони',
+        [],
+      ),
+    ).toBe(
+      'Yunusobod 4-kvartal [N]-uyi [N]-xonadoni, mo‘ljal: uyi [N], xonadoni [N], kvartirasi [N]. Юнусобод 4-мавзе [N]-уйи [N]-хонадони',
+    );
+    expect(masked('12-uyida, 45-xonadonida, kvartirasiga 5', [])).toBe(
+      '[N]-uyida, [N]-xonadonida, kvartirasiga [N]',
+    );
+    expect(masked('12-uyining, uyidan 9', [])).toBe('[N]-uyining, uyidan [N]');
+  });
+
+  it('N3: "12-a uy", "12 A uy", "kv-ra 5"', () => {
+    expect(masked('12-a uy, 12 A uy, kv-ra 5, кв-ра 9, 5-kv-ra', [])).toBe(
+      '[N] uy, [N] uy, kv-ra [N], кв-ра [N], [N]-kv-ra',
+    );
+    // Bog'lovchi / ko'paytirish belgisi uy raqamiga yutilmaydi; miqdor emas.
+    expect(masked('дом 12 и кв 5, 1 x uy, uyiga 2 ta, uyi bor', [])).toBe(
+      'дом [N] и кв [N], 1 x uy, uyiga 2 ta, uyi bor',
+    );
+  });
+
+  it('N3: ismga yopishgan murojaat — yalang‘och ism ham maskalanadi', () => {
+    expect(
+      masked(
+        'Dilnozaxon [TEL_1] Toshkent. Dilnoza opaga bering, Dilnozaning uyi',
+        ['Dilnozaxon'],
+      ),
+    ).toBe('[ISM] [TEL_1] Toshkent. [ISM] opaga bering, [ISM]ning uyi');
+    expect(masked('Феруза опага, Ферузанинг', ['Ферузажон'])).toBe(
+      '[ISM] опага, [ISM]нинг',
+    );
+    expect(masked('Rustam aka, Rustamjonga', ['Rustamjon Karimov'])).toBe(
+      '[ISM] aka, [ISM]ga',
+    );
+    expect(nameVariants(['Dilnozaxonim', 'Ферузажон', 'Alijon'])).toEqual(
+      expect.arrayContaining(['Dilnoza', 'Феруза', 'Ali']),
+    );
+    // O'zak < 3 harf yoki murojaatning o'zi — alohida variant emas.
+    expect(nameVariants(['Gojon', 'Opaxon'])).toEqual(['Opaxon', 'Gojon']);
+    // Boshqa ism (Dilnozabonu) tegilmaydi.
+    expect(masked('Dilnozabonu keldi', ['Dilnozaxon'])).toBe(
+      'Dilnozabonu keldi',
+    );
+  });
+
+  it('N3: kichraytuvchi -cha/-ча qo‘shimchasi', () => {
+    expect(masked('Dilnozachaga bering', ['Dilnoza'])).toBe(
+      '[ISM]chaga bering',
+    );
+    expect(masked('Ферузачага', ['Феруза'])).toBe('[ISM]чага');
+  });
+
+  it('xarita / WhatsApp havolalari → [LINK] (tinish belgisi saqlanadi)', () => {
+    expect(
+      masked(
+        'joy: https://maps.app.goo.gl/AbCdEf123xyz, https://www.google.com/maps?q=41.311081,69.240562; yandex.uz/maps/-/CDabC9~x. 2gis.uz/tashkent/geo/7030000 va go.2gis.com/ab12c, wa.me/998000000000',
+        [],
+      ),
+    ).toBe('joy: [LINK], [LINK]; [LINK]. [LINK] va [LINK], [LINK]');
+    expect(
+      masked(
+        'https://maps.google.com/?q=41.3,69.2 va google.co.uz/maps/place/X, goo.gl/maps/abc.',
+        [],
+      ),
+    ).toBe('[LINK] va [LINK], [LINK].');
+    // Xarita bo'lmagan / domen ichida emas — tegilmaydi.
+    expect(
+      masked('t.meeting emas, google.com/search?q=a emas, yandex.uz emas', []),
+    ).toBe('t.meeting emas, google.com/search?q=a emas, yandex.uz emas');
+  });
+
+  it('pasport: ajratgich bilan (tire, №)', () => {
+    expect(
+      masked(
+        'pasport AA-1234567, AA №1234567, AA № 1234567, AA1234567, AB–7654321',
+        [],
+      ),
+    ).toBe('pasport [HUJJAT], [HUJJAT], [HUJJAT], [HUJJAT], [HUJJAT]');
+  });
+
+  it('SQL: edited_fields JSON null/skalyar — jsonb_array_length faqat massivda', () => {
+    for (const sql of [COLLECT_SQL, UNEDITED_SAMPLE_SQL]) {
+      expect(sql).toMatch(
+        /jsonb_typeof\(i\.edited_fields\) = 'array'\s+THEN jsonb_array_length\(i\.edited_fields\) > 0/,
+      );
+      expect(sql).not.toContain('COALESCE(i.edited_fields');
+    }
+    // Tahrirlanmagan namunada massiv bo'lmagan qiymat "solishtirib bo'lmadi".
+    expect(UNEDITED_SAMPLE_SQL).toMatch(/ELSE true END\)/);
+    expect(COLLECT_SQL).toMatch(/ELSE false END/);
+  });
+});
+
+/** Review round-6 (L1, S1–S4) — hammasi sintetik ma'lumot. */
+describe('ai-eval-collect: PII (review round-6)', () => {
+  const masked = (text: string, names: string[]): string =>
+    maskCandidateText(text, names);
+
+  it('L1: havoladan keyingi telefon to‘liq [RAQAM] (birinchi guruh yutilmaydi)', () => {
+    for (const [t, want] of [
+      ['instagram.com/dilnoza_shop,90 742 90 47', '[LINK],[RAQAM]'],
+      ['t.me/dilnoza_shop,90 742 90 47', '[LINK],[RAQAM]'],
+      ['https://maps.app.goo.gl/AbC123,90 765 43 21', '[LINK],[RAQAM]'],
+      ['https://maps.app.goo.gl/AbC1-90 931 38 51', '[LINK]-[RAQAM]'],
+    ]) {
+      expect(masked(t, [])).toBe(want);
+    }
+    // Koordinatali xarita havolasi butunligicha; havolalar orasidagi vergul.
+    expect(
+      masked(
+        'google.com/maps/@41.31,69.23,17z/data=!3m1 va maps.google.com/?q=41.311081,69.240562',
+        [],
+      ),
+    ).toBe('[LINK] va [LINK]');
+    expect(masked('t.me/a_b, wa.me/998000000000', [])).toBe('[LINK], [LINK]');
+  });
+
+  it('L1: tuzatishlar va tasdiqlangan preview (maskDeep) orqali ham', () => {
+    const addr = 'Chilonzor 9, instagram.com/dilnoza_shop,90 742 90 47';
+    expect(
+      maskDeep(
+        scrubCorrections([
+          {
+            item_index: 0,
+            field_corrections: { address: { ai: null, final: addr } },
+          },
+        ]),
+        [],
+      ),
+    ).toEqual([
+      {
+        item_index: 0,
+        field_corrections: {
+          address: { ai: null, final: 'Chilonzor 9, [LINK],[RAQAM]' },
+        },
+      },
+    ]);
+    expect(
+      maskDeep(
+        confirmedPreview([{ index: 0, address: addr }], [{ item_index: 0 }]),
+        [],
+      ),
+    ).toEqual([{ index: 0, address: 'Chilonzor 9, [LINK],[RAQAM]' }]);
+  });
+
+  it('S1: narx guruhi uy raqamiga aylanmaydi', () => {
+    expect(
+      masked(
+        "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+        [],
+      ),
+    ).toBe(
+      "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+    );
+    expect(
+      masked('12-uyi, uyiga 12, uy 120, Yunusobod 4 12-uy, дом 12 кв 5', []),
+    ).toBe('[N]-uyi, uyiga [N], uy [N], Yunusobod 4 [N]-uy, дом [N] кв [N]');
+  });
+
+  it('S2: -hon/-honim va tireli murojaat ("Dilnoza-xon")', () => {
+    expect(masked('Dilnozahonga bering', ['Dilnoza'])).toBe(
+      '[ISM]honga bering',
+    );
+    expect(masked('Dilnoza opa keldi', ['Dilnozahon'])).toBe('[ISM] opa keldi');
+    expect(masked('Dilnoza opaga bering', ['Dilnoza-xon'])).toBe(
+      '[ISM] opaga bering',
+    );
+    expect(nameVariants(['Dilnoza-xon'])).toEqual(['Dilnoza-xon', 'Dilnoza']);
+    expect(nameVariants(['Dilnozahonim'])).toContain('Dilnoza');
+  });
+
+  it('S3: rus kelishigidagi uy/kvartira', () => {
+    expect(
+      masked('в доме 5, квартире 7, в квартиру 9, квартиры 2 шт', []),
+    ).toBe('в доме [N], квартире [N], в квартиру [N], квартиры 2 шт');
+    expect(masked('дома никого нет', [])).toBe('дома никого нет');
+  });
+
+  it('S4: pasport — oldida umumiy 2 harfli so‘z bo‘lsa seriya emas', () => {
+    expect(masked('Jami: 1 ta - 1500000, uy-1234567', [])).toBe(
+      'Jami: 1 ta - 1500000, uy-1234567',
+    );
+    expect(masked('AA-1234567, AB №1234567, AA 1234567', [])).toBe(
+      '[HUJJAT], [HUJJAT], [HUJJAT]',
+    );
+  });
+});
+
+/**
+ * Review round-7 — dev bilan tenglik (dev maskalagan narsa ochilmasin).
+ * Har holat maskCandidateText VA maskDeep (tuzatishlar, tasdiqlangan
+ * preview) orqali. Hammasi sintetik.
+ */
+describe('ai-eval-collect: PII (review round-7, dev tengligi)', () => {
+  const viaDeep = (text: string): string[] => {
+    const corr = maskDeep(
+      scrubCorrections([
+        {
+          item_index: 0,
+          field_corrections: { address: { ai: null, final: text } },
+        },
+      ]),
+      [],
+    ) as { field_corrections: { address: { final: string } } }[];
+    const prev = maskDeep(
+      confirmedPreview([{ index: 0, address: text }], [{ item_index: 0 }]),
+      [],
+    ) as { address: string }[];
+    return [corr[0].field_corrections.address.final, prev[0].address];
+  };
+  const expectAll = (text: string, want: string): void => {
+    expect(maskCandidateText(text, [])).toBe(want);
+    expect(viaDeep(text)).toEqual([want, want]);
+  };
+
+  it('B4: uy/xonadon raqamidan keyingi narx raqamni ochmaydi', () => {
+    for (const [t, want] of [
+      [
+        "Chilonzor 12 kvartal uy 5 kv 45 250 000 so'm",
+        "Chilonzor 12 kvartal uy [N] kv [N] 250 000 so'm",
+      ],
+      ["kv 45 150 000 so'm", "kv [N] 150 000 so'm"],
+      ['uy 12 100 000', 'uy [N] 100 000'],
+      ['дом 12 300 000 сум', 'дом [N] 300 000 сум'],
+      ['кв 45 200 тыс', 'кв [N] 200 тыс'],
+      ['dom 7 123', 'dom [N] 123'],
+      ['uyga 1.500', 'uyga [N].500'],
+      [
+        "Sergeli, dom 15, kv 7 350.000 so'm",
+        "Sergeli, dom [N], kv [N] 350.000 so'm",
+      ],
+      ["Olmazor uy 23 120 000 so'm", "Olmazor uy [N] 120 000 so'm"],
+      ['kvartira 7 200 ming', 'kvartira [N] 200 ming'],
+      [
+        "Dilnoza 90 742 90 47\nToshkent Chilonzor 9-kvartal, uy 12 kv 45\n250 000 so'm\natir 1 ta",
+        "Dilnoza [RAQAM]\nToshkent Chilonzor 9-kvartal, uy [N] kv [N]\n250 000 so'm\natir 1 ta",
+      ],
+    ]) {
+      expectAll(t, want);
+    }
+    // S1 narx holatlari avvalgidek saqlanadi.
+    expectAll(
+      "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+      "Dostavka uyigacha 20 000 so'm, uyiga 25 000, xonadoniga 30 000, Narxi 1 586 000 uyiga yetkazib",
+    );
+  });
+
+  it('B3: umumiy 2 harfli so‘z + 7 raqam — raqam yopiq (dev: [HUJJAT])', () => {
+    for (const [t, want] of [
+      ['Tel: 90 123 45 67 va 2345678', 'Tel: [RAQAM] va [RAQAM]'],
+      ['uy 2345678', 'uy [RAQAM]'],
+      ['uy2345678', 'uy[RAQAM]'],
+      ['tel uy 2345678', 'tel uy [RAQAM]'],
+      ['ва 1234567', 'ва [RAQAM]'],
+      ['кв 1234567', 'кв [RAQAM]'],
+      // dev'dagidek ochiq (dev ham maskalamagan).
+      ['Jami: 1 ta - 1500000', 'Jami: 1 ta - 1500000'],
+      ['uy-1234567', 'uy-1234567'],
+      // Pasport ajratgichi uy kalit so'zini yutmaydi (dev'dagidek).
+      ['151-уй - 6356734', '[N]-уй - 6356734'],
+      ['AA-1234567, AB №1234567', '[HUJJAT], [HUJJAT]'],
+    ]) {
+      expectAll(t, want);
+    }
+  });
+
+  it('B1/B2: havola chegarasidagi telefon to‘liq [RAQAM]', () => {
+    for (const [t, want] of [
+      ['instagram.com/dilnoza_shop,90-742 90 47', '[LINK],[RAQAM]'],
+      ['instagram.com/dilnoza_shop,90 742 90 47', '[LINK],[RAQAM]'],
+      ['wa.me/90 742 90 47', '[LINK]/[RAQAM]'],
+      ['api.whatsapp.com/send?phone=90 742 90 47', '[LINK]=[RAQAM]'],
+      ['maps.app.goo.gl/AbC123.90 742 90 47', '[LINK].[RAQAM]'],
+      ['https://maps.app.goo.gl/AbC1-90 931 38 51', '[LINK]-[RAQAM]'],
+      ['Tel 98 710 45 85.maps.app.goo.gl/AbC123', 'Tel [RAQAM].[LINK]'],
+      ['goo.gl/AbC12390 742 90 47', '[LINK][RAQAM]'],
+      // Koordinata/zoom vergullari havola ichida; havolalar orasidagi vergul.
+      [
+        'google.com/maps/@41.31,69.23,17z/data=!3m1 va maps.google.com/?q=41.311081,69.240562, t.me/a_b.',
+        '[LINK] va [LINK], [LINK].',
+      ],
+      ['yandex.uz/maps/?ll=69.24,-41.31&z=12', '[LINK]'],
+    ]) {
+      expectAll(t, want);
+    }
+  });
+
+  it('havola [TEL_n] tokenini yutmaydi', () => {
+    expectAll('https://wa.me/[TEL_1] yozing', '[LINK][TEL_1] yozing');
+  });
+
+  it('ismlar: en-tireli murojaat; hon/xonim/honim alohida so‘z sifatida maskalanmaydi', () => {
+    expect(maskCandidateText('Dilnoza opaga bering', ['Dilnoza–xon'])).toBe(
+      '[ISM] opaga bering',
+    );
+    expect(
+      maskCandidateText('hon keldi, xonim keldi, honim', [
+        'Dilnoza hon',
+        'Lola xonim',
+        'Gul honim',
+      ]),
+    ).toBe('hon keldi, xonim keldi, honim');
+  });
+});
+
+/**
+ * Review round-8 (eval aniqligi) - havola dumidagi raqam FAQAT telefon
+ * bo'lsa ajratiladi: post raqami / koordinata + narx [RAQAM] bo'lmaydi.
+ * Matn maskPhones'dan o'tgan ([TEL_n]) - haqiqiy yo'l.
+ */
+describe('ai-eval-collect: havoladan keyingi narx saqlanadi (round-8)', () => {
+  it.each([
+    ['https://t.me/elchi_shop/1543 150 000', '[LINK] 150 000'],
+    ["https://t.me/elchi_shop/1543\n175 000 so'm", "[LINK]\n175 000 so'm"],
+    ['https://t.me/c/1987654321/245 85 000', '[LINK] 85 000'],
+    ['instagram.com/p/C8x2Lm41 1 250 000', '[LINK] 1 250 000'],
+    [
+      'https://www.google.com/maps?q=41.311081,69.240562 85 000',
+      '[LINK] 85 000',
+    ],
+    [
+      'https://www.google.com/maps?q=41.311081,69.240562\n1 250 000',
+      '[LINK]\n1 250 000',
+    ],
+    ['https://maps.google.com/?q=41.31,69.24 12 500 000', '[LINK] 12 500 000'],
+    [
+      'https://yandex.uz/maps/?ll=69.240562,41.311081&z=17 12 500 000',
+      '[LINK] 12 500 000',
+    ],
+    ['https://maps.app.goo.gl/Xk3vQ9pR7mTz2 1 250 000', '[LINK] 1 250 000'],
+    // telefon holatlari avvalgidek
+    ['wa.me/90 742 90 47', '[LINK]/[RAQAM]'],
+    ['goo.gl/AbC12390 742 90 47', '[LINK][RAQAM]'],
+    ['https://maps.app.goo.gl/AbC1-90 931 38 51', '[LINK]-[RAQAM]'],
+    ['https://wa.me/[TEL_1] 150 000', '[LINK][TEL_1] 150 000'],
+  ])('%j', (text, want) => {
+    expect(maskCandidateText(text, [])).toBe(want);
+  });
+});
+
+/**
+ * Review round-8 (maxfiylik) - havola xostiga oldindan yopishgan telefon
+ * ("..._www.google.com", "...-maps.app.goo.gl", "...47www.google.com") va
+ * havola dumiga ajratgich bilan yopishgan telefon ("...AbC12355_150 50 15",
+ * "...x01133/142 83 08", "...(91_457 18 87", ".../@90_742 90 47") butunligicha
+ * [RAQAM]; "/" bilan tugagan havoladan keyingi narx ochiq qoladi.
+ */
+describe('ai-eval-collect: havolaga yopishgan telefon (round-8)', () => {
+  it.each([
+    ['93_918 34 78_www.google.com/maps/@901112233', '[RAQAM]_[LINK]'],
+    ['98\u2212341\u221237\u221210_www.google.com/maps', '[RAQAM]_[LINK]'],
+    ['90\u2212411\u221236\u221247www.google.com/maps/', '[RAQAM][LINK]'],
+    [
+      '50\u2013491\u201349\u201303 93_721 08 30-maps.app.goo.gl/AbC',
+      '[RAQAM]-[LINK]',
+    ],
+    ['(90)742-90-47-go.2gis.com/AbC', '([RAQAM]-[LINK]'],
+    ['wa.me/AbC12355_150 50 15', '[LINK][RAQAM]'],
+    ['api.whatsapp.com/send?phone=x01133/142 83 08', '[LINK][RAQAM]'],
+    ['https://www.go.2gis.com/x016(91_457 18 87', '[LINK][RAQAM]'],
+    ['maps.app.goo.gl/AbC12390-742 90 47', '[LINK][RAQAM]'],
+    ['maps.app.goo.gl/AbC12390.742 90 47', '[LINK][RAQAM]'],
+    ['https://goo.gl/maps/AbC12397.958 19 04', '[LINK][RAQAM]'],
+    ['maps.app.goo.gl/AbC123(98/866 29 30', '[LINK][RAQAM]'],
+    ['tiktok.com/@90_742 90 47', '[LINK][RAQAM]'],
+    // "dd.ddd dd dd" - nuqtali telefon, koordinata emas.
+    ['yandex.uz/maps/-/AbC53338#55.578 64 01', '[LINK]#[RAQAM]'],
+    ['facebook.com/x704,33.885 90 26', '[LINK],[RAQAM]'],
+    ['yandex.uz/maps/-/x/Saidaga(98.312 09 76', '[LINK][RAQAM]'],
+    // narx ochiq qoladi
+    [
+      'https://www.instagram.com/p/9Ujozfoh333/ 130000 som',
+      '[LINK] 130000 som',
+    ],
+    [
+      'https://www.google.com/maps/data=!3d41.311081!4d69.240562 85 000',
+      '[LINK] 85 000',
+    ],
+    ['https://yandex.uz/maps/?pt=69.279737%2C41.31 85 000', '[LINK] 85 000'],
+    ['https://maps.google.com/?q=41.31,69.240 85 000', '[LINK] 85 000'],
+  ])('%j', (text, want) => {
+    expect(maskCandidateText(text, [])).toBe(want);
+  });
+
+  it('ismlar: birinchi so\'z "Xonim" ism bo\'lsa ham maskalanadi', () => {
+    expect(
+      maskCandidateText('Xonim opaga bering, Karimova', ['Xonim Karimova']),
+    ).toBe('[ISM] opaga bering, [ISM]');
+    // Ikkinchi so'z sifatida - murojaat, ism emas.
+    expect(maskCandidateText('xonim keldi', ['Lola xonim'])).toBe(
+      'xonim keldi',
+    );
+  });
+});
+
+/**
+ * Review round-9 - C (ta/та), D (шт/по pasport istisnosi), E2 (egalik
+ * shakllaridan keyingi narx) qamrovi; "uyi 61 500" - qayd etilgan murosa.
+ */
+describe('ai-eval-collect: miqdor/narx istisnolari (round-9)', () => {
+  it.each([
+    '1 ta 1500000',
+    '1 \u0442\u0430 1500000',
+    '2 \u0448\u0442 1500000',
+    '\u043F\u043E 1500000',
+    '\u0448\u04421234567',
+    'uyigacha 19 900',
+    '\u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u0434\u043E \u0434\u043E\u043C\u0430 25 500',
+    'uyi 61 500',
+    'uyigacha 19.900',
+    'uyiga 25.000',
+    'uyiga 25\u00A0000',
+    'kv 18\tx2 sumka',
+    'uyiga 2 ta',
+  ])("o'zgarmaydi: %j", (text) => {
+    expect(maskCandidateText(text, [])).toBe(text);
+  });
+
+  it.each([
+    ['uyi 61 5000', 'uyi [N] 5000'],
+    ['kv 18\nx2 sumka', 'kv [N]\nx2 sumka'],
+    ['uyi 12\nMing rahmat', 'uyi [N]\nMing rahmat'],
+    ['uyi 61\r120 000', 'uyi [N]\r120 000'],
+    ['uyi 61\u2028120 000', 'uyi [N]\u2028120 000'],
+    ['uyi 61\u2029120 000', 'uyi [N]\u2029120 000'],
+    ['kv 18\rx2 sumka', 'kv [N]\rx2 sumka'],
+    ['kv 18\u2028x2 sumka', 'kv [N]\u2028x2 sumka'],
+    ['kv 18\u2029x2 sumka', 'kv [N]\u2029x2 sumka'],
+    ['uyi 12\rMing rahmat', 'uyi [N]\rMing rahmat'],
+    ['uyi 12\u2028Ming rahmat', 'uyi [N]\u2028Ming rahmat'],
+    ['uyi 12\u2029Ming rahmat', 'uyi [N]\u2029Ming rahmat'],
+    ['uyi 61.5000', 'uyi [N].5000'],
+    ['uyi 61-500', 'uyi [N]-500'],
+    ['uyi 61\r\n120 000', 'uyi [N]\r\n120 000'],
+  ])('qator chegarasi / qisqa son: %j', (text, want) => {
+    expect(maskCandidateText(text, [])).toBe(want);
+  });
+
+  it("E2 istisnosi yangi qatorni kesib o'tmaydi", () => {
+    expect(maskCandidateText('uyi 61\n120 000', [])).toBe('uyi [N]\n120 000');
   });
 });

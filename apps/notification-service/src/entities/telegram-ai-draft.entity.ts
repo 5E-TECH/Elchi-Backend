@@ -13,6 +13,35 @@ export type TelegramAiDraftStatus =
 export interface TelegramAiDraftInput {
   text?: string;
   files?: Array<{ file_id: string; mime?: string | null }>;
+  /** BOT ICHKI holati (AI chiqishi EMAS) — `TelegramAiDraftMeta`. */
+  meta?: TelegramAiDraftMeta;
+}
+
+/**
+ * Qoralama darajasidagi bot holati (`input` jsonb ichida — migratsiyasiz).
+ * Faqat bot yozadi; ai-parse javobidan HECH QACHON to'ldirilmaydi.
+ */
+export interface TelegramAiDraftMeta {
+  /** Qoralamani boshlagan aktor roli (`market` / `market_operator`). */
+  role?: string;
+  /** Market: tanlanadigan operatorlar (`GET /market-operators/selectable`). */
+  operators?: Array<{ id: string; name: string }>;
+  /** Marketdagi tanlanadigan operatorlar soni (ro'yxat cheklangan). */
+  operators_total?: number;
+  /** Odam «🎧 Operator» da tanlagan operator (faqat market). */
+  operator_id?: string | null;
+  operator_name?: string | null;
+  /**
+   * Server «Operator telefon raqami majburiy» dedi — keyingi «✅» aktor
+   * profil raqamini `operator_phone` qilib yuboradi (bir marta qayta).
+   */
+  operator_phone_needed?: boolean;
+  /**
+   * Aktor profili keshi (`GET /auth/my-profile` muvaffaqiyatli bo'lsa,
+   * qoralama bo'yicha): o'z raqami (normallashgan) va market sozlamasi
+   * «raqam majburiy, doimiy raqam yo'q».
+   */
+  profile?: { phone: string | null; required: boolean } | null;
 }
 
 /**

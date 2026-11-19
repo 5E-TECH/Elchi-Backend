@@ -97,6 +97,10 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
     const runner = db.createQueryRunner();
     await new CreateCashboxCards1716000000105().up(runner);
     await new CashboxCardDetails1716000000161().up(runner);
+    // 63HO6cBU (N1) — migratsiya 245 qo'shgan ustun (entity'da bor).
+    await runner.query(
+      'ALTER TABLE "finance_schema"."cashbox_cards" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamptz NULL',
+    );
     await runner.release();
 
     cards = new CashboxCardService(db, activityLog as never, realtime as never);
@@ -150,9 +154,10 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
       cashboxRepo().create({
         user_id: BRANCH,
         cashbox_type: Cashbox_type.BRANCH,
+        // 63HO6cBU — filial kassasi bitta jami.
         balance: 300_000,
-        balance_cash: 250_000,
-        balance_card: 50_000,
+        balance_cash: 300_000,
+        balance_card: 0,
       }),
     ]);
     activityLog.log.mockClear();
@@ -191,6 +196,20 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
       ...(branchId ? { branch_id: branchId } : {}),
     });
     return String(res.data.card.id);
+  };
+  /** 63HO6cBU — migratsiya 245 dan keyingi eski filial kartasi (nofaol, 0). */
+  const legacyBranchCard = async (name: string): Promise<string> => {
+    const cashbox = await cashboxOf(BRANCH);
+    const saved = await db.getRepository(CashboxCard).save(
+      db.getRepository(CashboxCard).create({
+        cashbox_id: String(cashbox.id),
+        name,
+        balance: 0,
+        is_default: false,
+        is_active: false,
+      }),
+    );
+    return String(saved.id);
   };
   const defaultId = async (branchId?: string): Promise<string> => {
     const list: any = await cards.listCards(
@@ -493,7 +512,7 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
     const humo = await create('Humo');
     const archived = await create('Eski');
     await cards.setCardActive({ id: archived, is_active: false });
-    const branchCard = await create('Filial karta', BRANCH);
+    const branchCard = await legacyBranchCard('Filial karta');
     await fund(humo, 60_000);
 
     await expect(
@@ -525,7 +544,6 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
     expect(Number(row.balance)).toBe(60_000);
     expect(await movementCount()).toBe(1);
     await expectInvariant();
-    await expectInvariant(BRANCH);
   });
 
   it('⭐ nol bilan boshlangan ID (`02`): o`ziga ko`chirish — 400 (karta "tirilmaydi", puli ikki baravar bo`lmaydi); transfer ham; takror — 200', async () => {
@@ -747,30 +765,23 @@ describePg('cards1111 — kassa kartasini o`chirish, haqiqiy Postgres', () => {
     ]);
   });
 
-  it('⭐ filial kassasi: qoldiq naqdga, filial invarianti; boshqa filial doirasi — 403; MAIN tegilmaydi', async () => {
-    const card = await create('Filial Humo', BRANCH);
-    await fund(card, 20_000, BRANCH);
+  it('⭐ 63HO6cBU: eski (nofaol, qoldiq 0) filial kartasi o`chiriladi; boshqa filial doirasi — 403; filial va MAIN puli tegilmaydi', async () => {
+    const card = await legacyBranchCard('Filial Humo');
 
     await expect(
       cards.deleteCard({ id: card, move_to: 'cash', branch_id: '14' }),
     ).rejects.toMatchObject({ error: { statusCode: 403 } });
 
-    const res: any = await cards.deleteCard({
-      id: card,
-      move_to: 'cash',
-      branch_id: BRANCH,
+    const res: any = await cards.deleteCard({ id: card, branch_id: BRANCH });
+    expect(res.data).toMatchObject({ moved_amount: 0, movement: null });
+    expect(await cardRepo().findOneByOrFail({ id: card })).toMatchObject({
+      isDeleted: true,
     });
-    expect(res.data).toMatchObject({
-      moved_amount: 20_000,
-      movement: { type: CardMovementType.CARD_TO_CASH, amount: 20_000 },
-    });
-    const { list, cashbox } = await expectInvariant(BRANCH);
-    expect(cashbox).toMatchObject({
+    expect(await cashboxOf(BRANCH)).toMatchObject({
       balance: 300_000,
-      balance_cash: 270_000,
-      balance_card: 30_000,
+      balance_cash: 300_000,
+      balance_card: 0,
     });
-    expect(balancesOf(list)).toEqual([['Asosiy karta', 30_000]]);
     expect(lastRealtime()).toMatchObject({
       action: 'deleted',
       cashbox_type: 'branch',

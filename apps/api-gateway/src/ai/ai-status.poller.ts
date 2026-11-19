@@ -45,10 +45,36 @@ export class AiStatusPoller implements OnModuleInit, OnModuleDestroy {
   private inFlight = false;
   private failureLogged = false;
 
+  /**
+   * «AI kalit va modellar» (be-brief §8): `ai.status` endi `ai_config_queue`
+   * orqali (DLX'siz, TTL 8 s) — `AI_CONFIG` mijozi bo'lmasa eski `AI`.
+   * ai-service rollout davomida ikkala navbatda javob beradi.
+   */
+  private readonly aiClient?: ClientProxy;
+
   constructor(
-    @Optional() @Inject('AI') private readonly aiClient?: ClientProxy,
+    @Optional() @Inject('AI') legacyClient?: ClientProxy,
     @Optional() private readonly config?: ConfigService,
-  ) {}
+    @Optional() @Inject('AI_CONFIG') configClient?: ClientProxy,
+  ) {
+    this.aiClient = configClient ?? legacyClient;
+  }
+
+  /**
+   * Yozuvdan keyin darhol yangilash (be-brief §8: kalit/model o'zgarishi
+   * `/orders/ai-availability` ga 30 s kutmasdan yetib borsin). Throw yo'q.
+   */
+  refreshNow(): void {
+    // So'rov ketayotgan bo'lsa — u tugagach yana bir marta (eski javob
+    // o'zgarishdan oldingi holatni ko'rsatishi mumkin).
+    if (this.inFlight) {
+      this.refreshPending = true;
+      return;
+    }
+    void this.poll();
+  }
+
+  private refreshPending = false;
 
   onModuleInit(): void {
     if (!this.aiClient || this.timer) return;
@@ -108,6 +134,10 @@ export class AiStatusPoller implements OnModuleInit, OnModuleDestroy {
       );
     } finally {
       this.inFlight = false;
+      if (this.refreshPending) {
+        this.refreshPending = false;
+        void this.poll();
+      }
     }
   }
 

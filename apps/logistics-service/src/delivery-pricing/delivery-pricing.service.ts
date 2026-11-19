@@ -150,7 +150,8 @@ export class DeliveryPricingService {
 
   /**
    * `GET /delivery/tariffs`: har tarifning HOZIRGI versiyasi + versiyalar
-   * tarixi (kelajakdagi rejalashtirilganlari ham), yangisi tepada.
+   * tarixi (kelajakdagi rejalashtirilganlari ham), yangisi tepada. Bekor
+   * qilingan versiya (B0ILd7YI) ham ro'yxatda — `is_cancelled: true`.
    */
   async listTariffs(payload: ListDeliveryTariffsPayload = {}) {
     const tariffFilter = payload.tariff_id
@@ -189,6 +190,9 @@ export class DeliveryPricingService {
         ...row,
         is_current: currentIds.has(String(row.id)),
         is_scheduled: row.is_active && new Date(row.valid_from).getTime() > now,
+        // B0ILd7YI — bekor qilingan rejalashtirilgan versiya (tarixda qoladi).
+        is_cancelled:
+          row.cancelled_at !== null && row.cancelled_at !== undefined,
       })),
     });
   }
@@ -818,6 +822,123 @@ export class DeliveryPricingService {
       saved,
       201,
       'Yetkazish tarifining yangi versiyasi yaratildi',
+    );
+  }
+
+  private requireRowId(value: unknown): string {
+    const id =
+      typeof value === 'number' && Number.isSafeInteger(value)
+        ? String(value)
+        : typeof value === 'string'
+          ? value.trim()
+          : '';
+    if (!/^[1-9][0-9]{0,18}$/.test(id)) {
+      this.fail("id musbat butun son bo'lishi kerak", 400);
+    }
+    return id;
+  }
+
+  /** Jurnal uchun tarif versiyasi nusxasi (`createTariff` dagi shakl). */
+  private tariffSnapshot(row: DeliveryTariff) {
+    return {
+      id: String(row.id),
+      tariff_id: row.tariff_id,
+      base_price: row.base_price,
+      extra_per_kg: row.extra_per_kg,
+      days_min: row.days_min,
+      days_max: row.days_max,
+      valid_from: row.valid_from,
+    };
+  }
+
+  /**
+   * B0ILd7YI — `POST /delivery/tariffs/:id/cancel`: FAQAT rejalashtirilgan
+   * versiya (faol, o'chirilmagan, `valid_from > now()`) bekor qilinadi. Qator
+   * o'chirilmaydi: `is_active = false` + `cancelled_at` / `cancelled_by`
+   * (tarixda «Bekor qilingan»), hozirgi tarif o'zgarmaydi.
+   *
+   * Shart BITTA `UPDATE` ichida va DB soati bilan (`valid_from > now()`) —
+   * kuchga kirish lahzasidagi poyga yo'q: kuchga kirgan versiya (sotuvda
+   * narx unga tayangan bo'lishi mumkin) hech qachon bekor qilinmaydi.
+   * Qayta so'rov (vaqt tugagach qayta bosish, ikki admin) — o'sha qator,
+   * 200, `already_cancelled: true`, jurnal ikkinchi marta yozilmaydi.
+   *
+   * Xatolar: 400 (id), 404 (versiya yo'q), 409 (allaqachon kuchga kirgan
+   * yoki boshqa sabab bilan nofaol).
+   */
+  async cancelScheduledTariff(
+    id: unknown,
+    requester?: DeliveryPricingRequester,
+  ) {
+    const rowId = this.requireRowId(id);
+    const result = await this.tariffRepo
+      .createQueryBuilder()
+      .update(DeliveryTariff)
+      .set({
+        is_active: false,
+        cancelled_at: () => 'now()',
+        cancelled_by: requester?.id ? String(requester.id) : null,
+      })
+      .where('id = :rowId', { rowId })
+      .andWhere('is_active = true')
+      .andWhere('is_deleted = false')
+      .andWhere('cancelled_at IS NULL')
+      .andWhere('valid_from > now()')
+      .execute();
+
+    const row = await this.tariffRepo.findOne({
+      where: { id: rowId, isDeleted: false },
+    });
+    if (!row) {
+      this.fail('Tarif versiyasi topilmadi', 404);
+    }
+    const view = (alreadyCancelled: boolean) => ({
+      ...row,
+      is_current: false,
+      is_scheduled: false,
+      is_cancelled: true,
+      already_cancelled: alreadyCancelled,
+    });
+
+    if (!result.affected) {
+      if (row.cancelled_at) {
+        return successRes(
+          view(true),
+          200,
+          'Tarif versiyasi allaqachon bekor qilingan',
+        );
+      }
+      if (!row.is_active) {
+        this.fail("Tarif versiyasi faol emas — bekor qilib bo'lmaydi", 409);
+      }
+      this.fail(
+        "Tarif versiyasi allaqachon kuchga kirgan — bekor qilib bo'lmaydi. Narxni o'zgartirish uchun yangi versiya yarating",
+        409,
+      );
+    }
+
+    await this.activityLog.log({
+      entity_type: 'DeliveryTariff',
+      entity_id: String(row.id),
+      action: 'logistics.delivery_tariff_cancelled',
+      old_value: { ...this.tariffSnapshot(row), is_active: true },
+      new_value: {
+        ...this.tariffSnapshot(row),
+        is_active: false,
+        cancelled_at: row.cancelled_at,
+      },
+      description: ActivityDescribeUz.deliveryTariffVersionCancelled(
+        row.tariff_id,
+        row.base_price,
+        row.extra_per_kg,
+      ),
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      view(false),
+      200,
+      'Rejalashtirilgan tarif versiyasi bekor qilindi',
     );
   }
 

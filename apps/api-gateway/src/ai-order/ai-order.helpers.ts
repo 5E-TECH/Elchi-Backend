@@ -1,7 +1,12 @@
 import { createHash } from 'crypto';
-import { GatewayTimeoutException, HttpException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  GatewayTimeoutException,
+  HttpException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { TimeoutError } from 'rxjs';
-import { readOrderIntakeClosed } from '@app/common';
+import { ORDER_CREATE_ERROR_CODES, readOrderIntakeClosed } from '@app/common';
 import {
   AI_VERIFY_REASON_TEXT,
   type AiVerifyFailureCode,
@@ -259,6 +264,38 @@ function clip(text: string): string {
 }
 
 /**
+ * `reason_code` ga chiqishi MUMKIN bo'lgan kodlar — faqat buyurtma
+ * yaratish kontrakti (`ORDER_CREATE_ERROR_CODES`, FRONTEND_CHANGELOG'da
+ * hujjatlangan). `PUBLIC_ERROR_CODES` EMAS: u butun so'rov xato tanasi
+ * uchun (ORDER_INTAKE_CLOSED, AI_CHECKS_* va h.k. — ularning o'z
+ * maydonlari va semantikasi bor, bitta buyurtma natijasiga mos emas);
+ * yangi kod per-order kontraktga ONGLI ravishda qo'shilsin.
+ */
+const REASON_CODE_ALLOWLIST: ReadonlySet<string> = new Set(
+  Object.values(ORDER_CREATE_ERROR_CODES),
+);
+
+/**
+ * Gateway O'ZI tashlagan xato (`HttpException` nusxasi) tanasidagi `code`
+ * oq ro'yxatda bo'lsa → natijadagi `reason_code` (masalan
+ * `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`). Mijozlar
+ * (Telegram bot, FE) o'zbekcha `reason` matnini tahlil qilmasin. RMQ'dan
+ * kelgan oddiy obyekt kodlari (servis ichki tafsiloti) va ro'yxatda yo'q
+ * kodlar o'tkazilmaydi.
+ */
+function reasonCodeOf(error: unknown): { reason_code?: string } {
+  if (!(error instanceof HttpException)) return {};
+  const response = error.getResponse();
+  const code =
+    response && typeof response === 'object'
+      ? (response as { code?: unknown }).code
+      : undefined;
+  return typeof code === 'string' && REASON_CODE_ALLOWLIST.has(code)
+    ? { reason_code: code }
+    : {};
+}
+
+/**
  * Bitta buyurtmani yaratishdagi xato → `{code, reason}`.
  *
  * ⚠️ Timeout — `timeout_unknown`: order.create ketgan bo'lishi mumkin, ya'ni
@@ -275,12 +312,15 @@ function clip(text: string): string {
  * mumkin — "Buyurtma yaratilmadi" deyish operatorni qo'lda qayta kiritishga
  * (haqiqiy dublikatga) undaydi.
  * ⚠️ Xom payload (mijoz ma'lumoti, dto) HECH QACHON javobga chiqmaydi — faqat
- * 400 xabari va identity'ning telefon-boshqa-rolda (409) matni o'tkaziladi.
+ * 400 xabari, gateway'ning o'z 403 (`ForbiddenException`) va 503
+ * (`ServiceUnavailableException` → `validation_unavailable`) matni va
+ * identity'ning telefon-boshqa-rolda (409) matni o'tkaziladi.
  */
 export function toConfirmFailure(error: unknown): {
   code: AiConfirmFailureCode;
   reason: string;
   order_id?: string;
+  reason_code?: string;
 } {
   // Cp2v3ZJ7: barqaror kalit + mazmun imzosi — order-service
   // `RpcException({statusCode:409, code:'duplicate_recent', order_id})`.
@@ -326,7 +366,34 @@ export function toConfirmFailure(error: unknown): {
     return { code: 'create_failed', reason: clip(message) };
   }
   if (status === 400 && message) {
-    return { code: 'create_failed', reason: clip(message) };
+    return {
+      code: 'create_failed',
+      reason: clip(message),
+      ...reasonCodeOf(error),
+    };
+  }
+  // Gateway O'ZI tashlagan 403 (`createOrderInternal`: tasdiqlanmagan
+  // `customer_id`, begona mijoz kartasini yangilash) — matn serverniki,
+  // payload yo'q; operator sababni ko'rsin. RMQ'dan kelgan 403 (oddiy
+  // obyekt, `ForbiddenException` nusxasi emas) — avvalgidek umumiy matn.
+  if (error instanceof ForbiddenException && message) {
+    return {
+      code: 'create_failed',
+      reason: clip(message),
+      ...reasonCodeOf(error),
+    };
+  }
+  // Gateway O'ZI tashlagan 503 — yaratishdan OLDINGI tekshiruv ishlamadi
+  // (masalan `customer_id` doirasi, fail-closed): buyurtma ANIQ
+  // yaratilmagan, qayta yuborish mumkin.
+  if (error instanceof ServiceUnavailableException) {
+    return {
+      code: 'validation_unavailable',
+      reason: message
+        ? clip(message)
+        : AI_CONFIRM_REASON_TEXT.validation_unavailable,
+      ...reasonCodeOf(error),
+    };
   }
 
   return {

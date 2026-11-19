@@ -59,4 +59,26 @@ describe('AI kaliti repoda yo‘q (LP3RKvXY)', () => {
     expect(envStep).toBeGreaterThan(-1);
     expect(pushStep).toBeGreaterThan(envStep);
   });
+
+  it('«AI kalit va modellar»: .env.ai-secrets.example da qiymat yo‘q (faqat izoh/placeholder)', () => {
+    const text = read('.env.ai-secrets.example');
+    expect(text).not.toMatch(REAL_KEY_RE);
+    // Faol (izohsiz) qator yo'q — bo'sh qiymat .env.production dagi kalitni bosib ketmasin.
+    const active = text
+      .split('\n')
+      .filter((l) => /^\s*[A-Z][A-Z0-9_]*\s*=/.test(l));
+    expect(active).toEqual([]);
+  });
+
+  it('«AI kalit va modellar»: compose fayllarida master sir qiymati yo‘q, ai-secrets faqat ai-service’da', () => {
+    for (const file of [
+      'docker-compose.prod.yml',
+      'docker-compose.staging.yml',
+    ]) {
+      const c = read(file);
+      expect(c).not.toMatch(/AI_KEY_ENCRYPTION_SECRET(_PREVIOUS)?\s*[:=]/);
+      // `path: .env(.staging).ai-secrets` — faqat bitta joyda (ai-service).
+      expect(c.match(/path:\s*\.env(\.staging)?\.ai-secrets/g)).toHaveLength(1);
+    }
+  });
 });

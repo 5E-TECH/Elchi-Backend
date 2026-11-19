@@ -7,6 +7,7 @@ import {
   lightNorm,
   normGeo,
   regionAlias,
+  regionMentionedInText,
 } from './';
 
 /**
@@ -246,5 +247,50 @@ describe('geo konstantalari', () => {
     expect(GEO_FUZZY_NEAR_DELTA).toBe(0.08);
     expect(GEO_REGION_FUZZY_MARGIN).toBe(0.1);
     expect(GEO_SUBSTRING_MIN).toBe(0.82);
+  });
+});
+
+describe('regionMentionedInText (P1-7)', () => {
+  it.each([
+    ['Ali Andijon Asaka atir', 'Andijon', true],
+    ['Ali Андижон вилояти Асака', 'Andijon viloyati', true],
+    ['Ali Andijan, Asaka', 'Andijon', true],
+    ['Ali Andijn Asaka', 'Andijon', true],
+    ['Ali Asaka tumani, atir', 'Andijon', false],
+    ['Toshkent sh. Chilonzor', 'Toshkent shahri', true],
+    ['Chilonzor 5-kvartal', 'Toshkent shahri', false],
+    ['Qibray', 'Toshkent viloyati', false],
+    ['xech narsa', null, true],
+    // #649 review: qisqartmalar — "aytilgan" (viloyat almashtirilmaydi).
+    ['Ali Sam. vil. Xonobod', 'Samarqand', true],
+    ['Sam vil Xonobod', 'Samarqand viloyati', true],
+    ['Farg. vil. Quva', "Farg'ona", true],
+    ['Tosh. vil. Qibray', 'Toshkent viloyati', true],
+    ['Qashqa, Kitob', 'Qashqadaryo', true],
+    ['Surxon Denov', 'Surxondaryo', true],
+    ['Andj Asaka', 'Andijon', true],
+    ['QR Nukus', "Qoraqalpog'iston", true],
+    ['Сырдарьинская обл, Гулистан', 'Sirdaryo', true],
+    // #649 review (3-davra): nuqtali 3 harfli prefiks, РК, Т.обл, T.sh.
+    ['Sam. Xonobod', 'Samarqand', true],
+    ['Nam. Chust', 'Namangan', true],
+    ['Bux. Kogon', 'Buxoro', true],
+    ['And. Asaka', 'Andijon', true],
+    ['Сам. Ургут', 'Samarqand', true],
+    ['РК Нукус', "Qoraqalpog'iston", true],
+    ['Т.обл Чирчик', 'Toshkent viloyati', true],
+    ['T.vil Qibray', 'Toshkent viloyati', true],
+    ['T.sh Chilonzor', 'Toshkent shahri', true],
+    ['Qoraqalpoq Nukus', "Qoraqalpog'iston", true],
+    ['Qoraqalpoqqa, Beruniy', "Qoraqalpog'iston", true],
+    // Nuqtasiz 3 harf va boshqa viloyat prefiksi — aytilmagan.
+    ['Sam Xonobod', 'Samarqand', false],
+    ['Nam. Chust', 'Samarqand', false],
+    ['T.sh Chilonzor', 'Toshkent viloyati', false],
+    // Tasodifiy so'zlar qisqartma emas.
+    ['Ali atir 2 ta, Xonobod', 'Samarqand', false],
+    ["Qibray, Navoiy ko'chasi", 'Toshkent viloyati', false],
+  ])('%s / %s → %s', (text, region, want) => {
+    expect(regionMentionedInText(text, region)).toBe(want);
   });
 });

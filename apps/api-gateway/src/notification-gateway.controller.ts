@@ -31,6 +31,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
+import { toPublicNotificationHealth } from './notification-bot-health.controller';
 import { Roles as RoleEnum } from '@app/common';
 import {
   ConnectTelegramByTokenRequestDto,
@@ -92,11 +93,18 @@ export class NotificationGatewayController {
     return { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] };
   }
 
+  /**
+   * (BOT-DIAG-BE) Ochiq javob: `bot` faqat eski maydonlar bilan — bot
+   * nosozligi sababi (`error_kind`, `error_text` …) faqat superadminga,
+   * `GET /health/notification-bot` da.
+   */
   @Public()
   @Get('health')
   @ApiOperation({ summary: 'Notification service health check' })
-  health() {
-    return this.send({ cmd: 'notification.health' }, {});
+  async health() {
+    return toPublicNotificationHealth(
+      await this.send({ cmd: 'notification.health' }, {}),
+    );
   }
 
   // ==================== In-app inbox (current user) ====================

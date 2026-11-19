@@ -31,10 +31,11 @@ import { PRODUCT_DISAMBIG_SCHEMA } from './product-disambiguate.schema';
  */
 const LOCKED = {
   // J3hEDtFN (2026-10-26.1): xato to'plami qoidalari, 8-misol, anyOf
-  // nullable, warnings[].
-  ORDER_EXTRACT_PROMPT_VERSION: '2026-10-26.1',
+  // nullable, warnings[]. PR #649 (2026-11-14.1): total_price = mahsulot +
+  // dostavka, oldindan to'lov ayirilmaydi.
+  ORDER_EXTRACT_PROMPT_VERSION: '2026-11-14.1',
   ORDER_EXTRACT_SYSTEM:
-    'c749e7ae493a2c61135334bbab354f63b070b1437c1638f8d243c950e811ffa2',
+    '710a3304ce571c2af67e6a7538908258c0b5aa9e9fc30113a3d566363ef2f965',
   ORDER_EXTRACT_SCHEMA:
     '45777b5c1fbedb1491ff65a3243f3dd25eb403dc8f920d6573622183f0b3a8e8',
   PRODUCT_DISAMBIG_SYSTEM:

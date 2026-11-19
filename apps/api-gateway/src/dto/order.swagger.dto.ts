@@ -35,6 +35,12 @@ import {
   IsOrderCreateItems,
   isProvidedDistrictId,
 } from '../order-create/order-create-content';
+import { OptionalChosenOperatorId } from '../order-create/order-chosen-operator';
+import { OptionalOperatorPhone } from '../order-create/order-operator-phone';
+import {
+  CUSTOMER_ID_FORMAT_MESSAGE,
+  OptionalPositiveInt8Id,
+} from '../order-create/positive-int8-id';
 import { OptionalOrderSpecialCategories } from '../order-create/order-special-categories';
 
 /**
@@ -102,11 +108,8 @@ const UZ_PHONE_MESSAGE =
   "Telefon raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak";
 const toCanonicalUzPhone = ({ value }: { value: unknown }): unknown =>
   normalizeUzPhone(value) ?? value;
-/** Ixtiyoriy telefon: bo'sh satr/bo'shliq — yuborilmagan (`undefined`). */
-const toOptionalCanonicalUzPhone = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' && value.trim() === ''
-    ? undefined
-    : toCanonicalUzPhone({ value });
+// Ixtiyoriy operator raqamlari — `OptionalOperatorPhone()`
+// (`order-create/order-operator-phone.ts`, ai-confirm bilan umumiy).
 
 const parseStringArray = (value: unknown): unknown => {
   if (Array.isArray(value)) return value;
@@ -285,10 +288,12 @@ export class CreateOrderRequestDto {
       'POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): ' +
       "shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. " +
       "Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. " +
-      'POST /orders/external da faqat superadmin/admin (fix3 RBAC-01).',
+      'POST /orders/external da faqat superadmin/admin (fix3 RBAC-01). ' +
+      'Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun; bo‘sh satr — berilmagan), aks holda 400.',
   })
-  @IsOptional()
-  @IsString()
+  // ai-confirm (`AiConfirmOrderDto.customer_id`) bilan umumiy: '0120' market
+  // yo'lida satr solishtiruvida rad, admin yo'lida 120 bo'lib saqlanardi.
+  @OptionalPositiveInt8Id(CUSTOMER_ID_FORMAT_MESSAGE)
   customer_id?: string;
 
   @ApiPropertyOptional({ type: CreateOrderCustomerDto })
@@ -385,19 +390,11 @@ export class CreateOrderRequestDto {
       "o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» " +
       "(superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi " +
       "yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). " +
-      "Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11).",
+      "Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11). " +
+      'Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa), aks holda 400.',
   })
-  @IsOptional()
-  @Transform(({ value }: { value: unknown }) => {
-    if (typeof value === 'number') return String(value);
-    // Bo'sh satr — «tanlanmagan» (forma select'ining bo'sh qiymati).
-    if (typeof value === 'string' && value.trim() === '') return undefined;
-    return value;
-  })
-  @IsString()
-  @Matches(/^\d{1,19}$/, {
-    message: "operator_id operator ID si (raqam) bo'lishi kerak",
-  })
+  // Tekshiruv ai-confirm (`AiConfirmOrderDto.operator_id`) bilan umumiy.
+  @OptionalChosenOperatorId()
   operator_id?: string | null;
 
   /**
@@ -406,26 +403,25 @@ export class CreateOrderRequestDto {
    * 2-raqam qiladi; bo'sh satr — yuborilmagan.
    */
   @ApiPropertyOptional({
+    type: String,
+    nullable: true,
     example: '+998901234567',
     description:
       "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; " +
       "`require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi.",
   })
-  @Transform(toOptionalCanonicalUzPhone)
-  @IsOptional()
-  @IsString()
-  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
+  // Tekshiruv ai-confirm (`AiConfirmOrderDto.operator_phone`) bilan umumiy.
+  @OptionalOperatorPhone()
   operator_phone?: string | null;
 
   @ApiPropertyOptional({
+    type: String,
+    nullable: true,
     example: '+998901234568',
     description:
       '`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi.',
   })
-  @Transform(toOptionalCanonicalUzPhone)
-  @IsOptional()
-  @IsString()
-  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
+  @OptionalOperatorPhone()
   secondary_operator_phone?: string | null;
 
   @ApiPropertyOptional({

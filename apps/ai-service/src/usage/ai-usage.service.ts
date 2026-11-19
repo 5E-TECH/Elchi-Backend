@@ -61,7 +61,9 @@ const UUID_RE =
  * bitta draft bir necha ai-confirm'da (masalan xato bo'lganlarini tuzatib
  * qayta yuborish) tasdiqlanishi mumkin — ustiga yozish oldingi bog'lanishni
  * yo'qotardi. market_id sharti — boshqa marketning draft'iga bog'lab
- * bo'lmaydi.
+ * bo'lmaydi. Hamma id allaqachon bog'langan qator (ai-confirm takrori)
+ * YANGILANMAYDI (`@>` sharti) — `updatedAt` va qator bekorga
+ * qayta yozilmaydi; `order_ids` NOT NULL (sukut `'{}'`).
  */
 export const AI_USAGE_LINK_ORDERS_SQL = `
   UPDATE ai_schema.ai_usage_log
@@ -70,6 +72,7 @@ export const AI_USAGE_LINK_ORDERS_SQL = `
       ),
       "updatedAt" = now()
   WHERE draft_id = $1 AND market_id = $3
+    AND NOT (order_ids @> $2::bigint[])
 `;
 
 /**
@@ -493,6 +496,25 @@ export class AiUsageService implements ClaudeUsageSink {
       latency_ms:
         typeof r.latencyMs === 'number' && Number.isFinite(r.latencyMs)
           ? Math.max(0, Math.round(r.latencyMs))
+          : null,
+      // «AI kalit va modellar»: lease (kalit qiymati yo'q).
+      key_id:
+        typeof r.keyId === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          r.keyId,
+        )
+          ? r.keyId
+          : null,
+      key_source:
+        r.keySource === 'ui' || r.keySource === 'env' ? r.keySource : null,
+      key_fingerprint:
+        typeof r.keyFingerprint === 'string' &&
+        /^[0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4}$/.test(r.keyFingerprint)
+          ? r.keyFingerprint
+          : null,
+      config_version:
+        typeof r.configVersion === 'number' && Number.isInteger(r.configVersion)
+          ? r.configVersion
           : null,
     };
   }

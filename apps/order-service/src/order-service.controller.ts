@@ -39,6 +39,7 @@ import { PostMembershipService } from './post-membership/post-membership.service
 import { OpenCustodyByDistrictService } from './custody/open-custody-by-district.service';
 import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
 import {
+  findCompletedAiCreates,
   isAiStableRequestId,
   runWithAiSignature,
   sanitizeAiAuditMetadata,
@@ -414,6 +415,30 @@ export class OrderServiceController {
               )
           : create,
       ),
+    );
+  }
+
+  /**
+   * ai-confirm takrori: barqaror kalitlardan qaysilari allaqachon
+   * `completed` (buyurtma yaratilgan) — gateway ularni operator/raqam
+   * tekshiruvisiz `idempotent_replay` qaytaradi. FAQAT o'qish; kalit
+   * market'i `market_id` ga teng bo'lmasa e'tiborsiz
+   * (`findCompletedAiCreates`). Javob: `successRes({ items: [{ request_id,
+   * order_id }] })`.
+   */
+  @MessagePattern({ cmd: 'order.ai_confirm.completed' })
+  aiConfirmCompleted(
+    @Payload() data: { market_id?: unknown; request_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () =>
+      successRes({
+        items: await findCompletedAiCreates(
+          this.idempotencyService,
+          data?.market_id,
+          data?.request_ids,
+        ),
+      }),
     );
   }
 

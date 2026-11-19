@@ -379,6 +379,36 @@ function sendResultOf(error: unknown): string {
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
+ * (BOT-DIAG-BE) fetch rad etilganda (javob umuman kelmadi) xato matni.
+ * undici `fetch failed` ning asl sababi `cause.code` da (ENOTFOUND,
+ * ECONNREFUSED …) — u matnga qo'shiladi, aks holda «Tizim holati» va logda
+ * faqat «fetch failed» ko'rinardi. `AbortSignal.timeout` — `TimeoutError`
+ * («The operation was aborted due to timeout») o'zgarishsiz qoladi.
+ */
+export function describeFetchFailure(error: unknown): string {
+  // Duck typing (instanceof emas): AbortSignal.timeout ning DOMException'i
+  // boshqa realm'dan kelishi mumkin (jest vm) — matn baribir olinadi.
+  const message =
+    error && typeof error === 'object'
+      ? (error as { message?: unknown }).message
+      : undefined;
+  if (typeof message !== 'string') return 'network error';
+  const cause = (error as { cause?: unknown }).cause;
+  const code =
+    cause && typeof cause === 'object'
+      ? (cause as { code?: unknown }).code
+      : undefined;
+  if (
+    typeof code === 'string' &&
+    /^[A-Z][A-Z0-9_]{1,40}$/.test(code) &&
+    !message.includes(code)
+  ) {
+    return `${message} (${code})`;
+  }
+  return message;
+}
+
+/**
  * Bitta Bot API chaqiruvi (qayta urinishsiz). Script (`telegram-setup.ts`)
  * ham shu funksiyadan foydalanadi — URL boshqa joyda yozilmaydi.
  */
@@ -399,8 +429,12 @@ export async function callTelegramApi<T>(
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'network error';
-    throw new TelegramApiError(method, 0, redactToken(message, token), null);
+    throw new TelegramApiError(
+      method,
+      0,
+      redactToken(describeFetchFailure(error), token),
+      null,
+    );
   }
   const body = (await response.json().catch(() => null)) as {
     ok?: boolean;
@@ -438,8 +472,12 @@ export async function callTelegramApiMultipart<T>(
       signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'network error';
-    throw new TelegramApiError(method, 0, redactToken(message, token), null);
+    throw new TelegramApiError(
+      method,
+      0,
+      redactToken(describeFetchFailure(error), token),
+      null,
+    );
   }
   const body = (await response.json().catch(() => null)) as {
     ok?: boolean;
@@ -661,8 +699,13 @@ export class BotTransportService {
     }
   }
 
-  getMe(): Promise<TelegramBotIdentity> {
-    return this.call<TelegramBotIdentity>('getMe', {}, { maxAttempts: 1 });
+  /** (BOT-DIAG-BE) `timeoutMs` — «Qayta tekshirish» qisqaroq kutadi. */
+  getMe(options: { timeoutMs?: number } = {}): Promise<TelegramBotIdentity> {
+    return this.call<TelegramBotIdentity>(
+      'getMe',
+      {},
+      { maxAttempts: 1, timeoutMs: options.timeoutMs },
+    );
   }
 
   getUpdates(

@@ -2,9 +2,11 @@ import {
   type ArgumentsHost,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   GatewayTimeoutException,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import {
   BaseRpcExceptionFilter,
@@ -14,6 +16,7 @@ import {
 import { firstValueFrom, TimeoutError } from 'rxjs';
 import {
   executeIdempotent,
+  ORDER_CREATE_ERROR_CODES,
   type IdempotencyService,
   type RmqService,
 } from '@app/common';
@@ -225,6 +228,108 @@ describe('ai-order.helpers', () => {
         code: 'timeout_unknown',
         reason:
           'Natija noma’lum — buyurtma yaratilgan bo‘lishi mumkin. “Yangi buyurtmalar”ni tekshiring, qayta yubormang',
+      });
+    });
+
+    it('gateway o`zi tashlagan 403 (ForbiddenException) — matni bilan; RMQ 403 — umumiy matn', () => {
+      expect(
+        toConfirmFailure(
+          new ForbiddenException('customer_id qabul qilinmadi: sabab'),
+        ),
+      ).toEqual({
+        code: 'create_failed',
+        reason: 'customer_id qabul qilinmadi: sabab',
+      });
+      expect(
+        toConfirmFailure({ statusCode: 403, message: 'ichki matn' }),
+      ).toEqual({
+        code: 'create_failed',
+        reason: AI_CONFIRM_REASON_TEXT.create_failed,
+      });
+    });
+
+    it('reason_code: gateway 400 tanasidagi UPPER_CASE `code` o`tadi; RMQ obyekti va kichik harfli kod — yo`q', () => {
+      expect(
+        toConfirmFailure(
+          new BadRequestException({
+            statusCode: 400,
+            message: 'Operator telefon raqami majburiy',
+            code: 'OPERATOR_PHONE_REQUIRED',
+          }),
+        ),
+      ).toEqual({
+        code: 'create_failed',
+        reason: 'Operator telefon raqami majburiy',
+        reason_code: 'OPERATOR_PHONE_REQUIRED',
+      });
+      // RMQ'dan kelgan oddiy obyekt — servis ichki kodi chiqmaydi.
+      expect(
+        toConfirmFailure({
+          statusCode: 400,
+          message: 'yiqildi',
+          code: 'INTERNAL_THING',
+        }),
+      ).toEqual({ code: 'create_failed', reason: 'yiqildi' });
+      expect(
+        toConfirmFailure(
+          new BadRequestException({ message: 'x', code: '23505' }),
+        ),
+      ).toEqual({ code: 'create_failed', reason: 'x' });
+      // Kodsiz 400 — avvalgidek (reason_code yo'q).
+      expect(toConfirmFailure(new BadRequestException('oddiy'))).toEqual({
+        code: 'create_failed',
+        reason: 'oddiy',
+      });
+    });
+
+    it('reason_code — faqat ORDER_CREATE_ERROR_CODES oq ro`yxati (boshqa UPPER_CASE kod o`tmaydi)', () => {
+      for (const code of Object.values(ORDER_CREATE_ERROR_CODES)) {
+        expect(
+          toConfirmFailure(
+            new BadRequestException({ statusCode: 400, message: 'm', code }),
+          ),
+        ).toMatchObject({ reason_code: code });
+      }
+      for (const [error, code] of [
+        [
+          new BadRequestException({
+            statusCode: 400,
+            message: 'm',
+            code: 'AI_DRAFT_REQUIRED',
+          }),
+          'AI_DRAFT_REQUIRED',
+        ],
+        [
+          new ForbiddenException({
+            statusCode: 403,
+            message: 'm',
+            code: 'SOME_INTERNAL_CODE',
+          }),
+          'SOME_INTERNAL_CODE',
+        ],
+        [
+          new ServiceUnavailableException({
+            statusCode: 503,
+            message: 'm',
+            code: 'ORDER_INTAKE_CLOSED',
+          }),
+          'ORDER_INTAKE_CLOSED',
+        ],
+      ] as const) {
+        const failure = toConfirmFailure(error);
+        expect(failure).not.toHaveProperty('reason_code');
+        expect(JSON.stringify(failure)).not.toContain(code);
+      }
+    });
+
+    it('gateway o`zi tashlagan 503 (ServiceUnavailableException) — validation_unavailable, matni bilan', () => {
+      expect(
+        toConfirmFailure(
+          new ServiceUnavailableException("Mijozni tekshirib bo'lmadi"),
+        ),
+      ).toEqual({
+        code: 'validation_unavailable',
+        reason: "Mijozni tekshirib bo'lmadi",
       });
     });
 

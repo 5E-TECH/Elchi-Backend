@@ -33,6 +33,7 @@ import { CarrierAdminGatewayController } from './carrier-admin-gateway.controlle
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
+import { NotificationBotHealthController } from './notification-bot-health.controller';
 import { ClientErrorGatewayController } from './client-error-gateway.controller';
 import { SearchGatewayController } from './search-gateway.controller';
 import { LogisticsGatewayController } from './logistics-gateway.controller';
@@ -70,6 +71,7 @@ import { MarketOperatorGatewayController } from './market-operator-gateway.contr
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
 import { PickupVisitGatewayController } from './pickup-visit-gateway.controller';
+import { OperatorPaymentGatewayController } from './operator-payment-gateway.controller';
 // mSkzzNBJ: ochiq kalkulyator — POST /public/delivery-quote, GET /public/delivery-tariffs.
 import { PublicDeliveryPricingController } from './public-delivery-pricing/public-delivery-pricing.controller';
 import { WarehouseGatewayController } from './warehouse-gateway.controller';
@@ -77,6 +79,8 @@ import { WarehouseGatewayController } from './warehouse-gateway.controller';
 import { ContactsGatewayController } from './contacts-gateway.controller';
 import { ProblemContactsService } from './contacts/problem-contacts.service';
 import { AiStatusPoller } from './ai/ai-status.poller';
+import { AiConfigGatewayController } from './ai-config-gateway.controller';
+import { AiConfigKeyThrottlerGuard } from './auth/ai-config-key-throttler.guard';
 // (KwodkKWY) POST /csp-report — brauzer CSP buzilish hisobotlari (@Public).
 import { CspReportController } from './csp-report/csp-report.controller';
 import type { StringValue } from 'ms';
@@ -138,6 +142,15 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // AI buyurtma (ai-service): ai-parse/ai-confirm, /ai/* admin va /health
     // holati. Navbat nomi RABBITMQ_AI_QUEUE (sukut 'ai_queue').
     RmqModule.register({ name: 'AI' }),
+    // «AI kalit va modellar»: `ai_config_queue` (DLX'siz, saqlanmaydi, TTL
+    // 8 s; RABBITMQ_AI_CONFIG_QUEUE, sukut 'ai_config_queue'). ai.config.*
+    // va ai.status shu navbat orqali.
+    RmqModule.register({ name: 'AI_CONFIG' }),
+    // (AI ack B1) ai-service TEZ navbati (RABBITMQ_AI_FAST_QUEUE, sukut
+    // 'ai_fast_queue'): ai-confirm yo'lidagi arzon DB amallari
+    // (confirm_context, attach_preview, link_orders) Claude chaqiruvlari
+    // ortida kutmasin.
+    RmqModule.register({ name: 'AI_FAST' }),
   ],
   controllers: [
     ApiGatewayController,
@@ -172,6 +185,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     CarrierGatewayController,
     CarrierAdminGatewayController,
     AiGatewayController,
+    // «AI kalit va modellar» — /ai/config* (faqat superadmin).
+    AiConfigGatewayController,
     // Celz3rKJ: "Moliyaviy balans → AI xarajat" paneli (/ai-usage/*).
     AiUsageGatewayController,
     // F7PWp6cK — AI moliyaviy yordamchi (SSE).
@@ -186,6 +201,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // /delivery/pricing-settings) — logistics-service.
     DeliveryPricingGatewayController,
     PickupVisitGatewayController,
+    // F2qp6FtE — market o'z operatoriga to'lov yozuvi (Elchi kassasiz).
+    OperatorPaymentGatewayController,
     // mSkzzNBJ: o'sha dvigatelning ochiq (tokensiz) yo'li — /public/delivery-*.
     PublicDeliveryPricingController,
     // hY7uacJu: vaqtinchalik ombor moduli (/warehouses, /market/warehouse-stock,
@@ -194,6 +211,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // KwodkKWY: CSP Report-Only kuzatuvi — `POST /csp-report` (log, 204).
     CspReportController,
     HealthController,
+    // BOT-DIAG-BE: /health/notification-bot (+ /recheck) — faqat superadmin.
+    NotificationBotHealthController,
     // QKCeGZ3N — frontend xato chegarasi hisobotlari (jurnalga, bazaga emas).
     ClientErrorGatewayController,
     // TODO: Qolgan gateway controllerlarni qo'shish
@@ -226,6 +245,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     TelegramIdThrottlerGuard,
     // /health va ai-availability uchun AI holati keshi (30s so'rov, RMQ kutilmaydi).
     AiStatusPoller,
+    AiConfigKeyThrottlerGuard,
     // WHMAIqyo #3: ai-parse rasmlari uchun vaqtinchalik saqlov (MinIO, TTL
     // 1 soat); MINIO_* yo'q bo'lsa null — base64 yo'li.
     {

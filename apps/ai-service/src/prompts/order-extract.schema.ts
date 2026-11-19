@@ -1,7 +1,7 @@
 import {
   AI_EXTRACT_WARNING_FIELDS,
   AI_EXTRACT_WARNING_REASONS,
-  type RawOrderExtraction,
+  type RawOrderModelKey,
 } from '@app/common';
 
 /**
@@ -74,10 +74,7 @@ export const ORDER_EXTRACT_WARNING_SCHEMA: Record<string, unknown> = deepFreeze(
  * o'chirilsa, bu obyekt tsc'dan o'tmaydi. Kalitlar tartibi = `required`
  * tartibi (sxema JSON'i deterministik).
  */
-const ORDER_PROPERTIES: Record<
-  keyof RawOrderExtraction,
-  Record<string, unknown>
-> = {
+const ORDER_PROPERTIES: Record<RawOrderModelKey, Record<string, unknown>> = {
   customer_name: nullable({ type: 'string' }),
   phone_number: nullable({ type: 'string' }),
   extra_number: nullable({ type: 'string' }),
@@ -102,8 +99,8 @@ const ORDER_PROPERTIES: Record<
 };
 
 /** Sxemadagi 14 ta required maydon nomi (sxema bilan bir xil tartibda). */
-export const ORDER_EXTRACT_FIELDS: ReadonlyArray<keyof RawOrderExtraction> =
-  Object.freeze(Object.keys(ORDER_PROPERTIES) as (keyof RawOrderExtraction)[]);
+export const ORDER_EXTRACT_FIELDS: ReadonlyArray<RawOrderModelKey> =
+  Object.freeze(Object.keys(ORDER_PROPERTIES) as RawOrderModelKey[]);
 
 /** Bitta buyurtma obyekti — 14 ta required maydon. */
 export const ORDER_EXTRACT_ORDER_SCHEMA: Record<string, unknown> = deepFreeze({

@@ -294,6 +294,8 @@ jobs:
           apps/finance-service/src/cashbox-receipt/cashbox-receipt-link.T3.pg.spec.ts
           apps/finance-service/src/pickup-visit/pickup-visit.B824gOu5.pg.spec.ts
           apps/finance-service/src/pickup-visit/pickup-visit.migration.B824gOu5.pg.spec.ts
+          apps/finance-service/src/operator-payment.pg.spec.ts
+          apps/finance-service/src/operator-payment/operator-payment.migration.F2qp6FtE.pg.spec.ts
           apps/finance-service/src/expense-category/expense-category.pg.spec.ts
           apps/finance-service/src/expense-category/expense-report.ljVOuNz4.pg.spec.ts
           apps/finance-service/src/shift-account-check/shift-check-main-defaults.migration.pg.spec.ts
@@ -302,6 +304,17 @@ jobs:
           apps/finance-service/src/shift-auto-close/shift-auto-close-report.y8Tqm9Ap.pg.spec.ts
           apps/finance-service/src/cashbox-card-branch.Zv3MLn0a.pg.spec.ts
           apps/finance-service/src/history-branch-source.pg.spec.ts
+          apps/finance-service/src/branch-cashbox-single.63HO6cBU.pg.spec.ts
+          apps/finance-service/src/branch-cashbox-single.migration.pg.spec.ts
+          apps/finance-service/src/finance-branch-debt.pg.spec.ts
+          apps/finance-service/src/finance-branch-to-market.pg.spec.ts
+          apps/finance-service/src/finance-m4-manager-market.pg.spec.ts
+          apps/finance-service/src/payment-correction/payment-correction.pg.spec.ts
+          apps/finance-service/src/cashbox-card-delete.cards1111.pg.spec.ts
+          apps/finance-service/src/cashbox-card.pg.spec.ts
+          apps/finance-service/src/cashbox-shift.pg.spec.ts
+          apps/finance-service/src/shift-auto-close/shift-auto-open.kun-tartibi.pg.spec.ts
+          apps/finance-service/src/finance-b4-click-ledger.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
           apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
           apps/ai-service/src/usage/ai-margin.pg.spec.ts
@@ -310,7 +323,20 @@ jobs:
           apps/ai-service/src/advisor/advisor-alerts.BE5.pg.spec.ts
           apps/ai-service/src/advisor/advisor-notify.BE5.pg.spec.ts
           apps/ai-service/src/advisor/advisor-explain.BE5.pg.spec.ts
+          apps/notification-service/src/notification-inbox.delivery-only.pg.spec.ts
+          apps/ai-service/src/ai-config/ai-key-store.pg.spec.ts
+          apps/ai-service/src/ai-config/ai-runtime.provider.pg.spec.ts
           apps/finance-service/src/advisor/advisor-inputs.BE5.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-inputs.volume.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-indexes.241.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-indexes.243.pg.spec.ts
+          apps/finance-service/src/advisor/advisor-indexes.244.pg.spec.ts
+          apps/logistics-service/src/delivery-pricing/delivery-pricing-settings-restore.pg.spec.ts
+          apps/logistics-service/src/courier-scan-taken-to-waiting.migration.pg.spec.ts
+          apps/logistics-service/src/delivery-pricing/city-zone-restore.pg.spec.ts
+          apps/branch-service/src/hq-branch-region-restore.pg.spec.ts
+          apps/finance-service/src/user-cashboxes-restore.pg.spec.ts
+          apps/logistics-service/src/delivery-pricing/delivery-pricing.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
@@ -333,10 +359,31 @@ jobs:
           # BE-5 (LhTIno57) AI maslahatchi sozlamalari/jadvallari (migratsiya 224):
           # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
           AI_ADVISOR_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # BE-5 #655 N1: dispatch delivery_only (notification_schema elchi_e_test ichida).
+          NOTIFICATION_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # «AI kalit va modellar» (migratsiya 228): kalit saqlash va runtime
+          # provayderi — o'z vaqtinchalik bazalari, elchi_e_test faqat ulanish uchun.
+          AI_CONFIG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # #648: AI marja hisoboti (1h kesh qo'shimchasi) va xarajat paneli SQL —
           # entity ↔ migratsiya 225 (cache_creation_1h_tokens) mosligi ham.
           AI_MARGIN_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_ai_margin
           AI_DASHBOARD_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_h_ai
+          # Migratsiya 231 (prod 2026-11-17): «Hisob qoidalari» faol qatorini tiklash —
+          # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
+          # Migratsiya 232 (Toshkent shahri `is_city_zone`) ham shu o'zgaruvchi bilan.
+          # B0ILd7YI: delivery-pricing.pg.spec.ts (142/154/183/235, tarif versiyasi,
+          # rejalashtirilganini bekor qilish) — elchi_e_test ichida logistics_schema
+          # ni o'zi yaratadi va o'chiradi (bu jobda boshqa spec unga tegmaydi).
+          DELIVERY_PRICING_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # COURIER-SCAN: migratsiya 240 (skan bilan olingan qatorlar WAITING ga) —
+          # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
+          COURIER_SCAN_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # Migratsiya 233 (HQ filiali viloyati) — o'z vaqtinchalik bazasi,
+          # elchi_e_test faqat ulanish uchun. Migratsiya 234 (kuryer / market /
+          # filial kassalari) — yuqoridagi FINANCE_PG_TEST_URI bilan.
+          # F2qp6FtE: operatorga to'lov yozuvi (kassasiz) — elchi_e_test ichida o'z
+          # sxemasi; migratsiya 242 spec'i — o'z vaqtinchalik bazasi (FINANCE_PG_TEST_URI).
+          BRANCH_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file

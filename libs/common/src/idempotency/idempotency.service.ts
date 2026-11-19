@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, QueryFailedError } from 'typeorm';
+import { In, Repository, QueryFailedError } from 'typeorm';
 import { IdempotencyKey } from './idempotency-key.entity';
 
 export type AcquireResult<T = unknown> =
@@ -208,6 +208,21 @@ export class IdempotencyService {
     }
     const result = await query.execute();
     return result.affected ?? 0;
+  }
+
+  /**
+   * FAQAT O'QISH: berilgan kalitlardan `completed` holatdagilarining
+   * keshlangan javobi (kalitni egallamaydi, lease/holatni o'zgartirmaydi).
+   * Masalan ai-confirm takrori — buyurtma allaqachon yaratilganini
+   * qayta tekshiruvlardan OLDIN bilish uchun.
+   */
+  async findCompleted(keys: string[]): Promise<Map<string, unknown>> {
+    if (keys.length === 0) return new Map();
+    const rows = await this.repo.find({
+      where: { key: In(keys), status: 'completed' },
+      select: { key: true, response: true },
+    });
+    return new Map(rows.map((row) => [row.key, row.response]));
   }
 
   async markCompleted(key: string, response: unknown): Promise<void> {

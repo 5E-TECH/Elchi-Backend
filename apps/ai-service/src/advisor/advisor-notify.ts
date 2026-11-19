@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { TimeoutError } from 'rxjs';
 import {
   AI_ADVISOR_RULE_NAMES,
   NotificationCategory,
@@ -42,6 +43,41 @@ export const ADVISOR_NOTIFY_MAX_AGE_HOURS = 24;
 /** Dispatch qulfi (qoidalar tick qulflari 716000000224/225 dan alohida). */
 export const ADVISOR_NOTIFY_LOCK_KEY = 716_000_000_901;
 export const ADVISOR_NOTIFY_BATCH = 20;
+/**
+ * (round-4 #655 S2) Bitta ogohlantirish bildirishnomasi RAD ETILSA (javob
+ * `statusCode` bilan: 400/404/500, yoki payload yaratilmadi) — urinishlar
+ * soni: shundan keyin `notify_skipped='failed'` (yakuniy). Oraliq
+ * eksponensial: 30 daqiqa, 1 soat, 2 soat, 4 soat (5-urinish — oxirgi).
+ * Xizmat YETIB BO'LMASA (timeout / transport) — bu qatorning aybi emas:
+ * hisoblagich oshmaydi, keyingi tick qayta uriniladi (§9.2 «jiddiy xabar
+ * yo'qolmasin»; 24 soatlik `stale` chegarasi baribir ishlaydi).
+ * Hisoblagich jarayon xotirasida — ai-service BITTA instansiya bo'lishi
+ * shart (dispatch advisory qulf bilan); restartda nolga tushadi.
+ */
+export const ADVISOR_NOTIFY_MAX_ATTEMPTS = 5;
+/** Bitta tick'da ketma-ket shuncha 5xx — xizmat nosoz, partiya to'xtaydi. */
+export const ADVISOR_NOTIFY_MAX_SERVER_ERRORS = 3;
+const NOTIFY_BACKOFF_BASE_MS = 30 * 60_000;
+export const advisorNotifyBackoffMs = (attempt: number): number =>
+  NOTIFY_BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1);
+/** Tick vaqti siljishi (qoidalar fazasi davomiyligi) — oraliq bir tick'ka siljimasin. */
+const NOTIFY_BACKOFF_SLACK_MS = 2 * 60_000;
+/**
+ * Qatorning aybi emas — xizmat yetib bo'lmadi (timeout / transport,
+ * `statusCode` yo'q) yoki xizmatning o'zi nosoz (5xx: `toRpcError` har
+ * kutilmagan istisnoni 500 qiladi — deploy xatosi, pool buzilishi).
+ * Hisoblanmaydi (§9.2; 24 soatlik `stale` baribir chegaralaydi). Faqat 4xx
+ * (qator/payload rad etildi) urinish sifatida sanaladi.
+ */
+/** Javob yo'q (timeout / transport) — partiya to'xtaydi (tick'ka bitta 8 s kutish). */
+export const isDispatchNoReply = (error: unknown): boolean =>
+  error instanceof TimeoutError ||
+  typeof (error as { statusCode?: unknown } | null)?.statusCode !== 'number';
+export const isDispatchUnreachable = (error: unknown): boolean => {
+  if (isDispatchNoReply(error)) return true;
+  const code = (error as { statusCode: number }).statusCode;
+  return code >= 500 || code === 429 || code === 408;
+};
 export const ADVISOR_RECIPIENTS_TTL_MS = 5 * 60_000;
 const BODY_MAX = 600;
 
@@ -66,6 +102,11 @@ export interface AdvisorDispatchPayload {
   link: string;
   group_key: string;
   client_request_id: string;
+  /**
+   * Kechiktirilgan Telegram (R6 09:00): ilova ichidagi qator QAYTA
+   * ko'tarilmaydi (o'qilgan/tartib/count o'zgarmaydi) — faqat Telegram.
+   */
+  delivery_only?: boolean;
   data: Record<string, unknown>;
 }
 
@@ -201,6 +242,7 @@ export function buildAdvisorDispatch(
         ? `ai-advisor-alert:${row.id}:tg`
         : `ai-advisor-alert:${row.id}`,
     ),
+    ...(mode === 'telegram_only' ? { delivery_only: true } : {}),
     data: {
       alert_id: row.id,
       rule_key: row.rule_key,
@@ -228,25 +270,55 @@ export function advisorTelegramAllowed(
   return input.telegramEnabled && input.rules[rule]?.telegram !== false;
 }
 
+/** Shu soatdan (Toshkent) keyin ham tun — R6 Telegram ertasi kuni 09:00 da. */
+export const ADVISOR_R6_NIGHT_START_HOUR = 22;
+
 /**
- * R6 (ega, 2026-11-15): tunda ochilgan zarar ogohlantirishi — Telegram
- * Toshkent 09:00 da (o'sha kun). 09:00 dan keyin — darhol (`null`).
+ * R6 (ega, 2026-11-15): Telegram tunda yo'q — Toshkent 22:00–09:00 oralig'ida
+ * kechiktiriladi: 09:00 gacha — o'sha kuni 09:00; 22:00 dan keyin — ertasi
+ * kuni 09:00 (#705 S4). 09:00 dan keyin, 22:00 gacha — darhol (`null`).
  */
 export function r6TelegramDueAt(
   rule: AiAdvisorRuleKey,
   now: Date,
 ): Date | null {
   if (rule !== 'R6') return null;
-  const nine = new Date(
-    startOfTashkentDay(now).getTime() + ADVISOR_R6_TELEGRAM_HOUR * 3600_000,
-  );
-  return now < nine ? nine : null;
+  const dayStart = startOfTashkentDay(now).getTime();
+  const nine = new Date(dayStart + ADVISOR_R6_TELEGRAM_HOUR * 3600_000);
+  if (now < nine) return nine;
+  if (now.getTime() >= dayStart + ADVISOR_R6_NIGHT_START_HOUR * 3600_000)
+    return new Date(nine.getTime() + 86_400_000);
+  return null;
 }
 
 @Injectable()
 export class AdvisorNotifier {
   private readonly logger = new Logger(AdvisorNotifier.name);
   private recipientsCache: { ids: string[]; at: number } | null = null;
+  /** (S2) Muvaffaqiyatsiz urinishlar: alert id → {n, keyingi urinish}. */
+  private readonly attempts = new Map<string, { n: number; next: number }>();
+  /**
+   * Oxirgi «yetib bo'lmadi» (timeout / transport / 5xx) vaqti: id+suffix → ms.
+   * Navbat shu vaqt bo'yicha AYLANADI: hech yiqilmaganlar — oldin, keyin eng
+   * uzoq kutganlar, hozir yiqilgani — oxirida. Engine har tick `updatedAt` ni
+   * yangilasa ham (`touch` bekor bo'ladi), `break` (javobsiz / ketma-ket 3×5xx)
+   * ortidagilarni abadiy to'smaydi. Muvaffaqiyatda o'chadi, 48 soatda kesiladi.
+   */
+  private readonly unreachableAt = new Map<string, number>();
+  private markUnreachable(key: string, now: Date): void {
+    this.unreachableAt.delete(key);
+    this.unreachableAt.set(key, now.getTime());
+  }
+  private unreachableOrder(now: Date, suffix: string): string[] {
+    const cutoff = now.getTime() - 2 * ADVISOR_NOTIFY_MAX_AGE_HOURS * 3600_000;
+    const out: Array<[string, number]> = [];
+    for (const [k, at] of this.unreachableAt) {
+      if (at < cutoff) this.unreachableAt.delete(k);
+      else if (suffix ? k.endsWith(suffix) : !k.includes(':'))
+        out.push([k.slice(0, k.length - suffix.length), at]);
+    }
+    return out.sort((a, b) => a[1] - b[1]).map(([id]) => id);
+  }
 
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
@@ -329,6 +401,7 @@ export class AdvisorNotifier {
     now: Date,
   ): Promise<{ sent: number; failed: number }> {
     const out = { sent: 0, failed: 0 };
+    let serverErrors = 0;
     // 24 soatdan eski (birinchi aniqlangan) ogohlantirish endi yuborilmaydi —
     // uzilish/superadmin yo'qligidan keyin eski xabarlar to'lqini bo'lmasin
     // (round-2 S3, kelishilgan). `notify_skipped='stale'` REST'da ko'rinmaydi.
@@ -345,12 +418,24 @@ export class AdvisorNotifier {
       this.logger.warn(`ai_advisor_notify_stale skipped=${stale.length}`);
     // Tartib — oxirgi urinish bo'yicha (xatoda `updatedAt` yangilanadi):
     // doimiy xatoli qatorlar yangilarini to'sib qo'ymaydi (round-2 S2).
-    const rows = await this.ds.query<AdvisorNotifyRow[]>(
-      `SELECT a."id"::text AS id, a."rule_key", a."severity", a."title", a."facts", a."subject", a."branch"
+    // Eskirgan hisoblagichlar (yozuv boshqa yo'l bilan yopilgan) — tozalanadi.
+    for (const [id, a] of this.attempts)
+      if (a.next < now.getTime() - ADVISOR_NOTIFY_MAX_AGE_HOURS * 3600_000)
+        this.attempts.delete(id);
+    // Oraliq tugamagan (backoff) qatorlar so'ralmaydi — partiya joyini olmaydi.
+    const waiting = this.waitingIds(now, '');
+    const rows = await this.ds.query<
+      Array<AdvisorNotifyRow & { first_at: Date | null }>
+    >(
+      `SELECT a."id"::text AS id, a."rule_key", a."severity", a."title", a."facts", a."subject", a."branch",
+              a."first_at"
          FROM ai_schema.ai_advisor_alerts a
         WHERE a."severity" = 'critical' AND a."status" IN ('new','seen') AND a."is_deleted" = false
           AND a."notified_at" IS NULL AND a."notify_skipped" IS NULL
-        ORDER BY a."updatedAt" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+          AND NOT (a."id" = ANY($1::bigint[]))
+        ORDER BY COALESCE(array_position($2::bigint[], a."id"), 0) ASC, a."updatedAt" ASC, a."id" ASC
+        LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+      [waiting, this.unreachableOrder(now, '')],
     );
     if (!rows.length) return out;
     let recipients: string[];
@@ -362,6 +447,11 @@ export class AdvisorNotifier {
       );
       return { sent: 0, failed: rows.length };
     }
+    // Bo'sh ro'yxat — identity xatosi kabi (#705 S3): urinish yozilmaydi.
+    if (!recipients.length) {
+      this.logger.warn(`ai_advisor_notify: superadminlar ro'yxati bo'sh`);
+      return { sent: 0, failed: rows.length };
+    }
     const rules = await this.settings.getRules();
     const telegramEnabled = await this.settings.telegramEnabled();
     const cabinetUrl = this.config?.get<string>('ELCHI_CABINET_URL') ?? null;
@@ -370,9 +460,24 @@ export class AdvisorNotifier {
         rules,
         telegramEnabled,
       });
-      const telegramDueAt = telegram
-        ? r6TelegramDueAt(row.rule_key, now)
-        : null;
+      // R6 Telegram'i DOIM alohida kechiktirilgan yo'l bilan (`…:tg`, #705
+      // rr13): asosiy dispatch rejimi (`no_telegram`) qayta urinishlar orasida
+      // O'ZGARMAYDI. Ayni client_request_id takrorini notification-service
+      // umuman yubormaydi (kanallar ham qayta ko'rilmaydi): javobi yo'qolgan
+      // kunduzgi 'default' urinish + tungi qayta urinish — ikki Telegram;
+      // tungi 'no_telegram' + kunduzgi 'default' — Telegram yo'q edi.
+      // due: tunda ochilgan R6 — o'sha 09:00; o'tgan bo'lsa — hozir (kunduz,
+      // shu tick'da ketadi) yoki ertasi 09:00 (tun).
+      const firstAt = row.first_at ? new Date(row.first_at) : null;
+      const openedAt =
+        firstAt && firstAt.getTime() <= now.getTime() ? firstAt : now;
+      const r6Due = telegram ? r6TelegramDueAt(row.rule_key, openedAt) : null;
+      const telegramDueAt =
+        telegram && row.rule_key === 'R6'
+          ? r6Due && r6Due.getTime() >= now.getTime()
+            ? r6Due
+            : (r6TelegramDueAt(row.rule_key, now) ?? now)
+          : null;
       const payload = buildAdvisorDispatch(row, {
         recipients,
         rules,
@@ -382,6 +487,7 @@ export class AdvisorNotifier {
       });
       if (!payload) {
         out.failed += 1;
+        await this.attemptFailed(row.id, now, 'payload yaratilmadi');
         continue;
       }
       try {
@@ -400,22 +506,97 @@ export class AdvisorNotifier {
             WHERE "id" = $1 AND "notified_at" IS NULL`,
           [row.id, telegramDueAt],
         );
+        this.attempts.delete(row.id);
+        this.unreachableAt.delete(row.id);
+        serverErrors = 0;
         out.sent += 1;
       } catch (error) {
         out.failed += 1;
-        // Navbat oxiriga (keyingi tick boshqalari oldin).
-        await this.ds
-          .query(
-            `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() WHERE "id" = $1`,
-            [row.id],
-          )
-          .catch(() => undefined);
-        this.logger.warn(
-          `ai_advisor_notify_failed alert=${row.id}: ${short(error)}`,
-        );
+        if (isDispatchUnreachable(error)) {
+          // Xizmat yo'q: hisoblagich oshmaydi, navbat oxiriga, partiya to'xtaydi
+          // (uzilish tick'iga bitta RPC kutish — qator jazolanmaydi).
+          await this.touch(row.id);
+          this.logger.warn(
+            `ai_advisor_notify_unreachable alert=${row.id}: ${short(error)}`,
+          );
+          this.markUnreachable(row.id, now);
+          if (isDispatchNoReply(error)) break;
+          // 5xx tez javob — qatorga xos xato boshqalarni to'smasin (davom);
+          // ketma-ket 3 ta — xizmat butunlay nosoz, tick to'xtaydi.
+          if (++serverErrors >= ADVISOR_NOTIFY_MAX_SERVER_ERRORS) break;
+          continue;
+        }
+        await this.attemptFailed(row.id, now, short(error));
       }
     }
     return out;
+  }
+
+  /** Oraliq (backoff) tugamagan qatorlar — `suffix` ('' | ':tg') bo'yicha. */
+  private waitingIds(now: Date, suffix: string): string[] {
+    return [...this.attempts]
+      .filter(
+        ([key, a]) =>
+          (suffix ? key.endsWith(suffix) : !key.includes(':')) &&
+          a.next - NOTIFY_BACKOFF_SLACK_MS > now.getTime(),
+      )
+      .map(([key]) => key.slice(0, key.length - suffix.length));
+  }
+
+  /** Navbat oxiriga (keyingi tick boshqalari oldin). */
+  private async touch(id: string): Promise<void> {
+    await this.ds
+      .query(
+        `UPDATE ai_schema.ai_advisor_alerts SET "updatedAt" = now() WHERE "id" = $1`,
+        [id],
+      )
+      .catch(() => undefined);
+  }
+
+  /**
+   * (S2) Rad etilgan urinish: oraliq (backoff) belgilanadi, navbat oxiriga;
+   * `ADVISOR_NOTIFY_MAX_ATTEMPTS` dan keyin — `giveUp` (asosiy: `notify_skipped
+   * = 'failed'`; 09:00 Telegram: `telegram_due_at` tozalanadi). `giveUp`
+   * yozuvi yiqilsa — hisoblagich saqlanadi, keyingi tick qayta voz kechadi.
+   */
+  private async attemptFailed(
+    id: string,
+    now: Date,
+    reason: string,
+    suffix = '',
+    giveUp: () => Promise<unknown> = () =>
+      this.ds.query(
+        `UPDATE ai_schema.ai_advisor_alerts SET "notify_skipped" = 'failed', "updatedAt" = now()
+          WHERE "id" = $1 AND "notified_at" IS NULL AND "notify_skipped" IS NULL`,
+        [id],
+      ),
+  ): Promise<void> {
+    const key = id + suffix;
+    const n = (this.attempts.get(key)?.n ?? 0) + 1;
+    if (n >= ADVISOR_NOTIFY_MAX_ATTEMPTS) {
+      try {
+        await giveUp();
+      } catch (error) {
+        this.attempts.set(key, { n: n - 1, next: now.getTime() });
+        this.logger.error(
+          `ai_advisor_notify_give_up_failed alert=${key}: ${short(error)}`,
+        );
+        return;
+      }
+      this.attempts.delete(key);
+      this.logger.error(
+        `ai_advisor_notify_gave_up alert=${key} attempts=${n}: ${reason}`,
+      );
+      return;
+    }
+    this.attempts.set(key, {
+      n,
+      next: now.getTime() + advisorNotifyBackoffMs(n),
+    });
+    await this.touch(id);
+    this.logger.warn(
+      `ai_advisor_notify_failed alert=${key} attempt=${n}: ${reason}`,
+    );
   }
 
   /**
@@ -427,6 +608,11 @@ export class AdvisorNotifier {
     now: Date,
   ): Promise<{ sent: number; failed: number }> {
     const out = { sent: 0, failed: 0 };
+    let serverErrors = 0;
+    // R6 Telegram'i tunda yo'q (Toshkent 22:00–09:00) — kechiktirilgan yo'lning
+    // QAYTA urinishlari ham (#705 bloker): 09:00 dagi yuborish uzilib, 22:00
+    // dan keyin tiklansa — ertasi 09:00 (`fresh` chegarasigacha), tunda emas.
+    if (r6TelegramDueAt('R6', now)) return out;
     const rows = await this.ds.query<
       Array<
         AdvisorNotifyRow & { status: string; is_deleted: boolean; due: Date }
@@ -436,8 +622,10 @@ export class AdvisorNotifier {
               a."branch", a."status", a."is_deleted", a."telegram_due_at" AS due
          FROM ai_schema.ai_advisor_alerts a
         WHERE a."telegram_due_at" IS NOT NULL AND a."telegram_due_at" <= $1
-        ORDER BY a."telegram_due_at" ASC, a."id" ASC LIMIT ${ADVISOR_NOTIFY_BATCH}`,
-      [now],
+          AND NOT (a."id" = ANY($2::bigint[]))
+        ORDER BY COALESCE(array_position($3::bigint[], a."id"), 0) ASC, a."updatedAt" ASC, a."id" ASC
+        LIMIT ${ADVISOR_NOTIFY_BATCH}`,
+      [now, this.waitingIds(now, ':tg'), this.unreachableOrder(now, ':tg')],
     );
     if (!rows.length) return out;
     const clear = (id: string) =>
@@ -455,7 +643,13 @@ export class AdvisorNotifier {
         !row.is_deleted && (row.status === 'new' || row.status === 'seen');
       const fresh =
         now.getTime() - new Date(row.due).getTime() <
-        ADVISOR_NOTIFY_MAX_AGE_HOURS * 3600_000;
+        // 24 soat + bitta tun (22:00–09:00): kunduzgi oyna to'liq o'tib ketgan
+        // Telegram ertasi 09:00 da bir marta ketadi, keyin — yo'q.
+        (ADVISOR_NOTIFY_MAX_AGE_HOURS +
+          24 -
+          ADVISOR_R6_NIGHT_START_HOUR +
+          ADVISOR_R6_TELEGRAM_HOUR) *
+          3600_000;
       if (
         !open ||
         !fresh ||
@@ -464,8 +658,25 @@ export class AdvisorNotifier {
         await clear(row.id);
         continue;
       }
+      // Qabul qiluvchilar — qator xatosi EMAS (#705 S-c): olinmasa partiya
+      // to'xtaydi, hech bir qatorga urinish yozilmaydi (dispatchBatch kabi).
+      if (recipients === null) {
+        try {
+          recipients = await this.recipients();
+        } catch (error) {
+          this.logger.warn(
+            `ai_advisor_notify_telegram: superadminlar olinmadi — ${short(error)}`,
+          );
+          return { sent: out.sent, failed: out.failed + 1 };
+        }
+        if (!recipients.length) {
+          this.logger.warn(
+            `ai_advisor_notify_telegram: superadminlar ro'yxati bo'sh`,
+          );
+          return { sent: out.sent, failed: out.failed + 1 };
+        }
+      }
       try {
-        recipients ??= await this.recipients();
         const payload = buildAdvisorDispatch(row, {
           recipients,
           rules,
@@ -474,7 +685,12 @@ export class AdvisorNotifier {
           mode: 'telegram_only',
         });
         if (!payload) {
+          // Qabul qiluvchi / matn yo'q — qayta urinish yordam bermaydi.
           out.failed += 1;
+          await clear(row.id);
+          this.logger.warn(
+            `ai_advisor_notify_telegram_skipped alert=${row.id}: payload yo'q`,
+          );
           continue;
         }
         await rmqSend(
@@ -484,11 +700,25 @@ export class AdvisorNotifier {
           { timeoutMs: 8_000, retries: 0 },
         );
         await clear(row.id);
+        this.attempts.delete(`${row.id}:tg`);
+        this.unreachableAt.delete(`${row.id}:tg`);
+        serverErrors = 0;
         out.sent += 1;
       } catch (error) {
         out.failed += 1;
-        this.logger.warn(
-          `ai_advisor_notify_telegram_failed alert=${row.id}: ${short(error)}`,
+        if (isDispatchUnreachable(error)) {
+          // Navbat oxiriga (S-b): o'z timeout'i bor qator boshqalarini to'smaydi.
+          await this.touch(row.id);
+          this.logger.warn(
+            `ai_advisor_notify_telegram_unreachable alert=${row.id}: ${short(error)}`,
+          );
+          this.markUnreachable(`${row.id}:tg`, now);
+          if (isDispatchNoReply(error)) break;
+          if (++serverErrors >= ADVISOR_NOTIFY_MAX_SERVER_ERRORS) break;
+          continue;
+        }
+        await this.attemptFailed(row.id, now, short(error), ':tg', () =>
+          clear(row.id),
         );
       }
     }
@@ -497,5 +727,41 @@ export class AdvisorNotifier {
 }
 
 function short(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 200);
+  // Log uchun: hech qachon tashlamaydi (aylanma / prototipsiz obyekt, getter).
+  try {
+    if (error instanceof Error) {
+      const t =
+        typeof error.message === 'string'
+          ? error.message
+          : typeof error.name === 'string'
+            ? error.name
+            : 'Error';
+      return t.slice(0, 200);
+    }
+    // RPC xatosi — `{statusCode, message}` obyekti ('[object Object]' emas).
+    if (error && typeof error === 'object') {
+      const e = error as { statusCode?: unknown; message?: unknown };
+      const code =
+        typeof e.statusCode === 'number' || typeof e.statusCode === 'string'
+          ? String(e.statusCode)
+          : '';
+      const msg =
+        typeof e.message === 'string'
+          ? e.message
+          : Array.isArray(e.message) // class-validator 400
+            ? e.message
+                .filter((m): m is string => typeof m === 'string')
+                .join('; ')
+            : '';
+      if (code || msg) return `${code} ${msg}`.trim().slice(0, 200);
+      return JSON.stringify(error).slice(0, 200);
+    }
+    return String(error).slice(0, 200);
+  } catch {
+    try {
+      return String(error).slice(0, 200);
+    } catch {
+      return 'unprintable error';
+    }
+  }
 }

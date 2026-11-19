@@ -7,6 +7,7 @@ import { CashboxHistory } from './entities/cashbox-history.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 import { OperatorEarning } from './entities/operator-earning.entity';
 import { OperatorPayment } from './entities/operator-payment.entity';
+import { OperatorPaymentService } from './operator-payment/operator-payment.service';
 
 /**
  * zTYaGWui — P&L daftari (financial_balance_history) zanjiri HAQIQIY
@@ -14,8 +15,9 @@ import { OperatorPayment } from './entities/operator-payment.entity';
  * (o'chirilganini ham) olardi, o'quvchilar esa `is_deleted = false` bilan —
  * oxirgi qator soft-delete qilinsa zanjir ikkiga bo'linardi.
  *
- * Uchala yozuvchi tekshiriladi: `recordFinancialBalance`,
- * `appendFinancialBalanceInTx` (qo'lda kirim/chiqim) va operator to'lovi.
+ * Yozuvchilar tekshiriladi: `recordFinancialBalance` va
+ * `appendFinancialBalanceInTx` (qo'lda kirim/chiqim). Operator to'lovi
+ * (F2qp6FtE) endi daftarga yozmaydi — TC1 shuni qulflaydi.
  * Env (`FINANCE_PG_TEST_URI`) berilmasa skip.
  */
 const pgUri =
@@ -175,7 +177,10 @@ describePg('zTYaGWui - P&L daftari zanjiri, haqiqiy Postgres', () => {
     expectChainIntact(await liveRows());
   });
 
-  it('TC1: operator to`lovi yozuvchisi ham tirik qatordan davom etadi', async () => {
+  it('TC1 (F2qp6FtE): market operatorga to`lovi daftarga ham, kassaga ham yozilmaydi — zanjir buzilmaydi', async () => {
+    // Ilgari operator to'lovi uchinchi daftar yozuvchisi edi (Asosiy kassadan
+    // chiqim + «Maosh» xarajati). Endi market o'z operatoriga o'zi to'laydi —
+    // yozuv faqat `operator_payments` da, daftar va kassa o'zgarmaydi.
     await db.getRepository(Cashbox).save(
       db.getRepository(Cashbox).create({
         user_id: '0',
@@ -185,29 +190,32 @@ describePg('zTYaGWui - P&L daftari zanjiri, haqiqiy Postgres', () => {
         balance_card: 0,
       }),
     );
-    await db.getRepository(OperatorEarning).save(
-      db.getRepository(OperatorEarning).create({
-        operator_id: '42',
-        order_id: '7001',
-        amount: 20000,
-      }),
-    );
     await record(3000, 'a');
     await record(900, 'b');
     await softDeleteLast();
+    const before = await liveRows();
 
-    const res = await service.createOperatorPayment({
+    const payments = new OperatorPaymentService(db, {
+      log: jest.fn().mockResolvedValue(undefined),
+    } as never);
+    const res = await payments.record({
+      market_id: '12',
       operator_id: '42',
       amount: 1000,
-      paid_by_id: '9',
+      recorded_by_id: '12',
+      recorded_by_role: 'market',
+      idempotency_key: 'chain-1',
     });
 
     expect(res.statusCode).toBe(201);
-    const rows = await liveRows();
-    expect(rows).toHaveLength(2);
-    expect(Number(rows[1].balance_before)).toBe(3000);
-    expect(Number(rows[1].balance_after)).toBe(2000);
-    expectChainIntact(rows);
+    expect(await liveRows()).toEqual(before);
+    expect(await db.getRepository(CashboxHistory).count()).toBe(0);
+    const main = await db.getRepository(Cashbox).findOneByOrFail({
+      user_id: '0',
+      cashbox_type: Cashbox_type.MAIN,
+    });
+    expect(Number(main.balance_cash)).toBe(10000);
+    expectChainIntact(await liveRows());
   });
 
   it('TC2: invariant — SUM(amount, is_deleted=false) == oxirgi tirik qatorning balance_after', async () => {

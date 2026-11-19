@@ -494,6 +494,7 @@ export function makeRouter(
         transport as never,
         config as never,
         outbox as never,
+        sessions as never,
       )
     : null;
   const aiHandler = aiService ? new AiOrderHandler(aiService) : undefined;
@@ -581,15 +582,32 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
     }),
     update: jest.fn(
       (
-        where: { id: string; worker_token?: string },
+        where: {
+          id: string;
+          worker_token?: string;
+          status?: string | { value?: unknown };
+          updated_at?: Date;
+        },
         patch: Record<string, any>,
       ) => {
         const row = rows.get(where.id);
+        // Shartli holat: `status: 'preview'` yoki `In([...])` (FindOperator).
+        const allowed =
+          where.status === undefined
+            ? null
+            : typeof where.status === 'string'
+              ? [where.status]
+              : (where.status.value as string[]);
         // (BOT-3b) da'vo tokeni bilan yakuniy yozuv.
         if (
           !row ||
           (where.worker_token !== undefined &&
-            row.worker_token !== where.worker_token)
+            row.worker_token !== where.worker_token) ||
+          (allowed !== null && !allowed.includes(row.status)) ||
+          // Versiya sharti (`updated_at`) — optimistik yozuv.
+          ('updated_at' in where &&
+            new Date(row.updated_at ?? 0).getTime() !==
+              new Date(where.updated_at ?? 0).getTime())
         ) {
           return Promise.resolve({ affected: 0 });
         }
@@ -601,6 +619,34 @@ export function makeAiDraftsStore(now: () => number = Date.now) {
       Promise.resolve(rows.get(where.id) ? { ...rows.get(where.id) } : null),
     ),
     query: jest.fn((sql: string, params: unknown[]) => {
+      // Operator tanlovi: `preview` va natijasi NOMA'LUM buyurtma yo'q bo'lsa.
+      if (/SET "input" = jsonb_set\(/.test(sql)) {
+        const [id, metaPatch] = params as [string, string];
+        const target = rows.get(id);
+        const orders = (target?.orders ?? []) as Array<Record<string, unknown>>;
+        if (
+          !target ||
+          target.status !== 'preview' ||
+          new Date(target.expires_at).getTime() <= now() ||
+          orders.some(
+            (o) =>
+              o?.confirm_attempted_at != null && o?.confirm_order_id == null,
+          )
+        ) {
+          return Promise.resolve([[], 0]);
+        }
+        // jsonb_set('{meta}', meta || patch) — faqat meta kalitlari.
+        const current = (target.input ?? {}) as Record<string, any>;
+        target.input = {
+          ...current,
+          meta: {
+            ...(current.meta ?? {}),
+            ...(JSON.parse(metaPatch) as Record<string, unknown>),
+          },
+        };
+        target.updated_at = new Date(now());
+        return Promise.resolve([[{ id }], 1]);
+      }
       // (BOT-3b) fondagi ishchi da'vosi: `worker_at IS NULL` bo'lsa oladi.
       if (/"worker_at" = now\(\)/.test(sql) && /"id" = \$1/.test(sql)) {
         const [claimId, status] = params as [string, string];

@@ -52,6 +52,8 @@ export class AiOrderHandler implements BotMessageHandler {
     if (!text || text.startsWith('/')) return false;
     const actor = await this.marketActor(ctx);
     if (!actor) return false;
+    // «🔎 Qidirish» dan keyin kutilgan matn (mahsulot nomi) — AI emas.
+    if (await this.ai.handleInput(ctx, actor.user_id, text)) return true;
     if (text.length > AI_TEXT_MAX_CHARS) {
       await ctx.reply(AI_TEXT_TOO_LONG_TEXT);
       return true;
@@ -60,7 +62,7 @@ export class AiOrderHandler implements BotMessageHandler {
       await ctx.reply(AI_HINT_TEXT);
       return true;
     }
-    await this.ai.start(ctx, actor.user_id, { text });
+    await this.ai.start(ctx, actor.user_id, { text }, actor.role);
     return true;
   }
 
@@ -83,10 +85,15 @@ export class AiOrderHandler implements BotMessageHandler {
         await ctx.reply(AI_MEDIA_TEXT);
         return true;
       }
-      await this.ai.start(ctx, actor.user_id, {
-        ...(caption ? { text: caption } : {}),
-        files: [{ file_id: size.file_id, mime: 'image/jpeg' }],
-      });
+      await this.ai.start(
+        ctx,
+        actor.user_id,
+        {
+          ...(caption ? { text: caption } : {}),
+          files: [{ file_id: size.file_id, mime: 'image/jpeg' }],
+        },
+        actor.role,
+      );
       return true;
     }
     const document = message.document!;
@@ -98,15 +105,23 @@ export class AiOrderHandler implements BotMessageHandler {
       await ctx.reply(AI_MEDIA_TEXT);
       return true;
     }
-    await this.ai.start(ctx, actor.user_id, {
-      ...(caption ? { text: caption } : {}),
-      files: [{ file_id: document.file_id, mime }],
-    });
+    await this.ai.start(
+      ctx,
+      actor.user_id,
+      {
+        ...(caption ? { text: caption } : {}),
+        files: [{ file_id: document.file_id, mime }],
+      },
+      actor.role,
+    );
     return true;
   }
 }
 
-/** Preview tugmalari: ✅ Yaratish / ✏️ Tuzatish / ❌ Bekor / 🔁 Qayta urinish. */
+/**
+ * Preview tugmalari: ✅ Yaratish / ✏️ Tuzatish / ❌ Bekor / 🔁 Qayta urinish;
+ * AI ack: «Baribir yaratamanmi?» — ✅ Ha, yaratish / ↩️ Yo‘q, orqaga.
+ */
 @Injectable()
 export class AiOrderActions {
   readonly handlers: BotActionHandler[];
@@ -122,6 +137,18 @@ export class AiOrderActions {
         if (!ctx.isPrivate) return;
         await fn(ctx, draftOf(action));
       };
+    const withPayload =
+      (
+        fn: (
+          ctx: BotContext,
+          draftId: string,
+          payload: Record<string, unknown>,
+        ) => Promise<void>,
+      ) =>
+      async (ctx: BotContext, action: TelegramBotAction) => {
+        if (!ctx.isPrivate) return;
+        await fn(ctx, draftOf(action), action.payload ?? {});
+      };
     this.handlers = [
       {
         action: AI_ORDER_ACTIONS.confirm,
@@ -129,19 +156,96 @@ export class AiOrderActions {
         handle: privateOnly((ctx, id) => this.ai.confirm(ctx, id)),
       },
       {
+        action: AI_ORDER_ACTIONS.ack,
+        expiredText: AI_EXPIRED_TEXT,
+        // (AI ack B3) `acks` — oynada ko'rsatilgan buyurtmalar va kodlar.
+        handle: async (ctx: BotContext, action: TelegramBotAction) => {
+          if (!ctx.isPrivate) return;
+          await this.ai.confirmAcked(
+            ctx,
+            draftOf(action),
+            action.payload?.acks,
+          );
+        },
+      },
+      {
+        action: AI_ORDER_ACTIONS.back,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: privateOnly((ctx, id) => this.ai.backFromAck(ctx, id)),
+      },
+      {
         action: AI_ORDER_ACTIONS.fix,
         expiredText: AI_EXPIRED_TEXT,
-        handle: privateOnly((ctx, id) => this.ai.close(ctx, id, 'fix')),
+        handle: privateOnly((ctx, id) => this.ai.editMenu(ctx, id)),
       },
       {
         action: AI_ORDER_ACTIONS.cancel,
         expiredText: AI_EXPIRED_TEXT,
-        handle: privateOnly((ctx, id) => this.ai.close(ctx, id, 'cancel')),
+        handle: privateOnly((ctx, id) => this.ai.close(ctx, id)),
+      },
+      // Tuzatish: payload — buyurtma indeksi, maydon kaliti, item / ro'yxat o'rni.
+      {
+        action: AI_ORDER_ACTIONS.edit,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.editOrder(ctx, id, p.o)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.field,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.editField(ctx, id, p)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.district,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.openDistrict(ctx, id, p.o)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.districtPick,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.pickDistrict(ctx, id, p)),
+      },
+      // «🎧 Operator» (faqat market): payload — `{k, oid}` / `{k: -1}`.
+      {
+        action: AI_ORDER_ACTIONS.operator,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: privateOnly((ctx, id) => this.ai.openOperators(ctx, id)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.operatorPick,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.pickOperator(ctx, id, p)),
       },
       {
         action: AI_ORDER_ACTIONS.retry,
         expiredText: AI_EXPIRED_TEXT,
         handle: privateOnly((ctx, id) => this.ai.retry(ctx, id)),
+      },
+      // Katalogda topilmagan mahsulot: payload — faqat indekslar (o, i, s, k).
+      {
+        action: AI_ORDER_ACTIONS.item,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) =>
+          this.ai.openItem(ctx, id, p.o, p.i),
+        ),
+      },
+      {
+        action: AI_ORDER_ACTIONS.pick,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) => this.ai.pickProduct(ctx, id, p)),
+      },
+      {
+        action: AI_ORDER_ACTIONS.find,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) =>
+          this.ai.startSearch(ctx, id, p.o, p.i),
+        ),
+      },
+      {
+        action: AI_ORDER_ACTIONS.keep,
+        expiredText: AI_EXPIRED_TEXT,
+        handle: withPayload((ctx, id, p) =>
+          this.ai.keepName(ctx, id, p.o, p.i),
+        ),
       },
     ];
   }

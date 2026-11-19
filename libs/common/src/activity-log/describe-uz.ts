@@ -258,9 +258,25 @@ export const ActivityDescribeUz = {
     return `Market #${String(marketId ?? '-')} ga to'lov: ${moneyUz(amount)}${cashboxSuffix(null, method)}`;
   },
 
-  /** "Operator #42 ga komissiya to'lovi: 150 000 so'm" */
+  /** "Operator #42 ga komissiya to'lovi: 150 000 so'm" (eski yo'l — Asosiy kassadan, F2qp6FtE gacha) */
   operatorPayment(operatorId: Id | null | undefined, amount: unknown): string {
     return `Operator #${String(operatorId ?? '-')} ga komissiya to'lovi: ${moneyUz(amount)}`;
+  },
+
+  /** "Market operator #42 ga to'lovni yozdi (Elchi kassasiz): 150 000 so'm" (F2qp6FtE) */
+  operatorPaymentRecorded(
+    operatorId: Id | null | undefined,
+    amount: unknown,
+  ): string {
+    return `Market operator #${String(operatorId ?? '-')} ga to'lovni yozdi (Elchi kassasiz): ${moneyUz(amount)}`;
+  },
+
+  /** "Operator #42 ga to'lov yozuvi bekor qilindi: 150 000 so'm" (F2qp6FtE) */
+  operatorPaymentCancelled(
+    operatorId: Id | null | undefined,
+    amount: unknown,
+  ): string {
+    return `Operator #${String(operatorId ?? '-')} ga to'lov yozuvi bekor qilindi: ${moneyUz(amount)}`;
   },
 
   /** "Jo'natma #12 yaratildi: Filial #3 → Filial #5, 4 ta buyurtma" */
@@ -360,6 +376,18 @@ export const ActivityDescribeUz = {
     extraPerKg: unknown,
   ): string {
     return `Yetkazish tarifi «${String(tariffId)}» — yangi versiya: ${moneyUz(basePrice)} + ${moneyUz(extraPerKg)}/kg`;
+  },
+
+  /**
+   * (B0ILd7YI) "Yetkazish tarifi «center» — rejalashtirilgan versiya bekor
+   * qilindi: 45 000 so'm + 4 500 so'm/kg". Faqat tarif kodi va summalar.
+   */
+  deliveryTariffVersionCancelled(
+    tariffId: string,
+    basePrice: unknown,
+    extraPerKg: unknown,
+  ): string {
+    return `Yetkazish tarifi «${String(tariffId)}» — rejalashtirilgan versiya bekor qilindi: ${moneyUz(basePrice)} + ${moneyUz(extraPerKg)}/kg`;
   },
 
   /** (DAqXPeSy) "Yetkazish narxi sozlamalari o'zgartirildi: 2 ta maydon". */

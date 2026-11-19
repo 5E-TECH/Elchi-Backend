@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   ForbiddenException,
@@ -9,6 +10,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  HttpException,
   Inject,
   Logger,
   NotFoundException,
@@ -33,7 +35,9 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiBadRequestResponse,
   ApiConflictResponse,
+  ApiServiceUnavailableResponse,
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
@@ -97,6 +101,8 @@ import {
   computeEditedFields,
   computeFieldCorrections,
 } from './ai-order/ai-edited-fields';
+import { missingAckChecks, requiredAckChecks } from './ai-order/ai-ack-checks';
+import { recordAiAck, type AiAckOutcome } from './ai-order/ai-ack-metrics';
 import {
   AiConfirmOrderDto,
   AiConfirmRequestDto,
@@ -150,6 +156,12 @@ import {
   parseUzPhoneSearch,
   recordReceiveByScanOutcome,
   requestContext,
+  AI_CHECKS_NOT_ACKNOWLEDGED,
+  AI_CHECKS_UNAVAILABLE,
+  AI_DRAFT_ITEM_NOT_FOUND,
+  AI_DRAFT_NOT_FOUND,
+  AI_DRAFT_REQUIRED,
+  AI_FAST_RMQ_NAME,
   type AiAuditedField,
   type AiFieldCorrections,
   type AiImageMediaType,
@@ -208,6 +220,7 @@ import {
   type OrderMarketPhonePolicy,
 } from './order-create/order-operator-phone';
 import {
+  type ChosenOrderOperator,
   MARKET_OPERATOR_SELECTABLE_CMD,
   resolveChosenOrderOperator,
 } from './order-create/order-chosen-operator';
@@ -363,6 +376,13 @@ type AiConfirmResult = {
   /** Mashina kaliti (district_not_found, duplicate_recent, ...). */
   code?: string;
   /**
+   * Aniqroq sabab — #658 UPPER_CASE kodi (faqat `ok:false`, bo'lsa):
+   * `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`,
+   * `CHOSEN_OPERATOR_SELF_ONLY` (`code` — avvalgidek `create_failed`).
+   * Mijozlar `reason` matnini tahlil qilmasin — shu maydonni tekshirsin.
+   */
+  reason_code?: string;
+  /**
    * Cp2v3ZJ7 #3: faqat `ok:true` da — `true` bo'lsa buyurtma AVVAL (shu
    * draft bandi bilan) yaratilgan, bu chaqiruv uni qayta YARATMADI.
    */
@@ -398,6 +418,13 @@ type AiParseResponseData = {
   reset_at?: string;
 };
 
+/** ai-confirm takrori so'rovi (`order.ai_confirm.completed`) — qisqa. */
+const AI_REPLAY_LOOKUP_TIMEOUT_MS = 3000;
+
+/** ai-confirm: tanlangan operatorni identity'da tekshirib bo'lmadi. */
+const AI_OPERATOR_CHECK_UNAVAILABLE_REASON =
+  'Tanlangan operatorni tekshirib bo‘lmadi — buyurtma yaratilmadi, birozdan so‘ng qayta yuboring';
+
 /** Tekshiruvdan o'tgan, yaratishga navbatdagi AI buyurtma. */
 type EligibleAiOrder = {
   index: number;
@@ -417,6 +444,25 @@ type EligibleAiOrder = {
   editedFields: AiAuditedField[] | null;
   /** J3hEDtFN #4: o'zgargan maydonlarning AI / yakuniy qiymati. */
   fieldCorrections?: AiFieldCorrections | null;
+  /**
+   * AI ack: SAQLANGAN snapshot bo'yicha tasdiq talab qiladigan bloklovchi
+   * kodlar (tahrir istisnosidan keyin; `requiredAckChecks`). Snapshot
+   * topilmasa — bo'sh.
+   */
+  requiredAcks?: string[];
+  /**
+   * Formadagi «Operator» tanlovi (`order.operator_id`) — partiya boshida
+   * BIR MARTA tekshirilgan (`resolveAiChosenOperators`); auditda `operator`
+   * shu ism bilan yoziladi, `createOrderInternal` uni qayta so'ramaydi.
+   */
+  chosenOperator?: ChosenOrderOperator;
+  /**
+   * Barqaror kalit (`stableRequestId`) bilan buyurtma AVVAL yaratilgan
+   * (`order.ai_confirm.completed`) — o'sha buyurtma id'si. Bo'lsa operator,
+   * raqam va mijoz qayta tekshirilmaydi, `order.create` chaqirilmaydi:
+   * natija `{ ok: true, order_id, idempotent_replay: true }`.
+   */
+  replayOrderId?: string;
 };
 
 /**
@@ -457,8 +503,32 @@ const createAiImageMemoryStorage = memoryStorage as () => unknown;
 const AI_MIN_PREVIEW_BUDGET_MS = 5_000;
 /** ai-confirm'dagi find_by_ids tekshiruvlari (partiyaga BITTADAN). */
 const AI_CONFIRM_LOOKUP_TIMEOUT_MS = 8_000;
-/** vncdmXOy: `ai.draft.confirm_context` — audit uchun, yaratishni kechiktirmasin. */
+/**
+ * vncdmXOy: `ai.draft.confirm_context` — yaratishni kechiktirmasin. (AI ack
+ * B1) TEZ navbat orqali (`AI_FAST`) — Claude chaqiruvlari ortida kutmaydi.
+ */
 const AI_DRAFT_CONTEXT_TIMEOUT_MS = 3_000;
+/** AI ack: 503 `AI_CHECKS_UNAVAILABLE` dan keyin qayta urinish (s). */
+const AI_CHECKS_RETRY_AFTER_SECONDS = 5;
+/**
+ * (AI ack S1) Snapshot (`attach_preview`, fire-and-forget) hali yetib
+ * kelmagan YOSH draft — 503 (qayta urinish). Shundan eski draft'da snapshot
+ * yo'q bo'lsa — yo'qolgan deb fail-open (`checks_unverified`, WARN).
+ */
+const AI_SNAPSHOT_PENDING_MAX_AGE_MS = 2 * 60_000;
+/** (AI ack S2) Log-only rejimda WARN'dagi kod → HTTP holati. */
+const AI_ACK_GATE_STATUS: Record<string, 400 | 409 | 503> = {
+  [AI_CHECKS_NOT_ACKNOWLEDGED]: 409,
+  [AI_DRAFT_REQUIRED]: 400,
+  [AI_DRAFT_NOT_FOUND]: 400,
+  [AI_DRAFT_ITEM_NOT_FOUND]: 400,
+  [AI_CHECKS_UNAVAILABLE]: 503,
+};
+/** (AI ack S4) 409 matni. */
+const AI_CHECKS_NOT_ACKNOWLEDGED_MESSAGE =
+  'AI ogohlantirishlari tasdiqlanmagan: tuman yoki summani tekshirib, «Baribir yaratish»ni bosing';
+const AI_CHECKS_UNAVAILABLE_MESSAGE =
+  "AI tekshiruvlarini hozir o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring";
 /** vncdmXOy: `GET /orders/:id/ai-trace` → `ai.draft.trace_by_order`. */
 const AI_DRAFT_TRACE_TIMEOUT_MS = 8_000;
 
@@ -604,6 +674,11 @@ export class OrderGatewayController {
     // T7 (QPq2C1co, B2): buyurtma javoblariga `problem_contacts`. Yo'q
     // (eski spec'lar) — maydon qo'shilmaydi.
     @Optional() private readonly problemContacts?: ProblemContactsService,
+    // (AI ack B1) ai-service TEZ navbati: confirm_context / attach_preview /
+    // link_orders. Yo'q bo'lsa (eski spec'lar) — umumiy `aiClient`.
+    @Optional()
+    @Inject(AI_FAST_RMQ_NAME)
+    private readonly aiFastClient?: ClientProxy,
   ) {}
 
   private readonly logger = new Logger(OrderGatewayController.name);
@@ -949,7 +1024,9 @@ export class OrderGatewayController {
       throw new BadRequestException({
         statusCode: 400,
         message:
-          "Buyurtmani avtomatik qabul qilib bo'lmadi — avval «Qabul qilish»ni bosing",
+          // COURIER-SCAN: kuryer «Qabul qilish» tugmasi olib tashlandi — QR
+          // skani (skan = qabul) yoki qayta urinish.
+          "Buyurtmani avtomatik qabul qilib bo'lmadi — buyurtma QR kodini skanerlang yoki qayta urinib ko'ring",
         reason: 'auto_receive_failed',
       });
     }
@@ -1543,6 +1620,48 @@ export class OrderGatewayController {
   }
 
   /**
+   * (AI ack S2) `AI_ACK_CHECKS_ENFORCE`: `on` — ack darvozasi 409/400/503
+   * qaytaradi; `off` (sukut, config yo'q) — faqat WARN `ai_ack would_<status>`
+   * va hisoblagich, buyurtmalar avvalgidek yaratiladi (gateway FE/botdan
+   * oldin chiqa olsin).
+   */
+  private isAiAckEnforced(): boolean {
+    const raw: unknown = this.config?.get<unknown>('AI_ACK_CHECKS_ENFORCE');
+    if (typeof raw === 'boolean') return raw;
+    return ['on', 'true', '1', 'yes'].includes(
+      this.asStr(raw).trim().toLowerCase(),
+    );
+  }
+
+  /**
+   * (AI ack S2/S7) Darvoza: hisoblagich + WARN (`ai_ack rejected_<status>`
+   * yoki log-only'da `ai_ack would_<status>`, buyurtmalar soni bilan).
+   * Majburiy rejimda xatoni tashlaydi; log-only'da qaytadi (yaratish davom
+   * etadi).
+   */
+  private aiAckGate(
+    outcome: AiAckOutcome,
+    count: number,
+    error: HttpException,
+  ): void {
+    const enforced = this.isAiAckEnforced();
+    recordAiAck(outcome, enforced, count);
+    const body = error.getResponse() as { code?: string };
+    const code = this.asStr(body?.code);
+    const status = AI_ACK_GATE_STATUS[code] ?? error.getStatus();
+    this.logger.warn(
+      `ai_ack ${enforced ? 'rejected' : 'would'}_${status} code=${code} outcome=${outcome} orders=${count}` +
+        (enforced ? '' : ' — AI_ACK_CHECKS_ENFORCE=off, yaratish davom etadi'),
+    );
+    if (enforced) throw error;
+  }
+
+  /** (AI ack B1) confirm yo'lidagi arzon ai-service RPC'lari uchun mijoz. */
+  private aiDraftClient(): ClientProxy | undefined {
+    return this.aiFastClient ?? this.aiClient;
+  }
+
+  /**
    * AI oqimi uchun market SERVER tomonda aniqlanadi (mijozga ishonilmaydi):
    *  - MARKET — token `sub`; tanadagi market_id E'TIBORSIZ;
    *  - MARKET_OPERATOR — identity `user.market_id`; bo'lmasa `{noMarket}`
@@ -2041,8 +2160,9 @@ export class OrderGatewayController {
    * ai-confirm SERVER TOMONDA QAYTA TEKSHIRUVI uchun ma'lumot: partiyadagi
    * barcha tumanlar BITTA `logistics.district.find_by_ids`, barcha mahsulotlar
    * BITTA `catalog.product.find_by_ids` bilan o'qiladi (wgqxS0Cp #11).
-   * Istalgan biri ishlamasa `null` — chaqiruvchi hamma buyurtmani
-   * `validation_unavailable` qiladi (tekshiruvsiz yaratish YO'Q).
+   * Istalgan biri ishlamasa `null` — chaqiruvchi takror BO'LMAGAN hamma
+   * buyurtmani `validation_unavailable` qiladi (tekshiruvsiz yaratish YO'Q);
+   * takror bandlar (`loadAiReplays`) baribir `idempotent_replay`.
    */
   private async loadAiConfirmLookups(orders: AiConfirmOrderDto[]): Promise<{
     districts: Array<Record<string, unknown>>;
@@ -2100,9 +2220,11 @@ export class OrderGatewayController {
    * ("Yangi buyurtmalar" ekranida ko'rinadi — bot yo'lidagi CREATED tuzog'i
    * takrorlanmaydi), filial esa rol bo'yicha `createOrderInternal` da
    * qo'yiladi. `region_id` — DB'dagi tuman yozuvidan. `operator` — FAQAT
-   * matn; `operator_id` `createOrderInternal` da faqat ROLDAN qo'yiladi
-   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null),
-   * matndan HECH QACHON.
+   * matn, undan `operator_id` HECH QACHON aniqlanmaydi. `operator_id` —
+   * formadagi tanlov (`order.operator_id`) bo'lsa `createOrderInternal` uni
+   * POST /orders kabi tekshiradi (shu marketning faol operatori, aks holda
+   * 400 → shu buyurtma `create_failed`) va ismini yozadi; bo'lmasa ROLDAN
+   * (MARKET_OPERATOR → sub, qolganlar — registrator ham, 2026-11-11 — null).
    */
   private async createAiOrder(
     item: EligibleAiOrder,
@@ -2120,6 +2242,16 @@ export class OrderGatewayController {
     },
   ): Promise<AiConfirmResult> {
     const { order, index } = item;
+    // Takror (`loadAiReplays`): buyurtma ayni barqaror kalit bilan avval
+    // yaratilgan — tekshiruvsiz, order-service javobidagi takror bilan AYNI shakl.
+    if (item.replayOrderId) {
+      return {
+        index,
+        ok: true,
+        order_id: item.replayOrderId,
+        idempotent_replay: true,
+      };
+    }
     const mapped: CreateOrderRequestDto = {
       // 6kHnNH9j: buyurtma → so'rov → sukut `auto` (createOrderInternal).
       ...((order.fulfillment ?? ctx.fulfillment)
@@ -2135,6 +2267,10 @@ export class OrderGatewayController {
         ...(order.customer.address ? { address: order.customer.address } : {}),
       },
       ...(ctx.includeMarketId ? { market_id: ctx.marketId } : {}),
+      // Mavjud mijoz tanlovi — POST /orders egalik qoidasi
+      // (`resolveScopedCustomerId`); tasdiqlanmasa shu buyurtma rad
+      // (`strictCustomerId`, pastda). Berilmasa — avvalgidek telefon yo'li.
+      ...(order.customer_id ? { customer_id: order.customer_id } : {}),
       // txmkXVBa: «Kartani ham yangilash» (berilmasa — karta o'zgarmaydi).
       ...(order.update_customer_card === true
         ? { update_customer_card: true }
@@ -2152,6 +2288,15 @@ export class OrderGatewayController {
       total_price: order.total_price ?? 0,
       comment: order.comment ?? null,
       operator: order.operator ?? null,
+      // «Operator» tanlovi — POST /orders bilan AYNI tekshiruv
+      // (`createOrderInternal` → `resolveChosenOrderOperator`); berilmasa
+      // maydon umuman yuborilmaydi (avvalgi xulq).
+      ...(order.operator_id ? { operator_id: order.operator_id } : {}),
+      // VRyloH62: formadagi operator raqami — 1-/2-raqam qarori
+      // `createOrderInternal` da (`resolveOrderOperatorPhones`, POST /orders
+      // bilan AYNI). Ilgari uzatilmasdi: raqam majburiy, doimiy raqamsiz
+      // marketda veb AI buyurtmasi DOIM 400 (`create_failed`) bo'lardi.
+      ...(order.operator_phone ? { operator_phone: order.operator_phone } : {}),
       // Almashtirish: order-service eski buyurtmani shu market (ctx.marketId —
       // server aniqlagan) bo'yicha tekshiradi; begona buyurtma — 400.
       ...(order.replaced_order_id
@@ -2183,6 +2328,9 @@ export class OrderGatewayController {
       marketProfile: ctx.marketProfile ?? null,
       operatorName: ctx.operatorName ?? null,
       branchAssignment: ctx.branchAssignment,
+      strictCustomerId: true,
+      // Partiya boshida tekshirilgan (`resolveAiChosenOperators`).
+      ...(item.chosenOperator ? { chosenOperator: item.chosenOperator } : {}),
     });
     const body = (response ?? {}) as {
       id?: unknown;
@@ -2231,8 +2379,13 @@ export class OrderGatewayController {
    * yozadi (draft ↔ buyurtma bog'lanishining asosiy manbai).
    * Fire-and-forget: javob kutilmaydi, xato faqat WARN — buyurtma natijasiga
    * TA'SIR QILMAYDI. ⚠️ Qayta urinish YO'Q (ai.* RPC).
-   * Cp2v3ZJ7: `idempotent_replay` (avval yaratilgan) natijalar QAYTA
-   * bog'lanmaydi — ular birinchi chaqiruvda bog'langan.
+   * `idempotent_replay` (avval yaratilgan) natijalar HAM bog'lanadi: 1-urinish
+   * `timeout_unknown` (ok:false) bo'lsa u bog'lanmagan — aks holda buyurtma
+   * draft'ga va AI xarajatiga HECH QACHON bog'lanmasdi. Takror bog'lash
+   * xavfsiz (idempotent): `ai_order_draft_item` — `ON CONFLICT (order_id)
+   * DO NOTHING` (narx faqat YANGI qatorga muzlatiladi, `charged_uzs` 0;
+   * birinchi bog'lanishdagi edited_fields saqlanadi), `ai_usage_log.order_ids`
+   * — `DISTINCT` birlashma.
    * NFiXfmq6: `ai_price_per_order` — market yozuvidagi narx (null — global);
    * ai-service uni har YANGI bog'langan buyurtmaga muzlatadi (`order_id`
    * UNIQUE — ikki marta chaqiruvda narx faqat bir marta qayd qilinadi).
@@ -2245,7 +2398,9 @@ export class OrderGatewayController {
     confirmedBy?: string,
     aiPricePerOrder: number | null = null,
   ): void {
-    if (!this.aiClient) return;
+    // (AI ack B1) TEZ navbat — Claude chaqiruvlari ortida kutmaydi.
+    const aiDraftClient = this.aiDraftClient();
+    if (!aiDraftClient) return;
     const editedByIndex = new Map(
       eligible.map((item) => [item.index, item.editedFields]),
     );
@@ -2260,7 +2415,6 @@ export class OrderGatewayController {
       const result = results.get(index);
       const draftId = this.asStr(order?.draft_id).trim();
       if (!result?.ok || !result.order_id || !draftId) return;
-      if (result.idempotent_replay === true) return;
       const entry = byDraft.get(draftId) ?? { orderIds: [], items: [] };
       entry.orderIds.push(result.order_id);
       entry.items.push({
@@ -2275,7 +2429,7 @@ export class OrderGatewayController {
     const confirmer = this.asStr(confirmedBy).trim();
     for (const [draftId, entry] of byDraft) {
       void firstValueFrom(
-        this.aiClient
+        aiDraftClient
           .send(
             { cmd: 'ai.usage.link_orders' },
             {
@@ -2304,12 +2458,18 @@ export class OrderGatewayController {
   private async loadAiDraftContexts(
     marketId: string,
     draftIds: string[],
-  ): Promise<Map<string, AiDraftConfirmContext>> {
+  ): Promise<Map<string, AiDraftConfirmContext> | null> {
     const out = new Map<string, AiDraftConfirmContext>();
-    if (!this.aiClient || draftIds.length === 0) return out;
+    if (draftIds.length === 0) return out;
+    // AI ack: ai-service bo'lmasa tekshiruvlarni o'qib bo'lmaydi — `null`
+    // (chaqiruvchi FAIL-CLOSED 503 qaytaradi).
+    // (AI ack B1) TEZ navbat (`AI_FAST`): umumiy `ai_queue` da 8 ta
+    // ekstraksiya ochiq turganda 3 s ichida javob kelmasdi.
+    const aiDraftClient = this.aiDraftClient();
+    if (!aiDraftClient) return null;
     try {
       const response: unknown = await firstValueFrom(
-        this.aiClient
+        aiDraftClient
           .send<unknown>(
             { cmd: 'ai.draft.confirm_context' },
             { market_id: marketId, draft_ids: draftIds },
@@ -2323,16 +2483,187 @@ export class OrderGatewayController {
       }
     } catch (error: unknown) {
       this.logger.warn(
-        `ai.draft.confirm_context ishlamadi (${this.errorName(error)}) — audit metadata qisqartirilgan`,
+        `ai.draft.confirm_context ishlamadi (${this.errorName(error)}) — AI tekshiruvlarini o'qib bo'lmadi`,
       );
+      return null;
     }
     return out;
   }
 
   /**
+   * ai-confirm takrori — barqaror kalitlar (`ai:<market>:<draft>:<idx>`,
+   * market — server aniqlagan) bo'yicha order-service'dan BITTA so'rov
+   * (`order.ai_confirm.completed`, faqat o'qish). Qaytaradi: so'rovdagi
+   * `orders[]` o'rni → avval yaratilgan buyurtma id'si. Kalitda market bor —
+   * boshqa market natijasi qaytmaydi. So'rov ishlamasa (timeout, eski
+   * order-service) — bo'sh Map va avvalgi yo'l (tekshiruvlar + `order.create`
+   * idempotentligi) ishlaydi.
+   */
+  private async loadAiReplays(
+    orders: AiConfirmOrderDto[],
+    marketId: string,
+  ): Promise<Map<number, string>> {
+    const keyByIndex = new Map<number, string>();
+    orders.forEach((order, index) => {
+      const key = aiStableRequestId(
+        marketId,
+        order?.draft_id,
+        order?.ai_item_index,
+      );
+      if (key) keyByIndex.set(index, key);
+    });
+    const replays = new Map<number, string>();
+    if (keyByIndex.size === 0) return replays;
+    let response: unknown;
+    try {
+      response = await firstValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.ai_confirm.completed' },
+            {
+              market_id: marketId,
+              request_ids: [...new Set(keyByIndex.values())],
+            },
+          )
+          .pipe(timeout(AI_REPLAY_LOOKUP_TIMEOUT_MS)),
+      );
+    } catch (error: unknown) {
+      this.logger.warn(
+        `ai-confirm: takror tekshiruvi ishlamadi (${this.errorName(error)}) — odatiy yo'l`,
+      );
+      return replays;
+    }
+    const items = (response as { data?: { items?: unknown } } | null)?.data
+      ?.items;
+    const byKey = new Map<string, string>();
+    for (const row of Array.isArray(items) ? items : []) {
+      const requestId = this.asStr(
+        (row as { request_id?: unknown })?.request_id,
+      );
+      const orderId = this.asStr((row as { order_id?: unknown })?.order_id);
+      if (requestId && /^\d{1,19}$/.test(orderId)) {
+        byKey.set(requestId, orderId);
+      }
+    }
+    for (const [index, key] of keyByIndex) {
+      const orderId = byKey.get(key);
+      if (orderId) replays.set(index, orderId);
+    }
+    return replays;
+  }
+
+  /**
+   * ai-confirm «Operator» tanlovi (`orders[].operator_id`) — POST /orders
+   * bilan AYNI tekshiruv (`resolveChosenOrderOperator`), lekin yaratishdan
+   * OLDIN va partiyaga bir marta:
+   *  - bir xil `operator_id` uchun identity bir marta so'raladi (market
+   *    partiyada bitta), turli id'lar — PARALLEL;
+   *  - 400 (begona/nofaol operator, market operatori boshqasini tanlagan) →
+   *    shu buyurtma `create_failed`, sababi — POST /orders matni;
+   *  - identity javob bermasa/xato → `validation_unavailable` (buyurtma ANIQ
+   *    yaratilmagan — `timeout_unknown` «yaratilgan bo'lishi mumkin» EMAS);
+   *    operatorsiz buyurtma saqlanmaydi (fail-closed).
+   * Qaytaradi: yaratishga qolgan buyurtmalar (`chosenOperator` bilan).
+   */
+  private async resolveAiChosenOperators(
+    eligible: EligibleAiOrder[],
+    req: { user: JwtUser },
+    marketId: string,
+    roles: string[],
+    results: Map<number, AiConfirmResult>,
+  ): Promise<EligibleAiOrder[]> {
+    // Takror (buyurtma allaqachon yaratilgan, `replayOrderId`) —
+    // tekshirilmaydi: operator keyin o'chirilgan bo'lsa ham mavjud buyurtma
+    // `create_failed` bo'lib ko'rinmasin.
+    const operatorIdOf = (item: EligibleAiOrder) =>
+      item.replayOrderId ? '' : this.asStr(item.order.operator_id).trim();
+    // Avval HAMMA noyob operator_id so'rovi bir vaqtda boshlanadi (har biri
+    // 8 s gacha — ketma-ket kutilsa 75 s partiya muddatini yerdi), keyin
+    // natijalar bandlarga taqsimlanadi.
+    type Settled =
+      | { ok: true; value: ChosenOrderOperator | null }
+      | { ok: false; error: unknown };
+    const lookups = new Map<string, Promise<Settled>>();
+    for (const item of eligible) {
+      const operatorId = operatorIdOf(item);
+      if (!operatorId || lookups.has(operatorId)) continue;
+      lookups.set(
+        operatorId,
+        resolveChosenOrderOperator({
+          operatorId,
+          roles,
+          requesterId: req.user.sub,
+          marketId,
+          loadSelectable: (payload) =>
+            this.sendIdentityWithTimeout(
+              { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+              payload,
+            ),
+        }).then(
+          (value): Settled => ({ ok: true, value }),
+          (error: unknown): Settled => ({ ok: false, error }),
+        ),
+      );
+    }
+    const settled = new Map<string, Settled>();
+    await Promise.all(
+      [...lookups].map(async ([operatorId, lookup]) => {
+        settled.set(operatorId, await lookup);
+      }),
+    );
+
+    const kept: EligibleAiOrder[] = [];
+    for (const item of eligible) {
+      const outcome = settled.get(operatorIdOf(item));
+      if (!outcome) {
+        kept.push(item);
+        continue;
+      }
+      if (outcome.ok) {
+        if (outcome.value) item.chosenOperator = outcome.value;
+        kept.push(item);
+      } else {
+        const { error } = outcome;
+        if (error instanceof BadRequestException) {
+          results.set(item.index, {
+            index: item.index,
+            ok: false,
+            ...toConfirmFailure(error),
+          });
+        } else {
+          this.logger.warn(
+            `ai-confirm: operator tekshiruvi ishlamadi (${this.errorName(error)}) — validation_unavailable`,
+          );
+          results.set(item.index, {
+            index: item.index,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: AI_OPERATOR_CHECK_UNAVAILABLE_REASON,
+          });
+        }
+      }
+    }
+    return kept;
+  }
+
+  /**
    * vncdmXOy #2: har eligible buyurtmaga `aiAudit` (activity_log metadata) va
    * SERVER tomonda hisoblangan `editedFields`. draft_id bo'lmasa — audit yo'q
-   * (oddiy qo'lda kiritilgan buyurtma kabi).
+   * (oddiy qo'lda kiritilgan buyurtma kabi; majburiy rejimda bunga
+   * `AI_DRAFT_REQUIRED` yo'l qo'ymaydi).
+   *
+   * AI ack darvozalari (`aiAckGate`; `AI_ACK_CHECKS_ENFORCE=off` da faqat
+   * WARN, yaratish davom etadi):
+   *  - ai-service javob bermadi → 503 `AI_CHECKS_UNAVAILABLE`;
+   *  - draft shu market uchun yo'q → 400 `AI_DRAFT_NOT_FOUND`;
+   *  - snapshot bor, lekin `index === ai_item_index` yozuv yo'q → 400
+   *    `AI_DRAFT_ITEM_NOT_FOUND` (B2);
+   *  - snapshot yo'q, draft YOSH (< 2 daqiqa) va tozalanmagan → 503
+   *    `AI_CHECKS_UNAVAILABLE` (S1: fire-and-forget `attach_preview` bilan
+   *    poyga — qayta urinishda snapshot bo'ladi).
+   * Fail-open (`checks_unverified`, WARN + hisoblagich) faqat: eski snapshot
+   * (`check_codes` yo'q), retention tozalagan, yoki snapshot yo'q va draft
+   * eski / eski ai-service holat bermadi.
    */
   private async attachAiAudit(
     eligible: EligibleAiOrder[],
@@ -2342,19 +2673,90 @@ export class OrderGatewayController {
       eligible.map((item) => item.order.draft_id),
     );
     if (draftIds.length === 0) return;
-    const contexts = await this.loadAiDraftContexts(marketId, draftIds);
-    for (const item of eligible) {
+    const draftItems = eligible.filter(
+      (item) => this.asStr(item.order.draft_id).trim() !== '',
+    );
+    const loaded = await this.loadAiDraftContexts(marketId, draftIds);
+    if (!loaded) {
+      // AI ack (FE sessiya / ega, 2026-11-15): FAIL-CLOSED — saqlangan
+      // tekshiruvlarni o'qib bo'lmasa hech narsa yaratilmaydi.
+      this.aiAckGate(
+        'checks_unavailable',
+        draftItems.length,
+        this.aiChecksUnavailable(),
+      );
+    }
+    const contexts = loaded ?? new Map<string, AiDraftConfirmContext>();
+    // AI ack (FE sessiya / ega, 2026-11-15): ai-service javob berdi, lekin
+    // draft shu market uchun yo'q (soxta UUID yoki saqlanmagan) — tasdiqni
+    // tekshirib bo'lmaydi, 400. (Log-only'da ai-service javob bermagan
+    // bo'lsa bu tekshiruv o'tkazib yuboriladi — yuqorida would_503.)
+    const unknownDraft = loaded
+      ? draftItems
+          .filter(
+            (item) => !contexts.has(this.asStr(item.order.draft_id).trim()),
+          )
+          .map((item) => item.index)
+      : [];
+    if (unknownDraft.length > 0) {
+      this.aiAckGate(
+        'draft_not_found',
+        unknownDraft.length,
+        new BadRequestException({
+          statusCode: 400,
+          code: AI_DRAFT_NOT_FOUND,
+          message:
+            "AI natijasi topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating",
+          indexes: unknownDraft,
+        }),
+      );
+    }
+    const itemNotFound: number[] = [];
+    const snapshotPending: number[] = [];
+    const failOpen: Record<
+      'fail_open_legacy' | 'fail_open_purged' | 'fail_open_snapshot_missing',
+      number[]
+    > = {
+      fail_open_legacy: [],
+      fail_open_purged: [],
+      fail_open_snapshot_missing: [],
+    };
+    const now = Date.now();
+    for (const item of draftItems) {
       const draftId = this.asStr(item.order.draft_id).trim();
-      if (!draftId) continue;
       const ctx = contexts.get(draftId) ?? null;
       const itemIndex =
         typeof item.order.ai_item_index === 'number'
           ? item.order.ai_item_index
           : null;
+      const snapshots = Array.isArray(ctx?.previews) ? ctx.previews : null;
       const preview =
-        ctx?.previews && itemIndex !== null
-          ? (ctx.previews.find((p) => p.index === itemIndex) ?? null)
+        snapshots && itemIndex !== null
+          ? (snapshots.find((p) => p.index === itemIndex) ?? null)
           : null;
+      if (ctx) {
+        if (snapshots && !preview) {
+          // B2: snapshot haqiqiy, lekin bunday buyurtma yo'q (soxta indeks).
+          itemNotFound.push(item.index);
+        } else if (!snapshots) {
+          const state = ctx.snapshot_state;
+          const createdMs = Date.parse(this.asStr(ctx.created_at));
+          if (state === 'purged') {
+            failOpen.fail_open_purged.push(item.index);
+          } else if (
+            state === 'pending' &&
+            (!Number.isFinite(createdMs) ||
+              now - createdMs < AI_SNAPSHOT_PENDING_MAX_AGE_MS)
+          ) {
+            // S1: attach_preview hali yetib kelmagan (poyga) — qayta urinish.
+            snapshotPending.push(item.index);
+          } else {
+            failOpen.fail_open_snapshot_missing.push(item.index);
+          }
+        } else if (!Array.isArray(preview?.check_codes)) {
+          failOpen.fail_open_legacy.push(item.index);
+        }
+      }
       const confirmedForAudit = {
         customer: item.order.customer,
         district_id: item.districtId,
@@ -2363,12 +2765,19 @@ export class OrderGatewayController {
         total_price: item.order.total_price,
         where_deliver: item.order.where_deliver,
         comment: item.order.comment,
-        operator: item.order.operator,
+        // Operator tanlangan bo'lsa buyurtmaga UNING ismi yoziladi (matn
+        // e'tiborsiz) — audit ham saqlanadigan qiymatni ko'rsin.
+        operator: item.chosenOperator
+          ? item.chosenOperator.name || null
+          : item.order.operator,
         items: item.order.items,
       };
       item.editedFields = preview
         ? computeEditedFields(preview, confirmedForAudit)
         : null;
+      // AI ack: talab — faqat saqlangan snapshot'dagi kodlardan (mijozga
+      // ishonilmaydi), operator tuzatgan maydon tekshiruvi tushib qoladi.
+      item.requiredAcks = requiredAckChecks(preview, item.editedFields);
       // J3hEDtFN #4: eval manbai — faqat ai_order_draft_item'ga (activity_log
       // metadata'siga EMAS: u yerda ism/manzil qiymati kerak emas).
       item.fieldCorrections =
@@ -2398,8 +2807,87 @@ export class OrderGatewayController {
                   100,
               ) / 100,
         edited_fields: item.editedFields,
+        // AI ack: tekshiruvlar tasdiqlanmadi — eski (feature'dan oldingi)
+        // draft: snapshot yoki undagi `check_codes` yo'q (fail-open), yoki
+        // log-only rejimda darvoza o'tkazib yuborgan.
+        checks_unverified:
+          !preview || !Array.isArray(preview.check_codes) || undefined,
       };
     }
+    if (itemNotFound.length > 0) {
+      this.aiAckGate(
+        'item_not_found',
+        itemNotFound.length,
+        new BadRequestException({
+          statusCode: 400,
+          code: AI_DRAFT_ITEM_NOT_FOUND,
+          message:
+            "AI natijasida bu buyurtma topilmadi — matnni AI bilan qayta tahlil qiling yoki buyurtmani qo'lda yarating",
+          indexes: itemNotFound,
+        }),
+      );
+    }
+    if (snapshotPending.length > 0) {
+      this.aiAckGate(
+        'snapshot_pending',
+        snapshotPending.length,
+        this.aiChecksUnavailable(),
+      );
+    }
+    // S7: fail-open — WARN + hisoblagich (darvoza emas, rejimdan qat'i nazar).
+    const enforced = this.isAiAckEnforced();
+    for (const [outcome, indexes] of Object.entries(failOpen) as [
+      keyof typeof failOpen,
+      number[],
+    ][]) {
+      if (indexes.length === 0) continue;
+      recordAiAck(outcome, enforced, indexes.length);
+      this.logger.warn(
+        `ai_ack ${outcome} orders=${indexes.length} indexes=${indexes.join(',')} — AI tekshiruvlari tasdiqlanmadi (checks_unverified)`,
+      );
+    }
+  }
+
+  /** AI ack: 503 `AI_CHECKS_UNAVAILABLE` (retryable). */
+  private aiChecksUnavailable(): ServiceUnavailableException {
+    return new ServiceUnavailableException({
+      statusCode: 503,
+      code: AI_CHECKS_UNAVAILABLE,
+      message: AI_CHECKS_UNAVAILABLE_MESSAGE,
+      retryable: true,
+      retry_after_seconds: AI_CHECKS_RETRY_AFTER_SECONDS,
+    });
+  }
+
+  /**
+   * AI ack: har eligible buyurtmaning `requiredAcks` i (`attachAiAudit`)
+   * `ack_checks` da bo'lishi shart. Bo'lmasa — 409
+   * `CHECKS_NOT_ACKNOWLEDGED`: `missing` — barcha tasdiqlanmagan kodlar
+   * (takrorsiz), `orders` — `[{ index, missing }]` (`index` — so'rovdagi
+   * `orders[]` o'rni). Log-only rejimda — faqat WARN `would_409`.
+   */
+  private assertAiChecksAcknowledged(eligible: EligibleAiOrder[]): void {
+    const unacked = eligible
+      .map((item) => ({
+        index: item.index,
+        missing: missingAckChecks(
+          item.requiredAcks ?? [],
+          item.order.ack_checks,
+        ),
+      }))
+      .filter((entry) => entry.missing.length > 0);
+    if (unacked.length === 0) return;
+    this.aiAckGate(
+      'checks_not_acknowledged',
+      unacked.length,
+      new ConflictException({
+        statusCode: 409,
+        code: AI_CHECKS_NOT_ACKNOWLEDGED,
+        message: AI_CHECKS_NOT_ACKNOWLEDGED_MESSAGE,
+        missing: [...new Set(unacked.flatMap((entry) => entry.missing))],
+        orders: unacked,
+      }),
+    );
   }
 
   /**
@@ -2413,10 +2901,12 @@ export class OrderGatewayController {
     previews: unknown[],
     timings?: AiParseTimings,
   ): void {
-    if (!this.aiClient || previews.length === 0) return;
+    // (AI ack B1) TEZ navbat — snapshot ai-confirm'dan oldin yetib kelsin.
+    const aiDraftClient = this.aiDraftClient();
+    if (!aiDraftClient || previews.length === 0) return;
     try {
       void firstValueFrom(
-        this.aiClient
+        aiDraftClient
           .send(
             { cmd: 'ai.draft.attach_preview' },
             {
@@ -2520,12 +3010,15 @@ export class OrderGatewayController {
    *
    * Qaytaradi: qabul qilingan id yoki `null`. Xulosa olinmasa (timeout/xato)
    * va `customer` obyekti bor bo'lsa — `null` (avvalgi telefon yo'li); obyekt
-   * yo'q bo'lsa xato yuqoriga otiladi (fail-closed).
+   * yo'q bo'lsa xato yuqoriga otiladi (fail-closed). `failClosed`
+   * (ai-confirm) — obyekt bo'lsa ham 503: tanlangan mijoz tekshirilmay
+   * qolib ketmasin va 403 «begona mijoz» deb noto'g'ri aytilmasin.
    */
   private async resolveScopedCustomerId(
     marketId: string | undefined,
     rawCustomerId: unknown,
     customer: { phone_number?: unknown } | undefined,
+    failClosed = false,
   ): Promise<{ id: string; inMarket: boolean } | null> {
     const customerId = this.asStr(rawCustomerId).trim();
     const market = String(marketId ?? '').trim();
@@ -2539,6 +3032,11 @@ export class OrderGatewayController {
         { market_id: market, customer_ids: [customerId] },
       );
     } catch (error) {
+      if (failClosed) {
+        throw new ServiceUnavailableException(
+          "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        );
+      }
       if (customer) {
         return null;
       }
@@ -2565,7 +3063,20 @@ export class OrderGatewayController {
     const card: unknown = await this.sendIdentityWithTimeout(
       { cmd: 'identity.customer.find_by_id' },
       { id: customerId },
-    ).catch(() => null);
+    ).catch((error: unknown) => {
+      // Mijoz yo'q (identity 404) — oddiy rad (403). `failClosed`
+      // (ai-confirm) da boshqa xato/timeout — 503: identity uzilishi
+      // «begona mijoz» deb noto'g'ri aytilmasin.
+      const status = Number(
+        (error as { statusCode?: unknown } | null)?.statusCode,
+      );
+      if (failClosed && status !== 404) {
+        throw new ServiceUnavailableException(
+          "Mijozni tekshirib bo'lmadi — birozdan so'ng qayta yuboring",
+        );
+      }
+      return null;
+    });
     const cardPhone = normalizeUzPhone(
       (card as { data?: { phone_number?: unknown } } | null)?.data
         ?.phone_number,
@@ -2628,6 +3139,19 @@ export class OrderGatewayController {
       branchAssignment?: BranchAssignment | null;
       /** Celz3rKJ: yaratish kanali (hozir faqat bot). */
       createdVia?: 'bot';
+      /**
+       * ai-confirm: tasdiqlanmagan `customer_id` `customer` obyekti bo'lsa
+       * ham 403 (POST /orders da obyekt bo'lsa jimgina telefon yo'li —
+       * AI'da obyekt DOIM bor, operator tanlagan mijoz yo'qolmasin);
+       * doira tekshiruvi ishlamasa — 503 (fail-closed).
+       */
+      strictCustomerId?: boolean;
+      /**
+       * ai-confirm: `dto.operator_id` partiya boshida AYNI
+       * `resolveChosenOrderOperator` bilan (shu market, shu so'rovchi)
+       * tekshirilgan — identity qayta so'ralmaydi.
+       */
+      chosenOperator?: ChosenOrderOperator;
     },
   ): Promise<unknown> {
     // IR2OHIiN: mahsulotsiz / tumansiz buyurtma — hech narsa (mijoz ham)
@@ -2757,6 +3281,8 @@ export class OrderGatewayController {
     // VRyloH62: operator raqamlari va ismi — mijoz yaratilishidan OLDIN
     // (raqam majburiy bo'lsa 400 yetim mijoz qoldirmaydi). Bot formasida
     // raqam maydoni yo'q — u yerda 400 berilmaydi (BeePost bot yo'li kabi).
+    // ai-confirm (veb AI VA Telegram AI — ikkalasi ham shu yo'l) qat'iy:
+    // raqam `orders[].operator_phone` dan.
     const operatorPhones = resolveOrderOperatorPhones({
       market: marketProfile,
       operatorPhone: dto.operator_phone,
@@ -2765,18 +3291,22 @@ export class OrderGatewayController {
     });
     // Formadagi «Operator» tanlovi (`operator_id`) — yakuniy market
     // aniqlangach, mijoz yaratilishidan OLDIN: shu marketning faol operatori
-    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). Bot va AI yo'llari uni yubormaydi.
-    const chosenOperator = await resolveChosenOrderOperator({
-      operatorId: dto.operator_id,
-      roles,
-      requesterId: req.user.sub,
-      marketId: resolvedMarketId,
-      loadSelectable: (payload) =>
-        this.sendIdentityWithTimeout(
-          { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
-          payload,
-        ),
-    });
+    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). ai-confirm `orders[].operator_id`
+    // ni shu yerga uzatadi (400 → shu buyurtma `create_failed`); bot yo'li
+    // (`botOrderCreate`) va Telegram AI (hozircha) uni yubormaydi.
+    const chosenOperator =
+      opts?.chosenOperator ??
+      (await resolveChosenOrderOperator({
+        operatorId: dto.operator_id,
+        roles,
+        requesterId: req.user.sub,
+        marketId: resolvedMarketId,
+        loadSelectable: (payload) =>
+          this.sendIdentityWithTimeout(
+            { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+            payload,
+          ),
+      }));
     // Operator tanlangan bo'lsa ism — uniki (yozilgan matn ham, so'rovchi
     // ismi ham ishlatilmaydi).
     const filledOperatorName = chosenOperator
@@ -2805,17 +3335,20 @@ export class OrderGatewayController {
     let customerInMarket: boolean | null = null;
     let customerCreatedNow = false;
     if (!isSystemPrivileged && this.hasCustomerIdValue(dto.customer_id)) {
+      const strictCustomerId = opts?.strictCustomerId === true;
       const scoped = await this.resolveScopedCustomerId(
         resolvedMarketId,
         dto.customer_id,
         customer,
+        strictCustomerId,
       );
       if (scoped) {
         customerId = scoped.id;
         customerInMarket = scoped.inMarket;
-      } else if (!customer) {
+      } else if (!customer || strictCustomerId) {
         // Tasdiqlanmagan id + mijoz obyekti yo'q — rad (RBAC-01 himoyasi).
-        // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi.
+        // Obyekt bo'lsa — avvalgidek telefon bo'yicha aniqlanadi
+        // (ai-confirm'da — rad, `strictCustomerId`).
         throw new ForbiddenException(
           "customer_id qabul qilinmadi: boshqa market mijozi uchun customer.phone_number mijoz telefoniga to'liq mos kelishi kerak (GET /customers/suggest taklifi). Yangi mijoz uchun customer obyekti (ism, telefon, tuman) yuboring",
         );
@@ -3172,6 +3705,13 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'AI: matn/rasmdan buyurtma preview (hech narsa yaratmaydi)',
+    description:
+      "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: " +
+      "`district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), " +
+      '`region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), ' +
+      "`checks: [{ code, … }]` — AI tekshiruvlari, `ready`/`issues` ga ta'sir qilmaydi. BLOKLOVCHI (yaratishdan oldin operator tasdig'i shart): `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }` — ai-confirm'da `orders[].ack_checks` da bo'lmasa 409 `CHECKS_NOT_ACKNOWLEDGED` (`AI_ACK_CHECKS_ENFORCE=on`). " +
+      "YUMSHOQ (faqat ogohlantirish, tasdiq so'ralmaydi): `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. " +
+      "⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -3561,14 +4101,33 @@ export class OrderGatewayController {
    * ⚠️ AI_ORDER_ENABLED ga BOG'LANMAGAN — AI o'chiq bo'lsa ham qo'lda
    * tahrirlangan buyurtmalarni qabul qilish to'xtamasligi kerak.
    *
+   * ⚠️ AI ack (`AI_ACK_CHECKS_ENFORCE=on`): ai-confirm ai-service ISHLAB
+   * TURISHINI talab qiladi — saqlangan AI tekshiruvlari
+   * (`ai.draft.confirm_context`, TEZ navbat `AI_FAST`, 3 s) o'qilmasa 503
+   * `AI_CHECKS_UNAVAILABLE` (fail-closed, hech narsa yaratilmaydi). Darvozalar
+   * (hammasi yaratishdan OLDIN, idempotent takror ham o'tadi): 400
+   * `AI_DRAFT_REQUIRED` / `AI_DRAFT_NOT_FOUND` / `AI_DRAFT_ITEM_NOT_FOUND`
+   * (`indexes`), 503 `AI_CHECKS_UNAVAILABLE` (ai-service yoki yosh draft
+   * snapshot'i hali yo'q), 409 `CHECKS_NOT_ACKNOWLEDGED`. `off` (sukut) —
+   * faqat WARN `ai_ack would_<status>`, yaratish avvalgidek.
+   *
    * Tartib:
    *  1) Partiya darajasi (HECH NARSA yaratilishidan OLDIN, xato → 4xx):
    *     market (`resolveAiMarket`) va filial BIR MARTA aniqlanadi.
+   *     Market nofaol / `add_order` o'chiq — butun so'rov 400, takror ham
+   *     (ruxsat tekshiruvi; ataylab).
+   *  1b) Takror (`loadAiReplays`): ayni barqaror kalit bilan avval yaratilgan
+   *     band — quyidagi tuman/mahsulot, dublikat, operator, raqam va mijoz
+   *     tekshiruvlarisiz `{ok:true, order_id, idempotent_replay:true}`; AI ack
+   *     darvozalari va xarajat bog'lanishi esa unga ham ishlaydi. Bugungi
+   *     qabul yopiq bo'lsa ham (yangi buyurtma yaratilmaydi) — ok.
    *  2) Server tomonda qayta tekshiruv: tumanlar va mahsulotlar partiyaga
    *     BITTADAN RPC bilan o'qiladi; region_id DB'dagi tumandan, mahsulot
-   *     tanlangan marketniki bo'lishi shart. Istalgan RPC ishlamasa — hamma
-   *     buyurtma `validation_unavailable` (tekshiruvsiz yaratish YO'Q).
-   *  3) Dublikat: partiya ichida imzo bo'yicha (`duplicate_in_batch`),
+   *     tanlangan marketniki bo'lishi shart. Istalgan RPC ishlamasa —
+   *     takror bo'lmagan hamma buyurtma `validation_unavailable` (tekshiruvsiz
+   *     yaratish YO'Q). 1b) bilan parallel.
+   *  3) Dublikat: partiya ichida imzo bo'yicha (`duplicate_in_batch`; takror
+   *     bandlar imzosi oldindan band — `orders[]` tartibidan qat'i nazar),
    *     so'rovlar orasida `request_id='ai-dedupe:<sha256>'` — order-service
    *     10 daqiqa ichidagi takrorni yaratmaydi (`duplicate_recent`).
    *  4) Yaratish: 3 ta yo'lak (bir telefon — bitta yo'lak, ketma-ket),
@@ -3597,6 +4156,30 @@ export class OrderGatewayController {
       'AI: tasdiqlangan buyurtmalarni yaratish (har buyurtmaga alohida natija)',
   })
   @ApiBody({ type: AiConfirmRequestDto })
+  @ApiOkResponse({
+    description:
+      '{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason_code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija. ' +
+      '`reason_code` (ixtiyoriy, UPPER_CASE, faqat `ok:false`) — `code` dan aniqroq sabab: `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`, ' +
+      '`CHOSEN_OPERATOR_SELF_ONLY` (hammasida `code: "create_failed"`). Mijoz `reason` matnini tahlil qilmasin. ' +
+      'Takror (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) — `{ ok: true, order_id, idempotent_replay: true }` — tuman/mahsulot, operator, operator raqami va mijoz qayta tekshirilmaydi; ' +
+      'tuman/mahsulot tekshiruvi ishlamasa ham (takror bo‘lmagan bandlar — `validation_unavailable`). Ayni mazmunli yangi band — `duplicate_in_batch`.',
+  })
+  @ApiConflictResponse({
+    description:
+      "CHECKS_NOT_ACKNOWLEDGED (`AI_ACK_CHECKS_ENFORCE=on`) — saqlangan AI preview'da BLOKLOVCHI tekshiruv (district_low_confidence, price_check) bor, " +
+      'lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi (idempotent takror ham). Tana: ' +
+      "`{ statusCode: 409, message, code: 'CHECKS_NOT_ACKNOWLEDGED', missing: string[], orders: [{ index, missing: string[] }] }` " +
+      '(`index` — so‘rovdagi `orders[]` o‘rni).',
+  })
+  @ApiBadRequestResponse({
+    description:
+      "(`AI_ACK_CHECKS_ENFORCE=on`) AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', indexes: number[] }` (so'rovdagi `orders[]` o'rinlari). " +
+      "AI_DRAFT_NOT_FOUND — `draft_id` shu market uchun ai-service'da topilmadi; AI_DRAFT_ITEM_NOT_FOUND — draft bor, lekin saqlangan preview'da bunday `ai_item_index` yo'q. Ikkalasida ham tana xuddi shunday `indexes: number[]`; AI'ni qayta yurgizing yoki qo'lda yarating. Boshqa 400 — DTO validatsiyasi.",
+  })
+  @ApiServiceUnavailableResponse({
+    description:
+      "(`AI_ACK_CHECKS_ENFORCE=on`) AI_CHECKS_UNAVAILABLE — saqlangan AI tekshiruvlarini o'qib bo'lmadi (ai-service timeout/xato) yoki yosh draft'ning (< 2 daqiqa) preview snapshot'i hali saqlanmagan. FAIL-CLOSED: hech narsa yaratilmaydi. Tana: `{ statusCode: 503, message, code: 'AI_CHECKS_UNAVAILABLE', retryable: true, retry_after_seconds: 5 }`, sarlavha `Retry-After: 5`.",
+  })
   async aiConfirm(
     @Body() dto: AiConfirmRequestDto,
     @Req() req: { user: JwtUser },
@@ -3605,6 +4188,31 @@ export class OrderGatewayController {
     const orders: AiConfirmOrderDto[] = Array.isArray(dto?.orders)
       ? dto.orders
       : [];
+
+    // AI ack (FE sessiya / ega, 2026-11-15): har buyurtma ai-parse
+    // draft'iga bog'langan bo'lishi SHART — `draft_id`/`ai_item_index`siz
+    // tasdiq talabini chetlab o'tish yo'li bo'lmasin.
+    const unlinked = orders
+      .map((order, index) =>
+        this.asStr(order?.draft_id).trim() &&
+        typeof order?.ai_item_index === 'number'
+          ? -1
+          : index,
+      )
+      .filter((index) => index >= 0);
+    if (unlinked.length > 0) {
+      this.aiAckGate(
+        'draft_required',
+        unlinked.length,
+        new BadRequestException({
+          statusCode: 400,
+          code: AI_DRAFT_REQUIRED,
+          message:
+            "AI buyurtmasi ai-parse natijasiga bog'lanmagan (draft_id va ai_item_index majburiy)",
+          indexes: unlinked,
+        }),
+      );
+    }
 
     // 1) Partiya darajasi — market va filial BIR MARTA.
     const market = await this.resolveAiMarket(req.user, dto?.market_id);
@@ -3637,29 +4245,69 @@ export class OrderGatewayController {
 
     const results = new Map<number, AiConfirmResult>();
 
-    // 2) Server tomonda qayta tekshiruv (mijozga ishonilmaydi).
-    const lookups = await this.loadAiConfirmLookups(orders);
-    if (!lookups) {
-      return successRes({
-        results: orders.map((_order, index): AiConfirmResult => ({
-          index,
-          ok: false,
-          code: 'validation_unavailable',
-          reason: AI_CONFIRM_REASON_TEXT.validation_unavailable,
-        })),
-      });
-    }
-    const verdicts = verifyAiOrders(orders, {
-      marketId,
-      districts: lookups.districts,
-      products: lookups.products,
-    });
+    // Takror: ayni barqaror kalit (`ai:<market>:<draft>:<idx>`) bilan AVVAL
+    // yaratilgan bandlar — market/filial ruxsati tekshirilgach, lekin
+    // tuman/mahsulot, partiya dublikati, operator va raqam tekshiruvlaridan
+    // OLDIN. Natijasi noma'lum 1-urinishdan keyin mahsulot/tuman o'chirilsa,
+    // operator o'chirilsa yoki raqam majburiy bo'lib qolsa ham mavjud
+    // buyurtma `idempotent_replay` bo'lib qaytadi. Takror bandlar navbatda
+    // qoladi: AI ack darvozalari va xarajat bog'lanishi ular uchun ham.
+    // 2) Server tomonda qayta tekshiruv (mijozga ishonilmaydi) — takror
+    // bo'lmagan bandlar uchun; takror so'rovi bilan PARALLEL (ikkalasi
+    // mustaqil, faqat o'qish). Tekshiruvni o'qib bo'lmasa takror bo'lmagan
+    // bandlar `validation_unavailable` (tekshiruvsiz yaratish YO'Q), takror
+    // bandlar — baribir `idempotent_replay`.
+    const [replays, lookups] = await Promise.all([
+      this.loadAiReplays(orders, marketId),
+      this.loadAiConfirmLookups(orders),
+    ]);
+    const verdicts = lookups
+      ? verifyAiOrders(orders, {
+          marketId,
+          districts: lookups.districts,
+          products: lookups.products,
+        })
+      : [];
 
     // 3) Partiya ichidagi dublikat — bir xil imzoli ikkinchi buyurtma.
+    // Takror bandlarning imzosi OLDINDAN band qilinadi: ayni mazmunli YANGI
+    // band `orders[]` da takrordan oldin kelsa ham `duplicate_in_batch`
+    // (aks holda ikkinchi, bir xil buyurtma yaratilardi — order-service
+    // `ai-dedupe:<imzo>` qatlami faqat 10 daqiqa ushlaydi).
     const seenSignatures = new Set<string>();
+    for (const replayIndex of replays.keys()) {
+      seenSignatures.add(aiOrderSignature(marketId, orders[replayIndex]));
+    }
     const eligible: EligibleAiOrder[] = [];
     orders.forEach((order, index) => {
       const verdict = verdicts[index];
+      const replayOrderId = replays.get(index);
+      if (replayOrderId) {
+        // Tuman/mahsulot qayta tekshirilmaydi; imzo yuqorida band qilingan.
+        const signature = aiOrderSignature(marketId, order);
+        eligible.push({
+          index,
+          order,
+          signature,
+          // Faqat audit (edited_fields) uchun: tekshiruvdan o'tgan bo'lsa
+          // DB'dagi qiymat, aks holda so'rovdagi.
+          districtId: this.asStr(
+            verdict?.ok ? verdict.district_id : order.district_id,
+          ),
+          regionId: this.asStr(
+            verdict?.ok ? verdict.region_id : order.region_id,
+          ),
+          stableRequestId: aiStableRequestId(
+            marketId,
+            order.draft_id,
+            order.ai_item_index,
+          ),
+          aiAudit: null,
+          editedFields: null,
+          replayOrderId,
+        });
+        return;
+      }
       if (!verdict) {
         results.set(index, {
           index,
@@ -3705,10 +4353,31 @@ export class OrderGatewayController {
       });
     });
 
+    // «Operator» tanlovi (`operator_id`) — yaratishdan va auditdan OLDIN,
+    // partiyaga (market, operator_id) bo'yicha BIR MARTA. Rad etilgan
+    // buyurtma navbatdan chiqadi (hech narsa yaratilmaydi).
+    eligible.splice(
+      0,
+      eligible.length,
+      ...(await this.resolveAiChosenOperators(
+        eligible,
+        req,
+        marketId,
+        roles,
+        results,
+      )),
+    );
+
     // vncdmXOy: audit metadata (model, prompt versiyasi, xarajat, server
-    // hisoblagan edited_fields). ai-service ishlamasa ham yaratish TO'XTAMAYDI
-    // — metadata faqat draft_id/ai_item_index bilan qoladi.
+    // hisoblagan edited_fields) va AI ack darvozalari (400/503 —
+    // `AI_ACK_CHECKS_ENFORCE=on`; `off` da faqat WARN, yaratish davom etadi).
     await this.attachAiAudit(eligible, marketId);
+
+    // AI ack (ega qarori 2026-11-14): bloklovchi tekshiruv (tuman noaniq,
+    // summa matndagidan farq qiladi) operator tomonidan tasdiqlanmagan
+    // bo'lsa — BUTUN so'rov 409, hech narsa yaratilmaydi (FE oynani
+    // ko'rsatib `ack_checks` bilan qayta yuboradi).
+    this.assertAiChecksAcknowledged(eligible);
 
     // 4) Yaratish — cheklangan parallellik, telefon bo'yicha yo'laklar.
     // VRyloH62: registrator/market operatori ismi — partiyaga BIR MARTA
@@ -7253,7 +7922,7 @@ export class OrderGatewayController {
     summary:
       "Scan QR and assign order to current courier. MWYaqprw: muvaffaqiyatli javobda `data.order` — { id, order_number, status, total_price, address, district, region, market, customer: { name, phone_number }, special_categories (T8) } (skaner ekrani uchun; olinmasa maydon bo'lmaydi, skan baribir o'tgan).",
     description:
-      "anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi (va «eski filialda tugasin» imtiyozli buyurtmalar — tuman HQ viloyatidan ko'chganda yoki deploy paytida HQ kuryerlarida bo'lganlar) — aks holda 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`). O'z WAITING / ON_THE_ROAD buyurtmasini qayta skanlash — idempotent 200.",
+      "COURIER-SCAN (ega, 2026-11-17) — SKAN = QABUL: muvaffaqiyatli skandan keyin buyurtma darhol `waiting` (Kutilmoqda) va kuryerda (`courier_id`, `holder_type COURIER`), `on the road` ga qaytmaydi; «Sotish» / «Bekor qilish» darhol ochiq (javobda `data.status = waiting`). Filial kuryeri o'z filialiga kelgan HQ → filial o'tkazma pochtasidagi yo'ldagi buyurtmani menejer pochtani qabul qilmagan bo'lsa ham oladi (skan shu bitta buyurtmani filialga qabul qiladi; oxirgisi olinsa pochta «Qabul qilingan»); «kelmagan» belgili (`return_requested`) — 409 `order_marked_not_arrived`. Kuryerning o'zidagi yo'ldagi buyurtmasini qayta skanlash — qabul (200, `data.accepted = true`); o'z `waiting` buyurtmasini — idempotent 200 (`data.idempotent = true`). Ikki kuryer bir vaqtda — biri 200, ikkinchisi 400 «Buyurtma allaqachon boshqa kuryerga biriktirilgan». anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi (va «eski filialda tugasin» imtiyozli buyurtmalar — tuman HQ viloyatidan ko'chganda yoki deploy paytida HQ kuryerlarida bo'lganlar) — aks holda 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`; filialga jo'natilgan (yo'ldagi) buyurtmani HQ kuryeri olmaydi. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`).",
   })
   @ApiBody({ type: ScanAssignOrderRequestDto })
   async scanAssignOrder(

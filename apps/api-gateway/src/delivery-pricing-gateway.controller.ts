@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   Inject,
+  Param,
   Patch,
   Post,
   Query,
@@ -19,6 +20,7 @@ import {
   ApiExtraModels,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
@@ -28,12 +30,14 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
+import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import {
   CreateDeliveryTariffRequestDto,
   DeliveryPricingSettingsResponseDto,
   DeliveryQuoteRequestDto,
   DeliveryQuoteByTariffRequestDto,
   DeliveryQuoteResponseDto,
+  DeliveryTariffCancelResponseDto,
   DeliveryTariffRowDto,
   DeliveryTariffsListResponseDto,
   UpdateDeliveryPricingSettingsRequestDto,
@@ -74,7 +78,9 @@ const LOGISTICS_TIMEOUT_MS = 8000;
  * `POST /delivery/quote` FAQAT hisoblaydi — hech narsa yozmaydi; buyurtma
  * DTO'siga narx maydoni qo'shilmaydi (sotuvda qotirish — KmWO9gTA).
  * Admin yozuvlari (`POST /delivery/tariffs`, `PATCH /delivery/pricing-settings`)
- * yangi VERSIYA yaratadi va activity-log'ga tushadi (logistics-service).
+ * yangi VERSIYA yaratadi, `POST /delivery/tariffs/:id/cancel` (B0ILd7YI)
+ * rejalashtirilgan versiyani bekor qiladi — hammasi activity-log'ga tushadi
+ * (logistics-service).
  */
 @ApiTags('Delivery pricing')
 @ApiExtraModels(DeliveryTariffRowDto)
@@ -86,22 +92,31 @@ export class DeliveryPricingGatewayController {
   ) {}
 
   /**
-   * (47WFHzlx) Tarix qatorlariga `created_by_name` — kim o'zgartirgani.
-   * Identity javob bermasa ism `null`, javob baribir qaytadi.
+   * (47WFHzlx) Tarix qatorlariga `created_by_name` — kim o'zgartirgani;
+   * (B0ILd7YI) `cancelled_by` bor qatorga `cancelled_by_name` — kim bekor
+   * qilgani. Identity javob bermasa ism `null`, javob baribir qaytadi.
    */
   private async withAuthorNames(rows: unknown[]) {
     const list = rows.filter(
       (row): row is Record<string, unknown> => !!row && typeof row === 'object',
     );
     const names = await this.auditEnrichment
-      .resolveUserNames(list.map((row) => row.created_by))
+      .resolveUserNames(
+        list.flatMap((row) =>
+          'cancelled_by' in row
+            ? [row.created_by, row.cancelled_by]
+            : [row.created_by],
+        ),
+      )
       .catch(() => new Map<string, string | null>());
+    const nameOf = (id: unknown) =>
+      typeof id === 'string' || typeof id === 'number'
+        ? (names.get(String(id)) ?? null)
+        : null;
     for (const row of list) {
-      const id = row.created_by;
-      row.created_by_name =
-        typeof id === 'string' || typeof id === 'number'
-          ? (names.get(String(id)) ?? null)
-          : null;
+      row.created_by_name = nameOf(row.created_by);
+      if ('cancelled_by' in row)
+        row.cancelled_by_name = nameOf(row.cancelled_by);
     }
   }
 
@@ -179,7 +194,8 @@ export class DeliveryPricingGatewayController {
     summary: 'Yetkazish tariflari: hozirgi versiyalar + tarix (admin)',
     description:
       "`data.current` — `{ city, center, address }` hozir amaldagi versiya (`valid_from <= now()`, eng so'nggisi). " +
-      '`data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan).',
+      '`data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan, ' +
+      '`is_cancelled` — bekor qilingan rejalashtirilgan versiya (B0ILd7YI): `cancelled_at`, `cancelled_by`, `cancelled_by_name`).',
   })
   @ApiQuery({
     name: 'tariff_id',
@@ -230,6 +246,33 @@ export class DeliveryPricingGatewayController {
       dto,
       requester: this.requester(req),
     });
+  }
+
+  @Post('tariffs/:id/cancel')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...DELIVERY_PRICING_ADMIN_ROLES)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Rejalashtirilgan tarif versiyasini bekor qilish (admin; faqat kelajakdagi)',
+    description:
+      "B0ILd7YI. Faqat hali kuchga kirmagan (`valid_from` kelajakda, `is_scheduled: true`) versiya bekor qilinadi; qator o'chirilmaydi — `is_active: false`, `cancelled_at`/`cancelled_by` yoziladi, tarixda `is_cancelled: true` bo'lib qoladi. Hozirgi tarif o'zgarmaydi. " +
+      'Takror so`rov (vaqt tugagach qayta bosish) — 200, o`sha qator, `already_cancelled: true`, jurnal ikkinchi marta yozilmaydi. ' +
+      "Amal activity-log'ga yoziladi (`logistics.delivery_tariff_cancelled`). Xatolar: 400 (id), 404 (versiya yo'q), 409 (allaqachon kuchga kirgan yoki nofaol — o'zgartirish uchun yangi versiya yarating).",
+  })
+  @ApiParam({ name: 'id', example: '12', description: 'Tarif versiyasi ID' })
+  @ApiOkResponse({ type: DeliveryTariffCancelResponseDto })
+  async cancelTariff(
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    const res = (await this.send('logistics.delivery.tariffs.cancel', {
+      id,
+      requester: this.requester(req),
+    })) as { data?: unknown };
+    if (res?.data) await this.withAuthorNames([res.data]);
+    return res;
   }
 
   @Get('pricing-settings')

@@ -258,8 +258,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   migration 195); `last_error`, `last_response` and the scheduler log are
   scrubbed with `scrubSmsSecret`. Template `user.temp_password` (class
   `security`, OTP quota) needs provider approval.
-  `POST /users/:id/password/resend-sms`: SA; admin except admin/SA; manager only
-  own (`created_by`) courier; 60 s cooldown and 5/Tashkent day under a per-user
+  `POST /users/:id/password/resend-sms`: SA; admin except admin/SA; manager — a
+  courier or registrator CURRENTLY in his branch (KQINMdeQ, same rule as edit;
+  was: own `created_by` courier); 60 s cooldown and 5/Tashkent day under a per-user
   advisory xact lock (429 `PASSWORD_SMS_COOLDOWN` / `PASSWORD_SMS_DAILY_LIMIT`).
   The hash is swapped and all sessions revoked only AFTER the SMS is queued; a
   queue failure leaves password and sessions untouched. `GET
@@ -298,19 +299,30 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   numeric id) and the condition is `(admin.id IN (...) OR (admin.role =
   'market' AND admin.created_by = :owner))` — a manager sees the markets he
   created (list, `?role=market` tab, counts) and `GET /users/:id` opens such
-  a market without the branch-member / branch-type check
-  (`isManagerOwnMarket`, one extra `identity.user.find_by_id`; lookup error →
-  old check, fail-closed). Other people's markets stay hidden. `POST
+  a market without the branch-member check (`isManagerOwnMarket`, one extra
+  `identity.user.find_by_id`; lookup error → old check, fail-closed;
+  view only — `can_manage: false`). KQINMdeQ (2026-11-17): `GET /users/:id`
+  for a manager no longer requires a REGIONAL/HYBRID branch — any branch type,
+  target must be an active member of his branch (other managers included,
+  read-only); `resolveManagerBranchMembers` errors → 403. Other people's markets stay hidden. `POST
   /markets` by a manager: PICKUP («Qabul punkti») or HYBRID («Aralash»)
   branch only (was HYBRID only), others / unassigned → 403; `created_by` =
   the manager.
   `GET /couriers`: non-SA/ADMIN, non-logist requesters always get their own
   branch's couriers (client `branch_id` ignored); unassigned → empty page.
   Manager mutations (`PATCH /users/:id`, `POST /users/:id/password/resend-sms`,
-  `GET /users/:id/password/sms-status`): the gateway
-  (`assertManagerTargetInOwnBranch`) requires the target to be an active
-  `branch_users` member of the manager's branch (self is exempt; unassigned
-  manager → 403); identity still also requires `created_by === manager`.
+  `GET /users/:id/password/sms-status`) — KQINMdeQ (2026-11-17), the CURRENT
+  branch decides, `created_by` neither grants nor limits: the gateway
+  (`assertManagerTargetInOwnBranch` → `resolveManagerBranchMembers`, read per
+  request) requires the target to be an active `branch_users` member of the
+  manager's branch whose branch role is not MANAGER (self is exempt;
+  unassigned manager or branch-service error → 403, identity not called);
+  identity re-checks (`assertManagerCanManageTarget`: target role courier /
+  registrator, `branch.user.find_by_user_ids` for [manager, target], both
+  branch ids equal; RPC error / null → 403). Child branches are not included.
+  `GET /users/:id` and every `GET /users` row carry `can_manage: boolean`
+  (gateway `computeCanManage`: SA — all; admin — self and non-admin/SA;
+  manager — self and courier/registrator members of his branch).
   The manager's own cashbox (`GET /finance/cashbox/user/:id`) no longer adds
   the unscoped `meta.couriers`.
 - **Market specifics:** telegram token (`market.find_by_tg_token`, `rotate_tg_token`),
@@ -583,8 +595,12 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `assigned_region`. RPCs: `logistics.delivery.quote` (read-only;
   `items[]` = `product_id` → dims via `catalog.product.find_by_ids`, MARKET
   only own products, or raw dims), `logistics.delivery.tariffs.find_all` /
-  `.create`, `logistics.delivery.settings.get` / `.update` (audit verbs
-  `logistics.delivery_tariff_created`,
+  `.create` / `.cancel` (B0ILd7YI: only a scheduled version, `valid_from >
+  now()` in one UPDATE; row kept with `is_active = false`, `cancelled_at`,
+  `cancelled_by` — migration `1716000000235`; repeat → 200
+  `already_cancelled`), `logistics.delivery.settings.get` / `.update` (audit
+  verbs `logistics.delivery_tariff_created`,
+  `logistics.delivery_tariff_cancelled`,
   `logistics.delivery_pricing_settings_updated`). No cache. Pickup fee is
   returned separately and never part of `total`. **Sale wiring (KmWO9gTA)**:
   `logistics.delivery.sale_quote` (internal: order-service and the partner
@@ -637,6 +653,30 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   `fill`, `spend`, payments (`payment_courier`, `payment_market`,
   `payment_branch_main`), `financial_balance.{record,history}`, history list,
   shifts (`open`/`close`/`find_all`), salary CRUD, operator earnings/payments/balance.
+- **Operator payments (F2qp6FtE, 2026-11-18, migr `1716000000242`):** owner
+  decision 2026-11-16 — a market pays its own operators itself; Elchi's MAIN
+  cashbox is NOT involved. `OperatorPaymentService`
+  (`operator-payment/`, RMQ `finance.operator.market_payment.{record,cancel,list}`,
+  `finance.operator.market_balances`) writes `operator_payments` rows only
+  (`source = 'market'`, `affects_cashbox = false` — DB CHECK) — no cashbox,
+  cashbox_history, P&L ledger, expense or shift effect. Gateway
+  `OperatorPaymentGatewayController` (`/finance/operator-payments`, MARKET only,
+  market = JWT `sub`, operator must be one of the market's non-deleted
+  operators via `identity.market_operator.find_by_market`, else 404):
+  `GET balances` (earned / paid / balance per operator), `GET` history,
+  `POST` (Idempotency-Key required, UNIQUE `(market_id, idempotency_key)`;
+  replay → 200, other payment → 409; `paid_at` Tashkent day, not future;
+  overpayment allowed → negative balance), `POST :id/cancel` (reason
+  required; row kept with `cancelled_*`; legacy `elchi` row → 409; repeat →
+  200). Balance = Σ non-deleted earnings − Σ non-deleted, non-cancelled
+  payments (legacy `elchi` payments included). The old superadmin cash-out
+  (`finance.operator.payment.create`, MAIN cashbox expense + `SALARY` ledger)
+  is removed — the RMQ handler answers 410 without writing (deploy window).
+  Legacy rows keep their cashbox/ledger rows; migr 242 marks them
+  `source = 'elchi'`, `affects_cashbox` from data (cashbox history or
+  `operator-payment:<id>` ledger row), `paid_at` = Tashkent date of
+  `createdAt`. Activity verbs `finance.operator_payment_recorded` /
+  `_cancelled`.
 - **Invariant:** the cashbox system enforces a money invariant (checked by
   `scripts/check-cashbox-invariant.ts`, `npm run db:check-cashbox`).
 - **Realtime (rWdLuoP3, 2026-10-25):** `FinanceRealtimeService` writes
@@ -666,9 +706,10 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   cashbox from the card), then cards; `applyCashboxCardSelection` binds a
   CLICK leg to a card of the SAME cashbox (MAIN/BRANCH; other cashbox → 403,
   cash/click_to_market → 400, no `card_id` → default card). `card_id` is
-  accepted by `fill`/`spend` (manager → own branch cashbox), `payment_courier`
-  (receiver leg, MAIN or manager's branch), `payment_market` (MAIN),
-  `payment_branch_main` (`card_id` = MAIN leg, `branch_card_id` = branch leg).
+  accepted by `fill`/`spend` (SA/admin, MAIN cashbox only — 63HO6cBU),
+  `payment_courier` (receiver leg, MAIN only — a BRANCH cashbox is a single
+  total, its cards are disabled), `payment_market` (MAIN),
+  `payment_branch_main` (`card_id` = MAIN leg; `branch_card_id` ignored).
   `make_default` swaps the default card under the cashbox lock (no money
   moves; old default keeps its derived balance as stored balance; its
   card-less CLICK history rows are stamped with its id so both ledgers stay
@@ -835,7 +876,8 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   gate R6), idempotency on the branch leg, `branch_to_hq` (`<token>:b`) then
   `hq_to_market` (`<token>`). Both new shapes are NOT correctable (T6
   `classifyTransfer` requires MAIN). A BRANCH cashbox may go negative only for system
-  legs — a manager's manual `spend` is strict like MAIN (400). `all_info` adds
+  legs; manual `spend`/`fill` on a BRANCH cashbox is rejected outright
+  (63HO6cBU: 400, gateway — SA/admin only, MAIN). `all_info` adds
   `marketPayableTotal` (sum of positive market balances). Financial-balance
   history/analytics/top-impacts and the cashbox history date filters use
   Tashkent days for `YYYY-MM-DD`.
@@ -1451,13 +1493,32 @@ and assigned to couriers (`logistics.order.assign_to_courier`,
 / `could_not_deliver`. Return: `initiate_return` → `mark_returned_to_market`.
 `rollback_waiting` reverses sold/cancelled (settlement-aware). Full history in
 `order_tracking`; custody in `order_custody_event`.
-`order.scan_assign` takes `new`/`received`/`waiting`/`waiting_customer`, re-scan
-of an own `on the road`/`waiting` order is idempotent. The courier list
-(`courierPostOrdersQuery`, also counts and `/region/my/district-stats`) hides
-`on the road` until the post is received, except a parcel the courier took by
-scan himself (`isCourierScanTakenOrder`: holder = courier, `last_handover_by` =
-courier, no `return_requested`); it stays `on the road` until received
-(6qypMFeT). **Auto-receive on sell/cancel (2026-11-12):** `POST
+**Courier scan = acceptance (COURIER-SCAN, owner 2026-11-17).**
+`order.scan_assign` (`POST /orders/scan-assign`) takes
+`new`/`received`/`waiting`/`waiting_customer` and always ends `waiting` with
+the courier (`courier_id`, holder COURIER) — never `on the road`, no separate
+courier «receive» step; sell/cancel work at once. A branch courier also takes an
+`on the road` order from his own branch's HQ → branch transfer post
+(`courier_id` '0', `sent`) before the manager received the post: the scan
+receives just that order into the branch (`receivePostByScan` with
+`courierScan.mode = 'BRANCH'`, same `post_receive:<id>` lock and conditional
+write; LC-11 closes the post and sends one «arrived» notification when the last
+`on the road` order leaves) and then assigns it. `return_requested` → 409
+`order_marked_not_arrived`; other region → 403 before any write; HQ courier
+rule unchanged. Re-scan of an own `on the road` order is acceptance (scan
+receive in his own post, `mode = 'OWN'`); own `waiting` is idempotent. Two
+couriers at once → one winner (`courier_scan_guard`, 409
+`courier_scan_conflict` under the order row lock). Courier post: today's
+`sent` → today's `received` → new `received`; a `sent` one with no `on the
+road` left is closed. Tracking: `courier_scan_received` /
+`branch_post_received_by_courier_scan` (notes `COURIER_SCAN_TRACKING_NOTES`),
+a manager scan of a taken order → 400 `order_taken_by_courier`. The courier
+list (`courierPostOrdersQuery`, also counts and `/region/my/district-stats`)
+hides `on the road` until the post is received; migration 1716000000240 moved
+scan-taken `on the road` rows to `waiting`. The 6qypMFeT exception
+(`isCourierScanTakenOrder` / `scan_taken_courier_id`) stays for ONE release only
+— for rows the old code writes in the deploy window — and is removed next
+release. **Auto-receive on sell/cancel (2026-11-12):** `POST
 /orders/sell|partly-sell|cancel/:id` on an `on the road`/`waiting_customer`
 order with a `post_id` first runs the scan receive at the gateway
 (`OrderGatewayController.autoReceiveOnRoadOrder` → `logistics.post.receive`

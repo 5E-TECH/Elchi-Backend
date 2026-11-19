@@ -37,16 +37,16 @@ describe('kassa jurnal gaplari (2WRzdWpZ)', () => {
     expect(entry.description).not.toMatch(/Ali|901234567/);
   });
 
-  it('qo`lda kirim: filial kassasi, karta', async () => {
+  it('qo`lda kirim: asosiy kassa, karta (filialda kirim yo`q — 63HO6cBU)', async () => {
     const { service, activityLog } = makeService();
     await service.fillTheCashbox({
       user_id: '13',
       amount: 50000,
-      cashbox_type: 'branch' as never,
+      cashbox_type: 'main' as never,
       type: 'click' as never,
     });
     expect(activityLog.log.mock.calls[0][0].description).toBe(
-      "Kassaga kirim: 50 000 so'm (Filial kassasi, karta (Click))",
+      "Kassaga kirim: 50 000 so'm (Asosiy kassa, karta (Click))",
     );
   });
 });

@@ -31,7 +31,7 @@ import type {
 
 /**
  * AnKM7xmy — tuman rezolyutsiyasi. ⚠️ DB, DataSource, RMQ va Claude YO'Q:
- * snapshot seed faylidan (`regions-districts.data.ts`, 14 viloyat / 181
+ * snapshot seed faylidan (`regions-districts.data.ts`, 14 viloyat / 206
  * tuman) sintetik id bilan quriladi — nomlar XOM ("Toshkent ", "Andijon ").
  */
 
@@ -374,12 +374,12 @@ describe('resolveDistrictText (AnKM7xmy)', () => {
       expect(res.region_id).toBe(regionIdBySato(snap, '1726'));
     });
 
-    it('seed ma`lumotida 181/181 tuman SOATO prefiksiga mos', () => {
+    it('seed ma`lumotida 206/206 tuman SOATO prefiksiga mos', () => {
       const bad = SNAP.districts.filter((d) => {
         const region = SNAP.regions.find((r) => r.id === d.region_id);
         return !String(d.sato_code).startsWith(String(region?.sato_code));
       });
-      expect(SNAP.districts).toHaveLength(181);
+      expect(SNAP.districts).toHaveLength(206);
       expect(bad).toEqual([]);
     });
   });
@@ -898,6 +898,20 @@ describe('D2–D5 (AI aniqligi, 2026-11-14)', () => {
       ? (SNAP.districts.find((d) => d.id === res.district_id)?.sato_code ??
         null)
       : null;
+  /**
+   * D1 (#656) dan keyin seed'da 25 ta rasmiy qator bor (Zomin, O'rtachirchiq,
+   * Quvasoy, Farg'ona shahri …). Quyidagi himoyalar D1 dan OLDINGI holat
+   * uchun yozilgan — shu qator bazada yo'q bo'lsa (hali qo'shilmagan yoki
+   * ops o'chirgan) — shuning uchun ular shu qatorlarsiz snapshotda tekshiriladi.
+   */
+  const without = (...codes: string[]) =>
+    buildSnapshot({
+      mutate: (s) => {
+        s.districts = s.districts.filter(
+          (d) => !codes.includes(d.sato_code ?? ''),
+        );
+      },
+    });
 
   it('D2: manzildagi ko‘cha nomi (Furqat ko‘chasi) tuman bo‘lib qolmaydi — operator yozgan tuman ustun', () => {
     const res = resolve({
@@ -909,12 +923,25 @@ describe('D2–D5 (AI aniqligi, 2026-11-14)', () => {
   });
 
   it('D2: tuman topilmasa manzildagi "Paxtakor mahallasi" — avto-tanlov emas', () => {
+    const snap = without('1708218'); // Zomin tumani bazada yo'q
+    const res = resolve(
+      {
+        region_name: 'Jizzax',
+        district_name: 'Zomin',
+        address: 'Paxtakor mahallasi, 12-uy',
+      },
+      snap,
+    );
+    expect(res.district_id).toBeNull();
+  });
+
+  it('D2 + D1: "Zomin" bazada bor — Zomin tumani, manzildagi Paxtakor EMAS', () => {
     const res = resolve({
       region_name: 'Jizzax',
       district_name: 'Zomin',
       address: 'Paxtakor mahallasi, 12-uy',
     });
-    expect(res.district_id).toBeNull();
+    expect(sato(res)).toBe('1708218');
   });
 
   it('D2: "Andijon shahri, Bo‘ston ko‘chasi" — Bo‘ston RAD, Andijon shahri', () => {
@@ -935,20 +962,44 @@ describe('D2–D5 (AI aniqligi, 2026-11-14)', () => {
   });
 
   it('D3: qism-moslik (token chegarasi) faqat nomzod: "O‘rta Chirchiq" → Chirchiq nomzod', () => {
+    const snap = without('1727253'); // O'rtachirchiq tumani bazada yo'q
+    const res = resolve(
+      {
+        region_name: 'Toshkent viloyati',
+        district_name: "O'rta Chirchiq tumani",
+      },
+      snap,
+    );
+    expect(res.district_id).toBeNull();
+    expect(candidateSatos(snap, res)).toContain('1727419');
+  });
+
+  it('D3 + D1: "O‘rta Chirchiq" bazada bor — O‘rtachirchiq tumani, Chirchiq shahri EMAS', () => {
     const res = resolve({
       region_name: 'Toshkent viloyati',
       district_name: "O'rta Chirchiq tumani",
     });
-    expect(res.district_id).toBeNull();
-    expect(candidateSatos(SNAP, res)).toContain('1727419');
+    expect(sato(res)).toBe('1727253');
   });
 
   it('D3: so‘z ichidagi qism (Quvasoy ⊃ Quva) avto-tanlanmaydi', () => {
+    const snap = without('1730408'); // Quvasoy shahri bazada yo'q
+    const res = resolve(
+      {
+        region_name: "Farg'ona",
+        district_name: 'Quvasoy shahri',
+      },
+      snap,
+    );
+    expect(res.district_id).toBeNull();
+  });
+
+  it('D3 + D1: "Quvasoy shahri" bazada bor — Quvasoy, Quva EMAS', () => {
     const res = resolve({
       region_name: "Farg'ona",
       district_name: 'Quvasoy shahri',
     });
-    expect(res.district_id).toBeNull();
+    expect(sato(res)).toBe('1730408');
   });
 
   it.each([
@@ -966,19 +1017,39 @@ describe('D2–D5 (AI aniqligi, 2026-11-14)', () => {
     ['Farg‘ona', 'Коканд', '1730405'],
     ['Jizzax', 'Джизак', '1708401'],
     ['Toshkent viloyati', 'Алмалык', '1727404'],
-    ['Toshkent viloyati', 'Бекабад', '1727220'],
     ['Toshkent shahri', "M.Ulug'bek", '1726269'],
   ])('D5: %s + %s → %s (rus / alias / variant)', (r, d, code) => {
     expect(sato(resolve({ region_name: r, district_name: d }))).toBe(code);
   });
 
+  it('D5 + D1: "Бекабад" (tur aytilmagan) — Bekobod tumani va Bekobod shahri ikkalasi nomzod', () => {
+    const res = resolve({
+      region_name: 'Toshkent viloyati',
+      district_name: 'Бекабад',
+    });
+    expect(res.district_id).toBeNull();
+    expect(candidateSatos(SNAP, res).sort()).toEqual(['1727220', '1727413']);
+  });
+
   it('kind_mismatch: "Farg‘ona shahri", bazada faqat tuman qatori — avto-tanlov emas, nomzod', () => {
+    const snap = without('1730401'); // Farg'ona shahri bazada yo'q
+    const res = resolve(
+      {
+        region_name: "Farg'ona",
+        district_name: "Farg'ona shahri",
+      },
+      snap,
+    );
+    expect(res.district_id).toBeNull();
+    expect(candidateSatos(snap, res)).toEqual(['1730233']);
+  });
+
+  it('kind_mismatch + D1: "Farg‘ona shahri" bazada bor — Farg‘ona shahri', () => {
     const res = resolve({
       region_name: "Farg'ona",
       district_name: "Farg'ona shahri",
     });
-    expect(res.district_id).toBeNull();
-    expect(candidateSatos(SNAP, res)).toEqual(['1730233']);
+    expect(sato(res)).toBe('1730401');
   });
 
   it('"Karshi" (rus nomi) — tuman qatori va Qarshi shahri ikkalasi nomzod', () => {
@@ -988,5 +1059,93 @@ describe('D2–D5 (AI aniqligi, 2026-11-14)', () => {
     });
     expect(res.district_id).toBeNull();
     expect(candidateSatos(SNAP, res).sort()).toEqual(['1710224', '1710401']);
+  });
+});
+
+describe('P1-7: match (D6) va region_inferred', () => {
+  it.each([
+    [{ region_name: 'Andijon', district_name: 'Asaka' }, 'exact', null],
+    [
+      { region_name: 'Toshkent shahri', district_name: "M.Ulug'bek" },
+      'alias',
+      null,
+    ],
+    [
+      { region_name: 'Toshkent shahri', district_name: 'Мирабад' },
+      'fuzzy',
+      'number',
+    ],
+    [{ region_name: 'Andijon', district_name: 'xojaobd' }, 'fuzzy', 'number'],
+    [
+      { region_name: 'Andijon', address: "Asaka tumani, Navoiy ko'chasi 1" },
+      'address',
+      null,
+    ],
+  ] as const)('%j → %s', (q, method, scoreType) => {
+    const res = resolve(q);
+    expect(res.district_id).not.toBeNull();
+    expect(res.match?.method).toBe(method);
+    if (scoreType === 'number') {
+      expect(res.match?.score).toBeGreaterThan(0);
+      expect(res.match?.score).toBeLessThanOrEqual(1);
+    } else {
+      expect(res.match?.score).toBeNull();
+    }
+    expect(res.match?.region_switched).toBeUndefined();
+  });
+
+  it('nomzodlar bo‘lsa match yo‘q', () => {
+    const res = resolve({ region_name: 'Andijon', district_name: 'Andijon' });
+    expect(res.district_id).toBeNull();
+    expect(res.match).toBeUndefined();
+  });
+
+  it('checklist #1 saqlanadi: viloyat matnda berilgan — boshqa viloyatga o‘tilmaydi', () => {
+    const res = resolve({
+      region_name: 'Toshkent shahri',
+      district_name: 'Xonobod',
+    });
+    expect(res.district_id).toBeNull();
+    expect(res.candidates).toEqual([]);
+  });
+
+  it('region_inferred=true: AI taxmin qilgan viloyatda yo‘q — boshqa viloyatdan aniq moslik, region_switched', () => {
+    const res = resolve({
+      region_name: 'Toshkent shahri',
+      district_name: 'Xonobod',
+      region_inferred: true,
+    });
+    const xonobod = districtByName(SNAP, 'Xonobod');
+    expect(res.district_id).toBe(xonobod.id);
+    expect(res.region_id).toBe(xonobod.region_id);
+    expect(res.match).toEqual({
+      method: 'exact',
+      score: null,
+      region_switched: true,
+    });
+    // Qaytgan viloyat berilgani emas.
+    expect(res.region_given).toBe(false);
+  });
+
+  it('#649 review: almashtirilgan tanlov ham R2 (cross_region_confusable) dan o‘tadi', () => {
+    const res = resolve({
+      region_name: 'Andijon',
+      district_name: 'Mirobod',
+      region_inferred: true,
+    });
+    expect(res.district_id).toBeNull();
+    expect(res.reason).toBe('cross_region_confusable');
+    expect(res.candidates.length).toBeGreaterThanOrEqual(2);
+    // Almashtirishdan keyin unresolved — viloyat "berilgan" emas.
+    expect(res.region_given).toBe(false);
+  });
+
+  it('region_inferred=true, lekin faqat imlo varianti — o‘tilmaydi', () => {
+    const res = resolve({
+      region_name: 'Toshkent shahri',
+      district_name: 'Xanabad',
+      region_inferred: true,
+    });
+    expect(res.match?.region_switched).toBeUndefined();
   });
 });

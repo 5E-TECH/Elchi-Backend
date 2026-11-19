@@ -8,7 +8,11 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy } from '@nestjs/microservices';
 import { Interval } from '@nestjs/schedule';
-import { rmqSend } from '@app/common';
+import {
+  BOT_CHECK_ERROR_TEXT_MAX,
+  rmqSend,
+  type BotCheckErrorKind,
+} from '@app/common';
 import {
   TELEGRAM_ALLOWED_UPDATES,
   resolveBotConfig,
@@ -17,7 +21,11 @@ import {
 import { botLinkedUsers, botTokenHealthy } from './bot-metrics';
 import { BotRouterService } from './bot-router.service';
 import { BotSessionService } from './bot-session.service';
-import { BotTransportService, TelegramApiError } from './bot-transport.service';
+import {
+  BotTransportService,
+  TelegramApiError,
+  redactToken,
+} from './bot-transport.service';
 
 /** Polling backoff: 3s → 6 → 12 → 24 → 48 → 60s (shift). */
 export const POLL_BACKOFF_START_MS = 3_000;
@@ -31,6 +39,56 @@ export function pollBackoffMs(failures: number): number {
   );
 }
 
+/**
+ * (BOT-DIAG-BE) «Qayta tekshirish» getMe'ni shuncha kutadi — gateway
+ * (`POST /health/notification-bot/recheck`, 5 s) dan qisqa: Telegram
+ * javob bermasa ham superadmin 503 emas, `timeout` sababini oladi.
+ */
+export const BOT_RECHECK_GETME_TIMEOUT_MS = 3_500;
+
+const TIMEOUT_RE =
+  /aborted due to timeout|timed? ?out|ETIMEDOUT|UND_ERR_(CONNECT|HEADERS|BODY)_TIMEOUT/i;
+const NETWORK_RE =
+  /fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|EPIPE|socket|network/i;
+
+/**
+ * (BOT-DIAG-BE) getMe xatosini turga ajratadi. `callTelegramApi` javob
+ * kelmagan xatoni `status: 0` bilan o'raydi — u timeout yoki tarmoq.
+ */
+export function classifyTokenCheckError(error: unknown): {
+  kind: BotCheckErrorKind;
+  status: number | null;
+} {
+  if (error instanceof TelegramApiError) {
+    if (error.kind === 'unauthorized') {
+      return { kind: 'token_rejected', status: error.status };
+    }
+    if (error.status === 0) {
+      return {
+        kind: TIMEOUT_RE.test(error.description) ? 'timeout' : 'network',
+        status: null,
+      };
+    }
+    return { kind: 'telegram_error', status: error.status };
+  }
+  const { name, message, code } = (
+    error && typeof error === 'object' ? error : {}
+  ) as { name?: unknown; message?: unknown; code?: unknown };
+  if (name === 'TimeoutError' || name === 'AbortError') {
+    return { kind: 'timeout', status: null };
+  }
+  const text = `${typeof message === 'string' ? message : String(error)} ${
+    typeof code === 'string' ? code : ''
+  }`;
+  if (NETWORK_RE.test(text)) return { kind: 'network', status: null };
+  return { kind: 'unknown', status: null };
+}
+
+/** Matnni `max` belgigacha qisqartiradi (oxiriga «…»). */
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 export interface BotHealth {
   /** Token sozlanganmi (placeholder emas). */
   enabled: boolean;
@@ -39,6 +97,22 @@ export interface BotHealth {
   healthy: boolean | null;
   username: string | null;
   reason: string;
+  /** (BOT-DIAG-BE) Oxirgi token tekshiruvi (ISO); hali bo'lmagan — null. */
+  checked_at: string | null;
+  /** Oxirgi tekshiruv xatosi turi; sog' yoki tekshirilmagan — null. */
+  error_kind: BotCheckErrorKind | null;
+  /** Telegram HTTP statusi (401, 429, 5xx …); javob kelmagan — null. */
+  error_status: number | null;
+  /** Qisqa sabab (≤ 200 belgi, token yashirilgan); sog' — null. */
+  error_text: string | null;
+  /** Token rad etilgan (401/404): qayta tekshiruv yo'q — yangi token + restart. */
+  restart_required: boolean;
+}
+
+/** `notification.bot.recheck` javobidagi bot holati. */
+export interface BotRecheckResult extends BotHealth {
+  /** Shu so'rovda getMe yurgizildimi (token yo'q yoki rad etilgan — false). */
+  rechecked: boolean;
 }
 
 /**
@@ -64,12 +138,31 @@ export class BotRuntimeService
   private timer: NodeJS.Timeout | null = null;
   private failures = 0;
   private tokenRejected = false;
+  /** (BOT-DIAG-BE) Oxirgi tekshiruv natijasi (health() ga chiqadi). */
+  private checkedAt: Date | null = null;
+  private errorKind: BotCheckErrorKind | null = null;
+  private errorStatus: number | null = null;
+  private errorText: string | null = null;
+  /**
+   * Har getMe tekshiruviga tartib raqami (`checkSeq`) va holatni oxirgi
+   * yozgan tekshiruv raqami (`appliedSeq`): davriy tekshiruv va «Qayta
+   * tekshirish» ustma-ust tushsa, KECHROQ boshlangan tekshiruv natijasi
+   * yozilgach eskisining kech kelgan natijasi uni bosib ketmaydi. Eskisi
+   * BIRINCHI tugasa — u yoziladi (boot getMe natijasi yo'qolmaydi: aks
+   * holda `healthy` null qolib `ready()` ni kutgan webhook update'lari rad
+   * etilardi; ikki «Qayta tekshirish»ning birinchisi ham o'z natijasini
+   * qaytaradi). Token rad etilgani (401/404) — har doim yoziladi.
+   */
+  private checkSeq = 0;
+  private appliedSeq = 0;
   /** Birinchi getMe — webhook hodisalari shu tugashini kutadi. */
   private bootCheck: Promise<boolean> | null = null;
   private offset = 0;
   /** Sinovlarda almashtiriladi. */
   schedule: (fn: () => void, ms: number) => NodeJS.Timeout = (fn, ms) =>
     setTimeout(fn, ms);
+  /** Sinovlarda almashtiriladi. */
+  now: () => Date = () => new Date();
 
   constructor(
     configService: ConfigService,
@@ -93,7 +186,28 @@ export class BotRuntimeService
       healthy: this.healthy,
       username: this.username,
       reason: this.stopReason ?? this.config.reason,
+      checked_at: this.checkedAt ? this.checkedAt.toISOString() : null,
+      error_kind: this.errorKind,
+      error_status: this.errorStatus,
+      error_text: this.errorText,
+      restart_required: this.tokenRejected,
     };
+  }
+
+  /**
+   * (BOT-DIAG-BE) «Qayta tekshirish» (`notification.bot.recheck`, faqat
+   * superadmin): token rad etilmagan bo'lsa getMe HOZIR yurgiziladi va yangi
+   * holat qaytadi. Rad etilgan (401/404) token qayta tekshirilmaydi —
+   * `restart_required: true` (yangi token bilan restart kerak).
+   */
+  async recheck(
+    timeoutMs: number = BOT_RECHECK_GETME_TIMEOUT_MS,
+  ): Promise<BotRecheckResult> {
+    if (!this.config.token || this.tokenRejected) {
+      return { ...this.health(), rechecked: false };
+    }
+    await this.checkToken({ timeoutMs });
+    return { ...this.health(), rechecked: true };
   }
 
   /** Readiness: token bor-u getMe o'tmagan — qizil. Token yo'q (off) — ta'sir yo'q. */
@@ -152,21 +266,35 @@ export class BotRuntimeService
    * 5 daqiqada qayta tekshiriladi.
    */
   @Interval('telegram-bot-token-check', 5 * 60_000)
-  async checkToken(): Promise<boolean> {
+  async checkToken(options: { timeoutMs?: number } = {}): Promise<boolean> {
     // Token rad etilgan (401/404) — qayta urinilmaydi, faqat restart (yangi token).
     if (!this.config.token || this.tokenRejected) return false;
-    const before = this.healthy;
+    const seq = ++this.checkSeq;
     try {
-      const me = await this.transport.getMe();
+      const me = await this.transport.getMe(options);
+      // Kechroq boshlangan tekshiruv natijasi allaqachon yozilgan yoki token
+      // shu orada rad etildi — bu (eski) natija holatni yozmaydi.
+      if (seq < this.appliedSeq || this.tokenRejected) {
+        return this.healthy === true;
+      }
+      this.appliedSeq = seq;
+      const before = this.healthy;
       this.healthy = true;
       this.username = me?.username ?? null;
+      this.recordCheck(null);
       if (before !== true) {
         this.logger.log(`Telegram bot tokeni sog' (@${this.username ?? '?'})`);
       }
     } catch (error) {
-      this.healthy = false;
       const permanent =
         error instanceof TelegramApiError && error.kind === 'unauthorized';
+      if (!permanent && (seq < this.appliedSeq || this.tokenRejected)) {
+        return this.healthy === true;
+      }
+      this.appliedSeq = Math.max(this.appliedSeq, seq);
+      const before = this.healthy;
+      this.healthy = false;
+      this.recordCheck(error);
       if (permanent) {
         this.tokenRejected = true;
         this.stopReason = `getMe ${error.status}: token buzuq — bot ishga tushmadi`;
@@ -180,6 +308,30 @@ export class BotRuntimeService
     }
     botTokenHealthy.set({ bot: this.config.slug }, this.healthy ? 1 : 0);
     return this.healthy === true;
+  }
+
+  /**
+   * (BOT-DIAG-BE) Tekshiruv natijasini saqlaydi: muvaffaqiyat (`null`) —
+   * xato maydonlari tozalanadi. Matn `transport.describe` dan, token
+   * (`redactToken` — har qanday `bot<id>:<secret>` va aynan env tokeni)
+   * yashirilgach 200 belgigacha qisqartiriladi (avval yashirish, keyin
+   * kesish — tokenning bo'lagi ham qolmaydi).
+   */
+  private recordCheck(error: unknown): void {
+    this.checkedAt = this.now();
+    if (error === null) {
+      this.errorKind = null;
+      this.errorStatus = null;
+      this.errorText = null;
+      return;
+    }
+    const { kind, status } = classifyTokenCheckError(error);
+    this.errorKind = kind;
+    this.errorStatus = status;
+    this.errorText = clip(
+      redactToken(this.transport.describe(error), this.config.token),
+      BOT_CHECK_ERROR_TEXT_MAX,
+    );
   }
 
   /** (9HIaV80X #6) `bot_linked_users{role}` — identity'dan, 5 daqiqada. */
@@ -256,6 +408,7 @@ export class BotRuntimeService
       if (error instanceof TelegramApiError && error.kind === 'unauthorized') {
         this.healthy = false;
         this.tokenRejected = true;
+        this.recordCheck(error);
         botTokenHealthy.set({ bot: this.config.slug }, 0);
         this.stopReason = `getUpdates ${error.status}: token buzuq — polling to'xtadi`;
         this.running = false;

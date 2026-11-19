@@ -87,6 +87,10 @@ describePg('3PE0B03q — asosiy kassa nomli kartalari, haqiqiy Postgres', () => 
     const runner = db.createQueryRunner();
     await migration.up(runner);
     await detailsMigration.up(runner);
+    // 63HO6cBU (N1) — migratsiya 245 qo'shgan ustun (entity'da bor).
+    await runner.query(
+      'ALTER TABLE "finance_schema"."cashbox_cards" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamptz NULL',
+    );
     await runner.release();
 
     const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
@@ -229,6 +233,9 @@ describePg('3PE0B03q — asosiy kassa nomli kartalari, haqiqiy Postgres', () => 
     } finally {
       await migration.up(runner);
       await detailsMigration.up(runner);
+      await runner.query(
+        'ALTER TABLE "finance_schema"."cashbox_cards" ADD COLUMN IF NOT EXISTS "deactivated_at" timestamptz NULL',
+      );
       await runner.release();
     }
   });

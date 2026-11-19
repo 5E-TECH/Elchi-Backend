@@ -810,7 +810,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q)."
+            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q). KQINMdeQ: har qatorda `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (superadmin — hammasi; admin — o`zi va admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa menejer va o`zi yaratgan market — false)."
           }
         },
         "security": [
@@ -831,6 +831,7 @@
     },
     "/users/{id}": {
       "get": {
+        "description": "SUPERADMIN/ADMIN — har qanday foydalanuvchi. MANAGER — HOZIR o'z filialining faol a'zosi (`branch_users`, so'rov paytida; filial turidan qat'i nazar — KQINMdeQ, ilgari faqat REGIONAL/HYBRID) yoki o'zi yaratgan market (2026-11-12, faqat ko'rish); boshqa filial foydalanuvchisi, filialga biriktirilmagan menejer yoki filial xizmati xatosi — 403.",
         "operationId": "ApiGatewayController_getUserById",
         "parameters": [
           {
@@ -845,7 +846,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`."
+            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users qatoridagi bilan bir xil qoida)."
           },
           "404": {
             "description": "Not found"
@@ -856,7 +857,7 @@
             "bearer": []
           }
         ],
-        "summary": "Get user by id (admin/superadmin)",
+        "summary": "Get user by id (admin/superadmin/manager)",
         "tags": [
           "Identity"
         ],
@@ -867,7 +868,7 @@
         ]
       },
       "patch": {
-        "description": "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi. MANAGER: faqat o'z filialining faol a'zosi (`branch_users`) VA o'zi yaratgan foydalanuvchi; boshqa filialga o'tkazilgan xodim yoki filialga biriktirilmagan menejer — 403.",
+        "description": "`password` berilsa (parolni tiklash): shu foydalanuvchining BARCHA sessiyalari darhol yopiladi (`password_changed`; 48 soatlik qulfga bog'liq emas) — uning access tokenlari keyingi so'rovdayoq 401, refresh ham 401. O'zini tahrirlasa (`:id` = o'zi) — joriy sessiya qoladi, qolganlari yopiladi. Javobga `sessions_revoked: <n>` qo'shiladi. MANAGER (KQINMdeQ): o'zi yoki HOZIR o'z filialining faol a'zosi (`branch_users`, so'rov paytida) bo'lgan kuryer / ro'yxatchi — kim yaratganidan (`created_by`) qat'i nazar. Boshqa menejer (shu filialdagisi ham), admin, superadmin, market (o'zi yaratgani ham), operator, investor, logist, boshqa filialga o'tkazilgan xodim, filialga biriktirilmagan menejer yoki filial xizmati xatosi — 403. Tekshiruv gateway va identity'da.",
         "operationId": "ApiGatewayController_updateUser",
         "parameters": [
           {
@@ -954,7 +955,7 @@
     },
     "/users/{id}/password/resend-sms": {
       "post": {
-        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — faqat o'zi yaratgan va hozir o'z filialida (`branch_users`) bo'lgan kuryer. Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
+        "description": "Yangi vaqtinchalik parol yaratib SMS bilan yuboradi (`password_mode: 'generate_sms'` bilan yaratilgan foydalanuvchi uchun «SMS kelmadimi? Qayta yuborish»). Rollar: superadmin; admin (admin/superadmin'dan boshqasi); menejer — HOZIR o'z filialida (`branch_users`) bo'lgan kuryer yoki ro'yxatchi, kim yaratganidan qat'i nazar (KQINMdeQ; ilgari faqat o'zi yaratgan kuryer). Nishon roli: admin, registrator, logist, courier, manager, market (boshqasi 400); o'ziga — 403. Eski parol darhol ishlamaydi, barcha sessiyalar yopiladi (`sessions_revoked`), birinchi kirishda parol almashtirish majburiy. Javob `data`: `user_id`, `must_change_password: true`, `password_sms` { `status`: `pending | sent | delivered | failed`, `failure_reason`, `failure_message`, `requested_at`, `sent_at`, `delivered_at`, `resend_available_at`, `resends_left_today` }. SMS yuborilmasa ham 200 (`status: failed` + sabab). 429 — `PASSWORD_SMS_COOLDOWN` (60 s) / `PASSWORD_SMS_DAILY_LIMIT` (kuniga 5), `retry_after_seconds`.",
         "operationId": "ApiGatewayController_resendTempPasswordSms",
         "parameters": [
           {
@@ -3279,6 +3280,7 @@
     },
     "/orders/ai-parse": {
       "post": {
+        "description": "Javob `data.orders[]` — preview (`ready`, `issues`, tuman/viloyat, mahsulotlar, …). P1-7 (2026-11-14) qo'shimcha maydonlar: `district_match: { method: 'exact'|'alias'|'partial'|'address'|'fuzzy'|'llm', ai_text, score } | null` (tuman qanday aniqlangani; `ai_text` — AI o'qigan tuman matni, har doim; `score` faqat fuzzy/address), `region_inferred: boolean` (viloyat matnda aytilmagan, AI uni tumandan chiqargan), `checks: [{ code, … }]` — AI tekshiruvlari, `ready`/`issues` ga ta'sir qilmaydi. BLOKLOVCHI (yaratishdan oldin operator tasdig'i shart): `district_low_confidence`, `price_check { kind: 'mismatch'|'too_high', mentions: number[] }` — ai-confirm'da `orders[].ack_checks` da bo'lmasa 409 `CHECKS_NOT_ACKNOWLEDGED` (`AI_ACK_CHECKS_ENFORCE=on`). YUMSHOQ (faqat ogohlantirish, tasdiq so'ralmaydi): `qty_check { item_index }`, `duplicate_items { item_indexes }`, `phone_is_market`, `same_phone_multi { other_index }`. ⚠️ Ro'yxat kengayadi — noma'lum `code` e'tiborsiz qoldirilsin.",
         "operationId": "OrderGatewayController_aiParse",
         "parameters": [],
         "requestBody": {
@@ -3468,7 +3470,16 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason_code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija. `reason_code` (ixtiyoriy, UPPER_CASE, faqat `ok:false`) — `code` dan aniqroq sabab: `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`, `CHOSEN_OPERATOR_SELF_ONLY` (hammasida `code: \"create_failed\"`). Mijoz `reason` matnini tahlil qilmasin. Takror (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) — `{ ok: true, order_id, idempotent_replay: true }` — tuman/mahsulot, operator, operator raqami va mijoz qayta tekshirilmaydi; tuman/mahsulot tekshiruvi ishlamasa ham (takror bo‘lmagan bandlar — `validation_unavailable`). Ayni mazmunli yangi band — `duplicate_in_batch`."
+          },
+          "400": {
+            "description": "(`AI_ACK_CHECKS_ENFORCE=on`) AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', indexes: number[] }` (so'rovdagi `orders[]` o'rinlari). AI_DRAFT_NOT_FOUND — `draft_id` shu market uchun ai-service'da topilmadi; AI_DRAFT_ITEM_NOT_FOUND — draft bor, lekin saqlangan preview'da bunday `ai_item_index` yo'q. Ikkalasida ham tana xuddi shunday `indexes: number[]`; AI'ni qayta yurgizing yoki qo'lda yarating. Boshqa 400 — DTO validatsiyasi."
+          },
+          "409": {
+            "description": "CHECKS_NOT_ACKNOWLEDGED (`AI_ACK_CHECKS_ENFORCE=on`) — saqlangan AI preview'da BLOKLOVCHI tekshiruv (district_low_confidence, price_check) bor, lekin `orders[].ack_checks` da yo‘q. Hech qaysi buyurtma yaratilmaydi (idempotent takror ham). Tana: `{ statusCode: 409, message, code: 'CHECKS_NOT_ACKNOWLEDGED', missing: string[], orders: [{ index, missing: string[] }] }` (`index` — so‘rovdagi `orders[]` o‘rni)."
+          },
+          "503": {
+            "description": "(`AI_ACK_CHECKS_ENFORCE=on`) AI_CHECKS_UNAVAILABLE — saqlangan AI tekshiruvlarini o'qib bo'lmadi (ai-service timeout/xato) yoki yosh draft'ning (< 2 daqiqa) preview snapshot'i hali saqlanmagan. FAIL-CLOSED: hech narsa yaratilmaydi. Tana: `{ statusCode: 503, message, code: 'AI_CHECKS_UNAVAILABLE', retryable: true, retry_after_seconds: 5 }`, sarlavha `Retry-After: 5`."
           }
         },
         "security": [
@@ -5546,7 +5557,7 @@
     },
     "/orders/scan-assign": {
       "post": {
-        "description": "anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi (va «eski filialda tugasin» imtiyozli buyurtmalar — tuman HQ viloyatidan ko'chganda yoki deploy paytida HQ kuryerlarida bo'lganlar) — aks holda 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`). O'z WAITING / ON_THE_ROAD buyurtmasini qayta skanlash — idempotent 200.",
+        "description": "COURIER-SCAN (ega, 2026-11-17) — SKAN = QABUL: muvaffaqiyatli skandan keyin buyurtma darhol `waiting` (Kutilmoqda) va kuryerda (`courier_id`, `holder_type COURIER`), `on the road` ga qaytmaydi; «Sotish» / «Bekor qilish» darhol ochiq (javobda `data.status = waiting`). Filial kuryeri o'z filialiga kelgan HQ → filial o'tkazma pochtasidagi yo'ldagi buyurtmani menejer pochtani qabul qilmagan bo'lsa ham oladi (skan shu bitta buyurtmani filialga qabul qiladi; oxirgisi olinsa pochta «Qabul qilingan»); «kelmagan» belgili (`return_requested`) — 409 `order_marked_not_arrived`. Kuryerning o'zidagi yo'ldagi buyurtmasini qayta skanlash — qabul (200, `data.accepted = true`); o'z `waiting` buyurtmasini — idempotent 200 (`data.idempotent = true`). Ikki kuryer bir vaqtda — biri 200, ikkinchisi 400 «Buyurtma allaqachon boshqa kuryerga biriktirilgan». anKpzwxk — viloyat qoidasi. Filial kuryeri: o'z filiali viloyatidagi buyurtma (tuman ↔ filial biriktiruvi hisobga olinmaydi); boshqa viloyat (tranzit) — 403 `data.reason = district_not_served_by_branch` «Boshqa viloyat buyurtmasi …» (`details.order_ids`). HQ kuryeri: faqat HQ viloyati buyurtmasi (va «eski filialda tugasin» imtiyozli buyurtmalar — tuman HQ viloyatidan ko'chganda yoki deploy paytida HQ kuryerlarida bo'lganlar) — aks holda 403 `hq_courier_region_only`; HQ viloyatsiz — 400 `branch_region_missing`; filialga jo'natilgan (yo'ldagi) buyurtmani HQ kuryeri olmaydi. Partiyadagi buyurtma — 409 `order_in_outgoing_batch` (`details.order_ids`).",
         "operationId": "OrderGatewayController_scanAssignOrder",
         "parameters": [],
         "requestBody": {
@@ -7688,6 +7699,7 @@
     },
     "/region": {
       "get": {
+        "description": "Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.",
         "operationId": "LogisticsGatewayController_getAllRegions",
         "parameters": [],
         "responses": {
@@ -7975,8 +7987,69 @@
         ]
       }
     },
+    "/region/district-coverage": {
+      "get": {
+        "description": "«Hududlar» sahifasi ogohlantirishi. Javob `data`: `{ missing_official: [{ sato_code, name, region: { id, name, sato_code } }], review_required: [{ district_id, name, region: { id, name, sato_code }, service_region: { id, name, sato_code }, sato_code, kind: 'city'|'tuman'|null, serving_branch: { id, name } | null, region_branches: [{ id, name }], reason: 'auto_assigned_D1'|'no_branch_found', flagged_at }], checked_at }`. `missing_official` — rasmiy SOATO ro‘yxatida bor, bazada (o‘chirilmagan) qatori yo‘q birliklar. `review_required` — seed qo‘shib viloyatga AVTOMATIK biriktirgan va ops hali tasdiqlamagan tumanlar. `region` — geografik viloyat (`region_id`), `service_region` — buyurtmani yo‘naltiradigan XIZMAT viloyati (`assigned_region ?? region_id`). `serving_branch` VILOYAT qoidasidan (district-coverage.ts, `isOrderServedByBranch`) CHAQIRUV paytida hisoblanadi: `region_branches` — xizmat viloyatidagi faol REGIONAL/HYBRID filiallar (id o‘sish tartibida; ularning HAR BIRI tuman buyurtmalarini ko‘radi), `serving_branch` — ulardan biri (eski `serving_branch_id` ro‘yxatda bo‘lsa o‘sha, aks holda eng kichik id). `reason: no_branch_found` va `serving_branch: null` — FAQAT xizmat viloyatida faol filial yo‘q bo‘lsa (buyurtmani faqat HQ ko‘radi). Filial xizmati javob bermasa — 503 (qamrov tekshiruvlari bilan bir xil; «filial yo‘q» deb ko‘rsatilmaydi). Belgini `POST /region/district/:id/confirm-assignment`, `PATCH /district/:id` (viloyat o‘zgarsa) yoki `PUT /branches/:id/districts` tushiradi; filial o‘chirilishi/nofaol qilinishi (`clear_serving_branch`) belgini TUSHIRMAYDI. Faqat SUPERADMIN/ADMIN.",
+        "operationId": "LogisticsGatewayController_getDistrictCoverageReview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Coverage review"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tuman qamrovi ogohlantirishi (D1)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/region/district/{id}/confirm-assignment": {
+      "post": {
+        "description": "Tumanning `assignment_review_required` belgisini tushiradi (audit yoziladi). IDEMPOTENT: belgi yo‘q bo‘lsa ham 200; parallel tasdiq yoki qayta biriktirish bilan poygada faqat yutgan so‘rov audit yozadi, qolgani saqlangan `confirmed_by`/`confirmed_at` ni qaytaradi. Javob `data`: `{ district_id, assignment_review_required: false, confirmed_by, confirmed_at }` (hech qachon tasdiqlanmagan va belgisiz tuman — `confirmed_by`/`confirmed_at` `null`). Tuman yo‘q — 404. Faqat SUPERADMIN/ADMIN.",
+        "operationId": "LogisticsGatewayController_confirmDistrictAssignment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "District ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assignment confirmed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Avtomatik filial biriktirishini tasdiqlash (D1)",
+        "tags": [
+          "Logistics"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/region/{id}": {
       "get": {
+        "description": "Tumanlardagi `assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi — boshqa rollarga kesiladi.",
         "operationId": "LogisticsGatewayController_getRegionById",
         "parameters": [
           {
@@ -8134,6 +8207,7 @@
     },
     "/district": {
       "get": {
+        "description": "`assignment_review_required`, `assignment_review_reason`, `assignment_flagged_at`, `assignment_confirmed_by`, `assignment_confirmed_at` (D1) — faqat SUPERADMIN/ADMIN ga; boshqa rollarga bu maydonlar qaytmaydi.",
         "operationId": "LogisticsGatewayController_getAll",
         "parameters": [
           {
@@ -8240,6 +8314,7 @@
     },
     "/district/sato/{satoCode}": {
       "get": {
+        "description": "`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.",
         "operationId": "LogisticsGatewayController_getDistrictBySato",
         "parameters": [
           {
@@ -8278,6 +8353,7 @@
     },
     "/district/{id}": {
       "get": {
+        "description": "`assignment_*` (D1) maydonlari faqat SUPERADMIN/ADMIN ga qaytadi.",
         "operationId": "LogisticsGatewayController_getById",
         "parameters": [
           {
@@ -8315,7 +8391,7 @@
         ]
       },
       "patch": {
-        "description": "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi.",
+        "description": "Ega qarori: ko'chirish paytida ESKI filialda, uning kuryerida yoki eski filialga yo'lda (HQ pochtasi / SENT partiya) turgan ochiq buyurtmalar eski filialda tugaydi — eski filial ularni o'z kuryeriga bera oladi (kuryer qaytargandan keyin ham, bekor/sotilgan buyurtma WAITING ga qaytarilsa ham). Ko'chirishdan keyin kelganlari faqat yangi filialga. Viloyat o'zgarsa javob `data.coverage_exemptions: { created, by_branch: [{ branch_id, count }] }` — nechta buyurtma qaysi eski filialda tugashi. Tuman buyurtmalarini tekshirib bo'lmasa — 503, tuman o'zgarmaydi. D1: tuman «tekshirilmagan» (`assignment_review_required: true`) bo'lsa, viloyat o'zgarishi bilan belgi SHU saqlashda tushadi (`assignment_confirmed_by/at` — so'rovchi; audit `cleared_by_region_move`).",
         "operationId": "LogisticsGatewayController_update",
         "parameters": [
           {
@@ -9228,6 +9304,7 @@
     },
     "/finance/cashbox/my-cashbox": {
       "get": {
+        "description": "63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
         "operationId": "FinanceGatewayController_myCashbox",
         "parameters": [
           {
@@ -10281,8 +10358,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -10325,14 +10401,13 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
     "/finance/history": {
       "get": {
-        "description": "GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami.",
+        "description": "GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami. 63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
         "operationId": "FinanceGatewayController_findHistory",
         "parameters": [
           {
@@ -10823,7 +10898,7 @@
     },
     "/finance/history/{id}": {
       "get": {
-        "description": "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id, transfer }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q. mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; `receiver` — kuryer to'lovida pulni olgan kassa, marketga to'lovda MAIN (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`. (2026-11-14) Barcha rollarga: `source_branch` — `branch_to_main` qatorida pulni topshirgan filial `{ id, name }`, boshqa turda `null`; `transfer_source_user` — o'tkazma manbasi `{ id, name, role, phone_number }` yoki `null`; `card` — `click` to'lovida MAIN / BRANCH kassaning qaysi kartasiga tushgan / qaysi kartasidan chiqqan `{ id, name, is_default, kind, bank_name, card_network, last4, holder_name }` (`card_id` siz — Asosiy karta; yozuvi yo'q bo'lsa `id: null`), naqd, «Marketga o'tkazma» va kuryer/market kassasida `null`. Fail-open — `null`.",
+        "description": "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id, transfer }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q. mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; `receiver` — kuryer to'lovida pulni olgan kassa, marketga to'lovda MAIN (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`. (2026-11-14) Barcha rollarga: `source_branch` — `branch_to_main` qatorida pulni topshirgan filial `{ id, name }`, boshqa turda `null`; `transfer_source_user` — o'tkazma manbasi `{ id, name, role, phone_number }` yoki `null`; `card` — `click` to'lovida MAIN / BRANCH kassaning qaysi kartasiga tushgan / qaysi kartasidan chiqqan `{ id, name, is_default, kind, bank_name, card_network, last4, holder_name }` (`card_id` siz — Asosiy karta; yozuvi yo'q bo'lsa `id: null`), naqd, «Marketga o'tkazma» va kuryer/market kassasida `null`. Fail-open — `null`. 63HO6cBU: FILIAL kassasi qatorida `card` doim `null` (filialda karta yo'q). `branch_leg: true` qatorda (filial oyog'i, kuryer → filial to'lovi) KURYER uchun `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; SA/admin, menejer, registrator — saqlanadi (ega qarori Q2).",
         "operationId": "FinanceGatewayController_findHistoryById",
         "parameters": [
           {
@@ -11131,7 +11206,7 @@
     },
     "/finance/shift/close": {
       "post": {
-        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`).",
+        "description": "Menejer faqat o'z filiali kassasining smenasini yopadi (boshqa kassa smenasi — 404) (R6). (8OYPuz7J, ega S5) `closing_balance_cash` (sanalgan naqd) MAJBURIY — yuborilmasa 400; `closing_balance_card` ixtiyoriy. (BE-A, 2026-11-10) ASOSIY kassa smenasida sukut bo'yicha `accounts[]` har faol karta uchun majburiy (400 «Har karta qoldig'ini tasdiqlang: <karta nomlari>»), rasm talab qilingan kartada avval `POST /finance/shift/account-photo` (400 ««<karta>»: qoldiq rasmi (skrinshot) majburiy — avval rasm yuklang»). Filial smenasi — sukut bo'yicha avvalgidek (`accounts[]` ixtiyoriy). Amaldagi qoida — `GET /finance/shift/settings` (`account_check_enabled`, `cards[].photo_required`). 63HO6cBU: FILIAL smenasi bitta jami — `closing_balance_card` yuborilsa `closing_balance_cash` ga QO'SHILADI (bitta «Sanalgan summa»), `accounts[]` e'tiborsiz; javobda `expected_balance_card: 0`, `discrepancy_card: null`.",
         "operationId": "FinanceGatewayController_closeShift",
         "parameters": [],
         "requestBody": {
@@ -11259,7 +11334,7 @@
     },
     "/finance/shift/settings": {
       "get": {
-        "description": "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH).",
+        "description": "So'ralgan kassa (`cashbox_user_id`, sukut '0' — asosiy) uchun AMALDAGI sozlama: `account_check_enabled` (BE-A: ASOSIY kassada sukut true — har faol karta qoldig'i majburiy; FILIALDA sukut false — `accounts[]` ixtiyoriy), `photo_required` / `ai_check_enabled` (global master kalitlar, sukut true), ikkala tasdiqlash kaliti alohida: `main_account_check_enabled` (`shift.account_check.enabled`), `branch_account_check_enabled` (`shift.account_check.branch_enabled`), `cashbox_type` (main|branch), `auto_close`, «Kun tartibi» `auto_open` (`{ enabled, times, scope }`) va `late_alert` (`{ enabled, grace_min, channels }`), `report` va kassa kartalari: `require_photo_on_shift_close`, `ai_check_enabled` (MAIN kartalarida sukut true, filialda false), hisoblangan `photo_required` / `ai_enabled` (smena yopish oynasi uchun). O'qish — yopuvchi rollar (menejer — o'z filiali, registrator — '0'); o'zgartirish — faqat superadmin (PATCH). 63HO6cBU: filial kassasi (`cashbox_type: branch`) uchun `account_check_enabled` DOIM false va `cards: []` (filialda karta yo'q); `branch_account_check_enabled` eskirgan — doim false.",
         "operationId": "FinanceGatewayController_getShiftSettings",
         "parameters": [
           {
@@ -11295,7 +11370,7 @@
         ]
       },
       "patch": {
-        "description": "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, «Kun tartibi» `auto_open` va `late_alert` (ochish va yopish vaqti bir xil — 400 `SHIFT_SCHEDULE_CONFLICT` + `times`; ochish yoqiq-u vaqtsiz yoki xabar yoqiq-u kanalsiz — 400), `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`.",
+        "description": "Global kalitlar: `account_check_enabled` (ASOSIY kassa), `branch_account_check_enabled` (BE-A, filial kassalari), `photo_required`, `ai_check_enabled`, `auto_close`, «Kun tartibi» `auto_open` va `late_alert` (ochish va yopish vaqti bir xil — 400 `SHIFT_SCHEDULE_CONFLICT` + `times`; ochish yoqiq-u vaqtsiz yoki xabar yoqiq-u kanalsiz — 400), `report` va `cards[]` (karta bo'yicha `require_photo_on_shift_close`, `ai_check_enabled` — superadmin MAIN kartasini shu bilan kartama-karta o'chiradi; AI faqat rasm talab qilinganda — aks holda 400). Boolean bo'lmagan qiymat — 400. Javob: `account_check_enabled` (ASOSIY kassa), `main_account_check_enabled`, `branch_account_check_enabled`, `photo_required`, `ai_check_enabled`, `auto_close`, `report`, `cashbox_type: 'main'` va o'zgargan kartalar `cards[]` (`{ card_id, old, new }`). Activity-log: `finance.shift_settings_updated`. 63HO6cBU: `branch_account_check_enabled` ESKIRGAN — qiymat tekshiriladi (boolean bo'lmasa 400), lekin saqlanmaydi; faqat shu kalit yuborilsa ham 200.",
         "operationId": "FinanceGatewayController_updateShiftSettings",
         "parameters": [],
         "requestBody": {
@@ -11329,7 +11404,7 @@
     },
     "/finance/receipt-settings": {
       "get": {
-        "description": "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH).",
+        "description": "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH). O'qish — superadmin/admin (menejer 403, 63HO6cBU).",
         "operationId": "FinanceGatewayController_getReceiptSettings",
         "parameters": [],
         "responses": {
@@ -11348,8 +11423,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       },
       "patch": {
@@ -11387,7 +11461,7 @@
     },
     "/finance/receipts": {
       "post": {
-        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: faqat superadmin/admin — har tur; menejer va boshqalar 403 (63HO6cBU: filialda «Kassadan xarajat» yo'q). Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
         "operationId": "FinanceGatewayController_uploadReceipt",
         "parameters": [],
         "requestBody": {
@@ -11416,8 +11490,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -11571,7 +11644,7 @@
     },
     "/finance/shift/{id}/report": {
       "get": {
-        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. (BE-B) Har karta qatorida: `photo_status` (not_required | uploaded | pending | missing — `pending`: rasm talab qilingan, yo'q, hali yuklash mumkin: smena ochiq yoki avto-yopilgan ASOSIY kassa smenasining 24 soatlik oynasi ichida; `missing`: oyna yopiq), `late_upload_deadline` (ISO, avto-yopilgan ASOSIY smenada `closed_at + 24 soat`, aks holda null), `late_uploaded` (rasm smena yopilgandan keyin yuklangan), `can_upload_late` (avto-yopilgan ASOSIY smena + oyna ichida VA so'rovchi superadmin / admin — `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` tugmasi). `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404).",
+        "description": "(y8Tqm9Ap / gWI4gYkw) `data.close_reason` (manual | auto | null — ochiq), `data.closed_by_system`, `data.auto_close` (`{ closed_at, label: 'Avtomatik yopildi — HH:MM, kassir yopmagan' }` yoki null — sariq banner), `data.report` (`status`: pending | processing | sent | skipped | failed, `round`, `file_format`, `has_file`, `file_url` — faqat superadmin, 300 s), `data.deliveries[]` — «Hisobot kimlarga yuborildi» (faqat superadmin; boshqalarga bo'sh). `data.cash` / `data.card` — ochilish, kirim, chiqim, kutilgan, sanalgan, farq; `data.accounts[]` — har karta: kutilgan (snapshot), kiritilgan, farq, `ai_status` (not_required | pending | match | mismatch | unreadable | disabled | error), `ai_entered_ok`, `ai_read_balance`, `ai_last4_detected`, `comment`, `comment_required`, `photo_url` (gateway havolasi `…/files/signed/<token>`, 300 s); `ai_raw` — faqat superadmin. (BE-B) Har karta qatorida: `photo_status` (not_required | uploaded | pending | missing — `pending`: rasm talab qilingan, yo'q, hali yuklash mumkin: smena ochiq yoki avto-yopilgan ASOSIY kassa smenasining 24 soatlik oynasi ichida; `missing`: oyna yopiq), `late_upload_deadline` (ISO, avto-yopilgan ASOSIY smenada `closed_at + 24 soat`, aks holda null), `late_uploaded` (rasm smena yopilgandan keyin yuklangan), `can_upload_late` (avto-yopilgan ASOSIY smena + oyna ichida VA so'rovchi superadmin / admin — `POST /finance/shift/:shift_id/accounts/:card_id/late-photo` tugmasi). `data.accounts_summary` — holatlar soni; `data.operations[]` — smena oynasidagi kassa operatsiyalari (tur × to'lov usuli: soni, summa). Menejer — faqat o'z filiali, registrator — asosiy kassa (boshqasi 404). 63HO6cBU: FILIAL smenasida `data.card: null`, `data.accounts: []`, `data.operations[]` — tur × usul (menejer ham ko'radi, ega qarori Q2), jami bitta.",
         "operationId": "FinanceGatewayController_shiftReport",
         "parameters": [
           {
@@ -11680,7 +11753,7 @@
     },
     "/finance/cashbox/cards": {
       "get": {
-        "description": "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403.",
+        "description": "3PE0B03q / Zv3MLn0a — `data.cards` (Asosiy karta birinchi, balansi = balance_card − Σ nomli kartalar; har kartada `kind`, `bank_name`, `card_network`, `last4`, `holder_name`, `note`, `require_photo_on_shift_close`, `ai_check_enabled`), `balance_card`, `total_card` (== balance_card), `in_sync`, `cashbox_id`, `cashbox_type` (main|branch), `branch_id`. `branch_id` — filial kassasi (superadmin/admin); MENEJER doim o'z filiali kassasini oladi, boshqa `branch_id` → 403. 63HO6cBU: `branch_id` bilan (filial kassasi) — `cards: []`, `cards_disabled: true` (filial kassasi naqd/kartaga ajralmaydi).",
         "operationId": "FinanceGatewayController_listCashboxCards",
         "parameters": [
           {
@@ -11722,7 +11795,7 @@
         ]
       },
       "post": {
-        "description": "Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta.",
+        "description": "Zv3MLn0a — `branch_id` bilan filial kassasiga. `last4` — faqat 4 raqam (uzunroq → 400). Smena sozlamalari (`require_photo_on_shift_close`, `ai_check_enabled`) — FAQAT superadmin (admin → 403); berilmasa (BE-A) ASOSIY kassa kartasi true/true, filial kartasi false/false bilan yaratiladi. `make_default: true` — darhol Asosiy karta. 63HO6cBU: filial kassasiga (`branch_id`) karta yaratish — 400 «Filial kassasi naqd va kartaga ajratilmaydi — filialda karta amallari yo'q».",
         "operationId": "FinanceGatewayController_createCashboxCard",
         "parameters": [],
         "requestBody": {
@@ -11981,7 +12054,7 @@
     },
     "/finance/cashbox/cards/{id}/make-default": {
       "post": {
-        "description": "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400.",
+        "description": "Zv3MLn0a — kassa qulfi ostida, pul harakatlanmaydi: eski Asosiy karta nomli bo'lib joriy qoldig'ini saqlaydi, tanlangan karta Asosiy bo'ladi (karta tanlanmagan to'lovlar endi shu kartaga). Σ kartalar == balance_card o'zgarmaydi. Arxivlangan karta yoki Asosiy karta balansi manfiy (moslik buzilgan) → 400. 63HO6cBU: filial kassasi kartasi — 400 (filialda karta amallari yo'q).",
         "operationId": "FinanceGatewayController_makeCashboxCardDefault",
         "parameters": [
           {
@@ -12060,7 +12133,7 @@
     },
     "/finance/cashbox/cards/transfer": {
       "post": {
-        "description": "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi o'tkazma yozmaydi.",
+        "description": "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi o'tkazma yozmaydi. 63HO6cBU: filial kassasi kartalari — 400 (filialda karta amallari yo'q).",
         "operationId": "FinanceGatewayController_transferCashboxCards",
         "parameters": [
           {
@@ -12112,7 +12185,7 @@
     },
     "/finance/cashbox/cards/convert": {
       "post": {
-        "description": "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi konvertatsiya yozmaydi.",
+        "description": "Idempotency-Key sarlavhasi bilan takroriy so'rov ikkinchi konvertatsiya yozmaydi. 63HO6cBU: filial kassasi kartasi — 400 (filialda karta amallari yo'q).",
         "operationId": "FinanceGatewayController_convertCashboxCard",
         "parameters": [
           {
@@ -12225,7 +12298,7 @@
     },
     "/finance/cashbox/expense-categories": {
       "get": {
-        "description": "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
+        "description": "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladiganlar (superadmin, admin) ko'radi; menejer — 403 (63HO6cBU). `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
         "operationId": "FinanceGatewayController_listCashboxExpenseCategories",
         "parameters": [
           {
@@ -12253,8 +12326,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       },
       "post": {
@@ -12582,50 +12654,6 @@
           }
         ],
         "summary": "Find salary by user id",
-        "tags": [
-          "Finance"
-        ],
-        "x-roles": [
-          "superadmin",
-          "admin"
-        ]
-      }
-    },
-    "/finance/operator-payments": {
-      "post": {
-        "operationId": "FinanceGatewayController_createOperatorPayment",
-        "parameters": [
-          {
-            "name": "idempotency-key",
-            "required": false,
-            "in": "header",
-            "description": "Har to'lov uchun bitta kalit (retry'da ayni kalit). Takroriy so'rov 200 va data.idempotent: true qaytaradi (FJVqcUTv).",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateOperatorPaymentRequestDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Record a payout to an operator",
         "tags": [
           "Finance"
         ],
@@ -19020,6 +19048,7 @@
     },
     "/transfer-batches/{id}/cancel": {
       "post": {
+        "description": "oP02jE2P — faqat hali jo'natilmagan (`PENDING`) paket bekor qilinadi. Ruxsat: superadmin, admin va paketni yig'gan (manba) filialning registratori yoki menejeri (yoki menejer daraxti); boshqasi — 403. 409 `data.reason = batch_in_transit` — paket jo'natilgan (`SENT`, yo'lda yoki qisman qabul qilingan): hech kimga, superadmin va adminga ham bekor qilinmaydi (`details: { batch_id, status }`). 400 `batch_received` — qabul qilingan paket, 400 `batch_already_cancelled` — allaqachon bekor qilingan, 400 `batch_not_cancellable` — boshqa holat. 400 — sabab (`reason`) 10 belgidan qisqa. Muvaffaqiyatda FORWARD paket buyurtmalari paketdan yechilib `new` holatiga qaytadi.",
         "operationId": "BranchGatewayController_cancelTransferBatch",
         "parameters": [
           {
@@ -23325,6 +23354,230 @@
         ]
       }
     },
+    "/ai/config": {
+      "get": {
+        "description": "`data` = AiConfigView (openapi-fragment v0.2). Kalit qiymati yoki shifrmatni HECH QACHON qaytmaydi. `AI_CONFIG_UI_ENABLED=false` da ham ishlaydi (faqat ko‘rish; `key_locked_reason: feature_off`). `key_wrap` — brauzer kalitni muhrlaydigan ai-service ochiq kaliti (yozish mumkin bo‘lmasa null).",
+        "operationId": "AiConfigGatewayController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI kalit va modellar: sozlama ko‘rinishi (faqat superadmin)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key": {
+      "put": {
+        "description": "Brauzer `{api_key, uid, nonce}` ni `key_wrap` bilan muhrlaydi (AiKeyEnvelope). Bepul tekshiruv (`GET /v1/models`) → shifrlab saqlash; audit `ai.key.add|replace`. Xatolar: 400 AI_KEY_FORMAT / AI_KEY_ADMIN_KEY / AI_KEY_OAUTH_TOKEN / AI_KEY_WRAP_INVALID / AI_CONFIG_INVALID {field}; 403 AI_CONFIG_UI_DISABLED / AI_CONFIG_NOT_ALLOWED / AI_CONFIG_UNSIGNED / AI_STEP_UP_REQUIRED; 409 AI_CONFIG_CONFLICT {version} / AI_KEY_SAME / AI_KEY_WRAP_STALE; 422 AI_KEY_REJECTED / AI_KEY_FORBIDDEN / AI_KEY_BAD_REQUEST / AI_KEY_BILLING; 429 AI_KEY_ATTEMPTS_EXCEEDED / AI_KEY_UPSTREAM_RATE_LIMITED {retry_after_seconds}; 502 AI_KEY_VERIFY_UNAVAILABLE; 503 AI_KEY_STORAGE_UNAVAILABLE / AI_CONFIG_EXPIRED; 504 (kodsiz) — hech narsa o‘zgarmagan. Javob — yangilangan AiConfigView.",
+        "operationId": "AiConfigGatewayController_setKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiKeySetDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Anthropic kalitini qo‘shish yoki almashtirish (muhrlangan)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/verify": {
+      "post": {
+        "description": "UI kaliti (yoki u yo‘q bo‘lsa server kaliti) `GET /v1/models` bilan tekshiriladi; aniq rad ham 200 — natija `verify.state` da. Audit `ai.key.verify`. Step-up talab qilinmaydi. 404 AI_KEY_NONE; 429 AI_KEY_ATTEMPTS_EXCEEDED.",
+        "operationId": "AiConfigGatewayController_verifyKey",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ishlatilayotgan kalitni qayta tekshirish (bepul)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/restore-previous": {
+      "post": {
+        "description": "Faol ↔ oldingi almashadi. 404 AI_KEY_NO_PREVIOUS; 409 AI_CONFIG_CONFLICT; 422/429/502 — tekshiruv natijasi; 503 AI_KEY_STORAGE_UNAVAILABLE / AI_CONFIG_EXPIRED. Audit `ai.key.restore`.",
+        "operationId": "AiConfigGatewayController_restoreKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiVersionedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Oldingi kalitga qaytarish (qayta tekshiruv bilan)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/deactivate": {
+      "post": {
+        "description": "Faol → oldingi; eski oldingisi o‘chiriladi (shifrmatn yo‘q qilinadi). Shifr kalitisiz ham ishlaydi — bir bosishda tiklash. Anthropic’da kalitni bekor QILMAYDI. 404 AI_KEY_NONE; 409 AI_CONFIG_CONFLICT; 400 AI_CONFIG_INVALID {field:\"reason\"}. Audit `ai.key.deactivate`.",
+        "operationId": "AiConfigGatewayController_deactivateKey",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiDeactivateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Faol UI kalitini o‘chirish (server kaliti ishlaydi yoki AI o‘chadi)",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/key/previous": {
+      "delete": {
+        "description": "Faqat jonli bazadan (WAL/zaxiralarda muddati tugaguncha qoladi). Anthropic’da bekor QILMAYDI. 404 AI_KEY_NO_PREVIOUS; 409 AI_CONFIG_CONFLICT. Audit `ai.key.forget`.",
+        "operationId": "AiConfigGatewayController_forgetPrevious",
+        "parameters": [
+          {
+            "name": "version",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Oldingi kalit shifrmatnini o‘chirish",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/ai/config/history": {
+      "get": {
+        "description": "`data` = `{items[{id, action, created_at, actor, details, reason, context{ip, device}}], next_cursor}`. Eng yangisi tepada; tizim qatorlari (rad etilgan urinish, runtime xatosi) ham.",
+        "operationId": "AiConfigGatewayController_history",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kalit va model o‘zgarishlari tarixi",
+        "tags": [
+          "AI config"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
     "/ai-usage/dashboard": {
       "get": {
         "operationId": "AiUsageGatewayController_dashboard",
@@ -23686,7 +23939,98 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Nishonlar va banner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "alerts": {
+                          "type": "object",
+                          "properties": {
+                            "new": {
+                              "type": "integer"
+                            },
+                            "open": {
+                              "type": "integer"
+                            },
+                            "critical": {
+                              "type": "integer"
+                            },
+                            "critical_open": {
+                              "type": "integer"
+                            },
+                            "critical_rule_keys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "R1",
+                                  "R2",
+                                  "R3",
+                                  "R4",
+                                  "R5",
+                                  "R6",
+                                  "R7",
+                                  "R8"
+                                ]
+                              }
+                            },
+                            "critical_open_rule_keys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "R1",
+                                  "R2",
+                                  "R3",
+                                  "R4",
+                                  "R5",
+                                  "R6",
+                                  "R7",
+                                  "R8"
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        "recommendations": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "budget": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "usd_uzs_rate": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "generated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23758,8 +24102,9 @@
             "name": "from",
             "required": false,
             "in": "query",
-            "description": "`last_at` Toshkent kuni ≥ from (YYYY-MM-DD); from–to ≤ 366 kun",
+            "description": "`last_at` Toshkent kuni ≥ from (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000); from–to ≤ 366 kun",
             "schema": {
+              "format": "date",
               "example": "2026-10-01",
               "type": "string"
             }
@@ -23768,8 +24113,9 @@
             "name": "to",
             "required": false,
             "in": "query",
-            "description": "`last_at` Toshkent kuni ≤ to (YYYY-MM-DD)",
+            "description": "`last_at` Toshkent kuni ≤ to (YYYY-MM-DD, aniq kalendar kuni, yil ≥ 2000)",
             "schema": {
+              "format": "date",
               "example": "2026-10-31",
               "type": "string"
             }
@@ -23778,7 +24124,7 @@
             "name": "q",
             "required": false,
             "in": "query",
-            "description": "Sarlavha / obyekt nomi (ILIKE), ≤ 100",
+            "description": "Sarlavha / obyekt nomi (ILIKE), ≤ 100. Boshqaruv belgilari (\\t, \\n, \\r dan tashqari) → 400.",
             "schema": {
               "maxLength": 100,
               "type": "string"
@@ -23837,7 +24183,216 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Ro‘yxat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "id",
+                              "rule_key",
+                              "severity",
+                              "status",
+                              "title",
+                              "branch",
+                              "subject",
+                              "headline_amount",
+                              "facts",
+                              "occurrences",
+                              "first_at",
+                              "last_at",
+                              "first_fact_at",
+                              "last_fact_at",
+                              "explanation_status",
+                              "reopened_from_id"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "rule_key": {
+                                "type": "string",
+                                "enum": [
+                                  "R1",
+                                  "R2",
+                                  "R3",
+                                  "R4",
+                                  "R5",
+                                  "R6",
+                                  "R7",
+                                  "R8"
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "critical",
+                                  "warning"
+                                ]
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "new",
+                                  "seen",
+                                  "resolved",
+                                  "dismissed"
+                                ]
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "branch": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "subject": {
+                                "type": "object",
+                                "required": [
+                                  "kind",
+                                  "id",
+                                  "name"
+                                ],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "branch",
+                                      "courier",
+                                      "market",
+                                      "cashbox",
+                                      "system"
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "headline_amount": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "facts": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "occurrences": {
+                                "type": "integer"
+                              },
+                              "first_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "last_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "first_fact_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "nullable": true
+                              },
+                              "last_fact_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "nullable": true
+                              },
+                              "explanation_status": {
+                                "type": "string",
+                                "enum": [
+                                  "none",
+                                  "pending",
+                                  "ready",
+                                  "failed"
+                                ]
+                              },
+                              "reopened_from_id": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        },
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "page": {
+                              "type": "integer"
+                            },
+                            "limit": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            },
+                            "totalPages": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "counts": {
+                          "type": "object",
+                          "properties": {
+                            "by_status": {
+                              "type": "object",
+                              "properties": {
+                                "new": {
+                                  "type": "integer"
+                                },
+                                "seen": {
+                                  "type": "integer"
+                                },
+                                "resolved": {
+                                  "type": "integer"
+                                },
+                                "dismissed": {
+                                  "type": "integer"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23884,7 +24439,365 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Tafsilot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "rule_key",
+                        "severity",
+                        "status",
+                        "title",
+                        "branch",
+                        "subject",
+                        "headline_amount",
+                        "facts",
+                        "occurrences",
+                        "first_at",
+                        "last_at",
+                        "first_fact_at",
+                        "last_fact_at",
+                        "explanation_status",
+                        "reopened_from_id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "rule_key": {
+                          "type": "string",
+                          "enum": [
+                            "R1",
+                            "R2",
+                            "R3",
+                            "R4",
+                            "R5",
+                            "R6",
+                            "R7",
+                            "R8"
+                          ]
+                        },
+                        "severity": {
+                          "type": "string",
+                          "enum": [
+                            "critical",
+                            "warning"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "new",
+                            "seen",
+                            "resolved",
+                            "dismissed"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "branch": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "subject": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "id",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "branch",
+                                "courier",
+                                "market",
+                                "cashbox",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "headline_amount": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "facts": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "occurrences": {
+                          "type": "integer"
+                        },
+                        "first_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "last_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "first_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "last_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_status": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "pending",
+                            "ready",
+                            "failed"
+                          ]
+                        },
+                        "reopened_from_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "rule": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string",
+                              "enum": [
+                                "R1",
+                                "R2",
+                                "R3",
+                                "R4",
+                                "R5",
+                                "R6",
+                                "R7",
+                                "R8"
+                              ]
+                            },
+                            "severity": {
+                              "type": "string",
+                              "enum": [
+                                "critical",
+                                "warning"
+                              ]
+                            },
+                            "thresholds": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        },
+                        "evidence": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "links": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "entity_id": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "primary": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        },
+                        "explanation_md": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "explanation_error": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "budget_exceeded",
+                            "ai_disabled",
+                            "error",
+                            null
+                          ]
+                        },
+                        "explanation_error_scope": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "advisor",
+                            "global",
+                            null
+                          ]
+                        },
+                        "explanation_retry_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_requested_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_poll_after_ms": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "explained_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolved_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "resolved_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolution_note": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reopened_from": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "resolved_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "history": {
+                          "type": "array",
+                          "description": "Faqat `?include=history` (≤ 50)",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "event": {
+                                "type": "string",
+                                "enum": [
+                                  "opened",
+                                  "occurred",
+                                  "seen",
+                                  "explained",
+                                  "resolved",
+                                  "dismissed"
+                                ]
+                              },
+                              "by": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "note": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23927,7 +24840,365 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "Yangilangan tafsilot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "rule_key",
+                        "severity",
+                        "status",
+                        "title",
+                        "branch",
+                        "subject",
+                        "headline_amount",
+                        "facts",
+                        "occurrences",
+                        "first_at",
+                        "last_at",
+                        "first_fact_at",
+                        "last_fact_at",
+                        "explanation_status",
+                        "reopened_from_id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "rule_key": {
+                          "type": "string",
+                          "enum": [
+                            "R1",
+                            "R2",
+                            "R3",
+                            "R4",
+                            "R5",
+                            "R6",
+                            "R7",
+                            "R8"
+                          ]
+                        },
+                        "severity": {
+                          "type": "string",
+                          "enum": [
+                            "critical",
+                            "warning"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "new",
+                            "seen",
+                            "resolved",
+                            "dismissed"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "branch": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "subject": {
+                          "type": "object",
+                          "required": [
+                            "kind",
+                            "id",
+                            "name"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "branch",
+                                "courier",
+                                "market",
+                                "cashbox",
+                                "system"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "headline_amount": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "facts": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "occurrences": {
+                          "type": "integer"
+                        },
+                        "first_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "last_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "first_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "last_fact_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_status": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "pending",
+                            "ready",
+                            "failed"
+                          ]
+                        },
+                        "reopened_from_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "rule": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string",
+                              "enum": [
+                                "R1",
+                                "R2",
+                                "R3",
+                                "R4",
+                                "R5",
+                                "R6",
+                                "R7",
+                                "R8"
+                              ]
+                            },
+                            "severity": {
+                              "type": "string",
+                              "enum": [
+                                "critical",
+                                "warning"
+                              ]
+                            },
+                            "thresholds": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        },
+                        "evidence": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "links": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "entity_id": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "primary": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        },
+                        "explanation_md": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "explanation_error": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "budget_exceeded",
+                            "ai_disabled",
+                            "error",
+                            null
+                          ]
+                        },
+                        "explanation_error_scope": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "advisor",
+                            "global",
+                            null
+                          ]
+                        },
+                        "explanation_retry_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_requested_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "explanation_poll_after_ms": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "explained_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "seen_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolved_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "resolved_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "resolution_note": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reopened_from": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "resolved_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "history": {
+                          "type": "array",
+                          "description": "Faqat `?include=history` (≤ 50)",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "event": {
+                                "type": "string",
+                                "enum": [
+                                  "opened",
+                                  "occurred",
+                                  "seen",
+                                  "explained",
+                                  "resolved",
+                                  "dismissed"
+                                ]
+                              },
+                              "by": {
+                                "type": "object",
+                                "nullable": true,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                }
+                              },
+                              "note": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -23986,7 +25257,74 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Sozlamalar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "integer"
+                        },
+                        "rules": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "limits": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "telegram": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "budget": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "schedule": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "updated_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24018,7 +25356,74 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "To‘liq sozlamalar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "message",
+                    "data"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "integer"
+                        },
+                        "rules": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "limits": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "telegram": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "budget": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "schedule": {
+                          "type": "object",
+                          "nullable": true
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "updated_by": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -24515,7 +25920,7 @@
     },
     "/delivery/tariffs": {
       "get": {
-        "description": "`data.current` — `{ city, center, address }` hozir amaldagi versiya (`valid_from <= now()`, eng so'nggisi). `data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan).",
+        "description": "`data.current` — `{ city, center, address }` hozir amaldagi versiya (`valid_from <= now()`, eng so'nggisi). `data.versions` — barcha versiyalar, yangisi tepada (`is_current`, `is_scheduled` — kelajakda kuchga kiradigan, `is_cancelled` — bekor qilingan rejalashtirilgan versiya (B0ILd7YI): `cancelled_at`, `cancelled_by`, `cancelled_by_name`).",
         "operationId": "DeliveryPricingGatewayController_listTariffs",
         "parameters": [
           {
@@ -24592,6 +25997,49 @@
           }
         ],
         "summary": "Yangi tarif versiyasi (admin; eski versiya o`chirilmaydi)",
+        "tags": [
+          "Delivery pricing"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
+    "/delivery/tariffs/{id}/cancel": {
+      "post": {
+        "description": "B0ILd7YI. Faqat hali kuchga kirmagan (`valid_from` kelajakda, `is_scheduled: true`) versiya bekor qilinadi; qator o'chirilmaydi — `is_active: false`, `cancelled_at`/`cancelled_by` yoziladi, tarixda `is_cancelled: true` bo'lib qoladi. Hozirgi tarif o'zgarmaydi. Takror so`rov (vaqt tugagach qayta bosish) — 200, o`sha qator, `already_cancelled: true`, jurnal ikkinchi marta yozilmaydi. Amal activity-log'ga yoziladi (`logistics.delivery_tariff_cancelled`). Xatolar: 400 (id), 404 (versiya yo'q), 409 (allaqachon kuchga kirgan yoki nofaol — o'zgartirish uchun yangi versiya yarating).",
+        "operationId": "DeliveryPricingGatewayController_cancelTariff",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Tarif versiyasi ID",
+            "schema": {
+              "example": "12",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryTariffCancelResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rejalashtirilgan tarif versiyasini bekor qilish (admin; faqat kelajakdagi)",
         "tags": [
           "Delivery pricing"
         ],
@@ -24866,6 +26314,224 @@
           "superadmin",
           "admin",
           "registrator",
+          "market"
+        ]
+      }
+    },
+    "/finance/operator-payments/balances": {
+      "get": {
+        "description": "F2qp6FtE. Marketning barcha o'chirilmagan operatorlari (faol va nofaol), ism tartibida emas — identity ro'yxati tartibida. `earned` — o'chirilmagan daromadlar (`GET operators/me/balance` bilan AYNI qoida), `paid` — o'chirilmagan va bekor qilinmagan to'lovlar (eski Elchi to'lovlari ham), `balance` = earned − paid (manfiy — ortiqcha to'langan). `totals` — yig'indi.",
+        "operationId": "OperatorPaymentGatewayController_balances",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: OperatorBalancesDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorBalancesDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Market emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: har operator — «Ishlab topdi / To'landi / Qoldiq»",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/finance/operator-payments": {
+      "get": {
+        "description": "F2qp6FtE. Yangisi tepada (to'lov sanasi, keyin id). Shu market yozganlari + uning operatorlariga Elchi eski yo'lda (Asosiy kassadan, `source: elchi`) yozganlari. Bekor qilinganlar ham chiqadi (`status: cancelled`, sabab bilan). `operator_id` — faqat o'z operatori (begona — 404).",
+        "operationId": "OperatorPaymentGatewayController_list",
+        "parameters": [
+          {
+            "name": "operator_id",
+            "required": false,
+            "in": "query",
+            "description": "Faqat shu operator (shu marketning operatori)",
+            "schema": {
+              "example": "41",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1…100, sukut 20",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: OperatorPaymentListDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorPaymentListDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: operatorlarga to'lovlar tarixi",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      },
+      "post": {
+        "description": "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
+        "operationId": "OperatorPaymentGatewayController_record",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Har mantiqiy to'lov uchun bitta kalit (1-255 belgi); timeout'dan keyin qayta yuborishda — o'sha kalit.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordOperatorPaymentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "{ statusCode: 201, message, data: OperatorPaymentViewDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorPaymentViewDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          },
+          "409": {
+            "description": "Idempotency-Key boshqa to`lov uchun ishlatilgan"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market o'z operatoriga to'lovni yozadi (Elchi kassasiz)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/finance/operator-payments/{id}/cancel": {
+      "post": {
+        "description": "F2qp6FtE. Qator o'chirilmaydi: `status: cancelled`, `cancelled_at`, `cancel_reason`; «To'landi» ga kirmaydi. Faqat shu market yozgan yozuv (begona yoki yo'q — 404); eski Elchi (Asosiy kassadan) yozuvi — 409. Takroriy bekor — 200 (`idempotent: true`). Kassaga tegmaydi. Jurnal: `finance.operator_payment_cancelled`.",
+        "operationId": "OperatorPaymentGatewayController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "To'lov yozuvi ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelOperatorPaymentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode: 200, message, data: OperatorPaymentViewDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorPaymentViewDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "To'lov topilmadi yoki begona"
+          },
+          "409": {
+            "description": "Eski Elchi to'lovi — bekor qilinmaydi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: xato to'lov yozuvini bekor qilish (sabab bilan)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
           "market"
         ]
       }
@@ -26222,6 +27888,72 @@
           "Health"
         ],
         "x-roles": null
+      }
+    },
+    "/health/notification-bot": {
+      "get": {
+        "operationId": "NotificationBotHealthController_notificationBot",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationBotHealthResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bildirishnoma xizmati 3 s ichida javob bermadi yoki bog‘lanib bo‘lmadi (o‘zbekcha `message`)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Telegram bot holati va nosozlik sababi (faqat superadmin): `bot.error_kind` (token_rejected | timeout | network | telegram_error | unknown), `error_status`, `error_text` (≤ 200, token yashirilgan), `checked_at`, `restart_required`. Ochiq `/health/readiness` o‘zgarmagan.",
+        "tags": [
+          "Health"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
+      }
+    },
+    "/health/notification-bot/recheck": {
+      "post": {
+        "operationId": "NotificationBotHealthController_recheckNotificationBot",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationBotHealthResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bildirishnoma xizmati 5 s ichida javob bermadi yoki bog‘lanib bo‘lmadi (o‘zbekcha `message`)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Telegram bot tokenini hozir qayta tekshirish (faqat superadmin): getMe ko‘pi bilan 3,5 s kutiladi, javob — yangi holat + `rechecked`. Token rad etilgan (401/404) bo‘lsa tekshirilmaydi: `rechecked: false`, `bot.restart_required: true` (yangi token bilan restart kerak).",
+        "tags": [
+          "Health"
+        ],
+        "x-roles": [
+          "superadmin"
+        ]
       }
     },
     "/client-errors": {
@@ -28368,7 +30100,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun; bo‘sh satr — berilmagan), aks holda 400."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -28423,15 +30155,17 @@
           "operator_id": {
             "type": "string",
             "example": "26",
-            "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan). Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» (superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11)."
+            "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan). Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART, aks holda 400 «Tanlangan operator bu marketga tegishli emas yoki faol emas» (superadmin/admin ham tekshiriladi). To'g'ri bo'lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e'tiborsiz). Market operatori faqat o'zini tanlay oladi (boshqasi — 400). Berilmasa — `operator` matni; market operatori — o'zi; registrator va boshqalar — operatorsiz (null, 2026-11-11). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa), aks holda 400."
           },
           "operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234567",
             "description": "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; `require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi."
           },
           "secondary_operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234568",
             "description": "`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi."
           },
@@ -28681,6 +30415,11 @@
           "customer": {
             "$ref": "#/components/schemas/AiConfirmCustomerDto"
           },
+          "customer_id": {
+            "type": "string",
+            "example": "120",
+            "description": "Mavjud mijoz ID si (GET /customers/suggest taklifidan). Egalik POST /orders `customer_id` bilan AYNI: superadmin/admin — istalgan mijoz; boshqa rollar — shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi faqat `customer.phone_number` kartadagi asosiy telefonga TO'LIQ mos kelsa. Tasdiqlanmasa (boshqa rollar uchun: begona yoki mavjud bo‘lmagan mijoz; superadmin/admin — id tekshirilmaydi, POST /orders kabi) SHU buyurtma yaratilmaydi: `ok: false, code: \"create_failed\"`, `reason` — POST /orders 403 matni («customer_id qabul qilinmadi: …»); tekshiruv xizmati (order/identity) javob bermasa — `code: \"validation_unavailable\"` («Mijozni tekshirib bo‘lmadi …», buyurtma ANIQ yaratilmagan). Partiyaning qolgani yaratiladi. Qabul qilinsa buyurtma SHU kartaga yoziladi: `customer` dagi ism/telefon kartaga yozilmaydi (AI o‘qigan telefon saqlanmaydi — kartadagi telefon ishlatiladi; yangi karta ham ochilmaydi); `customer.address`/`extra_number` va `address` — buyurtmaning o'z ustunlariga; kartani yangilash faqat `update_customer_card: true` bilan (POST /orders kabi). `customer` obyekti baribir MAJBURIY (dublikat imzosi va tekshiruvlar uchun). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun), aks holda 400 (DTO). Berilmasa — avvalgi xulq (telefon bo‘yicha)."
+          },
           "district_id": {
             "type": "string",
             "example": "12",
@@ -28694,14 +30433,26 @@
           "draft_id": {
             "type": "string",
             "example": "3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c",
-            "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun."
+            "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun. MAJBURIY (AI ack, 2026-11-15): yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED` (`indexes`). Shu market uchun topilmasa — 400 `AI_DRAFT_NOT_FOUND`."
           },
           "ai_item_index": {
             "type": "number",
             "example": 0,
             "minimum": 0,
             "maximum": 29,
-            "description": "Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG."
+            "description": "Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`), audit (edited_fields) va AI tekshiruvi tasdig‘i uchun. MAJBURIY: yo‘q bo‘lsa 400 `AI_DRAFT_REQUIRED`; saqlangan preview’da bunday `index` bo‘lmasa 400 `AI_DRAFT_ITEM_NOT_FOUND` (`indexes`). Qayta yuborishda O‘ZGARTIRMANG."
+          },
+          "ack_checks": {
+            "example": [
+              "district_low_confidence",
+              "price_check"
+            ],
+            "maxItems": 10,
+            "description": "Operator tasdiqlagan bloklovchi AI tekshiruvlari (`district_low_confidence`, `price_check`). Server talab qilinadigan kodlarni ai-parse paytida SAQLANGAN preview’dan oladi (mijoz yuborgan `checks` ga ishonilmaydi). Kerakli kod yo‘q bo‘lsa — butun so‘rov 409 `CHECKS_NOT_ACKNOWLEDGED` (`missing`, `orders[{index, missing}]`), hech narsa yaratilmaydi. Operator tuman (`district_id`) ni o‘zgartirsa `district_low_confidence`, summani (`total_price`) o‘zgartirsa `price_check` talab qilinmaydi. Boshqa (yumshoq) kodlar va ortiqcha kodlar e’tiborsiz qoldiriladi.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "items": {
             "maxItems": 50,
@@ -28743,7 +30494,18 @@
             "type": "string",
             "example": "sevinch",
             "maxLength": 100,
-            "description": "Operator nomi — FAQAT matn (varchar). operator_id ga HECH QACHON bog‘lanmaydi."
+            "description": "Operator nomi — FAQAT matn (varchar); matndan operator_id HECH QACHON aniqlanmaydi. `operator_id` berilsa bu matn e’tiborsiz — buyurtmaga tanlangan operator ismi yoziladi (POST /orders bilan bir xil)."
+          },
+          "operator_id": {
+            "type": "string",
+            "example": "26",
+            "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan) — POST /orders `operator_id` bilan AYNI qoida. Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART (superadmin/admin ham tekshiriladi); market operatori faqat o'zini tanlay oladi. Aks holda SHU buyurtma yaratilmaydi: natijada `ok: false, code: \"create_failed\"`, `reason` — POST /orders 400 matni («Tanlangan operator bu marketga tegishli emas yoki faol emas» yoki «Market operatori faqat o‘zini operator qilib tanlay oladi»); partiyadagi boshqa buyurtmalar yaratiladi. Operatorni tekshirib bo‘lmasa (identity javob bermadi) — `code: \"validation_unavailable\"`, buyurtma ANIQ yaratilmagan, qayta yuboring. To‘g‘ri bo‘lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e’tiborsiz; AI auditida ham shu ism). Musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa) — aks holda 400 (DTO). Bo‘sh satr — tanlanmagan. Berilmasa — avvalgi xulq (`operator` matni; market operatori — o‘zi; qolganlar — operatorsiz). ⚠️ Faqat odam select’da tanlaydi: AI `operator` matnidan operator_id ni AVTOMATIK tanlamang; market operatori roli uni yubormasin (u baribir o‘zi)."
+          },
+          "operator_phone": {
+            "type": "string",
+            "nullable": true,
+            "example": "+998901234567",
+            "description": "Operator raqami — POST /orders `operator_phone` bilan AYNI qoida (normallashtiriladi: \"90 123 45 67\", \"0901234567\" → +998XXXXXXXXX; noto‘g‘ri shakl — 400, bo‘sh satr — yuborilmagan). Market `default_operator_phone` bo‘lsa u 1-raqam, bu esa 2-raqam (bir xil bo‘lsa takrorlanmaydi); `require_operator_phone=true` va default yo‘q bo‘lsa MAJBURIY va 1-raqam bo‘ladi — yuborilmasa SHU buyurtma `ok: false, code: \"create_failed\"`, `reason` — POST /orders 400 matni («Operator telefon raqami majburiy…»)."
           },
           "fulfillment": {
             "type": "string",
@@ -28784,6 +30546,8 @@
         "required": [
           "customer",
           "district_id",
+          "draft_id",
+          "ai_item_index",
           "items",
           "where_deliver"
         ]
@@ -28888,7 +30652,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01)."
+            "description": "Customer ID (as string/bigint). Superadmin/admin — istalgan mijoz. POST /orders da boshqa rollar (market, operator, filial xodimi) — GET /customers/suggest qoidasi (hiqRNhkI, WCuZzUCv): shu marketda buyurtmasi bor mijoz, yoki boshqa market mijozi — faqat `customer.phone_number` kartadagi telefonga TO'LIQ mos kelsa. Tasdiqlanmagan id: `customer` obyekti bo'lsa u ishlatiladi (telefon bo'yicha), bo'lmasa 403. POST /orders/external da faqat superadmin/admin (fix3 RBAC-01). Format: musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun; bo‘sh satr — berilmagan), aks holda 400."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -28941,12 +30705,14 @@
             "description": "Bo'sh bo'lsa market operatori uchun server uning ismini yozadi (VRyloH62); registrator — yozilmaydi (2026-11-11)"
           },
           "operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234567",
             "description": "Formadagi operator raqami. Market `default_operator_phone` bo'lsa u 1-raqam, bu esa 2-raqam; `require_operator_phone=true` va default yo'q bo'lsa MAJBURIY (yo'q → 400) va 1-raqam bo'ladi."
           },
           "secondary_operator_phone": {
-            "type": "object",
+            "type": "string",
+            "nullable": true,
             "example": "+998901234568",
             "description": "`operator_phone` sinonimi (BeePost bilan moslik) — `operator_phone` bo‘lmasa shu olinadi."
           },
@@ -30676,14 +32442,23 @@
           },
           "balance": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           },
           "balance_cash": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           },
           "balance_card": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           }
         },
@@ -30829,6 +32604,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 150000
           },
           "operation_type": {
@@ -30906,6 +32684,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 250000
           },
           "payment_method": {
@@ -30915,7 +32696,8 @@
               "click",
               "click_to_market"
             ],
-            "example": "cash"
+            "example": "cash",
+            "description": "63HO6cBU (P0) — superadmin/admin (HQ kuryeridan MAIN'ga) uchun MAJBURIY (yo'q → 400). MENEJER uchun YUBORILMAYDI: filial kassasi naqd/kartaga ajralmaydi, server o'zi `cash` yozadi (eski FE yuborgan `cash`/`click` e'tiborsiz; `click_to_market` → 400)."
           },
           "market_id": {
             "type": "string",
@@ -30932,13 +32714,18 @@
           "card_id": {
             "type": "string",
             "example": "3",
-            "description": "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`; superadmin/admin — asosiy kassa, menejer — o'z filiali kassasi `?branch_id` siz). Faqat `click` to'lovida (aks holda 400); berilmasa — Asosiy karta. Boshqa kassa (filial) kartasi → 403."
+            "description": "Zv3MLn0a — pul QABUL QILUVCHI kassaning kartasi ID si (`GET /finance/cashbox/cards`, asosiy kassa). Faqat superadmin/admin'ning `click` qabulida (aks holda 400); berilmasa — Asosiy karta. 63HO6cBU: MENEJER yuborsa — e'tiborsiz (filial kassasida karta yo'q)."
+          },
+          "branch_card_id": {
+            "type": "string",
+            "example": "7",
+            "deprecated": true,
+            "description": "63HO6cBU (P0) — ESKIRGAN: filial kassasi naqd/kartaga ajralmaydi. Eski FE yuborsa 400 emas — jimgina e'tiborsiz."
           }
         },
         "required": [
           "courier_id",
-          "amount",
-          "payment_method"
+          "amount"
         ]
       },
       "CourierPaymentAckRequestDto": {
@@ -30971,6 +32758,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 500000
           },
           "payment_method": {
@@ -31022,6 +32812,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 250000
           },
           "payment_method": {
@@ -31044,7 +32837,7 @@
           "source_user_id": {
             "type": "string",
             "example": "7",
-            "description": "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul filial kassasining va asosiy kassaning balance_card idan harakatlanadi. Naqd (cash) to'lovda e'tiborga olinmaydi."
+            "description": "O'tkazma manbasi (click): o'tkazmani qilgan xodim ID si. Faqat audit — tarixda `transfer_source_user_id` bo'lib saqlanadi; pul filial kassasining JAMI qoldig'idan (63HO6cBU) va asosiy kassaning balance_card idan harakatlanadi. Naqd (cash) to'lovda e'tiborga olinmaydi."
           },
           "card_id": {
             "type": "string",
@@ -31054,12 +32847,13 @@
           "branch_card_id": {
             "type": "string",
             "example": "7",
-            "description": "Zv3MLn0a — pul chiqadigan FILIAL kassasining kartasi ID si (`GET /finance/cashbox/cards?branch_id=`). Faqat `click` to'lovida; berilmasa — filialning Asosiy kartasi. Boshqa kassa kartasi → 403, mablag' yetmasa 400."
+            "description": "63HO6cBU (P0) — ESKIRGAN: filial kassasi naqd/kartaga ajralmaydi, pul filialning JAMI qoldig'idan yechiladi. Yuborilsa — jimgina e'tiborsiz (400 emas).",
+            "deprecated": true
           },
           "market_id": {
             "type": "string",
             "example": "2002",
-            "description": "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (karta bo'lagi) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda karta (`card_id` / `branch_card_id` → 400) yo'q; chek — «O'tkazma» bilan bir xil (`hq_transfer` sozlamasi, `receipt_id`). Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin."
+            "description": "«Marketga o'tkazma» (`payment_method: click_to_market`) da MAJBURIY (yo'q → 400): pul o'tkazilgan market ID si. Filial kassasi (jami) −X, asosiy kassa +X/−X (sof 0), market kassasi −X; daftar — `branch_to_hq` va `hq_to_market`. Boshqa usulda berilsa 400. Bu usulda HQ kartasi (`card_id` → 400) yo'q, `branch_card_id` e'tiborsiz; chek — «O'tkazma» bilan bir xil (`hq_transfer` sozlamasi, `receipt_id`). Filial «Kassa qarzga ishlaydi» yoqilgan bo'lsa filial kassasi minusga tushishi mumkin."
           }
         },
         "required": [
@@ -31073,6 +32867,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": -50000,
             "description": "Signed amount: positive = income, negative = expense. Match the sign to source_type."
           },
@@ -31141,6 +32938,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 150000
           },
           "type": {
@@ -31182,6 +32982,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 150000
           },
           "type": {
@@ -31249,6 +33052,9 @@
           },
           "new_amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 450000,
             "description": "Yangi summa (> 0, ko'pi bilan 2 kasr). Eskisiga teng — 409 SAME_AMOUNT; `max` dan katta — 409 AMOUNT_EXCEEDS."
           }
@@ -31269,10 +33075,16 @@
           },
           "opening_balance_cash": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 100000
           },
           "opening_balance_card": {
             "type": "number",
+            "minimum": -10000000000000,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 0
           },
           "comment": {
@@ -31291,6 +33103,9 @@
           },
           "entered_balance": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1250000,
             "description": "Kassir kiritgan qoldiq (so'm)"
           },
@@ -31328,11 +33143,17 @@
           },
           "closing_balance_cash": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 120000,
             "description": "Sanab topshirilgan naqd (MAJBURIY, ega S5). discrepancy_cash = shu − expected_balance_cash"
           },
           "closing_balance_card": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 50000,
             "description": "Sanab topshirilgan karta qoldig'i. Yuborilsa discrepancy_card hisoblanadi"
           },
@@ -31367,6 +33188,9 @@
           },
           "entered_balance": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1250000,
             "description": "Qoralama: kassir kiritgan qoldiq (yopishda qayta yuboriladi)"
           },
@@ -31390,6 +33214,9 @@
         "properties": {
           "entered_balance": {
             "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1250000,
             "description": "Karta qoldig'i (so'm), MAJBURIY, ≥ 0. Farq = shu qiymat − avto-yopish paytidagi snapshot `expected_balance`"
           },
@@ -31846,6 +33673,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 500000
           },
           "comment": {
@@ -31879,6 +33709,9 @@
           },
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 500000
           },
           "comment": {
@@ -31969,10 +33802,16 @@
           },
           "salary_amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 3000000
           },
           "have_to_pay": {
             "type": "number",
+            "minimum": -999999999999.99,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 3000000
           },
           "payment_day": {
@@ -31994,10 +33833,16 @@
           },
           "salary_amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 3500000
           },
           "have_to_pay": {
             "type": "number",
+            "minimum": -999999999999.99,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 1000000
           },
           "payment_day": {
@@ -32006,39 +33851,14 @@
           },
           "increase_have_to_pay_by": {
             "type": "number",
+            "minimum": -999999999999.99,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01,
             "example": 250000
           }
         },
         "required": [
           "user_id"
-        ]
-      },
-      "CreateOperatorPaymentRequestDto": {
-        "type": "object",
-        "properties": {
-          "operator_id": {
-            "type": "string",
-            "example": "42",
-            "description": "Operator user id (bigint string)"
-          },
-          "market_id": {
-            "type": "string",
-            "example": "7",
-            "description": "Market id (bigint string)"
-          },
-          "amount": {
-            "type": "number",
-            "example": 50000,
-            "description": "Payout amount"
-          },
-          "note": {
-            "type": "string",
-            "example": "Oylik komissiya to`lovi"
-          }
-        },
-        "required": [
-          "operator_id",
-          "amount"
         ]
       },
       "AudienceSegmentDto": {
@@ -34115,6 +35935,9 @@
         "properties": {
           "amount": {
             "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000000000000,
+            "multipleOf": 0.01,
             "example": 1500000,
             "description": "Total amount the provider remitted"
           },
@@ -34573,7 +36396,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0.01
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "invested_at": {
             "type": "string",
@@ -34597,7 +36422,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0.01
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "invested_at": {
             "type": "string",
@@ -34627,7 +36454,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0.01
+            "minimum": 0.01,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "invested_at": {
             "type": "string",
@@ -34646,7 +36475,9 @@
           },
           "amount": {
             "type": "number",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "percentage": {
             "type": "number",
@@ -34678,7 +36509,9 @@
         "properties": {
           "amount": {
             "type": "number",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 999999999999.99,
+            "multipleOf": 0.01
           },
           "percentage": {
             "type": "number",
@@ -36931,6 +38764,109 @@
           "reason"
         ]
       },
+      "AiKeyEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "v": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "kid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "description": "key_wrap.kid"
+          },
+          "alg": {
+            "type": "string",
+            "enum": [
+              "RSA-OAEP-256+A256GCM"
+            ]
+          },
+          "ek": {
+            "type": "string",
+            "minLength": 400,
+            "maxLength": 700,
+            "description": "base64url"
+          },
+          "iv": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{16}$"
+          },
+          "ct": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 1024,
+            "description": "base64url"
+          }
+        },
+        "required": [
+          "v",
+          "kid",
+          "alg",
+          "ek",
+          "iv",
+          "ct"
+        ]
+      },
+      "AiKeySetDto": {
+        "type": "object",
+        "properties": {
+          "key_envelope": {
+            "description": "Brauzerda (WebCrypto) ai-service ochiq kaliti bilan muhrlangan kalit. Ochiq kalit HECH QACHON yuborilmaydi.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiKeyEnvelopeDto"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "Ixtiyoriy; sukut «Anthropic kaliti». Harf, raqam, bo'sh joy va . , _ ( ) ' ʻ ʼ -. Kalit o'xshash qiymat → 400 AI_CONFIG_INVALID {field:'label'}."
+          },
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          }
+        },
+        "required": [
+          "key_envelope",
+          "version"
+        ]
+      },
+      "AiVersionedDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          }
+        },
+        "required": [
+          "version"
+        ]
+      },
+      "AiDeactivateDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "minimum": 1,
+            "description": "GET /ai/config → version.key"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "version"
+        ]
+      },
       "AiAssistantMessageDto": {
         "type": "object",
         "properties": {
@@ -37183,6 +39119,22 @@
             "type": "string",
             "nullable": true,
             "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
+          },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "(B0ILd7YI) Rejalashtirilgan versiya bekor qilingan vaqt; null — bekor qilinmagan"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (foydalanuvchi ID)"
+          },
+          "cancelled_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (ism; GET /delivery/tariffs va bekor qilish javobida)"
           }
         },
         "required": [
@@ -37583,6 +39535,22 @@
             "nullable": true,
             "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
           },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "(B0ILd7YI) Rejalashtirilgan versiya bekor qilingan vaqt; null — bekor qilinmagan"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (foydalanuvchi ID)"
+          },
+          "cancelled_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (ism; GET /delivery/tariffs va bekor qilish javobida)"
+          },
           "is_current": {
             "type": "boolean",
             "description": "Hozir amaldagi versiya"
@@ -37590,6 +39558,10 @@
           "is_scheduled": {
             "type": "boolean",
             "description": "Kelajakda kuchga kiradi"
+          },
+          "is_cancelled": {
+            "type": "boolean",
+            "description": "(B0ILd7YI) Bekor qilingan rejalashtirilgan versiya — hech qachon kuchga kirmaydi (`is_active: false`)"
           }
         },
         "required": [
@@ -37601,7 +39573,8 @@
           "days_max",
           "valid_from",
           "is_current",
-          "is_scheduled"
+          "is_scheduled",
+          "is_cancelled"
         ]
       },
       "DeliveryTariffsListDataDto": {
@@ -37696,6 +39669,121 @@
           "extra_per_kg",
           "days_min",
           "days_max"
+        ]
+      },
+      "DeliveryTariffCancelledDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "2"
+          },
+          "tariff_id": {
+            "type": "string",
+            "enum": [
+              "city",
+              "center",
+              "address"
+            ]
+          },
+          "base_price": {
+            "type": "number",
+            "example": 40000
+          },
+          "extra_per_kg": {
+            "type": "number",
+            "example": 4000
+          },
+          "days_min": {
+            "type": "number",
+            "example": 1
+          },
+          "days_max": {
+            "type": "number",
+            "example": 2
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Kim yaratgan (ism; GET /delivery/tariffs da)"
+          },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "(B0ILd7YI) Rejalashtirilgan versiya bekor qilingan vaqt; null — bekor qilinmagan"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (foydalanuvchi ID)"
+          },
+          "cancelled_by_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "(B0ILd7YI) Kim bekor qilgan (ism; GET /delivery/tariffs va bekor qilish javobida)"
+          },
+          "is_current": {
+            "type": "boolean",
+            "description": "Hozir amaldagi versiya"
+          },
+          "is_scheduled": {
+            "type": "boolean",
+            "description": "Kelajakda kuchga kiradi"
+          },
+          "is_cancelled": {
+            "type": "boolean",
+            "description": "(B0ILd7YI) Bekor qilingan rejalashtirilgan versiya — hech qachon kuchga kirmaydi (`is_active: false`)"
+          },
+          "already_cancelled": {
+            "type": "boolean",
+            "description": "true — versiya avvalroq bekor qilingan edi (takror so`rov; jurnal ikkinchi marta yozilmaydi)"
+          }
+        },
+        "required": [
+          "id",
+          "tariff_id",
+          "base_price",
+          "extra_per_kg",
+          "days_min",
+          "days_max",
+          "valid_from",
+          "is_current",
+          "is_scheduled",
+          "is_cancelled",
+          "already_cancelled"
+        ]
+      },
+      "DeliveryTariffCancelResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Rejalashtirilgan tarif versiyasi bekor qilindi"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeliveryTariffCancelledDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
         ]
       },
       "DeliveryPricingSettingsRowDto": {
@@ -38103,6 +40191,301 @@
           "market_id",
           "courier_id",
           "parcel_count"
+        ]
+      },
+      "OperatorPaymentViewDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "301"
+          },
+          "operator_id": {
+            "type": "string",
+            "example": "41"
+          },
+          "operator_name": {
+            "type": "string",
+            "example": "Madina Xoliqova",
+            "nullable": true,
+            "description": "Operator ismi (o'chirilgan operatorda — null)"
+          },
+          "market_id": {
+            "type": "string",
+            "example": "12",
+            "nullable": true,
+            "description": "Yozgan market (eski Elchi yozuvlarida — null)"
+          },
+          "amount": {
+            "type": "number",
+            "example": 150000
+          },
+          "paid_at": {
+            "type": "string",
+            "example": "2026-11-18",
+            "description": "Toshkent kuni"
+          },
+          "note": {
+            "type": "string",
+            "example": "Oktabr komissiyasi",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "market",
+              "elchi"
+            ],
+            "description": "`market` — market o'zi yozgan (kassasiz); `elchi` — eski yo'l, Elchi xodimi yozgan (bekor qilib bo'lmaydi)."
+          },
+          "affects_cashbox": {
+            "type": "boolean",
+            "example": false,
+            "description": "Asosiy kassani o'zgartirganmi (faqat eski `elchi` yozuvlarida true)."
+          },
+          "recorded_by_role": {
+            "type": "string",
+            "example": "market",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-11-18T09:30:00.000Z"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "cancelled"
+            ]
+          },
+          "cancelled_at": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "cancelled_by_role": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "cancel_reason": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "can_cancel": {
+            "type": "boolean",
+            "example": true,
+            "description": "Shu market bekor qila oladimi (o'z yozuvi, hali faol)."
+          },
+          "idempotent": {
+            "type": "boolean",
+            "example": false,
+            "description": "Yozish/bekor qilish javobida: takroriy so'rov (ayni Idempotency-Key yoki allaqachon bekor) — true."
+          }
+        },
+        "required": [
+          "id",
+          "operator_id",
+          "operator_name",
+          "market_id",
+          "amount",
+          "paid_at",
+          "note",
+          "source",
+          "affects_cashbox",
+          "recorded_by_role",
+          "created_at",
+          "status",
+          "cancelled_at",
+          "cancelled_by_role",
+          "cancel_reason",
+          "can_cancel"
+        ]
+      },
+      "OperatorPaymentPaginationDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number",
+            "example": 42
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "limit": {
+            "type": "number",
+            "example": 20
+          },
+          "totalPages": {
+            "type": "number",
+            "example": 3
+          }
+        },
+        "required": [
+          "total",
+          "page",
+          "limit",
+          "totalPages"
+        ]
+      },
+      "OperatorPaymentListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorPaymentViewDto"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/OperatorPaymentPaginationDto"
+          }
+        },
+        "required": [
+          "items",
+          "pagination"
+        ]
+      },
+      "OperatorBalanceItemDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "41"
+          },
+          "operator_name": {
+            "type": "string",
+            "example": "Madina Xoliqova"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "example": "active"
+          },
+          "earned": {
+            "type": "number",
+            "example": 1250000,
+            "description": "«Ishlab topdi» — o`chirilmagan daromadlar (GET operators/me/balance bilan AYNI qoida)"
+          },
+          "paid": {
+            "type": "number",
+            "example": 900000,
+            "description": "«To`landi» — o`chirilmagan va bekor qilinmagan to`lovlar (eski Elchi to`lovlari ham)"
+          },
+          "balance": {
+            "type": "number",
+            "example": 350000,
+            "description": "«Qoldiq» = earned − paid. Manfiy — ortiqcha to`langan."
+          },
+          "payments_count": {
+            "type": "number",
+            "example": 3
+          },
+          "last_paid_at": {
+            "type": "string",
+            "example": "2026-11-18",
+            "nullable": true
+          }
+        },
+        "required": [
+          "operator_id",
+          "operator_name",
+          "status",
+          "earned",
+          "paid",
+          "balance",
+          "payments_count",
+          "last_paid_at"
+        ]
+      },
+      "OperatorBalanceTotalsDto": {
+        "type": "object",
+        "properties": {
+          "earned": {
+            "type": "number",
+            "example": 2500000
+          },
+          "paid": {
+            "type": "number",
+            "example": 1800000
+          },
+          "balance": {
+            "type": "number",
+            "example": 700000
+          }
+        },
+        "required": [
+          "earned",
+          "paid",
+          "balance"
+        ]
+      },
+      "OperatorBalancesDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorBalanceItemDto"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/OperatorBalanceTotalsDto"
+          }
+        },
+        "required": [
+          "items",
+          "totals"
+        ]
+      },
+      "RecordOperatorPaymentRequestDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "41",
+            "description": "Operator (shu marketning operatori; begona yoki yo`q — 404)"
+          },
+          "amount": {
+            "type": "number",
+            "example": 150000,
+            "description": "To'langan summa, so'm (> 0, ko'pi bilan 2 kasr). Qoldiqdan oshsa ham yoziladi — «Qoldiq» manfiy (ortiqcha to'langan) bo'ladi."
+          },
+          "paid_at": {
+            "type": "string",
+            "example": "2026-11-18",
+            "description": "To'lov sanasi (Toshkent kuni, `YYYY-MM-DD`). Berilmasa — bugun. Kelajak sanasi — 400."
+          },
+          "note": {
+            "type": "string",
+            "example": "Oktabr komissiyasi, naqd",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "operator_id",
+          "amount"
+        ]
+      },
+      "CancelOperatorPaymentRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "Summa xato kiritildi",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "Bekor qilish sababi (majburiy)."
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "PublicDeliveryTariffDto": {
@@ -40750,6 +43133,126 @@
           "product_name",
           "removed",
           "written_off"
+        ]
+      },
+      "NotificationBotDiagnosticsDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Bot tokeni sozlanganmi (placeholder emas)"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "webhook",
+              "polling",
+              "off"
+            ],
+            "example": "webhook",
+            "description": "Ish rejimi; token rad etilgan yoki transport to‘xtagan — `off`"
+          },
+          "healthy": {
+            "type": "boolean",
+            "nullable": true,
+            "example": false,
+            "description": "Oxirgi getMe natijasi: `true` — sog‘, `false` — o‘tmadi, `null` — hali tekshirilmagan"
+          },
+          "username": {
+            "type": "string",
+            "nullable": true,
+            "example": "elchi_bot",
+            "description": "Bot username (oxirgi muvaffaqiyatli getMe dan)"
+          },
+          "reason": {
+            "type": "string",
+            "example": "webhook (secret_token bilan)",
+            "description": "Rejim sababi yoki to‘xtash sababi (server matni)"
+          },
+          "checked_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "example": "2026-11-17T21:05:00.000Z",
+            "description": "Oxirgi token tekshiruvi vaqti (ISO). Davriy tekshiruv — har 5 daqiqada; `null` — hali tekshirilmagan (token yo‘q)"
+          },
+          "error_kind": {
+            "type": "string",
+            "enum": [
+              "token_rejected",
+              "timeout",
+              "network",
+              "telegram_error",
+              "unknown"
+            ],
+            "nullable": true,
+            "example": "network",
+            "description": "Oxirgi tekshiruv xatosi turi: `token_rejected` — Telegram tokenni rad etdi (401/404), qayta tekshirish befoyda, yangi token bilan restart kerak; `timeout` — Telegram javob bermadi; `network` — Telegram’ga ulanib bo‘lmadi (DNS, rad etildi, uzildi); `telegram_error` — Telegram boshqa xato qaytardi (`error_status` bilan, masalan 429, 5xx); `unknown` — kutilmagan xato. Sog‘ yoki tekshirilmagan — `null`"
+          },
+          "error_status": {
+            "type": "number",
+            "nullable": true,
+            "example": null,
+            "description": "Telegram HTTP statusi (401, 404, 429, 5xx …); javob kelmagan (timeout/network) yoki sog‘ — `null`"
+          },
+          "error_text": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "example": "Telegram getMe failed (0): fetch failed (ENOTFOUND)",
+            "description": "Qisqa texnik sabab (inglizcha server matni, ≤ 200 belgi, token yashirilgan). UI asosiy matnni `error_kind` dan oladi, buni «Texnik tafsilot» sifatida ko‘rsatadi"
+          },
+          "restart_required": {
+            "type": "boolean",
+            "example": false,
+            "description": "`true` — token rad etilgan: «Qayta tekshirish» getMe yurgizmaydi, yangi token bilan notification-service restart kerak"
+          }
+        },
+        "required": [
+          "enabled",
+          "mode",
+          "healthy",
+          "username",
+          "reason",
+          "checked_at",
+          "error_kind",
+          "error_status",
+          "error_text",
+          "restart_required"
+        ]
+      },
+      "NotificationBotHealthResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "example": "degraded",
+            "description": "notification-service holati (readiness bilan bir xil): `degraded` — token sozlangan, lekin getMe o‘tmagan"
+          },
+          "bot": {
+            "$ref": "#/components/schemas/NotificationBotDiagnosticsDto"
+          },
+          "rechecked": {
+            "type": "boolean",
+            "example": true,
+            "description": "Faqat `POST …/recheck` javobida: getMe shu so‘rovda yurgizildimi (`false` — token yo‘q yoki rad etilgan, `restart_required`)"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-11-17T21:05:01.000Z",
+            "description": "Javob vaqti"
+          }
+        },
+        "required": [
+          "status",
+          "bot",
+          "timestamp"
         ]
       },
       "ClientErrorReportDto": {
