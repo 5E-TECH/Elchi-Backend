@@ -3412,14 +3412,14 @@
    "full_address": "Samarqand, Navoiy ko'chasi 5, oluvchi Furqat T."
   },
   "seed": {
-   "sato": "1718233",
-   "reason": null
+   "sato": null,
+   "reason": "no_place_signal"
   },
   "full": {
-   "sato": "1718233",
-   "reason": null
+   "sato": null,
+   "reason": "no_place_signal"
   },
-  "note": "r7 S2 accepted residual: a district name that is also a person name before an initial (Furqat T.) is still a tuman marker"
+  "note": "r14 S1 (was r7 S2 accepted residual, AUTO 1718233): \"oluvchi Name T.\" is a person - neither a place nor a kind marker, the bare region word gets no AUTO"
  },
  {
   "q": {
@@ -3428,13 +3428,13 @@
   },
   "seed": {
    "sato": null,
-   "reason": "district_ambiguous"
+   "reason": "no_place_signal"
   },
   "full": {
    "sato": null,
-   "reason": "district_ambiguous"
+   "reason": "no_place_signal"
   },
-  "note": "r13 F3x (was r7 S2 residual): bare main name + person name \"Furqat T.\" in the same region - candidates, the person is not auto-selected (dev: candidates; head: AUTO 1730238)"
+  "note": "r14 S1 (was r13 F3x candidates): the recipient \"Furqat T.\" is dropped - no place signal left for the bare region word"
  },
  {
   "q": {
@@ -3443,14 +3443,14 @@
    "address": "Malik ko'chasi 5"
   },
   "seed": {
-   "sato": "1718233",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
-   "sato": "1718233",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
-  "note": "r7 S2 accepted residual: initial split across fields (full_address ends with \"Samarqand T.\")"
+  "note": "r14 S1 (was r7 S2 accepted residual, AUTO 1718233): a capital \"T.\" alone never gives AUTO and sets no kind - candidates (city + tuman)"
  },
  {
   "q": {
@@ -4261,7 +4261,7 @@
    "sato": null,
    "reason": "district_ambiguous"
   },
-  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/\u2116\" after a district name is a street - candidate only"
+  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/№\" after a district name is a street - candidate only"
  },
  {
   "q": {
@@ -4276,7 +4276,7 @@
    "sato": null,
    "reason": "district_ambiguous"
   },
-  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/\u2116\" after a district name is a street - candidate only"
+  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/№\" after a district name is a street - candidate only"
  },
  {
   "q": {
@@ -4291,12 +4291,12 @@
    "sato": null,
    "reason": "district_ambiguous"
   },
-  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/\u2116\" after a district name is a street - candidate only"
+  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/№\" after a district name is a street - candidate only"
  },
  {
   "q": {
    "region_name": "Toshkent shahri",
-   "full_address": "Toshkent sh., Sergeli ul. \u2116"
+   "full_address": "Toshkent sh., Sergeli ul. №"
   },
   "seed": {
    "sato": null,
@@ -4306,7 +4306,7 @@
    "sato": null,
    "reason": "district_ambiguous"
   },
-  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/\u2116\" after a district name is a street - candidate only"
+  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/№\" after a district name is a street - candidate only"
  },
  {
   "q": {
@@ -4321,7 +4321,7 @@
    "sato": null,
    "reason": "district_ambiguous"
   },
-  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/\u2116\" after a district name is a street - candidate only"
+  "note": "r11 B5: \"ul. korp./nomer/raqam/bino/№\" after a district name is a street - candidate only"
  },
  {
   "q": {
@@ -4525,14 +4525,14 @@
    "full_address": "Qarshi, Navoiy ko'chasi 5, Furqat T."
   },
   "seed": {
-   "sato": "1710224",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
   "full": {
-   "sato": "1710224",
-   "reason": null
+   "sato": null,
+   "reason": "district_ambiguous"
   },
-  "note": "r12 C3 guard: \"Name T.\" of a district OUTSIDE the locked region stays a place/kind signal - S2 accepted residual, same as case 241 (head behaviour kept)"
+  "note": "r14 S1 (was r12 C3 guard, AUTO 1710224): an out-of-region capital \"Name T.\" is no longer a place/kind signal - candidates"
  },
  {
   "q": {
@@ -5452,13 +5452,13 @@
   },
   "seed": {
    "sato": null,
-   "reason": "district_ambiguous"
+   "reason": "no_place_signal"
   },
   "full": {
    "sato": null,
-   "reason": "district_ambiguous"
+   "reason": "no_place_signal"
   },
-  "note": "r13 F3x: bare main name + person name \"Name T.\" (district-equal names) - candidates, never the person (dev: candidates; head: AUTO 1712230)"
+  "note": "r14 S1 (was r13 F3x candidates): the recipient \"Navbahor T.\" is dropped - no place signal left for the bare name"
  },
  {
   "q": {
@@ -5731,5 +5731,575 @@
    "reason": "district_ambiguous"
   },
   "note": "r13 M: \"5-mavze\" after a comma / \"X 5-kvartal\" is not a house number of the name (dev: candidates; head: AUTO 1710235)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Узбекистан г. Ташкент, Чиланзарский район, кв. 12"
+  },
+  "seed": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "full": {
+   "sato": "1726294",
+   "reason": null
+  },
+  "note": "r14 B1: the country name (Uzbekistan) is not a district (O'zbekiston tumani) - Chilonzor as on dev"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Uzbekistan г. Ургенч, Nurli yo'l MFY"
+  },
+  "seed": {
+   "sato": "1733401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1733401",
+   "reason": null
+  },
+  "note": "r14 B1: the country name is not a district - Urganch city as on dev"
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "full_address": "Узбекистан г. Коканд, ул. Навои 5"
+  },
+  "seed": {
+   "sato": "1730405",
+   "reason": null
+  },
+  "full": {
+   "sato": "1730405",
+   "reason": null
+  },
+  "note": "r14 B1: the country name is not a district - Qo'qon city (\"г. Коканд\" via geoFold; dev: not found - dev cannot see the Russian spelling)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Республика Узбекистан г. Самарканд ул. Мустакиллик 5"
+  },
+  "seed": {
+   "sato": "1718401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718401",
+   "reason": null
+  },
+  "note": "r14 B1: the country name is not a district - Samarqand city; same result without the country words (dev: candidates [1718401] - dev ignored \"г.\" before a variant spelling, r13 accepts it)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Мингбулак район, kv. 12, из г. Янгикурган"
+  },
+  "seed": {
+   "sato": "1714204",
+   "reason": null
+  },
+  "full": {
+   "sato": "1714204",
+   "reason": null
+  },
+  "note": "r14 B2: \"из г. X\" is the origin - the marked destination stays (as dev)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Ташкентская обл., отправитель: г. Бостанлык, Bekobod sh., Istiqbol MFY 17-uy"
+  },
+  "seed": {
+   "sato": "1727413",
+   "reason": null
+  },
+  "full": {
+   "sato": "1727413",
+   "reason": null
+  },
+  "note": "r14 B2: \"отправитель: г. X\" is the origin - Bekobod sh. (as dev)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Forish\nNavro'z 4-uy\nDo'stlik tumani tomonga"
+  },
+  "seed": {
+   "sato": "1708235",
+   "reason": null
+  },
+  "full": {
+   "sato": "1708235",
+   "reason": null
+  },
+  "note": "r14 B2/S2: a newly recognised (geoFold) landmark name does not take over the bare main name - Forish (as dev)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Payariq, Mirzo Bobur 2-tor ko'chasi 6, с г. Джамбай"
+  },
+  "seed": {
+   "sato": "1718224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718224",
+   "reason": null
+  },
+  "note": "r14 B2: \"с г. X\" is the origin, not a hidden rival - Payariq (as dev; head: candidates)"
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Payariq, Mirzo Bobur 6, с г. Jomboy"
+  },
+  "seed": {
+   "sato": "1718224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1718224",
+   "reason": null
+  },
+  "note": "r14 B2: \"с г. X\" is the origin even when dev can see X - Payariq (dev: AUTO 1718209 - the origin; head: candidates)"
+ },
+ {
+  "q": {
+   "region_name": "Syrdarya",
+   "full_address": "с г. Мирзаабад, Yangiyer rayon, Mehnat MFY, 23-uy"
+  },
+  "seed": {
+   "sato": "1724413",
+   "reason": null
+  },
+  "full": {
+   "sato": "1724413",
+   "reason": null
+  },
+  "note": "r14 B2: \"с г. X\" is the origin - Yangier (as dev)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Xorazm vil., Кошкупыр район, Bog'ishamol ko'chasi 3, Xiva shahar"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 B2: two marked names - candidates (as dev)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Xorazm, Do'stlik tumaniga, Mirzo Bobur 6"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 B3: a district of another region than the one written in the text - candidates, not AUTO (dev: AUTO 1708215)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Xorazm viloyati, Yangiyer t., Mirzo Bobur 6"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 B3: a district of another region than the one written in the text - candidates, not AUTO (dev: AUTO 1724413)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Бухарская область, Kasbi t., ул. Амира Темура 15"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 B4: Russian region form + \"X t.\" of another region - candidates, like the Latin form (dev: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Buxoro viloyati, Kasbi t., ул. Амира Темура 15"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 B4: \"X t.\" of a district outside the written region - candidates (dev: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Xorazm viloyati, Namangan tum., Navro'z mahallasi 4-uy"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 B4: \"X tum.\" of a district outside the written region - candidates (dev: AUTO 1714212)"
+ },
+ {
+  "q": {
+   "region_name": "Samarqand",
+   "full_address": "Samarqand, Registon 5, oluvchi Furqat T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "full": {
+   "sato": null,
+   "reason": "no_place_signal"
+  },
+  "note": "r14 S1: \"oluvchi Name T.\" is a person - neither a place nor a kind marker (dev/head: AUTO 1718233 Samarqand TUMAN)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Mustaqillik ko'chasi 12, oluvchi Фуркат Т."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "note": "r14 S1: recipient \"Name Т.\" is not a district (dev/head: AUTO 1730238)"
+ },
+ {
+  "q": {
+   "region_name": "Syrdarya",
+   "address": "Navro'z mahallasi 4-uy, получатель: Sherin Т."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "note": "r14 S1: recipient \"Name Т.\" is not a district (dev: no_place_signal; head: AUTO 1724410)"
+ },
+ {
+  "q": {
+   "region_name": "Syrdarya",
+   "address": "Navro'z mahallasi 4-uy, получатель: Gulistan Т."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "note": "r14 S1: recipient \"Name Т.\" is not a district (dev: candidates; head: AUTO 1724220)"
+ },
+ {
+  "q": {
+   "region_name": "Surxondaryo",
+   "address": "Mustaqillik 12, mijoz Dinov Т."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "note": "r14 S1: recipient \"Name Т.\" is not a district (dev: not found; head: AUTO 1722210)"
+ },
+ {
+  "q": {
+   "region_name": "Farg'ona",
+   "address": "Mustaqillik 12, qabul qiluvchi Kava T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "note": "r14 S1: recipient \"Name T.\" is not a district (dev: not found; head: AUTO 1730218)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Navro'z 4-uy, ism Dinov T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_not_found"
+  },
+  "note": "r14 S1: recipient \"Name T.\" is not a district (dev: not found; head: AUTO 1722210)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Navro'z 4-uy, Gulistan T."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S1: a capital \"T.\" alone never gives AUTO and sets no kind - candidates (as dev; head: AUTO 1724220)"
+ },
+ {
+  "q": {
+   "region_name": "Syrdarya",
+   "address": "Navro'z mahallasi 4-uy, Sherin Т."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S1: a capital \"Т.\" alone never gives AUTO - candidates (dev: no_place_signal; head: AUTO 1724410)"
+ },
+ {
+  "q": {
+   "region_name": "Surxondaryo",
+   "address": "Mustaqillik 12, Dinov Т."
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S1: a capital \"Т.\" alone never gives AUTO - candidates (dev: not found; head: AUTO 1722210)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Kasbi T., Navoiy 5"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S1: a capital \"T.\" alone never gives AUTO - candidates (dev/head: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Kasbi t., Navoiy 5"
+  },
+  "seed": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "note": "r14 S1 guard: lower-case \"X t.\" stays a tuman marker - AUTO (as dev)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Kasbi tumani, Navoiy 5, oluvchi Muborak T."
+  },
+  "seed": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "note": "r14 S1 guard: a dev marker wins, the recipient is ignored (dev: AUTO 1710234 - the recipient)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Navro'z 4-uy, Do'stlik tumaniga ketaverishda"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S2: landmark only (\"X tumaniga ketaverishda\") - candidates (dev: AUTO 1708215)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Mustaqillik 12, Payariq tumaniga burilishda"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S2: landmark only (\"X tumaniga burilishda\") - candidates (dev: AUTO 1718224)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Bog'ishamol 3, Kasbi tumani tomonga"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S2: landmark only (\"X tumani tomonga\") - candidates (dev: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Navro'z 4-uy, Kasbi tumaniga burilishda"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S2: landmark only, region given - candidates (dev: AUTO 1710237)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Forish, Navro'z 4-uy, Dustlik tumani tomonga"
+  },
+  "seed": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "full": {
+   "sato": null,
+   "reason": "district_ambiguous"
+  },
+  "note": "r14 S2: a landmark dev can see plus a bare main name - both candidates (dev: AUTO 1708215 - the landmark)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Qarshi tumani, Navoiy 5, Kasbi tumaniga yaqin"
+  },
+  "seed": {
+   "sato": "1710224",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710224",
+   "reason": null
+  },
+  "note": "r14 S2 guard: a dev-marked main name keeps AUTO next to a landmark (as dev)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Shahrisabz tumani dan, Qarshi sh, Navoiy 5"
+  },
+  "seed": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "note": "r14 S3: the kind is not taken from the origin (\"X tumani dan\") - Qarshi city (dev: AUTO 1710245 - the origin; head: AUTO 1710224 - TUMAN)"
+ },
+ {
+  "q": {
+   "region_name": null,
+   "full_address": "Qarshi sh. - Navoiy 5"
+  },
+  "seed": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710401",
+   "reason": null
+  },
+  "note": "r14 S4: \" - \" separates parts like a comma (as dev)"
+ },
+ {
+  "q": {
+   "region_name": "Qashqadaryo",
+   "full_address": "Kasbi tumani\nNavoiy 5"
+  },
+  "seed": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "full": {
+   "sato": "1710237",
+   "reason": null
+  },
+  "note": "r14 S4: a newline separates parts like a comma (as dev)"
  }
 ]
