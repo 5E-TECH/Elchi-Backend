@@ -938,33 +938,92 @@ describe('BLOCKER: qayta urinishli partiyada natijasi NOMA‘LUM buyurtma qulfla
     expect(row(ctx).orders[1].confirm_attempted_at).toBeUndefined();
   });
 
-  it('operator rad etildi + noma‘lum natija — matn «🎧 Operator» ni taklif qilmaydi', async () => {
+  it.each([
+    [
+      'reason_code (#722)',
+      {
+        reason: 'Operator mos emas',
+        reason_code: 'CHOSEN_OPERATOR_NOT_SELECTABLE',
+      },
+    ],
+    [
+      'matn zaxirasi (eski gateway)',
+      { reason: 'Tanlangan operator bu marketga tegishli emas yoki faol emas' },
+    ],
+  ])(
+    'operator rad etildi (%s) + noma‘lum natija — 1-si qulf, matn «🎧 Operator» ni taklif qilmaydi',
+    async (_n, rejection) => {
+      const { ctx } = setup({
+        orders: orders(2),
+        confirm: [
+          batch(
+            {
+              index: 0,
+              ok: false,
+              code: 'timeout_unknown',
+              reason: 'Natija noma’lum',
+            },
+            { index: 1, ok: false, code: 'create_failed', ...rejection },
+          ),
+        ],
+      });
+      await send(ctx, ORDER_TEXT);
+      await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+      await press(ctx, buttons(ctx)['Operator 01']);
+      await press(ctx, buttons(ctx)['✅ Yaratish']);
+      expect(row(ctx).status).toBe('preview');
+      expect(row(ctx).input.meta.operator_id).toBeUndefined();
+      expect(typeof row(ctx).orders[0].confirm_attempted_at).toBe('number');
+      expect(row(ctx).orders[1].confirm_attempted_at).toBeUndefined();
+      expect(lastShown(ctx)).not.toContain(AI_OPERATOR_REJECTED_TEXT);
+      expect(lastShown(ctx)).toContain('operatorsiz yuboradi');
+    },
+  );
+
+  it('noma‘lum reason_code + NOT_CREATED kodi — ANIQ yaratilmagan (belgisiz); timeout_unknown / duplicate_in_progress / natija yo‘q — noma‘lum', async () => {
     const { ctx } = setup({
-      orders: orders(2),
+      orders: orders(5),
       confirm: [
         batch(
           {
             index: 0,
             ok: false,
-            code: 'timeout_unknown',
-            reason: 'Natija noma’lum',
+            code: 'create_failed',
+            reason: 'Yangi sabab',
+            reason_code: 'SOMETHING_NEW',
           },
           {
             index: 1,
             ok: false,
-            code: 'create_failed',
-            reason:
-              'Tanlangan operator bu marketga tegishli emas yoki faol emas',
+            code: 'not_started',
+            reason: 'Vaqt yetmadi',
+            reason_code: 'SOMETHING_NEW',
           },
+          {
+            index: 2,
+            ok: false,
+            code: 'timeout_unknown',
+            reason: 'Natija noma’lum',
+            reason_code: 'SOMETHING_NEW',
+          },
+          {
+            index: 3,
+            ok: false,
+            code: 'duplicate_in_progress',
+            reason: 'Yaratilmoqda',
+          },
+          // index 4 — natija yo'q.
         ),
       ],
     });
     await send(ctx, ORDER_TEXT);
-    await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
-    await press(ctx, buttons(ctx)['Operator 01']);
     await press(ctx, buttons(ctx)['✅ Yaratish']);
-    expect(lastShown(ctx)).not.toContain(AI_OPERATOR_REJECTED_TEXT);
-    expect(lastShown(ctx)).toContain('operatorsiz yuboradi');
+    expect(row(ctx).status).toBe('preview');
+    const marked = (row(ctx).orders as AiPreviewOrder[]).map(
+      (o) => typeof o.confirm_attempted_at === 'number',
+    );
+    expect(marked).toEqual([false, false, true, true, true]);
+    expect(lastShown(ctx)).toContain('❌ 1) Yangi sabab');
   });
 
   it('nit: profil raqami normallashmasa keshlanmaydi; userReason oddiy qavsdagi so‘zni qoldiradi', async () => {
@@ -1010,5 +1069,106 @@ describe('BLOCKER: qayta urinishli partiyada natijasi NOMA‘LUM buyurtma qulfla
     await press(ctx, buttons(ctx)['✅ Yaratish']);
     await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
     expect(lastShown(ctx)).toContain('hali yaratilmagan buyurtmalarga');
+  });
+});
+
+describe('#722 reason_code — natija sababi kod bo‘yicha (matn faqat zaxira)', () => {
+  const failed = (reason: string, reasonCode?: string) => (): Reply => ({
+    status: 200,
+    body: {
+      data: {
+        results: [
+          {
+            index: 0,
+            ok: false,
+            code: 'create_failed',
+            reason,
+            ...(reasonCode ? { reason_code: reasonCode } : {}),
+          },
+        ],
+      },
+    },
+  });
+
+  it('⭐ OPERATOR_PHONE_REQUIRED (matn boshqacha) — qayta urinishli, keyingi «✅» profil raqami bilan', async () => {
+    const { ctx, calls } = setup({
+      role: 'market_operator',
+      confirm: [failed('Raqam kerak', 'OPERATOR_PHONE_REQUIRED')],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('preview');
+    expect(row(ctx).input.meta.operator_phone_needed).toBe(true);
+    expect(lastShown(ctx)).toContain(AI_OPERATOR_PHONE_RETRY_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(sentOrder(calls, 1).operator_phone).toBe('+998900000099');
+  });
+
+  it.each([
+    ['CHOSEN_OPERATOR_NOT_SELECTABLE', 'Operator mos emas'],
+    ['CHOSEN_OPERATOR_SELF_ONLY', 'Faqat o‘zingizni tanlay olasiz'],
+  ])(
+    '⭐ %s — tanlov olib tashlanadi, ro‘yxat yangilanadi, qayta urinishli',
+    async (reasonCode, reason) => {
+      let lists = 0;
+      const { ctx, calls } = setup({
+        selectable: () => ((lists += 1) === 1 ? operators(2) : operators(1)),
+        confirm: [failed(reason, reasonCode)],
+      });
+      await send(ctx, ORDER_TEXT);
+      await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+      await press(ctx, buttons(ctx)['Operator 02']);
+      await press(ctx, buttons(ctx)['✅ Yaratish']);
+      expect(row(ctx).status).toBe('preview');
+      expect(row(ctx).input.meta.operator_id).toBeUndefined();
+      expect(
+        calls.filter((c) => c.path === '/market-operators/selectable'),
+      ).toHaveLength(2);
+      expect(lastShown(ctx)).toContain(AI_OPERATOR_REJECTED_TEXT);
+    },
+  );
+
+  it('noma‘lum reason_code — matn mos kelsa ham umumiy xato (qayta urinish yo‘q)', async () => {
+    const { ctx } = setup({
+      role: 'market_operator',
+      confirm: [failed(PHONE_REQUIRED, 'SOMETHING_NEW')],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('created');
+    expect(lastShown(ctx)).toContain(`❌ 1) ${PHONE_REQUIRED_SHOWN}`);
+    expect(lastShown(ctx)).not.toContain(AI_RETRY_ALL_HINT_TEXT);
+  });
+
+  it('operator rad etildi (reason_code), lekin tanlov yuborilmagan — umumiy xato (qayta urinish ma’nosiz)', async () => {
+    const { ctx } = setup({
+      confirm: [failed('Operator mos emas', 'CHOSEN_OPERATOR_SELF_ONLY')],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('created');
+    expect(lastShown(ctx)).toContain('❌ 1) Operator mos emas');
+  });
+
+  it('zaxira: reason_code yo‘q (eski gateway) — matn bo‘yicha (raqam va operator)', async () => {
+    const phone = setup({
+      role: 'market_operator',
+      confirm: [failed(PHONE_REQUIRED)],
+    });
+    await send(phone.ctx, ORDER_TEXT);
+    await press(phone.ctx, buttons(phone.ctx)['✅ Yaratish']);
+    expect(row(phone.ctx).input.meta.operator_phone_needed).toBe(true);
+
+    const op = setup({
+      confirm: [
+        failed('Tanlangan operator bu marketga tegishli emas yoki faol emas'),
+      ],
+    });
+    await send(op.ctx, ORDER_TEXT);
+    await press(op.ctx, buttons(op.ctx)['🎧 Operator: tanlanmagan']);
+    await press(op.ctx, buttons(op.ctx)['Operator 01']);
+    await press(op.ctx, buttons(op.ctx)['✅ Yaratish']);
+    expect(row(op.ctx).status).toBe('preview');
+    expect(row(op.ctx).input.meta.operator_id).toBeUndefined();
   });
 });

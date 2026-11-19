@@ -329,6 +329,8 @@ interface ConfirmResult {
   /** Xato kodi (`create_failed`, `validation_unavailable`, …). */
   code?: string;
   reason?: string;
+  /** #722: mashina o'qiydigan sabab (`ORDER_CREATE_ERROR_CODES`, ok:false). */
+  reason_code?: string;
   idempotent_replay?: boolean;
 }
 
