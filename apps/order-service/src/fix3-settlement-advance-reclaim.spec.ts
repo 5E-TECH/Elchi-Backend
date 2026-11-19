@@ -485,7 +485,12 @@ describe('M8 — servis: advance tokenining "applied" belgisi', () => {
     // FIFO qayta ishlamadi: 103 hamon PENDING, qoldiq 20 ga oshmadi.
     expect(store[2].status).toBe(SettlementStatus.PENDING);
     expect(carryOf('263')).toBe(10);
-    expect(settlementRepo.find).toHaveBeenCalledTimes(1);
+    // FIFO nomzodlari (FOR UPDATE) faqat bir marta o'qildi. 63HO6cBU: kaskad
+    // (filial, market) qoldiqlarini ham o'qiydi — u qulfsiz, hisobga olinmaydi.
+    const fifoReads = (settlementRepo.find as jest.Mock).mock.calls.filter(
+      ([options]) => Boolean((options as { lock?: unknown } | undefined)?.lock),
+    );
+    expect(fifoReads).toHaveLength(1);
     expect(queryRunner.startTransaction).toHaveBeenCalledTimes(1);
   });
 

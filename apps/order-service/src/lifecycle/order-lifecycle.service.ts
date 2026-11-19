@@ -2360,6 +2360,25 @@ export class OrderLifecycleService {
     const extraCostRows = approvalIds.length
       ? ` OR (extra_cost_approval_id IN (:...approvalIds)${keepIds.length ? ' AND id NOT IN (:...keepIds)' : ''})`
       : '';
+    // 63HO6cBU (PR-C) — himoya qatlami (tranzaksiya ichida, qulf bilan):
+    // market ulushini filial to'lagan qator o'chirilmaydi.
+    const orderRows = await repo.find({
+      where: { order_id: String(orderId), isDeleted: false },
+      // FIFO (`runFifoSettlement`) bilan bir xil tartib — deadlock yo'q.
+      order: { createdAt: 'ASC', id: 'ASC' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (
+      orderRows.some(
+        (row) =>
+          row?.market_paid_by_branch_at != null ||
+          (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0,
+      )
+    ) {
+      this.badRequest(
+        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
+      );
+    }
     await repo
       .createQueryBuilder()
       .update(OrderSettlement)
@@ -6033,6 +6052,16 @@ export class OrderLifecycleService {
         "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
       );
     }
+    // 63HO6cBU (PR-C) — market ulushini filial o'z kassasidan to'lagan qator:
+    // pul marketga ketgan, buyurtmani qaytarish daftarni buzadi.
+    if (
+      existingSettlement?.market_paid_by_branch_at ||
+      (Number(existingSettlement?.market_paid_by_branch_amount ?? 0) || 0) !== 0
+    ) {
+      this.badRequest(
+        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
+      );
+    }
     /**
      * Kuryer pulni filialga topshirgan qator (audit M6) — `isCourierRemittedSettlement`
      * izohiga qarang. Kuryer va menejer uchun YOPIQ (avvalgidek).
@@ -7304,6 +7333,16 @@ export class OrderLifecycleService {
     if (row && this.isSettledToHq(row.status)) {
       this.badRequest(
         "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
+      );
+    }
+    // 63HO6cBU (PR-C) — market ulushini filial o'z kassasidan to'lagan qator:
+    // pul marketga ketgan, buyurtmani qaytarish daftarni buzadi.
+    if (
+      row?.market_paid_by_branch_at ||
+      (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0
+    ) {
+      this.badRequest(
+        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
       );
     }
     if (

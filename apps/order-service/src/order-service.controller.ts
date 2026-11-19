@@ -1248,7 +1248,12 @@ export class OrderServiceController {
   settlementAdvance(
     @Payload()
     data: {
-      level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
+      level:
+        | 'courier_to_branch'
+        | 'branch_to_hq'
+        | 'hq_to_market'
+        // 63HO6cBU (PR-C) — filial menejeri o'z marketiga, match "X:M".
+        | 'branch_to_market';
       match_value: string;
       amount: number;
       requester_id?: string;
@@ -1354,6 +1359,33 @@ export class OrderServiceController {
    * Bitta filial kesimidagi hisob-kitob yig'indisi (audit C1). Manager paneli
    * ilgari buni 5 000 tagacha buyurtmani tortib olib JS'da hisoblardi.
    */
+  /** 63HO6cBU (PR-C) — filial marketlari va har biriga filial ulushi. */
+  @MessagePattern({ cmd: 'order.settlement.branch_markets' })
+  settlementBranchMarkets(
+    @Payload() data: { branch_id?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.getBranchMarkets(data ?? {}),
+    );
+  }
+
+  /** 63HO6cBU (PR-C) — bitta market: filialnikimi va filial ulushi. */
+  @MessagePattern({ cmd: 'order.settlement.branch_market_share' })
+  settlementBranchMarketShare(
+    @Payload()
+    data: {
+      branch_id?: string | null;
+      market_id?: string | null;
+      pending_tokens?: unknown;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.getBranchMarketShare(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.settlement.branch_summary' })
   settlementBranchSummary(
     @Payload() data: { branch_id?: string | null; courier_ids?: string[] },

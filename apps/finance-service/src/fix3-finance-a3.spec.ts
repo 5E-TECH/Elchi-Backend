@@ -1,5 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { Between } from 'typeorm';
 import { FinanceServiceService } from './finance-service.service';
 
@@ -113,6 +113,24 @@ function makeManager() {
     save: jest.fn((entity: any) => Promise.resolve(entity)),
     create: jest.fn((_entity: any, dto: any) => ({ ...dto })),
   };
+}
+
+/**
+ * 63HO6cBU (PR-C) — filial to'lovchi: finance ulushni (X, M) qulfi ostida
+ * order-service'dan qayta o'qiydi. Fake manager'ga advisory qulf so'rovi va
+ * outbox pending o'qishi (bu yerda bo'sh) qo'shiladi.
+ */
+function withBranchShare(env: any, share: number | null) {
+  env.manager.query = jest.fn().mockResolvedValue([]);
+  jest.spyOn(env.service, 'pendingBranchMarketAdvances').mockResolvedValue([]);
+  const original = env.orderClient.send;
+  env.orderClient.send = jest.fn((pattern: any, payload: any) =>
+    pattern?.cmd === 'order.settlement.branch_market_share'
+      ? share === null
+        ? throwError(() => new Error('down'))
+        : of({ statusCode: 200, data: { share, applied_tokens: [] } })
+      : original(pattern, payload),
+  );
 }
 
 function makeService(manager = makeManager()) {
@@ -760,6 +778,7 @@ describe('M4 — "Marketga o`tkazma" (click_to_market)', () => {
     jest
       .spyOn(env.service as any, 'scheduleMarketPaymentFollowUp')
       .mockResolvedValue(undefined);
+    withBranchShare(env, 100_000);
 
     const res: any = await env.service.paymentsToMarket({
       market_id: '201',
@@ -768,6 +787,7 @@ describe('M4 — "Marketga o`tkazma" (click_to_market)', () => {
       payer_cashbox_type: 'branch' as any,
       payer_user_id: '15',
       dedup_epoch: 'tok-9',
+      branch_share: 100_000,
     });
 
     expect(res.statusCode).toBe(200);
@@ -785,11 +805,51 @@ describe('M4 — "Marketga o`tkazma" (click_to_market)', () => {
         call[2].level,
         call[2].request_id,
       ]),
-    ).toEqual([
-      ['branch_to_hq', 'tok-9:b'],
-      ['hq_to_market', 'tok-9'],
-    ]);
+    ).toEqual([['branch_to_market', 'tok-9']]);
+    // 63HO6cBU (PR-C) — bitta bo'g'in: faqat (filial, market) qatorlari.
+    expect(env.outbox.enqueue.mock.calls[0][2]).toMatchObject({
+      match_value: '15:201',
+      amount: 100_000,
+    });
   });
+
+  it.each([
+    ['order-service javob bermadi', null, 503],
+    ['ulushdan ortiq', 99_999.99, 400],
+  ])(
+    '63HO6cBU — filial to`lovchi: %s → %s… kassa saqlanmaydi, daftar navbati yo`q',
+    async (_label, share, status) => {
+      const env = makeService();
+      env.manager.findOne
+        .mockResolvedValueOnce({
+          id: 'br-15',
+          user_id: '15',
+          cashbox_type: 'branch',
+          balance: 400_000,
+          balance_cash: 400_000,
+          balance_card: 0,
+        })
+        .mockResolvedValueOnce(marketCashbox(1_000_000))
+        .mockResolvedValueOnce(null);
+      jest.spyOn(env.service, 'requireOpenShift').mockResolvedValue(undefined);
+      withBranchShare(env, share);
+      const error: unknown = await env.service
+        .paymentsToMarket({
+          market_id: '201',
+          amount: 100_000,
+          payment_method: 'cash' as any,
+          payer_cashbox_type: 'branch' as any,
+          payer_user_id: '15',
+          dedup_epoch: 'tok-11',
+        })
+        .catch((caught: unknown) => caught);
+      expect((error as RpcException).getError()).toMatchObject({
+        statusCode: status,
+      });
+      expect(env.outbox.enqueue).not.toHaveBeenCalled();
+      expect(env.manager.save).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     [{ payer_cashbox_type: 'branch' }],
