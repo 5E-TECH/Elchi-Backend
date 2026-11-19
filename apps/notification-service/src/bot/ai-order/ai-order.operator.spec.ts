@@ -803,3 +803,104 @@ describe('#721 review', () => {
     expect(sentOrder(calls)).not.toHaveProperty('operator_id');
   });
 });
+
+describe('#722 reason_code — natija sababi kod bo‘yicha (matn faqat zaxira)', () => {
+  const failed = (reason: string, reasonCode?: string) => (): Reply => ({
+    status: 200,
+    body: {
+      data: {
+        results: [
+          {
+            index: 0,
+            ok: false,
+            code: 'create_failed',
+            reason,
+            ...(reasonCode ? { reason_code: reasonCode } : {}),
+          },
+        ],
+      },
+    },
+  });
+
+  it('⭐ OPERATOR_PHONE_REQUIRED (matn boshqacha) — qayta urinishli, keyingi «✅» profil raqami bilan', async () => {
+    const { ctx, calls } = setup({
+      role: 'market_operator',
+      confirm: [failed('Raqam kerak', 'OPERATOR_PHONE_REQUIRED')],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('preview');
+    expect(row(ctx).input.meta.operator_phone_needed).toBe(true);
+    expect(lastShown(ctx)).toContain(AI_OPERATOR_PHONE_RETRY_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(sentOrder(calls, 1).operator_phone).toBe('+998900000099');
+  });
+
+  it.each([
+    ['CHOSEN_OPERATOR_NOT_SELECTABLE', 'Operator mos emas'],
+    ['CHOSEN_OPERATOR_SELF_ONLY', 'Faqat o‘zingizni tanlay olasiz'],
+  ])(
+    '⭐ %s — tanlov olib tashlanadi, ro‘yxat yangilanadi, qayta urinishli',
+    async (reasonCode, reason) => {
+      let lists = 0;
+      const { ctx, calls } = setup({
+        selectable: () => ((lists += 1) === 1 ? operators(2) : operators(1)),
+        confirm: [failed(reason, reasonCode)],
+      });
+      await send(ctx, ORDER_TEXT);
+      await press(ctx, buttons(ctx)['🎧 Operator: tanlanmagan']);
+      await press(ctx, buttons(ctx)['Operator 02']);
+      await press(ctx, buttons(ctx)['✅ Yaratish']);
+      expect(row(ctx).status).toBe('preview');
+      expect(row(ctx).input.meta.operator_id).toBeUndefined();
+      expect(
+        calls.filter((c) => c.path === '/market-operators/selectable'),
+      ).toHaveLength(2);
+      expect(lastShown(ctx)).toContain(AI_OPERATOR_REJECTED_TEXT);
+    },
+  );
+
+  it('noma‘lum reason_code — matn mos kelsa ham umumiy xato (qayta urinish yo‘q)', async () => {
+    const { ctx } = setup({
+      role: 'market_operator',
+      confirm: [failed(PHONE_REQUIRED, 'SOMETHING_NEW')],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('created');
+    expect(lastShown(ctx)).toContain(`❌ 1) ${PHONE_REQUIRED_SHOWN}`);
+    expect(lastShown(ctx)).not.toContain(AI_RETRY_ALL_HINT_TEXT);
+  });
+
+  it('operator rad etildi (reason_code), lekin tanlov yuborilmagan — umumiy xato (qayta urinish ma’nosiz)', async () => {
+    const { ctx } = setup({
+      confirm: [failed('Operator mos emas', 'CHOSEN_OPERATOR_SELF_ONLY')],
+    });
+    await send(ctx, ORDER_TEXT);
+    await press(ctx, buttons(ctx)['✅ Yaratish']);
+    expect(row(ctx).status).toBe('created');
+    expect(lastShown(ctx)).toContain('❌ 1) Operator mos emas');
+  });
+
+  it('zaxira: reason_code yo‘q (eski gateway) — matn bo‘yicha (raqam va operator)', async () => {
+    const phone = setup({
+      role: 'market_operator',
+      confirm: [failed(PHONE_REQUIRED)],
+    });
+    await send(phone.ctx, ORDER_TEXT);
+    await press(phone.ctx, buttons(phone.ctx)['✅ Yaratish']);
+    expect(row(phone.ctx).input.meta.operator_phone_needed).toBe(true);
+
+    const op = setup({
+      confirm: [
+        failed('Tanlangan operator bu marketga tegishli emas yoki faol emas'),
+      ],
+    });
+    await send(op.ctx, ORDER_TEXT);
+    await press(op.ctx, buttons(op.ctx)['🎧 Operator: tanlanmagan']);
+    await press(op.ctx, buttons(op.ctx)['Operator 01']);
+    await press(op.ctx, buttons(op.ctx)['✅ Yaratish']);
+    expect(row(op.ctx).status).toBe('preview');
+    expect(row(op.ctx).input.meta.operator_id).toBeUndefined();
+  });
+});

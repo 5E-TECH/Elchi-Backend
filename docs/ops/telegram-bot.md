@@ -521,11 +521,20 @@ bazasiga o'zi yozmaydi, doira/holat mashinasi/isbot/extra-cost — serverda.
   profil raqami bilan. Raqam bo'sh / normallashmasa — yuborilmaydi.
 - **Qayta urinishli natijalar (#721 review bilan).** Hammasi server
   kalitidan OLDIN — buyurtma ANIQ yaratilmagan: `validation_unavailable`,
-  `not_started`, birinchi «Operator telefon raqami majburiy» (market egasi
-  ham — profil vaqtincha olinmagan bo'lishi mumkin; bir marta, keyingi «✅»
-  profil raqami bilan), rad etilgan operator tanlovi («Tanlangan operator …
-  faol emas» — tanlov olib tashlanadi, ro'yxat qayta olinadi, «🎧 Operator»
-  dan boshqasini tanlash mumkin). Qoralama `created` EMAS, preview'ga
+  `not_started`, birinchi «operator raqami majburiy» (market egasi ham —
+  profil vaqtincha olinmagan bo'lishi mumkin; bir marta, keyingi «✅» profil
+  raqami bilan), rad etilgan operator tanlovi (tanlov olib tashlanadi,
+  ro'yxat qayta olinadi, «🎧 Operator» dan boshqasini tanlash mumkin).
+  **Sabab aniqlash (#722):** natijadagi `reason_code`
+  (`ORDER_CREATE_ERROR_CODES`, `@app/common`) — `OPERATOR_PHONE_REQUIRED` →
+  raqam; `CHOSEN_OPERATOR_NOT_SELECTABLE` / `CHOSEN_OPERATOR_SELF_ONLY` →
+  operator rad etildi (SELF_ONLY market operatoriga tegishli, u operator_id
+  yubormaydi — amalda kelmaydi, kelsa NOT_SELECTABLE kabi). Noma'lum
+  `reason_code` — umumiy xato (`code` bo'yicha), matnga QARALMAYDI. Matn
+  bo'yicha aniqlash («Operator telefon raqami majburiy», «Tanlangan
+  operator …») — faqat `reason_code` yo'q bo'lsa (eski gateway) zaxira.
+  Operator rad etildi, lekin bot tanlov yubormagan — umumiy xato (qayta
+  urinish ma'nosiz). Qoralama `created` EMAS, preview'ga
   qaytadi; faqat javob kelgan va YARATILGAN buyurtmalar belgilanadi
   (`confirm_order_id` — kartada «✅ Yaratilgan: EL-… — tuzatish faqat
   kabinetda», «Javob kelmadi» EMAS), yaratilmaganlari belgisiz — tuzatsa
