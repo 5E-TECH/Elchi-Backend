@@ -10357,8 +10357,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -10401,8 +10400,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -11463,7 +11461,7 @@
     },
     "/finance/receipts": {
       "post": {
-        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: superadmin/admin — har tur; menejer — faqat `manual_expense` (filial — JWT'dan); boshqalar 403. Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
+        "description": "`photo` — jpeg / png / webp, ≤ 5 MB, turi magic-bytes bilan tekshiriladi, EXIF/XMP tozalanadi, shaxsiy saqlanadi. `kind`: faqat superadmin/admin — har tur; menejer va boshqalar 403 (63HO6cBU: filialda «Kassadan xarajat» yo'q). Rasm o'chiq turga → 400 `RECEIPT_DISABLED` (fayl yuklanmaydi). 201 → `{ receipt_id, kind, state: 'draft', photo_url, photo_url_expires_in: 300 }`. Qoralama 24 soat ichida operatsiyaga biriktirilmasa o'chiriladi; biriktirilgan chek va rasmi saqlanib qoladi. BE-C (2026-11-10): chek faqat karta (`click`) operatsiyasiga biriktiriladi — `manual_expense` ham faqat karta chiqimi uchun (naqd chiqimda yuklamang: `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE`). 2026-11-12: `courier_to_hq` / `branch_to_hq` — «O'tkazma» (`click`) VA «Marketga o'tkazma» (`click_to_market`), ikkalasi `hq_transfer` sozlamasiga bo'ysunadi.",
         "operationId": "FinanceGatewayController_uploadReceipt",
         "parameters": [],
         "requestBody": {
@@ -11492,8 +11490,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -12301,7 +12298,7 @@
     },
     "/finance/cashbox/expense-categories": {
       "get": {
-        "description": "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladigan hamma (superadmin, admin, menejer) ko'radi. `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
+        "description": "`data.items` — `{ id, name, description, sort_order, is_deleted, is_default, created_by, updated_by, created_at, updated_at }`, `sort_order` bo'yicha. `is_default: true` — standart kategoriya (seed'dagi 17 ta; ega 2026-11-11): tahrirlab ham, o'chirib ham bo'lmaydi (PATCH / DELETE → 403). Kassadan chiqim qila oladiganlar (superadmin, admin) ko'radi; menejer — 403 (63HO6cBU). `include_deleted=true` — o'chirilganlar ham (oxirida); faqat superadmin uchun, boshqalarda e'tiborsiz.",
         "operationId": "FinanceGatewayController_listCashboxExpenseCategories",
         "parameters": [
           {
@@ -12329,8 +12326,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       },
       "post": {
