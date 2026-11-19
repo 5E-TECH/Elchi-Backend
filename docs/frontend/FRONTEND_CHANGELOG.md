@@ -29,10 +29,11 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
   2. finance outbox'da yetkazilmagan `branch_to_market` advance = 0 ni kutish (`status` — `pending` yoki `failed`);
   3. order-service va finance-service'ni to'xtatish;
   4. konvertatsiya: `psql -v ON_ERROR_STOP=1 -f scripts/order/convert-246-before-down.sql` (filial to'lagan qism → `order_settlement_carry` branch_to_hq / hq_to_market; yetkazilmagan advance bo'lsa o'zi ABORT qiladi; ko'chirilganlar izi — `order_schema.order_settlement_246_conversion`);
-  5. migratsiya 246 `down()` — konvertatsiyasiz rad etadi (chetlab o'tish yo'q);
-  6. eski kodni ishga tushirish.
+  5. migratsiya 246 `down()`: `npm run db:revert -- --expect=SettlementMarketPaidByBranch1716000000246` (oxirgi migratsiya boshqa bo'lsa hech narsa qilmaydi; `npm run migration:revert` bu yerda yaramaydi). Konvertatsiyasiz rad etadi (chetlab o'tish yo'q);
+  6. tekshirish: `SELECT max("timestamp") FROM order_schema.migrations` = `1716000000245`, `order_settlement` da `market_paid_by_branch_*` ustunlari yo'q;
+  7. eski kodni ishga tushirish.
 
-  Konvertatsiyadan keyin 246 `up()` qayta yurgizilsa — iz jadvalida qator bo'lsa rad etadi (ulushlar qayta tirilmasin): avval qayta solishtiring, so'ng izni tozalang.
+  Konvertatsiyadan keyin (iz jadvalida qator bor) PR-C kodi filial → market yo'lini yopadi: `manager/markets`, `cashbox/user/:marketId` (menejer) va menejer to'lovi — **503** (rollback yarim yo'lda qolsa ham ikki marta to'lanmaydi). 246 `up()` qayta yurgizilsa ham rad etadi (ulushlar qayta tirilmasin): avval qayta solishtiring, so'ng izni tozalang. Skript qulfni 5 s dan ortiq kutmaydi (`lock_timeout`).
 
 **Ta'riflar**
 - **Filial marketi** — o'chirilmagan buyurtmasida `orders.home_branch_id` = menejer filiali bo'lgan market.
@@ -48,6 +49,7 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
   - Query: `search` (market nomi yoki id), `page`, `limit` (≤ 100).
   - Javob: `data: { branch_id, items: [{ market_id, name, status, branch_share, payable }], total_share, total_payable, pagination: { total, page, limit, totalPages } }`.
   - **`payable` — «To'lash mumkin»** = min(`branch_share`, max(marketga qarz, 0)). To'lov chegarasi aynan shu (marketga qarzdan ortiq hech qachon to'lanmaydi — HQ oldindan to'lagan bo'lsa ulush hali ko'rinishi mumkin).
+  - ⚠️ `payable` daftarga hali tushmagan (bir necha soniya oldingi) to'lovlarni hisobga olmaydi — qisqa vaqt haqiqiy chegaradan katta ko'rinishi mumkin. Ustun — 400 javobidagi «To'lash mumkin: N so'm»: FE 400 matnini foydalanuvchiga ko'rsatsin.
   - Identity'da yo'q (o'chirilgan) market ro'yxatda ham, to'lovda ham (403), ko'rishda ham (403) yo'q.
   - Order-service yoki finance javob bermasa (shu jumladan timeout yoki buzuq javob) — **503** «Filial ulushini tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring» (bo'sh ro'yxat emas). Filialda 500 dan ortiq market bo'lsa ham ishlaydi.
   - Tartib — ulush bo'yicha kamayib boradi. Ulushi 0 bo'lgan market ham ro'yxatda turadi, lekin unga to'lab bo'lmaydi.
@@ -71,6 +73,7 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
 - 🟢 [ledger] Menejer to'lovidan keyin «HQ ga berilishi kerak» (`branch_summary.branch_payable`, `all-info`) aynan to'langan summaga kamayadi:
   - qolgan qarz = `branch_amount` − filial to'lagan qism (to'liq to'langanda faqat HQ ulushi `branch_amount − market_amount`);
   - admin filialdan pul olganda to'liq to'langan qatorlar darhol «market to'landi» holatiga o'tadi va HQ ularni marketga qayta to'lamaydi; qisman to'langan qatorni HQ marketga faqat qolgan qismini to'laydi;
+  - market ulushi 0 bo'lgan qator (masalan, market ulushi 0 sotuv) ham filial HQ'ga topshirganda darhol «market to'landi» — HQ → market da 0 so'm bilan osilib qolmaydi;
   - HQ'ning market qarzi (moliyaviy balans) ham shunga kamayadi.
 - 🟢 Market ulushi filial tomonidan (qisman yoki to'liq) to'langan buyurtmani rollback qilib bo'lmaydi (400). Filialdan marketga to'lovni T6 bilan tuzatish yoki qaytarish ham avvalgidek yopiq.
 - 🟢 Olib ketish (pickup-visit) haqlari filial to'lovida ushlanmaydi (global, HQ to'lovida).

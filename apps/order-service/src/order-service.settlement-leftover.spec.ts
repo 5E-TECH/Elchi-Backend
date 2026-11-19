@@ -423,6 +423,8 @@ describe('znD3KaZL TC1 — qisman topshiruvlar to`planib buyurtmani yopadi', () 
         branch_id: '14',
         status: SettlementStatus.COURIER_SETTLED,
         branch_amount: 300000,
+        // WX-2: market ulushi > 0 (0 bo'lsa branch_to_hq darhol MARKET_SETTLED).
+        market_amount: 250000,
       },
       {
         order_id: 'M1',

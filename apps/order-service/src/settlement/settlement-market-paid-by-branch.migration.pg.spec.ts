@@ -173,6 +173,30 @@ describePg(
       ).rejects.toThrow();
     });
 
+    it('WX-1: jonli finance outbox yozuvi qulfni ushlab tursa — skript 5 s dan keyin lock_timeout bilan yiqiladi, hech narsa o`zgarmaydi', async () => {
+      const finance = db.createQueryRunner();
+      await finance.connect();
+      await finance.startTransaction();
+      try {
+        // Finance to'lov tranzaksiyasi: outbox'ga yozdi, hali commit yo'q.
+        await finance.query(`INSERT INTO "finance_schema"."outbox_events" (pattern, payload, status)
+          VALUES ('order.settlement.advance', '{"level":"branch_to_hq","match_value":"15","amount":1}', 'pending')`);
+        const started = Date.now();
+        await expect(runConvert()).rejects.toThrow(/lock timeout/i);
+        const waited = Date.now() - started;
+        expect(waited).toBeGreaterThanOrEqual(4_500);
+        expect(waited).toBeLessThan(10_000);
+      } finally {
+        await finance.rollbackTransaction();
+        await finance.release();
+      }
+      expect(
+        await db.query(
+          `SELECT to_regclass('"order_schema"."order_settlement_246_conversion"') AS t`,
+        ),
+      ).toEqual([{ t: null }]);
+    }, 20_000);
+
     it('⭐ C2: filial → market to`lov holati bor — down() RAD (konvertatsiyasiz); konvertatsiya skripti qoldiqlarga o`tkazadi, keyin down() o`tadi', async () => {
       await db.query(`UPDATE "order_schema"."order_settlement"
         SET market_paid_by_branch_amount = 30000 WHERE order_id = 1`);

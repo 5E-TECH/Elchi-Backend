@@ -2379,6 +2379,8 @@ export class OrderSettlementService {
     await queryRunner.startTransaction();
     try {
       const tx = queryRunner.manager;
+      // WX-1 — konvertatsiyadan keyin hech narsa yozilmaydi (token ham olinmaydi).
+      await this.assertNotConverted246(tx);
       if (input.claimKey) {
         await this.claimAdvanceToken(tx, input.claimKey);
       }
@@ -2535,6 +2537,7 @@ export class OrderSettlementService {
     if (!/^\d{1,18}$/.test(branchId) || /^0+$/.test(branchId)) {
       this.badRequest("branch_id raqamli ID bo'lishi kerak");
     }
+    await this.assertNotConverted246();
     const orders = this.tableOf(Order);
     const settlements = this.tableOf(OrderSettlement);
     const rows = await this.dataSource.query<
@@ -2588,6 +2591,40 @@ export class OrderSettlementService {
       : `"${meta.tableName}"`;
   }
 
+  /**
+   * WX-1 — kill switch (fail-closed): migratsiya 246 konvertatsiyasi izi
+   * (`order_settlement_246_conversion`, scripts/order/convert-246-before-down.sql)
+   * bo'lsa, PR-C kodi filial → market yo'lida ISHLAMAYDI — 503. Konvertatsiya
+   * filial to'lagan qismni `order_settlement_carry` ga ko'chirib, ustunlarni
+   * 0 lagan: shu holatda ulush «qayta tiriladi» va menejer yana to'lardi
+   * (xizmatlar to'xtamasdan konvertatsiya, rollback yarim yo'lda to'xtab
+   * PR-C qayta ishga tushishi, izsiz qayta up()). Finance va gateway 503 ni
+   * uzatadi — pul ko'chmaydi. Iz faqat qayta solishtirilgach qo'lda tozalanadi.
+   */
+  private async assertNotConverted246(
+    runner: Pick<EntityManager, 'query'> = this.dataSource,
+  ): Promise<void> {
+    const schema = this.dataSource.getMetadata(OrderSettlement).schema;
+    const table = schema
+      ? `"${schema}"."order_settlement_246_conversion"`
+      : `"order_settlement_246_conversion"`;
+    const [row] = await runner.query<Array<{ table_name: string | null }>>(
+      `SELECT to_regclass($1)::text AS table_name`,
+      [table],
+    );
+    if (!row?.table_name) return;
+    const [trace] = await runner.query<Array<{ has_trace: boolean }>>(
+      `SELECT EXISTS (SELECT 1 FROM ${table}) AS has_trace`,
+    );
+    if (trace?.has_trace) {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Filial → market to'lovlari vaqtincha yopiq (migratsiya 246 orqaga qaytarilgan) — HQ orqali to'lang",
+      });
+    }
+  }
+
   /** 63HO6cBU (PR-C) — bitta market: X filialnikimi va filial ulushi. */
   /**
    * 63HO6cBU (PR-C) — (X, M) ulushi. `pending_tokens` (ixtiyoriy, ≤ 200) —
@@ -2627,6 +2664,7 @@ export class OrderSettlementService {
     const snapshot = await this.dataSource.transaction(
       'REPEATABLE READ',
       async (tx) => {
+        await this.assertNotConverted246(tx);
         const [row] = await tx.query<
           Array<{ in_branch: boolean; share: string | null }>
         >(
@@ -3162,8 +3200,11 @@ export class OrderSettlementService {
          * (`market_paid_by_branch_at`) HQ'ga yetgach darhol MARKET_SETTLED:
          * HQ uni marketga qayta to'lamaydi. Oyog'i — faqat HQ ulushi.
          */
+        // WX-2 — market ulushi 0 bo'lgan qator ham: HQ marketga hech narsa
+        // to'lamaydi, BRANCH_SETTLED da abadiy osilib qolmasin.
         toStatus: (settlement: OrderSettlement) =>
-          isMarketPaidByBranch(settlement)
+          isMarketPaidByBranch(settlement) ||
+          money2(Number(settlement.market_amount ?? 0) || 0) === 0
             ? SettlementStatus.MARKET_SETTLED
             : SettlementStatus.BRANCH_SETTLED,
         legOf: branchToHqLeg,
