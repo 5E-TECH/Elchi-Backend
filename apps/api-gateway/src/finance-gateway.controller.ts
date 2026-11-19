@@ -4827,12 +4827,13 @@ export class FinanceGatewayController {
 
   @Get('receipt-settings')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  // 63HO6cBU (PR-B) — menejerda chek (manual_expense) yo'q → sozlamalar ham.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary: '(T3) Kassa cheki sozlamalari',
     description:
-      "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH).",
+      "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH). O'qish — superadmin/admin (menejer 403, 63HO6cBU).",
   })
   async getReceiptSettings() {
     return this.send({ cmd: 'finance.receipt.settings.get' }, {});

@@ -29,7 +29,7 @@ Deploy: **finance-service va api-gateway**, migratsiyasiz.
 - ⚠️ [gateway] `PATCH /finance/cashbox/spend` va `PATCH /finance/cashbox/fill` — endi faqat **SUPERADMIN / ADMIN** (asosiy kassa). **Menejer → 403.**
 - ⚠️ [finance] Filial kassasiga (`cashbox_type: branch`) qo'lda chiqim → 400 «Filial kassasidan xarajat qilinmaydi — filial puli HQ'ga topshiriladi», kirim → 400 «Filial kassasini qo'lda to'ldirib bo'lmaydi».
 - ⚠️ [gateway] `GET /finance/cashbox/expense-categories` — menejer → 403 (SA/admin avvalgidek).
-- ⚠️ [gateway] `POST /finance/receipts` (chek yuklash) — faqat SA/admin; menejer → 403 (`manual_expense` cheki menejerda yo'q).
+- ⚠️ [gateway] `POST /finance/receipts` (chek yuklash) va `GET /finance/receipt-settings` — faqat SA/admin; menejer → 403 (`manual_expense` cheki menejerda yo'q).
 - 🟢 «Filial daromadini yechish» (o'z foydasi doirasida chiqim) — alohida karta (t7ewOeOP), hali yo'q.
 
 **Frontend action items:**

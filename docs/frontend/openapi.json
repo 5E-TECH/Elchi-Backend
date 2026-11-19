@@ -11403,7 +11403,7 @@
     },
     "/finance/receipt-settings": {
       "get": {
-        "description": "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH).",
+        "description": "`{ manual_expense: { photo_required, ai_enabled }, hq_transfer: { photo_required, ai_enabled }, updated_at, updated_by }`. Sozlama qatori yo'q — `true` (sukut — ikkalasi yoqiq). `hq_transfer` — kuryer → HQ va filial → HQ. O'zgartirish — faqat superadmin (PATCH). O'qish — superadmin/admin (menejer 403, 63HO6cBU).",
         "operationId": "FinanceGatewayController_getReceiptSettings",
         "parameters": [],
         "responses": {
@@ -11422,8 +11422,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       },
       "patch": {

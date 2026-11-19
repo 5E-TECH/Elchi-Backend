@@ -273,15 +273,13 @@ describe('T3-1 — gateway: kassa cheki sozlamalari va yuklash', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('rollar: GET — SA/admin/menejer; PATCH — faqat SA; yuklash — SA/admin (63HO6cBU)', () => {
+  it('rollar: GET — SA/admin; PATCH — faqat SA; yuklash — SA/admin (63HO6cBU)', () => {
     const proto = FinanceGatewayController.prototype;
     const handler = (name: keyof FinanceGatewayController): object =>
       Object.getOwnPropertyDescriptor(proto, name)?.value as object;
     const roles = (name: keyof FinanceGatewayController) =>
       [...(Reflect.getMetadata(ROLES_KEY, handler(name)) as string[])].sort();
-    expect(roles('getReceiptSettings')).toEqual(
-      ['admin', 'manager', 'superadmin'].sort(),
-    );
+    expect(roles('getReceiptSettings')).toEqual(['admin', 'superadmin'].sort());
     expect(roles('updateReceiptSettings')).toEqual(['superadmin']);
     expect(roles('uploadReceipt')).toEqual(['admin', 'superadmin'].sort());
     for (const name of [
