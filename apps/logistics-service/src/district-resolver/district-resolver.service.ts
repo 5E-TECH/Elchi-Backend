@@ -84,9 +84,15 @@ export const DISTRICT_CORPUS_MAX_CHARS = 120;
 /**
  * Matnda joy belgisi bormi — BeePost :1596-1601 (hasPlaceSignal). D5: rus
  * va qisqa shakllar ham (shaxri, rayon, r-n, gorod, sh., g.).
+ * r12: qo'shimchali tuman so'zlari (tum., tumanida/tumanidagi/tumaniga)
+ * bu yerda YO'Q - ular faqat topilgan nomga tegishli bo'lsa belgi
+ * (`suffixFor`): "Yangiyer tumanida, Navoiy 5" dagi belgi Yangiyer'niki -
+ * yalang'och "Navoiy" (ko'cha) avto bo'lmaydi. "X tumani dan" (ajratib
+ * yozilgan "tumanidan") - joy belgisi emas (r7 S3). r13: 4-usulda ham
+ * (`placeSignalFor`).
  */
-const PLACE_WORD_RE =
-  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b|\br-n\b|\b(sh|g|tum)\.|\btuman(ida|idagi|iga)\b/;
+const PLACE_STRICT_RE =
+  /\b(tumani|tuman|shahri|shaxri|shahar|shaharcha|shaharchasi|rayon|rayoni|raion|gorod)\b(?![\s-]*dan\b)|\br-n\b|\b(sh|g)\./;
 /** Shahar afzalligi belgisi — BeePost :1708-1709 (+ shaxri, gorod, sh., g.). */
 const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
 /**
@@ -98,19 +104,46 @@ const CITY_WORD_RE = /\b(shahri|shaxri|shahar|gorod)\b|\b(sh|g)\./;
  * (raqam) — belgi EMAS. Matnlar `, ` bilan qo'shiladi (maydon chegarasi).
  * r7 B2: "X t." faqat X tuman/viloyat nomi bo'lsa (`namedT`) — "Karimov T."
  * (familiya + bosh harf) joy belgisi EMAS; shuning uchun umumiy "X t."
- * PLACE_WORD_RE / TUMAN_WORD_RE dan olib tashlangan.
+ * PLACE_STRICT_RE / TUMAN_WORD_RE dan olib tashlangan.
+ * r12: nom va "t." orasida chiziqcha yoki nuqta ham ("Qarshi-t.,",
+ * "Qarshi -t.,", "Qarshi.t.,") - xuddi "Qarshi t.," kabi.
  */
-const TUMAN_T_ABBR_RE = /([a-z]{2,})\s+t\.(?=\s*(?:[,;]|$))/g;
-const TUMAN_WORD_RE =
-  /\b(tumani|tuman|tumanida|tumanidagi|tumaniga|rayon|rayoni|raion)\b|\btum\.|\br-n\b/;
+const TUMAN_T_ABBR_RE = /([a-z]{2,})(?:\s*-\s*|\.\s*|\s+)t\.(?=\s*(?:[,;]|$))/g;
+/** `addressTokens` da "X t." dan keyin qo'yiladigan belgi tokeni (r11). */
+const TUMAN_T_ABBR_TOKEN = 'qqtabbrqq';
+/** `addressTokens` ichida vergul / nuqtali vergul o'rni (r13). */
+const SEPARATOR_TOKEN = 'qqsepqq';
+
+/**
+ * Manzil tokenlari va `sepBefore` - oldidan vergul yoki nuqtali vergul
+ * kelgan token indekslari (r13): "Farg'ona rayon, Quva" dagi "rayon"
+ * Farg'ona'niki, keyingi Quva uchun "rayon X" belgisi EMAS.
+ */
+interface AddressTokens {
+  tokens: string[];
+  sepBefore: ReadonlySet<number>;
+}
+const TUMAN_WORD_RE = /\b(tumani|tuman|rayon|rayoni|raion)\b|\br-n\b/;
+/**
+ * r6 qo'shimchali tuman belgilari: "X tumanida / tumanidagi / tumaniga",
+ * "X tum." / "tum. X". Manzilda faqat X topilgan tumanning o'z nomi bo'lsa tur
+ * belgisi - "Qarshi, Navoiy 5, Kasbi tumaniga yaqin" dagi "tumaniga"
+ * Kasbi'niki, Qarshi'ni TUMANga aylantirmaydi (r11).
+ */
+const TUMAN_SUFFIX_RE =
+  /([a-z]{2,})\s+(?:tumanida|tumanidagi|tumaniga)\b|([a-z]{2,})\s+tum\.|\btum\.\s*([a-z]{2,})/g;
 /**
  * r7 B1: vergulsiz "X t. <so'z|uy raqami>" ("Qarshi t. Mustaqillik", "Qarshi
  * T.Malik", "Qarshi t. 5-uy") — tuman belgisi ham, ism bosh harfi / boshqa
  * narsa ham bo'lishi mumkin. Telefon ("t. 90 123 ...", "t. 901234567",
  * "t.: ", "t. +998", "t. (90)"), "t.y." va "[TEL_1]" bundan mustasno.
+ * r12: "Qarshi.t. Navoiy 5", "Qarshi t. [Navoiy 5]" - ham noaniq; "[" faqat
+ * "[TEL_n]" / "[EMAIL]" tokeni oldida belgi emas.
+ * r13: "t.: (90) ...", "t. (tel) 90 ...", "t.: mob. ...", "t. (TEL_1)" -
+ * telefon, belgi emas (head kabi).
  */
 const SOFT_TUMAN_T_RE =
-  /([a-z]{2,})\s+t\.(?!\s*(?:[,;:+([]|$|y\b|y\.|\d{2}\s*\d{3}|\d{5,}))/g;
+  /([a-z]{2,})(?:\s*-\s*|\.\s*|\s+)t\.(?!\s*(?:[,;+]|\[(?:tel|email)|[:(][\s:(]*(?:[+\d[]|tel|mob|nom|raq|sot|phone|aloqa|kont|cont)|$|y\b|y\.|\d{2}\s*\d{3}|\d{5,}))/g;
 
 /**
  * D2: manzilda tuman nomidan KEYIN kelsa — bu ko'cha/mahalla nomi, tuman
@@ -176,6 +209,25 @@ const UL_HOUSE_WORDS: ReadonlySet<string> = new Set([
   'korpus',
   'no',
   'n',
+  // r11: "ul. korp. 2", "ul. nomer 5", "ul. raqam 5", "ul. bino 5"
+  'korp',
+  'kor',
+  'nomer',
+  'raqam',
+  'bino',
+  // r13: "ul. xona 5", "ul. blok 3", "ul. qavat 2", "ул. этаж 4",
+  // "ул. подъезд 1" — xonadon/bino qismi (ko'cha, tuman emas).
+  'xona',
+  'hona',
+  'blok',
+  'qavat',
+  'kavat',
+  'etaj',
+  'etazh',
+  'podyezd',
+  'podezd',
+  'padez',
+  'pod',
 ]);
 /** Nomdan OLDIN kelsa ko'cha belgisi ("ул. Навои", "pr. Amir Temur"). */
 const STREET_BEFORE_WORDS: ReadonlySet<string> = new Set([
@@ -247,20 +299,118 @@ const TUMAN_AFTER_WORDS: ReadonlySet<string> = new Set([
   'raion',
 ]);
 
+/** PR'dagi yangi qo'shimchali tuman belgilari (dev'da belgi emas edi, r6). */
+const NEW_TUMAN_AFTER_WORDS: ReadonlySet<string> = new Set([
+  'tum',
+  'tumanida',
+  'tumanidagi',
+  'tumaniga',
+]);
+
+/** Nomdan keyin "...dan" - jo'natish joyi, yetkazish manzili emas (r7 S3). */
+const ORIGIN_AFTER_WORDS: ReadonlySet<string> = new Set([
+  'tumanidan',
+  'shahridan',
+  'shahardan',
+]);
+
+/**
+ * r13: yashirin raqib qidiruvida nom bo'la olmaydigan so'zlar - belgilar,
+ * ko'cha va uy so'zlari.
+ */
+const HIDDEN_SKIP_WORDS: ReadonlySet<string> = new Set([
+  ...PLACE_AFTER_WORDS,
+  ...ORIGIN_AFTER_WORDS,
+  ...REGION_AFTER_WORDS,
+  // "guzar" - ko'cha so'zi ham, G'uzor'ning rus yozuvi ("Гузар") ham.
+  ...[...STREET_AFTER_WORDS].filter((w) => w !== 'guzar'),
+  ...STREET_BEFORE_WORDS,
+  ...UL_HOUSE_WORDS,
+  'dan',
+  'r',
+  'n',
+  // `geoFold` bilan tuman nomiga yaqin umumiy so'zlar (bozor ~ G'uzor,
+  // katta ~ Quva, yangi ~ Yangiyer, do'kon ~ Qo'qon; mamlakat nomi).
+  'bozor',
+  'bozori',
+  'bozorcha',
+  'katta',
+  'yangi',
+  'dokon',
+  'dukon',
+  'ozbekiston',
+  'uzbekistan',
+]);
+
+/**
+ * r13: matcher ko'rmaydigan yozuvni ("Карши", "Термез", "Денау", "Баяут",
+ * "Yangiyer") tuman nomi bilan fuzzy taqqoslash uchun ikkala tomonda bir
+ * xil yig'iladi: a/u -> o, k -> q, y/e -> i, dj/dzh/zh -> j, takror harf -
+ * bitta.
+ */
+/** PROTO fix1: mamlakat nomi ("Uzbekistan", "Узбекистан") - tuman emas. */
+const COUNTRY_FOLDS: ReadonlySet<string> = new Set(['ozbiqiston']);
+const RU_FROM_WORDS: ReadonlySet<string> = new Set([
+  'iz',
+  's',
+  'ot',
+  'otkuda',
+  'otpravitel',
+  'ryadom',
+  'vozle',
+  'okolo',
+  'bliz',
+]);
+function geoFold(skel: string): string {
+  return skel
+    .replace(/dzh|dj|zh/g, 'j')
+    .replace(/[au]/g, 'o')
+    .replace(/k/g, 'q')
+    .replace(/[ye]/g, 'i')
+    .replace(/(.)\1+/g, '$1');
+}
+
+/**
+ * r13: `tokens[j]` nomga (vergulsiz) qo'shilgan uy raqamimi - "Navoiy 5",
+ * "Navoiy 12-uy" (ko'cha). "Qarshi, 5-mavze" (vergul) va "Chilonzor
+ * 5-kvartal" (mavze / kvartal / massiv raqami) - uy raqami EMAS.
+ */
+function houseNumberAt(
+  tokens: readonly string[],
+  j: number,
+  sepBefore: ReadonlySet<number>,
+): boolean {
+  if (sepBefore.has(j) || !/^\d/.test(tokens[j] ?? '')) return false;
+  return !AREA_AFTER_WORDS.has(tokens[j + 1] ?? '');
+}
+
 /** `tokens[j]` dan aniq tuman belgisi boshlanadimi ("tumani", "t.", "r-n"). */
 function tumanMarkerAt(tokens: string[], j: number): boolean {
   const w = tokens[j] ?? '';
   return TUMAN_AFTER_WORDS.has(w) || (w === 'r' && tokens[j + 1] === 'n');
 }
 
-/** Nomdan OLDIN tuman belgisi — rus tartibi ("р-н X", "rayon X"). */
-function tumanMarkerBefore(tokens: string[], i: number): boolean {
+/**
+ * Nomdan OLDIN belgi — rus tartibi ("г. X" shahar, "р-н X" / "rayon X"
+ * tuman). r13: oradagi vergul yoki nuqtali vergul bilan emas ("Farg'ona
+ * rayon, Quva" dagi "rayon" Quva'niki EMAS).
+ */
+function kindBefore(
+  tokens: string[],
+  i: number,
+  sepBefore: ReadonlySet<number>,
+): DistrictKind | null {
+  if (sepBefore.has(i)) return null;
   const prev = tokens[i - 1] ?? '';
-  return (
+  if (prev === 'g' || prev === 'gorod') return 'city';
+  if (
     prev === 'rayon' ||
     prev === 'raion' ||
     (prev === 'n' && tokens[i - 2] === 'r')
-  );
+  ) {
+    return 'tuman';
+  }
+  return null;
 }
 
 /**
@@ -268,18 +418,34 @@ function tumanMarkerBefore(tokens: string[], i: number): boolean {
  * Nomdan keyingi "t." (`TUMAN_T_ABBR_RE`) — "tumani" tokeni; telefon,
  * "t.y." yoki ism bosh harfidagi "t." esa oddiy "t" bo'lib qoladi.
  */
-function addressTokens(text: string): string[] {
-  return (
-    lightNorm(text)
-      // "№12": translit (kichik harf) dan keyin NFKC "№" → "No" (katta N) —
-      // `[^a-z0-9]` uni o'chirib "o12" qoldirardi (r7 B3).
-      .replace(/No(?=\s*\d)/g, ' no ')
-      .replace(TUMAN_T_ABBR_RE, '$1 tumani ')
-      .replace(RU_ADJ_SUFFIX_RE, '$1')
-      .replace(/[^a-z0-9]+/g, ' ')
-      .split(' ')
-      .filter(Boolean)
-  );
+function addressTokens(text: string): AddressTokens {
+  const raw = lightNorm(text)
+    // "№12": translit (kichik harf) dan keyin NFKC "№" → "No" (katta N) —
+    // `[^a-z0-9]` uni o'chirib "o12" qoldirardi (r7 B3).
+    // r11: raqamsiz "\u2116" ham ("Sergeli ul. \u2116").
+    .replace(/No/g, ' no ')
+    // r11: "X t." -> "tumani" + belgi tokeni (TUMAN_T_ABBR_TOKEN): bosh
+    // harfli ism ("Muborak T.") aniq "sh./tumani"ni bosib ketmasin.
+    .replace(TUMAN_T_ABBR_RE, `$1 tumani ${TUMAN_T_ABBR_TOKEN} `)
+    .replace(RU_ADJ_SUFFIX_RE, '$1')
+    // r13: vergul / nuqtali vergul - qism chegarasi (`sepBefore`).
+    .replace(/[,;]/g, ` ${SEPARATOR_TOKEN} `)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter(Boolean);
+  const tokens: string[] = [];
+  const sepBefore = new Set<number>();
+  let sep = false;
+  for (const t of raw) {
+    if (t === SEPARATOR_TOKEN) {
+      sep = true;
+      continue;
+    }
+    if (sep) sepBefore.add(tokens.length);
+    sep = false;
+    tokens.push(t);
+  }
+  return { tokens, sepBefore };
 }
 
 type DistrictKind = 'city' | 'tuman';
@@ -319,6 +485,96 @@ const AMBIGUOUS_REGION_WORDS: ReadonlySet<string> = (() => {
 const REGION_BASE_WORDS: ReadonlySet<string> = new Set(
   REGION_ALIASES.flatMap((row) => row.bases.map((b) => normGeo(b))),
 );
+/** `REGION_BASE_WORDS` skelet ko'rinishida (`tHeads` bilan taqqoslash). */
+const REGION_BASE_SKELS: ReadonlySet<string> = new Set(
+  [...REGION_BASE_WORDS].map((w) => geoSkeleton(w)),
+);
+/** r13: viloyat asos so'zi skeleti -> viloyat SOATO'lari ("toshkent" - 2). */
+const REGION_SATOS_BY_SKEL: ReadonlyMap<string, ReadonlySet<string>> = (() => {
+  const out = new Map<string, Set<string>>();
+  for (const row of REGION_ALIASES) {
+    for (const b of row.bases) {
+      const sk = geoSkeleton(normGeo(b));
+      const set = out.get(sk) ?? new Set<string>();
+      set.add(row.sato);
+      out.set(sk, set);
+    }
+  }
+  return out;
+})();
+
+/**
+ * r13: matnda KICHIK "t." / "т." bilan yozilgan "W t." nomlari (oxirgi so'z
+ * skeleti) - "Поп т.", "So'x-t.,". Katta "T." ("Furqat T.") - ism bosh harfi
+ * bo'lishi mumkin (S2).
+ */
+const LOWER_T_ABBR_RE =
+  /([\p{L}\p{M}'`\u02bb\u02bc\u2018\u2019]{2,})(?:\s*-\s*|\.\s*|\s+)[t\u0442]\.(?=\s*(?:[,;]|$))/gu;
+function lowerAbbrNames(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(LOWER_T_ABBR_RE)) {
+    const sk = geoSkeleton(lightNorm(m[1]));
+    if (sk) out.add(sk);
+  }
+  return out;
+}
+
+/**
+ * r12 (B3 kengaytmasi): manzilda aniq belgili ("W tumani", "W sh.", "W r-n",
+ * "g. W", "rayon W"; `pool` dagi nom uchun "W t." ham) BOSHQA tuman nomi
+ * bormi - W `heads` (rasmiy/bazadagi tuman nomlari) ichida, lekin `own`
+ * (topilgan tumanlar) emas va viloyat asos so'zi emas ("Toshkent sh." -
+ * viloyat). "Yangiyer tumani, Navoiy 5, Guliston T." da Yangiyer bazada
+ * "Yangier" - topilmaydi, lekin u boshqa tuman.
+ */
+function explicitOtherName(
+  tokenLists: readonly string[][],
+  heads: ReadonlySet<string>,
+  own: ReadonlySet<string>,
+  pool: ReadonlySet<string>,
+  lowerAbbr: ReadonlySet<string>,
+  devOnly = false,
+): boolean {
+  for (const tokens of tokenLists) {
+    for (let j = 0; j < tokens.length; j++) {
+      const w = tokens[j];
+      // "W t." - faqat qidiruv havzasidagi tuman nomi bo'lsa ("Yangiyer t." -
+      // bazada "Yangier"); boshqa viloyat nomi + "T." ism bo'lishi mumkin (S2).
+      // r13: kichik "t." / "т." bilan ("Поп т.", "So'x-t.") - ism bosh harfi
+      // emas, tuman qisqartmasi: havzadan tashqarida ham boshqa tuman.
+      const abbr = w === 'tumani' && tokens[j + 1] === TUMAN_T_ABBR_TOKEN;
+      // r13 `devOnly`: faqat dev belgilari ("t." / "tumaniga" emas).
+      if (devOnly && (abbr || NEW_TUMAN_AFTER_WORDS.has(w))) continue;
+      const after =
+        (PLACE_AFTER_WORDS.has(w) && tokens[j + 1] !== 'dan') ||
+        (w === 'r' && tokens[j + 1] === 'n');
+      const before =
+        w === 'g' ||
+        w === 'gorod' ||
+        w === 'rayon' ||
+        w === 'raion' ||
+        (w === 'n' && tokens[j - 1] === 'r');
+      for (let k = 1; k <= 3; k++) {
+        for (const name of [
+          after && j >= k ? tokens.slice(j - k, j) : null,
+          before ? tokens.slice(j + 1, j + 1 + k) : null,
+        ]) {
+          if (!name || name.length !== k) continue;
+          const sk = name.join('');
+          if (
+            heads.has(sk) &&
+            !own.has(sk) &&
+            !REGION_BASE_SKELS.has(sk) &&
+            (!abbr || pool.has(sk) || lowerAbbr.has(name[k - 1]))
+          ) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
 
 interface PreparedRegion {
   id: string;
@@ -358,6 +614,17 @@ interface PreparedSnapshot {
   districtsByRegion: Map<string, PreparedDistrict[]>;
   /** R2 qo'shnilari keshi (tuman id → boshqa viloyatdagi o'xshashlar). */
   neighbourCache: Map<string, PreparedDistrict[]>;
+  /** r13: `geoFold` shakllari (nom, alias, rasmiy nom) — yashirin raqib. */
+  folds: {
+    id: string;
+    forms: string[];
+    region: string;
+    regionNamed: boolean;
+  }[];
+  /** r13: tuman id -> `geoFold` shakllari (2b belgili moslik). */
+  foldById: Map<string, ReadonlySet<string>>;
+  /** r13: ko'p so'zli nom qismlari ("mirzo", "ulugbek", "rashidov"). */
+  nameParts: ReadonlySet<string>;
 }
 
 /** Tozalangan so'rov: hamma maydon satr ('' = yo'q). */
@@ -446,6 +713,26 @@ const OFFICIAL_KINDS: ReadonlyMap<string, ReadonlySet<DistrictKind>> = (() => {
  */
 const OFFICIAL_SKELS: readonly string[] = satoRegions.flatMap((r) =>
   r.districts.map((d) => geoSkeleton(normGeo(d.name))),
+);
+/**
+ * SOATO kodi -> rasmiy nom skeleti ("1724413" -> "yangiyer"; bazadagi qator
+ * nomi "Yangier").
+ */
+const OFFICIAL_SKEL_BY_SATO: ReadonlyMap<string, string> = new Map(
+  satoRegions.flatMap((r) =>
+    r.districts.map((d) => [d.sato_code, geoSkeleton(normGeo(d.name))]),
+  ),
+);
+
+/**
+ * r13: rasmiy ko'p so'zli nomlarning qismlari (`geoFold`) — "Rashidov T.",
+ * "Ulug'bek T." (ism + bosh harf) yashirin raqib EMAS (r11 B1).
+ */
+const NAME_PART_FOLDS: readonly string[] = satoRegions.flatMap((r) =>
+  r.districts.flatMap((d) => {
+    const tokens = normGeo(d.name).split(' ').filter(Boolean);
+    return tokens.length > 1 ? tokens.map((t) => geoFold(geoSkeleton(t))) : [];
+  }),
 );
 
 function officialHasKind(
@@ -539,6 +826,25 @@ function prepareSnapshot(snapshot: DistrictSnapshot): PreparedSnapshot {
     else districtsByRegion.set(district.region_id, [district]);
   }
 
+  const nameParts = new Set<string>(NAME_PART_FOLDS);
+  const folds = districts.map((d) => {
+    const official = d.sato ? OFFICIAL_SKEL_BY_SATO.get(d.sato) : undefined;
+    if (d.tokens.length > 1) {
+      for (const t of d.tokens) nameParts.add(geoFold(geoSkeleton(t)));
+    }
+    return {
+      id: d.id,
+      region: d.region_id,
+      regionNamed: d.regionNamed,
+      forms: [
+        ...new Set(
+          [d.skel, ...d.aliases, official ?? '']
+            .filter((f) => f.length >= 4)
+            .map(geoFold),
+        ),
+      ],
+    };
+  });
   const prepared: PreparedSnapshot = {
     regionById,
     regionBySato,
@@ -546,6 +852,9 @@ function prepareSnapshot(snapshot: DistrictSnapshot): PreparedSnapshot {
     districts,
     districtsByRegion,
     neighbourCache: new Map(),
+    folds,
+    foldById: new Map(folds.map((f) => [f.id, new Set(f.forms)])),
+    nameParts,
   };
   PREPARED.set(snapshot, prepared);
   return prepared;
@@ -715,23 +1024,98 @@ export function resolveDistrictText(
   ]);
   // r7 B2: "X t." faqat X tuman/viloyat nomi bo'lsa ("Karimov T." — ism
   // bosh harfi, joy belgisi EMAS).
+  // r11: ko'p so'zli nom ("Mirzo Ulug'bek t.", "Sharof Rashidov t.") faqat
+  // TO'LIQ holda - oxirgi so'zning o'zi ("Rashidov T.", "Ulug'bek T." -
+  // familiya/ism + bosh harf) belgi EMAS. Viloyat asoslari faqat shu nomli
+  // tuman/shahar bor viloyatda ("Samarqand t.", "Toshkent t."); "Qashqadaryo
+  // t." - tuman emas.
   const tHeads = new Set<string>(allSkels);
   for (const d of idx.districts) {
-    const last = d.tokens[d.tokens.length - 1];
-    if (last) tHeads.add(geoSkeleton(last));
     for (const a of d.aliases) tHeads.add(a);
   }
+  // Viloyat asosi faqat o'zi (yoki qoidaviy varianti: Samarkand -> samarqand)
+  // tuman/shahar nomi bo'lsa: "Qashqadaryo t." - tuman emas. Qoidaviy
+  // varianti bazadagi nomga yetmaydigan yozuv ("Fergana t.", "Syrdarya t.")
+  // ham belgi emas - tur noaniq qoladi (nomzod), avto emas (r12).
+  const districtHeads = new Set<string>(tHeads);
   for (const row of REGION_ALIASES) {
-    for (const b of row.bases) tHeads.add(geoSkeleton(normGeo(b)));
+    for (const b of row.bases) {
+      const sk = geoSkeleton(normGeo(b));
+      if ([...geoSpellingVariants(sk)].some((v) => districtHeads.has(v))) {
+        tHeads.add(sk);
+      }
+    }
   }
-  const namedT = (text: string, re: RegExp): boolean => {
-    for (const m of lightNorm(text).matchAll(re)) {
-      if (tHeads.has(geoSkeleton(m[1]))) return true;
+  /** `accept` berilsa - "X t." faqat `accept(X)` bo'lsa (r12). */
+  const namedT = (
+    text: string,
+    re: RegExp,
+    accept?: (head: string) => boolean,
+  ): boolean => {
+    const light = lightNorm(text);
+    for (const m of light.matchAll(re)) {
+      const words = light
+        .slice(0, (m.index ?? 0) + m[1].length)
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+      for (let k = 1; k <= 3 && k <= words.length; k++) {
+        const w = words.slice(-k).join('');
+        if (tHeads.has(w) && (!accept || accept(w))) return true;
+      }
     }
     return false;
   };
-  const kindOf = (text: string): DistrictKind | null =>
-    wantedKind(translit(text), namedT(text, TUMAN_T_ABBR_RE));
+  /**
+   * Topilgan tumanlarning nom skeletlari (qo'shimchali belgi egasi) - bazadagi
+   * nom, uning so'zlari, alias'lar va rasmiy SOATO nomi (r12).
+   */
+  const headsOf = (list: readonly PreparedDistrict[]): Set<string> => {
+    const heads = new Set<string>();
+    for (const d of list) {
+      heads.add(d.skel);
+      for (const t of d.tokens) heads.add(geoSkeleton(t));
+      for (const a of d.aliases) heads.add(a);
+      const official = d.sato ? OFFICIAL_SKEL_BY_SATO.get(d.sato) : undefined;
+      if (official) heads.add(official);
+    }
+    return heads;
+  };
+  /**
+   * `heads` berilsa - qo'shimchali belgi faqat shu nomlardan keyin (r13:
+   * `geoFold` bo'yicha ham - "Qarshy tumanida").
+   */
+  const suffixFor = (text: string, heads?: ReadonlySet<string>): boolean => {
+    let folds: Set<string> | null = null;
+    for (const m of lightNorm(text).matchAll(TUMAN_SUFFIX_RE)) {
+      if (!heads) return true;
+      const sk = geoSkeleton(m[1] ?? m[2] ?? m[3]);
+      if (heads.has(sk)) return true;
+      folds ??= new Set([...heads].map(geoFold));
+      if (folds.has(geoFold(sk))) return true;
+    }
+    return false;
+  };
+  /**
+   * r13: "W t." - W topilgan nomning matcher ko'rmaydigan yozuvi bo'lsa ham
+   * (`geoFold`: "Termez t.", "Каган t.") - o'sha nomning tuman belgisi.
+   */
+  const foldAbbrFor = (text: string, heads: ReadonlySet<string>): boolean => {
+    const folds = new Set([...heads].map(geoFold));
+    for (const m of lightNorm(text).matchAll(TUMAN_T_ABBR_RE)) {
+      if (folds.has(geoFold(geoSkeleton(m[1])))) return true;
+    }
+    return false;
+  };
+  const kindOf = (
+    text: string,
+    heads?: ReadonlySet<string>,
+  ): DistrictKind | null =>
+    wantedKind(
+      translit(text),
+      namedT(text, TUMAN_T_ABBR_RE) ||
+        suffixFor(text, heads) ||
+        (!!heads && foldAbbrFor(text, heads)),
+    );
   const addressKind = new Map<string, DistrictKind>();
   const streetRejected = new Set<string>();
   const pool = lockedRegion
@@ -821,10 +1205,146 @@ export function resolveDistrictText(
 
   // PLACE-SIGNAL (BeePost :1596-1601): "tuman/shahar" so'zi yoki
   // district_name bo'lmasa — oddiy ko'cha so'zi jimgina TUMANga aylanmaydi.
-  const hasPlaceSignal =
-    !!q.district_name ||
-    PLACE_WORD_RE.test(translit(`${q.full_address}, ${q.address}`)) ||
-    namedT(`${q.full_address}, ${q.address}`, TUMAN_T_ABBR_RE);
+  const placeText = `${q.full_address}, ${q.address}`;
+  const strictPlaceSignal =
+    !!q.district_name || PLACE_STRICT_RE.test(translit(placeText));
+  /**
+   * r12: 2b zaif moslik uchun PR'dagi yangi belgilar. "Y tumanida/tum." -
+   * faqat Y topilgan nom bo'lsa. "Y t." - Y topilgan nom yoki qidiruv
+   * havzasidan TASHQARIDAGI nom (boshqa viloyat - ism bo'lishi mumkin, S2,
+   * avvalgidek belgi). Havzadagi, lekin topilmagan tuman ("Yangiyer t." -
+   * bazada "Yangier", "Do'stlik T." - "Dustlik", "Djizak t." - alias) - belgi
+   * o'sha tumanniki: yalang'och "Navoiy"/"Sirdaryo" avto emas (dev kabi).
+   */
+  let poolNames: Set<string> | null = null;
+  const placeSignalFor = (
+    list: readonly PreparedDistrict[],
+  ): 'strict' | 'own' | 'outside' | null => {
+    if (strictPlaceSignal) return 'strict';
+    const heads = headsOf(list);
+    if (suffixFor(placeText, heads)) return 'own';
+    if (namedT(placeText, TUMAN_T_ABBR_RE, (w) => heads.has(w))) return 'own';
+    poolNames ??= headsOf(pool);
+    const outside = poolNames;
+    return namedT(placeText, TUMAN_T_ABBR_RE, (w) => !outside.has(w))
+      ? 'outside'
+      : null;
+  };
+  /**
+   * r13: manzilda matcher ko'rmaydigan BOSHQA joy nomi bormi - qidiruv
+   * havzasida aynan yo'q, lekin `geoFold` bilan biror tumanga (alias, rasmiy
+   * nom) fuzzy yaqin so'z: "Карши" (Qarshi), "Термез t." (Termiz), "Денау"
+   * (Denov), "Yangiyer" (bazada Yangier). Uy raqamli / ko'cha / viloyat /
+   * jo'natish joyi ("...dan") so'zi, `own` nomlari va ko'p so'zli nom
+   * qismlari ("Rashidov T.", "Ulug'bek T." - ism) raqib EMAS.
+   */
+  let poolSkels: Set<string> | null = null;
+  let poolIds: Set<string> | null = null;
+  const hiddenRival = (
+    infos: readonly AddressTokens[],
+    own: readonly PreparedDistrict[],
+    opts: {
+      hasOrigin: boolean;
+      devMarkedOnly?: boolean;
+      skipAbbr?: boolean;
+      /** "Самарканд, Ургут т." - `leadRegion(li, j)`: j'dan "X t." viloyati. */
+      leadRegion?: (li: number, j: number) => string | null;
+    },
+  ): boolean => {
+    poolSkels ??= new Set(pool.map((d) => d.skel));
+    poolIds ??= new Set(pool.map((d) => d.id));
+    const ownIds = new Set(own.map((d) => d.id));
+    const ownFolds = new Set([...headsOf(own)].map(geoFold));
+    for (let li = 0; li < infos.length; li++) {
+      const { tokens, sepBefore } = infos[li];
+      for (let i = 0; i < tokens.length; i++) {
+        if (STREET_BEFORE_WORDS.has(tokens[i - 1] ?? '') && !sepBefore.has(i)) {
+          continue;
+        }
+        // 1-2 so'zli nom ("Мирзо Улугбек"); bir harfli token (bosh harf,
+        // "t", "g") - nom emas.
+        for (let k = 1; k <= 2 && i + k <= tokens.length; k++) {
+          const last = tokens[i + k - 1];
+          if (
+            HIDDEN_SKIP_WORDS.has(last) ||
+            /^\d/.test(last) ||
+            last.length < 2
+          ) {
+            break;
+          }
+          if (k > 1 && sepBefore.has(i + k - 1)) break;
+          const w = tokens.slice(i, i + k).join('');
+          if (w.length < 4 || poolSkels.has(w)) continue;
+          if (AMBIGUOUS_REGION_WORDS.has(w)) continue;
+          if (opts.hasOrigin && REGION_BASE_SKELS.has(w)) continue;
+          // Vergul bilan ajralgan keyingi so'z bu nomga tegishli emas.
+          const joined = !sepBefore.has(i + k);
+          const next = joined ? (tokens[i + k] ?? '') : '';
+          const afterNext = tokens[i + k + 1];
+          // S2: havzadan tashqaridagi "Name T." (ism bo'lishi mumkin) - raqib
+          // emas; havzadagi tumanga yaqin "W t." esa raqib.
+          const outsideOnly =
+            !!opts.skipAbbr &&
+            next === 'tumani' &&
+            afterNext === TUMAN_T_ABBR_TOKEN;
+          if (
+            houseNumberAt(tokens, i + k, sepBefore) ||
+            (STREET_AFTER_WORDS.has(next) &&
+              (next !== 'ul' ||
+                afterNext === undefined ||
+                /^(?:no?)?\d/.test(afterNext) ||
+                UL_HOUSE_WORDS.has(afterNext))) ||
+            REGION_AFTER_WORDS.has(next) ||
+            ORIGIN_AFTER_WORDS.has(next) ||
+            (PLACE_AFTER_WORDS.has(next) && afterNext === 'dan')
+          ) {
+            continue;
+          }
+          // dev belgisi (yangi "t." / "tumaniga" emas): "W sh.", "W tumani",
+          // "W r-n", "g. W", "р-н W".
+          const devMark =
+            (PLACE_AFTER_WORDS.has(next) &&
+              !NEW_TUMAN_AFTER_WORDS.has(next) &&
+              !(next === 'tumani' && afterNext === TUMAN_T_ABBR_TOKEN)) ||
+            (next === 'r' && afterNext === 'n') ||
+            (!sepBefore.has(i) &&
+              ['g', 'gorod', 'rayon', 'raion'].includes(tokens[i - 1] ?? '')) ||
+            (!sepBefore.has(i) &&
+              tokens[i - 1] === 'n' &&
+              tokens[i - 2] === 'r');
+          if (opts.devMarkedOnly && !devMark) continue;
+          const f = geoFold(w);
+          if (ownFolds.has(f) || idx.nameParts.has(f)) continue;
+          // Ikki so'zli oyna - qat'iyroq (tasodifiy qo'shilish emas).
+          const min = k > 1 ? GEO_SUBSTRING_MIN : GEO_FUZZY_MIN;
+          // Topilgan nomning o'zi boshqa shaklda ("Каршинский р-н" ->
+          // "karshin" ~ Karshi) - raqib faqat boshqa tumanga YAQINROQ bo'lsa.
+          const ownSim = Math.max(
+            0,
+            ...[...ownFolds].map((g) => simRatio(f, g)),
+          );
+          // Viloyat konteksti ("Самарканд, Ургут т., ...") - shu viloyatning
+          // viloyat nomli tumani raqib emas.
+          const lead =
+            i === 0 && sepBefore.has(k)
+              ? (opts.leadRegion?.(li, k) ?? null)
+              : null;
+          for (const { id, forms, region, regionNamed } of idx.folds) {
+            if (ownIds.has(id)) continue;
+            if (outsideOnly && !poolIds.has(id)) continue;
+            if (lead && regionNamed && region === lead) continue;
+            for (const g of forms) {
+              const m = Math.max(f.length, g.length);
+              if (Math.abs(f.length - g.length) > (1 - min) * m) continue;
+              const sim = simRatio(f, g);
+              if (sim >= min && sim > ownSim) return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
   let forceCandidate = false;
 
   /** Viloyat nomli tuman boshqa topilgan tumandan KEYIN; eng uzun nom. */
@@ -836,6 +1356,15 @@ export function resolveDistrictText(
     const maxLen = ranked[0].geo.length;
     return ranked.filter((d) => d.geo.length === maxLen);
   };
+
+  /** r13: shu viloyatda o'xshash nomli BOSHQA turdagi qator bormi (R1). */
+  const hasKindTwin = (d: PreparedDistrict): boolean =>
+    (idx.districtsByRegion.get(d.region_id) ?? []).some(
+      (s) =>
+        s.id !== d.id &&
+        s.kind !== d.kind &&
+        simRatio(s.geo, d.geo) >= GEO_SUBSTRING_MIN,
+    );
 
   // 2a-usul (BeePost :1603-1623): tuman SO'ROVI ichida butun so'z bilan.
   // ⚠️ Elchi: viloyat nomli tuman boshqa topilgan tumandan KEYIN. Aks holda
@@ -917,14 +1446,105 @@ export function resolveDistrictText(
     }
   }
 
+  const addressTexts = [q.address, q.full_address].filter(Boolean);
+  const tokenInfos = addressTexts.map(addressTokens);
+  /** r13: 2b ziddiyati - 4-usul topmasa shu nomzodlar. */
+  let deferred: PreparedDistrict[] = [];
+  /**
+   * r13: manzilda tilga olingan viloyatlar (asos so'zi, ko'cha nomi emas):
+   * "Toshkent, ..., Ширин-T." - Shirin (Sirdaryo) bu viloyatda emas.
+   */
+  const mentionedRegions = new Set<string>();
+  /**
+   * r13: belgisiz yalang'och "Toshkent" o'rinlari (2b'da tuman sifatida
+   * tanlanmaydi) - yangi belgili tuman uchun yalang'och raqib nom kabi.
+   */
+  const bareTashkent: { li: number; end: number; lead: boolean }[] = [];
+  tokenInfos.forEach(({ tokens, sepBefore }, li) => {
+    tokens.forEach((t, j) => {
+      const next = sepBefore.has(j + 1) ? '' : (tokens[j + 1] ?? '');
+      const prev = sepBefore.has(j) ? '' : (tokens[j - 1] ?? '');
+      let satos = REGION_SATOS_BY_SKEL.get(t);
+      if (!satos && REGION_AFTER_WORDS.has(next) && t.length >= 4) {
+        const s = regionAlias(`${t} ${next}`);
+        if (s) satos = new Set([s]);
+      }
+      if (!satos) return;
+      if (
+        (PLACE_AFTER_WORDS.has(next) && next !== 'sh' && next !== 'g') ||
+        (next === 'r' && tokens[j + 2] === 'n')
+      ) {
+        return;
+      }
+      if (STREET_AFTER_WORDS.has(next) || STREET_BEFORE_WORDS.has(prev)) return;
+      if (houseNumberAt(tokens, j + 1, sepBefore)) return;
+      for (const s of satos) mentionedRegions.add(s);
+      if (
+        AMBIGUOUS_REGION_WORDS.has(t) &&
+        !PLACE_AFTER_WORDS.has(next) &&
+        !REGION_AFTER_WORDS.has(next) &&
+        !(next === 'r' && tokens[j + 2] === 'n') &&
+        !kindBefore(tokens, j, sepBefore)
+      ) {
+        bareTashkent.push({
+          li,
+          end: j + 1,
+          lead: j === 0 && sepBefore.has(j + 1),
+        });
+      }
+    });
+  });
+  /** r13: matnda jo'natish joyi bor ("X tumanidan", "X tumani dan"). */
+  const originInText = tokenInfos.some(({ tokens }) =>
+    tokens.some(
+      (t, j) =>
+        ORIGIN_AFTER_WORDS.has(t) ||
+        (PLACE_AFTER_WORDS.has(t) && tokens[j + 1] === 'dan'),
+    ),
+  );
+  /**
+   * r13: manzilda dev belgili ("W tumani", "W sh.", "р-н W") BOSHQA ma'lum
+   * nom bormi - aniq belgi o'sha tumanniki ("So'x tumani, Navoiy 5,
+   * Furqat-T.", "Pop tumani, ..., Do'stlik T. 90...").
+   */
+  const devOtherName = (list: readonly PreparedDistrict[]): boolean =>
+    explicitOtherName(
+      tokenInfos.map((t) => t.tokens),
+      tHeads,
+      headsOf(list),
+      (poolNames ??= headsOf(pool)),
+      new Set<string>(),
+      true,
+    );
+  /**
+   * r13: zaif moslik / 4-usul belgisi. Belgi aniq dev so'zi ("tumani",
+   * "sh.") bo'lsa - matcher ko'rmaydigan boshqa BELGILI nom ("Янгикурган
+   * gorod") bo'lmasin; PR'dagi yangi belgi (topilgan nomning "X t." /
+   * "X tumanida") - hech qanday yashirin joy nomi bo'lmasin; havzadan
+   * tashqaridagi "Name T." (S2) - havzadagi yashirin nom bo'lmasin.
+   */
+  const weakSignal = (
+    list: readonly PreparedDistrict[],
+    allowOutside: boolean,
+  ): 'ok' | 'none' | 'rival' => {
+    const signal = placeSignalFor(list);
+    if (!signal || (signal === 'outside' && !allowOutside)) return 'none';
+    if (signal === 'strict' && devOtherName(list)) return 'rival';
+    return hiddenRival(tokenInfos, list, {
+      hasOrigin: originInText,
+      devMarkedOnly: signal === 'strict',
+      skipAbbr: signal === 'outside',
+    })
+      ? 'rival'
+      : 'ok';
+  };
   // 2b-usul: MANZIL korpusidan butun so'z bilan. D2: nomdan keyin
   // ko'cha/mahalla so'zi kelsa (yoki oldidan "ул.") — RAD; "tumani/shahri"
   // kelsa — kuchli; boshqa holatda operator tuman yozgan bo'lsa faqat nomzod.
   // full_address ham (alohida matn sifatida): "Andijon shahri, Bo'ston
   // ko'chasi" — Bo'ston RAD, "Andijon shahri" kuchli.
-  const addressTexts = [q.address, q.full_address].filter(Boolean);
   if (!matches.length && addressTexts.length) {
-    const tokenLists = addressTexts.map(addressTokens);
+    const tokenLists = tokenInfos.map((t) => t.tokens);
     // Rus yozuvi varianti ("Юнусабадский район" → yunusabad → yunusobod):
     // faqat KUCHLI holatda (keyin "rayon/tumani/shahri") qabul qilinadi.
     const variantCache = new Map<string, Set<string>>();
@@ -939,13 +1559,35 @@ export function resolveDistrictText(
     const strong: PreparedDistrict[] = [];
     const weak: PreparedDistrict[] = [];
     const softTumanT = new Set<string>();
+    const exactPoolSkels = new Set(pool.map((d) => d.skel));
+    // r12: PR'dagi yangi belgi ("X t.", "X tumaniga/tumanida/tum.") bilan
+    // kuchli tumanning manzildagi so'zi; `devMarked` - dev belgisi bilan.
+    const newMarkWord = new Map<string, string>();
+    const devMarked = new Set<string>();
+    // r12: "X tumanidan / tum-dan / tumani dan" - jo'natish joyi (r7 S3).
+    const originMarked = new Set<string>();
+    // r12: uy raqamisiz yalang'och moslik ("Qarshi, ..."; "Navoiy 5" emas).
+    const plainWeak = new Set<string>();
+    // r13: qoidaviy variantsiz (dev ham ko'radigan) moslik.
+    const exactSeen = new Set<string>();
+    // PROTO fix2: faqat geoFold bilan topilgan (dev ko'rmagan yozuv) nomlar.
+    const foldSeen = new Set<string>();
+    const nonFoldSeen = new Set<string>();
+    // r13: yalang'och moslik o'rinlari va "X t." moslik boshlanishi.
+    const plainAt = new Map<
+      string,
+      { li: number; i: number; end: number; sep: boolean }[]
+    >();
+    const abbrAt = new Map<string, { d: PreparedDistrict; last: string }>();
     for (const d of pool) {
       if (d.geo.length < 4 || !d.tokens.length) continue;
       let best: 'strong' | 'weak' | null = null;
-      for (const tokens of tokenLists) {
+      for (let li = 0; li < tokenInfos.length; li++) {
+        const { tokens, sepBefore } = tokenInfos[li];
         for (let i = 0; i < tokens.length; i++) {
           let len = 0;
           let viaVariant = false;
+          let viaFold = false;
           if (d.tokens.every((w, k) => tokens[i + k] === w))
             len = d.tokens.length;
           else {
@@ -964,14 +1606,38 @@ export function resolveDistrictText(
             len = 1;
             viaVariant = true;
           }
+          // r13: `geoFold` tengligi ("Термез", "Ургенч", "Yangiyer", "Навои")
+          // - qoidaviy variant kabi, faqat belgi bilan. Havzadagi boshqa
+          // tumanning aniq nomi ("Qarshi" - Karshi emas) va viloyat asos
+          // so'zi ("Syrdarya t.", r11 B2) bundan mustasno.
+          for (let k = 1; !len && k <= 2 && i + k <= tokens.length; k++) {
+            if (k > 1 && sepBefore.has(i + k - 1)) break;
+            const w = tokens.slice(i, i + k).join('');
+            if (exactPoolSkels.has(w) || REGION_BASE_SKELS.has(w)) continue;
+            const f = geoFold(w);
+            if (COUNTRY_FOLDS.has(f)) continue;
+            if (f.length >= 4 && idx.foldById.get(d.id)?.has(f)) {
+              len = k;
+              viaVariant = true;
+              viaFold = true;
+            }
+          }
           if (!len) continue;
-          const next = tokens[i + len] ?? '';
+          // r13: vergul / nuqtali verguldan keyingi so'z bu nomning belgisi
+          // emas ("Namangan, г. Туракурган" - "г." Turakurgan'niki).
+          const next = sepBefore.has(i + len) ? '' : (tokens[i + len] ?? '');
           const prev = tokens[i - 1] ?? '';
+          // Rus tartibi — belgi nomdan OLDIN: "г. Termiz", "р-н Shahrisabz"
+          // (#646 review round 2). r13: vergul orqali emas ("Farg'ona
+          // rayon, Quva" - "rayon" Farg'ona'niki).
+          const prevKind = kindBefore(tokens, i, sepBefore);
           if (
             viaVariant &&
             !(
               PLACE_AFTER_WORDS.has(next) ||
-              (next === 'r' && tokens[i + len + 1] === 'n')
+              (next === 'r' && tokens[i + len + 1] === 'n') ||
+              // r13: "р-н Фуркат" (Furqat) - belgi nomdan OLDIN.
+              prevKind
             )
           ) {
             continue;
@@ -986,7 +1652,7 @@ export function resolveDistrictText(
             AMBIGUOUS_REGION_WORDS.has(d.geo) &&
             d.kind !== 'city' &&
             !tumanMarkerAt(tokens, i + len) &&
-            !tumanMarkerBefore(tokens, i)
+            kindBefore(tokens, i, sepBefore) !== 'tuman'
           ) {
             // "Toshkent t. Keles" — "t." keyin vergulsiz: tuman belgisi
             // ham, ism bosh harfi ("T. Malik") ham bo'lishi mumkin — faqat
@@ -1023,31 +1689,62 @@ export function resolveDistrictText(
               streetRejected.add(d.id);
             continue;
           }
+          if (!viaVariant) exactSeen.add(d.id);
+          const afterMark =
+            PLACE_AFTER_WORDS.has(next) ||
+            (next === 'r' && tokens[i + len + 1] === 'n');
+          if (viaFold || (viaVariant && !afterMark)) foldSeen.add(d.id);
+          else nonFoldSeen.add(d.id);
+          // PROTO fix5: rus old qo'shimchasi - "из г. X", "с г. X", "рядом с г.
+          // X", "от X" - jo'natish joyi / mo'ljal, yetkazish belgisi emas.
+          if (
+            prevKind &&
+            RU_FROM_WORDS.has(tokens[i - 2] ?? '') &&
+            !sepBefore.has(i - 1)
+          ) {
+            originMarked.add(d.id);
+            continue;
+          }
           const isRn = next === 'r' && tokens[i + len + 1] === 'n';
-          if (PLACE_AFTER_WORDS.has(next) || isRn) {
+          // r12: "X tum-dan", "X tumani dan" ("tumanidan" ajratib yozilgan,
+          // "...dan kelgan") - yetkazish belgisi EMAS (r7 S3 bilan bir xil).
+          const fromPlace =
+            PLACE_AFTER_WORDS.has(next) && tokens[i + len + 1] === 'dan';
+          if (fromPlace || ORIGIN_AFTER_WORDS.has(next)) originMarked.add(d.id);
+          if (!fromPlace && (PLACE_AFTER_WORDS.has(next) || isRn)) {
+            const viaAbbr =
+              next === 'tumani' && tokens[i + len + 1] === TUMAN_T_ABBR_TOKEN;
+            if (viaAbbr) {
+              abbrAt.set(`${li}:${i}`, { d, last: tokens[i + len - 1] });
+            }
+            if (viaAbbr || NEW_TUMAN_AFTER_WORDS.has(next)) {
+              if (!newMarkWord.has(d.id))
+                newMarkWord.set(d.id, tokens.slice(i, i + len).join(''));
+            } else devMarked.add(d.id);
             best = 'strong';
             addressKind.set(
               d.id,
               CITY_AFTER_WORDS.has(next) ? 'city' : 'tuman',
             );
+            if (viaAbbr) continue;
             break;
           }
-          // Rus tartibi — belgi nomdan OLDIN: "г. Termiz", "р-н Shahrisabz"
-          // (#646 review round 2: tur kind_mismatch'ga yetib borsin).
-          const prevKind: DistrictKind | null =
-            prev === 'g' || prev === 'gorod'
-              ? 'city'
-              : (prev === 'n' && tokens[i - 2] === 'r') ||
-                  prev === 'rayon' ||
-                  prev === 'raion'
-                ? 'tuman'
-                : null;
+          // Rus tartibi — belgi nomdan OLDIN (tur kind_mismatch'ga yetib
+          // borsin).
           if (prevKind) {
             best = 'strong';
+            devMarked.add(d.id);
             addressKind.set(d.id, prevKind);
             break;
           }
-          best = 'weak';
+          // "X t." dan keyin davom etilgan bo'lsa - kuchli saqlanadi (r11).
+          if (best !== 'strong') best = 'weak';
+          if (!houseNumberAt(tokens, i + len, sepBefore)) {
+            plainWeak.add(d.id);
+            const occ = plainAt.get(d.id) ?? [];
+            occ.push({ li, i, end: i + len, sep: sepBefore.has(i + len) });
+            plainAt.set(d.id, occ);
+          }
         }
         if (best === 'strong') break;
       }
@@ -1055,18 +1752,184 @@ export function resolveDistrictText(
       else if (best === 'weak') weak.push(d);
     }
     if (strong.length || weak.length) stage = 'address';
-    if (strong.length) {
-      matches = longestNonRegion(strong);
+    // r12: yalang'och raqib nom - jo'natish joyi ("X tumanidan") va uy raqamli
+    // ko'cha ("Navoiy 5") emas. Matnda jo'natish joyi bo'lsa ("...dan Y
+    // tumaniga" - Y manzil), viloyat nomli so'z ("Sirdaryo, Guliston shahridan
+    // Boyovut tumaniga") raqib emas.
+    const bareRival = (d: PreparedDistrict): boolean =>
+      plainWeak.has(d.id) &&
+      !originMarked.has(d.id) &&
+      (!d.regionNamed || (!originMarked.size && !originInText));
+    /**
+     * r13: "Samarqand, Urgut t., Navoiy 5" - maydon boshidagi viloyat nomli
+     * yalang'och so'z, vergul va darhol shu viloyatdagi KICHIK "t." bilan
+     * yozilgan tuman - viloyat konteksti, raqib emas. "Navoiy, Navoiy
+     * ko'chasi 5, oluvchi Navbahor T." (orada ko'cha, katta "T.") - raqib.
+     */
+    const lowerAbbr = lowerAbbrNames(addressTexts.join(', '));
+    const regionLead = (d: PreparedDistrict): boolean => {
+      const occ = plainAt.get(d.id) ?? [];
+      return (
+        d.regionNamed &&
+        occ.length > 0 &&
+        occ.every((o) => {
+          const a = abbrAt.get(`${o.li}:${o.end}`);
+          return (
+            o.i === 0 &&
+            o.sep &&
+            !!a &&
+            a.d.region_id === d.region_id &&
+            lowerAbbr.has(a.last)
+          );
+        })
+      );
+    };
+    // r12: faqat yangi belgilar bilan kuchli IKKI xil nom ("Qarshi t., ...,
+    // Muborak T.", "Qarshi tumaniga Kasbi tumaniga") - eng uzun nom emas,
+    // hammasi nomzod (dev'da ular belgi emas edi).
+    const newOnlyWords = new Set<string>();
+    for (const d of strong) {
+      const w = newMarkWord.get(d.id);
+      if (w !== undefined && !devMarked.has(d.id)) newOnlyWords.add(w);
+    }
+    if (strong.some((d) => devMarked.has(d.id))) {
+      // r12: dev belgisi ("Kasbi tumani") yangi qo'shimchali belgidan
+      // ("Muborak tumaniga" - ko'pincha mo'ljal) ustun - dev bilan bir xil.
+      // r13: "X t." / "Name T." ham ("Qarshi sh., Navoiy 5, Muborak T.",
+      // "Yangier sh., ..., oluvchi Shirin T.") - aniq belgili tuman, dev kabi.
+      const foldOnly = (d: PreparedDistrict) =>
+        foldSeen.has(d.id) && !nonFoldSeen.has(d.id);
+      const dm = strong.filter((d) => devMarked.has(d.id));
+      const dmVisible = dm.filter((d) => !foldOnly(d));
+      if (dmVisible.length && dmVisible.length < dm.length) {
+        // dev ko'rgan aniq belgili nom bor - dev tanlovi (fold-only raqib emas).
+        matches = longestNonRegion(dmVisible);
+      } else if (
+        !dmVisible.length &&
+        ([...strong, ...weak].some(
+          (d) =>
+            !foldOnly(d) &&
+            !dm.includes(d) &&
+            !d.regionNamed &&
+            !originMarked.has(d.id) &&
+            plainWeak.has(d.id),
+        ) ||
+          (mentionedRegions.size > 0 &&
+            dm.some((d) => {
+              const sato = idx.regionById.get(d.region_id)?.sato;
+              return !!sato && !mentionedRegions.has(sato);
+            })))
+      ) {
+        // fold-only belgili nom + dev ko'rgan boshqa asosiy nom yoki boshqa
+        // viloyat - nomzod (dev bu nomni ko'rmasdi).
+        matches = [...dm, ...strong, ...weak].slice(0, AI_MAX_CANDIDATES);
+        candidateOnly = true;
+      } else {
+        matches = longestNonRegion(dm);
+      }
+    } else if (strong.length) {
+      // Faqat PR'dagi yangi belgilar ("X t.", "Y tumaniga/tumanida/tum.").
+      // Raqib bo'lsa - hammasi nomzod (dev'da ular belgi emas edi):
+      //  - ikki xil yangi belgili nom (r12 C5);
+      //  - yalang'och raqib nom ("Qarshi, Navoiy 5, Kasbi tumaniga yaqin",
+      //    "Qarshi, Navoiy ko'chasi 5, Muborak T." - Y mo'ljal yoki ism);
+      //  - topilmagan boshqa belgili nom ("Yangiyer sh.", "Pop-t.", r12 C4);
+      //  - matcher ko'rmaydigan yozuvdagi boshqa joy nomi ("Карши, ...",
+      //    "Termez t., ..., Nishon-T.", r13);
+      //  - belgisiz "Toshkent" yoki matndagi BOSHQA viloyat ("Toshkent, ...,
+      //    Мубарак T.", r13).
+      // "Samarqand, Urgut t., ..." (viloyat konteksti) - raqib emas.
+      const conflict =
+        newOnlyWords.size >= 2 ||
+        weak.some((d) => bareRival(d) && !regionLead(d)) ||
+        bareTashkent.some((o) => {
+          const a = o.lead ? abbrAt.get(`${o.li}:${o.end}`) : undefined;
+          return !(
+            a &&
+            lowerAbbr.has(a.last) &&
+            isTashkentSato(idx.regionById.get(a.d.region_id)?.sato)
+          );
+        }) ||
+        // r13: matndagi viloyat boshqa ("Toshkent, ..., Мубарак T.").
+        (mentionedRegions.size > 0 &&
+          strong.some((d) => {
+            const sato = idx.regionById.get(d.region_id)?.sato;
+            return !!sato && !mentionedRegions.has(sato);
+          })) ||
+        explicitOtherName(
+          tokenLists,
+          tHeads,
+          headsOf(strong),
+          (poolNames ??= headsOf(pool)),
+          lowerAbbr,
+        ) ||
+        hiddenRival(tokenInfos, strong, {
+          hasOrigin: originInText,
+          leadRegion: (li, j) => {
+            const a = abbrAt.get(`${li}:${j}`);
+            return a && lowerAbbr.has(a.last) ? a.d.region_id : null;
+          },
+        });
+      if (!conflict) {
+        matches = longestNonRegion(strong);
+      } else {
+        // r13: ziddiyatda dev kabi (yangi belgilarsiz): yagona yalang'och nom
+        // + aniq dev belgisi ("Toshkent shahri, Uchtepa, ..., Mirobod
+        // tumanidagi bozor yonida") - dev'ning avto tanlovi saqlanadi;
+        // aks holda hammasi nomzod.
+        const devWeak = [...weak, ...strong.filter((d) => exactSeen.has(d.id))];
+        const devPick =
+          devWeak.filter((d) => !d.regionNamed).length > 1 || !devWeak.length
+            ? []
+            : longestNonRegion(devWeak);
+        const keep =
+          devPick.length === 1 &&
+          !dq &&
+          strictPlaceSignal &&
+          !softTumanT.has(devPick[0].id) &&
+          !hasKindTwin(devPick[0]) &&
+          !devOtherName(devPick) &&
+          !hiddenRival(tokenInfos, devPick, {
+            hasOrigin: originInText,
+            devMarkedOnly: true,
+          });
+        if (keep) {
+          matches = devPick;
+        } else if (!devWeak.length) {
+          // dev'da 2b hech narsa topmasdi (faqat qoidaviy variantli yangi
+          // belgi: "Кува туманига") - 4-usul dev kabi; topilmasa nomzodlar.
+          deferred = strong;
+        } else {
+          matches = [...strong, ...weak].slice(0, AI_MAX_CANDIDATES);
+          candidateOnly = true;
+        }
+      }
     } else if (weak.length) {
+      // r13: jo'natish joyi ("Zarbdor tumanidan kelgan") yetkazish manzili
+      // emas - boshqa yalang'och (uy raqamisiz) moslik bo'lsa o'shalardan
+      // ("Jizzax, ..., Zarbdor tumanidan kelgan"); aks holda dev kabi.
+      const dest = weak.filter(
+        (d) => !originMarked.has(d.id) && plainWeak.has(d.id),
+      );
+      const pickFrom =
+        dest.length && weak.some((d) => originMarked.has(d.id)) ? dest : weak;
       // Bir nechta zaif moslik — HAMMASI nomzod (eng uzuni emas).
-      const weakNonRegion = weak.filter((d) => !d.regionNamed);
+      const weakNonRegion = pickFrom.filter((d) => !d.regionNamed);
       if (weakNonRegion.length > 1) {
         matches = weakNonRegion;
         candidateOnly = true;
       } else {
-        matches = longestNonRegion(weak);
+        matches = longestNonRegion(pickFrom);
       }
-      if (!hasPlaceSignal) forceCandidate = true;
+      // r12: belgi faqat boshqa nomning "Y t." / "Y tumanida/tum." belgisi
+      // bo'lsa (Y topilmagan) - yalang'och moslik avto emas.
+      // r13: belgi matcher ko'rmaydigan BOSHQA nomniki bo'lsa ("Янгикурган
+      // gorod, ..." / "Termez tumani, ..."), yoki faqat havzadan tashqaridagi
+      // "Name T." (S2) va manzilda yashirin joy nomi bo'lsa ("Sirdaryo,
+      // Yangiyer, ..., Нишон T.") - avto emas.
+      const signal = weakSignal(matches, true);
+      if (signal === 'none') forceCandidate = true;
+      if (signal === 'rival') candidateOnly = true;
       if (matches.some((d) => softTumanT.has(d.id))) candidateOnly = true;
       // Operator tuman nomini yozgan, lekin u topilmadi — manzildagi so'z
       // bilan almashtirish TAXMIN.
@@ -1105,10 +1968,19 @@ export function resolveDistrictText(
         matches = bestDs.slice(0, AI_MAX_CANDIDATES);
         stage = 'substring';
         stageScore = Math.round(bestScore * 1000) / 1000;
-        if (!hasPlaceSignal) forceCandidate = true;
+        // r13: belgi topilgan nomniki bo'lsa (yoki aniq dev so'zi) -
+        // "Pop-t., ..., Do'stlik T. 90..." dagi "Pop-t." Do'stlik uchun joy
+        // belgisi EMAS; havzadan tashqaridagi "Name T." (S2) ham bu yerda
+        // belgi emas (dev kabi nomzod); "Пахтаабад, Мархамат туманига
+        // яқин" - yashirin boshqa joy nomi bilan avto emas.
+        const signal = weakSignal(matches, false);
+        if (signal === 'none') forceCandidate = true;
+        if (signal === 'rival') candidateOnly = true;
         // D3: operator yozgan tuman nomi so'zma-so'z topilmadi — korpus
         // ichidagi qism ("Quvasoy" ichida "Quva") faqat nomzod.
         if (dq) candidateOnly = true;
+        // PROTO fix3: 2b ziddiyati 4-usulga qoldirilgan bo'lsa - avto emas.
+        if (matches.some((d) => deferred.includes(d))) candidateOnly = true;
         if (matches.every((d) => streetRejected.has(d.id) || d.regionNamed))
           candidateOnly = true;
         via4 = true;
@@ -1164,9 +2036,14 @@ export function resolveDistrictText(
     }
   }
 
+  if (!matches.length && deferred.length) {
+    matches = deferred.slice(0, AI_MAX_CANDIDATES);
+    candidateOnly = true;
+  }
+
   // R1: shahar/tuman afzalligi (SOATO turi bo'yicha).
   const markerText = `${q.district_name}, ${q.full_address || q.address}`;
-  const want = kindOf(markerText);
+  const want = kindOf(markerText, headsOf(matches));
   matches = preferCityOrTuman(matches, want, idx);
   // r7 B1: vergulsiz "Qarshi t. Mustaqillik" — tur noaniq: shahar/tuman
   // juftligida ikkalasi NOMZOD, hech biri avto emas (yalang'och "Qarshi"
