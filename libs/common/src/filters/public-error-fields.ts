@@ -5,6 +5,7 @@ import { WAREHOUSE_ERROR_CODES } from '../catalog/warehouse';
 import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
 import { ORDER_OPERATOR_ERROR_CODES } from '../order/order-operator-assign';
+import { ORDER_CREATE_ERROR_CODES } from '../order/order-create-error-codes';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
 import {
@@ -161,6 +162,14 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [ORDER_OPERATOR_ERROR_CODES.ALREADY_ASSIGNED]: [],
   [ORDER_OPERATOR_ERROR_CODES.EXTERNAL]: [],
   [ORDER_OPERATOR_ERROR_CODES.MARKET_CHANGED]: [],
+  // Buyurtma yaratish (POST /orders) — 400: operator raqami majburiy,
+  // tanlangan operator shu marketniki/faol emas, market operatori faqat o'zi.
+  ...Object.fromEntries(
+    Object.values(ORDER_CREATE_ERROR_CODES).map((code) => [
+      code,
+      [] as readonly string[],
+    ]),
+  ),
   // (2026-11-09) bugungi buyurtma qabuli yopiq — 409; `reopens_at` — kun
   // almashadigan lahza (ISO), `cutoff_time` — qo'yilgan qabul vaqti (HH:MM).
   [ORDER_INTAKE_CLOSED]: ['reopens_at', 'cutoff_time'],

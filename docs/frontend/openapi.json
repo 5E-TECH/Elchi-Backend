@@ -3470,7 +3470,7 @@
         },
         "responses": {
           "200": {
-            "description": "{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija"
+            "description": "{ statusCode: 200, message, data: { results: [{ index, ok, order_id?, code?, reason_code?, reason?, idempotent_replay? }] } } — har buyurtmaga alohida natija. `reason_code` (ixtiyoriy, UPPER_CASE, faqat `ok:false`) — `code` dan aniqroq sabab: `OPERATOR_PHONE_REQUIRED`, `CHOSEN_OPERATOR_NOT_SELECTABLE`, `CHOSEN_OPERATOR_SELF_ONLY` (hammasida `code: \"create_failed\"`). Mijoz `reason` matnini tahlil qilmasin. Takror (ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan) — `{ ok: true, order_id, idempotent_replay: true }`, operator/raqam qayta tekshirilmaydi."
           },
           "400": {
             "description": "(`AI_ACK_CHECKS_ENFORCE=on`) AI_DRAFT_REQUIRED — buyurtmada `draft_id` yoki `ai_item_index` yo'q (ack talabini chetlab o'tib bo'lmaydi). Tana: `{ statusCode: 400, message, code: 'AI_DRAFT_REQUIRED', indexes: number[] }` (so'rovdagi `orders[]` o'rinlari). AI_DRAFT_NOT_FOUND — `draft_id` shu market uchun ai-service'da topilmadi; AI_DRAFT_ITEM_NOT_FOUND — draft bor, lekin saqlangan preview'da bunday `ai_item_index` yo'q. Ikkalasida ham tana xuddi shunday `indexes: number[]`; AI'ni qayta yurgizing yoki qo'lda yarating. Boshqa 400 — DTO validatsiyasi."

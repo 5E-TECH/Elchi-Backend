@@ -541,3 +541,46 @@ describe('IdempotencyService.markCompleted / markFailed (BOT-3d)', () => {
     );
   });
 });
+
+describe('IdempotencyService.findCompleted (faqat o‘qish)', () => {
+  const serviceWithFind = (find: jest.Mock) => {
+    const repo = makeRepo();
+    return {
+      repo,
+      service: new IdempotencyService({
+        ...repo,
+        find,
+      } as unknown as Repository<IdempotencyKey>),
+    };
+  };
+
+  it('faqat `completed` qatorlar, kalit → javob; hech narsa yozilmaydi', async () => {
+    const find = jest
+      .fn()
+      .mockResolvedValue([
+        { key: 'order.create:a', response: { data: { id: '5' } } },
+      ]);
+    const { repo, service } = serviceWithFind(find);
+
+    const out = await service.findCompleted([
+      'order.create:a',
+      'order.create:b',
+    ]);
+
+    expect([...out]).toEqual([['order.create:a', { data: { id: '5' } }]]);
+    const [arg] = find.mock.calls[0] as [
+      { where: { status: string }; select: Record<string, boolean> },
+    ];
+    expect(arg.where.status).toBe('completed');
+    expect(arg.select).toEqual({ key: true, response: true });
+    expect(repo.insert).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('bo‘sh ro‘yxat — DB so‘ralmaydi', async () => {
+    const find = jest.fn();
+    const { service } = serviceWithFind(find);
+    expect((await service.findCompleted([])).size).toBe(0);
+    expect(find).not.toHaveBeenCalled();
+  });
+});

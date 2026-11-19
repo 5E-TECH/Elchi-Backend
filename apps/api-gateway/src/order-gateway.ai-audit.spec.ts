@@ -130,7 +130,12 @@ function setup(
     return of({ data: null });
   });
   let next = 5000;
-  orderC.send.mockImplementation(() => of({ data: { id: String(next++) } }));
+  orderC.send.mockImplementation((pattern) =>
+    // Takror so'rovi (`markAiReplays`): avval yaratilgan band yo'q.
+    pattern.cmd === 'order.ai_confirm.completed'
+      ? of({ data: { items: [] } })
+      : of({ data: { id: String(next++) } }),
+  );
   ai.send.mockImplementation((pattern) => {
     if (pattern.cmd === 'ai.draft.confirm_context') {
       return opts.contextError
@@ -414,7 +419,18 @@ describe('ai-confirm — barqaror idempotency kaliti (Cp2v3ZJ7)', () => {
     // order-service `executeIdempotent` emulyatsiyasi: request_id → bitta buyurtma.
     const byKey = new Map<string, string>();
     let next = 7000;
-    fx.orderC.send.mockImplementation((_p, payload) => {
+    fx.orderC.send.mockImplementation((p, payload) => {
+      // `order.ai_confirm.completed` — tugagan barqaror kalitlar (faqat o'qish).
+      if (p.cmd === 'order.ai_confirm.completed') {
+        const ids = (payload.request_ids ?? []) as string[];
+        return of({
+          data: {
+            items: ids
+              .filter((id) => byKey.has(id))
+              .map((id) => ({ request_id: id, order_id: byKey.get(id) })),
+          },
+        });
+      }
       const key = String(payload.request_id);
       const existing = byKey.get(key);
       if (existing) {

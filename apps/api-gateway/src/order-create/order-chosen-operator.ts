@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { Roles as RoleEnum } from '@app/common';
+import { ORDER_CREATE_ERROR_CODES, Roles as RoleEnum } from '@app/common';
 import { INT8_MAX, OptionalPositiveInt8Id } from './positive-int8-id';
 
 /**
@@ -56,6 +56,20 @@ export function OptionalChosenOperatorId(): PropertyDecorator {
   return OptionalPositiveInt8Id(CHOSEN_OPERATOR_ID_FORMAT_MESSAGE);
 }
 
+/** 400 — kod bilan (#658): ai-confirm natijasida `reason_code` bo'ladi. */
+const notSelectable = () =>
+  new BadRequestException({
+    statusCode: 400,
+    message: CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE,
+    code: ORDER_CREATE_ERROR_CODES.CHOSEN_OPERATOR_NOT_SELECTABLE,
+  });
+const selfOnly = () =>
+  new BadRequestException({
+    statusCode: 400,
+    message: CHOSEN_OPERATOR_SELF_ONLY_MESSAGE,
+    code: ORDER_CREATE_ERROR_CODES.CHOSEN_OPERATOR_SELF_ONLY,
+  });
+
 const BIGINT_ID_RE = /^[0-9]{1,19}$/;
 
 /** Ichki chaqiruvlar: boshida nol bo'lishi mumkin, lekin 0 va int8 dan katta — yo'q. */
@@ -88,7 +102,7 @@ export async function resolveChosenOrderOperator(params: {
   }
   // DTO tekshiradi; bu — DTO'dan o'tmaydigan ichki chaqiruvlar uchun.
   if (!isInt8IdText(operatorId)) {
-    throw new BadRequestException(CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE);
+    throw notSelectable();
   }
   const chosenId = canonicalId(operatorId);
 
@@ -100,13 +114,13 @@ export async function resolveChosenOrderOperator(params: {
   ) {
     const self = idText(params.requesterId);
     if (!BIGINT_ID_RE.test(self) || canonicalId(self) !== chosenId) {
-      throw new BadRequestException(CHOSEN_OPERATOR_SELF_ONLY_MESSAGE);
+      throw selfOnly();
     }
   }
 
   const marketId = idText(params.marketId);
   if (!BIGINT_ID_RE.test(marketId)) {
-    throw new BadRequestException(CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE);
+    throw notSelectable();
   }
   const response = await params.loadSelectable({
     market_id: canonicalId(marketId),
@@ -120,7 +134,7 @@ export async function resolveChosenOrderOperator(params: {
       )
     : undefined;
   if (!match) {
-    throw new BadRequestException(CHOSEN_OPERATOR_NOT_SELECTABLE_MESSAGE);
+    throw notSelectable();
   }
   return {
     id: chosenId,

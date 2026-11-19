@@ -247,6 +247,40 @@ describe('ai-order.helpers', () => {
       });
     });
 
+    it('reason_code: gateway 400 tanasidagi UPPER_CASE `code` o`tadi; RMQ obyekti va kichik harfli kod — yo`q', () => {
+      expect(
+        toConfirmFailure(
+          new BadRequestException({
+            statusCode: 400,
+            message: 'Operator telefon raqami majburiy',
+            code: 'OPERATOR_PHONE_REQUIRED',
+          }),
+        ),
+      ).toEqual({
+        code: 'create_failed',
+        reason: 'Operator telefon raqami majburiy',
+        reason_code: 'OPERATOR_PHONE_REQUIRED',
+      });
+      // RMQ'dan kelgan oddiy obyekt — servis ichki kodi chiqmaydi.
+      expect(
+        toConfirmFailure({
+          statusCode: 400,
+          message: 'yiqildi',
+          code: 'INTERNAL_THING',
+        }),
+      ).toEqual({ code: 'create_failed', reason: 'yiqildi' });
+      expect(
+        toConfirmFailure(
+          new BadRequestException({ message: 'x', code: '23505' }),
+        ),
+      ).toEqual({ code: 'create_failed', reason: 'x' });
+      // Kodsiz 400 — avvalgidek (reason_code yo'q).
+      expect(toConfirmFailure(new BadRequestException('oddiy'))).toEqual({
+        code: 'create_failed',
+        reason: 'oddiy',
+      });
+    });
+
     it('gateway o`zi tashlagan 503 (ServiceUnavailableException) — validation_unavailable, matni bilan', () => {
       expect(
         toConfirmFailure(

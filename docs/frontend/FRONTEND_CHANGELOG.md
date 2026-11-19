@@ -22,6 +22,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 ## Yozuvlar
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
+### 2026-11-18 — AI tasdiq: natijada `reason_code`; takror tekshiruvlardan oldin
+
+Deploy: **order-service va api-gateway** (yangi RMQ `order.ai_confirm.completed`; gateway eski order-service bilan ham ishlaydi — so'rov javob bermasa avvalgi yo'l). Migratsiyasiz. Orqaga mos — yangi maydon qo'shimcha.
+
+- ✏️ [gateway] `POST /orders/ai-confirm` — `results[]` da yangi ixtiyoriy **`reason_code`** (UPPER_CASE, #658 kontrakti; faqat `ok: false` da, bo'lsa). `code` va `reason` O'ZGARMAGAN (`code: 'create_failed'`), `reason_code` — aniqroq sabab:
+  - `OPERATOR_PHONE_REQUIRED` — market operator raqamini majburiy qilgan, doimiy raqam yo'q, `operator_phone` yuborilmagan;
+  - `CHOSEN_OPERATOR_NOT_SELECTABLE` — `operator_id` buyurtma marketining faol operatori emas;
+  - `CHOSEN_OPERATOR_SELF_ONLY` — market operatori boshqa operatorni tanlagan.
+  Mijozlar (FE, Telegram bot) o'zbekcha `reason` matnini TAHLIL QILMASIN — `reason_code` ni tekshirsin (`reason` faqat ko'rsatish uchun). Kelajakda boshqa kodlar qo'shilishi mumkin — noma'lum `reason_code` ni `code` bo'yicha umumiy xato deb ko'rsating.
+- ✏️ [gateway] `POST /orders` (va `PUT /orders/:id/operator` dagi operator tekshiruvi) 400 tanasida endi `code`: yuqoridagi uchta kod (matn o'zgarmagan).
+- 🔧 [gateway] **Takror tartibi:** ayni `draft_id` + `ai_item_index` bilan buyurtma avval yaratilgan bo'lsa (masalan natijasi noma'lum 1-urinish, keyin «✅» qayta), endi operator, operator raqami va mijoz QAYTA TEKSHIRILMAYDI — darhol `{ ok: true, order_id, idempotent_replay: true }`. Ilgari operator orada o'chirilsa yoki market raqamni majburiy qilsa, mavjud buyurtma `create_failed` bo'lib ko'rinardi. Yangi bandlar uchun tekshiruvlar o'zgarmagan; takror faqat shu market (server aniqlagan) kalitlari bo'yicha. AI ack darvozalari (400/409/503) takrorda ham avvalgidek.
+
+**Frontend / bot action items:**
+- 🔧 Telegram bot (#721): operator raqami / operator xatosini `reason` matni bilan emas, `results[i].reason_code === 'OPERATOR_PHONE_REQUIRED'` va `reason_code === 'CHOSEN_OPERATOR_NOT_SELECTABLE' || reason_code === 'CHOSEN_OPERATOR_SELF_ONLY'` bilan aniqlasin (`ok === false`). `reason_code` yo'q eski gateway uchun — matn bo'yicha fallback vaqtincha qolishi mumkin.
+
 ### 2026-11-18 — AI tasdiq: mavjud mijozni tanlash (`orders[].customer_id`)
 
 Deploy: api-gateway, migratsiyasiz. Orqaga mos — maydon ixtiyoriy.

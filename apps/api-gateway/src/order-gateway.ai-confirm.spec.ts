@@ -169,7 +169,12 @@ const makeController = () => {
     return of({ data: null });
   });
   let nextOrderId = 1000;
-  order.send.mockImplementation(() => of({ id: String(nextOrderId++) }));
+  order.send.mockImplementation((pattern) =>
+    // Takror so'rovi (`markAiReplays`): avval yaratilgan band yo'q.
+    pattern.cmd === 'order.ai_confirm.completed'
+      ? of({ data: { items: [] } })
+      : of({ id: String(nextOrderId++) }),
+  );
   // AI ack: ai-confirm draft'ni ai-service'dan oladi — so'ralgan har draft
   // "eski" (snapshot'siz) sifatida qaytadi (tasdiq so'ralmaydi).
   ai.send.mockImplementation((pattern, payload) =>
