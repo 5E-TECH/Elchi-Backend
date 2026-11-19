@@ -1052,7 +1052,7 @@ export class AiOrderService implements OnModuleDestroy {
       return result.idempotent_replay &&
         order &&
         editedAfterAttempt(order, extra)
-        ? [line, `⚠️ ${n}) ${AI_EDITS_NOT_APPLIED_TEXT}`]
+        ? [line, AI_EDITS_NOT_APPLIED_TEXT.replace(/^⚠️ /, `⚠️ ${n}) `)]
         : [line];
     });
     for (const order of unacked) {
@@ -1219,15 +1219,17 @@ export class AiOrderService implements OnModuleDestroy {
         text,
         '',
         ...(phoneRetry ? [AI_OPERATOR_PHONE_RETRY_TEXT] : []),
-        // Natijasi noma'lum buyurtma bo'lsa «🎧 Operator» yopiq — matn shunga mos.
+        // Matnlar BUTUN qoralama bo'yicha (shu urinish emas): oldingi
+        // urinishdan qolgan belgilar ham hisobga olinadi. Natijasi noma'lum
+        // buyurtma bo'lsa «🎧 Operator» yopiq — matn shunga mos.
         ...(operatorRejected
           ? [
-              unknown.size
+              orders.some(outcomeUnknown)
                 ? AI_OPERATOR_REJECTED_LOCKED_TEXT
                 : AI_OPERATOR_REJECTED_TEXT,
             ]
           : []),
-        created.size || unknown.size
+        orders.some(confirmAttempted)
           ? AI_RETRY_HINT_TEXT
           : AI_RETRY_ALL_HINT_TEXT,
       ].join('\n'),
@@ -1335,18 +1337,29 @@ export class AiOrderService implements OnModuleDestroy {
     // aniqligi JS Date bilan hech qachon teng chiqmasdi): `preview` va
     // natijasi NOMA'LUM buyurtma (confirm_attempted_at bor, confirm_order_id
     // yo'q) YO'Q. O'qishdan keyin orada «✅» → noma'lum natija bo'lsa tanlov
-    // yozilmaydi — belgilangan buyurtma operatori o'zgarmasin.
+    // yozilmaydi — belgilangan buyurtma operatori o'zgarmasin. Faqat
+    // `meta.operator_id` / `meta.operator_name` yoziladi (jsonb `||`):
+    // `input` ning qolgani (masalan parallel yozilgan profil keshi, ro'yxat)
+    // eski nusxa bilan ustidan yozilmaydi.
     const rows = rowsOf<{ id: string }>(
       await this.drafts.query(
         `UPDATE "notification_schema"."telegram_ai_drafts"
-            SET "input" = $2::jsonb, "updated_at" = now()
+            SET "input" = jsonb_set(COALESCE("input", '{}'::jsonb), '{meta}',
+                  COALESCE("input"->'meta', '{}'::jsonb) || $2::jsonb),
+                "updated_at" = now()
           WHERE "id" = $1 AND "status" = 'preview' AND "expires_at" > now()
             AND NOT EXISTS (
               SELECT 1 FROM jsonb_array_elements(COALESCE("orders", '[]'::jsonb)) o
                WHERE o->>'confirm_attempted_at' IS NOT NULL
                  AND o->>'confirm_order_id' IS NULL)
         RETURNING "id"`,
-        [draft.id, JSON.stringify(input)],
+        [
+          draft.id,
+          JSON.stringify({
+            operator_id: next.operator_id ?? null,
+            operator_name: next.operator_name ?? null,
+          }),
+        ],
       ),
     );
     if (!rows.length) {
