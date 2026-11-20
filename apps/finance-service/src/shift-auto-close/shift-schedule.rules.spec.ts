@@ -8,6 +8,7 @@ import {
   dueCloseSlots,
   dueWarnSlots,
   missedCloseSlot,
+  missedOpenSlot,
   normalizeTimes,
   parseAutoClosePatch,
   parseReportPatch,
@@ -135,6 +136,38 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
             T('2026-11-20 23:50'),
           )?.key,
         ).toBe('2026-11-20T23:55');
+      });
+
+      it("ochish: 08:55 → 09:30 o'chiq — 09:00 sloti; kun yopilgandan keyin — yo'q", () => {
+        expect(
+          missedOpenSlot(
+            T('2026-11-21 09:30'),
+            ['09:00'],
+            ['23:00'],
+            T('2026-11-21 08:55'),
+          )?.key,
+        ).toBe('2026-11-21T09:00');
+        // 08:55 → 23:30 o'chiq: 23:00 da kun yopilgan — kech ochilmaydi.
+        expect(
+          missedOpenSlot(
+            T('2026-11-21 23:30'),
+            ['09:00'],
+            ['23:00'],
+            T('2026-11-21 08:55'),
+          ),
+        ).toBeNull();
+        // Yurak urishi yo'q / slotdan keyin tick bo'lgan — yo'q.
+        expect(
+          missedOpenSlot(T('2026-11-21 09:30'), ['09:00'], ['23:00'], null),
+        ).toBeNull();
+        expect(
+          missedOpenSlot(
+            T('2026-11-21 09:30'),
+            ['09:00'],
+            ['23:00'],
+            T('2026-11-21 09:05'),
+          ),
+        ).toBeNull();
       });
 
       it('kuniga bir necha vaqt, uzoq uzilish — faqat ENG OXIRGI o‘tgan slot', () => {

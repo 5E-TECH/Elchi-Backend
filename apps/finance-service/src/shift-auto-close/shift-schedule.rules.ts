@@ -24,7 +24,8 @@ export const SHIFT_AUTOMATION_KEYS = {
 /**
  * Scheduler yurak urishi — oxirgi muvaffaqiyatli tick vaqti (ISO, faqat tizim
  * yozadi; sozlama emas, `SHIFT_AUTOMATION_KEYS` ga KIRMAYDI). O'tkazib
- * yuborilgan yopish slotini aniqlash uchun (`missedCloseSlot`).
+ * yuborilgan yopish / ochish slotini aniqlash uchun (`missedCloseSlot`,
+ * `missedOpenSlot`).
  */
 export const SHIFT_SCHEDULER_HEARTBEAT_KEY = 'shift.scheduler.last_tick_at';
 
@@ -650,6 +651,29 @@ export function missedCloseSlot(
     if (!latest || slot.at.getTime() > latest.at.getTime()) latest = slot;
   }
   return latest && latest.at.getTime() > last ? latest : null;
+}
+
+/**
+ * O'TKAZIB YUBORILGAN ochish sloti — `missedCloseSlot` bilan bir xil shart
+ * (`lastTickAt < S`, catch-up o'tgan, eng oxirgi slot), QO'SHIMCHA: slotdan
+ * keyin hozirgacha birorta ham YOPISH sloti bo'lmagan (`S < C ≤ now` yo'q) —
+ * aks holda kun allaqachon yopilgan, kech ochish noto'g'ri bo'lardi.
+ */
+export function missedOpenSlot(
+  now: Date,
+  openTimes: string[],
+  closeTimes: string[],
+  lastTickAt: Date | null | undefined,
+  catchupMin = AUTO_CLOSE_CATCHUP_MIN,
+): ScheduleSlot | null {
+  const slot = missedCloseSlot(now, openTimes, lastTickAt, catchupMin);
+  if (!slot) return null;
+  const t = now.getTime();
+  const closedSince = candidateSlots(now, closeTimes).some(
+    (close) =>
+      close.at.getTime() > slot.at.getTime() && close.at.getTime() <= t,
+  );
+  return closedSince ? null : slot;
 }
 
 /** Ogohlantirish oynasidagi slotlar: `slot − warn ≤ now < slot`. */

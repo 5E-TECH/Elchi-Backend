@@ -27,6 +27,7 @@ import {
   dueLateSlots,
   dueWarnSlots,
   missedCloseSlot,
+  missedOpenSlot,
   lateCloseClaimKey,
   lateOpenClaimKey,
   warnClaimKey,
@@ -88,7 +89,9 @@ interface LateAlerter {
  *    server o'sha oynada UMUMAN ishlamagan bo'lsa (yurak urishi —
  *    `SHIFT_SCHEDULER_HEARTBEAT_KEY` — slotdan oldin) — qayta ishga tushgandagi
  *    birinchi tickda kechikib yopiladi (`missedCloseSlot`);
- *  - `auto_open` yoqiq — slot vaqti kelgan (catch-up 10 daqiqa) qamrovdagi
+ *  - `auto_open` yoqiq — slot vaqti kelgan (catch-up 10 daqiqa; server
+ *    o'chiq bo'lgan va kun hali yopilmagan bo'lsa — kechikib,
+ *    `missedOpenSlot`) qamrovdagi
  *    har kassada ochiq smena yo'q bo'lsa `autoOpenShift` (tizim ochadi);
  *  - `late_alert` yoqiq — ochish slotidan `grace_min` o'tib kassada smena
  *    ochilmagan / yopish slotidan keyin smena hali ochiq bo'lsa superadminlarga
@@ -182,13 +185,20 @@ export class ShiftAutoCloseScheduler implements OnModuleInit, OnModuleDestroy {
         result.warned = await this.warn(now, auto_close);
         result.closed = await this.close(now, auto_close, alerter, lastTickAt);
       }
-      // Yopish bosqichidan KEYIN (xato bo'lsa yozilmaydi — keyingi tick
-      // o'tkazib yuborilgan slotni qayta ko'radi). Avtomatika o'chiq bo'lsa
-      // ham yoziladi: keyin yoqilsa o'tib ketgan slotlar «quvlanmaydi».
-      await this.writeHeartbeat(now);
       if (auto_open.enabled && auto_open.times.length) {
-        result.opened = await this.open(now, auto_open, alerter);
+        result.opened = await this.open(
+          now,
+          auto_open,
+          alerter,
+          auto_close.times,
+          lastTickAt,
+        );
       }
+      // Yopish va ochish bosqichlaridan KEYIN (xato bo'lsa yozilmaydi —
+      // keyingi tick o'tkazib yuborilgan slotni qayta ko'radi; qayta yurish
+      // idempotent). Avtomatika o'chiq bo'lsa ham yoziladi: keyin yoqilsa
+      // o'tib ketgan slotlar «quvlanmaydi».
+      await this.writeHeartbeat(now);
       if (alerter) {
         await this.lateChecks(now, auto_open, auto_close, late_alert, alerter);
       }
@@ -352,9 +362,21 @@ export class ShiftAutoCloseScheduler implements OnModuleInit, OnModuleDestroy {
     now: Date,
     settings: AutoOpenSettings,
     alerter: LateAlerter | null,
+    closeTimes: string[] = [],
+    lastTickAt: Date | null = null,
   ): Promise<string[]> {
     const opened: string[] = [];
-    const slots = dueCloseSlots(now, settings.times);
+    const slots: Array<ScheduleSlot & { missed?: boolean }> = dueCloseSlots(
+      now,
+      settings.times,
+    );
+    const missed = missedOpenSlot(now, settings.times, closeTimes, lastTickAt);
+    if (missed && !slots.some((slot) => slot.key === missed.key)) {
+      this.logger.warn(
+        `ochish sloti ${missed.key} o'tkazib yuborilgan (oxirgi tick ${lastTickAt?.toISOString() ?? '—'}) — smenalar hozir ochiladi`,
+      );
+      slots.push({ ...missed, missed: true });
+    }
     if (!slots.length) return opened;
     const cashboxes = await this.scopeCashboxes(settings.scope);
     for (const slot of slots) {
@@ -364,11 +386,12 @@ export class ShiftAutoCloseScheduler implements OnModuleInit, OnModuleDestroy {
             cashbox_user_id: cashboxUserId,
             slot_key: slot.key,
             slot_at: slot.at,
+            ...(slot.missed ? { missed: true } : {}),
           });
           if (outcome.opened && outcome.shift_id) {
             opened.push(outcome.shift_id);
             this.logger.log(
-              `kassa ${cashboxUserId}: smena #${outcome.shift_id} avtomatik ochildi (slot ${slot.key})`,
+              `kassa ${cashboxUserId}: smena #${outcome.shift_id} avtomatik ochildi (slot ${slot.key}${slot.missed ? ', kechikib' : ''})`,
             );
           }
         } catch (error) {
