@@ -26591,7 +26591,7 @@
     },
     "/finance/operator-payments/balances": {
       "get": {
-        "description": "F2qp6FtE. Marketning barcha o'chirilmagan operatorlari (faol va nofaol), ism tartibida emas — identity ro'yxati tartibida. `earned` — o'chirilmagan daromadlar (`GET operators/me/balance` bilan AYNI qoida), `paid` — o'chirilmagan va bekor qilinmagan to'lovlar (eski Elchi to'lovlari ham), `balance` = earned − paid (manfiy — ortiqcha to'langan). `totals` — yig'indi.",
+        "description": "F2qp6FtE. Marketning barcha o'chirilmagan operatorlari (faol va nofaol), ism tartibida emas — identity ro'yxati tartibida. `earned` — o'chirilmagan daromadlar (`GET operators/me/balance` bilan AYNI qoida), `paid` — o'chirilmagan va bekor qilinmagan to'lovlar (eski Elchi to'lovlari ham), `balance` = earned − paid (manfiy — ortiqcha to'langan). `totals` — yig'indi. 2026-11-20: o'chirilgan operator ham (`status: deleted`) — faqat daromadi, to'lovi yoki yo'ldagi buyurtmasi bo'lsa; `orders_total` / `orders_sold` / `orders_pending` — operator buyurtmalari soni (komissiya faqat sotilganidan yoziladi; order-service javob bermasa — null).",
         "operationId": "OperatorPaymentGatewayController_balances",
         "parameters": [],
         "responses": {
@@ -26742,6 +26742,70 @@
           }
         ],
         "summary": "Market o'z operatoriga to'lovni yozadi (Elchi kassasiz)",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/finance/operator-payments/earnings": {
+      "get": {
+        "description": "2026-11-20. «Ishlab topdi» ning tarkibi: har sotilgan buyurtma uchun yozilgan operator ulushi (yangisi tepada). `operator_id` — shu marketning operatori (o'chirilgani ham; begona yoki yo'q — 404). Rollback qilingan (o'chirilgan) qatorlar chiqmaydi — «Ishlab topdi» bilan AYNI qoida. Komissiya sotuv paytidagi stavka bo'yicha (snapshot).",
+        "operationId": "OperatorPaymentGatewayController_earnings",
+        "parameters": [
+          {
+            "name": "operator_id",
+            "required": true,
+            "in": "query",
+            "description": "Shu marketning operatori (o`chirilgani ham); begona yoki yo`q — 404",
+            "schema": {
+              "example": "41",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1…100, sukut 20",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: OperatorEarningListDto }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorEarningListDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: operator daromad qatorlari (qaysi buyurtmadan qancha)",
         "tags": [
           "Finance"
         ],
@@ -40576,7 +40640,7 @@
             "type": "string",
             "example": "Madina Xoliqova",
             "nullable": true,
-            "description": "Operator ismi (o'chirilgan operatorda — null)"
+            "description": "Operator ismi (2026-11-20 dan o'chirilgan operatorda ham; ro'yxatda umuman yo'q bo'lsa — null)"
           },
           "market_id": {
             "type": "string",
@@ -40732,14 +40796,34 @@
             "type": "string",
             "enum": [
               "active",
-              "inactive"
+              "inactive",
+              "deleted"
             ],
-            "example": "active"
+            "example": "active",
+            "description": "`deleted` — o`chirilgan operator (2026-11-20): faqat daromadi yoki to`lovi bo`lsa chiqadi, uning hisobi yo`qolmasin"
           },
           "earned": {
             "type": "number",
             "example": 1250000,
             "description": "«Ishlab topdi» — o`chirilmagan daromadlar (GET operators/me/balance bilan AYNI qoida)"
+          },
+          "orders_total": {
+            "type": "number",
+            "example": 57,
+            "nullable": true,
+            "description": "Shu marketdagi operator buyurtmalari (`orders.operator_id`), butun davr. order-service javob bermasa — null (hisob baribir qaytadi)"
+          },
+          "orders_sold": {
+            "type": "number",
+            "example": 41,
+            "nullable": true,
+            "description": "Sotilgan (sold / paid / partly_paid) — komissiya shulardan yoziladi"
+          },
+          "orders_pending": {
+            "type": "number",
+            "example": 9,
+            "nullable": true,
+            "description": "Hali yo`lda (yangi … mijozni kutmoqda) — sotilsa komissiya yoziladi"
           },
           "paid": {
             "type": "number",
@@ -40766,6 +40850,9 @@
           "operator_name",
           "status",
           "earned",
+          "orders_total",
+          "orders_sold",
+          "orders_pending",
           "paid",
           "balance",
           "payments_count",
@@ -40810,6 +40897,76 @@
         "required": [
           "items",
           "totals"
+        ]
+      },
+      "OperatorEarningViewDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "901"
+          },
+          "order_id": {
+            "type": "string",
+            "example": "55120",
+            "description": "Buyurtma ID"
+          },
+          "amount": {
+            "type": "number",
+            "example": 12500,
+            "description": "Operator ulushi (so`m)"
+          },
+          "order_total_price": {
+            "type": "number",
+            "example": 250000,
+            "description": "Sotuv paytidagi buyurtma summasi"
+          },
+          "commission_type": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "nullable": true,
+            "description": "Sotuv paytidagi komissiya turi (snapshot)"
+          },
+          "commission_value": {
+            "type": "number",
+            "example": 5,
+            "description": "Sotuv paytidagi stavka"
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-11-18T09:12:00.000Z",
+            "description": "Yozilgan vaqt (sotuv)"
+          }
+        },
+        "required": [
+          "id",
+          "order_id",
+          "amount",
+          "order_total_price",
+          "commission_type",
+          "commission_value",
+          "created_at"
+        ]
+      },
+      "OperatorEarningListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorEarningViewDto"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/OperatorPaymentPaginationDto"
+          }
+        },
+        "required": [
+          "items",
+          "pagination"
         ]
       },
       "RecordOperatorPaymentRequestDto": {

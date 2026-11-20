@@ -2410,6 +2410,24 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * 2026-11-20: market «Operatorlar → To'lovlar» hisobi — har operator
+   * bo'yicha buyurtmalar soni (jami / sotilgan / yo'lda). `market_id` —
+   * gateway JWT'dan (market o'zi), operatorlar — shu market ro'yxatidan.
+   */
+  @MessagePattern({ cmd: 'order.operator.order_counts' })
+  operatorOrderCounts(
+    @Payload() data: { market_id: string; operator_ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getOperatorOrderCounts(
+        data?.market_id,
+        data?.operator_ids,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.analytics.courier_stat' })
   analyticsCourierStat(
     @Payload()

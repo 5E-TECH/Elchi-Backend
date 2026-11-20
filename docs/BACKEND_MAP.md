@@ -669,7 +669,16 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   overpayment allowed → negative balance), `POST :id/cancel` (reason
   required; row kept with `cancelled_*`; legacy `elchi` row → 409; repeat →
   200). Balance = Σ non-deleted earnings − Σ non-deleted, non-cancelled
-  payments (legacy `elchi` payments included). The old superadmin cash-out
+  payments (legacy `elchi` payments included). 2026-11-20: `GET balances`
+  and `GET` history also include DELETED operators
+  (`find_by_market` `query.include_deleted`, internal only; balances keep a
+  deleted operator only if it has earnings, payments or in-flight orders,
+  `status: deleted`) and add per-operator order counts
+  (`orders_total` / `orders_sold` / `orders_pending` from order-service
+  `order.operator.order_counts`; null if it does not answer); `GET earnings`
+  (`operator_id` required, own operator incl. deleted) lists the earning
+  rows behind «Ishlab topdi» via `finance.operator.earning.list`. Recording a
+  payment still requires a non-deleted operator. The old superadmin cash-out
   (`finance.operator.payment.create`, MAIN cashbox expense + `SALARY` ledger)
   is removed — the RMQ handler answers 410 without writing (deploy window).
   Legacy rows keep their cashbox/ledger rows; migr 242 marks them

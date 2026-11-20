@@ -114,7 +114,8 @@ export class OperatorPaymentViewDto {
     example: 'Madina Xoliqova',
     nullable: true,
     type: String,
-    description: "Operator ismi (o'chirilgan operatorda — null)",
+    description:
+      "Operator ismi (2026-11-20 dan o'chirilgan operatorda ham; ro'yxatda umuman yo'q bo'lsa — null)",
   })
   operator_name!: string | null;
 
@@ -207,7 +208,12 @@ export class OperatorBalanceItemDto {
   @ApiProperty({ example: 'Madina Xoliqova' })
   operator_name!: string;
 
-  @ApiProperty({ enum: ['active', 'inactive'], example: 'active' })
+  @ApiProperty({
+    enum: ['active', 'inactive', 'deleted'],
+    example: 'active',
+    description:
+      '`deleted` — o`chirilgan operator (2026-11-20): faqat daromadi yoki to`lovi bo`lsa chiqadi, uning hisobi yo`qolmasin',
+  })
   status!: string;
 
   @ApiProperty({
@@ -216,6 +222,33 @@ export class OperatorBalanceItemDto {
       '«Ishlab topdi» — o`chirilmagan daromadlar (GET operators/me/balance bilan AYNI qoida)',
   })
   earned!: number;
+
+  @ApiProperty({
+    example: 57,
+    nullable: true,
+    type: Number,
+    description:
+      'Shu marketdagi operator buyurtmalari (`orders.operator_id`), butun davr. order-service javob bermasa — null (hisob baribir qaytadi)',
+  })
+  orders_total!: number | null;
+
+  @ApiProperty({
+    example: 41,
+    nullable: true,
+    type: Number,
+    description:
+      'Sotilgan (sold / paid / partly_paid) — komissiya shulardan yoziladi',
+  })
+  orders_sold!: number | null;
+
+  @ApiProperty({
+    example: 9,
+    nullable: true,
+    type: Number,
+    description:
+      'Hali yo`lda (yangi … mijozni kutmoqda) — sotilsa komissiya yoziladi',
+  })
+  orders_pending!: number | null;
 
   @ApiProperty({
     example: 900000,
@@ -252,4 +285,73 @@ export class OperatorBalancesDto {
 
   @ApiProperty({ type: OperatorBalanceTotalsDto })
   totals!: OperatorBalanceTotalsDto;
+}
+
+/** GET /finance/operator-payments/earnings (2026-11-20) — market, o'z operatori daromad qatorlari. */
+export class ListOperatorEarningsQueryDto {
+  @ApiProperty({
+    example: '41',
+    description:
+      'Shu marketning operatori (o`chirilgani ham); begona yoki yo`q — 404',
+  })
+  @IsString()
+  @Matches(BIGINT_ID, { message: "operator_id noto'g'ri" })
+  operator_id!: string;
+
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 20, description: '1…100, sukut 20' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}
+
+export class OperatorEarningViewDto {
+  @ApiProperty({ example: '901' })
+  id!: string;
+
+  @ApiProperty({ example: '55120', description: 'Buyurtma ID' })
+  order_id!: string;
+
+  @ApiProperty({ example: 12500, description: 'Operator ulushi (so`m)' })
+  amount!: number;
+
+  @ApiProperty({
+    example: 250000,
+    description: 'Sotuv paytidagi buyurtma summasi',
+  })
+  order_total_price!: number;
+
+  @ApiProperty({
+    enum: ['percent', 'fixed'],
+    nullable: true,
+    type: String,
+    description: 'Sotuv paytidagi komissiya turi (snapshot)',
+  })
+  commission_type!: string | null;
+
+  @ApiProperty({ example: 5, description: 'Sotuv paytidagi stavka' })
+  commission_value!: number;
+
+  @ApiProperty({
+    example: '2026-11-18T09:12:00.000Z',
+    description: 'Yozilgan vaqt (sotuv)',
+  })
+  created_at!: string;
+}
+
+export class OperatorEarningListDto {
+  @ApiProperty({ type: [OperatorEarningViewDto] })
+  items!: OperatorEarningViewDto[];
+
+  @ApiProperty({ type: OperatorPaymentPaginationDto })
+  pagination!: OperatorPaymentPaginationDto;
 }
