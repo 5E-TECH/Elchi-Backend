@@ -6588,6 +6588,9 @@ export class UserServiceService implements OnModuleInit {
    * identity.market_operator.find_by_market (i76gGjyq) — FAQAT shu marketning
    * operatorlari (role = market_operator, o'chirilmagan). Javob shakli
    * GET /users bilan bir xil (`items` + `meta`), sahifalash 100 gacha.
+   * `query.include_deleted === true` (faqat gateway operator hisobi) —
+   * o'chirilganlar ham, har qatorda `is_deleted`: ularning daromadi va
+   * to'lovlari market hisobidan yo'qolmasin (2026-11-20).
    */
   async findMarketOperators(
     marketId: string,
@@ -6601,11 +6604,12 @@ export class UserServiceService implements OnModuleInit {
       page: query?.page,
       limit: query?.limit,
     });
+    const includeDeleted = query?.include_deleted === true;
 
     const base = {
       role: Roles.MARKET_OPERATOR,
       market_id: scopedMarketId,
-      isDeleted: false,
+      ...(includeDeleted ? {} : { isDeleted: false }),
       ...(status ? { status } : {}),
     };
     // zfPNDCCr: telefonga o'xshash qidiruv — raqamlar ichidan (formatsiz).
@@ -6635,7 +6639,11 @@ export class UserServiceService implements OnModuleInit {
     });
 
     return successRes({
-      items: rows.map((row) => this.toMarketOperatorView(row)),
+      items: rows.map((row) =>
+        includeDeleted
+          ? { ...this.toMarketOperatorView(row), is_deleted: row.isDeleted }
+          : this.toMarketOperatorView(row),
+      ),
       meta: {
         page,
         limit,

@@ -689,6 +689,51 @@ describe('UserServiceService — market operatorlari (i76gGjyq)', () => {
         await statusOf(service.deleteMarketOperator('60', MARKET_A, req)),
       ).toBe(404);
     });
+
+    it("2026-11-20: `include_deleted` (faqat gateway hisobi) — o'chirilgani ham, `is_deleted` bilan; sukut o'zgarmagan", async () => {
+      const { service } = makeService();
+      const req = marketReq(MARKET_A);
+      const created: any = await service.createMarketOperator(
+        MARKET_A,
+        dto as never,
+        req,
+      );
+      await service.deleteMarketOperator(created.data.id, MARKET_A, req);
+
+      const plain: any = await service.findMarketOperators(MARKET_A, {}, req);
+      expect(
+        plain.data.items.some((item: any) => item.id === created.data.id),
+      ).toBe(false);
+      expect(
+        plain.data.items.every((item: any) => !('is_deleted' in item)),
+      ).toBe(true);
+
+      const withDeleted: any = await service.findMarketOperators(
+        MARKET_A,
+        { include_deleted: true },
+        req,
+      );
+      expect(withDeleted.data.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: created.data.id, is_deleted: true }),
+        ]),
+      );
+      // Faqat shu market: boshqa market operatori (o'chirilgani ham) chiqmaydi.
+      expect(
+        withDeleted.data.items.every(
+          (item: any) => String(item.market_id) === MARKET_A,
+        ),
+      ).toBe(true);
+      // `true` dan boshqa qiymat — e'tiborsiz.
+      const truthy: any = await service.findMarketOperators(
+        MARKET_A,
+        { include_deleted: 'true' } as never,
+        req,
+      );
+      expect(
+        truthy.data.items.some((item: any) => item.id === created.data.id),
+      ).toBe(false);
+    });
   });
 
   describe('updateMarketOperatorCommission (TC5)', () => {
