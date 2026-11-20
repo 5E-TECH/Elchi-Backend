@@ -82,6 +82,7 @@ const RULES = [
   ['branch: remote ref', 'origin/main', 'origin/test'],
   ['branch: checkout', 'git checkout -f main', 'git checkout -f test'],
   ['env file', '.env.production', '.env.staging'],
+  ['ai-secrets file', '.env.ai-secrets', '.env.staging.ai-secrets'],
   ['own /tmp files (prod may share the host)', '/tmp/elchi-', '/tmp/elchi-stg-'],
   [
     'first install also when no app container exists',
