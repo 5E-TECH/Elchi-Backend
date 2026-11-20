@@ -454,9 +454,18 @@ export class TelegramDmService {
     let messageId: number | null = null;
     let textNeeded = true;
     let albumSent = false;
+    /**
+     * Matn Telegram izohiga (1024) sig'maydi (masalan smena hisoboti + Excel):
+     * avval to'liq matn (tugmalar bilan), keyin fayl — qisqa izoh bilan.
+     * Izohni kesish HTML teglarini buzib, butun yuborishni yiqitardi.
+     */
+    let filesAfterText: Array<{ buffer: Buffer; mime: string; name: string }> =
+      [];
     if (keys.length && this.transport && this.fileClient) {
       const files = await this.readFiles(keys.slice(0, 10));
-      if (files.length) {
+      if (files.length && text.length > MEDIA_CAPTION_SAFE_CHARS) {
+        filesAfterText = files;
+      } else if (files.length) {
         try {
           messageId = await this.transport.sendMedia(
             chat,
@@ -493,6 +502,13 @@ export class TelegramDmService {
         (sent as { result?: { message_id?: number } | null })?.result
           ?.message_id ?? messageId;
     }
+    if (filesAfterText.length) {
+      await this.sendFileList(
+        chat,
+        filesAfterText,
+        mediaCaption(data?.telegram_media_caption),
+      );
+    }
     if (reply_markup && messageId && this.actions) {
       const callbacks = reply_markup.inline_keyboard
         .flat()
@@ -503,6 +519,39 @@ export class TelegramDmService {
         .catch(() => undefined);
     }
     return status;
+  }
+
+  /**
+   * Fayllarni (file-service kalitlari) chatga yuborish — filial kassasi
+   * guruhiga smena hisoboti Excel'i (relay matnidan keyin). Best-effort:
+   * o'qilmagan / yuborilmagan fayl — faqat WARN.
+   */
+  async sendFiles(
+    chat: string,
+    keys: string[],
+    caption?: string | null,
+  ): Promise<boolean> {
+    if (!this.transport || !this.fileClient || !keys.length) return false;
+    const files = await this.readFiles(keys.slice(0, 10));
+    if (!files.length) return false;
+    return this.sendFileList(chat, files, mediaCaption(caption));
+  }
+
+  private async sendFileList(
+    chat: string,
+    files: Array<{ buffer: Buffer; mime: string; name: string }>,
+    caption: string,
+  ): Promise<boolean> {
+    try {
+      await this.transport!.sendMedia(chat, files, {
+        caption,
+        parse_mode: 'HTML',
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn(`telegram fayl yuborilmadi: ${short(error)}`);
+      return false;
+    }
   }
 
   private async readFiles(
@@ -527,7 +576,7 @@ export class TelegramDmService {
         files.push({
           buffer,
           mime: str(res?.data?.mime_type) || 'application/octet-stream',
-          name: key.split('/').pop()?.slice(-60) || 'proof',
+          name: telegramFileName(key),
         });
       } catch (error) {
         this.logger.warn(`isbot fayli o'qilmadi: ${short(error)}`);
@@ -811,4 +860,26 @@ export class TelegramDmService {
       !target?.branch_id
     );
   }
+}
+
+/** Izoh shu uzunlikdan oshsa — matn alohida xabarda (Telegram chegarasi 1024). */
+export const MEDIA_CAPTION_SAFE_CHARS = 1000;
+
+/** Fayl izohi — oddiy matn (HTML escape), ≤200 belgi; berilmasa sukut. */
+function mediaCaption(value: unknown): string {
+  const text = typeof value === 'string' ? value.trim().slice(0, 200) : '';
+  return escapeTelegramHtml(text || '📎 Ilova');
+}
+
+/**
+ * file-service kaliti `<folder>-<vaqt>-<uuid>-<asl nom>` — Telegram'da asl
+ * nom ko'rinadi (masalan `smena-77-hisobot.xlsx`).
+ */
+export function telegramFileName(key: string): string {
+  const last = key.split('/').pop() ?? key;
+  const original = last.replace(
+    /^.*?-\d{10,}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i,
+    '',
+  );
+  return (original || last).slice(-60) || 'file';
 }
