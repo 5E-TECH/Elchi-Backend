@@ -7,6 +7,7 @@ import {
   autoClosedLabel,
   dueCloseSlots,
   dueWarnSlots,
+  missedCloseSlot,
   normalizeTimes,
   parseAutoClosePatch,
   parseReportPatch,
@@ -75,6 +76,78 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
       ).toEqual(['2026-10-27T00:05']);
     });
 
+    describe("o'tkazib yuborilgan yopish sloti (server ishlamagan)", () => {
+      /** Toshkent vaqti → UTC lahza. */
+      const T = (local: string) => new Date(`${local.replace(' ', 'T')}+05:00`);
+
+      it('22:59 dan keyin tick yo‘q, 23:12 da qayta ishga tushdi — 23:00 sloti', () => {
+        expect(
+          missedCloseSlot(
+            T('2026-11-20 23:12'),
+            ['23:00'],
+            T('2026-11-20 22:59'),
+          )?.key,
+        ).toBe('2026-11-20T23:00');
+      });
+
+      it("catch-up oynasi ichida — oddiy yo'l (dueCloseSlots), missed emas", () => {
+        expect(
+          missedCloseSlot(
+            T('2026-11-20 23:05'),
+            ['23:00'],
+            T('2026-11-20 22:59'),
+          ),
+        ).toBeNull();
+      });
+
+      it("slotdan keyin tick bo'lgan (avtomatika o'chiq yoki yopish xatosi) — quvlanmaydi", () => {
+        expect(
+          missedCloseSlot(
+            T('2026-11-20 23:30'),
+            ['23:00'],
+            T('2026-11-20 23:00'),
+          ),
+        ).toBeNull();
+        expect(
+          missedCloseSlot(
+            T('2026-11-21 08:00'),
+            ['23:00'],
+            T('2026-11-20 23:04'),
+          ),
+        ).toBeNull();
+      });
+
+      it("yurak urishi yo'q (birinchi ishga tushish) / yaroqsiz / kelajakda — null", () => {
+        const now = T('2026-11-20 23:30');
+        expect(missedCloseSlot(now, ['23:00'], null)).toBeNull();
+        expect(missedCloseSlot(now, ['23:00'], new Date('x'))).toBeNull();
+        expect(
+          missedCloseSlot(now, ['23:00'], T('2026-11-20 23:40')),
+        ).toBeNull();
+        expect(missedCloseSlot(now, [], T('2026-11-20 20:00'))).toBeNull();
+      });
+
+      it('yarim tun: 23:55 sloti, server 23:50 → 00:20 o‘chiq — kechagi slot', () => {
+        expect(
+          missedCloseSlot(
+            T('2026-11-21 00:20'),
+            ['23:55'],
+            T('2026-11-20 23:50'),
+          )?.key,
+        ).toBe('2026-11-20T23:55');
+      });
+
+      it('kuniga bir necha vaqt, uzoq uzilish — faqat ENG OXIRGI o‘tgan slot', () => {
+        expect(
+          missedCloseSlot(
+            T('2026-11-21 15:00'),
+            ['14:00', '23:00'],
+            T('2026-11-20 10:00'),
+          )?.key,
+        ).toBe('2026-11-21T14:00');
+      });
+    });
+
     it("ogohlantirish oynasi: slot − warn ≤ now < slot; warn=0 — yo'q", () => {
       expect(
         dueWarnSlots(new Date('2026-10-26T17:45:00Z'), ['23:00'], 15),
@@ -112,8 +185,16 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
 
     it("sukut: hisobot yuborish O'CHIQ — hech bir qabul qiluvchi × kanal yoqilmagan", () => {
       const off = { telegram: false, in_app: false };
+      // Istisno — filial guruhi: faqat guruh ulanganda / shaxsiy chat
+      // tanlanganda ketadi, shuning uchun telegram sukut yoqiq.
+      const branchDefault = { telegram: true, in_app: false };
       expect(readReportSettings(new Map())).toEqual({
-        recipients: { superadmin: off, couriers: off, markets: off },
+        recipients: {
+          superadmin: off,
+          couriers: off,
+          markets: off,
+          branches: branchDefault,
+        },
         format: 'pdf',
       });
       // Yaroqsiz / qisman saqlangan qiymat ham yoqilgan deb o'qilmaydi.
@@ -126,7 +207,12 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
             ],
           ]),
         ).recipients,
-      ).toEqual({ superadmin: off, couriers: off, markets: off });
+      ).toEqual({
+        superadmin: off,
+        couriers: off,
+        markets: off,
+        branches: branchDefault,
+      });
       // Superadmin faqat bitta guruhni yoqsa — qolganlari o'chiq qoladi.
       const [[key, value]] = parseReportPatch(
         { recipients: { superadmin: { in_app: true } } },
@@ -137,7 +223,14 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
         superadmin: { telegram: false, in_app: true },
         couriers: off,
         markets: off,
+        branches: branchDefault,
       });
+      // Filial guruhini superadmin o'chira oladi.
+      const [[, branchesOff]] = parseReportPatch(
+        { recipients: { branches: { telegram: false } } },
+        REPORT_DEFAULTS,
+      );
+      expect((branchesOff as Record<string, unknown>).branches).toEqual(off);
     });
 
     it('normalizeTimes — tartib, takror, yaroqsiz', () => {
@@ -178,7 +271,12 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
       const report = parseReportPatch(
         { recipients: { couriers: { telegram: false } }, format: 'xlsx' },
         {
-          recipients: { superadmin: on, couriers: on, markets: on },
+          recipients: {
+            superadmin: on,
+            couriers: on,
+            markets: on,
+            branches: on,
+          },
           format: 'pdf',
         },
       );
@@ -186,6 +284,7 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
         superadmin: { telegram: true, in_app: true },
         couriers: { telegram: false, in_app: true },
         markets: { telegram: true, in_app: true },
+        branches: { telegram: true, in_app: true },
       });
       expect(report[1]).toEqual([SHIFT_AUTOMATION_KEYS.reportFormat, 'xlsx']);
       expect(() =>

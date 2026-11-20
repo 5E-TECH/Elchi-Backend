@@ -21,6 +21,13 @@ export const SHIFT_AUTOMATION_KEYS = {
   lateAlertChannels: 'shift.late_alert.channels',
 } as const;
 
+/**
+ * Scheduler yurak urishi — oxirgi muvaffaqiyatli tick vaqti (ISO, faqat tizim
+ * yozadi; sozlama emas, `SHIFT_AUTOMATION_KEYS` ga KIRMAYDI). O'tkazib
+ * yuborilgan yopish slotini aniqlash uchun (`missedCloseSlot`).
+ */
+export const SHIFT_SCHEDULER_HEARTBEAT_KEY = 'shift.scheduler.last_tick_at';
+
 export type AutoCloseScope = 'main' | 'main+branches';
 export const AUTO_CLOSE_SCOPES: readonly AutoCloseScope[] = [
   'main',
@@ -36,11 +43,18 @@ export interface AutoCloseSettings {
   warn_before_min: number;
 }
 
-export type ReportRecipientGroup = 'superadmin' | 'couriers' | 'markets';
+/**
+ * `branches` — filial kassasi (asosiy kassa — HQ filiali) hisoboti: telegram
+ * — filial guruhiga yoki (filial sozlamasi `private`) menejerlarning shaxsiy
+ * chatiga; in_app — filial menejerlariga.
+ */
+export type ReportRecipientGroup =
+  'superadmin' | 'couriers' | 'markets' | 'branches';
 export const REPORT_RECIPIENT_GROUPS: readonly ReportRecipientGroup[] = [
   'superadmin',
   'couriers',
   'markets',
+  'branches',
 ];
 
 export interface ReportChannels {
@@ -63,6 +77,8 @@ export interface ReportSettings {
  * qilinmaguncha haqiqiy kuryer / market / superadminga hech narsa ketmaydi
  * (`deliver` → `report_status = 'skipped'`, outbox / fayl yo'q). Superadmin
  * `PATCH /finance/shift/settings` `report.recipients` bilan yoqadi. Format PDF.
+ * ISTISNO — `branches.telegram` (sukut yoqiq): hisobot faqat filial guruhi
+ * ulanganda yoki filial «shaxsiy chat» ni tanlaganda ketadi.
  */
 export const AUTO_CLOSE_DEFAULTS: AutoCloseSettings = Object.freeze({
   enabled: false,
@@ -76,6 +92,9 @@ export const REPORT_DEFAULTS: ReportSettings = Object.freeze({
     superadmin: { telegram: false, in_app: false },
     couriers: { telegram: false, in_app: false },
     markets: { telegram: false, in_app: false },
+    // Filial guruhi: guruh ULANGANDA (yoki menejer «shaxsiy chat» ni
+    // tanlaganda) hisobot o'zi ketadi — ulashning o'zi rozilik.
+    branches: { telegram: true, in_app: false },
   },
   format: 'pdf',
 }) as ReportSettings;
@@ -138,7 +157,9 @@ export const MAX_WARN_BEFORE_MIN = 180;
 /**
  * Slot vaqtidan keyin shu oraliqda (daqiqa) ham yopiladi: replika qayta ishga
  * tushgan / tick kechikkan bo'lsa slot o'tkazib yuborilmasin. Undan keyin —
- * eski slot qayta "quvlanmaydi" (keyingi slotgacha kutiladi).
+ * eski slot qayta "quvlanmaydi" (keyingi slotgacha kutiladi). ISTISNO —
+ * scheduler shu oynada UMUMAN ishlamagan bo'lsa (server o'chiq):
+ * `missedCloseSlot` — birinchi tickda yopiladi.
  */
 export const AUTO_CLOSE_CATCHUP_MIN = 10;
 
@@ -487,7 +508,7 @@ export function parseReportPatch(
     for (const key of Object.keys(patch)) {
       if (!REPORT_RECIPIENT_GROUPS.includes(key as ReportRecipientGroup)) {
         throw new ShiftSettingsError(
-          `report.recipients.${key.slice(0, 40)} noma'lum (superadmin | couriers | markets)`,
+          `report.recipients.${key.slice(0, 40)} noma'lum (superadmin | couriers | markets | branches)`,
         );
       }
     }
@@ -602,6 +623,33 @@ export function dueCloseSlots(
     (slot) =>
       slot.at.getTime() <= t && t < slot.at.getTime() + catchupMin * 60_000,
   );
+}
+
+/**
+ * O'TKAZIB YUBORILGAN yopish sloti (server / finance-service ishlamagan):
+ * `lastTickAt` — oldingi muvaffaqiyatli tick vaqti (`SHIFT_SCHEDULER_HEARTBEAT_KEY`).
+ * Catch-up oynasi o'tib ketgan eng OXIRGI slot `S` uchun `lastTickAt < S`
+ * bo'lsa — `[S, S + catch-up)` oralig'ida birorta ham tick bo'lmagan: slot
+ * o'tkazib yuborilgan, smena hozir yopiladi. Aks holda (tick bo'lgan —
+ * avtomatika o'chiq yoki yopish xatosi bo'lgan bo'lishi mumkin) — `null`:
+ * yoqilgan avtomatika ilgari o'tib ketgan slotlarni «quvlamaydi».
+ * `lastTickAt` yo'q (birinchi ishga tushish) — `null`.
+ */
+export function missedCloseSlot(
+  now: Date,
+  times: string[],
+  lastTickAt: Date | null | undefined,
+  catchupMin = AUTO_CLOSE_CATCHUP_MIN,
+): ScheduleSlot | null {
+  const last = lastTickAt ? new Date(lastTickAt).getTime() : NaN;
+  const t = now.getTime();
+  if (!times.length || !Number.isFinite(last) || last >= t) return null;
+  let latest: ScheduleSlot | null = null;
+  for (const slot of candidateSlots(now, times)) {
+    if (slot.at.getTime() + catchupMin * 60_000 > t) continue;
+    if (!latest || slot.at.getTime() > latest.at.getTime()) latest = slot;
+  }
+  return latest && latest.at.getTime() > last ? latest : null;
 }
 
 /** Ogohlantirish oynasidagi slotlar: `slot − warn ≤ now < slot`. */

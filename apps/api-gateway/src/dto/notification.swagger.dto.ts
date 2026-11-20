@@ -570,6 +570,18 @@ export class TelegramLinkCodeRequestDto {
   group_type?: Group_type;
 }
 
+/** Filial kassasi hisoboti qayerga — `PATCH /branches/:id/telegram/report-target`. */
+export class BranchTelegramReportTargetRequestDto {
+  @ApiProperty({
+    enum: ['group', 'private'],
+    example: 'group',
+    description:
+      '`group` — filial Telegram guruhiga (sukut); `private` — filial menejerlarining shaxsiy chatiga (bot orqali).',
+  })
+  @IsIn(['group', 'private'])
+  report_target!: 'group' | 'private';
+}
+
 export class TelegramAuthRequestDto {
   @ApiProperty({
     description:

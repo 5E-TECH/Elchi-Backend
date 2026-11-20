@@ -686,6 +686,16 @@ export class ShiftReportRecipientsRequestDto {
   @ValidateNested()
   @Type(() => ShiftReportChannelsRequestDto)
   markets?: ShiftReportChannelsRequestDto;
+
+  @ApiPropertyOptional({
+    type: () => ShiftReportChannelsRequestDto,
+    description:
+      "Filial kassasi (asosiy kassa — HQ filiali): `telegram` — filial guruhiga yoki (filial «shaxsiy chat» tanlagan bo'lsa) menejerlarning shaxsiy chatiga; `in_app` — filial menejerlariga. Sukut: telegram true (faqat guruh ulanganda / shaxsiy chat tanlanganda ketadi), in_app false.",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ShiftReportChannelsRequestDto)
+  branches?: ShiftReportChannelsRequestDto;
 }
 
 /** (gWI4gYkw) Smena hisobotini kimlarga / qaysi kanal / qaysi formatda yuborish. */
@@ -693,7 +703,7 @@ export class ShiftReportSettingsRequestDto {
   @ApiPropertyOptional({
     type: () => ShiftReportRecipientsRequestDto,
     description:
-      "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi)",
+      "`shift.report.recipients` — superadmin / couriers / markets / branches × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi; istisno — `branches.telegram` true: faqat filial guruhi ulanganda ketadi)",
   })
   @IsOptional()
   @ValidateNested()

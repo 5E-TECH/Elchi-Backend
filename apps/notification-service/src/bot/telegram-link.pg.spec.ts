@@ -1,5 +1,6 @@
 import { DataSource } from 'typeorm';
 import { TelegramLinking1716000000121 } from '../../../../migrations/1716000000121-TelegramLinking';
+import { TelegramLinkTokenOwnerLabel1716000000247 } from '../../../../migrations/1716000000247-TelegramLinkTokenOwnerLabel';
 import { TelegramLinkToken } from '../entities/telegram-link-token.entity';
 import { TelegramLinkService, hashLinkToken } from './telegram-link.service';
 
@@ -43,6 +44,10 @@ const linkUri = (() => {
       const runner = db.createQueryRunner();
       try {
         await migration[direction](runner);
+        // (247) `owner_label` — entity uni yozadi/o'qiydi (filial guruhi kodi).
+        if (direction === 'up') {
+          await new TelegramLinkTokenOwnerLabel1716000000247().up(runner);
+        }
       } finally {
         await runner.release();
       }

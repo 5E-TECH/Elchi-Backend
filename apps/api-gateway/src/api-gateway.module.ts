@@ -52,6 +52,7 @@ import { WebhookGatewayController } from './webhook-gateway.controller';
 import { TelegramWebhookController } from './telegram-webhook.controller';
 // (6jXw0DDr / 9uNhwTZp) Telegram bog'lash kodlari va statistikasi.
 import { TelegramGatewayController } from './telegram-gateway.controller';
+import { BranchTelegramGatewayController } from './branch-telegram-gateway.controller';
 import { TelegramIdThrottlerGuard } from './auth/telegram-id-throttler.guard';
 import { InvestorGatewayController } from './investor-gateway.controller';
 import { BranchGatewayController } from './branch-gateway.controller';
@@ -170,6 +171,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     WebhookGatewayController,
     TelegramWebhookController,
     TelegramGatewayController,
+    BranchTelegramGatewayController,
     InvestorGatewayController,
     BranchGatewayController,
     FileGatewayController,

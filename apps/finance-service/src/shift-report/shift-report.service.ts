@@ -40,6 +40,7 @@ import type {
   ReportSettings,
 } from '../shift-auto-close/shift-schedule.rules';
 import {
+  buildBranchMessage,
   buildCourierMessage,
   buildMarketMessage,
   buildSuperadminMessage,
@@ -64,6 +65,11 @@ const PENDING_GRACE_MS = 30_000;
 
 export const IDENTITY_ACTIVE_BY_ROLE_PATTERN =
   'identity.user.active_ids_by_role';
+/** notification-service — filial kassasi hisoboti qayerga (guruh / shaxsiy). */
+export const BRANCH_TELEGRAM_ROUTE_PATTERN =
+  'notification.telegram.branch_route';
+/** branch-service `branch.find_by_id` / `find_by_branch` — tizim nomidan. */
+const SYSTEM_BRANCH_REQUESTER = { id: 'system', roles: ['superadmin'] };
 
 function forbidden(message: string): never {
   throw new RpcException({ statusCode: 403, message });
@@ -108,8 +114,20 @@ const isId = (value: unknown): boolean =>
 interface PlannedRecipient {
   kind: ShiftReportRecipientKind;
   recipient_id: string;
-  message: ShiftReportMessage & { group_text?: string };
+  message: ShiftReportMessage & { group_text?: string; telegram_text?: string };
   channels: ReportChannels;
+  /**
+   * `branch` (filial guruhi) — dispatch kimlar nomidan (inbox qatori):
+   * filial menejerlari, bo'lmasa smenani yopgan / ochgan xodim.
+   */
+  notify_ids?: string[];
+  /** `branch` — guruh holati (`telegram` so'ralganda). */
+  group?: { active: boolean; inactive_reason: string | null };
+}
+
+export interface BranchTelegramRoute {
+  report_target: 'group' | 'private';
+  group: { active: boolean; inactive_reason: string | null } | null;
 }
 
 export interface ShiftReportDeliverResult {
@@ -150,6 +168,10 @@ export class ShiftReportService {
     private readonly notifications: FinanceNotificationService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Optional() @Inject('FILE') private readonly fileClient?: ClientProxy,
+    @Optional()
+    @Inject('NOTIFICATION')
+    private readonly notificationClient?: ClientProxy,
+    @Optional() @Inject('BRANCH') private readonly branchClient?: ClientProxy,
   ) {}
 
   /** Yopish commit'idan keyin — javobni kutdirmaydi (xato faqat WARN). */
@@ -252,9 +274,10 @@ export class ShiftReportService {
         return await this.markSkipped(shiftId, round);
       }
       // (BOT-2 #3) market ham — egasi shaxsiy Telegram'ga ulanganmi.
+      // `branch` — filial id (foydalanuvchi emas), guruhga ketadi.
       const linked = await this.telegramLinked(
         recipients
-          .filter((r) => r.channels.telegram)
+          .filter((r) => r.channels.telegram && r.kind !== 'branch')
           .map((r) => r.recipient_id),
       );
       const fileKey = recipients.some((r) => r.kind === 'superadmin')
@@ -309,6 +332,9 @@ export class ShiftReportService {
           superadmins: recipients.filter((r) => r.kind === 'superadmin').length,
           couriers: recipients.filter((r) => r.kind === 'courier').length,
           markets: recipients.filter((r) => r.kind === 'market').length,
+          branch_groups: recipients.filter((r) => r.kind === 'branch').length,
+          branch_managers: recipients.filter((r) => r.kind === 'branch_manager')
+            .length,
         },
         user_id: null,
       });
@@ -333,9 +359,13 @@ export class ShiftReportService {
    */
   private anyRecipientEnabled(report: ReportSettings): boolean {
     const groups = report?.recipients;
-    return [groups?.superadmin, groups?.couriers, groups?.markets].some(
-      (channels?: ReportChannels) =>
-        Boolean(channels?.in_app || channels?.telegram),
+    return [
+      groups?.superadmin,
+      groups?.couriers,
+      groups?.markets,
+      groups?.branches,
+    ].some((channels?: ReportChannels) =>
+      Boolean(channels?.in_app || channels?.telegram),
     );
   }
 
@@ -372,8 +402,11 @@ export class ShiftReportService {
   ): Promise<number> {
     const entry = findNotificationType(type);
     if (!entry) return 0;
+    // Filial id foydalanuvchi id bilan bir xil son bo'lishi mumkin — nomlar fazosi.
     const dispatchId = deterministicUuid(
-      `shift-report:${snapshot.shift_id}:${snapshot.round}:${recipient.recipient_id}`,
+      recipient.kind === 'branch'
+        ? `shift-report:${snapshot.shift_id}:${snapshot.round}:branch:${recipient.recipient_id}`
+        : `shift-report:${snapshot.shift_id}:${snapshot.round}:${recipient.recipient_id}`,
     );
     const rows: Array<{
       channel: ShiftReportChannel;
@@ -386,7 +419,27 @@ export class ShiftReportService {
       rows.push({ channel: 'in_app', status: 'queued', failed_reason: null });
     }
     let telegram: FinanceNotificationPayload['telegram'];
-    if (recipient.channels.telegram) {
+    if (recipient.channels.telegram && recipient.kind === 'branch') {
+      // Filial kassasi GURUHI — to'liq hisobot (menejer guruh ulab rozi bo'lgan).
+      if (recipient.group?.active) {
+        channels.push(NotificationChannel.TELEGRAM);
+        telegram = {
+          branch_id: recipient.recipient_id,
+          text: recipient.message.telegram_text ?? recipient.message.body,
+        };
+        rows.push({
+          channel: 'telegram_group',
+          status: 'queued',
+          failed_reason: null,
+        });
+      } else {
+        rows.push({
+          channel: 'telegram_group',
+          status: 'failed',
+          failed_reason: deliveryReasonText('branch_group_inactive'),
+        });
+      }
+    } else if (recipient.channels.telegram) {
       if (
         recipient.kind === 'market' &&
         linked?.get(recipient.recipient_id) === true
@@ -471,7 +524,9 @@ export class ShiftReportService {
         body: recipient.message.body,
         data,
         link: recipient.message.link,
-        recipient_ids: [recipient.recipient_id],
+        recipient_ids: recipient.notify_ids?.length
+          ? recipient.notify_ids
+          : [recipient.recipient_id],
         ...(groupKey ? { group_key: groupKey } : {}),
         channels,
         client_request_id: dispatchId,
@@ -845,7 +900,183 @@ export class ShiftReportService {
         });
       }
     }
+    if (enabled(report.recipients.branches)) {
+      planned.push(
+        ...(await this.planBranchRecipients(
+          snapshot,
+          report.recipients.branches,
+        )),
+      );
+    }
     return planned;
+  }
+
+  /**
+   * Filial kassasi hisoboti (asosiy kassa — HQ filiali):
+   *  - telegram + filial `group` + guruh bor → bitta `branch` qatori (guruhga;
+   *    nofaol guruh — `failed` + sabab);
+   *  - telegram + filial `private` → har menejerga `branch_manager` (shaxsiy
+   *    chat, ulanmagan — «Telegram ulanmagan»);
+   *  - in_app → menejerlarga ilova ichida.
+   * Guruh ham yo'q, `private` ham emas — hech kim (jim).
+   *
+   * Filial kassasida marshrut / menejerlar olinmasa — XATO (da'vo
+   * bo'shatiladi, keyingi tick qayta uradi). Asosiy kassada esa fail-soft:
+   * mavjud superadmin hisoboti yangi bog'liqlik sabab kechikmasin.
+   */
+  private async planBranchRecipients(
+    snapshot: ShiftReportSnapshot,
+    channels: ReportChannels,
+  ): Promise<PlannedRecipient[]> {
+    const isMain = snapshot.cashbox_type === 'main';
+    // Mijozlar ulanmagan (test / qisman o'rnatish) — filial qismi jim o'tadi.
+    if (!this.notificationClient || !this.branchClient) return [];
+    try {
+      const branchId = isMain
+        ? await this.hqBranchId()
+        : String(snapshot.cashbox_user_id);
+      if (!isId(branchId)) return [];
+      const route = channels.telegram ? await this.branchRoute(branchId) : null;
+      const wantPrivate = Boolean(
+        channels.telegram && route?.report_target === 'private',
+      );
+      const wantGroup = Boolean(
+        channels.telegram && route?.report_target !== 'private' && route?.group,
+      );
+      if (!wantPrivate && !wantGroup && !channels.in_app) return [];
+      const [branchName, managers] = await Promise.all([
+        this.branchName(branchId),
+        wantPrivate
+          ? this.branchManagerIds(branchId)
+          : this.branchManagerIds(branchId).catch((error) => {
+              this.logger.warn(
+                `filial #${branchId} menejerlari olinmadi: ${short(error)}`,
+              );
+              return [] as string[];
+            }),
+      ]);
+      const message = buildBranchMessage(
+        snapshot,
+        branchName,
+        process.env.ELCHI_CABINET_URL || undefined,
+      );
+      if (wantPrivate) {
+        return managers.map((id) => ({
+          kind: 'branch_manager' as const,
+          recipient_id: id,
+          message,
+          channels: { telegram: true, in_app: channels.in_app },
+        }));
+      }
+      const notify = managers.length
+        ? managers
+        : [snapshot.closed_by, snapshot.opened_by].filter((id): id is string =>
+            isId(id),
+          );
+      if (!notify.length) return [];
+      return [
+        {
+          kind: 'branch',
+          recipient_id: branchId,
+          notify_ids: [...new Set(notify.map(String))],
+          message,
+          channels: { telegram: wantGroup, in_app: channels.in_app },
+          ...(wantGroup && route?.group ? { group: route.group } : {}),
+        },
+      ];
+    } catch (error) {
+      if (!isMain) throw error;
+      this.logger.warn(
+        `smena #${snapshot.shift_id}: asosiy kassa filial hisoboti o'tkazib yuborildi — ${short(error)}`,
+      );
+      return [];
+    }
+  }
+
+  /** HQ filiali (asosiy kassa egasi). Topilmasa — ''. */
+  private async hqBranchId(): Promise<string> {
+    if (!this.branchClient) return '';
+    const response = await rmqSend<{ data?: { id?: unknown } | null }>(
+      this.branchClient,
+      { cmd: 'branch.find_hq' },
+      {},
+      { timeoutMs: 5_000, retries: 1 },
+    );
+    return text(response?.data?.id);
+  }
+
+  /** notification-service: filial hisoboti qayerga. Xato — throw. */
+  async branchRoute(branchId: string): Promise<BranchTelegramRoute> {
+    if (!this.notificationClient) {
+      throw new Error('NOTIFICATION mijozi yo‘q');
+    }
+    const response = await rmqSend<{ data?: Record<string, unknown> | null }>(
+      this.notificationClient,
+      { cmd: BRANCH_TELEGRAM_ROUTE_PATTERN },
+      { branch_id: branchId },
+      { timeoutMs: 5_000, retries: 1 },
+    );
+    const data = response?.data;
+    if (!data || typeof data !== 'object') {
+      throw new Error(`${BRANCH_TELEGRAM_ROUTE_PATTERN}: javob yaroqsiz`);
+    }
+    const group =
+      data.group && typeof data.group === 'object'
+        ? (data.group as Record<string, unknown>)
+        : null;
+    return {
+      report_target: data.report_target === 'private' ? 'private' : 'group',
+      group: group
+        ? {
+            active: group.active === true,
+            inactive_reason: text(group.inactive_reason) || null,
+          }
+        : null,
+    };
+  }
+
+  /** Filial nomi — fail-open (`null`). */
+  private async branchName(branchId: string): Promise<string | null> {
+    if (!this.branchClient) return null;
+    try {
+      const response = await rmqSend<{ data?: { name?: unknown } | null }>(
+        this.branchClient,
+        { cmd: 'branch.find_by_id' },
+        { id: branchId, requester: SYSTEM_BRANCH_REQUESTER },
+        { timeoutMs: 3_000, retries: 0 },
+      );
+      const name = text(response?.data?.name).trim();
+      return name ? name.slice(0, 80) : null;
+    } catch (error) {
+      this.logger.warn(`filial #${branchId} nomi olinmadi: ${short(error)}`);
+      return null;
+    }
+  }
+
+  /** Filialning faol menejerlari (`branch_users.role = MANAGER`). Xato — throw. */
+  private async branchManagerIds(branchId: string): Promise<string[]> {
+    if (!this.branchClient) throw new Error('BRANCH mijozi yo‘q');
+    const response = await rmqSend<{ data?: unknown }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_branch' },
+      { branch_id: branchId, requester: SYSTEM_BRANCH_REQUESTER },
+      { timeoutMs: 5_000, retries: 1 },
+    );
+    const rows = Array.isArray(response?.data) ? response.data : null;
+    if (!rows) throw new Error('branch.user.find_by_branch: javob yaroqsiz');
+    return [
+      ...new Set(
+        (rows as Array<Record<string, unknown>>)
+          .filter(
+            (row) =>
+              row &&
+              row.isDeleted !== true &&
+              text(row.role).toUpperCase() === 'MANAGER',
+          )
+          .map((row) => text(row.user_id))
+          .filter(isId),
+      ),
+    ];
   }
 
   /**
@@ -953,12 +1184,23 @@ export class ShiftReportService {
       where: { shift_id: shiftId, isDeleted: false },
       order: { round: 'DESC', recipient_kind: 'ASC', id: 'ASC' },
     });
-    const names = await this.userNames(rows.map((row) => row.recipient_id));
+    const isBranch = (row: ShiftReportDelivery) =>
+      row.recipient_kind === 'branch';
+    const [names, branchNames] = await Promise.all([
+      this.userNames(
+        rows.filter((row) => !isBranch(row)).map((row) => row.recipient_id),
+      ),
+      this.branchNames(
+        rows.filter(isBranch).map((row) => String(row.recipient_id)),
+      ),
+    ]);
     return rows.map((row) => ({
       id: String(row.id),
       round: row.round,
       recipient_id: String(row.recipient_id),
-      recipient_name: names.get(String(row.recipient_id)) ?? null,
+      recipient_name:
+        (isBranch(row) ? branchNames : names).get(String(row.recipient_id)) ??
+        null,
       recipient_kind: row.recipient_kind,
       channel: row.channel,
       status: row.status,
@@ -967,6 +1209,15 @@ export class ShiftReportService {
       sent_at: row.sent_at,
       created_at: row.createdAt,
     }));
+  }
+
+  private async branchNames(ids: string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (const id of [...new Set(ids.filter(isId))].slice(0, 20)) {
+      const name = await this.branchName(id);
+      if (name) names.set(id, name);
+    }
+    return names;
   }
 
   /**
@@ -982,15 +1233,17 @@ export class ShiftReportService {
         .slice(0, 1000)
         .map((item) => (item ?? {}) as Record<string, unknown>);
       const byKey = new Map<string, Record<string, unknown>>();
+      // Filial guruhi (`branch`): dispatch menejerlar nomidan — guruh relay
+      // natijasi hamma qatorda bir xil, dispatch bo'yicha birinchisi olinadi.
+      const byDispatch = new Map<string, Record<string, unknown>>();
       for (const item of found) {
         const delivery =
           item.delivery && typeof item.delivery === 'object'
             ? (item.delivery as Record<string, unknown>)
             : {};
-        byKey.set(
-          `${text(item.dispatch_id).toLowerCase()}:${text(item.recipient_id)}`,
-          delivery,
-        );
+        const dispatch = text(item.dispatch_id).toLowerCase();
+        byKey.set(`${dispatch}:${text(item.recipient_id)}`, delivery);
+        if (!byDispatch.has(dispatch)) byDispatch.set(dispatch, delivery);
       }
       const repo = this.dataSource.getRepository(ShiftReportDelivery);
       const queued = byKey.size
@@ -1001,9 +1254,11 @@ export class ShiftReportService {
       let updated = 0;
       for (const row of queued) {
         if (!row.dispatch_id) continue;
-        const delivery = byKey.get(
-          `${String(row.dispatch_id).toLowerCase()}:${String(row.recipient_id)}`,
-        );
+        const dispatch = String(row.dispatch_id).toLowerCase();
+        const delivery =
+          row.recipient_kind === 'branch'
+            ? byDispatch.get(dispatch)
+            : byKey.get(`${dispatch}:${String(row.recipient_id)}`);
         if (!delivery) continue;
         const next = deliveryStatusFrom(row.channel, delivery);
         if (!next || next.status === 'queued') continue;

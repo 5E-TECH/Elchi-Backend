@@ -33,6 +33,7 @@ import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { SendNotificationDto } from './dto/send-notification.dto';
 import { BotOutboxService } from './bot/bot-outbox.service';
 import { TelegramLinkService } from './bot/telegram-link.service';
+import { BranchTelegramService } from './telegram/branch-telegram.service';
 import { NotificationInboxService } from './notification-inbox.service';
 import type {
   InlineKeyboardMarkup,
@@ -158,6 +159,14 @@ export class NotificationServiceService {
     private readonly links: TelegramLinkService,
     @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
+
+  /** DI halqasisiz (va spec'larda konstruktor o'zgarmasin) — chaqiruv paytida. */
+  private branchTelegram(): BranchTelegramService {
+    if (!this.moduleRef) {
+      throw new Error('BranchTelegramService mavjud emas (moduleRef yo‘q)');
+    }
+    return this.moduleRef.get(BranchTelegramService, { strict: false });
+  }
 
   private toPublic(row: TelegramMarket) {
     return toPublicTelegramMarket(row);
@@ -310,9 +319,13 @@ export class NotificationServiceService {
    * Bot yo'li (guruhda `/start <kod>`): natija ham, xato ham guruhga
    * yuboriladigan { message } — bot uni javob matni sifatida ishlatadi.
    */
-  async connectGroupByCodeText(code: string, groupId: string) {
+  async connectGroupByCodeText(
+    code: string,
+    groupId: string,
+    title?: string | null,
+  ) {
     try {
-      return await this.bindGroupByCode(code, groupId, 'bot_start');
+      return await this.bindGroupByCode(code, groupId, 'bot_start', title);
     } catch (error) {
       // O'zimizning 400/404 xabarlarimiz (o'zbekcha) guruhga boradi; kutilmagan
       // xato (masalan baza) matni esa faqat logga — guruhga umumiy xabar.
@@ -335,6 +348,7 @@ export class NotificationServiceService {
     code: string,
     groupId: string,
     via: 'connect_by_token' | 'bot_start',
+    title?: string | null,
   ) {
     const claim = await this.links.claim(code, 'group', groupId);
     if (claim.status === 'invalid') {
@@ -345,6 +359,10 @@ export class NotificationServiceService {
     }
     if (claim.status !== 'ok') {
       throw new BadRequestException(GROUP_BIND_CODE_USED_MESSAGE);
+    }
+    // Filial kassasi guruhi (`branch_group`) — alohida oqim: market emas.
+    if (String(claim.token.purpose) === 'branch_group') {
+      return this.branchTelegram().bindGroup(claim.token, groupId, title);
     }
     const groupType =
       String(claim.token.group_type ?? '').toLowerCase() === Group_type.CANCEL
@@ -984,13 +1002,25 @@ export class NotificationServiceService {
    */
   async enqueueGroupRelay(
     manager: EntityManager,
-    target: { market_id?: string; group_id?: string; group_type?: Group_type },
+    target: {
+      market_id?: string;
+      group_id?: string;
+      group_type?: Group_type;
+      branch_id?: string;
+    },
     message: string,
     notificationIds: string[],
   ): Promise<string[] | null> {
     let chats: string[];
     if (target.group_id) {
       chats = [target.group_id];
+    } else if (target.branch_id) {
+      // Filial kassasi guruhi (`telegram_chats`, owner_type='branch').
+      this.assertBigIntId(target.branch_id, 'branch_id');
+      chats = await this.branchTelegram().activeGroupChats(
+        manager,
+        target.branch_id,
+      );
     } else if (target.market_id) {
       this.assertBigIntId(target.market_id, 'market_id');
       const where: FindOptionsWhere<TelegramMarket> = {

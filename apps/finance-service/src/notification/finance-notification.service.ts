@@ -98,8 +98,10 @@ export interface FinanceNotificationPayload {
    * notification-service shaxsiy DM emas, guruhga yuboradi.
    */
   telegram?: {
-    market_id: string;
+    market_id?: string;
     group_type?: 'create' | 'cancel';
+    /** Filial kassasi guruhi (notification-service `telegram_chats`). */
+    branch_id?: string;
     text: string;
   };
 }

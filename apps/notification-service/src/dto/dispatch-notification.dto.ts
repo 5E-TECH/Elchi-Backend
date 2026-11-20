@@ -171,6 +171,8 @@ export class DispatchNotificationDto {
   telegram?: {
     market_id?: string;
     group_id?: string;
+    /** Filial kassasi guruhi (`telegram_chats`, owner_type='branch'). */
+    branch_id?: string;
     group_type?: Group_type;
     text?: string;
   };

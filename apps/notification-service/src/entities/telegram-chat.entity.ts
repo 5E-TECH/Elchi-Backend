@@ -2,11 +2,7 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 
 export type TelegramChatType = 'private' | 'group' | 'channel';
 export type TelegramChatOwnerType =
-  | 'market'
-  | 'market_operator'
-  | 'courier'
-  | 'branch'
-  | 'user';
+  'market' | 'market_operator' | 'courier' | 'branch' | 'user';
 
 /**
  * (ysBqD9Nx #5) Umumlashtirilgan chat ↔ egasi bog'lanishi (migratsiya 126).
@@ -47,6 +43,21 @@ export class TelegramChat {
 
   @Column({ type: 'bigint', nullable: true })
   source_market_row_id!: string | null;
+
+  /** (migratsiya 247) Guruh nomi — ulanganda (faqat filial qatorlari). */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  chat_title!: string | null;
+
+  /**
+   * (migratsiya 247) Filial qatori nofaol bo'lish sababi: bot aniqlagan
+   * 'kicked' | 'left' | 'blocked_on_send' | 'chat_not_found' yoki panelda
+   * uzilgan 'unlinked'. Faol qatorda NULL.
+   */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  inactive_reason!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  inactive_at!: Date | null;
 
   @Column({ type: 'timestamptz', default: () => 'now()' })
   created_at!: Date;

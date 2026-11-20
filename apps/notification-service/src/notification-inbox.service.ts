@@ -637,7 +637,11 @@ export class NotificationInboxService {
       const wantsGroupRelay =
         channels.includes(NotificationChannel.TELEGRAM) &&
         !dmPlan &&
-        Boolean(dto.telegram?.market_id || dto.telegram?.group_id);
+        Boolean(
+          dto.telegram?.market_id ||
+          dto.telegram?.group_id ||
+          dto.telegram?.branch_id,
+        );
       let relay: GroupRelay | undefined;
       const redelivery = { duplicate: false };
       const rows =
@@ -1551,6 +1555,7 @@ export class NotificationInboxService {
         {
           market_id: target.market_id,
           group_id: target.group_id,
+          branch_id: target.branch_id,
           group_type: target.group_type,
         },
         this.relayMessage(dto),
@@ -1594,7 +1599,10 @@ export class NotificationInboxService {
     relay: GroupRelay | undefined,
   ): Promise<{ result: unknown; outcome: TelegramOutcome }> {
     const target = dto.telegram;
-    if (!relay || (!target?.market_id && !target?.group_id)) {
+    if (
+      !relay ||
+      (!target?.market_id && !target?.group_id && !target?.branch_id)
+    ) {
       return {
         result: null,
         outcome: {

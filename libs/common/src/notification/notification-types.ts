@@ -358,7 +358,12 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       priority: NotificationPriority.NORMAL,
       group_key_pattern: 'finance:shift:{{shift_id}}:report:{{round}}',
       label_uz: 'Smena yopildi — hisobot',
-      default_audience: [Roles.SUPERADMIN, Roles.COURIER, Roles.MARKET],
+      default_audience: [
+        Roles.SUPERADMIN,
+        Roles.COURIER,
+        Roles.MARKET,
+        Roles.MANAGER,
+      ],
       user_can_mute: true,
       default_channels: [
         NotificationChannel.IN_APP,
@@ -373,7 +378,12 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       priority: NotificationPriority.NORMAL,
       group_key_pattern: 'finance:shift:{{shift_id}}:report:{{round}}',
       label_uz: 'Smena avtomatik yopildi — hisobot',
-      default_audience: [Roles.SUPERADMIN, Roles.COURIER, Roles.MARKET],
+      default_audience: [
+        Roles.SUPERADMIN,
+        Roles.COURIER,
+        Roles.MARKET,
+        Roles.MANAGER,
+      ],
       user_can_mute: true,
       default_channels: [
         NotificationChannel.IN_APP,
@@ -765,6 +775,38 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       group_key_pattern: 'telegram:market_channel_inactive:{{chat_id}}',
       label_uz: 'Telegram guruhingiz nofaol',
       default_audience: [Roles.MARKET],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+
+    // Filial kassasi Telegram guruhi nofaol (bot chiqarildi / huquq olindi) —
+    // guruhni ulagan xodim (menejer / admin) biladi: hisobot guruhga bormaydi.
+    def({
+      key: 'telegram.branch_channel_inactive',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: 'telegram:branch_channel_inactive:{{chat_id}}',
+      label_uz: 'Filial kassa guruhi nofaol',
+      default_audience: [Roles.MANAGER, Roles.ADMIN, Roles.SUPERADMIN],
+      user_can_mute: false,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
+    // Filial kassasi guruhiga yangi a'zo — guruhda kassa summalari ko'rinadi.
+    def({
+      key: 'telegram.branch_group_member_joined',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: null,
+      label_uz: "Filial kassa guruhiga yangi a'zo qo'shildi",
+      default_audience: [Roles.MANAGER, Roles.ADMIN, Roles.SUPERADMIN],
       user_can_mute: false,
       default_channels: [
         NotificationChannel.IN_APP,
