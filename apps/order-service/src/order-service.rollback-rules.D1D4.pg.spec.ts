@@ -179,6 +179,13 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
           can_sell_cancel: canSellCancel.get(String(id)) ?? true,
         }),
       ),
+      // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getCashboxByUserStrict(
+        this: { getCashboxByUser: (...a: unknown[]) => unknown },
+        ...args: unknown[]
+      ) {
+        return this.getCashboxByUser(...args);
+      },
       getCashboxByUser: jest.fn(async (userId: string, type: Cashbox_type) =>
         financeDb.getRepository(Cashbox).findOne({
           where: { user_id: String(userId), cashbox_type: type },
@@ -1203,6 +1210,38 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
     }
     // Izsiz — superadmin qaytaradi (D2).
     await allowedRollback(SUPERADMIN, '7001', 'rb-b3');
+  }, 60_000);
+
+  it('⭐ WX-4: menejer to`lovi (advance) yetkazilmay turib superadmin qaytaradi — to`lov (X, M) qoldig`iga tushadi; invariantlar (XM a`zosi bilan) saqlanadi', async () => {
+    await addOrder('7001');
+    await sell(COURIER, '7001');
+    await courierPays(COURIER_SHARE, 'cp-wx4');
+    // Finance to'lovi commit — order tomonga advance hali yetkazilmagan.
+    await finance.paymentsToMarket({
+      market_id: MARKET_ID,
+      amount: 100000,
+      payment_method: PaymentMethod.CASH,
+      payer_cashbox_type: Cashbox_type.BRANCH,
+      payer_user_id: BRANCH,
+      created_by: MANAGER.id,
+      dedup_epoch: 'mm-wx4',
+    });
+    // Rollback: relay avval rollback oyoqlarini, keyin advance'ni yetkazadi —
+    // qator yo'q, to'lov (X, M) qoldig'iga.
+    await allowedRollback(SUPERADMIN, '7001', 'rb-wx4');
+    const [{ amount }] = await orderDb.query(
+      `SELECT COALESCE(SUM(amount), 0)::float8 AS amount
+         FROM "${orderSchema}".order_settlement_branch_market_carry
+        WHERE branch_id = $1 AND market_id = $2`,
+      [BRANCH, MARKET_ID],
+    );
+    expect(amount).toBe(100000);
+    await assertInvariants();
+    expect(await equity()).toBe(0);
+    // Keyingi sotuv: (X, M) qoldig'i menejer to'lovi o'rnida qo'llanadi.
+    await addOrder('7002');
+    await sell(COURIER, '7002');
+    await assertInvariants();
   }, 60_000);
 
   it('A-F6: kuryersiz bekor buyurtma, pul oyog`i yo`q — superadmin qaytaradi', async () => {

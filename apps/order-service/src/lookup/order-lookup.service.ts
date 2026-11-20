@@ -428,6 +428,27 @@ export class OrderLookupService implements OnModuleInit {
     return response?.data ?? [];
   }
 
+  /**
+   * `getCashboxByUser` bilan AYNI so'rov, lekin transport xatosi YUTILMAYDI
+   * (rollback, WX-5): 404 — `undefined` (kassa yo'q), boshqa xato —
+   * chaqiruvchiga (503 ga aylantiriladi).
+   */
+  async getCashboxByUserStrict(userId: string, cashboxType: Cashbox_type) {
+    try {
+      const response = await rmqSend<{
+        data?: { id: string; balance?: number };
+      }>(
+        this.financeClient,
+        { cmd: 'finance.cashbox.find_by_user' },
+        { user_id: userId, cashbox_type: cashboxType },
+      );
+      return response?.data;
+    } catch (error) {
+      if (rpcErrorStatusOf(error) === 404) return undefined;
+      throw error;
+    }
+  }
+
   async getCashboxByUser(userId: string, cashboxType: Cashbox_type) {
     const response = await rmqSend<{ data?: { id: string; balance?: number } }>(
       this.financeClient,

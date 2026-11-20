@@ -330,6 +330,13 @@ function makeWorld(opts: { carryTable?: boolean } = {}) {
       return this.getUserById(id);
     },
     getUserById: jest.fn().mockResolvedValue(null),
+    // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+    getCashboxByUserStrict(
+      this: { getCashboxByUser: (...a: unknown[]) => unknown },
+      ...args: unknown[]
+    ) {
+      return this.getCashboxByUser(...args);
+    },
     getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
       Promise.resolve({
         id: `${type}-${userId}`,

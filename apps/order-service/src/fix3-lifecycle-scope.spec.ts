@@ -690,6 +690,13 @@ function makeSellHarness(orderOver: Row = {}, approvalRows: Row[] = []) {
         tariff_center: 0,
         tariff_home: 0,
       }),
+      // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getCashboxByUserStrict(
+        this: { getCashboxByUser: (...a: unknown[]) => unknown },
+        ...args: unknown[]
+      ) {
+        return this.getCashboxByUser(...args);
+      },
       getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
         Promise.resolve({ id: `${type}-${userId}`, balance: 0 }),
       ),
@@ -867,6 +874,8 @@ function makeRollbackHarness(order: Row) {
     dataSource: { createQueryRunner: mocks.createQueryRunner },
     // D3 (2026-11-19) — menejer huquqi (rollback eligibility).
     lookup: {
+      // WX-6 — sahifa probe'i (market bor; keyingi qadam — sentinel).
+      getMarketsByIds: jest.fn().mockResolvedValue([]),
       // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
       getUserByIdStrict(
         this: { getUserById: (id: string) => unknown },
@@ -1084,6 +1093,13 @@ function makeApprovalService(
       tariff_center: 0,
       tariff_home: 0,
     }),
+    // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+    getCashboxByUserStrict(
+      this: { getCashboxByUser: (...a: unknown[]) => unknown },
+      ...args: unknown[]
+    ) {
+      return this.getCashboxByUser(...args);
+    },
     getCashboxByUser: jest.fn((_id: string, type: Cashbox_type) =>
       Promise.resolve({ id: `${type}-cashbox`, balance: 0 }),
     ),

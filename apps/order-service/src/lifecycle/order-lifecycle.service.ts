@@ -2411,7 +2411,7 @@ export class OrderLifecycleService {
       )
     ) {
       this.rollbackStateChanged(
-        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
+        "Rollback holati o'zgargan (buyurtmaning market ulushi shu orada filial kassasidan to'langan) — qayta urinib ko'ring",
       );
     }
     await repo
@@ -5956,10 +5956,14 @@ export class OrderLifecycleService {
     // qayta O'QILMAYDI: tranzaksiyadagi qulf aynan shu surat bilan
     // solishtiriladi (oradagi har qanday to'lov — STATE_CHANGED).
     const decidedSales = new Map<string, OrderSettlement | null>();
+    const decidedDeferred = new Map<
+      string,
+      { approvals: OrderExtraCostApproval[]; extraRows: OrderSettlement[] }
+    >();
     const rollbackContexts = await this.loadRollbackContexts(
       [order],
       requester,
-      { saleRows: decidedSales },
+      { saleRows: decidedSales, deferredRows: decidedDeferred },
     );
     const rollbackDecision: RollbackEligibility = evaluateRollbackEligibility(
       rollbackContexts.get(String(order.id)) as RollbackEligibilityContext,
@@ -6021,23 +6025,17 @@ export class OrderLifecycleService {
      * filialda, snapshot mos emas) eligibility'da tekshirilgan; kredit
      * tayyorlash pastda yana bir bor (qulfdan oldin) tekshiradi.
      */
+    // WX-7 — `existingSettlement` aynan qaror surati (RX-1): avvalgi
+    // «status qarordagidan farq qiladimi» tekshiruvi tavtologiya edi, olib
+    // tashlandi. Oradagi o'zgarish tranzaksiyadagi qulfda ushlanadi.
     const rollbackPath = rollbackDecision.path;
-    if (
-      rollbackPath !== 'plain' &&
-      (!existingSettlement ||
-        String(existingSettlement.status) !==
-          String(rollbackContexts.get(String(order.id))?.sale?.status ?? ''))
-    ) {
-      this.rollbackStateChanged(
-        "Rollback holati o'zgargan (hisob-kitob qatori yangilangan) — qayta urinib ko'ring",
-      );
-    }
     const remittedSale =
       rollbackPath === 'courier_remitted' ? existingSettlement : null;
     const settledSale = rollbackPath === 'settled' ? existingSettlement : null;
     const deferredRollback = await this.loadDeferredExtraCostRollbackState(
       order,
       remittedSale,
+      decidedDeferred.get(String(order.id)) ?? null,
     );
     let remittedCourierCredit: RemittedCourierCredit | null = null;
     const creditSale =
@@ -6048,8 +6046,10 @@ export class OrderLifecycleService {
         ? settledSale
         : null);
     if (creditSale) {
-      remittedCourierCredit =
-        await this.prepareRemittedCourierCredit(creditSale);
+      remittedCourierCredit = await this.prepareRemittedCourierCredit(
+        creditSale,
+        isSuperAdmin,
+      );
       const remittedChainAmount = deferredRollback.plan.remittedChainRows
         .map((row) => Number(row.courier_amount) || 0)
         .reduce((sum, amount) => sum + amount, 0);
@@ -6150,14 +6150,9 @@ export class OrderLifecycleService {
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
-      this.lookup.getCashboxByUser(
-        String(order.market_id),
-        Cashbox_type.FOR_MARKET,
-      ),
+      this.rollbackCashbox(String(order.market_id), Cashbox_type.FOR_MARKET),
       saleCourierId
-        ? this.lookup
-            .getCashboxByUser(saleCourierId, Cashbox_type.FOR_COURIER)
-            .catch(() => null)
+        ? this.rollbackCashbox(saleCourierId, Cashbox_type.FOR_COURIER)
         : Promise.resolve(null),
     ]);
     if (!marketCashbox) {
@@ -6237,12 +6232,10 @@ export class OrderLifecycleService {
       : extraCostParty.cashbox_type === Cashbox_type.FOR_COURIER &&
           extraCostParty.user_id === saleCourierId
         ? courierCashbox
-        : await this.lookup
-            .getCashboxByUser(
-              extraCostParty.user_id,
-              extraCostParty.cashbox_type,
-            )
-            .catch(() => null);
+        : await this.rollbackCashbox(
+            extraCostParty.user_id,
+            extraCostParty.cashbox_type,
+          );
     if (extraCostParty && !extraCostPartyCashbox) {
       // Jimgina o'tkazib yuborilmaydi: aks holda settlement qatori o'chib,
       // xarajat egasi kassasida −E daftarsiz qolardi.
@@ -6292,12 +6285,10 @@ export class OrderLifecycleService {
             extraCostParty.user_id === saleMarketPaidParty.user_id &&
             extraCostParty.cashbox_type === saleMarketPaidParty.cashbox_type
           ? extraCostPartyCashbox
-          : await this.lookup
-              .getCashboxByUser(
-                saleMarketPaidParty.user_id,
-                saleMarketPaidParty.cashbox_type,
-              )
-              .catch(() => null);
+          : await this.rollbackCashbox(
+              saleMarketPaidParty.user_id,
+              saleMarketPaidParty.cashbox_type,
+            );
     if (saleMarketPaidParty && !saleMarketPaidPartyCashbox) {
       this.notFound(
         saleMarketPaidParty.cashbox_type === Cashbox_type.BRANCH
@@ -6392,7 +6383,7 @@ export class OrderLifecycleService {
       });
       if (!locked || locked.status !== originalStatus) {
         this.rollbackStateChanged(
-          `Rollback holati o'zgargan (status: ${locked?.status ?? "yo'q"})`,
+          `Rollback holati o'zgargan (status shu orada: ${locked?.status ?? "yo'q"}) — qayta urinib ko'ring`,
         );
       }
       /**
@@ -6428,7 +6419,7 @@ export class OrderLifecycleService {
         Math.max(Number(order.extra_cost ?? 0) || 0, 0)
       ) {
         this.rollbackStateChanged(
-          "Rollback holati o'zgargan (qo'shimcha xarajat shu orada tasdiqlandi) — qaytadan urinib ko'ring",
+          "Rollback holati o'zgargan (qo'shimcha xarajat shu orada tasdiqlandi) — qayta urinib ko'ring",
         );
       }
       if (deferredRollback.approvals.length) {
@@ -6628,9 +6619,7 @@ export class OrderLifecycleService {
           await this.lookup.ensureBranchCashbox(rbBranchId);
         }
         const rbBranchCashbox = rbBranchId
-          ? await this.lookup
-              .getCashboxByUser(rbBranchId, Cashbox_type.BRANCH)
-              .catch(() => null)
+          ? await this.rollbackCashbox(rbBranchId, Cashbox_type.BRANCH)
           : null;
 
         // market leg (reverse)
@@ -7035,12 +7024,18 @@ export class OrderLifecycleService {
         | 'region_id'
         | 'sale_market_paid_amount'
         | 'canceled_post_id'
+        | 'market_id'
       >
     >,
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     opts: {
       /** RX-1 — 2-bosqich o'qigan sotuv qatorlari (qaror surati). */
       saleRows?: Map<string, OrderSettlement | null>;
+      /** WX-1 — qaror o'qigan kechiktirilgan E tasdiqlari va qatorlari. */
+      deferredRows?: Map<
+        string,
+        { approvals: OrderExtraCostApproval[]; extraRows: OrderSettlement[] }
+      >;
     } = {},
   ): Promise<Map<string, RollbackEligibilityContext>> {
     /**
@@ -7212,6 +7207,25 @@ export class OrderLifecycleService {
     });
     if (!pending.length) return result;
     const pendingIds = pending.map((order) => String(order.id));
+
+    // WX-6 — identity (market / kuryer) javob bermasa endpoint 503 beradi;
+    // ro'yxat maydoni ham «ruxsat» demasin: sahifaga bitta qat'iy probe.
+    const marketIds = [
+      ...new Set(
+        pending
+          .map((order) => String(order.market_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (marketIds.length) {
+      try {
+        await this.lookup.getMarketsByIds(marketIds, { strict: true });
+      } catch {
+        unavailable(
+          "Market ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
+      }
+    }
 
     // ── 2-bosqich: hisob-kitob va daftar (faqat o'tganlar uchun) ───────────
     const onlyOne = pending.length === 1;
@@ -7395,6 +7409,7 @@ export class OrderLifecycleService {
               ),
           )
         : [];
+      opts.deferredRows?.set(orderId, { approvals: orderApprovals, extraRows });
       const creditsCourier = creditsCourierOf(sale);
       const ledgerMismatch = this.rollbackLedgerMismatch({
         order,
@@ -7651,6 +7666,25 @@ export class OrderLifecycleService {
     return null;
   }
 
+  /**
+   * WX-5 — rollback kassasi: yo'q — `null` (chaqiruvchi 404 beradi), finance
+   * javob bermasa — 503 (ro'yxat maydoni «ruxsat» degan holatda kodsiz 404
+   * «kassa topilmadi» chiqmasin).
+   */
+  private async rollbackCashbox(userId: string, cashboxType: Cashbox_type) {
+    try {
+      return (
+        (await this.lookup.getCashboxByUserStrict(userId, cashboxType)) ?? null
+      );
+    } catch {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Kassa ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+  }
+
   /** A-F7 / B-2 — «holat o'zgargan» 400 — mashina o'qiydigan kod bilan. */
   private rollbackStateChanged(message: string): never {
     throw new RpcException({
@@ -7702,6 +7736,15 @@ export class OrderLifecycleService {
      * u bilan birga topshirilgan zanjir qatori ham qaytariladi (fix3b).
      */
     remittedSale: OrderSettlement | null = null,
+    /**
+     * WX-1 — qaror o'qigan E tasdiqlari / qatorlari: qayta o'qilgani bilan
+     * (id:status) farq qilsa — STATE_CHANGED (rejalashtirish kodsiz 400
+     * bermasin).
+     */
+    decided: {
+      approvals: OrderExtraCostApproval[];
+      extraRows: OrderSettlement[];
+    } | null = null,
   ): Promise<{
     approvals: OrderExtraCostApproval[];
     extraRows: OrderSettlement[];
@@ -7714,6 +7757,30 @@ export class OrderLifecycleService {
       party: null,
       plan: { consumedMarketRows: [], remittedChainRows: [] },
     };
+    const signature = (
+      approvals: OrderExtraCostApproval[],
+      extraRows: OrderSettlement[],
+    ) =>
+      [
+        ...approvals.map((row) => `a${String(row.id)}:${String(row.status)}`),
+        ...extraRows.map((row) => `s${String(row.id)}:${String(row.status)}`),
+      ]
+        .sort()
+        .join(',');
+    const assertUnchanged = (
+      approvals: OrderExtraCostApproval[],
+      extraRows: OrderSettlement[],
+    ) => {
+      if (
+        decided &&
+        signature(approvals, extraRows) !==
+          signature(decided.approvals, decided.extraRows)
+      ) {
+        this.rollbackStateChanged(
+          "Rollback holati o'zgargan (qo'shimcha xarajat hisob-kitobi shu orada yangilangan) — qayta urinib ko'ring",
+        );
+      }
+    };
     if (!(Number(order.extra_cost ?? 0) > 0)) return empty;
     const approvals = await this.extraCostApprovalRepo.find({
       where: {
@@ -7724,7 +7791,10 @@ export class OrderLifecycleService {
       },
       order: { id: 'ASC' },
     });
-    if (!approvals?.length) return empty;
+    if (!approvals?.length) {
+      assertUnchanged([], []);
+      return empty;
+    }
     const extraRows = await this.orderSettlementRepo.find({
       where: {
         order_id: String(order.id),
@@ -7732,6 +7802,7 @@ export class OrderLifecycleService {
         extra_cost_approval_id: In(approvals.map((row) => String(row.id))),
       },
     });
+    assertUnchanged(approvals, extraRows ?? []);
     const plan = this.planDeferredExtraCostRows(
       approvals,
       extraRows ?? [],
@@ -7930,22 +8001,36 @@ export class OrderLifecycleService {
    */
   private async prepareRemittedCourierCredit(
     settlement: OrderSettlement | null,
+    isSuperAdmin = false,
   ): Promise<RemittedCourierCredit> {
+    /**
+     * WX-3 — qaror shu shartlarni tekshirgan; bu yerdagi rad = qarordan keyin
+     * holat o'zgargan (masalan kuryer boshqa filialga o'tkazilgan). Kod
+     * eligibility bilan AYNI: superadmin — CORRECTION_REQUIRED, boshqalar —
+     * SUPERADMIN_ONLY (qayta urinish ham shu javobni beradi).
+     */
+    const deny: (message: string) => never = (message) => {
+      throw new RpcException({
+        statusCode: 400,
+        code: isSuperAdmin
+          ? ORDER_ROLLBACK_ERROR_CODES.CORRECTION_REQUIRED
+          : ORDER_ROLLBACK_ERROR_CODES.SUPERADMIN_ONLY,
+        message,
+      });
+    };
     const courierId = this.normalizeCourierId(settlement?.courier_id);
     const branchId = String(settlement?.branch_id ?? '').trim();
     const amount = Number(settlement?.courier_amount ?? 0) || 0;
     if (!settlement || !courierId) {
-      this.badRequest(
-        'Kuryer hisob-kitob qatori topilmadi — rollback bajarilmadi',
-      );
+      deny('Kuryer hisob-kitob qatori topilmadi — rollback bajarilmadi');
     }
     // Manfiy (kredit) qator: qoldiq manfiy bo'la olmaydi (FIFO uni 0 deb
     // o'qiydi), ya'ni teskari yozuvni daftarda ifodalab bo'lmaydi.
     if (toTiyin(amount) <= 0) {
-      this.badRequest(REMITTED_CREDIT_ROW_MESSAGE);
+      deny(REMITTED_CREDIT_ROW_MESSAGE);
     }
     if (!branchId) {
-      this.badRequest(
+      deny(
         "Kuryer to'lovi filialsiz qatorda — rollback mumkin emas (naqd HQ'da)",
       );
     }
@@ -7961,14 +8046,14 @@ export class OrderLifecycleService {
     if (branchId === hqBranchId) {
       // HQ qatorida kuryer naqdi MAIN'da; qoldiq esa filial kuryeri deb
       // yozilib, moliyaviy balansni og'dirardi.
-      this.badRequest(
+      deny(
         "Bu qator HQ filialiga yozilgan — kuryer kreditini avtomatik yozib bo'lmaydi, " +
           'rollback bajarilmadi',
       );
     }
 
     if (!(await this.isSettlementCarryTablePresent())) {
-      this.badRequest(
+      deny(
         "Hisob-kitob qoldig'i jadvali topilmadi — kuryer kreditini yozib bo'lmaydi, " +
           'rollback bajarilmadi',
       );
@@ -7987,7 +8072,7 @@ export class OrderLifecycleService {
       });
     }
     if (String(assignment?.branch_id ?? '').trim() !== branchId) {
-      this.badRequest(
+      deny(
         'Kuryer endi boshqa filialda (yoki filialga biriktirilmagan) — topshirilgan ' +
           "summani uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi",
       );
@@ -8049,7 +8134,7 @@ export class OrderLifecycleService {
     });
     if (row && this.isSettledToHq(row.status)) {
       this.rollbackStateChanged(
-        "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
+        "Rollback holati o'zgargan (buyurtma summasi shu orada bosh ofisga to'langan) — qayta urinib ko'ring",
       );
     }
     // 63HO6cBU (PR-C) — market ulushini filial o'z kassasidan to'lagan qator:
@@ -8059,7 +8144,7 @@ export class OrderLifecycleService {
       (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0
     ) {
       this.rollbackStateChanged(
-        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
+        "Rollback holati o'zgargan (buyurtmaning market ulushi shu orada filial kassasidan to'langan) — qayta urinib ko'ring",
       );
     }
     if (
@@ -8083,7 +8168,7 @@ export class OrderLifecycleService {
     const existingBranchId = String(courierCarry.branch_id ?? '').trim();
     if (toTiyin(existingAmount) > 0 && existingBranchId !== credit.branchId) {
       this.rollbackStateChanged(
-        'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
+        "Rollback holati o'zgargan (kuryerda shu orada boshqa filialga tegishli qoldiq paydo bo'lgan) — qayta urinib ko'ring",
       );
     }
     await carryRepo.update(
@@ -8172,7 +8257,7 @@ export class OrderLifecycleService {
     if (courierCredit) {
       if (courierCredit.branchId !== plan.branchId) {
         this.rollbackStateChanged(
-          'Kuryer krediti filiali qator filialiga mos emas — rollback bajarilmadi',
+          "Rollback holati o'zgargan (kuryer filiali shu orada o'zgargan) — qayta urinib ko'ring",
         );
       }
       courierCarry = await this.lockRemittedCourierCarries(tx, courierCredit);
@@ -8238,7 +8323,7 @@ export class OrderLifecycleService {
         existingBranchId !== courierCredit.branchId
       ) {
         this.rollbackStateChanged(
-          'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
+          "Rollback holati o'zgargan (kuryerda shu orada boshqa filialga tegishli qoldiq paydo bo'lgan) — qayta urinib ko'ring",
         );
       }
       await carryRepo.update(
