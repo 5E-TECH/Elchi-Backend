@@ -45,9 +45,10 @@ export class SettlementMarketPaidByBranch1716000000246 implements MigrationInter
         throw new Error(
           `Migratsiya 246 up() rad etildi: oldingi konvertatsiya izi bor ` +
             `(order_schema.order_settlement_246_conversion, ${traces} qator). ` +
-            `Avval qayta solishtiring (order_settlement_carry branch_to_hq / ` +
-            `hq_to_market qoldiqlari), so'ng izni tozalang — aks holda filial ` +
-            `to'lagan ulushlar qayta tiriladi.`,
+            `Avval scripts/order/reconcile-246-after-reup.sql ni yurgizing ` +
+            `(izdan filial to'lagan holatni tiklaydi, qoldiqlarni qaytaradi va ` +
+            `izni o'chiradi), so'ng migration:run — aks holda filial to'lagan ` +
+            `ulushlar ikki marta hisoblanadi.`,
         );
       }
     }
@@ -119,6 +120,29 @@ export class SettlementMarketPaidByBranch1716000000246 implements MigrationInter
            WHERE "amount" <> 0
         `)) as Array<{ carried: number }>)
       : [{ carried: 0 }];
+    // X737-1 — ikkinchi himoya: finance outbox'da (shu bazada) yetkazilmagan
+    // filial → market advance bo'lsa, u konvertatsiyaga kirmagan.
+    const [{ has_outbox: hasOutbox }] = (await queryRunner.query(`
+      SELECT to_regclass('"finance_schema"."outbox_events"') IS NOT NULL AS has_outbox
+    `)) as Array<{ has_outbox: boolean }>;
+    const [{ in_flight: inFlight }] = hasOutbox
+      ? ((await queryRunner.query(`
+          SELECT count(*)::int AS in_flight
+            FROM "finance_schema"."outbox_events"
+           WHERE "status" IN ('pending', 'failed')
+             AND "pattern" = 'order.settlement.advance'
+             AND "payload"->>'level' = 'branch_to_market'
+        `)) as Array<{ in_flight: number }>)
+      : [{ in_flight: 0 }];
+    if (inFlight > 0) {
+      await restore();
+      throw new Error(
+        `Migratsiya 246 down() rad etildi: finance outbox'da ${inFlight} ta ` +
+          `yetkazilmagan branch_to_market advance bor — menejer to'lovlarini ` +
+          `o'chiring, xizmatlarni to'xtating, advance'lar yetkazilsin, so'ng ` +
+          `scripts/order/convert-246-before-down.sql va down().`,
+      );
+    }
     if (paid > 0 || carried > 0) {
       await restore();
       throw new Error(
