@@ -2,7 +2,7 @@ import { ExecutionContext, Inject, Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientIpThrottlerGuard } from './client-ip-throttler.guard';
 
-/** Alohida throttler nomi — global 'default' (per-IP) hisoblagichiga tegmaydi. */
+/** Alohida throttler nomi — global 'default' hisoblagichiga tegmaydi. */
 export const AI_USER_THROTTLER_NAME = 'ai-user';
 /** `AI_PARSE_THROTTLE_LIMIT` sukuti (C11). */
 export const AI_PARSE_THROTTLE_LIMIT_DEFAULT = 10;
@@ -25,10 +25,10 @@ const MIN_TTL_MS = 1000;
  * ⚠️ O'Z NOMI ('ai-user') VA O'Z LIMITI. Guard `@Throttle({ default })`
  * metama'lumotini UMUMAN o'qimaydi — `canActivate` `handleRequest` ni
  * to'g'ridan-to'g'ri chaqiradi. Route'ga `@Throttle({ default: ... })` qo'yish
- * global per-IP limitni ham 10 ga tushirib yuborardi; `@SkipThrottle()` esa
- * per-IP 60/min abuse himoyasini o'chirardi. Ikkalasi ham QO'YILMAYDI: global
- * `ClientIpThrottlerGuard` (60/IP) o'z holicha qoladi, bu guard esa ustidan
- * `sub` bo'yicha 10/60s qo'shadi (5 operator × 10 = 50 < 60).
+ * global limitni ham 10 ga tushirib yuborardi; `@SkipThrottle()` esa
+ * 60/min abuse himoyasini o'chirardi. Ikkalasi ham QO'YILMAYDI: global
+ * `GlobalThrottlerGuard` (60/route; kirgan foydalanuvchi — `sub`, anonim —
+ * IP) o'z holicha qoladi, bu guard esa ustidan `sub` bo'yicha 10/60s qo'shadi.
  *
  * ⚠️ BU PUL HIMOYASI EMAS — faqat suiiste'mol (abuse) himoyasi. Hisoblagich
  * jarayon XOTIRASIDA (Redis yo'q): har deploy/restartda nollanadi va har

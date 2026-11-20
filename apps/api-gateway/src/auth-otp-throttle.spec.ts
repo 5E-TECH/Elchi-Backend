@@ -27,15 +27,21 @@ describe('OTP endpointlari — IP rate-limit (rkz0yBxr TC5)', () => {
     },
   );
 
-  it('IP tracker — global APP_GUARD sifatida mavjud ClientIpThrottlerGuard (CF-Connecting-IP)', () => {
+  it('IP tracker — global APP_GUARD (GlobalThrottlerGuard) @Public route’da ClientIpThrottlerGuard IP’si (CF-Connecting-IP)', () => {
     // Modulni import qilish env validatsiyasini ishga tushiradi — statik tekshiruv.
     const source = readFileSync(
       join(__dirname, 'api-gateway.module.ts'),
       'utf8',
     );
     expect(source).toMatch(
-      /\{\s*provide:\s*APP_GUARD,\s*useClass:\s*ClientIpThrottlerGuard\s*\}/,
+      /\{\s*provide:\s*APP_GUARD,\s*useClass:\s*GlobalThrottlerGuard\s*\}/,
     );
+    const globalGuard = readFileSync(
+      join(__dirname, 'auth', 'global-throttler.guard.ts'),
+      'utf8',
+    );
+    expect(globalGuard).toMatch(/extends ClientIpThrottlerGuard/);
+    expect(globalGuard).toMatch(/IS_PUBLIC_KEY/);
     const guard = readFileSync(
       join(__dirname, 'auth', 'client-ip-throttler.guard.ts'),
       'utf8',

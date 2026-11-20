@@ -3713,7 +3713,7 @@ export class OrderGatewayController {
    */
   @Post('ai-parse')
   @HttpCode(200)
-  // Global per-IP limit (ClientIpThrottlerGuard) O'ZGARMAYDI; ustiga
+  // Global limit (GlobalThrottlerGuard) O'ZGARMAYDI; ustiga
   // foydalanuvchi (JWT sub) bo'yicha alohida 'ai-user' limiti. ⚠️
   // @Throttle({default}) ham, @SkipThrottle ham ATAYLAB YO'Q.
   @UseGuards(JwtAuthGuard, RolesGuard, UserThrottlerGuard)
