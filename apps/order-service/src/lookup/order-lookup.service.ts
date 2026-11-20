@@ -131,10 +131,13 @@ export class OrderLookupService implements OnModuleInit {
    * super-kuryerning shu viloyat tarifini (courier_regions ?? yassi) qaytaradi;
    * oddiy kuryer va `opts`siz chaqiruvlar o'zgarmaydi.
    */
-  async getCouriersByIds(ids: string[], opts?: { region_id?: string | null }) {
+  async getCouriersByIds(
+    ids: string[],
+    opts?: { region_id?: string | null; strict?: boolean },
+  ) {
     if (!ids.length) return [];
     const regionId = String(opts?.region_id ?? '').trim();
-    const response = await rmqSend<{
+    const call = rmqSend<{
       data?: Array<{
         id: string;
         name?: string;
@@ -151,7 +154,12 @@ export class OrderLookupService implements OnModuleInit {
       this.identityClient,
       { cmd: 'identity.courier.find_by_ids' },
       regionId ? { ids, region_id: regionId } : { ids },
-    ).catch(() => ({ data: [] }));
+    );
+    // `strict` (rollback, A-F5) — xato yutilmaydi: tarifsiz hisob «mos emas»
+    // degan soxta javob berardi.
+    const response = opts?.strict
+      ? await call
+      : await call.catch(() => ({ data: [] }));
     return response?.data ?? [];
   }
 
@@ -185,7 +193,11 @@ export class OrderLookupService implements OnModuleInit {
   async getUserByIdStrict(id: string) {
     try {
       const response = await rmqSend<{
-        data?: { id: string; can_add_extra_cost?: boolean | null } | null;
+        data?: {
+          id: string;
+          can_add_extra_cost?: boolean | null;
+          can_sell_cancel?: boolean | null;
+        } | null;
       }>(
         this.identityClient,
         { cmd: 'identity.user.find_by_id' },

@@ -645,6 +645,9 @@ function replacementIdText(value: unknown): string {
     : '';
 }
 
+/** C1 — `rollback` maydoni so'rovining timeout'i (ro'yxat bloklanmasin). */
+const ROLLBACK_FIELD_TIMEOUT_MS = 1500;
+
 @ApiTags('Orders')
 @Controller('orders')
 // Javob tanasidagi statusCode (masalan 202 — market tasdig'i kutilmoqda) HTTP
@@ -749,7 +752,9 @@ export class OrderGatewayController {
   ): Promise<T> {
     return Promise.resolve(payload).then((resolved) =>
       attachRollbackEligibility(resolved, user, (pattern, data) =>
-        this.sendOrderWithTimeout(pattern, data),
+        // C1 — ro'yxat rollback maydoni uchun kutmaydi: 1.5 s dan keyin
+        // `rollback: null` (noma'lum), ro'yxat o'zi kechikmaydi.
+        this.sendOrderWithTimeout(pattern, data, ROLLBACK_FIELD_TIMEOUT_MS),
       ),
     );
   }
@@ -757,9 +762,10 @@ export class OrderGatewayController {
   private async sendOrderWithTimeout(
     pattern: { cmd: string },
     payload: object,
+    timeoutMs = 8000,
   ) {
     return firstValueFrom(
-      this.orderClient.send(pattern, payload).pipe(timeout(8000)),
+      this.orderClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException(
@@ -8509,8 +8515,10 @@ export class OrderGatewayController {
       '(aks holda 403 NO_PERMISSION); pul kuryerda yoki kuryer filialga topshirgan (kuryerga kredit) — ' +
       "ruxsat; HQ'ga o'tgan / market to'langan / filial marketga to'lagan — 400 SUPERADMIN_ONLY; bekor " +
       "posilka faqat o'z filialida yoki o'z kuryerida (jo'natilgan — 400 PARCEL_NOT_IN_BRANCH). " +
-      "SUPERADMIN: barcha bosqich, naqd ko'chmaydi — daftar teskari (kuryer/filial kredit, market debet). " +
-      'KURYER: avvalgidek (topshirilgan pul — 400 COURIER_REMITTED). Timeout 60 s.',
+      "SUPERADMIN: barcha bosqich, naqd ko'chmaydi — daftar teskari (kuryer/filial kredit, market oldindan olgan: hq_to_market +=). " +
+      'KURYER: avvalgidek (topshirilgan pul — 400 COURIER_REMITTED). Shu orada holat o‘zgarsa — 400 STATE_CHANGED; ' +
+      'noto‘g‘ri target_status — 400 INVALID_TARGET (ruxsatdan keyin tekshiriladi). Rollback roli bo‘lmagan foydalanuvchi — ' +
+      'RolesGuard umumiy 403 (kodsiz; `NOT_ALLOWED_ROLE` faqat ro‘yxatdagi `rollback` maydonida). Timeout 60 s.',
   })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiBody({ type: RollbackOrderRequestDto, required: false })

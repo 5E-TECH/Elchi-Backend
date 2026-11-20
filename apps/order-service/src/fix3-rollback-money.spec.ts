@@ -118,7 +118,19 @@ function makeRollbackService(
           ? extraCostApprovalTable()
           : entity === Order
             ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
-            : {},
+            : entity === OrderSettlement
+              ? // B-2 — tranzaksiyadagi sotuv qatori qulfi = qaror surati.
+                {
+                  findOne: (...args: unknown[]) =>
+                    (
+                      s as unknown as {
+                        orderSettlementRepo: {
+                          findOne: (...a: unknown[]) => unknown;
+                        };
+                      }
+                    ).orderSettlementRepo.findOne(...args),
+                }
+              : {},
       ),
     },
   };
@@ -183,6 +195,13 @@ function makeRollbackService(
           ids.map((id) => ({ id, tariff_center: 25000, tariff_home: 35000 })),
         ),
       ),
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn((id: string) =>
         Promise.resolve({
           id,
@@ -895,6 +914,13 @@ function makeSellService(
           can_sell_cancel: true,
         },
       ]),
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn().mockResolvedValue({
         id: '201',
         can_add_extra_cost: true,

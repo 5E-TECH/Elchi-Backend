@@ -102,4 +102,38 @@ describe('attachRollbackEligibility', () => {
     );
     expect(out).toEqual({ data: [{ id: '1', rollback: null }] });
   });
+  it('C4: 200 dan ko`p qator — 200 talik bo`laklar; bo`lak xatosi faqat o`z qatorlarini null qiladi', async () => {
+    const rows = Array.from({ length: 450 }, (_v, i) => ({
+      id: String(i + 1),
+    }));
+    const send = jest.fn(
+      (_pattern: { cmd: string }, data: Record<string, unknown>) => {
+        const ids = data.order_ids as string[];
+        if (ids[0] === '201') return Promise.reject(new Error('timeout'));
+        return Promise.resolve({
+          data: {
+            items: ids.map((id) => ({
+              order_id: id,
+              allowed: true,
+              code: null,
+              message: null,
+            })),
+          },
+        });
+      },
+    );
+    const out = (await attachRollbackEligibility(
+      { data: rows },
+      manager,
+      send,
+    )) as { data: Array<{ id: string; rollback: unknown }> };
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(
+      send.mock.calls.map(([, data]) => (data.order_ids as string[]).length),
+    ).toEqual([200, 200, 50]);
+    expect(out.data[0].rollback).toMatchObject({ allowed: true });
+    expect(out.data[200].rollback).toBeNull();
+    expect(out.data[399].rollback).toBeNull();
+    expect(out.data[449].rollback).toMatchObject({ allowed: true });
+  });
 });

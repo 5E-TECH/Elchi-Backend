@@ -230,7 +230,19 @@ function makeRollbackHarness(order: Row, settlement: Row) {
           ? extraCostApprovalTable()
           : entity === Order
             ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
-            : {},
+            : entity === OrderSettlement
+              ? // B-2 — tranzaksiyadagi sotuv qatori qulfi = qaror surati.
+                {
+                  findOne: (...args: unknown[]) =>
+                    (
+                      s as unknown as {
+                        orderSettlementRepo: {
+                          findOne: (...a: unknown[]) => unknown;
+                        };
+                      }
+                    ).orderSettlementRepo.findOne(...args),
+                }
+              : {},
       ),
     },
   };

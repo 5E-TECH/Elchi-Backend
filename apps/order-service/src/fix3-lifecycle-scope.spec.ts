@@ -676,6 +676,13 @@ function makeSellHarness(orderOver: Row = {}, approvalRows: Row[] = []) {
           can_sell_cancel: true,
         },
       ]),
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn().mockResolvedValue({
         id: '201',
         can_add_extra_cost: true,
@@ -860,6 +867,13 @@ function makeRollbackHarness(order: Row) {
     dataSource: { createQueryRunner: mocks.createQueryRunner },
     // D3 (2026-11-19) — menejer huquqi (rollback eligibility).
     lookup: {
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn().mockResolvedValue({ can_sell_cancel: true }),
       getBranchAssignmentByUser: jest
         .fn()
@@ -1055,6 +1069,13 @@ function makeApprovalService(
         can_sell_cancel: true,
       },
     ]),
+    // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+    getUserByIdStrict(
+      this: { getUserById: (id: string) => unknown },
+      id: string,
+    ) {
+      return this.getUserById(id);
+    },
     getUserById: jest.fn().mockResolvedValue({
       id: '201',
       branch_id: '77',

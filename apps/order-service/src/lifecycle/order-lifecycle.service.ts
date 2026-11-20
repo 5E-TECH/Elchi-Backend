@@ -85,6 +85,7 @@ import {
   resolvePartnerMoneyFields,
   resolveExtraCostAutoApproveMinutes,
   WAREHOUSE_ERROR_CODES,
+  ORDER_ROLLBACK_ERROR_CODES,
 } from '@app/common';
 
 import type { EntityManager } from 'typeorm';
@@ -118,6 +119,7 @@ import {
   toSaleEngineQuote,
 } from '../pricing/sale-pricing';
 import {
+  effectiveRollbackRole,
   evaluateRollbackEligibility,
   isRemittedSale,
   REMITTED_CREDIT_ROW_MESSAGE,
@@ -449,7 +451,7 @@ interface SettledRollbackLedger {
   marketId: string;
   /** `branch_to_hq` qoldig'iga kredit (filial amalda bergan pul). */
   branchCredit: number;
-  /** `hq_to_market` qoldig'idan debet (market amalda olgan pul). */
+  /** `hq_to_market` qoldig'iga += (market amalda olgan pul — oldindan olgan). */
   marketDebit: number;
   snapshot: {
     courier_amount: number;
@@ -5920,25 +5922,24 @@ export class OrderLifecycleService {
     const rollbackTarget = String(dto?.target_status ?? 'waiting')
       .trim()
       .toLowerCase() as 'waiting' | 'cancelled' | 'cancelled_sent';
-    if (!['waiting', 'cancelled', 'cancelled_sent'].includes(rollbackTarget)) {
-      this.badRequest(
-        `Noto'g'ri rollback maqsadi: ${String(dto?.target_status ?? '')}`,
-      );
-    }
 
-    const isManagerRequester =
-      this.hasRole(requester, Roles.MANAGER) &&
-      !this.hasRole(requester, Roles.COURIER);
+    /**
+     * A-F9 — bir nechta rolli JWT: rol ustuvorligi eligibility bilan AYNAN
+     * (superadmin > kuryer > menejer). Quyidagi hamma tekshiruv shu bitta
+     * rol bilan (`effectiveRequester`).
+     */
+    const effectiveRole = effectiveRollbackRole({
+      roles: (requester.roles ?? []).map(String),
+    });
+    const effectiveRequester = {
+      ...requester,
+      roles: effectiveRole ? [effectiveRole] : [],
+    };
+    const isManagerRequester = effectiveRole === 'manager';
     const order = await this.findById(id);
     const originalStatus = order.status;
-    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
-    const isCourier = this.hasRole(requester, Roles.COURIER);
-
-    if (rollbackTarget === 'cancelled_sent' && !isCourier) {
-      this.badRequest(
-        'cancelled_sent rollback faqat courier uchun ruxsat etilgan',
-      );
-    }
+    const isSuperAdmin = effectiveRole === 'superadmin';
+    const isCourier = effectiveRole === 'courier';
 
     /**
      * (2026-11-19, D1–D4) RUXSAT — BITTA MANBA: `evaluateRollbackEligibility`.
@@ -5954,7 +5955,6 @@ export class OrderLifecycleService {
     const rollbackContexts = await this.loadRollbackContexts(
       [order],
       requester,
-      { strict: true },
     );
     const rollbackDecision: RollbackEligibility = evaluateRollbackEligibility(
       rollbackContexts.get(String(order.id)) as RollbackEligibilityContext,
@@ -5964,6 +5964,21 @@ export class OrderLifecycleService {
         statusCode: rollbackDecision.httpStatus ?? 400,
         message: rollbackDecision.message,
         code: rollbackDecision.code,
+      });
+    }
+    // A-F7 — maqsad tekshiruvi ruxsatdan KEYIN (ro'yxat maydoni maqsadsiz).
+    if (!['waiting', 'cancelled', 'cancelled_sent'].includes(rollbackTarget)) {
+      throw new RpcException({
+        statusCode: 400,
+        code: ORDER_ROLLBACK_ERROR_CODES.INVALID_TARGET,
+        message: `Noto'g'ri rollback maqsadi: ${String(dto?.target_status ?? '')}`,
+      });
+    }
+    if (rollbackTarget === 'cancelled_sent' && !isCourier) {
+      throw new RpcException({
+        statusCode: 400,
+        code: ORDER_ROLLBACK_ERROR_CODES.INVALID_TARGET,
+        message: 'cancelled_sent rollback faqat courier uchun ruxsat etilgan',
       });
     }
 
@@ -6003,7 +6018,7 @@ export class OrderLifecycleService {
         String(existingSettlement.status) !==
           String(rollbackContexts.get(String(order.id))?.sale?.status ?? ''))
     ) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Rollback holati o'zgargan (hisob-kitob qatori yangilangan) — qayta urinib ko'ring",
       );
     }
@@ -6040,15 +6055,22 @@ export class OrderLifecycleService {
     // Superadmin + sotuv qatori bor: teskari oyoqlar qatordan olinadi
     // (`resolveRollbackReversalActor`) — kuryersiz (menejer / filial sotgan)
     // buyurtma ham ochiq (D2). Qatorsiz eski buyurtmada avvalgidek kuryer.
+    // A-F6 — pul oyog'i yo'q bekor buyurtma (sotuv emas, xarajat yo'q) ham.
+    const noMoneyLeg =
+      ![
+        Order_status.SOLD,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+      ].includes(originalStatus) && !(Number(order.extra_cost ?? 0) > 0);
     const saCourierless =
       isSuperAdmin &&
-      Boolean(existingSettlement) &&
+      (Boolean(existingSettlement) || noMoneyLeg) &&
       !this.normalizeCourierId(post?.courier_id) &&
       !this.normalizeCourierId(order.holder_courier_id) &&
       !this.normalizeCourierId(order.courier_id);
     const courierId = saCourierless
       ? String(requester.id)
-      : this.resolveActorCourierId(requester, order, post);
+      : this.resolveActorCourierId(effectiveRequester, order, post);
     if (!courierId) {
       this.notFound('Kuryer topilmadi');
     }
@@ -6068,9 +6090,11 @@ export class OrderLifecycleService {
     const reversalActor = resolveRollbackReversalActor({
       settlement: existingSettlement,
       legacy: {
-        isManagerRequester,
+        // A-F6 — kuryersiz, pul oyog'i yo'q bekor buyurtma (superadmin):
+        // kuryer oyog'i ham, xarajat egasi ham yo'q.
+        isManagerRequester: isManagerRequester || saCourierless,
         courierId,
-        requesterBranchId: requester.branch_id ?? null,
+        requesterBranchId: saCourierless ? null : (requester.branch_id ?? null),
       },
     });
     const saleCourierId = reversalActor.saleCourierId;
@@ -6343,9 +6367,30 @@ export class OrderLifecycleService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!locked || locked.status !== originalStatus) {
-        this.badRequest(
+        this.rollbackStateChanged(
           `Rollback holati o'zgargan (status: ${locked?.status ?? "yo'q"})`,
         );
+      }
+      /**
+       * B-2 — oddiy yo'l (pul kuryerda / sotuv qatori yo'q): qaror
+       * tranzaksiyadan OLDIN qilingan; shu orada kuryer to'lovi qatorni
+       * COURIER_SETTLED, filial → HQ to'lovi BRANCH_SETTLED qilgan bo'lsa,
+       * qator kreditsiz o'chib, pul daftardan yo'qolardi. Sotuv qatori shu
+       * yerda FOR UPDATE (FIFO bilan bir xil: qatorni olib, qoldiqqa
+       * tegmaymiz — sikl yo'q) va qaror suratiga solishtiriladi. Kredit
+       * yo'llari (M6 / D2) o'z funksiyalarida qoldiq qulfidan keyin
+       * tekshiradi.
+       */
+      if (rollbackPath === 'plain') {
+        const lockedSale = await tx.getRepository(OrderSettlement).findOne({
+          where: { order_id: String(order.id), isDeleted: false, kind: 'sale' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!this.sameSaleSnapshot(existingSettlement, lockedSale)) {
+          this.rollbackStateChanged(
+            "Rollback holati o'zgargan (shu orada to'lov hisob-kitob qatorini o'zgartirdi) — qayta urinib ko'ring",
+          );
+        }
       }
       /**
        * (SPEC v2 §5) Kechiktirilgan E tasdig'i buyurtma QULFI ostida
@@ -6358,7 +6403,7 @@ export class OrderLifecycleService {
         Math.max(Number(locked.extra_cost ?? 0) || 0, 0) !==
         Math.max(Number(order.extra_cost ?? 0) || 0, 0)
       ) {
-        this.badRequest(
+        this.rollbackStateChanged(
           "Rollback holati o'zgargan (qo'shimcha xarajat shu orada tasdiqlandi) — qaytadan urinib ko'ring",
         );
       }
@@ -6969,15 +7014,24 @@ export class OrderLifecycleService {
       >
     >,
     requester: { id: string; roles?: string[]; branch_id?: string | null },
-    opts: { strict?: boolean } = {},
   ): Promise<Map<string, RollbackEligibilityContext>> {
-    const strict = Boolean(opts.strict);
+    /**
+     * A-F3 — har doim qat'iy: tashqi xizmat javob bermasa 503 (ruxsatni
+     * taxmin qilmaymiz). Ro'yxatda gateway xatoni `rollback: null`
+     * (noma'lum) ga aylantiradi — soxta «ruxsat yo'q» chiqmaydi.
+     */
     const result = new Map<string, RollbackEligibilityContext>();
     if (!orders.length) return result;
-    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
-    const isCourier = !isSuperAdmin && this.hasRole(requester, Roles.COURIER);
-    const isManager =
-      !isSuperAdmin && !isCourier && this.hasRole(requester, Roles.MANAGER);
+    // A-F9 — rol ustuvorligi evaluator va endpoint bilan AYNI.
+    const role = effectiveRollbackRole({
+      roles: (requester.roles ?? []).map(String),
+    });
+    const isSuperAdmin = role === 'superadmin';
+    const isCourier = role === 'courier';
+    const isManager = role === 'manager';
+    const unavailable = (message: string): never => {
+      throw new RpcException({ statusCode: 503, message });
+    };
 
     const single = orders.length === 1;
     const branchOf = async (
@@ -6989,16 +7043,15 @@ export class OrderLifecycleService {
         if (single) {
           // Bitta buyurtma — ko'pi bilan 2 kuryer; M6 dagi AYNI so'rov.
           for (const courierId of courierIds) {
-            const assignment = strict
-              ? await this.lookup.getBranchAssignmentByUserStrict(courierId)
-              : await this.lookup.getBranchAssignmentByUser(courierId);
+            const assignment =
+              await this.lookup.getBranchAssignmentByUserStrict(courierId);
             const branchId = String(assignment?.branch_id ?? '').trim();
             out.set(courierId, branchId || null);
           }
           return out;
         }
         return await this.lookup.getBranchIdsByUserIds([...courierIds], {
-          strict,
+          strict: true,
         });
       } catch {
         throw new RpcException({
@@ -7011,10 +7064,17 @@ export class OrderLifecycleService {
 
     // ── 1-bosqich: aktor va buyurtma (hisob-kitob o'qilmaydi) ──────────────
     // Menejer huquqi (D3) — sotish / bekor qilish bilan bir xil manba
-    // (`getUserById`); topilmasa — huquq yo'q.
+    // (`getUserById`); A-F4 — 404 → huquq yo'q, transport xatosi → 503.
     let canSellCancel: boolean | null = null;
     if (isManager) {
-      const user = await this.lookup.getUserById(String(requester.id));
+      let user: { can_sell_cancel?: boolean | null } | null = null;
+      try {
+        user = await this.lookup.getUserByIdStrict(String(requester.id));
+      } catch {
+        unavailable(
+          "Foydalanuvchi huquqini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
+      }
       canSellCancel = user?.can_sell_cancel === true;
     }
 
@@ -7053,13 +7113,9 @@ export class OrderLifecycleService {
           posts = Array.isArray(many?.data) ? many.data : [];
         }
       } catch {
-        if (strict) {
-          throw new RpcException({
-            statusCode: 503,
-            message:
-              "Pochta ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
-          });
-        }
+        unavailable(
+          "Pochta ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
       }
       for (const post of posts) {
         postCourier.set(
@@ -7099,6 +7155,7 @@ export class OrderLifecycleService {
         branch_id: order.branch_id ?? null,
         courier_id: order.courier_id ?? null,
         canceled_post_id: order.canceled_post_id ?? null,
+        extra_cost: order.extra_cost ?? null,
       },
       postCourierId: order.post_id
         ? (postCourier.get(String(order.post_id)) ?? null)
@@ -7205,20 +7262,96 @@ export class OrderLifecycleService {
     if (saleCouriers.size) {
       hqBranchId =
         String((await this.lookup.getHqBranchId()) ?? '').trim() || null;
-      if (!hqBranchId && strict) {
-        throw new RpcException({
-          statusCode: 503,
-          message:
-            "Bosh ofis filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
-        });
+      if (!hqBranchId) {
+        unavailable(
+          "Bosh ofis filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
       }
       carryTablePresent = await this.isSettlementCarryTablePresent();
     }
 
-    for (const order of pending) {
+    // A-F8 — kuryerning hozirgi `courier_to_branch` qoldig'i (boshqa filialga
+    // tegishli musbat qoldiq bo'lsa kredit yozilmaydi — endpoint bilan AYNI).
+    const courierCarry = new Map<
+      string,
+      { branchId: string | null; amount: number }
+    >();
+    if (saleCouriers.size && carryTablePresent) {
+      const carries = await this.dataSource
+        .getRepository(OrderSettlementCarry)
+        .find({
+          where: {
+            level: 'courier_to_branch',
+            party_id: In([...saleCouriers]),
+          },
+        });
+      for (const carry of carries ?? []) {
+        courierCarry.set(String(carry.party_id), {
+          branchId: carry.branch_id ? String(carry.branch_id) : null,
+          amount: Number(carry.amount ?? 0) || 0,
+        });
+      }
+    }
+
+    // B-3 — migratsiya 246 konvertatsiyasi izidagi qatorlar.
+    const convertedSaleIds = await this.convertedSettlementIds246(
+      [...saleByOrder.values()].map((row) => String(row.id)),
+    );
+
+    // A-F5 — snapshot'siz (courier_share NULL) tariflar: viloyat bo'yicha
+    // bitta so'rov. Allaqachon rad etilganlar uchun hisoblanmaydi.
+    const preContext = (order: (typeof pending)[number]) => {
       const orderId = String(order.id);
       const sale = saleByOrder.get(orderId) ?? null;
       const saleCourier = this.normalizeCourierId(sale?.courier_id);
+      const carry = saleCourier ? courierCarry.get(saleCourier) : undefined;
+      return buildContext(order, {
+        sale: sale
+          ? {
+              status: String(sale.status),
+              courier_id: sale.courier_id ?? null,
+              branch_id: sale.branch_id ?? null,
+              courier_amount: sale.courier_amount,
+              market_paid_by_branch_at: sale.market_paid_by_branch_at ?? null,
+              market_paid_by_branch_amount: sale.market_paid_by_branch_amount,
+            }
+          : null,
+        saleCourierBranchId: saleCourier
+          ? (saleBranch.get(saleCourier) ?? null)
+          : null,
+        saleCourierCarryBranchId: carry?.branchId ?? null,
+        saleCourierCarryAmount: carry?.amount ?? 0,
+        conversionTraced: sale ? convertedSaleIds.has(String(sale.id)) : false,
+        hqBranchId,
+        carryTablePresent,
+        ledgerMismatch: null,
+        settlementLoaded: true,
+      });
+    };
+    const contextsBeforeLedger = new Map(
+      pending.map((order) => [String(order.id), preContext(order)]),
+    );
+    const needsLedger = pending.filter(
+      (order) =>
+        evaluateRollbackEligibility(contextsBeforeLedger.get(String(order.id))!)
+          .allowed,
+    );
+    const tariffs = await this.rollbackCourierTariffs(
+      needsLedger.filter((order) => {
+        const sale = saleByOrder.get(String(order.id)) ?? null;
+        return order.courier_share == null && creditsCourierOf(sale);
+      }),
+      saleByOrder,
+    );
+
+    for (const order of pending) {
+      const orderId = String(order.id);
+      const ctxBefore = contextsBeforeLedger.get(orderId)!;
+      if (!needsLedger.includes(order)) {
+        result.set(orderId, ctxBefore);
+        continue;
+      }
+      const sale = saleByOrder.get(orderId) ?? null;
       const orderApprovals = approvalsByOrder.get(orderId) ?? [];
       const extraRows = orderApprovals.length
         ? (onlyOne ? extraSettlementRows : (rows ?? [])).filter(
@@ -7239,31 +7372,93 @@ export class OrderLifecycleService {
         extraRows,
         isSuperAdmin,
         creditsCourier,
+        courierTariff: tariffs.get(orderId),
       });
-      result.set(
-        orderId,
-        buildContext(order, {
-          sale: sale
-            ? {
-                status: String(sale.status),
-                courier_id: sale.courier_id ?? null,
-                branch_id: sale.branch_id ?? null,
-                courier_amount: sale.courier_amount,
-                market_paid_by_branch_at: sale.market_paid_by_branch_at ?? null,
-                market_paid_by_branch_amount: sale.market_paid_by_branch_amount,
-              }
-            : null,
-          saleCourierBranchId: saleCourier
-            ? (saleBranch.get(saleCourier) ?? null)
-            : null,
-          hqBranchId,
-          carryTablePresent,
-          ledgerMismatch,
-          settlementLoaded: true,
-        }),
-      );
+      result.set(orderId, { ...ctxBefore, ledgerMismatch });
     }
     return result;
+  }
+
+  /**
+   * B-3 — migratsiya 246 konvertatsiyasi izida (`settlement_row`) turgan
+   * sotuv qatorlari. Jadval yo'q — bo'sh to'plam.
+   */
+  private async convertedSettlementIds246(
+    settlementIds: string[],
+  ): Promise<Set<string>> {
+    const out = new Set<string>();
+    const ids = settlementIds.filter((id) => /^\d{1,18}$/.test(id));
+    if (!ids.length) return out;
+    const schema = this.dataSource.getMetadata(OrderSettlement).schema;
+    const table = schema
+      ? `"${schema}"."order_settlement_246_conversion"`
+      : `"order_settlement_246_conversion"`;
+    const [row] = await this.dataSource.query<
+      Array<{ table_name: string | null }>
+    >(`SELECT to_regclass($1)::text AS table_name`, [table]);
+    if (!row?.table_name) return out;
+    const traced = await this.dataSource.query<
+      Array<{ settlement_id: string | number }>
+    >(
+      `SELECT DISTINCT "settlement_id" FROM ${table}
+        WHERE "kind" = 'settlement_row' AND "settlement_id" = ANY($1::bigint[])`,
+      [ids],
+    );
+    for (const item of traced ?? []) out.add(String(item.settlement_id));
+    return out;
+  }
+
+  /**
+   * A-F5 — snapshot'siz buyurtmalar uchun kuryer tarifi: viloyat bo'yicha
+   * guruhlab, har guruhga bitta `identity.courier.find_by_ids` (qat'iy).
+   */
+  private async rollbackCourierTariffs(
+    orders: Array<{ id: string; region_id?: string | null }>,
+    saleByOrder: Map<string, OrderSettlement>,
+  ): Promise<
+    Map<string, { tariff_center?: number; tariff_home?: number } | undefined>
+  > {
+    const out = new Map<
+      string,
+      { tariff_center?: number; tariff_home?: number } | undefined
+    >();
+    const byRegion = new Map<
+      string,
+      Array<{ orderId: string; courierId: string }>
+    >();
+    for (const order of orders) {
+      const courierId = this.normalizeCourierId(
+        saleByOrder.get(String(order.id))?.courier_id,
+      );
+      if (!courierId) continue;
+      const region = String(order.region_id ?? '').trim();
+      byRegion.set(region, [
+        ...(byRegion.get(region) ?? []),
+        { orderId: String(order.id), courierId },
+      ]);
+    }
+    for (const [region, items] of byRegion) {
+      let couriers: Array<{
+        id: string;
+        tariff_center?: number;
+        tariff_home?: number;
+      }>;
+      try {
+        couriers = await this.lookup.getCouriersByIds(
+          [...new Set(items.map((item) => item.courierId))],
+          { region_id: region || null, strict: true },
+        );
+      } catch {
+        throw new RpcException({
+          statusCode: 503,
+          message:
+            "Kuryer tarifini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        });
+      }
+      const byId = new Map(couriers.map((c) => [String(c.id), c]));
+      for (const item of items) out.set(item.orderId, byId.get(item.courierId));
+    }
+    return out;
   }
 
   /**
@@ -7328,6 +7523,8 @@ export class OrderLifecycleService {
     extraRows: OrderSettlement[];
     isSuperAdmin: boolean;
     creditsCourier: boolean;
+    /** A-F5 — oldindan (batch) o'qilgan tarif; `undefined` — o'qilmagan. */
+    courierTariff?: { tariff_center?: number; tariff_home?: number };
   }): Promise<string | null> {
     const { order, sale, approvals, extraRows, isSuperAdmin, creditsCourier } =
       params;
@@ -7378,13 +7575,7 @@ export class OrderLifecycleService {
     if (order.courier_share != null) {
       courierShare = Number(order.courier_share);
     } else {
-      const courier = saleCourierId
-        ? (
-            await this.lookup.getCouriersByIds([saleCourierId], {
-              region_id: order.region_id,
-            })
-          )?.[0]
-        : undefined;
+      const courier = params.courierTariff;
       courierShare = resolveOrderTariff({
         snapshot: order.courier_tariff,
         isCenter: order.where_deliver === Where_deliver.CENTER,
@@ -7422,6 +7613,38 @@ export class OrderLifecycleService {
       );
     }
     return null;
+  }
+
+  /** A-F7 / B-2 — «holat o'zgargan» 400 — mashina o'qiydigan kod bilan. */
+  private rollbackStateChanged(message: string): never {
+    throw new RpcException({
+      statusCode: 400,
+      code: ORDER_ROLLBACK_ERROR_CODES.STATE_CHANGED,
+      message,
+    });
+  }
+
+  /** B-2 — sotuv qatori qaror suratidan beri o'zgarmaganmi (null ≡ null). */
+  private sameSaleSnapshot(
+    before: OrderSettlement | null | undefined,
+    after: OrderSettlement | null | undefined,
+  ): boolean {
+    if (!before || !after) return !before && !after;
+    const same = (a: unknown, b: unknown) =>
+      String(a ?? '').trim() === String(b ?? '').trim();
+    return (
+      String(before.id) === String(after.id) &&
+      same(before.status, after.status) &&
+      same(before.courier_id, after.courier_id) &&
+      same(before.branch_id, after.branch_id) &&
+      toTiyin(before.courier_amount) === toTiyin(after.courier_amount) &&
+      toTiyin(before.branch_amount) === toTiyin(after.branch_amount) &&
+      toTiyin(before.market_amount) === toTiyin(after.market_amount) &&
+      toTiyin(before.market_paid_by_branch_amount) ===
+        toTiyin(after.market_paid_by_branch_amount) &&
+      Boolean(before.market_paid_by_branch_at) ===
+        Boolean(after.market_paid_by_branch_at)
+    );
   }
 
   private rpcMessageOf(error: unknown): string {
@@ -7615,7 +7838,7 @@ export class OrderLifecycleService {
         .sort()
         .join('|');
     if (signature(rows) !== signature(state.extraRows)) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Rollback holati o'zgargan (qo'shimcha xarajat hisob-kitobi yangilangan) — qayta urinib ko'ring",
       );
     }
@@ -7808,7 +8031,7 @@ export class OrderLifecycleService {
       String(row.branch_id ?? '').trim() !== credit.branchId ||
       toTiyin(row.courier_amount) !== toTiyin(credit.amount)
     ) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Rollback holati o'zgargan (hisob-kitob qatori yangilangan) — qayta urinib ko'ring",
       );
     }
@@ -7844,7 +8067,7 @@ export class OrderLifecycleService {
    *  • filial krediti (`branch_to_hq` +=) — filial shu qator bo'yicha AMALDA
    *    bergan pul: BRANCH/MARKET_SETTLED — `branch_amount` (HQ'ga to'lagani +
    *    marketga to'lagan P); COURIER_SETTLED + filial to'lagan — faqat P;
-   *  • market debeti (`hq_to_market` −=) — market AMALDA olgan pul:
+   *  • market debeti (`hq_to_market` +=, «market oldindan olgan») — market AMALDA olgan pul:
    *    MARKET_SETTLED — `market_amount` (HQ'dan + filialdan P); aks holda P;
    *  • kuryer krediti — M6 bilan bir xil (`courier_to_branch` +=).
    * HQ neti: −filial krediti (HQ olgan `branch_amount − P`) + market debeti
@@ -7964,7 +8187,7 @@ export class OrderLifecycleService {
         (this.normalizeCourierId(row.courier_id) !== courierCredit.courierId ||
           toTiyin(row.courier_amount) !== toTiyin(courierCredit.amount)))
     ) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Rollback holati o'zgargan (hisob-kitob qatori yangilangan) — qayta urinib ko'ring",
       );
     }
@@ -8005,8 +8228,11 @@ export class OrderLifecycleService {
       await carryRepo.update(
         { id: marketCarry.id },
         {
+          // B-1 — hq_to_market qoldig'i += : musbat qoldiq = HQ marketga
+          // OLDINDAN bergan (market oldindan olgan) — keyingi HQ → market
+          // FIFO uni avval ishlatadi (`remaining = lump + carry`).
           amount:
-            (toTiyin(marketCarry.amount ?? 0) - toTiyin(plan.marketDebit)) /
+            (toTiyin(marketCarry.amount ?? 0) + toTiyin(plan.marketDebit)) /
             100,
         },
       );

@@ -1309,6 +1309,7 @@ export class OrderRollbackEligibilityDto {
   allowed!: boolean;
 
   @ApiProperty({
+    type: String,
     nullable: true,
     example: 'SUPERADMIN_ONLY',
     enum: [
@@ -1327,6 +1328,7 @@ export class OrderRollbackEligibilityDto {
   code!: string | null;
 
   @ApiProperty({
+    type: String,
     nullable: true,
     example: 'Faqat superadmin qaytara oladi',
     description: "Rad etilsa — FE oynada ko'rsatadigan o'zbekcha sabab.",

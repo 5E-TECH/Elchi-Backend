@@ -49,6 +49,8 @@ export interface RollbackOrderView {
   courier_id?: string | null;
   /** Bekorlar pochtasi (solingan / jo'natilgan) — S11. */
   canceled_post_id?: string | null;
+  /** Qo'shimcha xarajat snapshoti (A-F6: kuryersiz bekor — pul oyog'i bormi). */
+  extra_cost?: number | string | null;
 }
 
 export interface RollbackSaleView {
@@ -85,6 +87,18 @@ export interface RollbackEligibilityContext {
    * (hisob-kitob bosqichi) baholanmaydi, faqat oldingi qadamlar rad etadi.
    */
   settlementLoaded?: boolean;
+  /**
+   * B-3 — migratsiya 246 konvertatsiya izida shu sotuv qatori bor: filial
+   * marketga to'lagan qism ustunlardan o'chirilgan (konvertatsiya qilingan),
+   * qator esa oddiy COURIER_SETTLED ko'rinadi. Avtomatik qaytarish yo'q.
+   */
+  conversionTraced?: boolean;
+  /**
+   * A-F8 — kuryerning `courier_to_branch` qoldig'i boshqa filialga bog'langan
+   * (musbat) — kreditni qo'shib bo'lmaydi (`creditRemittedCourierCarry` sharti).
+   */
+  saleCourierCarryBranchId?: string | null;
+  saleCourierCarryAmount?: number | null;
 }
 
 export interface RollbackEligibility {
@@ -116,10 +130,23 @@ const norm = (value: unknown): string => {
   return /^\d+$/.test(raw) ? String(BigInt(raw)) : raw;
 };
 
-const hasRole = (actor: RollbackActor, role: string): boolean =>
+const hasRole = (actor: Pick<RollbackActor, 'roles'>, role: string): boolean =>
   (actor.roles ?? []).some(
     (item) => String(item).toLowerCase() === String(role).toLowerCase(),
   );
+
+/**
+ * A-F9 — rol ustuvorligi (bir nechta rolli JWT): superadmin > kuryer >
+ * menejer. Endpoint ham, eligibility ham AYNAN shu tanlov bilan ishlaydi.
+ */
+export function effectiveRollbackRole(
+  actor: Pick<RollbackActor, 'roles'>,
+): 'superadmin' | 'courier' | 'manager' | null {
+  if (hasRole(actor, Roles.SUPERADMIN)) return 'superadmin';
+  if (hasRole(actor, Roles.COURIER)) return 'courier';
+  if (hasRole(actor, Roles.MANAGER)) return 'manager';
+  return null;
+}
 
 function deny(
   code: OrderRollbackErrorCode,
@@ -176,7 +203,12 @@ export const REMITTED_CREDIT_ROW_MESSAGE =
 export function remittedCreditBlocker(
   ctx: Pick<
     RollbackEligibilityContext,
-    'sale' | 'saleCourierBranchId' | 'hqBranchId' | 'carryTablePresent'
+    | 'sale'
+    | 'saleCourierBranchId'
+    | 'hqBranchId'
+    | 'carryTablePresent'
+    | 'saleCourierCarryBranchId'
+    | 'saleCourierCarryAmount'
   >,
 ): string | null {
   const sale = ctx.sale;
@@ -208,6 +240,13 @@ export function remittedCreditBlocker(
       "summani uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi"
     );
   }
+  // A-F8 — `creditRemittedCourierCarry` bilan AYNI shart.
+  if (
+    toTiyin(ctx.saleCourierCarryAmount ?? 0) > 0 &&
+    norm(ctx.saleCourierCarryBranchId) !== branchId
+  ) {
+    return 'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi';
+  }
   return null;
 }
 
@@ -237,11 +276,11 @@ export function evaluateRollbackEligibility(
   ctx: RollbackEligibilityContext,
 ): RollbackEligibility {
   const { actor, order, sale } = ctx;
-  const isSuperAdmin = hasRole(actor, Roles.SUPERADMIN);
-  const isCourier = !isSuperAdmin && hasRole(actor, Roles.COURIER);
-  const isManager =
-    !isSuperAdmin && !isCourier && hasRole(actor, Roles.MANAGER);
-  if (!isSuperAdmin && !isCourier && !isManager) {
+  const role = effectiveRollbackRole(actor);
+  const isSuperAdmin = role === 'superadmin';
+  const isCourier = role === 'courier';
+  const isManager = role === 'manager';
+  if (!role) {
     return deny(RB.NOT_ALLOWED_ROLE);
   }
 
@@ -357,11 +396,22 @@ export function evaluateRollbackEligibility(
     isSuperAdmin &&
     ![ctx.postCourierId, order.holder_courier_id, order.courier_id]
       .map(norm)
-      .some(Boolean)
+      .some(Boolean) &&
+    // A-F6 — pul oyog'i yo'q (sotuv emas va qo'shimcha xarajat yo'q) bekor
+    // buyurtma — kuryer kerak emas, superadmin ham qaytaradi.
+    (saleStatuses.includes(status) || toTiyin(order.extra_cost) > 0)
   ) {
     // Sotuv qatori yo'q (eski buyurtma) — teskari oyoqlar kuryerdan olinadi
     // (`resolveActorCourierId`, avvalgidek): kuryer majburiy.
     return deny(RB.CORRECTION_REQUIRED, 'Buyurtmaga kuryer biriktirilmagan');
+  }
+  // B-3 — konvertatsiya qilingan qator: filial to'lagan qism daftarda yo'q.
+  if (ctx.conversionTraced && sale) {
+    return deny(
+      isSuperAdmin ? RB.CORRECTION_REQUIRED : RB.SUPERADMIN_ONLY,
+      "Bu buyurtmaning filial → market to'lovi migratsiya 246 orqaga qaytarilganda " +
+        "konvertatsiya qilingan — avtomatik qaytarib bo'lmaydi, buxgalteriya tuzatishi kerak",
+    );
   }
   if (!sale || sale.status === SettlementStatus.PENDING) {
     if (ctx.ledgerMismatch) {

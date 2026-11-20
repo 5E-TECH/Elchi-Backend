@@ -6122,7 +6122,7 @@
     },
     "/orders/rollback/{id}": {
       "post": {
-        "description": "(2026-11-19, D1–D4) Ruxsat — ro'yxat/tafsilotdagi `rollback` maydoni bilan AYNI qaror (`code` + `message` 400/403 tanasida). MENEJER: faqat o‘z filiali, `can_sell_cancel` shart (aks holda 403 NO_PERMISSION); pul kuryerda yoki kuryer filialga topshirgan (kuryerga kredit) — ruxsat; HQ'ga o'tgan / market to'langan / filial marketga to'lagan — 400 SUPERADMIN_ONLY; bekor posilka faqat o'z filialida yoki o'z kuryerida (jo'natilgan — 400 PARCEL_NOT_IN_BRANCH). SUPERADMIN: barcha bosqich, naqd ko'chmaydi — daftar teskari (kuryer/filial kredit, market debet). KURYER: avvalgidek (topshirilgan pul — 400 COURIER_REMITTED). Timeout 60 s.",
+        "description": "(2026-11-19, D1–D4) Ruxsat — ro'yxat/tafsilotdagi `rollback` maydoni bilan AYNI qaror (`code` + `message` 400/403 tanasida). MENEJER: faqat o‘z filiali, `can_sell_cancel` shart (aks holda 403 NO_PERMISSION); pul kuryerda yoki kuryer filialga topshirgan (kuryerga kredit) — ruxsat; HQ'ga o'tgan / market to'langan / filial marketga to'lagan — 400 SUPERADMIN_ONLY; bekor posilka faqat o'z filialida yoki o'z kuryerida (jo'natilgan — 400 PARCEL_NOT_IN_BRANCH). SUPERADMIN: barcha bosqich, naqd ko'chmaydi — daftar teskari (kuryer/filial kredit, market oldindan olgan: hq_to_market +=). KURYER: avvalgidek (topshirilgan pul — 400 COURIER_REMITTED). Shu orada holat o‘zgarsa — 400 STATE_CHANGED; noto‘g‘ri target_status — 400 INVALID_TARGET (ruxsatdan keyin tekshiriladi). Rollback roli bo‘lmagan foydalanuvchi — RolesGuard umumiy 403 (kodsiz; `NOT_ALLOWED_ROLE` faqat ro‘yxatdagi `rollback` maydonida). Timeout 60 s.",
         "operationId": "OrderGatewayController_rollbackOrder",
         "parameters": [
           {
@@ -30885,7 +30885,7 @@
             ]
           },
           "message": {
-            "type": "object",
+            "type": "string",
             "nullable": true,
             "example": "Faqat superadmin qaytara oladi",
             "description": "Rad etilsa — FE oynada ko'rsatadigan o'zbekcha sabab."

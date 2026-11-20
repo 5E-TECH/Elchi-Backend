@@ -322,6 +322,13 @@ function makeWorld(opts: { carryTable?: boolean } = {}) {
         })),
       ),
     ),
+    // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+    getUserByIdStrict(
+      this: { getUserById: (id: string) => unknown },
+      id: string,
+    ) {
+      return this.getUserById(id);
+    },
     getUserById: jest.fn().mockResolvedValue(null),
     getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
       Promise.resolve({

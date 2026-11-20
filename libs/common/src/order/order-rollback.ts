@@ -28,6 +28,10 @@ export const ORDER_ROLLBACK_ERROR_CODES = {
   COURIER_REMITTED: 'COURIER_REMITTED',
   /** Daftar holati avtomatik teskari yozishga yaramaydi — buxgalteriya tuzatishi. */
   CORRECTION_REQUIRED: 'CORRECTION_REQUIRED',
+  /** Qaror va yozish orasida holat o'zgardi (parallel to'lov / amal) — qayta urinish. */
+  STATE_CHANGED: 'STATE_CHANGED',
+  /** Noto'g'ri qaytarish maqsadi (`target_status`) yoki maqsad bu rolga yopiq. */
+  INVALID_TARGET: 'INVALID_TARGET',
 } as const;
 
 export type OrderRollbackErrorCode =
@@ -51,6 +55,8 @@ export const ORDER_ROLLBACK_MESSAGES: Record<OrderRollbackErrorCode, string> = {
     'Pul filialga topshirilgan — buyurtmani menejer yoki superadmin qaytaradi',
   CORRECTION_REQUIRED:
     'Hisob-kitob holati avtomatik qaytarishga yaramaydi — buxgalteriya tuzatishi kerak',
+  STATE_CHANGED: 'Rollback holati o‘zgargan — qayta urinib ko‘ring',
+  INVALID_TARGET: 'Noto‘g‘ri qaytarish maqsadi',
 };
 
 /** Ro'yxat / tafsilotdagi `rollback` maydoni. */

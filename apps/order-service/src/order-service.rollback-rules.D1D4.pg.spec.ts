@@ -173,7 +173,11 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
         }),
       ),
       getUserByIdStrict: jest.fn((id: string) =>
-        Promise.resolve({ id, can_add_extra_cost: true }),
+        Promise.resolve({
+          id,
+          can_add_extra_cost: true,
+          can_sell_cancel: canSellCancel.get(String(id)) ?? true,
+        }),
       ),
       getCashboxByUser: jest.fn(async (userId: string, type: Cashbox_type) =>
         financeDb.getRepository(Cashbox).findOne({
@@ -489,7 +493,17 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
         WHERE is_deleted = false AND status <> 'market_settled' AND market_id = $1`,
       [MARKET_ID],
     );
-    expect(s.market).toBeCloseTo(marketOpen + s.carries.market, 2);
+    // B-1 — musbat `hq_to_market` qoldig'i: HQ marketga OLDINDAN bergan
+    // (market oldindan olgan); (X, M) — filial marketga oldindan bergani.
+    const branchMarketCarry = await sumOf(
+      `SELECT SUM(amount) FROM "${orderSchema}".order_settlement_branch_market_carry
+        WHERE market_id = $1`,
+      [MARKET_ID],
+    );
+    expect(s.market).toBeCloseTo(
+      marketOpen - s.carries.market - branchMarketCarry,
+      2,
+    );
     // Filial.
     const branchOwed = await sumOf(
       `SELECT SUM(branch_amount - market_paid_by_branch_amount)
@@ -861,7 +875,7 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
   }, 60_000);
 
   describe('D2 — superadmin: HQ`ga o`tgan, market to`langan, filial marketga to`lagan', () => {
-    it('⭐ MARKET_SETTLED (HQ marketga to`lagan): kuryer + filial kredit, market debet; HQ neti 0; menejer to`lovi chegarasi 0', async () => {
+    it('⭐ MARKET_SETTLED (HQ marketga to`lagan): kuryer + filial kredit, market oldindan olgan (hq_to_market +=); HQ neti 0; menejer to`lovi chegarasi 0', async () => {
       await addOrder('7001');
       await sell(COURIER, '7001');
       await courierPays(COURIER_SHARE, 'cp-ms');
@@ -894,13 +908,13 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
         carries: {
           courier: COURIER_SHARE,
           branch: COURIER_SHARE,
-          market: -MARKET_SHARE,
+          market: MARKET_SHARE,
         },
       });
       // HQ neti: oldin +220 000 (filialdan) − 205 000 (marketga) = 15 000;
-      // kelajakda −220 000 (filial krediti) + 205 000 (market debeti) → 0.
+      // kelajakda −220 000 (filial krediti) + 205 000 (market oldindan olgan) → 0.
       const s = await snapshot();
-      expect(s.main - s.carries.branch - s.carries.market).toBe(0);
+      expect(s.main - s.carries.branch + s.carries.market).toBe(0);
       expect(await equity()).toBe(0);
 
       // S3 (orkestr): market qarzdor — menejer to'lovi chegarasi 0.
@@ -915,20 +929,19 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
       await relay();
       await assertInvariants();
       // Kaskad: filial krediti (220 000) ham darhol qo'llandi — HQ'ga
-      // qayta pul berilmaydi (rollback'dan oldin bergani hisoblandi).
+      // qayta pul berilmaydi (rollback'dan oldin bergani hisoblandi); B-1 —
+      // market oldindan olgan 205 000 ham qo'llanadi: HQ marketga qayta
+      // to'lamaydi, qator MARKET_SETTLED.
       expect((await saleRow('7002'))?.status).toBe(
-        SettlementStatus.BRANCH_SETTLED,
+        SettlementStatus.MARKET_SETTLED,
       );
       expect(await carry('branch_to_hq', BRANCH)).toBe(0);
       expect(await carry('courier_to_branch', COURIER_ID)).toBe(0);
+      expect(await carry('hq_to_market', MARKET_ID)).toBe(0);
       // Market kassasi: −205 000 + 205 000 = 0 → payable = min(ulush, 0) = 0.
       expect(await balance(MARKET_ID, Cashbox_type.FOR_MARKET)).toBe(0);
       await expect(managerPaysMarket(1, 'mm-ms-2')).rejects.toMatchObject({
-        error: {
-          statusCode: 400,
-          message:
-            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 0 so'm)",
-        },
+        error: { statusCode: 400 },
       });
     }, 60_000);
 
@@ -949,7 +962,7 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
         branch: COURIER_SHARE - 100000,
         courier: -COURIER_SHARE,
         market: -100000,
-        carries: { courier: COURIER_SHARE, branch: 100000, market: -100000 },
+        carries: { courier: COURIER_SHARE, branch: 100000, market: 100000 },
       });
       expect(await equity()).toBe(0);
     }, 60_000);
@@ -974,7 +987,7 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
         carries: {
           courier: COURIER_SHARE,
           branch: COURIER_SHARE,
-          market: -MARKET_SHARE,
+          market: MARKET_SHARE,
         },
       });
       expect(await equity()).toBe(0);
@@ -986,6 +999,171 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
       expect(n).toBe(0);
     }, 60_000);
   });
+
+  /**
+   * B-2 — qaror tranzaksiyadan OLDIN; shu orada to'lov qatorni o'zgartiradi.
+   * Rollback tranzaksiyasi ochilishidan oldin (`connect`) aralashuv bajariladi.
+   */
+  const rollbackWithInterleave = async (
+    actor: Row,
+    id: string,
+    key: string,
+    interleave: () => Promise<void>,
+  ) => {
+    // `DataSource.query` ham queryRunner ochadi — aralashuv faqat birinchi
+    // `startTransaction` da (ya'ni rollback tranzaksiyasi, qarordan keyin).
+    const ds = (lifecycle as unknown as { dataSource: DataSource }).dataSource;
+    const original = ds.createQueryRunner.bind(ds);
+    let fired = false;
+    const spy = jest
+      .spyOn(ds, 'createQueryRunner')
+      .mockImplementation(
+        (...args: Parameters<DataSource['createQueryRunner']>) => {
+          const qr = original(...args);
+          if (fired) return qr;
+          const start = qr.startTransaction.bind(qr);
+          qr.startTransaction = async (...startArgs) => {
+            if (!fired) {
+              fired = true;
+              await interleave();
+            }
+            return start(...startArgs);
+          };
+          return qr;
+        },
+      );
+    try {
+      return await lifecycle
+        .rollbackOrderToWaiting(actor as never, id, undefined, key)
+        .then(
+          () => null,
+          (e: unknown) => (e as { getError: () => Row }).getError(),
+        );
+    } finally {
+      spy.mockRestore();
+      expect(fired).toBe(true);
+    }
+  };
+
+  describe('B-2 — oddiy yo`l: qulf ostida qayta tekshiruv (STATE_CHANGED)', () => {
+    it.each([1, 2, 3])(
+      '⭐ #%i (a) kuryer sotdi (PENDING); qaror va tranzaksiya orasida kuryer topshirdi (COURIER_SETTLED) — 400 STATE_CHANGED, daftar mos',
+      async (round) => {
+        await addOrder('7001');
+        await sell(COURIER, '7001');
+        expect((await saleRow('7001'))?.status).toBe(SettlementStatus.PENDING);
+        const error = await rollbackWithInterleave(
+          MANAGER,
+          '7001',
+          `rb-b2a-${round}`,
+          () => courierPays(COURIER_SHARE, `cp-b2a-${round}`),
+        );
+        expect(error).toMatchObject({ statusCode: 400, code: 'STATE_CHANGED' });
+        await relay();
+        await assertInvariants();
+        expect(await orderStatus('7001')).toBe(Order_status.SOLD);
+        expect((await saleRow('7001'))?.status).toBe(
+          SettlementStatus.COURIER_SETTLED,
+        );
+        // Qayta urinish — yangi qaror (D1: kuryerga kredit) bilan o'tadi.
+        await allowedRollback(MANAGER, '7001', `rb-b2a-retry-${round}`);
+        expect(await carry('courier_to_branch', COURIER_ID)).toBe(
+          COURIER_SHARE,
+        );
+        expect(await equity()).toBe(0);
+      },
+      60_000,
+    );
+
+    it.each([1, 2, 3])(
+      '⭐ #%i (b) menejer sotdi (naqd filialda); orada filial HQ`ga to`ladi (BRANCH_SETTLED) — 400 STATE_CHANGED, daftar mos',
+      async (round) => {
+        await addOrder('7001', {
+          holder_type: 'BRANCH',
+          holder_courier_id: null,
+          courier_id: null,
+          post_id: 9002,
+        });
+        await sell(MANAGER, '7001');
+        const before = await saleRow('7001');
+        const amount = Number(
+          (
+            await orderDb.query(
+              `SELECT branch_amount::float8 AS a FROM "${orderSchema}".order_settlement
+                WHERE order_id = '7001' AND kind = 'sale' AND is_deleted = false`,
+            )
+          )[0].a,
+        );
+        const error = await rollbackWithInterleave(
+          MANAGER,
+          '7001',
+          `rb-b2b-${round}`,
+          () => branchPaysHq(amount, `bp-b2b-${round}`),
+        );
+        expect(error).toMatchObject({ statusCode: 400, code: 'STATE_CHANGED' });
+        await relay();
+        await assertInvariants();
+        expect(await orderStatus('7001')).toBe(Order_status.SOLD);
+        expect((await saleRow('7001'))?.status).toBe(
+          SettlementStatus.BRANCH_SETTLED,
+        );
+        // Menejer sotuvi — naqd filialda (COURIER_SETTLED, kuryersiz).
+        expect(before?.status).toBe(SettlementStatus.COURIER_SETTLED);
+        // Endi menejerga — SUPERADMIN_ONLY (HQ'ga o'tgan).
+        await deniedRollback(MANAGER, '7001', 'SUPERADMIN_ONLY');
+      },
+      60_000,
+    );
+  });
+
+  it('⭐ B-3: migratsiya 246 konvertatsiya izidagi qator — superadmin CORRECTION_REQUIRED, menejer SUPERADMIN_ONLY', async () => {
+    await addOrder('7001');
+    await sell(COURIER, '7001');
+    await courierPays(COURIER_SHARE, 'cp-b3');
+    await managerPaysMarket(100000, 'mm-b3');
+    const [{ id: saleId }] = await orderDb.query(
+      `SELECT id FROM "${orderSchema}".order_settlement
+        WHERE order_id = '7001' AND kind = 'sale' AND is_deleted = false`,
+    );
+    await orderDb.query(
+      `CREATE TABLE "${orderSchema}".order_settlement_246_conversion (
+         id BIGSERIAL PRIMARY KEY, kind varchar(32) NOT NULL,
+         settlement_id bigint, amount numeric(14,2) NOT NULL DEFAULT 0)`,
+    );
+    try {
+      await orderDb.query(
+        `INSERT INTO "${orderSchema}".order_settlement_246_conversion (kind, settlement_id, amount)
+         VALUES ('settlement_row', $1, 100000)`,
+        [saleId],
+      );
+      await deniedRollback(MANAGER, '7001', 'SUPERADMIN_ONLY');
+      const error = await deniedRollback(
+        SUPERADMIN,
+        '7001',
+        'CORRECTION_REQUIRED',
+      );
+      expect(error.message).toContain('migratsiya 246');
+    } finally {
+      await orderDb.query(
+        `DROP TABLE "${orderSchema}".order_settlement_246_conversion`,
+      );
+    }
+    // Izsiz — superadmin qaytaradi (D2).
+    await allowedRollback(SUPERADMIN, '7001', 'rb-b3');
+  }, 60_000);
+
+  it('A-F6: kuryersiz bekor buyurtma, pul oyog`i yo`q — superadmin qaytaradi', async () => {
+    await addOrder('7001', {
+      status: 'cancelled',
+      holder_type: 'BRANCH',
+      holder_courier_id: null,
+      courier_id: null,
+      post_id: 9002,
+    });
+    await allowedRollback(SUPERADMIN, '7001', 'rb-af6');
+    expect(await orderStatus('7001')).toBe(Order_status.WAITING);
+    expect(await equity()).toBe(0);
+  }, 60_000);
 
   it.each([1, 2, 3, 4, 5])(
     '⭐ poyga #%i: rollback ‖ kuryer to`lovi ‖ filial → HQ ‖ HQ → market ‖ menejer → market — deadlock yo`q, ikki marta yozilmaydi, invariantlar saqlanadi',

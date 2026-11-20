@@ -13,7 +13,8 @@ import {
  * `rollback.allowed` dan, sababni `rollback.message` dan oladi.
  *
  *  • rollback qila olmaydigan rol (superadmin / menejer / kuryer emas) —
- *    so'rovsiz `NOT_ALLOWED_ROLE`;
+ *    so'rovsiz `NOT_ALLOWED_ROLE` (faqat shu maydonda; endpointning o'zi
+ *    bunday rolga RolesGuard'ning umumiy 403 ini qaytaradi, kodsiz);
  *  • order-service javob bermasa — `rollback: null` (noma'lum; ro'yxat
  *    yiqilmaydi, FE tugmani ko'rsatmaydi yoki bosilganda server qaror qiladi).
  */
@@ -117,41 +118,51 @@ export async function attachRollbackEligibility<T>(
     };
     for (const ref of refs) decisions.set(ref.id, denied);
   } else {
-    const ids = [...new Set(refs.map((ref) => ref.id))].slice(0, MAX_IDS);
-    try {
-      const response = (await send(
-        { cmd: 'order.rollback_eligibility' },
-        {
-          order_ids: ids,
-          requester: {
-            id: String(user.sub),
-            roles,
-            branch_id: idOf(user.branch_id) || null,
-          },
-        },
-      )) as {
-        data?: {
-          items?: Array<{
-            order_id?: unknown;
-            allowed?: unknown;
-            code?: unknown;
-            message?: unknown;
-          }>;
-        };
-      } | null;
-      for (const item of response?.data?.items ?? []) {
-        decisions.set(String(item.order_id), {
-          allowed: item.allowed === true,
-          code:
-            typeof item.code === 'string'
-              ? (item.code as OrderRollbackEligibility['code'])
-              : null,
-          message: typeof item.message === 'string' ? item.message : null,
-        });
-      }
-    } catch {
-      // Noma'lum — `rollback: null`.
+    // C4 — 200 talik bo'laklar (RPC chegarasi), parallel; bo'lak xatosi
+    // faqat o'z qatorlarini `rollback: null` qiladi.
+    const ids = [...new Set(refs.map((ref) => ref.id))];
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += MAX_IDS) {
+      chunks.push(ids.slice(i, i + MAX_IDS));
     }
+    await Promise.all(
+      chunks.map(async (chunk) => {
+        try {
+          const response = (await send(
+            { cmd: 'order.rollback_eligibility' },
+            {
+              order_ids: chunk,
+              requester: {
+                id: String(user.sub),
+                roles,
+                branch_id: idOf(user.branch_id) || null,
+              },
+            },
+          )) as {
+            data?: {
+              items?: Array<{
+                order_id?: unknown;
+                allowed?: unknown;
+                code?: unknown;
+                message?: unknown;
+              }>;
+            };
+          } | null;
+          for (const item of response?.data?.items ?? []) {
+            decisions.set(String(item.order_id), {
+              allowed: item.allowed === true,
+              code:
+                typeof item.code === 'string'
+                  ? (item.code as OrderRollbackEligibility['code'])
+                  : null,
+              message: typeof item.message === 'string' ? item.message : null,
+            });
+          }
+        } catch {
+          // Noma'lum — `rollback: null`.
+        }
+      }),
+    );
   }
 
   const replaced = new Map<Record<string, unknown>, Record<string, unknown>>();

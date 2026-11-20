@@ -1,5 +1,6 @@
 import { Order_status, SettlementStatus } from '@app/common';
 import {
+  effectiveRollbackRole,
   evaluateRollbackEligibility,
   type RollbackEligibilityContext,
 } from './rollback-eligibility';
@@ -293,5 +294,91 @@ describe('evaluateRollbackEligibility (D1–D4)', () => {
         }),
       ),
     ).toMatchObject({ code: 'CORRECTION_REQUIRED' });
+  });
+  it('A-F9: ko`p rolli JWT — ustunlik superadmin > kuryer > menejer', () => {
+    expect(effectiveRollbackRole({ roles: ['manager', 'superadmin'] })).toBe(
+      'superadmin',
+    );
+    expect(effectiveRollbackRole({ roles: ['manager', 'courier'] })).toBe(
+      'courier',
+    );
+    expect(effectiveRollbackRole({ roles: ['manager'] })).toBe('manager');
+    expect(effectiveRollbackRole({ roles: ['admin'] })).toBeNull();
+    // Menejer + kuryer: kuryer qoidasi (topshirilgan pul — COURIER_REMITTED).
+    expect(
+      evaluateRollbackEligibility(
+        base({
+          actor: {
+            id: '301',
+            roles: ['manager', 'courier'],
+            branch_id: BRANCH,
+            can_sell_cancel: true,
+          },
+          sale: withSale({ status: SettlementStatus.COURIER_SETTLED }),
+        }),
+      ),
+    ).toMatchObject({ allowed: false, code: 'COURIER_REMITTED' });
+  });
+
+  it('A-F8: kuryerda boshqa filialga tegishli musbat qoldiq — kredit yo`li rad (menejer SUPERADMIN_ONLY, superadmin CORRECTION_REQUIRED)', () => {
+    const ctx = {
+      sale: withSale({ status: SettlementStatus.COURIER_SETTLED }),
+      saleCourierCarryBranchId: '99',
+      saleCourierCarryAmount: 5000,
+    };
+    expect(evaluateRollbackEligibility(base(ctx))).toMatchObject({
+      allowed: false,
+      code: 'SUPERADMIN_ONLY',
+      message:
+        'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
+    });
+    expect(
+      evaluateRollbackEligibility(base({ ...ctx, actor: SA })),
+    ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED' });
+    // O'sha filial qoldig'i yoki 0 — to'sqinlik yo'q.
+    for (const carry of [
+      { saleCourierCarryBranchId: BRANCH, saleCourierCarryAmount: 5000 },
+      { saleCourierCarryBranchId: '99', saleCourierCarryAmount: 0 },
+    ]) {
+      expect(
+        evaluateRollbackEligibility(base({ ...ctx, ...carry })),
+      ).toMatchObject({ allowed: true, path: 'courier_remitted' });
+    }
+  });
+
+  it('B-3: migratsiya 246 konvertatsiya izi — superadmin CORRECTION_REQUIRED, menejer SUPERADMIN_ONLY', () => {
+    expect(
+      evaluateRollbackEligibility(base({ conversionTraced: true })),
+    ).toMatchObject({ allowed: false, code: 'SUPERADMIN_ONLY' });
+    expect(
+      evaluateRollbackEligibility(base({ conversionTraced: true, actor: SA })),
+    ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED' });
+  });
+
+  it('A-F6: kuryersiz bekor buyurtma, pul oyog`i yo`q — superadmin qaytaradi; xarajat bo`lsa — CORRECTION_REQUIRED', () => {
+    const courierless = {
+      actor: SA,
+      sale: null,
+      postCourierId: null,
+      order: withOrder({
+        status: Order_status.CANCELLED,
+        holder_type: 'BRANCH',
+        holder_courier_id: null,
+        courier_id: null,
+        sold_at: null,
+      }),
+    };
+    expect(evaluateRollbackEligibility(base(courierless))).toMatchObject({
+      allowed: true,
+      path: 'plain',
+    });
+    expect(
+      evaluateRollbackEligibility(
+        base({
+          ...courierless,
+          order: { ...courierless.order, extra_cost: 10000 },
+        }),
+      ),
+    ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED' });
   });
 });
