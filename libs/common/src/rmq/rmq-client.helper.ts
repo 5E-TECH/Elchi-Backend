@@ -1,5 +1,12 @@
-import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { firstValueFrom, timeout, retry, timer, throwError } from 'rxjs';
+import { ClientProxy } from '@nestjs/microservices';
+import {
+  firstValueFrom,
+  timeout,
+  retry,
+  timer,
+  throwError,
+  TimeoutError,
+} from 'rxjs';
 import { randomUUID } from 'crypto';
 import { requestContext } from '../context/request-context';
 
@@ -92,8 +99,14 @@ function withRequestId<T>(data: T): T {
 
 /**
  * Wrapper around firstValueFrom with timeout and retry (exponential backoff).
- * Only retries on timeout errors; RpcExceptions are thrown immediately.
  * Auto-attaches request_id to the payload for idempotency on the server side.
+ *
+ * Faqat rxjs `TimeoutError` da qayta uriniladi. Boshqa servis qaytargan xato
+ * (@nestjs/microservices 11: `ClientProxy.serializeError` uni o'zgartirmaydi)
+ * gateway'ga `RpcException` emas, ODDIY OBYEKT (`{ statusCode, message }`)
+ * bo'lib keladi. Avval `instanceof RpcException` tekshirilgani uchun har bir
+ * 4xx/5xx biznes xatosi yana 2 marta yuborilib, javob ~600 ms kechikardi va
+ * servisda keraksiz yuk paydo bo'lardi. Javob kelgan bo'lsa — u yakuniy.
  */
 export async function rmqSend<T = unknown>(
   client: ClientProxy,
@@ -112,7 +125,7 @@ export async function rmqSend<T = unknown>(
     retry({
       count: maxRetries,
       delay: (error, retryCount) => {
-        if (error instanceof RpcException) {
+        if (!(error instanceof TimeoutError)) {
           return throwError(() => error);
         }
         const delay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 2000);
