@@ -322,6 +322,7 @@ jobs:
           apps/order-service/src/settlement/financial-balance-provider-held.pg.spec.ts
           apps/order-service/src/order-service.rollback-rules.D1D4.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
+          apps/order-service/src/lifecycle/order-operator-unlinked.pg.spec.ts
           apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
           apps/ai-service/src/usage/ai-margin.pg.spec.ts
           apps/ai-service/src/usage/ai-usage.dashboard.pg.spec.ts

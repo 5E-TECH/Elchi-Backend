@@ -1633,6 +1633,21 @@ Money (settlement, cashboxes) and tariffs are unchanged. Details: order-service
   the sale-time `finance.operator.earning.record` is enqueued in the same
   transaction (finance is idempotent on `order_id`); a later rollback removes
   it as usual.
+- **Operator name left as text — bulk assign (2026-11-20, owner: «operator
+  nomidan yaratilgan buyurtmalarga xizmat haqqi yozilmayapti»):** the web AI
+  panel and the typed «Ro'yxatda yo'q operator» field used to store the
+  operator only as `operator` text (`operator_id` NULL), so no commission was
+  ever earned. MARKET only, `MarketOperatorOrdersGatewayController`:
+  `GET /market-operators/unlinked-orders` → `order.operator.unlinked`
+  (`findUnlinkedOperatorGroups`, `lifecycle/order-operator-unlinked.ts`):
+  own market, `operator_id IS NULL`, non-empty text, not `external_%`,
+  not deleted — grouped by normalized name (leading `#`, case, whitespace),
+  ≤ 200 groups, ≤ 500 `order_ids` each, with `total_orders` / `sold_orders`.
+  `POST /market-operators/unlinked-orders/assign` `{ operator_id, order_ids
+  (1–100) }` — operator checked ONCE with `resolveChosenOrderOperator`, then
+  `order.operator.assign_bulk` runs `assignOperator` per order (same lock and
+  409/403 rules, sold → earning enqueued); one failure does not stop the
+  rest; result per id. No automatic name matching — the market picks.
 - **Read scope (gateway):** `GET /orders/:id` — market own, market_operator own
   market, customer own, courier (`courier_id`/`holder_courier_id`), branch
   staff own branch triple (+ HQ staff: HQ-held), operator/investor 403;
