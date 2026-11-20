@@ -51,7 +51,10 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
-import { attachRollbackEligibility } from './order-rollback-field';
+import {
+  applyRollbackDecisions,
+  fetchRollbackDecisions,
+} from './order-rollback-field';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { SCAN_THROTTLE } from './auth/scan-throttle';
 import { AllowTelegramScanScope } from './auth/telegram-scan-scope.guard';
@@ -645,8 +648,31 @@ function replacementIdText(value: unknown): string {
     : '';
 }
 
-/** C1 — `rollback` maydoni so'rovining timeout'i (ro'yxat bloklanmasin). */
-const ROLLBACK_FIELD_TIMEOUT_MS = 1500;
+/**
+ * C1 — `rollback` maydoni so'rovining timeout'i (ro'yxat bloklanmasin).
+ *
+ * Ilgari 1500 ms edi va ro'yxat javobi shu RPC tugaguncha ushlab turilardi:
+ * order-service navbati band bo'lsa menejer/kuryer ro'yxati 1.5 s kechikardi.
+ * Endi so'rov `problem_contacts` bilan PARALLEL boshlanadi va 300 ms dan
+ * keyin `rollback: null` (noma'lum — FE tugmani ko'rsatmaydi yoki bosilganda
+ * server qaror qiladi).
+ */
+export const ROLLBACK_FIELD_TIMEOUT_MS = 300;
+
+/**
+ * Masofadagi servisda shu pattern uchun handler yo'q (eski versiya / hali
+ * deploy qilinmagan). @nestjs/microservices RMQ server buni
+ * `NO_MESSAGE_HANDLER` satri bilan qaytaradi — `RpcException` ham, obyekt
+ * ham emas.
+ */
+export function isNoMessageHandlerError(error: unknown): boolean {
+  const message =
+    error && typeof error === 'object'
+      ? (error as { message?: unknown }).message
+      : error;
+  const text = typeof message === 'string' ? message : '';
+  return text.toLowerCase().includes('no matching message handler');
+}
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -742,21 +768,29 @@ export class OrderGatewayController {
   }
 
   /**
-   * (2026-11-19, D1–D4) Qatorlarga `rollback: { allowed, code, message }` —
-   * joriy foydalanuvchi uchun, sahifaga bitta `order.rollback_eligibility`
-   * so'rovi (`order-rollback-field.ts`).
+   * Ro'yxat / tafsilot javobini yakunlash: `problem_contacts` (T7, rol
+   * proyeksiyasidan OLDIN), rol proyeksiyasi (kH2zZsz3) va (2026-11-19,
+   * D1–D4) `rollback: { allowed, code, message }` — joriy foydalanuvchi
+   * uchun, sahifaga bitta `order.rollback_eligibility` so'rovi
+   * (`order-rollback-field.ts`).
+   *
+   * Rollback so'rovi faqat qator id'lariga bog'liq — u `problem_contacts`
+   * bilan PARALLEL boshlanadi (ilgari ketma-ket edi) va C1 timeout'i
+   * (`ROLLBACK_FIELD_TIMEOUT_MS`) dan oshsa `rollback: null` bo'ladi.
    */
-  private withRollbackField<T>(
-    payload: T | Promise<T>,
+  private async withContactsAndRollback<T>(
+    roles: string[] | undefined,
+    payload: T,
     user: JwtUser | undefined,
   ): Promise<T> {
-    return Promise.resolve(payload).then((resolved) =>
-      attachRollbackEligibility(resolved, user, (pattern, data) =>
-        // C1 — ro'yxat rollback maydoni uchun kutmaydi: 1.5 s dan keyin
-        // `rollback: null` (noma'lum), ro'yxat o'zi kechikmaydi.
-        this.sendOrderWithTimeout(pattern, data, ROLLBACK_FIELD_TIMEOUT_MS),
-      ),
+    const decisions = fetchRollbackDecisions(payload, user, (pattern, data) =>
+      this.sendOrderWithTimeout(pattern, data, ROLLBACK_FIELD_TIMEOUT_MS),
     );
+    const projected = projectOrderPayloadForRoles(
+      roles,
+      await attachProblemContacts(this.problemContacts, payload),
+    );
+    return applyRollbackDecisions(projected, await decisions);
   }
 
   private async sendOrderWithTimeout(
@@ -776,6 +810,13 @@ export class OrderGatewayController {
     });
   }
 
+  /**
+   * `*_enriched` pattern'i, order-service'da u hali yo'q bo'lsa (eski
+   * versiya) — oddiy pattern. FAQAT «handler topilmadi» holatida: ilgari
+   * HAR QANDAY xatoda (400/403/404, 5xx) so'rov ikkinchi marta yuborilardi —
+   * javob kechikib, order-service'ga ikki baravar yuk tushardi va natija
+   * baribir o'sha xato edi (`enrichOrders` boyitish xatolarini o'zi yutadi).
+   */
   private async sendOrderWithFallback(
     primary: { cmd: string },
     fallback: { cmd: string },
@@ -784,7 +825,7 @@ export class OrderGatewayController {
     try {
       return await this.sendOrderWithTimeout(primary, payload);
     } catch (error) {
-      if (error instanceof GatewayTimeoutException) {
+      if (!isNoMessageHandlerError(error)) {
         throw error;
       }
       return this.sendOrderWithTimeout(fallback, payload);
@@ -5165,17 +5206,15 @@ export class OrderGatewayController {
 
       // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
       // T7: `problem_contacts` proyeksiyadan OLDIN.
-      return this.withRollbackField(
-        projectOrderPayloadForRoles(
-          roles,
-          await attachProblemContacts(this.problemContacts, {
-            data,
-            total,
-            page: pagination.page,
-            limit: pagination.limit,
-            ...paginationMeta,
-          }),
-        ),
+      return this.withContactsAndRollback(
+        roles,
+        {
+          data,
+          total,
+          page: pagination.page,
+          limit: pagination.limit,
+          ...paginationMeta,
+        },
         req?.user,
       );
     }
@@ -5195,18 +5234,13 @@ export class OrderGatewayController {
     ).then(async (response) => {
       // kH2zZsz3: ro'yxat qatorlari ham detal bilan AYNI rol proyeksiyasida.
       // T7: `problem_contacts` proyeksiyadan OLDIN.
-      return this.withRollbackField(
-        projectOrderPayloadForRoles(
-          roles,
-          await attachProblemContacts(
-            this.problemContacts,
-            this.withPaginationMeta(
-              request.logistRegionIds
-                ? this.keepLogistRegionRows(response, request.logistRegionIds)
-                : response,
-              pagination,
-            ),
-          ),
+      return this.withContactsAndRollback(
+        roles,
+        this.withPaginationMeta(
+          request.logistRegionIds
+            ? this.keepLogistRegionRows(response, request.logistRegionIds)
+            : response,
+          pagination,
         ),
         req?.user,
       );
@@ -6339,23 +6373,18 @@ export class OrderGatewayController {
       );
 
       // kH2zZsz3: kuryerning bekor qilinganlar tabi — market tarifisiz.
-      return this.withRollbackField(
-        projectOrderPayloadForRoles(
-          req?.user?.roles,
-          await attachProblemContacts(
-            this.problemContacts,
-            successRes(
-              {
-                data: legacyData,
-                total,
-                page: pagination.page,
-                limit: pagination.limit,
-                ...paginationMeta,
-              },
-              200,
-              'All my orders',
-            ),
-          ),
+      return this.withContactsAndRollback(
+        req?.user?.roles,
+        successRes(
+          {
+            data: legacyData,
+            total,
+            page: pagination.page,
+            limit: pagination.limit,
+            ...paginationMeta,
+          },
+          200,
+          'All my orders',
         ),
         req?.user,
       );
@@ -6407,23 +6436,18 @@ export class OrderGatewayController {
 
       // T7: filial doirasi (menejer/filial) — market/operator telefonlarisiz,
       // `problem_contacts` proyeksiyadan OLDIN (kuryer yo'llari bilan bir xil).
-      return this.withRollbackField(
-        projectOrderPayloadForRoles(
-          req?.user?.roles,
-          await attachProblemContacts(
-            this.problemContacts,
-            successRes(
-              {
-                data: legacyData,
-                total,
-                page: currentPage,
-                limit: currentLimit,
-                ...paginationMeta,
-              },
-              200,
-              'All my orders',
-            ),
-          ),
+      return this.withContactsAndRollback(
+        req?.user?.roles,
+        successRes(
+          {
+            data: legacyData,
+            total,
+            page: currentPage,
+            limit: currentLimit,
+            ...paginationMeta,
+          },
+          200,
+          'All my orders',
         ),
         req?.user,
       );
@@ -6486,23 +6510,18 @@ export class OrderGatewayController {
 
     // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
     // T7: `problem_contacts` proyeksiyadan OLDIN.
-    return this.withRollbackField(
-      projectOrderPayloadForRoles(
-        req?.user?.roles,
-        await attachProblemContacts(
-          this.problemContacts,
-          successRes(
-            {
-              data: legacyData,
-              total,
-              page: currentPage,
-              limit: currentLimit,
-              ...paginationMeta,
-            },
-            200,
-            'All my orders',
-          ),
-        ),
+    return this.withContactsAndRollback(
+      req?.user?.roles,
+      successRes(
+        {
+          data: legacyData,
+          total,
+          page: currentPage,
+          limit: currentLimit,
+          ...paginationMeta,
+        },
+        200,
+        'All my orders',
       ),
       req?.user,
     );
@@ -7853,13 +7872,7 @@ export class OrderGatewayController {
     // kH2zZsz3: kuryer — market tarifi/filial ulushisiz, market — kuryer
     // tarifi/ulushi va filial ulushisiz (auth/order-role-projection).
     // T7: `problem_contacts` proyeksiyadan OLDIN.
-    return this.withRollbackField(
-      projectOrderPayloadForRoles(
-        req?.user?.roles,
-        await attachProblemContacts(this.problemContacts, response),
-      ),
-      req?.user,
-    );
+    return this.withContactsAndRollback(req?.user?.roles, response, req?.user);
   }
 
   @Get('qr-code/:token')
