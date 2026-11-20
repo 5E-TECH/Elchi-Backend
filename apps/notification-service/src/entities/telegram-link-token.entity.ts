@@ -1,7 +1,10 @@
 import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
 
-/** `user` — shaxsiy chatni akkauntga; `market_group` — guruhni marketga. */
-export type TelegramLinkPurpose = 'user' | 'market_group';
+/**
+ * `user` — shaxsiy chatni akkauntga; `market_group` — guruhni marketga;
+ * `branch_group` — guruhni filial kassasiga (hisobotlar).
+ */
+export type TelegramLinkPurpose = 'user' | 'market_group' | 'branch_group';
 export type TelegramLinkScope = 'private' | 'group';
 
 /**
@@ -27,9 +30,13 @@ export class TelegramLinkToken {
   @Column({ type: 'varchar', length: 24 })
   owner_type!: string;
 
-  /** `user` — foydalanuvchi id; `market_group` — market id. */
+  /** `user` — foydalanuvchi id; `market_group` — market id; `branch_group` — filial id. */
   @Column({ type: 'bigint' })
   owner_id!: string;
+
+  /** (migratsiya 247) Kim uchun kod — guruhga aytiladigan nom (sir emas). */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  owner_label!: string | null;
 
   @Column({ type: 'varchar', length: 8 })
   chat_scope!: TelegramLinkScope;

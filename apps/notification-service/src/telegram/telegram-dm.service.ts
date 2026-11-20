@@ -798,12 +798,17 @@ export class TelegramDmService {
   /** Dispatch'da shaxsiy DM yo'li: TELEGRAM so'ralgan va guruh nishoni yo'q. */
   static wantsDm(
     channels: readonly string[],
-    target?: { market_id?: string; group_id?: string } | null,
+    target?: {
+      market_id?: string;
+      group_id?: string;
+      branch_id?: string;
+    } | null,
   ): boolean {
     return (
       channels.includes(NotificationChannel.TELEGRAM) &&
       !target?.market_id &&
-      !target?.group_id
+      !target?.group_id &&
+      !target?.branch_id
     );
   }
 }

@@ -11,6 +11,7 @@ import {
 import { TelegramMarket } from '../entities/telegram-market.entity';
 import { NotificationInboxService } from '../notification-inbox.service';
 import { BotSessionService } from './bot-session.service';
+import { BranchTelegramService } from '../telegram/branch-telegram.service';
 
 export type ChannelInactiveReason =
   'kicked' | 'left' | 'blocked_on_send' | 'chat_not_found';
@@ -81,6 +82,15 @@ export class BotChannelService {
         [chatId, reason],
       );
     const changed = Array.isArray(rows[0]) ? (rows[0] as typeof rows) : rows;
+    // Filial kassasi guruhi (`telegram_chats`, owner_type='branch') ham.
+    const branchRows = await this.branchTelegram()
+      ?.markInactive(chatId, reason)
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `filial guruhi ${chatId} nofaol qilinmadi: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return 0;
+      });
     for (const row of changed) {
       await this.activityLog.log({
         entity_type: 'TelegramMarket',
@@ -99,7 +109,19 @@ export class BotChannelService {
       );
       await this.alertAdmins(chatId, reason, changed);
     }
-    return { deactivated: changed.length };
+    return { deactivated: changed.length + (branchRows ?? 0) };
+  }
+
+  /** Filial guruhi xizmati — DI halqasisiz, spec'larda bo'lmasligi mumkin. */
+  private branchTelegram(): BranchTelegramService | null {
+    try {
+      const service: unknown = this.moduleRef.get(BranchTelegramService, {
+        strict: false,
+      });
+      return service instanceof BranchTelegramService ? service : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -176,6 +198,13 @@ export class BotChannelService {
         },
       });
     }
+    await this.branchTelegram()
+      ?.migrate(oldChatId, newChatId)
+      .catch((error: unknown) =>
+        this.logger.warn(
+          `filial guruhi ${oldChatId} ko'chirilmadi: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
     if (markets.length || outbox.length) {
       this.logger.warn(
         `Telegram guruh ${oldChatId} supergroup'ga aylandi → ${newChatId}: ${markets.length} ulanish, ${outbox.length} navbatdagi xabar ko'chirildi`,
@@ -229,6 +258,13 @@ export class BotChannelService {
   }
 
   private async reactivateGroup(chatId: string): Promise<void> {
+    await this.branchTelegram()
+      ?.reactivate(chatId)
+      .catch((error: unknown) =>
+        this.logger.warn(
+          `filial guruhi ${chatId} qayta yoqilmadi: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
     const rows = await this.markets.query(
       `UPDATE "notification_schema"."telegram_markets"
           SET "is_active" = true, "inactive_reason" = NULL,

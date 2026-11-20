@@ -17028,6 +17028,160 @@
         ]
       }
     },
+    "/branches/{id}/telegram": {
+      "get": {
+        "description": "`{ branch_id, report_target: 'group' | 'private', group: null | { chat_id, title, is_active, inactive_reason, inactive_at, linked_at, linked_by }, can_manage }`. `group: null` — ulanmagan (yoki panelda uzilgan). Menejer — faqat o'z filiali (boshqasi 403).",
+        "operationId": "BranchTelegramGatewayController_status",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Filial ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Filial kassasi Telegram guruhi holati",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/branches/{id}/telegram/link-code": {
+      "post": {
+        "description": "Javob: `{ token, purpose: 'branch_group', branch_id, expires_at, deep_link (t.me/<bot>?startgroup=…), command }`. Guruhni tanlab botni qo'shish kifoya — bot o'zi ulaydi. Guruh allaqachon ulangan bo'lsa, yangi guruh uni almashtiradi. Market guruhini filialga ulab bo'lmaydi.",
+        "operationId": "BranchTelegramGatewayController_linkCode",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Filial ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Filial guruhini ulash havolasi (bir martalik, 10 daqiqa)",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/branches/{id}/telegram/report-target": {
+      "patch": {
+        "description": "`group` (sukut) — filial guruhiga; `private` — filial menejerlarining shaxsiy Telegram chatiga (bot orqali; menejer Telegram'ga ulangan bo'lishi kerak). Guruh ulanmagan bo'lsa ham `private` tanlash mumkin.",
+        "operationId": "BranchTelegramGatewayController_reportTarget",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Filial ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BranchTelegramReportTargetRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kassa hisoboti qayerga: guruhga yoki shaxsiy chatga",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/branches/{id}/telegram/group": {
+      "delete": {
+        "description": "Guruhga hisobot boshqa bormaydi (bot guruhda qoladi — kerak bo'lsa guruhdan o'zingiz chiqaring). Qayta ulash — yangi havola bilan.",
+        "operationId": "BranchTelegramGatewayController_unlink",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Filial ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Filial guruhini uzish",
+        "tags": [
+          "Telegram"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
     "/investors/me": {
       "get": {
         "operationId": "InvestorGatewayController_getMyProfile",
@@ -33467,6 +33621,14 @@
           },
           "markets": {
             "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+          },
+          "branches": {
+            "description": "Filial kassasi (asosiy kassa — HQ filiali): `telegram` — filial guruhiga yoki (filial «shaxsiy chat» tanlagan bo'lsa) menejerlarning shaxsiy chatiga; `in_app` — filial menejerlariga. Sukut: telegram true (faqat guruh ulanganda / shaxsiy chat tanlanganda ketadi), in_app false.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShiftReportChannelsRequestDto"
+              }
+            ]
           }
         }
       },
@@ -33474,7 +33636,7 @@
         "type": "object",
         "properties": {
           "recipients": {
-            "description": "`shift.report.recipients` — superadmin / couriers / markets × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi)",
+            "description": "`shift.report.recipients` — superadmin / couriers / markets / branches × telegram / in_app (sukut — hammasi false: hisobot yuborish O'CHIQ, superadmin yoqadi; istisno — `branches.telegram` true: faqat filial guruhi ulanganda ketadi)",
             "allOf": [
               {
                 "$ref": "#/components/schemas/ShiftReportRecipientsRequestDto"
@@ -36406,6 +36568,23 @@
           "statusCode",
           "message",
           "data"
+        ]
+      },
+      "BranchTelegramReportTargetRequestDto": {
+        "type": "object",
+        "properties": {
+          "report_target": {
+            "type": "string",
+            "enum": [
+              "group",
+              "private"
+            ],
+            "example": "group",
+            "description": "`group` — filial Telegram guruhiga (sukut); `private` — filial menejerlarining shaxsiy chatiga (bot orqali)."
+          }
+        },
+        "required": [
+          "report_target"
         ]
       },
       "CreateInvestorDto": {

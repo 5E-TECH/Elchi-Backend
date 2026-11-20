@@ -141,9 +141,11 @@ describe('ZlpXb4Wh — yagona bot yadrosi', () => {
           fromId: 5,
         }),
       );
+      // 3-argument — guruh nomi (filial kassasi guruhi uchun), bu yerda yo'q.
       expect(ctx.notifications.connectGroupByCodeText).toHaveBeenCalledWith(
         code,
         '-1001234',
+        null,
       );
       await ctx.router.dispatch(
         'elchi',

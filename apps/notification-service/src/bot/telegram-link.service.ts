@@ -21,6 +21,8 @@ export interface IssueLinkTokenInput {
   owner_type: string;
   owner_id: string;
   group_type?: string | null;
+  /** Guruhga aytiladigan nom (masalan filial nomi), ≤120 belgi. */
+  owner_label?: string | null;
   created_by?: string | null;
   created_ip?: string | null;
 }
@@ -54,8 +56,11 @@ export class TelegramLinkService {
       purpose: input.purpose,
       owner_type: input.owner_type,
       owner_id: input.owner_id,
-      chat_scope: input.purpose === 'market_group' ? 'group' : 'private',
+      chat_scope: input.purpose === 'user' ? 'private' : 'group',
       group_type: input.group_type ?? null,
+      owner_label: input.owner_label
+        ? String(input.owner_label).replace(/\s+/g, ' ').trim().slice(0, 120)
+        : null,
       expires_at: expiresAt,
       used_at: null,
       used_chat_id: null,
@@ -83,7 +88,7 @@ export class TelegramLinkService {
           AND "expires_at" > now()
           AND "is_deleted" = false
       RETURNING "token_hash", "purpose", "owner_type", "owner_id",
-                "chat_scope", "group_type", "created_by"`,
+                "owner_label", "chat_scope", "group_type", "created_by"`,
       [hash, scope, chatId],
     );
     const claimed = firstRow<TelegramLinkToken>(rows);

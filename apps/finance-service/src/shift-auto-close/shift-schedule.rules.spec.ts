@@ -185,8 +185,16 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
 
     it("sukut: hisobot yuborish O'CHIQ — hech bir qabul qiluvchi × kanal yoqilmagan", () => {
       const off = { telegram: false, in_app: false };
+      // Istisno — filial guruhi: faqat guruh ulanganda / shaxsiy chat
+      // tanlanganda ketadi, shuning uchun telegram sukut yoqiq.
+      const branchDefault = { telegram: true, in_app: false };
       expect(readReportSettings(new Map())).toEqual({
-        recipients: { superadmin: off, couriers: off, markets: off },
+        recipients: {
+          superadmin: off,
+          couriers: off,
+          markets: off,
+          branches: branchDefault,
+        },
         format: 'pdf',
       });
       // Yaroqsiz / qisman saqlangan qiymat ham yoqilgan deb o'qilmaydi.
@@ -199,7 +207,12 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
             ],
           ]),
         ).recipients,
-      ).toEqual({ superadmin: off, couriers: off, markets: off });
+      ).toEqual({
+        superadmin: off,
+        couriers: off,
+        markets: off,
+        branches: branchDefault,
+      });
       // Superadmin faqat bitta guruhni yoqsa — qolganlari o'chiq qoladi.
       const [[key, value]] = parseReportPatch(
         { recipients: { superadmin: { in_app: true } } },
@@ -210,7 +223,14 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
         superadmin: { telegram: false, in_app: true },
         couriers: off,
         markets: off,
+        branches: branchDefault,
       });
+      // Filial guruhini superadmin o'chira oladi.
+      const [[, branchesOff]] = parseReportPatch(
+        { recipients: { branches: { telegram: false } } },
+        REPORT_DEFAULTS,
+      );
+      expect((branchesOff as Record<string, unknown>).branches).toEqual(off);
     });
 
     it('normalizeTimes — tartib, takror, yaroqsiz', () => {
@@ -251,7 +271,12 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
       const report = parseReportPatch(
         { recipients: { couriers: { telegram: false } }, format: 'xlsx' },
         {
-          recipients: { superadmin: on, couriers: on, markets: on },
+          recipients: {
+            superadmin: on,
+            couriers: on,
+            markets: on,
+            branches: on,
+          },
           format: 'pdf',
         },
       );
@@ -259,6 +284,7 @@ describe('y8Tqm9Ap — smena jadvali qoidalari', () => {
         superadmin: { telegram: true, in_app: true },
         couriers: { telegram: false, in_app: true },
         markets: { telegram: true, in_app: true },
+        branches: { telegram: true, in_app: true },
       });
       expect(report[1]).toEqual([SHIFT_AUTOMATION_KEYS.reportFormat, 'xlsx']);
       expect(() =>

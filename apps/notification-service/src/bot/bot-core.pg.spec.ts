@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { TelegramBotCore1716000000120 } from '../../../../migrations/1716000000120-TelegramBotCore';
 import { TelegramMarketInactiveReason1716000000150 } from '../../../../migrations/1716000000150-TelegramMarketInactiveReason';
 import { TelegramChats1716000000126 } from '../../../../migrations/1716000000126-TelegramChats';
+import { TelegramBranchChats1716000000248 } from '../../../../migrations/1716000000248-TelegramBranchChats';
 import { TelegramOrderCards1716000000122 } from '../../../../migrations/1716000000122-TelegramOrderCards';
 import { TelegramAiDrafts1716000000128 } from '../../../../migrations/1716000000128-TelegramAiDrafts';
 import { TelegramChatLocksAiWorker1716000000190 } from '../../../../migrations/1716000000190-TelegramChatLocksAiWorker';
@@ -611,6 +612,8 @@ const migration = new TelegramBotCore1716000000120();
         const runner = db.createQueryRunner();
         try {
           await new TelegramChats1716000000126().up(runner);
+          // (248) filial guruhi ustunlari — TelegramChat entity ularni o'qiydi.
+          await new TelegramBranchChats1716000000248().up(runner);
           // (#595 ko'rib chiqish) karta qatorlari ham haqiqiy jadvalda.
           await new TelegramOrderCards1716000000122().up(runner);
         } finally {
@@ -852,6 +855,8 @@ const migration = new TelegramBotCore1716000000120();
         const runner = db.createQueryRunner();
         try {
           await new TelegramChats1716000000126().up(runner);
+          // (248) filial guruhi ustunlari — TelegramChat entity ularni o'qiydi.
+          await new TelegramBranchChats1716000000248().up(runner);
         } finally {
           await runner.release();
         }

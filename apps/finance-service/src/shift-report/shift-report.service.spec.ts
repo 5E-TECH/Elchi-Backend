@@ -83,9 +83,20 @@ const setup = (report: ReportSettings) => {
   };
 };
 
+/** Hamma qabul qiluvchi × kanal o'chiq (superadmin filial guruhini ham o'chirgan). */
+const REPORT_OFF: ReportSettings = {
+  ...REPORT_DEFAULTS,
+  recipients: {
+    superadmin: { telegram: false, in_app: false },
+    couriers: { telegram: false, in_app: false },
+    markets: { telegram: false, in_app: false },
+    branches: { telegram: false, in_app: false },
+  },
+};
+
 describe('ShiftReportService.deliver — sozlama snapshot’dan OLDIN (gWI4gYkw)', () => {
-  it("hisobot o'chiq (sukut): snapshot qurilmaydi, darhol skipped — qurish xatosi pending'ga qaytarmaydi", async () => {
-    const fx = setup(REPORT_DEFAULTS);
+  it("hisobot o'chiq: snapshot qurilmaydi, darhol skipped — qurish xatosi pending'ga qaytarmaydi", async () => {
+    const fx = setup(REPORT_OFF);
     const result = await fx.service.deliver('9');
     expect(result).toEqual({
       claimed: true,
@@ -108,7 +119,7 @@ describe('ShiftReportService.deliver — sozlama snapshot’dan OLDIN (gWI4gYkw)
   });
 
   it("scheduler: o'chiq hisobotli qolib ketgan smena bir marta skipped bo'ladi (har daqiqa qayta urinilmaydi)", async () => {
-    const fx = setup(REPORT_DEFAULTS);
+    const fx = setup(REPORT_OFF);
     // processPending ro'yxati: bitta `pending` smena.
     const listQb = {
       select: jest.fn(() => listQb),
@@ -129,11 +140,17 @@ describe('ShiftReportService.deliver — sozlama snapshot’dan OLDIN (gWI4gYkw)
     );
   });
 
+  it('sukut: filial guruhi (branches.telegram) yoqiq — snapshot quriladi', async () => {
+    const fx = setup(REPORT_DEFAULTS);
+    await expect(fx.service.deliver('9')).rejects.toThrow('snapshot qurilmadi');
+    expect(fx.buildSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it('hisobot yoqilgan: oqim o‘zgarmagan — snapshot quriladi, xatoda da’vo pending’ga qaytadi', async () => {
     const fx = setup({
-      ...REPORT_DEFAULTS,
+      ...REPORT_OFF,
       recipients: {
-        ...REPORT_DEFAULTS.recipients,
+        ...REPORT_OFF.recipients,
         superadmin: { telegram: false, in_app: true },
       },
     });
@@ -146,9 +163,9 @@ describe('ShiftReportService.deliver — sozlama snapshot’dan OLDIN (gWI4gYkw)
 
   it('faqat bitta guruhning bitta kanali (market Telegram) yoqilgan bo‘lsa ham snapshot quriladi', async () => {
     const fx = setup({
-      ...REPORT_DEFAULTS,
+      ...REPORT_OFF,
       recipients: {
-        ...REPORT_DEFAULTS.recipients,
+        ...REPORT_OFF.recipients,
         markets: { telegram: true, in_app: false },
       },
     });
