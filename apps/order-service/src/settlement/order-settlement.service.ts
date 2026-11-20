@@ -1383,7 +1383,7 @@ export class OrderSettlementService {
       settlement: OrderSettlement,
       amount: number,
     ) => Promise<void>;
-    stamp: (now: Date) => Partial<OrderSettlement>;
+    stamp: (now: Date, row: OrderSettlement) => Partial<OrderSettlement>;
     /**
      * M8 — advance tokenining "qo'llandi" belgisi (`ADVANCE_APPLIED_PATTERN`
      * izohi). Berilsa tranzaksiyaning BIRINCHI yozuvi sifatida kiritiladi va
@@ -1523,7 +1523,7 @@ export class OrderSettlementService {
       const advanceRow = async (row: OrderSettlement): Promise<void> => {
         await repo.update(
           { id: row.id, status: params.fromStatus },
-          { status: params.toStatus(row), ...params.stamp(now) },
+          { status: params.toStatus(row), ...params.stamp(now, row) },
         );
         settledOrderIds.push(String(row.order_id));
         if (row.branch_id) touchedBranches.add(String(row.branch_id));
@@ -3209,9 +3209,16 @@ export class OrderSettlementService {
             : SettlementStatus.BRANCH_SETTLED,
         legOf: branchToHqLeg,
         amountField: 'branch_amount' as const,
-        stamp: (now: Date) => ({
+        // X737-5 — filial to'lamagan, market ulushi 0 qator shu bosqichda
+        // MARKET_SETTLED bo'ladi: HQ → market bosqichi ham (0 so'm) yopilgan
+        // deb belgilanadi (`hq_to_market_at` null qolib ketmasin).
+        stamp: (now: Date, row: OrderSettlement) => ({
           branch_to_hq_at: now,
           branch_to_hq_by: stampBy,
+          ...(!isMarketPaidByBranch(row) &&
+          money2(Number(row.market_amount ?? 0) || 0) === 0
+            ? { hq_to_market_at: now, hq_to_market_by: stampBy }
+            : {}),
         }),
       },
       hq_to_market: {

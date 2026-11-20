@@ -35,6 +35,17 @@ type MigrationRow = { name: string; timestamp: string };
 
 async function lastExecuted(ds: DataSource): Promise<MigrationRow | null> {
   const table = `"order_schema"."${ds.options.migrationsTableName ?? 'migrations'}"`;
+  // X737-2 — TypeORM `undoLastMigration()` AYNAN shu qatorni (eng oxirgi
+  // BAJARILGAN — `id DESC`) qaytaradi; tekshiruv ham shu qatorni ko'rsin.
+  const rows = await ds.query<MigrationRow[]>(
+    `SELECT name, timestamp::text AS timestamp FROM ${table} ORDER BY id DESC LIMIT 1`,
+  );
+  return rows[0] ?? null;
+}
+
+/** Eng katta `timestamp` li bajarilgan migratsiya (tartibdan tashqari holat uchun). */
+async function newestByTimestamp(ds: DataSource): Promise<MigrationRow | null> {
+  const table = `"order_schema"."${ds.options.migrationsTableName ?? 'migrations'}"`;
   const rows = await ds.query<MigrationRow[]>(
     `SELECT name, timestamp::text AS timestamp FROM ${table} ORDER BY timestamp DESC, id DESC LIMIT 1`,
   );
@@ -55,9 +66,14 @@ async function main(): Promise<void> {
   await ds.initialize();
   try {
     const last = await lastExecuted(ds);
-    if (!last || last.name !== expected) {
+    const newest = await newestByTimestamp(ds);
+    // Ikkalasi ham kutilgan migratsiya bo'lishi shart: oxirgi bajarilgan
+    // (TypeORM qaytaradigan) va eng yangi timestamp li (tartibdan tashqari
+    // bajarilgan migratsiya bo'lsa — rad).
+    if (!last || last.name !== expected || newest?.name !== expected) {
       throw new Error(
-        `[db-revert] oxirgi bajarilgan migratsiya '${last?.name ?? '(yo`q)'}', kutilgan '${expected}' — hech narsa qaytarilmadi`,
+        `[db-revert] oxirgi bajarilgan migratsiya '${last?.name ?? '(yo`q)'}', ` +
+          `eng yangi timestamp '${newest?.name ?? '(yo`q)'}', kutilgan '${expected}' — hech narsa qaytarilmadi`,
       );
     }
     await ds.undoLastMigration({ transaction: 'all' });
