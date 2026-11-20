@@ -166,13 +166,15 @@ jobs:
           DEPLOY_APP_PATH: ${{ secrets.SERVER_APP_PATH }}
           DEPLOY_SHA: ${{ github.sha }}
           DEPLOY_REPO: ${{ github.repository }}
+          # Release preflight escape hatch (emergency only): repository variable.
+          DEPLOY_PREFLIGHT_SKIP: ${{ vars.DEPLOY_PREFLIGHT_SKIP }}
         with:
           host: ${{ secrets.SERVER_IP }}
           port: ${{ secrets.SERVER_SSH_PORT || 22 }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 50m
-          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER,DEPLOY_APP_PATH,DEPLOY_SHA,DEPLOY_REPO
+          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER,DEPLOY_APP_PATH,DEPLOY_SHA,DEPLOY_REPO,DEPLOY_PREFLIGHT_SKIP
           # NOT script_stop: drone-ssh's script_stop instruments the script
           # line-by-line and treats ANY `[ test ]` in an `if` that evaluates
           # false as a fatal error — so `if [ "$RUN_MIGRATIONS" != true ]` aborted
@@ -256,6 +258,112 @@ jobs:
               echo "Superseded: the branch is at $NEW_SHA, this run is for $DEPLOY_SHA — nothing deployed; the newer run deploys it."
               exit 0
             fi
+
+            # --- Release preflight (2026-11-20) ----------------------------------
+            # Read-only and BEFORE anything is touched: the checkout is still OLD_SHA,
+            # NEW_SHA is only fetched. Each check below otherwise shows up only after
+            # images were rebuilt and migrations ran — as a readiness failure and a
+            # code rollback on a migrated database:
+            #   1. Docker Compose reads the new compose file (env_file `path:` /
+            #      `required:` needs >= 2.24.0).
+            #   2. ANTHROPIC_API_KEY and AI_ACK_CHECKS_ENFORCE pass the rules the
+            #      services boot with (libs/common/src/config/index.ts, ai-key-format.ts);
+            #      compose's env_file order: the ai-secrets file wins.
+            #   3. Migration ledger: the only migrations this deploy runs are the ones
+            #      it adds. An older one missing from order_schema.migrations would be
+            #      re-run on a schema that already has it.
+            # Values never reach a shell variable or the log, only key and migration
+            # names. A refusal leaves the running release as it is: fix, re-run.
+            # Repository variable DEPLOY_PREFLIGHT_SKIP=true skips it (emergency only).
+            if [ "${DEPLOY_PREFLIGHT_SKIP:-}" = true ]; then
+              echo "WARN: DEPLOY_PREFLIGHT_SKIP=true — release preflight skipped." >&2
+            else
+              PF_FAIL=""
+              PF_DIR="$(umask 077 && mktemp -d /tmp/elchi-preflight.XXXXXXXXXX)"
+              PF_CV="$(docker compose version --short 2>/dev/null || echo 0)"
+              if [ "$(printf '%s\n' 2.24.0 "${PF_CV#v}" | sort -V | head -n 1)" != 2.24.0 ]; then
+                PF_FAIL="${PF_FAIL}[compose] Docker Compose ${PF_CV} is older than 2.24.0 (docker-compose.prod.yml needs it); "
+              fi
+              PF_ENV_FILES=".env.production"
+              if [ -e .env.ai-secrets ]; then
+                if [ -r .env.ai-secrets ]; then
+                  PF_ENV_FILES="$PF_ENV_FILES .env.ai-secrets"
+                else
+                  PF_FAIL="${PF_FAIL}[env] .env.ai-secrets exists but is not readable by $(id -un); "
+                fi
+              fi
+              PF_ENV_BAD="$(awk '
+                {
+                  line = $0
+                  sub(/\r$/, "", line)
+                  sub(/^[ \t]*(export[ \t]+)?/, "", line)
+                  eq = index(line, "=")
+                  k = substr(line, 1, eq - 1)
+                  if (eq < 2 || (k != "ANTHROPIC_API_KEY" && k != "AI_ACK_CHECKS_ENFORCE")) next
+                  if (k == "AI_ACK_CHECKS_ENFORCE" && FILENAME != ".env.production") next
+                  v = substr(line, eq + 1)
+                  q = substr(v, 1, 1)
+                  if (q == "\"" || q == "\047") {
+                    v = substr(v, 2)
+                    e = index(v, q)
+                    if (e > 0) v = substr(v, 1, e - 1)
+                  } else {
+                    sub(/[ \t]+#.*$/, "", v)
+                  }
+                  sub(/^[ \t]+/, "", v)
+                  sub(/[ \t]+$/, "", v)
+                  val[k] = v
+                }
+                END {
+                  v = val["ANTHROPIC_API_KEY"]
+                  if (index(v, "sk-ant-admin") == 1) printf "ANTHROPIC_API_KEY (an Admin API key, sk-ant-admin…) "
+                  else if (index(v, "sk-ant-oat") == 1 || index(v, "sk-ant-ort") == 1) printf "ANTHROPIC_API_KEY (a subscription token, sk-ant-oat/ort…) "
+                  else if (v != "" && (length(v) < 40 || length(v) > 256 || v !~ /^sk-ant-[A-Za-z0-9_-]+$/)) printf "ANTHROPIC_API_KEY (format: sk-ant-…, 40-256 of A-Z a-z 0-9 _ -) "
+                  v = tolower(val["AI_ACK_CHECKS_ENFORCE"])
+                  if (v != "" && v != "on" && v != "off") printf "AI_ACK_CHECKS_ENFORCE (on or off) "
+                }
+              ' $PF_ENV_FILES)"
+              if [ -n "$PF_ENV_BAD" ]; then
+                PF_FAIL="${PF_FAIL}[env] the services would refuse to boot with: ${PF_ENV_BAD}(values not shown; empty ANTHROPIC_API_KEY = AI off) — docs/ops/ai-config.md; "
+              fi
+              if [ -n "$OLD_SHA" ] && [ "$OLD_SHA" != "$NEW_SHA" ] && [ -n "$(docker compose -f docker-compose.prod.yml ps --status running --quiet postgres 2>/dev/null || true)" ]; then
+                PF_PSQL='psql -X -q -tA -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+                if ! printf '%s\n' "SELECT to_regclass('order_schema.migrations') IS NOT NULL, EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'order_schema' AND tablename <> 'migrations');" | docker compose -f docker-compose.prod.yml exec -T postgres sh -c "$PF_PSQL" > "$PF_DIR/ledger"; then
+                  PF_FAIL="${PF_FAIL}[migrations] could not read the migration ledger (psql in the postgres container failed); "
+                elif [ "$(tr -d '[:space:]' < "$PF_DIR/ledger")" = 'f|t' ]; then
+                  PF_FAIL="${PF_FAIL}[migrations] order_schema has tables but no order_schema.migrations ledger — every migration would run again; "
+                elif [ "$(tr -d '[:space:]' < "$PF_DIR/ledger" | cut -d '|' -f 1)" = t ]; then
+                  if printf '%s\n' "SELECT name FROM order_schema.migrations;" | docker compose -f docker-compose.prod.yml exec -T postgres sh -c "$PF_PSQL" > "$PF_DIR/ledger"; then
+                    tr -d '\r ' < "$PF_DIR/ledger" | LC_ALL=C sort -u > "$PF_DIR/db"
+                    { git grep -h -oE '^export class [A-Za-z0-9_]+' "$NEW_SHA" -- 'migrations/*.ts' || true; } | awk '{ print $3 }' | LC_ALL=C sort -u > "$PF_DIR/code"
+                    git diff -M --name-only --diff-filter=A "$OLD_SHA" "$NEW_SHA" -- migrations/ > "$PF_DIR/added-files"
+                    : > "$PF_DIR/added"
+                    if [ -s "$PF_DIR/added-files" ]; then
+                      { git grep -h -oE '^export class [A-Za-z0-9_]+' "$NEW_SHA" -- $(cat "$PF_DIR/added-files") || true; } | awk '{ print $3 }' | LC_ALL=C sort -u > "$PF_DIR/added"
+                    fi
+                    LC_ALL=C comm -23 "$PF_DIR/code" "$PF_DIR/db" > "$PF_DIR/pending"
+                    LC_ALL=C comm -23 "$PF_DIR/pending" "$PF_DIR/added" > "$PF_DIR/unexpected"
+                    echo "Preflight: $(wc -l < "$PF_DIR/code") migrations in the new code, $(wc -l < "$PF_DIR/db") recorded, $(wc -l < "$PF_DIR/pending") will run (all added by this deploy unless listed below)."
+                    if [ ! -s "$PF_DIR/code" ]; then
+                      PF_FAIL="${PF_FAIL}[migrations] no migration class found in $NEW_SHA (preflight could not read the new code); "
+                    elif [ -s "$PF_DIR/unexpected" ]; then
+                      PF_FAIL="${PF_FAIL}[migrations] not in order_schema.migrations although this deploy does not add them: $(tr '\n' ' ' < "$PF_DIR/unexpected")— they would run again on the live schema. Check the ledger (docs/ops/db-backups.md) before deploying; "
+                    fi
+                  else
+                    PF_FAIL="${PF_FAIL}[migrations] could not read order_schema.migrations; "
+                  fi
+                else
+                  echo "Preflight: empty order_schema (first install) — ledger check skipped."
+                fi
+              fi
+              rm -rf "$PF_DIR"
+              if [ -n "$PF_FAIL" ]; then
+                echo "!!! Release preflight refused this deploy — nothing was touched, the running release is unchanged: $PF_FAIL" >&2
+                exit 1
+              fi
+              echo "Preflight ok (compose ${PF_CV}, AI env, migration ledger)."
+            fi
+            # --- end release preflight -------------------------------------------
 
             APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service ai-service"
             DEPLOY_SERVICES=""
@@ -696,13 +804,15 @@ jobs:
           DEPLOY_APP_PATH: ${{ secrets.SERVER_APP_PATH }}
           DEPLOY_SHA: ${{ github.sha }}
           DEPLOY_REPO: ${{ github.repository }}
+          # Release preflight escape hatch (emergency only): repository variable.
+          DEPLOY_PREFLIGHT_SKIP: ${{ vars.DEPLOY_PREFLIGHT_SKIP }}
         with:
           host: ${{ secrets.SERVER_IP }}
           port: ${{ secrets.SERVER_SSH_PORT || 22 }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 50m
-          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER,DEPLOY_APP_PATH,DEPLOY_SHA,DEPLOY_REPO
+          envs: CI_IMAGES,GHCR_TOKEN,GHCR_USER,DEPLOY_APP_PATH,DEPLOY_SHA,DEPLOY_REPO,DEPLOY_PREFLIGHT_SKIP
           # script_stop: false — same reason as the production job.
           script_stop: false
           # GENERATED from the production `deploy` script — do not edit here.
@@ -819,6 +929,112 @@ jobs:
               echo "Superseded: the branch is at $NEW_SHA, this run is for $DEPLOY_SHA — nothing deployed; the newer run deploys it."
               exit 0
             fi
+
+            # --- Release preflight (2026-11-20) ----------------------------------
+            # Read-only and BEFORE anything is touched: the checkout is still OLD_SHA,
+            # NEW_SHA is only fetched. Each check below otherwise shows up only after
+            # images were rebuilt and migrations ran — as a readiness failure and a
+            # code rollback on a migrated database:
+            #   1. Docker Compose reads the new compose file (env_file `path:` /
+            #      `required:` needs >= 2.24.0).
+            #   2. ANTHROPIC_API_KEY and AI_ACK_CHECKS_ENFORCE pass the rules the
+            #      services boot with (libs/common/src/config/index.ts, ai-key-format.ts);
+            #      compose's env_file order: the ai-secrets file wins.
+            #   3. Migration ledger: the only migrations this deploy runs are the ones
+            #      it adds. An older one missing from order_schema.migrations would be
+            #      re-run on a schema that already has it.
+            # Values never reach a shell variable or the log, only key and migration
+            # names. A refusal leaves the running release as it is: fix, re-run.
+            # Repository variable DEPLOY_PREFLIGHT_SKIP=true skips it (emergency only).
+            if [ "${DEPLOY_PREFLIGHT_SKIP:-}" = true ]; then
+              echo "WARN: DEPLOY_PREFLIGHT_SKIP=true — release preflight skipped." >&2
+            else
+              PF_FAIL=""
+              PF_DIR="$(umask 077 && mktemp -d /tmp/elchi-stg-preflight.XXXXXXXXXX)"
+              PF_CV="$(docker compose version --short 2>/dev/null || echo 0)"
+              if [ "$(printf '%s\n' 2.24.0 "${PF_CV#v}" | sort -V | head -n 1)" != 2.24.0 ]; then
+                PF_FAIL="${PF_FAIL}[compose] Docker Compose ${PF_CV} is older than 2.24.0 (docker-compose.prod.yml needs it); "
+              fi
+              PF_ENV_FILES=".env.staging"
+              if [ -e .env.staging.ai-secrets ]; then
+                if [ -r .env.staging.ai-secrets ]; then
+                  PF_ENV_FILES="$PF_ENV_FILES .env.staging.ai-secrets"
+                else
+                  PF_FAIL="${PF_FAIL}[env] .env.staging.ai-secrets exists but is not readable by $(id -un); "
+                fi
+              fi
+              PF_ENV_BAD="$(awk '
+                {
+                  line = $0
+                  sub(/\r$/, "", line)
+                  sub(/^[ \t]*(export[ \t]+)?/, "", line)
+                  eq = index(line, "=")
+                  k = substr(line, 1, eq - 1)
+                  if (eq < 2 || (k != "ANTHROPIC_API_KEY" && k != "AI_ACK_CHECKS_ENFORCE")) next
+                  if (k == "AI_ACK_CHECKS_ENFORCE" && FILENAME != ".env.staging") next
+                  v = substr(line, eq + 1)
+                  q = substr(v, 1, 1)
+                  if (q == "\"" || q == "\047") {
+                    v = substr(v, 2)
+                    e = index(v, q)
+                    if (e > 0) v = substr(v, 1, e - 1)
+                  } else {
+                    sub(/[ \t]+#.*$/, "", v)
+                  }
+                  sub(/^[ \t]+/, "", v)
+                  sub(/[ \t]+$/, "", v)
+                  val[k] = v
+                }
+                END {
+                  v = val["ANTHROPIC_API_KEY"]
+                  if (index(v, "sk-ant-admin") == 1) printf "ANTHROPIC_API_KEY (an Admin API key, sk-ant-admin…) "
+                  else if (index(v, "sk-ant-oat") == 1 || index(v, "sk-ant-ort") == 1) printf "ANTHROPIC_API_KEY (a subscription token, sk-ant-oat/ort…) "
+                  else if (v != "" && (length(v) < 40 || length(v) > 256 || v !~ /^sk-ant-[A-Za-z0-9_-]+$/)) printf "ANTHROPIC_API_KEY (format: sk-ant-…, 40-256 of A-Z a-z 0-9 _ -) "
+                  v = tolower(val["AI_ACK_CHECKS_ENFORCE"])
+                  if (v != "" && v != "on" && v != "off") printf "AI_ACK_CHECKS_ENFORCE (on or off) "
+                }
+              ' $PF_ENV_FILES)"
+              if [ -n "$PF_ENV_BAD" ]; then
+                PF_FAIL="${PF_FAIL}[env] the services would refuse to boot with: ${PF_ENV_BAD}(values not shown; empty ANTHROPIC_API_KEY = AI off) — docs/ops/ai-config.md; "
+              fi
+              if [ -n "$OLD_SHA" ] && [ "$OLD_SHA" != "$NEW_SHA" ] && [ -n "$(docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml ps --status running --quiet postgres 2>/dev/null || true)" ]; then
+                PF_PSQL='psql -X -q -tA -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+                if ! printf '%s\n' "SELECT to_regclass('order_schema.migrations') IS NOT NULL, EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'order_schema' AND tablename <> 'migrations');" | docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml exec -T postgres sh -c "$PF_PSQL" > "$PF_DIR/ledger"; then
+                  PF_FAIL="${PF_FAIL}[migrations] could not read the migration ledger (psql in the postgres container failed); "
+                elif [ "$(tr -d '[:space:]' < "$PF_DIR/ledger")" = 'f|t' ]; then
+                  PF_FAIL="${PF_FAIL}[migrations] order_schema has tables but no order_schema.migrations ledger — every migration would run again; "
+                elif [ "$(tr -d '[:space:]' < "$PF_DIR/ledger" | cut -d '|' -f 1)" = t ]; then
+                  if printf '%s\n' "SELECT name FROM order_schema.migrations;" | docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml exec -T postgres sh -c "$PF_PSQL" > "$PF_DIR/ledger"; then
+                    tr -d '\r ' < "$PF_DIR/ledger" | LC_ALL=C sort -u > "$PF_DIR/db"
+                    { git grep -h -oE '^export class [A-Za-z0-9_]+' "$NEW_SHA" -- 'migrations/*.ts' || true; } | awk '{ print $3 }' | LC_ALL=C sort -u > "$PF_DIR/code"
+                    git diff -M --name-only --diff-filter=A "$OLD_SHA" "$NEW_SHA" -- migrations/ > "$PF_DIR/added-files"
+                    : > "$PF_DIR/added"
+                    if [ -s "$PF_DIR/added-files" ]; then
+                      { git grep -h -oE '^export class [A-Za-z0-9_]+' "$NEW_SHA" -- $(cat "$PF_DIR/added-files") || true; } | awk '{ print $3 }' | LC_ALL=C sort -u > "$PF_DIR/added"
+                    fi
+                    LC_ALL=C comm -23 "$PF_DIR/code" "$PF_DIR/db" > "$PF_DIR/pending"
+                    LC_ALL=C comm -23 "$PF_DIR/pending" "$PF_DIR/added" > "$PF_DIR/unexpected"
+                    echo "Preflight: $(wc -l < "$PF_DIR/code") migrations in the new code, $(wc -l < "$PF_DIR/db") recorded, $(wc -l < "$PF_DIR/pending") will run (all added by this deploy unless listed below)."
+                    if [ ! -s "$PF_DIR/code" ]; then
+                      PF_FAIL="${PF_FAIL}[migrations] no migration class found in $NEW_SHA (preflight could not read the new code); "
+                    elif [ -s "$PF_DIR/unexpected" ]; then
+                      PF_FAIL="${PF_FAIL}[migrations] not in order_schema.migrations although this deploy does not add them: $(tr '\n' ' ' < "$PF_DIR/unexpected")— they would run again on the live schema. Check the ledger (docs/ops/db-backups.md) before deploying; "
+                    fi
+                  else
+                    PF_FAIL="${PF_FAIL}[migrations] could not read order_schema.migrations; "
+                  fi
+                else
+                  echo "Preflight: empty order_schema (first install) — ledger check skipped."
+                fi
+              fi
+              rm -rf "$PF_DIR"
+              if [ -n "$PF_FAIL" ]; then
+                echo "!!! Release preflight refused this deploy — nothing was touched, the running release is unchanged: $PF_FAIL" >&2
+                exit 1
+              fi
+              echo "Preflight ok (compose ${PF_CV}, AI env, migration ledger)."
+            fi
+            # --- end release preflight -------------------------------------------
 
             APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service ai-service"
             DEPLOY_SERVICES=""
