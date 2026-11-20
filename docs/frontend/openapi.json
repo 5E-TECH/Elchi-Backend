@@ -26740,6 +26740,85 @@
         ]
       }
     },
+    "/finance/operator-payments/missing-earnings": {
+      "get": {
+        "description": "2026-11-20. Hech narsa yozilmaydi. `{ sold_orders, already_recorded, missing, to_record, amount, commission_type, commission_value, operator_name, truncated }` — `to_record` / `amount`: joriy stavka bo'yicha yoziladigan qatorlar va summa (stavka yo'q — 0).",
+        "operationId": "OperatorEarningBackfillGatewayController_preview",
+        "parameters": [
+          {
+            "name": "operator_id",
+            "required": true,
+            "in": "query",
+            "description": "Shu marketning (o`chirilmagan) operatori; begona yoki yo`q — 404",
+            "schema": {
+              "example": "41",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data }"
+          },
+          "403": {
+            "description": "Market emas"
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: operatorning komissiyasiz qolgan sotuvlari — oldindan ko`rish",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      },
+      "post": {
+        "description": "2026-11-20. Faqat daftarda qatori umuman yo'q (rollback qilinmagan) hozir sotilgan buyurtmalar; mavjud qatorlar o'zgarmaydi. Takror — ikkinchi qator yo'q (`created: 0`). Javob: oldindan ko'rish maydonlari + `created`, `created_amount`. Elchi kassasiga ta'sir yo'q.",
+        "operationId": "OperatorEarningBackfillGatewayController_record",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MissingEarningsOperatorDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data }"
+          },
+          "403": {
+            "description": "Market emas"
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: komissiyasiz qolgan o`tgan sotuvlarga joriy stavka bo`yicha ulush yozish",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
     "/public/delivery-quote": {
       "post": {
         "description": "Autentifikatsiyasiz (elchipochta.uz kalkulyatori). Hisob tokenli `POST /delivery/quote` bilan AYNI dvigatel (logistics `logistics.delivery.quote`). Posilka: yuqori darajadagi `weight_kg` (+ ixtiyoriy `length_cm`/`width_cm`/`height_cm` — uchalasi birga, `volumetric_enabled`) YOKI `items[]` (≤ 20, bitta jo'natma). `product_id` qabul qilinmaydi (400). `pickup: true` — bitta posilkali tashrif: `pickupFee` va `totalWithPickup` ga kiradi, `total` ga emas. Tarif: ikkala viloyat ham shahar zonasida → `city`, aks holda `where_deliver`. Javobda faqat hisob — tarif/sozlama id'lari yo'q. Xatolar: 400 (validatsiya, yo'q viloyat), 409 (faol tarif yo'q), 429 (per-IP limit, sukut 30/daqiqa), 504. Javob ≤ 30 s keshlanadi.",
@@ -40762,6 +40841,19 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "MissingEarningsOperatorDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "41",
+            "description": "Shu marketning (o`chirilmagan) operatori; begona yoki yo`q — 404"
+          }
+        },
+        "required": [
+          "operator_id"
         ]
       },
       "PublicDeliveryTariffDto": {
