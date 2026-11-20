@@ -15,6 +15,15 @@
  * `REFRESH_COOKIE_SAMESITE` = `lax` | `strict` | `none` (boshqa / bo'sh —
  * `lax`). `none` faqat favqulodda orqaga qaytish uchun; u holda `Secure`
  * majburiy (brauzerlar `SameSite=None` ni `Secure` siz rad etadi).
+ *
+ * `Path` — ATAYLAB `/auth` (bir domenli API'da ham). Kabinet API'ni o'z
+ * domeni orqali chaqirganda (`test-admin…/api/*` → Elchi-Frontend Worker
+ * proksisi, docs/ops/same-origin-api.md) Worker `/api` prefiksini olib
+ * tashlaydi va javobdagi `Set-Cookie` `Path` iga uni qaytarib qo'shadi
+ * (`/auth` → `/api/auth`, nginx `proxy_cookie_path` kabi). Shu sabab bu yerda
+ * `/api/auth` YOZILMAYDI (aks holda `/api/api/auth`) — backend ikkala yo'lni
+ * (to'g'ridan-to'g'ri API va proksi) bir vaqtda o'zgarishsiz xizmat qiladi.
+ * Cookie host-only (`Domain` yo'q) — proksida kabinet hostiga bog'lanadi.
  */
 export type RefreshCookieSameSite = 'lax' | 'strict' | 'none';
 

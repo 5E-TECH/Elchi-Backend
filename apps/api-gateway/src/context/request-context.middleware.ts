@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
 import {
   RequestContextStore,
   requestContext,
   sanitizeAuditContext,
 } from '@app/common';
-import { resolveTrustedClientIp } from '../auth/client-ip-throttler.guard';
+import {
+  createWorkerEgressIpWarner,
+  resolveTrustedClientIp,
+} from '../auth/client-ip-throttler.guard';
 import { normalizeIp } from '../auth/ip-allowlist.util';
 import { describeUserAgent, normalizeDeviceName } from './device-label';
 
@@ -92,6 +96,16 @@ export function buildRequestContextStore(req: Request): RequestContextStore {
 }
 
 /**
+ * Kabinet Worker proksisi noto'g'ri sozlansa (API boshqa zonada) mijoz IP'si
+ * o'rniga Worker umumiy manzili keladi — ogohlantirish (5 daqiqada bir marta).
+ * Batafsil: `client-ip-throttler.guard.ts`.
+ */
+const clientIpLogger = new Logger('ClientIp');
+const warnWorkerEgressIp = createWorkerEgressIpWarner((message) =>
+  clientIpLogger.warn(message),
+);
+
+/**
  * Trace correlation + audit konteksti: read x-request-id from the client
  * (typical proxy pattern) or mint a fresh one. The id and the audit fields
  * propagate through pino logs, outgoing RMQ calls (AMQP headers —
@@ -104,6 +118,7 @@ export function requestContextMiddleware(
   next: NextFunction,
 ): void {
   const store = buildRequestContextStore(req);
+  warnWorkerEgressIp(store.ip);
   res.setHeader('x-request-id', store.traceId);
   requestContext.run(store, () => next());
 }
