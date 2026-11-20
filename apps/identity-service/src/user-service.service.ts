@@ -19,7 +19,10 @@ import {
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { lastValueFrom, timeout } from 'rxjs';
 import { randomBytes } from 'crypto';
-import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
+import {
+  BcryptEncryption,
+  PASSWORD_LOGIN_DISABLED,
+} from '../../../libs/common/helpers/bcrypt';
 import { User } from './entities/user.entity';
 import { CourierRegion } from './entities/courier-region.entity';
 import { invalidateAllSessions, isSessionId } from './auth/session-security';
@@ -4179,9 +4182,11 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
-    // Crypto-strong throwaway password. Customers authenticate by phone/OTP, not
-    // this value, but it must not be guessable if a password path is ever enabled.
-    const generatedPassword = `cust_${randomBytes(12).toString('hex')}`;
+    // Mijoz parol bilan kirmaydi: ilgari bu yerda hech kimga berilmaydigan
+    // tasodifiy parol bcryptjs (narx 12) bilan xeshlanardi — identity event
+    // loop'ini har yangi mijozda ~0.2–0.3 s band qilib, sessiya tekshiruvini
+    // ham kechiktirardi. Marker bcrypt xeshi emas: `login` doim rad etadi
+    // (soxta xesh bilan, AYNI vaqtda — `BcryptEncryption.compare`).
     const customer = this.users.create({
       // 2026-11-04: odam ismi — har so'z bosh harfi katta.
       name: normalizePersonName(dto.name),
@@ -4191,7 +4196,7 @@ export class UserServiceService implements OnModuleInit {
       address: dto.address ?? null,
       district_id: dto.district_id,
       username: null,
-      password: await this.bcryptEncryption.encrypt(generatedPassword),
+      password: PASSWORD_LOGIN_DISABLED,
       salary: 0,
       payment_day: undefined,
       role: Roles.CUSTOMER,
