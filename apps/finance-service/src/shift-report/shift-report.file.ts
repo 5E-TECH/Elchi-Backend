@@ -10,13 +10,17 @@ import {
   AI_STATUS_LABELS,
   PAYMENT_METHOD_LABELS,
   formatSom,
+  type MarketSlice,
   type ShiftMoneyBlock,
   type ShiftReportSnapshot,
 } from './shift-report.builders';
 
 /**
- * gWI4gYkw #3 — superadmin uchun to'liq smena hisoboti fayli (PDF | XLSX).
- * Faqat superadminga ilova qilinadi; kuryer / market faylni olmaydi.
+ * gWI4gYkw #3 — smena hisoboti fayllari:
+ *  - to'liq hisobot (PDF | XLSX) — superadmin; XLSX — filial guruhi /
+ *    filial menejerlari (o'z filiali kassasi; asosiy kassa — HQ filiali);
+ *  - market Excel'i — FAQAT shu marketning o'z to'lovlari (`buildMarketXlsx`,
+ *    boshqa market / kuryer ma'lumoti yo'q).
  */
 
 export const REPORT_MIME: Record<ReportFormat, string> = {
@@ -26,6 +30,9 @@ export const REPORT_MIME: Record<ReportFormat, string> = {
 
 export const reportFileName = (shiftId: string, format: ReportFormat) =>
   `smena-${shiftId}-hisobot.${format}`;
+
+export const marketReportFileName = (shiftId: string, marketId: string) =>
+  `smena-${shiftId}-market-${marketId}-tolovlar.xlsx`;
 
 const moneyRows = (block: ShiftMoneyBlock): Array<[string, string]> => [
   ['Ochilish qoldig‘i', formatSom(block.opening_balance)],
@@ -158,6 +165,50 @@ export async function buildXlsx(
   }
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer as ArrayBuffer);
+}
+
+/**
+ * Market Excel'i — FAQAT o'z to'lovlari (`slice`): smena, yopilgan vaqt,
+ * har to'lov (summa, usul, karta, vaqt, izoh), jami va qoldiq.
+ */
+export async function buildMarketXlsx(
+  snapshot: Pick<
+    ShiftReportSnapshot,
+    'shift_id' | 'closed_at' | 'close_reason'
+  >,
+  slice: MarketSlice,
+): Promise<Buffer> {
+  const workbook = new Workbook();
+  workbook.creator = 'Elchi';
+  const sheet = workbook.addWorksheet("To'lovlar");
+  sheet.columns = [
+    { width: 20 },
+    { width: 18 },
+    { width: 22 },
+    { width: 20 },
+    { width: 14 },
+  ];
+  sheet.addRow(['Smena', `#${snapshot.shift_id}`]);
+  sheet.addRow(['Market', slice.name ?? `#${slice.market_id}`]);
+  sheet.addRow(['Yopilgan', tashkentDateTime(snapshot.closed_at)]);
+  sheet.addRow([]);
+  const header = sheet.addRow(['Summa', 'Usul', 'Karta', 'Vaqt', 'Izoh']);
+  header.font = { bold: true };
+  for (const line of slice.payments) {
+    sheet.addRow([
+      line.amount,
+      PAYMENT_METHOD_LABELS[line.payment_method] ?? line.payment_method,
+      line.card_name ?? '',
+      tashkentDateTime(line.at),
+      line.reversed ? 'qaytarildi' : '',
+    ]);
+  }
+  sheet.addRow([]);
+  sheet.addRow(['Jami', slice.total]).font = { bold: true };
+  if (slice.balance != null) {
+    sheet.addRow(['Hisobingizdagi qoldiq', slice.balance]);
+  }
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 const DEJAVU = [

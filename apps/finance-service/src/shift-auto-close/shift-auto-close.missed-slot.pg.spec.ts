@@ -408,6 +408,47 @@ describePg(
       expect((await at('2026-11-21 09:00:30')).opened).toHaveLength(2);
     });
 
+    it('⭐ server 08:55 → 09:30 ishlamadi: smenalar 09:30 da kechikib ochiladi (BIR marta)', async () => {
+      await fullSchedule();
+      await at('2026-11-21 08:55:00');
+      const back = await at('2026-11-21 09:30:00');
+      expect(back.opened).toHaveLength(2);
+      const open = await withStatus(ShiftStatus.OPEN);
+      expect(open.map((shift) => shift.cashbox_user_id).sort()).toEqual([
+        '0',
+        '13',
+      ]);
+      for (const shift of open) {
+        expect(new Date(shift.opened_at).toISOString()).toBe(
+          T('2026-11-21 09:30:00').toISOString(),
+        );
+      }
+      expect(await claimKeys()).toEqual(
+        expect.arrayContaining([
+          'auto_open:0:2026-11-21T09:00',
+          'auto_open:13:2026-11-21T09:00',
+        ]),
+      );
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'finance.shift_auto_opened',
+          metadata: expect.objectContaining({
+            slot: '2026-11-21T09:00',
+            missed_slot: true,
+            late_by_min: 30,
+          }),
+        }),
+      );
+      expect((await at('2026-11-21 09:31:00')).opened).toEqual([]);
+    });
+
+    it('server ochish va yopish vaqtidan keyin qaytdi (kun yopilgan) — kech ochilmaydi', async () => {
+      await fullSchedule();
+      await at('2026-11-21 08:55:00');
+      expect((await at('2026-11-21 23:30:00')).opened).toEqual([]);
+      expect(await shifts()).toHaveLength(0);
+    });
+
     it("yurak urishi yo'q (birinchi ishga tushish) — o'tib ketgan slot quvlanmaydi", async () => {
       const open = await db.getRepository(Shift).save(
         db.getRepository(Shift).create({

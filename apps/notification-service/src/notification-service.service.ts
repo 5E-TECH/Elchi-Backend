@@ -168,6 +168,15 @@ export class NotificationServiceService {
     return this.moduleRef.get(BranchTelegramService, { strict: false });
   }
 
+  /** Filial kassasi guruhining faol chat'lari (relay ilovasi uchun). */
+  async activeBranchGroupChats(
+    manager: EntityManager,
+    branchId: string,
+  ): Promise<string[]> {
+    if (!/^\d{1,19}$/.test(branchId)) return [];
+    return this.branchTelegram().activeGroupChats(manager, branchId);
+  }
+
   private toPublic(row: TelegramMarket) {
     return toPublicTelegramMarket(row);
   }

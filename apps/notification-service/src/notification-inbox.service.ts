@@ -747,6 +747,7 @@ export class NotificationInboxService {
         const relayed = await this.relayTelegram(dto, relay);
         telegram = relayed.result;
         telegramOutcome = relayed.outcome;
+        await this.relayGroupFiles(dto, telegramOutcome);
       }
 
       // 4) Kanal natijalari dispatch oxirida BITTA bulk UPDATE bilan (sikl
@@ -1580,6 +1581,54 @@ export class NotificationInboxService {
         `telegram relay navbatga qo'yilmadi (dispatch davom etadi): ${shortReason(error)}`,
       );
       return { ids: null, error };
+    }
+  }
+
+  /**
+   * Filial kassasi guruhi relay'idan keyin ilova (smena hisoboti Excel) —
+   * `data.telegram_media` (file-service kalitlari). Faqat ICHKI dispatch
+   * (finance outbox; HTTP so'rovida `requester` bor — u fayl kalitini
+   * guruhga uzata olmaydi) va faqat `branch_id` nishoni (market guruhiga pul
+   * fayli YUBORILMAYDI). Matn yuborilgan / navbatda bo'lsa; best-effort —
+   * xato dispatch'ni yiqitmaydi.
+   */
+  private async relayGroupFiles(
+    dto: DispatchNotificationDto,
+    outcome: TelegramOutcome | undefined,
+  ): Promise<void> {
+    const branchId = dto.telegram?.branch_id;
+    if (!branchId || !this.telegramDm) return;
+    if ((dto as { requester?: unknown }).requester) return;
+    if (
+      outcome?.telegram !== NotificationDeliveryStatus.SENT &&
+      outcome?.telegram !== NotificationDeliveryStatus.QUEUED
+    ) {
+      return;
+    }
+    const data: Record<string, unknown> = dto.data ?? {};
+    const keys = Array.isArray(data.telegram_media)
+      ? data.telegram_media.filter(
+          (key): key is string => typeof key === 'string' && key.length > 0,
+        )
+      : [];
+    if (!keys.length) return;
+    try {
+      const chats = await this.telegramService.activeBranchGroupChats(
+        this.repo.manager,
+        String(branchId),
+      );
+      if (!chats?.length) return;
+      const caption =
+        typeof data.telegram_media_caption === 'string'
+          ? data.telegram_media_caption
+          : null;
+      for (const chat of chats) {
+        await this.telegramDm.sendFiles(chat, keys, caption);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `filial guruhiga ilova yuborilmadi: ${shortReason(error)}`,
+      );
     }
   }
 
