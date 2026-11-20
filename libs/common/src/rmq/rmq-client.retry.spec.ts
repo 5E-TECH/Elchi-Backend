@@ -1,9 +1,9 @@
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { defer, NEVER, Observable, of, throwError, TimeoutError } from 'rxjs';
-import { rmqSend } from './rmq-client.helper';
+import { isRetryableRmqError, rmqSend } from './rmq-client.helper';
 
 /**
- * `rmqSend` faqat timeout'da qayta yuborishi kerak. @nestjs/microservices 11 da
+ * `rmqSend` faqat transport xatosida (timeout, mahalliy Error) qayta yuboradi. @nestjs/microservices 11 da
  * boshqa servis qaytargan xato `ClientProxy.serializeError` orqali o'zgarmasdan,
  * ya'ni ODDIY OBYEKT bo'lib keladi — `RpcException` emas.
  */
@@ -44,7 +44,7 @@ describe('rmqSend retry policy', () => {
     expect(attempts()).toBe(1);
   });
 
-  it('does not retry an RpcException or a generic Error', async () => {
+  it('does not retry an RpcException or the Nest "no handler" string', async () => {
     const rpc = new RpcException({ statusCode: 403, message: 'Forbidden' });
     const rpcClient = clientFrom(() => throwError(() => rpc));
     await expect(
@@ -52,12 +52,37 @@ describe('rmqSend retry policy', () => {
     ).rejects.toBe(rpc);
     expect(rpcClient.attempts()).toBe(1);
 
-    const plain = new Error('connection closed');
-    const errClient = clientFrom(() => throwError(() => plain));
+    const noHandler =
+      'There is no matching message handler defined in the remote service.';
+    const strClient = clientFrom(() => throwError(() => noHandler));
     await expect(
-      rmqSend(errClient.client, { cmd: 'x' }, {}, { retryBaseDelayMs: 1 }),
-    ).rejects.toBe(plain);
-    expect(errClient.attempts()).toBe(1);
+      rmqSend(strClient.client, { cmd: 'x' }, {}, { retryBaseDelayMs: 1 }),
+    ).rejects.toBe(noHandler);
+    expect(strClient.attempts()).toBe(1);
+  });
+
+  it('retries a local transport Error (connection blip) — NDmZMzCP / dzyVftBx', async () => {
+    let call = 0;
+    const { client, attempts } = clientFrom(() => {
+      call += 1;
+      return call === 1
+        ? throwError(() => new Error('connection closed'))
+        : of({ ok: true });
+    });
+
+    await expect(
+      rmqSend(client, { cmd: 'x' }, {}, { retries: 1, retryBaseDelayMs: 1 }),
+    ).resolves.toEqual({ ok: true });
+    expect(attempts()).toBe(2);
+  });
+
+  it('isRetryableRmqError: transport — ha, remote javob — yo‘q', () => {
+    expect(isRetryableRmqError(new TimeoutError())).toBe(true);
+    expect(isRetryableRmqError(new Error('channel closed'))).toBe(true);
+    expect(isRetryableRmqError(new RpcException('x'))).toBe(false);
+    expect(isRetryableRmqError({ statusCode: 409, message: 'x' })).toBe(false);
+    expect(isRetryableRmqError('no matching message handler')).toBe(false);
+    expect(isRetryableRmqError(null)).toBe(false);
   });
 
   it('retries on rxjs TimeoutError and succeeds when a later attempt answers', async () => {

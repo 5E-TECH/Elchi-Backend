@@ -1,4 +1,4 @@
-import { ClientProxy } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
   firstValueFrom,
   timeout,
@@ -98,15 +98,27 @@ function withRequestId<T>(data: T): T {
 }
 
 /**
+ * Qayta urinsa bo'ladigan (transport) xato: rxjs `TimeoutError` yoki shu
+ * jarayonda yuzaga kelgan `Error` (ulanish/kanal). `RpcException` va boshqa
+ * servisning javobi (oddiy obyekt, satr) — yakuniy, qayta yuborilmaydi.
+ */
+export function isRetryableRmqError(error: unknown): boolean {
+  if (error instanceof TimeoutError) return true;
+  return error instanceof Error && !(error instanceof RpcException);
+}
+
+/**
  * Wrapper around firstValueFrom with timeout and retry (exponential backoff).
  * Auto-attaches request_id to the payload for idempotency on the server side.
  *
- * Faqat rxjs `TimeoutError` da qayta uriniladi. Boshqa servis qaytargan xato
- * (@nestjs/microservices 11: `ClientProxy.serializeError` uni o'zgartirmaydi)
- * gateway'ga `RpcException` emas, ODDIY OBYEKT (`{ statusCode, message }`)
- * bo'lib keladi. Avval `instanceof RpcException` tekshirilgani uchun har bir
- * 4xx/5xx biznes xatosi yana 2 marta yuborilib, javob ~600 ms kechikardi va
- * servisda keraksiz yuk paydo bo'lardi. Javob kelgan bo'lsa — u yakuniy.
+ * Faqat TRANSPORT xatosida qayta uriniladi (`isRetryableRmqError`): timeout
+ * yoki mahalliy `Error` (ulanish uzildi, kanal yopildi). Boshqa servis
+ * qaytargan xato (@nestjs/microservices 11: `ClientProxy.serializeError` uni
+ * o'zgartirmaydi) `RpcException` emas, ODDIY OBYEKT (`{ statusCode, message }`)
+ * yoki satr («no matching message handler») bo'lib keladi. Avval faqat
+ * `instanceof RpcException` tekshirilgani uchun har bir 4xx/5xx biznes xatosi
+ * yana 2 marta yuborilib, javob ~600 ms kechikardi va servisda keraksiz yuk
+ * paydo bo'lardi. Javob kelgan bo'lsa — u yakuniy.
  */
 export async function rmqSend<T = unknown>(
   client: ClientProxy,
@@ -125,7 +137,7 @@ export async function rmqSend<T = unknown>(
     retry({
       count: maxRetries,
       delay: (error, retryCount) => {
-        if (!(error instanceof TimeoutError)) {
+        if (!isRetryableRmqError(error)) {
           return throwError(() => error);
         }
         const delay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 2000);

@@ -174,8 +174,9 @@ describe('UserServiceService saga — branch.user.assign 4xx rad javobi', () => 
     expect(err).toEqual(
       expect.objectContaining({ statusCode: 403, message: PICKUP_MESSAGE }),
     );
-    // rmqSend kutubxonadagi qayta urinish (retries: 1) o'zgarmagan.
-    expect(h.assignAttempts()).toBe(2);
+    // Boshqa servisning 4xx javobi yakuniy — rmqSend uni qayta yubormaydi
+    // (faqat transport xatosi: timeout / mahalliy Error).
+    expect(h.assignAttempts()).toBe(1);
     expect(h.branchClient.send).toHaveBeenCalledTimes(1);
     // 1-save: yangi kuryer; 2-save: kompensatsiya (soft-delete).
     expect(h.saves).toHaveLength(2);
