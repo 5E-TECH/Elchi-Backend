@@ -21,6 +21,13 @@ export const SHIFT_AUTOMATION_KEYS = {
   lateAlertChannels: 'shift.late_alert.channels',
 } as const;
 
+/**
+ * Scheduler yurak urishi — oxirgi muvaffaqiyatli tick vaqti (ISO, faqat tizim
+ * yozadi; sozlama emas, `SHIFT_AUTOMATION_KEYS` ga KIRMAYDI). O'tkazib
+ * yuborilgan yopish slotini aniqlash uchun (`missedCloseSlot`).
+ */
+export const SHIFT_SCHEDULER_HEARTBEAT_KEY = 'shift.scheduler.last_tick_at';
+
 export type AutoCloseScope = 'main' | 'main+branches';
 export const AUTO_CLOSE_SCOPES: readonly AutoCloseScope[] = [
   'main',
@@ -138,7 +145,9 @@ export const MAX_WARN_BEFORE_MIN = 180;
 /**
  * Slot vaqtidan keyin shu oraliqda (daqiqa) ham yopiladi: replika qayta ishga
  * tushgan / tick kechikkan bo'lsa slot o'tkazib yuborilmasin. Undan keyin —
- * eski slot qayta "quvlanmaydi" (keyingi slotgacha kutiladi).
+ * eski slot qayta "quvlanmaydi" (keyingi slotgacha kutiladi). ISTISNO —
+ * scheduler shu oynada UMUMAN ishlamagan bo'lsa (server o'chiq):
+ * `missedCloseSlot` — birinchi tickda yopiladi.
  */
 export const AUTO_CLOSE_CATCHUP_MIN = 10;
 
@@ -602,6 +611,33 @@ export function dueCloseSlots(
     (slot) =>
       slot.at.getTime() <= t && t < slot.at.getTime() + catchupMin * 60_000,
   );
+}
+
+/**
+ * O'TKAZIB YUBORILGAN yopish sloti (server / finance-service ishlamagan):
+ * `lastTickAt` — oldingi muvaffaqiyatli tick vaqti (`SHIFT_SCHEDULER_HEARTBEAT_KEY`).
+ * Catch-up oynasi o'tib ketgan eng OXIRGI slot `S` uchun `lastTickAt < S`
+ * bo'lsa — `[S, S + catch-up)` oralig'ida birorta ham tick bo'lmagan: slot
+ * o'tkazib yuborilgan, smena hozir yopiladi. Aks holda (tick bo'lgan —
+ * avtomatika o'chiq yoki yopish xatosi bo'lgan bo'lishi mumkin) — `null`:
+ * yoqilgan avtomatika ilgari o'tib ketgan slotlarni «quvlamaydi».
+ * `lastTickAt` yo'q (birinchi ishga tushish) — `null`.
+ */
+export function missedCloseSlot(
+  now: Date,
+  times: string[],
+  lastTickAt: Date | null | undefined,
+  catchupMin = AUTO_CLOSE_CATCHUP_MIN,
+): ScheduleSlot | null {
+  const last = lastTickAt ? new Date(lastTickAt).getTime() : NaN;
+  const t = now.getTime();
+  if (!times.length || !Number.isFinite(last) || last >= t) return null;
+  let latest: ScheduleSlot | null = null;
+  for (const slot of candidateSlots(now, times)) {
+    if (slot.at.getTime() + catchupMin * 60_000 > t) continue;
+    if (!latest || slot.at.getTime() > latest.at.getTime()) latest = slot;
+  }
+  return latest && latest.at.getTime() > last ? latest : null;
 }
 
 /** Ogohlantirish oynasidagi slotlar: `slot − warn ≤ now < slot`. */
