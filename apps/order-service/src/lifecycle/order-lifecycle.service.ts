@@ -85,6 +85,7 @@ import {
   resolvePartnerMoneyFields,
   resolveExtraCostAutoApproveMinutes,
   WAREHOUSE_ERROR_CODES,
+  ORDER_ROLLBACK_ERROR_CODES,
 } from '@app/common';
 
 import type { EntityManager } from 'typeorm';
@@ -103,7 +104,6 @@ import {
   computeSellExtraCostLimit,
   computeSellProfit,
   computeTariffShortfall,
-  isCourierRemittedSettlement,
   type MarketTariffResolution,
   resolveOrderTariff,
   resolveOrderTariffDetailed,
@@ -118,6 +118,14 @@ import {
   type SaleDeliveryQuote,
   toSaleEngineQuote,
 } from '../pricing/sale-pricing';
+import {
+  effectiveRollbackRole,
+  evaluateRollbackEligibility,
+  isRemittedSale,
+  REMITTED_CREDIT_ROW_MESSAGE,
+  type RollbackEligibility,
+  type RollbackEligibilityContext,
+} from './rollback-eligibility';
 import {
   countExternalBatches,
   ScannedExternalBatch,
@@ -430,6 +438,27 @@ interface RemittedCourierCredit {
    * kredit bo'ladi — bugungi «tasdiqsiz E» ning bitta qatori summasi.
    */
   deferredChainAmount?: number;
+}
+
+/**
+ * D2 (2026-11-19) — superadmin HQ'ga o'tgan / market to'langan / filial
+ * to'lagan sotuvni qaytarganda daftar teskarisi (`planSettledRollbackLedger`).
+ * Summalar so'mda; `snapshot` — tiyinda, qulf ostida qayta tekshiriladi.
+ */
+interface SettledRollbackLedger {
+  status: SettlementStatus;
+  branchId: string;
+  marketId: string;
+  /** `branch_to_hq` qoldig'iga kredit (filial amalda bergan pul). */
+  branchCredit: number;
+  /** `hq_to_market` qoldig'iga += (market amalda olgan pul — oldindan olgan). */
+  marketDebit: number;
+  snapshot: {
+    courier_amount: number;
+    branch_amount: number;
+    market_amount: number;
+    market_paid_by_branch_amount: number;
+  };
 }
 
 /** Kuryer qoldig'iga yoziladigan kredit: sotuv qatori + birga topshirilgan zanjir (−E). */
@@ -2352,7 +2381,12 @@ export class OrderLifecycleService {
   private async resetSettlementOnRollback(
     manager: EntityManager,
     orderId: string,
-    scope: { extraCostApprovalIds?: string[]; keepIds?: string[] } = {},
+    scope: {
+      extraCostApprovalIds?: string[];
+      keepIds?: string[];
+      /** D2 — superadmin: filial to'lagan qator daftarda teskari yozilgan. */
+      allowBranchPaid?: boolean;
+    } = {},
   ): Promise<void> {
     const repo = manager.getRepository(OrderSettlement);
     const approvalIds = (scope.extraCostApprovalIds ?? []).map(String);
@@ -2369,14 +2403,15 @@ export class OrderLifecycleService {
       lock: { mode: 'pessimistic_write' },
     });
     if (
+      !scope.allowBranchPaid &&
       orderRows.some(
         (row) =>
           row?.market_paid_by_branch_at != null ||
           (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0,
       )
     ) {
-      this.badRequest(
-        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
+      this.rollbackStateChanged(
+        "Rollback holati o'zgargan (buyurtmaning market ulushi shu orada filial kassasidan to'langan) — qayta urinib ko'ring",
       );
     }
     await repo
@@ -2393,6 +2428,9 @@ export class OrderLifecycleService {
         courier_amount: 0,
         branch_amount: 0,
         market_amount: 0,
+        market_paid_by_branch_amount: 0,
+        market_paid_by_branch_at: null,
+        market_paid_by_branch_by: null,
         isDeleted: true,
       })
       .where(`order_id = :orderId AND (kind = :saleKind${extraCostRows})`, {
@@ -5884,133 +5922,73 @@ export class OrderLifecycleService {
     const rollbackTarget = String(dto?.target_status ?? 'waiting')
       .trim()
       .toLowerCase() as 'waiting' | 'cancelled' | 'cancelled_sent';
-    if (!['waiting', 'cancelled', 'cancelled_sent'].includes(rollbackTarget)) {
-      this.badRequest(
-        `Noto'g'ri rollback maqsadi: ${String(dto?.target_status ?? '')}`,
-      );
-    }
 
-    const isManagerRequester =
-      this.hasRole(requester, Roles.MANAGER) &&
-      !this.hasRole(requester, Roles.COURIER);
+    /**
+     * A-F9 — bir nechta rolli JWT: rol ustuvorligi eligibility bilan AYNAN
+     * (superadmin > kuryer > menejer). Quyidagi hamma tekshiruv shu bitta
+     * rol bilan (`effectiveRequester`).
+     */
+    const effectiveRole = effectiveRollbackRole({
+      roles: (requester.roles ?? []).map(String),
+    });
+    const effectiveRequester = {
+      ...requester,
+      roles: effectiveRole ? [effectiveRole] : [],
+    };
+    const isManagerRequester = effectiveRole === 'manager';
     const order = await this.findById(id);
     const originalStatus = order.status;
-    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
-    const isCourier = this.hasRole(requester, Roles.COURIER);
-    const isManager = this.hasRole(requester, Roles.MANAGER);
+    const isSuperAdmin = effectiveRole === 'superadmin';
+    const isCourier = effectiveRole === 'courier';
 
+    /**
+     * (2026-11-19, D1–D4) RUXSAT — BITTA MANBA: `evaluateRollbackEligibility`.
+     * Ro'yxat / tafsilotdagi `rollback.allowed` ham aynan shu funksiyadan
+     * (`evaluateRollbackForOrders`), shuning uchun tugma va endpoint hech
+     * qachon ajralmaydi. Kontekst `strict` — tashqi xizmat javob bermasa 503.
+     *
+     * Avvalgi tarqoq tekshiruvlar (rol / holat ro'yxatlari — RBAC-20,
+     * kuryer bekor posilkasi — LC-05, sotuv qaydi — RBAC-05, PARTLY_PAID —
+     * Audit P1, menejer filiali, HQ'ga yetgan qator, PR-C filial to'lagan
+     * qator, kuryer topshirgan pul — M6) shu funksiyaga ko'chirilgan.
+     */
+    // RX-1 — qaror o'qigan sotuv qatori (surat) shu yerga olinadi; keyin
+    // qayta O'QILMAYDI: tranzaksiyadagi qulf aynan shu surat bilan
+    // solishtiriladi (oradagi har qanday to'lov — STATE_CHANGED).
+    const decidedSales = new Map<string, OrderSettlement | null>();
+    const decidedDeferred = new Map<
+      string,
+      { approvals: OrderExtraCostApproval[]; extraRows: OrderSettlement[] }
+    >();
+    const rollbackContexts = await this.loadRollbackContexts(
+      [order],
+      requester,
+      { saleRows: decidedSales, deferredRows: decidedDeferred },
+    );
+    const rollbackDecision: RollbackEligibility = evaluateRollbackEligibility(
+      rollbackContexts.get(String(order.id)) as RollbackEligibilityContext,
+    );
+    if (!rollbackDecision.allowed) {
+      throw new RpcException({
+        statusCode: rollbackDecision.httpStatus ?? 400,
+        message: rollbackDecision.message,
+        code: rollbackDecision.code,
+      });
+    }
+    // A-F7 — maqsad tekshiruvi ruxsatdan KEYIN (ro'yxat maydoni maqsadsiz).
+    if (!['waiting', 'cancelled', 'cancelled_sent'].includes(rollbackTarget)) {
+      throw new RpcException({
+        statusCode: 400,
+        code: ORDER_ROLLBACK_ERROR_CODES.INVALID_TARGET,
+        message: `Noto'g'ri rollback maqsadi: ${String(dto?.target_status ?? '')}`,
+      });
+    }
     if (rollbackTarget === 'cancelled_sent' && !isCourier) {
-      this.badRequest(
-        'cancelled_sent rollback faqat courier uchun ruxsat etilgan',
-      );
-    }
-
-    if (
-      isCourier &&
-      ![Order_status.SOLD, Order_status.CANCELLED].includes(order.status)
-    ) {
-      this.badRequest(`Rollback mumkin emas (status: ${order.status})`);
-    }
-
-    if (
-      isSuperAdmin &&
-      ![
-        Order_status.SOLD,
-        Order_status.CANCELLED,
-        Order_status.CLOSED,
-        Order_status.PAID,
-        Order_status.PARTLY_PAID,
-      ].includes(order.status)
-    ) {
-      this.badRequest(`Rollback mumkin emas (status: ${order.status})`);
-    }
-
-    if (!isCourier && !isSuperAdmin && !isManager) {
-      this.badRequest('Rollback uchun ruxsat yo‘q');
-    }
-
-    // Reversing a PARTLY_PAID sale's cashbox legs is only implemented for
-    // superadmin (see `doSaleReversal` below). Letting a courier/manager roll a
-    // PARTLY_PAID order back to WAITING would flip the status WITHOUT reversing
-    // the already-credited market/courier/branch cash — a double-credit that is
-    // realised when the order is re-sold (Audit money P1). Enforce the same
-    // superadmin-only boundary at the permission layer.
-    if (originalStatus === Order_status.PARTLY_PAID && !isSuperAdmin) {
-      this.badRequest(
-        "Qisman to'langan buyurtmani faqat superadmin WAITING holatiga qaytara oladi",
-      );
-    }
-
-    /**
-     * MENEJER HAM FAQAT SOTILGAN / BEKOR QILINGAN BUYURTMANI QAYTARADI
-     * (audit RBAC-20). Ilgari status ro'yxati faqat kuryer va superadmin
-     * uchun bor edi: menejer API orqali CLOSED (tovar marketga qaytgan),
-     * RECEIVED yoki ON_THE_ROAD buyurtmani WAITING ga majburlay olardi —
-     * keyingi sotuv market qo'lidagi tovar uchun pul yozardi. UI ham
-     * rollbackni faqat shu ikki holatda ko'rsatadi.
-     */
-    if (
-      isManager &&
-      !isSuperAdmin &&
-      !isCourier &&
-      ![Order_status.SOLD, Order_status.CANCELLED].includes(order.status)
-    ) {
-      this.badRequest(`Rollback mumkin emas (status: ${order.status})`);
-    }
-
-    /**
-     * ⚠️ KURYER FAQAT O'Z QO'LIDAGI BEKOR BUYURTMANI TIKLAYDI (audit LC-05).
-     *
-     * Bekor qilingan buyurtma kuryerning eski yetkazish pochtasida (`post_id`
-     * hech qachon tozalanmaydi) qoladi, shuning uchun kuryer uni filial yoki
-     * HQ qabul qilib bo'lganidan keyin ham "Barchasi" tabida ko'rib,
-     * "Tiklash" bosa olardi. Natija: buyurtma WAITING bo'lib (holder HQ yoki
-     * filial qolgan holda) HQ/market bekor ro'yxati va QR topshirishdan
-     * chiqib ketardi, kuryerda esa "Sotish" tugmasi bilan qaytib chiqardi —
-     * HQ javonidagi tovar uchun kuryerga naqd qarz yozilardi. Endi kuryer
-     * faqat posilka hali o'zida turganda (holder = shu kuryer) tiklaydi.
-     */
-    if (isCourier && originalStatus === Order_status.CANCELLED) {
-      // `holder_courier_id` faqat holder = COURIER bo'lganda to'ldiriladi
-      // (`resolveHolderFromState`); filial/HQ/market holderida u null.
-      const holderType = String(order.holder_type ?? '').toUpperCase();
-      const holderCourierId = this.normalizeCourierId(order.holder_courier_id);
-      const heldByRequester =
-        (!holderType || holderType === String(OrderHolderType.COURIER)) &&
-        Boolean(holderCourierId) &&
-        holderCourierId === String(requester.id ?? '').trim();
-      if (!heldByRequester) {
-        this.badRequest(
-          "Topshirilgan bekor buyurtmani qaytarib bo'lmaydi — posilka endi " +
-            "filial yoki HQ qo'lida",
-        );
-      }
-    }
-
-    /**
-     * ⚠️ SOTUV QAYDISIZ "SOTILGAN" BUYURTMA ROLLBACK QILINMAYDI (RBAC-05,
-     * himoya chuqurligi).
-     *
-     * Har haqiqiy sotuv (`sellOrder`, `partlySellOrder`, kargo
-     * `markByProvider`) `sold_at` ni yozadi, PATCH va yaratish DTO'lari esa
-     * uni bera olmaydi. `sold_at` siz SOLD/PAID/PARTLY_PAID — sotish amalidan
-     * o'tmagan (masalan to'g'ridan-to'g'ri `status:'sold'` bilan yaratilgan
-     * yoki PATCH qilingan) buyurtma: uning kassa oyoqlari umuman YOZILMAGAN.
-     * Rollback esa `sale_collectible_amount` bo'lmasa `total_price` bo'yicha
-     * teskari oyoqlarni yozardi — market va filial/kuryer kassasiga hech
-     * qachon kirmagan pul uchun CHIQIM (filialda "yo'qolgan" naqd, kuryerning
-     * qarzi esa o'chib ketardi).
-     */
-    if (
-      [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(
-        originalStatus,
-      ) &&
-      !String(order.sold_at ?? '').trim()
-    ) {
-      this.badRequest(
-        "Bu buyurtma sotish amali orqali sotilmagan (sotuv vaqti yo'q) — " +
-          'rollback kassaga teskari yozuv qila olmaydi. Superadminga murojaat qiling',
-      );
+      throw new RpcException({
+        statusCode: 400,
+        code: ORDER_ROLLBACK_ERROR_CODES.INVALID_TARGET,
+        message: 'cancelled_sent rollback faqat courier uchun ruxsat etilgan',
+      });
     }
 
     // Merge note (dev↔shodiyor): post is optional (a manager can roll back an
@@ -6025,89 +6003,53 @@ export class OrderLifecycleService {
       : { data: undefined };
     const post = rollbackPostRes?.data;
 
-    if (isManager && !isSuperAdmin) {
-      const requesterBranchId = String(requester?.branch_id ?? '').trim();
-      const orderHolderBranchId = String(order?.holder_branch_id ?? '').trim();
-      const orderBranchId = String(order?.branch_id ?? '').trim();
-      if (
-        !requesterBranchId ||
-        (requesterBranchId !== orderHolderBranchId &&
-          requesterBranchId !== orderBranchId)
-      ) {
-        this.badRequest('Buyurtma bu menejer filialiga biriktirilmagan');
-      }
-    }
-
-    // Settlement-aware guard: a branch/courier may roll back only while the
-    // order's COD has NOT yet reached HQ. Once branch→HQ is settled the money
-    // has moved up the chain and the order must not be reverted here.
-    // (SPEC v2) Faqat SOTUV qatori (`kind = 'sale'`) — kechiktirilgan E ning
-    // market qatori ataylab BRANCH_SETTLED dan boshlanadi, u «HQ'ga yetgan»
-    // degani emas.
-    const existingSettlement = await this.orderSettlementRepo.findOne({
-      where: { order_id: String(id), isDeleted: false, kind: 'sale' },
-    });
-    if (existingSettlement && this.isSettledToHq(existingSettlement.status)) {
-      this.badRequest(
-        "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
+    // (SPEC v2) Faqat SOTUV qatori (`kind = 'sale'`) — RX-1: qaror surati
+    // (ikkinchi o'qish yo'q; post lookup oynasidagi to'lov suratni
+    // o'zgartirmaydi, tranzaksiyadagi qulf farqni ko'radi).
+    if (!decidedSales.has(String(order.id))) {
+      this.rollbackStateChanged(
+        "Rollback holati o'zgargan (hisob-kitob qatori o'qilmadi) — qayta urinib ko'ring",
       );
     }
-    // 63HO6cBU (PR-C) — market ulushini filial o'z kassasidan to'lagan qator:
-    // pul marketga ketgan, buyurtmani qaytarish daftarni buzadi.
-    if (
-      existingSettlement?.market_paid_by_branch_at ||
-      (Number(existingSettlement?.market_paid_by_branch_amount ?? 0) || 0) !== 0
-    ) {
-      this.badRequest(
-        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
-      );
-    }
+    const existingSettlement = decidedSales.get(String(order.id)) ?? null;
     /**
-     * Kuryer pulni filialga topshirgan qator (audit M6) — `isCourierRemittedSettlement`
-     * izohiga qarang. Kuryer va menejer uchun YOPIQ (avvalgidek).
-     *
-     * fix3b — SUPERADMIN tuzatish roli (hujjat: rollback chegarasi HQ —
-     * "HQ'ga yetgach taqiqlanadi"; HQ'ga yetgan qator yuqorida hamma uchun
-     * yopiq qoladi). Superadmin qaytarganda kuryer topshirgan summa
-     * yo'qolmaydi: tranzaksiya ichida, `runFifoSettlement` dagi AYNI qoldiq
-     * qulfi ostida qatorning `courier_amount` i kuryerning `courier_to_branch`
-     * qoldig'iga qo'shiladi — u kuryerning KEYINGI topshirig'iga kredit
-     * bo'ladi. So'ng oyoqlar kutilayotgan (PENDING) sotuvdagidek teskari
-     * yoziladi. Xavfsiz bo'lmagan holatlar (manfiy/kredit qator, filialsiz
-     * yoki HQ qatori, kuryer boshqa filialga o'tgan, qoldiq jadvali yo'q,
-     * snapshot mos emas) aniq xabar bilan rad etiladi.
+     * Daftar yo'li (`rollbackDecision.path`):
+     *  • `courier_remitted` — M6 / D1 (superadmin yoki menejer): kuryer
+     *    topshirgan summa uning `courier_to_branch` qoldig'iga kredit
+     *    (`creditRemittedCourierCarry`);
+     *  • `settled` — D2 (faqat superadmin): HQ'ga o'tgan / market to'langan /
+     *    filial marketga to'lagan qator — kuryerga kredit, filialga kredit
+     *    (`branch_to_hq`), marketga debet (`hq_to_market`, manfiy qoldiq)
+     *    (`creditSettledRollbackLedger`). Naqd ko'chmaydi.
+     * Qolgan shartlar (manfiy / filialsiz / HQ qatori, kuryer boshqa
+     * filialda, snapshot mos emas) eligibility'da tekshirilgan; kredit
+     * tayyorlash pastda yana bir bor (qulfdan oldin) tekshiradi.
      */
-    /**
-     * (SPEC v2 §5) Tasdiqlangan kechiktirilgan E: uning hisob-kitob qatorlari
-     * (`extra_cost_chain` / `extra_cost_market`) qanday qaytarilishi —
-     * `planDeferredExtraCostRows`: boshlang'ich holatidagisi o'chiriladi;
-     * boshqa buyurtma HQ→market FIFO'si ishlatgan market qatori joyida
-     * qoladi, o'rniga +E kompensatsiya; superadmin yo'lida sotuv qatori
-     * bilan birga topshirilgan zanjir qatori fix3b kabi qaytariladi; zanjir
-     * krediti boshqa buyurtma topshirig'ida ishlatilgan bo'lsa — 400 (aks
-     * holda kuryer / filial daftari E ga buzilardi). Teskari yozish egasi —
-     * snapshot (bugungi E qayerga yozilgan bo'lsa). Kutilayotgan (pending)
-     * so'rov — faqat `void`, pul yo'q (`extra_cost` 0).
-     */
-    if (isCourierRemittedSettlement(existingSettlement) && !isSuperAdmin) {
-      this.badRequest(
-        "Kuryer bu buyurtma pulini filialga topshirib bo'lgan — rollback " +
-          'mumkin emas, aks holda kuryer hisob-kitobi buziladi. ' +
-          'Tuzatishni faqat superadmin qila oladi',
-      );
-    }
-    // Bu yerga faqat superadmin yetadi (yuqoridagi to'siq).
-    const remittedSale = isCourierRemittedSettlement(existingSettlement)
-      ? existingSettlement
-      : null;
+    // WX-7 — `existingSettlement` aynan qaror surati (RX-1): avvalgi
+    // «status qarordagidan farq qiladimi» tekshiruvi tavtologiya edi, olib
+    // tashlandi. Oradagi o'zgarish tranzaksiyadagi qulfda ushlanadi.
+    const rollbackPath = rollbackDecision.path;
+    const remittedSale =
+      rollbackPath === 'courier_remitted' ? existingSettlement : null;
+    const settledSale = rollbackPath === 'settled' ? existingSettlement : null;
     const deferredRollback = await this.loadDeferredExtraCostRollbackState(
       order,
       remittedSale,
+      decidedDeferred.get(String(order.id)) ?? null,
     );
     let remittedCourierCredit: RemittedCourierCredit | null = null;
-    if (remittedSale) {
-      remittedCourierCredit =
-        await this.prepareRemittedCourierCredit(remittedSale);
+    const creditSale =
+      remittedSale ??
+      (settledSale &&
+      this.normalizeCourierId(settledSale.courier_id) &&
+      (Number(settledSale.courier_amount ?? 0) || 0) !== 0
+        ? settledSale
+        : null);
+    if (creditSale) {
+      remittedCourierCredit = await this.prepareRemittedCourierCredit(
+        creditSale,
+        isSuperAdmin,
+      );
       const remittedChainAmount = deferredRollback.plan.remittedChainRows
         .map((row) => Number(row.courier_amount) || 0)
         .reduce((sum, amount) => sum + amount, 0);
@@ -6116,8 +6058,29 @@ export class OrderLifecycleService {
           toTiyin(remittedChainAmount) / 100;
       }
     }
+    const settledLedger = settledSale
+      ? this.planSettledRollbackLedger(settledSale)
+      : null;
 
-    const courierId = this.resolveActorCourierId(requester, order, post);
+    // Superadmin + sotuv qatori bor: teskari oyoqlar qatordan olinadi
+    // (`resolveRollbackReversalActor`) — kuryersiz (menejer / filial sotgan)
+    // buyurtma ham ochiq (D2). Qatorsiz eski buyurtmada avvalgidek kuryer.
+    // A-F6 — pul oyog'i yo'q bekor buyurtma (sotuv emas, xarajat yo'q) ham.
+    const noMoneyLeg =
+      ![
+        Order_status.SOLD,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+      ].includes(originalStatus) && !(Number(order.extra_cost ?? 0) > 0);
+    const saCourierless =
+      isSuperAdmin &&
+      (Boolean(existingSettlement) || noMoneyLeg) &&
+      !this.normalizeCourierId(post?.courier_id) &&
+      !this.normalizeCourierId(order.holder_courier_id) &&
+      !this.normalizeCourierId(order.courier_id);
+    const courierId = saCourierless
+      ? String(requester.id)
+      : this.resolveActorCourierId(effectiveRequester, order, post);
     if (!courierId) {
       this.notFound('Kuryer topilmadi');
     }
@@ -6137,28 +6100,44 @@ export class OrderLifecycleService {
     const reversalActor = resolveRollbackReversalActor({
       settlement: existingSettlement,
       legacy: {
-        isManagerRequester,
+        // A-F6 — kuryersiz, pul oyog'i yo'q bekor buyurtma (superadmin):
+        // kuryer oyog'i ham, xarajat egasi ham yo'q.
+        isManagerRequester: isManagerRequester || saCourierless,
         courierId,
-        requesterBranchId: requester.branch_id ?? null,
+        requesterBranchId: saCourierless ? null : (requester.branch_id ?? null),
       },
     });
     const saleCourierId = reversalActor.saleCourierId;
 
+    // RX-3 — qat'iy: identity javob bermasa 503 (ro'yxat maydoni «ruxsat»
+    // degan, endpoint esa kodsiz 404 «Market topilmadi» bergan bo'lardi).
     const [market, financialActor] = await Promise.all([
       this.lookup
-        .getMarketsByIds([String(order.market_id)])
+        .getMarketsByIds([String(order.market_id)], { strict: true })
         .then((rows) => rows[0]),
       // hEjjuJaT: super-kuryer — buyurtma viloyati tarifi (snapshot bo'lmasa).
       saleCourierId
         ? this.lookup
-            .getCouriersByIds([saleCourierId], { region_id: order.region_id })
+            .getCouriersByIds([saleCourierId], {
+              region_id: order.region_id,
+              strict: true,
+            })
             .then((rows) => rows[0])
-        : isManagerRequester
-          ? this.lookup.getUserById(String(requester.id))
+        : isManagerRequester || saCourierless
+          ? this.lookup.getUserByIdStrict(String(requester.id))
           : this.lookup
-              .getCouriersByIds([courierId], { region_id: order.region_id })
+              .getCouriersByIds([courierId], {
+                region_id: order.region_id,
+                strict: true,
+              })
               .then((rows) => rows[0]),
-    ]);
+    ]).catch(() => {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Market yoki kuryer ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    });
     if (!market) {
       this.notFound('Market topilmadi');
     }
@@ -6171,14 +6150,9 @@ export class OrderLifecycleService {
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
-      this.lookup.getCashboxByUser(
-        String(order.market_id),
-        Cashbox_type.FOR_MARKET,
-      ),
+      this.rollbackCashbox(String(order.market_id), Cashbox_type.FOR_MARKET),
       saleCourierId
-        ? this.lookup
-            .getCashboxByUser(saleCourierId, Cashbox_type.FOR_COURIER)
-            .catch(() => null)
+        ? this.rollbackCashbox(saleCourierId, Cashbox_type.FOR_COURIER)
         : Promise.resolve(null),
     ]);
     if (!marketCashbox) {
@@ -6258,12 +6232,10 @@ export class OrderLifecycleService {
       : extraCostParty.cashbox_type === Cashbox_type.FOR_COURIER &&
           extraCostParty.user_id === saleCourierId
         ? courierCashbox
-        : await this.lookup
-            .getCashboxByUser(
-              extraCostParty.user_id,
-              extraCostParty.cashbox_type,
-            )
-            .catch(() => null);
+        : await this.rollbackCashbox(
+            extraCostParty.user_id,
+            extraCostParty.cashbox_type,
+          );
     if (extraCostParty && !extraCostPartyCashbox) {
       // Jimgina o'tkazib yuborilmaydi: aks holda settlement qatori o'chib,
       // xarajat egasi kassasida −E daftarsiz qolardi.
@@ -6313,12 +6285,10 @@ export class OrderLifecycleService {
             extraCostParty.user_id === saleMarketPaidParty.user_id &&
             extraCostParty.cashbox_type === saleMarketPaidParty.cashbox_type
           ? extraCostPartyCashbox
-          : await this.lookup
-              .getCashboxByUser(
-                saleMarketPaidParty.user_id,
-                saleMarketPaidParty.cashbox_type,
-              )
-              .catch(() => null);
+          : await this.rollbackCashbox(
+              saleMarketPaidParty.user_id,
+              saleMarketPaidParty.cashbox_type,
+            );
     if (saleMarketPaidParty && !saleMarketPaidPartyCashbox) {
       this.notFound(
         saleMarketPaidParty.cashbox_type === Cashbox_type.BRANCH
@@ -6412,9 +6382,30 @@ export class OrderLifecycleService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!locked || locked.status !== originalStatus) {
-        this.badRequest(
-          `Rollback holati o'zgargan (status: ${locked?.status ?? "yo'q"})`,
+        this.rollbackStateChanged(
+          `Rollback holati o'zgargan (status shu orada: ${locked?.status ?? "yo'q"}) — qayta urinib ko'ring`,
         );
+      }
+      /**
+       * B-2 — oddiy yo'l (pul kuryerda / sotuv qatori yo'q): qaror
+       * tranzaksiyadan OLDIN qilingan; shu orada kuryer to'lovi qatorni
+       * COURIER_SETTLED, filial → HQ to'lovi BRANCH_SETTLED qilgan bo'lsa,
+       * qator kreditsiz o'chib, pul daftardan yo'qolardi. Sotuv qatori shu
+       * yerda FOR UPDATE (FIFO bilan bir xil: qatorni olib, qoldiqqa
+       * tegmaymiz — sikl yo'q) va qaror suratiga solishtiriladi. Kredit
+       * yo'llari (M6 / D2) o'z funksiyalarida qoldiq qulfidan keyin
+       * tekshiradi.
+       */
+      if (rollbackPath === 'plain') {
+        const lockedSale = await tx.getRepository(OrderSettlement).findOne({
+          where: { order_id: String(order.id), isDeleted: false, kind: 'sale' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!this.sameSaleSnapshot(existingSettlement, lockedSale)) {
+          this.rollbackStateChanged(
+            "Rollback holati o'zgargan (shu orada to'lov hisob-kitob qatorini o'zgartirdi) — qayta urinib ko'ring",
+          );
+        }
       }
       /**
        * (SPEC v2 §5) Kechiktirilgan E tasdig'i buyurtma QULFI ostida
@@ -6427,8 +6418,8 @@ export class OrderLifecycleService {
         Math.max(Number(locked.extra_cost ?? 0) || 0, 0) !==
         Math.max(Number(order.extra_cost ?? 0) || 0, 0)
       ) {
-        this.badRequest(
-          "Rollback holati o'zgargan (qo'shimcha xarajat shu orada tasdiqlandi) — qaytadan urinib ko'ring",
+        this.rollbackStateChanged(
+          "Rollback holati o'zgargan (qo'shimcha xarajat shu orada tasdiqlandi) — qayta urinib ko'ring",
         );
       }
       if (deferredRollback.approvals.length) {
@@ -6458,7 +6449,16 @@ export class OrderLifecycleService {
 
       // fix3b (M6): superadmin kredit yo'li — qoldiq QULFI ostida, oyoqlardan
       // OLDIN (qator qayta tekshiriladi; o'zgargan bo'lsa hech narsa yozilmaydi).
-      if (remittedCourierCredit) {
+      if (settledLedger) {
+        // D2 (superadmin): HQ'ga o'tgan / market to'langan / filial marketga
+        // to'lagan qator — kuryer + filial kredit, market debet (qulf ostida).
+        await this.creditSettledRollbackLedger(
+          tx,
+          String(order.id),
+          settledLedger,
+          remittedCourierCredit,
+        );
+      } else if (remittedCourierCredit) {
         await this.creditRemittedCourierCarry(
           tx,
           String(order.id),
@@ -6619,9 +6619,7 @@ export class OrderLifecycleService {
           await this.lookup.ensureBranchCashbox(rbBranchId);
         }
         const rbBranchCashbox = rbBranchId
-          ? await this.lookup
-              .getCashboxByUser(rbBranchId, Cashbox_type.BRANCH)
-              .catch(() => null)
+          ? await this.rollbackCashbox(rbBranchId, Cashbox_type.BRANCH)
           : null;
 
         // market leg (reverse)
@@ -6710,6 +6708,8 @@ export class OrderLifecycleService {
       // The order is being reverted out of its sold state — clear its settlement
       // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
       await this.resetSettlementOnRollback(tx, id, {
+        // D2 — filial to'lagan qator daftarda yuqorida teskari yozildi.
+        allowBranchPaid: Boolean(settledLedger),
         extraCostApprovalIds: deferredRollback.approvals.map((row) =>
           String(row.id),
         ),
@@ -6909,6 +6909,18 @@ export class OrderLifecycleService {
               courier_credit_branch_id: remittedCourierCredit.branchId,
             }
           : {}),
+        // D2 — superadmin: filialga kredit va marketga debet (daftar).
+        ...(settledLedger
+          ? {
+              settled_rollback: {
+                settlement_status: settledLedger.status,
+                branch_id: settledLedger.branchId,
+                branch_credit: settledLedger.branchCredit,
+                market_id: settledLedger.marketId,
+                market_debit: settledLedger.marketDebit,
+              },
+            }
+          : {}),
       },
     });
 
@@ -6935,10 +6947,17 @@ export class OrderLifecycleService {
     }
 
     // fix3b (M6): superadmin tuzatishida kuryer krediti haqida aniq xabar.
-    const courierCreditNote = remittedCourierCredit
-      ? `. Kuryer filialga topshirgan ${remittedCarryCredit(remittedCourierCredit)} so'm ` +
-        "uning keyingi topshirig'iga hisoblanadi"
-      : '';
+    const courierCreditNote =
+      (remittedCourierCredit
+        ? `. Kuryer filialga topshirgan ${remittedCarryCredit(remittedCourierCredit)} so'm ` +
+          "uning keyingi topshirig'iga hisoblanadi"
+        : '') +
+      (settledLedger && settledLedger.branchCredit > 0
+        ? `. Filialga ${settledLedger.branchCredit} so'm keyingi HQ topshirig'iga hisoblanadi`
+        : '') +
+      (settledLedger && settledLedger.marketDebit > 0
+        ? `. Market ${settledLedger.marketDebit} so'm oldindan olgan — keyingi to'lovidan ayiriladi`
+        : '');
     if (rollbackTarget === 'cancelled') {
       return successRes(
         {},
@@ -6974,6 +6993,742 @@ export class OrderLifecycleService {
    * (oddiy rollback avvalgidek, ortiqcha so'rovsiz).
    * Qatorni xavfsiz qaytarib bo'lmasa — 400 (aniq sabab bilan).
    */
+  /**
+   * Rollback ruxsati — kontekstni PARTIYA bilan yig'ish (ro'yxat ham,
+   * endpoint ham shu yo'ldan): har turdagi ma'lumot uchun BITTA so'rov
+   * (hisob-kitob qatorlari, E tasdiqlari, pochtalar, kuryerlar filiali, HQ
+   * id si, menejer huquqi) — N+1 yo'q.
+   *
+   * `strict` (endpoint) — tashqi xizmat javob bermasa 503 (ruxsatni
+   * taxmin qilmaymiz); ro'yxatda esa yutiladi (natija «ruxsat yo'q» tomonga).
+   */
+  async loadRollbackContexts(
+    orders: Array<
+      Pick<
+        Order,
+        | 'id'
+        | 'status'
+        | 'sold_at'
+        | 'holder_type'
+        | 'holder_branch_id'
+        | 'holder_courier_id'
+        | 'branch_id'
+        | 'courier_id'
+        | 'post_id'
+        | 'extra_cost'
+        | 'sale_collectible_amount'
+        | 'total_price'
+        | 'courier_share'
+        | 'courier_tariff'
+        | 'where_deliver'
+        | 'region_id'
+        | 'sale_market_paid_amount'
+        | 'canceled_post_id'
+        | 'market_id'
+      >
+    >,
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
+    opts: {
+      /** RX-1 — 2-bosqich o'qigan sotuv qatorlari (qaror surati). */
+      saleRows?: Map<string, OrderSettlement | null>;
+      /** WX-1 — qaror o'qigan kechiktirilgan E tasdiqlari va qatorlari. */
+      deferredRows?: Map<
+        string,
+        { approvals: OrderExtraCostApproval[]; extraRows: OrderSettlement[] }
+      >;
+    } = {},
+  ): Promise<Map<string, RollbackEligibilityContext>> {
+    /**
+     * A-F3 — har doim qat'iy: tashqi xizmat javob bermasa 503 (ruxsatni
+     * taxmin qilmaymiz). Ro'yxatda gateway xatoni `rollback: null`
+     * (noma'lum) ga aylantiradi — soxta «ruxsat yo'q» chiqmaydi.
+     */
+    const result = new Map<string, RollbackEligibilityContext>();
+    if (!orders.length) return result;
+    // A-F9 — rol ustuvorligi evaluator va endpoint bilan AYNI.
+    const role = effectiveRollbackRole({
+      roles: (requester.roles ?? []).map(String),
+    });
+    const isSuperAdmin = role === 'superadmin';
+    const isCourier = role === 'courier';
+    const isManager = role === 'manager';
+    const unavailable = (message: string): never => {
+      throw new RpcException({ statusCode: 503, message });
+    };
+
+    const single = orders.length === 1;
+    const branchOf = async (
+      courierIds: Set<string>,
+    ): Promise<Map<string, string | null>> => {
+      const out = new Map<string, string | null>();
+      if (!courierIds.size) return out;
+      try {
+        if (single) {
+          // Bitta buyurtma — ko'pi bilan 2 kuryer; M6 dagi AYNI so'rov.
+          for (const courierId of courierIds) {
+            const assignment =
+              await this.lookup.getBranchAssignmentByUserStrict(courierId);
+            const branchId = String(assignment?.branch_id ?? '').trim();
+            out.set(courierId, branchId || null);
+          }
+          return out;
+        }
+        return await this.lookup.getBranchIdsByUserIds([...courierIds], {
+          strict: true,
+        });
+      } catch {
+        throw new RpcException({
+          statusCode: 503,
+          message:
+            "Kuryer filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        });
+      }
+    };
+
+    // ── 1-bosqich: aktor va buyurtma (hisob-kitob o'qilmaydi) ──────────────
+    // Menejer huquqi (D3) — sotish / bekor qilish bilan bir xil manba
+    // (`getUserById`); A-F4 — 404 → huquq yo'q, transport xatosi → 503.
+    let canSellCancel: boolean | null = null;
+    if (isManager) {
+      let user: { can_sell_cancel?: boolean | null } | null = null;
+      try {
+        user = await this.lookup.getUserByIdStrict(String(requester.id));
+      } catch {
+        unavailable(
+          "Foydalanuvchi huquqini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
+      }
+      canSellCancel = user?.can_sell_cancel === true;
+    }
+
+    // Pochta kuryeri (kuryer — biriktirilganlik; superadmin — kuryer bormi).
+    const postCourier = new Map<string, string | null>();
+    const postIds =
+      isCourier || isSuperAdmin
+        ? [
+            ...new Set(
+              orders
+                .map((order) => String(order.post_id ?? '').trim())
+                .filter(Boolean),
+            ),
+          ]
+        : [];
+    if (postIds.length) {
+      let posts: Array<{ id?: string; courier_id?: string | null }> = [];
+      try {
+        if (postIds.length === 1) {
+          const one = await rmqSend<{
+            data?: { id?: string; courier_id?: string | null };
+          }>(
+            this.logisticsClient,
+            { cmd: 'logistics.post.find_by_id' },
+            { id: postIds[0] },
+          );
+          posts = one?.data ? [{ ...one.data, id: postIds[0] }] : [];
+        } else {
+          const many = await rmqSend<{
+            data?: Array<{ id?: string; courier_id?: string | null }>;
+          }>(
+            this.logisticsClient,
+            { cmd: 'logistics.post.find_by_ids' },
+            { ids: postIds },
+          );
+          posts = Array.isArray(many?.data) ? many.data : [];
+        }
+      } catch {
+        unavailable(
+          "Pochta ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
+      }
+      for (const post of posts) {
+        postCourier.set(
+          String(post?.id ?? ''),
+          this.normalizeCourierId(post?.courier_id) || null,
+        );
+      }
+    }
+
+    // D4 (menejer, bekor) — posilka egasi kuryerning filiali.
+    const holderCouriers = new Set<string>();
+    if (isManager) {
+      for (const order of orders) {
+        if (order.status !== Order_status.CANCELLED) continue;
+        const holder = this.normalizeCourierId(order.holder_courier_id);
+        if (holder) holderCouriers.add(holder);
+      }
+    }
+    const holderBranch = await branchOf(holderCouriers);
+
+    const buildContext = (
+      order: (typeof orders)[number],
+      extra: Partial<RollbackEligibilityContext> = {},
+    ): RollbackEligibilityContext => ({
+      actor: {
+        id: String(requester.id ?? ''),
+        roles: (requester.roles ?? []).map(String),
+        branch_id: requester.branch_id ? String(requester.branch_id) : null,
+        can_sell_cancel: canSellCancel,
+      },
+      order: {
+        status: String(order.status),
+        sold_at: order.sold_at ?? null,
+        holder_type: order.holder_type ?? null,
+        holder_branch_id: order.holder_branch_id ?? null,
+        holder_courier_id: order.holder_courier_id ?? null,
+        branch_id: order.branch_id ?? null,
+        courier_id: order.courier_id ?? null,
+        canceled_post_id: order.canceled_post_id ?? null,
+        extra_cost: order.extra_cost ?? null,
+      },
+      postCourierId: order.post_id
+        ? (postCourier.get(String(order.post_id)) ?? null)
+        : null,
+      sale: null,
+      holderCourierBranchId:
+        holderBranch.get(this.normalizeCourierId(order.holder_courier_id)) ??
+        null,
+      saleCourierBranchId: null,
+      hqBranchId: null,
+      carryTablePresent: true,
+      ledgerMismatch: null,
+      settlementLoaded: false,
+      ...extra,
+    });
+
+    // Hisob-kitobsiz qarorda rad etilganlar — qolgan o'qishlar kerak emas
+    // (bosqich 5 faqat ruxsatni toraytiradi).
+    const pending = orders.filter((order) => {
+      const ctx = buildContext(order);
+      if (!evaluateRollbackEligibility(ctx).allowed) {
+        result.set(String(order.id), ctx);
+        return false;
+      }
+      return true;
+    });
+    if (!pending.length) return result;
+    const pendingIds = pending.map((order) => String(order.id));
+
+    // WX-6 — identity (market / kuryer) javob bermasa endpoint 503 beradi;
+    // ro'yxat maydoni ham «ruxsat» demasin: sahifaga bitta qat'iy probe.
+    const marketIds = [
+      ...new Set(
+        pending
+          .map((order) => String(order.market_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (marketIds.length) {
+      try {
+        await this.lookup.getMarketsByIds(marketIds, { strict: true });
+      } catch {
+        unavailable(
+          "Market ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
+      }
+    }
+
+    // ── 2-bosqich: hisob-kitob va daftar (faqat o'tganlar uchun) ───────────
+    const onlyOne = pending.length === 1;
+    const rows: OrderSettlement[] = onlyOne
+      ? await this.orderSettlementRepo
+          .findOne({
+            where: { order_id: pendingIds[0], isDeleted: false, kind: 'sale' },
+          })
+          .then((row) => (row ? [row] : []))
+      : await this.orderSettlementRepo.find({
+          where: { order_id: In(pendingIds), isDeleted: false },
+        });
+    const saleByOrder = new Map<string, OrderSettlement>();
+    for (const row of rows ?? []) {
+      if (row.kind === 'sale' || (onlyOne && !row.kind)) {
+        saleByOrder.set(String(row.order_id ?? pendingIds[0]), row);
+      }
+    }
+    for (const orderId of pendingIds) {
+      opts.saleRows?.set(orderId, saleByOrder.get(orderId) ?? null);
+    }
+
+    const extraOrderIds = pending
+      .filter((order) => Number(order.extra_cost ?? 0) > 0)
+      .map((order) => String(order.id));
+    const approvals = extraOrderIds.length
+      ? await this.extraCostApprovalRepo.find({
+          where: {
+            order_id: In(extraOrderIds),
+            status: 'approved',
+            mode: 'deferred',
+            isDeleted: false,
+          },
+          order: { id: 'ASC' },
+        })
+      : [];
+    const approvalsByOrder = new Map<string, OrderExtraCostApproval[]>();
+    for (const approval of approvals ?? []) {
+      const key = String(approval.order_id ?? pendingIds[0]);
+      approvalsByOrder.set(key, [
+        ...(approvalsByOrder.get(key) ?? []),
+        approval,
+      ]);
+    }
+    // Bitta buyurtma: E qatorlari (sotuv qatoridan tashqari) alohida.
+    const extraSettlementRows: OrderSettlement[] =
+      onlyOne && approvals?.length
+        ? await this.orderSettlementRepo.find({
+            where: {
+              order_id: pendingIds[0],
+              isDeleted: false,
+              extra_cost_approval_id: In(
+                approvals.map((row) => String(row.id)),
+              ),
+            },
+          })
+        : [];
+
+    // D1 / D2 — kuryer krediti: sotuv kuryerining hozirgi filiali, HQ, jadval.
+    const creditsCourierOf = (sale: OrderSettlement | null): boolean =>
+      !isCourier &&
+      Boolean(sale) &&
+      Boolean(this.normalizeCourierId(sale?.courier_id)) &&
+      (isRemittedSale(sale) ||
+        sale?.status === SettlementStatus.BRANCH_SETTLED ||
+        sale?.status === SettlementStatus.MARKET_SETTLED ||
+        Boolean(sale?.market_paid_by_branch_at) ||
+        (Number(sale?.market_paid_by_branch_amount ?? 0) || 0) !== 0);
+    const saleCouriers = new Set<string>();
+    for (const orderId of pendingIds) {
+      const sale = saleByOrder.get(orderId) ?? null;
+      if (creditsCourierOf(sale)) {
+        saleCouriers.add(this.normalizeCourierId(sale?.courier_id));
+      }
+    }
+    const saleBranch = await branchOf(saleCouriers);
+    let hqBranchId: string | null = null;
+    let carryTablePresent = true;
+    if (saleCouriers.size) {
+      hqBranchId =
+        String((await this.lookup.getHqBranchId()) ?? '').trim() || null;
+      if (!hqBranchId) {
+        unavailable(
+          "Bosh ofis filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        );
+      }
+      carryTablePresent = await this.isSettlementCarryTablePresent();
+    }
+
+    // A-F8 — kuryerning hozirgi `courier_to_branch` qoldig'i (boshqa filialga
+    // tegishli musbat qoldiq bo'lsa kredit yozilmaydi — endpoint bilan AYNI).
+    const courierCarry = new Map<
+      string,
+      { branchId: string | null; amount: number }
+    >();
+    if (saleCouriers.size && carryTablePresent) {
+      const carries = await this.dataSource
+        .getRepository(OrderSettlementCarry)
+        .find({
+          where: {
+            level: 'courier_to_branch',
+            party_id: In([...saleCouriers]),
+          },
+        });
+      for (const carry of carries ?? []) {
+        courierCarry.set(String(carry.party_id), {
+          branchId: carry.branch_id ? String(carry.branch_id) : null,
+          amount: Number(carry.amount ?? 0) || 0,
+        });
+      }
+    }
+
+    // B-3 — migratsiya 246 konvertatsiyasi izidagi qatorlar.
+    const convertedSaleIds = await this.convertedSettlementIds246(
+      [...saleByOrder.values()].map((row) => String(row.id)),
+    );
+
+    // A-F5 — snapshot'siz (courier_share NULL) tariflar: viloyat bo'yicha
+    // bitta so'rov. Allaqachon rad etilganlar uchun hisoblanmaydi.
+    const preContext = (order: (typeof pending)[number]) => {
+      const orderId = String(order.id);
+      const sale = saleByOrder.get(orderId) ?? null;
+      const saleCourier = this.normalizeCourierId(sale?.courier_id);
+      const carry = saleCourier ? courierCarry.get(saleCourier) : undefined;
+      return buildContext(order, {
+        sale: sale
+          ? {
+              status: String(sale.status),
+              courier_id: sale.courier_id ?? null,
+              branch_id: sale.branch_id ?? null,
+              courier_amount: sale.courier_amount,
+              market_paid_by_branch_at: sale.market_paid_by_branch_at ?? null,
+              market_paid_by_branch_amount: sale.market_paid_by_branch_amount,
+            }
+          : null,
+        saleCourierBranchId: saleCourier
+          ? (saleBranch.get(saleCourier) ?? null)
+          : null,
+        saleCourierCarryBranchId: carry?.branchId ?? null,
+        saleCourierCarryAmount: carry?.amount ?? 0,
+        conversionTraced: sale ? convertedSaleIds.has(String(sale.id)) : false,
+        hqBranchId,
+        carryTablePresent,
+        ledgerMismatch: null,
+        settlementLoaded: true,
+      });
+    };
+    const contextsBeforeLedger = new Map(
+      pending.map((order) => [String(order.id), preContext(order)]),
+    );
+    const needsLedger = pending.filter(
+      (order) =>
+        evaluateRollbackEligibility(contextsBeforeLedger.get(String(order.id))!)
+          .allowed,
+    );
+    const tariffs = await this.rollbackCourierTariffs(
+      needsLedger.filter((order) => {
+        const sale = saleByOrder.get(String(order.id)) ?? null;
+        return order.courier_share == null && creditsCourierOf(sale);
+      }),
+      saleByOrder,
+    );
+
+    for (const order of pending) {
+      const orderId = String(order.id);
+      const ctxBefore = contextsBeforeLedger.get(orderId)!;
+      if (!needsLedger.includes(order)) {
+        result.set(orderId, ctxBefore);
+        continue;
+      }
+      const sale = saleByOrder.get(orderId) ?? null;
+      const orderApprovals = approvalsByOrder.get(orderId) ?? [];
+      const extraRows = orderApprovals.length
+        ? (onlyOne ? extraSettlementRows : (rows ?? [])).filter(
+            (row) =>
+              (onlyOne || String(row.order_id) === orderId) &&
+              orderApprovals.some(
+                (approval) =>
+                  String(approval.id) ===
+                  String(row.extra_cost_approval_id ?? ''),
+              ),
+          )
+        : [];
+      opts.deferredRows?.set(orderId, { approvals: orderApprovals, extraRows });
+      const creditsCourier = creditsCourierOf(sale);
+      const ledgerMismatch = this.rollbackLedgerMismatch({
+        order,
+        sale,
+        approvals: orderApprovals,
+        extraRows,
+        isSuperAdmin,
+        creditsCourier,
+        courierTariff: tariffs.get(orderId),
+      });
+      result.set(orderId, { ...ctxBefore, ledgerMismatch });
+    }
+    return result;
+  }
+
+  /**
+   * B-3 — migratsiya 246 konvertatsiyasi izida (`settlement_row`) turgan
+   * sotuv qatorlari. Jadval yo'q — bo'sh to'plam.
+   */
+  private async convertedSettlementIds246(
+    settlementIds: string[],
+  ): Promise<Set<string>> {
+    const out = new Set<string>();
+    const ids = settlementIds.filter((id) => /^\d{1,18}$/.test(id));
+    if (!ids.length) return out;
+    const schema = this.dataSource.getMetadata(OrderSettlement).schema;
+    const table = schema
+      ? `"${schema}"."order_settlement_246_conversion"`
+      : `"order_settlement_246_conversion"`;
+    const [row] = await this.dataSource.query<
+      Array<{ table_name: string | null }>
+    >(`SELECT to_regclass($1)::text AS table_name`, [table]);
+    if (!row?.table_name) return out;
+    const traced = await this.dataSource.query<
+      Array<{ settlement_id: string | number }>
+    >(
+      `SELECT DISTINCT "settlement_id" FROM ${table}
+        WHERE "kind" = 'settlement_row' AND "settlement_id" = ANY($1::bigint[])`,
+      [ids],
+    );
+    for (const item of traced ?? []) out.add(String(item.settlement_id));
+    return out;
+  }
+
+  /**
+   * A-F5 — snapshot'siz buyurtmalar uchun kuryer tarifi: viloyat bo'yicha
+   * guruhlab, har guruhga bitta `identity.courier.find_by_ids` (qat'iy).
+   */
+  private async rollbackCourierTariffs(
+    orders: Array<{ id: string; region_id?: string | null }>,
+    saleByOrder: Map<string, OrderSettlement>,
+  ): Promise<
+    Map<string, { tariff_center?: number; tariff_home?: number } | undefined>
+  > {
+    const out = new Map<
+      string,
+      { tariff_center?: number; tariff_home?: number } | undefined
+    >();
+    const byRegion = new Map<
+      string,
+      Array<{ orderId: string; courierId: string }>
+    >();
+    for (const order of orders) {
+      const courierId = this.normalizeCourierId(
+        saleByOrder.get(String(order.id))?.courier_id,
+      );
+      if (!courierId) continue;
+      const region = String(order.region_id ?? '').trim();
+      byRegion.set(region, [
+        ...(byRegion.get(region) ?? []),
+        { orderId: String(order.id), courierId },
+      ]);
+    }
+    // Z-1 — viloyatlar parallel (sahifa 1.5 s chegarasiga sig'sin).
+    await Promise.all(
+      [...byRegion].map(async ([region, items]) => {
+        let couriers: Array<{
+          id: string;
+          tariff_center?: number;
+          tariff_home?: number;
+        }>;
+        try {
+          couriers = await this.lookup.getCouriersByIds(
+            [...new Set(items.map((item) => item.courierId))],
+            { region_id: region || null, strict: true },
+          );
+        } catch {
+          throw new RpcException({
+            statusCode: 503,
+            message:
+              "Kuryer tarifini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+          });
+        }
+        const byId = new Map(couriers.map((c) => [String(c.id), c]));
+        for (const item of items) {
+          out.set(item.orderId, byId.get(item.courierId));
+        }
+      }),
+    );
+    return out;
+  }
+
+  /**
+   * RPC `order.rollback_eligibility` — id lar bo'yicha (≤ 200). Buyurtmalar
+   * bitta so'rov bilan o'qiladi; topilmagani javobda yo'q.
+   */
+  async rollbackEligibilityForIds(
+    orderIds: unknown,
+    requester: {
+      id: string;
+      roles?: string[];
+      branch_id?: string | null;
+    } | null,
+  ) {
+    const ids = [
+      ...new Set(
+        (Array.isArray(orderIds) ? orderIds : [])
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^\d{1,18}$/.test(id)),
+      ),
+    ];
+    if (ids.length > 200) {
+      this.badRequest("order_ids ro'yxati juda uzun (≤ 200)");
+    }
+    if (!requester?.id || !ids.length) {
+      return successRes({ items: [] }, 200, 'Rollback eligibility');
+    }
+    const orders = await this.orderRepo.find({
+      where: { id: In(ids), isDeleted: false },
+    });
+    // Xato yutilmaydi — gateway `rollback: null` (noma'lum) qo'yadi.
+    const contexts = await this.loadRollbackContexts(orders, requester);
+    return successRes(
+      {
+        items: orders.map((order) => {
+          const ctx = contexts.get(String(order.id));
+          const decision = ctx ? evaluateRollbackEligibility(ctx) : null;
+          return {
+            order_id: String(order.id),
+            allowed: decision?.allowed ?? false,
+            code: decision?.code ?? null,
+            message: decision?.message ?? null,
+          };
+        }),
+      },
+      200,
+      'Rollback eligibility',
+    );
+  }
+
+  /**
+   * Daftar ↔ kassa moslik xatosi (endpoint bilan AYNI hisob):
+   *  • kechiktirilgan E rejasi (`planDeferredExtraCostRows`) 400 bersa;
+   *  • kuryerga kredit yoziladigan yo'lda (M6 / D1 / D2) kuryer kassasi
+   *    qaytimi qator `courier_amount` (+ zanjir) ga teng bo'lmasa.
+   * `null` — mos.
+   */
+  private rollbackLedgerMismatch(params: {
+    order: Parameters<OrderLifecycleService['loadRollbackContexts']>[0][number];
+    sale: OrderSettlement | null;
+    approvals: OrderExtraCostApproval[];
+    extraRows: OrderSettlement[];
+    isSuperAdmin: boolean;
+    creditsCourier: boolean;
+    /** A-F5 — oldindan (batch) o'qilgan tarif; `undefined` — o'qilmagan. */
+    courierTariff?: { tariff_center?: number; tariff_home?: number };
+  }): string | null {
+    const { order, sale, approvals, extraRows, isSuperAdmin, creditsCourier } =
+      params;
+    const remittedSale = creditsCourier && isRemittedSale(sale) ? sale : null;
+    if (approvals.length) {
+      try {
+        this.planDeferredExtraCostRows(approvals, extraRows, remittedSale);
+      } catch (error) {
+        return this.rpcMessageOf(error);
+      }
+    }
+    if (!creditsCourier || !sale) return null;
+    const saleCourierId = this.normalizeCourierId(sale.courier_id);
+    const originalStatus = order.status;
+    const reverseSale =
+      [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
+      (originalStatus === Order_status.PARTLY_PAID && isSuperAdmin);
+    const extraCostAmount = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CANCELLED,
+      Order_status.CLOSED,
+    ].includes(originalStatus)
+      ? Math.max(Number(order.extra_cost ?? 0) || 0, 0)
+      : 0;
+    const snapshot = approvals.length
+      ? approvals[approvals.length - 1].deferred_snapshot
+      : null;
+    const extraCostParty =
+      extraCostAmount > 0
+        ? approvals.length
+          ? snapshot?.charged_cashbox_type &&
+            this.numericActorId(snapshot?.charged_user_id)
+            ? {
+                user_id: this.numericActorId(
+                  snapshot.charged_user_id,
+                ) as string,
+                cashbox_type: snapshot.charged_cashbox_type as Cashbox_type,
+              }
+            : null
+          : { user_id: saleCourierId, cashbox_type: Cashbox_type.FOR_COURIER }
+        : null;
+    const saleMarketPaidAmount = reverseSale
+      ? Math.max(Number(order.sale_market_paid_amount ?? 0) || 0, 0)
+      : 0;
+    let courierShare: number;
+    if (order.courier_share != null) {
+      courierShare = Number(order.courier_share);
+    } else {
+      const courier = params.courierTariff;
+      courierShare = resolveOrderTariff({
+        snapshot: order.courier_tariff,
+        isCenter: order.where_deliver === Where_deliver.CENTER,
+        centerTariff: courier?.tariff_center,
+        homeTariff: courier?.tariff_home,
+      });
+    }
+    const delta = computeRollbackCourierCashboxDelta({
+      reverseSale,
+      saleCollectible:
+        order.sale_collectible_amount != null
+          ? Number(order.sale_collectible_amount)
+          : Number(order.total_price ?? 0),
+      courierShare,
+      extraCostRefund:
+        extraCostParty?.cashbox_type === Cashbox_type.FOR_COURIER &&
+        extraCostParty.user_id === saleCourierId
+          ? extraCostAmount
+          : 0,
+      marketPaidRefund: saleMarketPaidAmount,
+    });
+    const chainCourier = extraRows
+      .filter(
+        (row) =>
+          row.kind === 'extra_cost_chain' &&
+          String(row.courier_id ?? '') === saleCourierId,
+      )
+      .reduce((sum, row) => sum + (Number(row.courier_amount) || 0), 0);
+    const credit = Number(sale.courier_amount ?? 0) || 0;
+    if (toTiyin(delta) !== -toTiyin(credit + chainCourier)) {
+      return (
+        'Kuryer hisob-kitob qatori sotuv summalariga mos kelmaydi ' +
+        `(qator: ${Math.round(credit * 100) / 100}, kassa qaytimi: ${-delta}) — ` +
+        'rollback kuryer daftarini buzadi, bajarilmadi. Buxgalteriya tuzatishi kerak'
+      );
+    }
+    return null;
+  }
+
+  /**
+   * WX-5 — rollback kassasi: yo'q — `null` (chaqiruvchi 404 beradi), finance
+   * javob bermasa — 503 (ro'yxat maydoni «ruxsat» degan holatda kodsiz 404
+   * «kassa topilmadi» chiqmasin).
+   */
+  private async rollbackCashbox(userId: string, cashboxType: Cashbox_type) {
+    try {
+      return (
+        (await this.lookup.getCashboxByUserStrict(userId, cashboxType)) ?? null
+      );
+    } catch {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Kassa ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+  }
+
+  /** A-F7 / B-2 — «holat o'zgargan» 400 — mashina o'qiydigan kod bilan. */
+  private rollbackStateChanged(message: string): never {
+    throw new RpcException({
+      statusCode: 400,
+      code: ORDER_ROLLBACK_ERROR_CODES.STATE_CHANGED,
+      message,
+    });
+  }
+
+  /** B-2 — sotuv qatori qaror suratidan beri o'zgarmaganmi (null ≡ null). */
+  private sameSaleSnapshot(
+    before: OrderSettlement | null | undefined,
+    after: OrderSettlement | null | undefined,
+  ): boolean {
+    if (!before || !after) return !before && !after;
+    const same = (
+      a: string | number | null | undefined,
+      b: string | number | null | undefined,
+    ) => String(a ?? '').trim() === String(b ?? '').trim();
+    return (
+      String(before.id) === String(after.id) &&
+      same(before.status, after.status) &&
+      same(before.courier_id, after.courier_id) &&
+      same(before.branch_id, after.branch_id) &&
+      toTiyin(before.courier_amount) === toTiyin(after.courier_amount) &&
+      toTiyin(before.branch_amount) === toTiyin(after.branch_amount) &&
+      toTiyin(before.market_amount) === toTiyin(after.market_amount) &&
+      toTiyin(before.market_paid_by_branch_amount) ===
+        toTiyin(after.market_paid_by_branch_amount) &&
+      Boolean(before.market_paid_by_branch_at) ===
+        Boolean(after.market_paid_by_branch_at)
+    );
+  }
+
+  private rpcMessageOf(error: unknown): string {
+    if (error instanceof RpcException) {
+      const payload = error.getError() as { message?: unknown } | string;
+      if (typeof payload === 'string') return payload;
+      if (payload && typeof payload.message === 'string')
+        return payload.message;
+    }
+    return (error as Error)?.message ?? String(error);
+  }
+
   private async loadDeferredExtraCostRollbackState(
     order: Pick<Order, 'id' | 'extra_cost'>,
     /**
@@ -6981,6 +7736,15 @@ export class OrderLifecycleService {
      * u bilan birga topshirilgan zanjir qatori ham qaytariladi (fix3b).
      */
     remittedSale: OrderSettlement | null = null,
+    /**
+     * WX-1 — qaror o'qigan E tasdiqlari / qatorlari: qayta o'qilgani bilan
+     * (id:status) farq qilsa — STATE_CHANGED (rejalashtirish kodsiz 400
+     * bermasin).
+     */
+    decided: {
+      approvals: OrderExtraCostApproval[];
+      extraRows: OrderSettlement[];
+    } | null = null,
   ): Promise<{
     approvals: OrderExtraCostApproval[];
     extraRows: OrderSettlement[];
@@ -6993,6 +7757,30 @@ export class OrderLifecycleService {
       party: null,
       plan: { consumedMarketRows: [], remittedChainRows: [] },
     };
+    const signature = (
+      approvals: OrderExtraCostApproval[],
+      extraRows: OrderSettlement[],
+    ) =>
+      [
+        ...approvals.map((row) => `a${String(row.id)}:${String(row.status)}`),
+        ...extraRows.map((row) => `s${String(row.id)}:${String(row.status)}`),
+      ]
+        .sort()
+        .join(',');
+    const assertUnchanged = (
+      approvals: OrderExtraCostApproval[],
+      extraRows: OrderSettlement[],
+    ) => {
+      if (
+        decided &&
+        signature(approvals, extraRows) !==
+          signature(decided.approvals, decided.extraRows)
+      ) {
+        this.rollbackStateChanged(
+          "Rollback holati o'zgargan (qo'shimcha xarajat hisob-kitobi shu orada yangilangan) — qayta urinib ko'ring",
+        );
+      }
+    };
     if (!(Number(order.extra_cost ?? 0) > 0)) return empty;
     const approvals = await this.extraCostApprovalRepo.find({
       where: {
@@ -7003,7 +7791,10 @@ export class OrderLifecycleService {
       },
       order: { id: 'ASC' },
     });
-    if (!approvals?.length) return empty;
+    if (!approvals?.length) {
+      assertUnchanged([], []);
+      return empty;
+    }
     const extraRows = await this.orderSettlementRepo.find({
       where: {
         order_id: String(order.id),
@@ -7011,6 +7802,7 @@ export class OrderLifecycleService {
         extra_cost_approval_id: In(approvals.map((row) => String(row.id))),
       },
     });
+    assertUnchanged(approvals, extraRows ?? []);
     const plan = this.planDeferredExtraCostRows(
       approvals,
       extraRows ?? [],
@@ -7155,7 +7947,7 @@ export class OrderLifecycleService {
         .sort()
         .join('|');
     if (signature(rows) !== signature(state.extraRows)) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Rollback holati o'zgargan (qo'shimcha xarajat hisob-kitobi yangilangan) — qayta urinib ko'ring",
       );
     }
@@ -7209,26 +8001,36 @@ export class OrderLifecycleService {
    */
   private async prepareRemittedCourierCredit(
     settlement: OrderSettlement | null,
+    isSuperAdmin = false,
   ): Promise<RemittedCourierCredit> {
+    /**
+     * WX-3 — qaror shu shartlarni tekshirgan; bu yerdagi rad = qarordan keyin
+     * holat o'zgargan (masalan kuryer boshqa filialga o'tkazilgan). Kod
+     * eligibility bilan AYNI: superadmin — CORRECTION_REQUIRED, boshqalar —
+     * SUPERADMIN_ONLY (qayta urinish ham shu javobni beradi).
+     */
+    const deny: (message: string) => never = (message) => {
+      throw new RpcException({
+        statusCode: 400,
+        code: isSuperAdmin
+          ? ORDER_ROLLBACK_ERROR_CODES.CORRECTION_REQUIRED
+          : ORDER_ROLLBACK_ERROR_CODES.SUPERADMIN_ONLY,
+        message,
+      });
+    };
     const courierId = this.normalizeCourierId(settlement?.courier_id);
     const branchId = String(settlement?.branch_id ?? '').trim();
     const amount = Number(settlement?.courier_amount ?? 0) || 0;
     if (!settlement || !courierId) {
-      this.badRequest(
-        'Kuryer hisob-kitob qatori topilmadi — rollback bajarilmadi',
-      );
+      deny('Kuryer hisob-kitob qatori topilmadi — rollback bajarilmadi');
     }
     // Manfiy (kredit) qator: qoldiq manfiy bo'la olmaydi (FIFO uni 0 deb
     // o'qiydi), ya'ni teskari yozuvni daftarda ifodalab bo'lmaydi.
     if (toTiyin(amount) <= 0) {
-      this.badRequest(
-        "Kuryer bu buyurtmaning manfiy (kredit) summasini topshiriqda ishlatib bo'lgan — " +
-          "rollback kuryer qoldig'ini manfiy qilardi, superadmin ham qaytara olmaydi. " +
-          'Buxgalteriya tuzatishi kerak',
-      );
+      deny(REMITTED_CREDIT_ROW_MESSAGE);
     }
     if (!branchId) {
-      this.badRequest(
+      deny(
         "Kuryer to'lovi filialsiz qatorda — rollback mumkin emas (naqd HQ'da)",
       );
     }
@@ -7244,14 +8046,14 @@ export class OrderLifecycleService {
     if (branchId === hqBranchId) {
       // HQ qatorida kuryer naqdi MAIN'da; qoldiq esa filial kuryeri deb
       // yozilib, moliyaviy balansni og'dirardi.
-      this.badRequest(
+      deny(
         "Bu qator HQ filialiga yozilgan — kuryer kreditini avtomatik yozib bo'lmaydi, " +
           'rollback bajarilmadi',
       );
     }
 
     if (!(await this.isSettlementCarryTablePresent())) {
-      this.badRequest(
+      deny(
         "Hisob-kitob qoldig'i jadvali topilmadi — kuryer kreditini yozib bo'lmaydi, " +
           'rollback bajarilmadi',
       );
@@ -7270,7 +8072,7 @@ export class OrderLifecycleService {
       });
     }
     if (String(assignment?.branch_id ?? '').trim() !== branchId) {
-      this.badRequest(
+      deny(
         'Kuryer endi boshqa filialda (yoki filialga biriktirilmagan) — topshirilgan ' +
           "summani uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi",
       );
@@ -7331,8 +8133,8 @@ export class OrderLifecycleService {
       lock: { mode: 'pessimistic_write' },
     });
     if (row && this.isSettledToHq(row.status)) {
-      this.badRequest(
-        "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
+      this.rollbackStateChanged(
+        "Rollback holati o'zgargan (buyurtma summasi shu orada bosh ofisga to'langan) — qayta urinib ko'ring",
       );
     }
     // 63HO6cBU (PR-C) — market ulushini filial o'z kassasidan to'lagan qator:
@@ -7341,8 +8143,8 @@ export class OrderLifecycleService {
       row?.market_paid_by_branch_at ||
       (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0
     ) {
-      this.badRequest(
-        "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
+      this.rollbackStateChanged(
+        "Rollback holati o'zgargan (buyurtmaning market ulushi shu orada filial kassasidan to'langan) — qayta urinib ko'ring",
       );
     }
     if (
@@ -7352,7 +8154,7 @@ export class OrderLifecycleService {
       String(row.branch_id ?? '').trim() !== credit.branchId ||
       toTiyin(row.courier_amount) !== toTiyin(credit.amount)
     ) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Rollback holati o'zgargan (hisob-kitob qatori yangilangan) — qayta urinib ko'ring",
       );
     }
@@ -7365,8 +8167,8 @@ export class OrderLifecycleService {
     const existingAmount = Number(courierCarry.amount ?? 0) || 0;
     const existingBranchId = String(courierCarry.branch_id ?? '').trim();
     if (toTiyin(existingAmount) > 0 && existingBranchId !== credit.branchId) {
-      this.badRequest(
-        'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
+      this.rollbackStateChanged(
+        "Rollback holati o'zgargan (kuryerda shu orada boshqa filialga tegishli qoldiq paydo bo'lgan) — qayta urinib ko'ring",
       );
     }
     await carryRepo.update(
@@ -7379,6 +8181,185 @@ export class OrderLifecycleService {
         branch_id: credit.branchId,
       },
     );
+  }
+
+  /**
+   * D2 (2026-11-19) — superadmin HQ'ga o'tgan / market to'langan / filial
+   * marketga to'lagan sotuv qatorini qaytarganda daftar teskarisi (naqd
+   * ko'chmaydi, faqat qoldiqlar):
+   *  • filial krediti (`branch_to_hq` +=) — filial shu qator bo'yicha AMALDA
+   *    bergan pul: BRANCH/MARKET_SETTLED — `branch_amount` (HQ'ga to'lagani +
+   *    marketga to'lagan P); COURIER_SETTLED + filial to'lagan — faqat P;
+   *  • market debeti (`hq_to_market` +=, «market oldindan olgan») — market AMALDA olgan pul:
+   *    MARKET_SETTLED — `market_amount` (HQ'dan + filialdan P); aks holda P;
+   *  • kuryer krediti — M6 bilan bir xil (`courier_to_branch` +=).
+   * HQ neti: −filial krediti (HQ olgan `branch_amount − P`) + market debeti
+   * (HQ to'lagan `market_amount − P`) = 0 ga qaytadi.
+   */
+  private planSettledRollbackLedger(
+    sale: OrderSettlement,
+  ): SettledRollbackLedger {
+    const status = sale.status;
+    const paidByBranch = toTiyin(sale.market_paid_by_branch_amount ?? 0);
+    const reachedHq =
+      status === SettlementStatus.BRANCH_SETTLED ||
+      status === SettlementStatus.MARKET_SETTLED;
+    const branchCreditTiyin = reachedHq
+      ? toTiyin(sale.branch_amount ?? 0)
+      : paidByBranch;
+    const marketDebitTiyin =
+      status === SettlementStatus.MARKET_SETTLED
+        ? toTiyin(sale.market_amount ?? 0)
+        : paidByBranch;
+    const branchId = String(sale.branch_id ?? '').trim();
+    const marketId = String(sale.market_id ?? '').trim();
+    if (!branchId) {
+      this.badRequest(
+        "Filialsiz (HQ kuryeri) qator — daftarni avtomatik teskari yozib bo'lmaydi",
+      );
+    }
+    if (marketDebitTiyin !== 0 && !marketId) {
+      this.badRequest(
+        "Hisob-kitob qatorida market yo'q — market debetini yozib bo'lmaydi",
+      );
+    }
+    return {
+      status,
+      branchId,
+      marketId,
+      branchCredit: branchCreditTiyin / 100,
+      marketDebit: marketDebitTiyin / 100,
+      snapshot: {
+        courier_amount: toTiyin(sale.courier_amount ?? 0),
+        branch_amount: toTiyin(sale.branch_amount ?? 0),
+        market_amount: toTiyin(sale.market_amount ?? 0),
+        market_paid_by_branch_amount: paidByBranch,
+      },
+    };
+  }
+
+  /**
+   * D2 — daftar teskarisini tranzaksiya ICHIDA yozish. Qulf tartibi FIFO
+   * (`runFifoSettlement`) va M6 bilan mos: avval qoldiq qatorlari
+   * (`courier_to_branch` → `branch_to_hq` → `hq_to_market`), keyin sotuv
+   * qatori. Hech bir FIFO ikki qoldiqni qulflamaydi — sikl yo'q. Qulf
+   * ostida qator qayta o'qiladi: holati yoki summalari o'zgargan bo'lsa 400,
+   * hech narsa yozilmaydi.
+   */
+  private async creditSettledRollbackLedger(
+    tx: EntityManager,
+    orderId: string,
+    plan: SettledRollbackLedger,
+    courierCredit: RemittedCourierCredit | null,
+  ): Promise<void> {
+    const carryRepo = tx.getRepository(OrderSettlementCarry);
+    let courierCarry: OrderSettlementCarry | null = null;
+    if (courierCredit) {
+      if (courierCredit.branchId !== plan.branchId) {
+        this.rollbackStateChanged(
+          "Rollback holati o'zgargan (kuryer filiali shu orada o'zgargan) — qayta urinib ko'ring",
+        );
+      }
+      courierCarry = await this.lockRemittedCourierCarries(tx, courierCredit);
+      if (!courierCarry) {
+        this.badRequest(
+          "Kuryer qoldig'i qatorini qulflab bo'lmadi — rollback bajarilmadi",
+        );
+      }
+    }
+    const lockCarry = async (
+      level: 'branch_to_hq' | 'hq_to_market',
+      partyId: string,
+    ): Promise<OrderSettlementCarry | null> => {
+      await carryRepo
+        .createQueryBuilder()
+        .insert()
+        .values({ level, party_id: partyId, branch_id: null, amount: 0 })
+        .orIgnore()
+        .execute();
+      return carryRepo.findOne({
+        where: { level, party_id: partyId },
+        lock: { mode: 'pessimistic_write' },
+      });
+    };
+    const branchCarry = await lockCarry('branch_to_hq', plan.branchId);
+    const marketCarry =
+      plan.marketDebit !== 0
+        ? await lockCarry('hq_to_market', plan.marketId)
+        : null;
+    if (!branchCarry || (plan.marketDebit !== 0 && !marketCarry)) {
+      this.badRequest(
+        "Hisob-kitob qoldig'i qatorini qulflab bo'lmadi — rollback bajarilmadi",
+      );
+    }
+
+    const row = await tx.getRepository(OrderSettlement).findOne({
+      where: { order_id: String(orderId), isDeleted: false, kind: 'sale' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (
+      !row ||
+      row.status !== plan.status ||
+      String(row.branch_id ?? '').trim() !== plan.branchId ||
+      toTiyin(row.courier_amount ?? 0) !== plan.snapshot.courier_amount ||
+      toTiyin(row.branch_amount ?? 0) !== plan.snapshot.branch_amount ||
+      toTiyin(row.market_amount ?? 0) !== plan.snapshot.market_amount ||
+      toTiyin(row.market_paid_by_branch_amount ?? 0) !==
+        plan.snapshot.market_paid_by_branch_amount ||
+      (courierCredit &&
+        (this.normalizeCourierId(row.courier_id) !== courierCredit.courierId ||
+          toTiyin(row.courier_amount) !== toTiyin(courierCredit.amount)))
+    ) {
+      this.rollbackStateChanged(
+        "Rollback holati o'zgargan (hisob-kitob qatori yangilangan) — qayta urinib ko'ring",
+      );
+    }
+
+    if (courierCredit && courierCarry) {
+      const existingAmount = Number(courierCarry.amount ?? 0) || 0;
+      const existingBranchId = String(courierCarry.branch_id ?? '').trim();
+      if (
+        toTiyin(existingAmount) > 0 &&
+        existingBranchId !== courierCredit.branchId
+      ) {
+        this.rollbackStateChanged(
+          "Rollback holati o'zgargan (kuryerda shu orada boshqa filialga tegishli qoldiq paydo bo'lgan) — qayta urinib ko'ring",
+        );
+      }
+      await carryRepo.update(
+        { id: courierCarry.id },
+        {
+          amount:
+            (Math.max(toTiyin(existingAmount), 0) +
+              toTiyin(remittedCarryCredit(courierCredit))) /
+            100,
+          branch_id: courierCredit.branchId,
+        },
+      );
+    }
+    if (plan.branchCredit !== 0 && branchCarry) {
+      await carryRepo.update(
+        { id: branchCarry.id },
+        {
+          amount:
+            (toTiyin(branchCarry.amount ?? 0) + toTiyin(plan.branchCredit)) /
+            100,
+        },
+      );
+    }
+    if (plan.marketDebit !== 0 && marketCarry) {
+      await carryRepo.update(
+        { id: marketCarry.id },
+        {
+          // B-1 — hq_to_market qoldig'i += : musbat qoldiq = HQ marketga
+          // OLDINDAN bergan (market oldindan olgan) — keyingi HQ → market
+          // FIFO uni avval ishlatadi (`remaining = lump + carry`).
+          amount:
+            (toTiyin(marketCarry.amount ?? 0) + toTiyin(plan.marketDebit)) /
+            100,
+        },
+      );
+    }
   }
 
   /**

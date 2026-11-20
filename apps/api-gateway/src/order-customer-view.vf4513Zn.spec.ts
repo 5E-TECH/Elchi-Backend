@@ -408,7 +408,10 @@ describe('vf4513Zn — buyurtmadagi `customer` faqat mijoz ko`rinishi (cheklanga
       '67',
       user('26', ['courier']),
     )) as Row;
-    expect(res.data.order).toEqual(orderRes.data);
+    // D1–D4: buyurtma tafsilotida qo'shimcha `rollback` maydoni bor.
+    expect({ ...res.data.order, rollback: orderRes.data.rollback }).toEqual(
+      orderRes.data,
+    );
   });
 
   it('⭐ market 37 GET /finance/history/113: customer minimal; o`z market profili — mavjud qoida (o`zgarmagan)', async () => {
@@ -423,7 +426,10 @@ describe('vf4513Zn — buyurtmadagi `customer` faqat mijoz ko`rinishi (cheklanga
       '67',
       user('37', ['market']),
     )) as Row;
-    expect(res.data.order).toEqual(orderRes.data);
+    // D1–D4: buyurtma tafsilotida qo'shimcha `rollback` maydoni bor.
+    expect({ ...res.data.order, rollback: orderRes.data.rollback }).toEqual(
+      orderRes.data,
+    );
   });
 
   it.each([

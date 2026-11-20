@@ -352,7 +352,8 @@ describe('kH2zZsz3 — GET /orders/:id rol proyeksiyasi', () => {
 
     await expect(
       controller.findById('25', user('1', ['superadmin'])),
-    ).resolves.toBe(row);
+      // D1–D4: `rollback` (bu mock'da eligibility javobi yo'q — null).
+    ).resolves.toEqual({ ...row, rollback: null });
   });
 
   it("menejer (o'z filiali) — to'liq ko'rinish", async () => {

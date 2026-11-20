@@ -168,6 +168,13 @@ const COURIER_TARIFF = 30000;
         ),
         getUserById: jest.fn().mockResolvedValue(null),
         // Qoldiq HAQIQIY finance kassasidan (autoPay va X chegarasi uchun).
+        // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+        getCashboxByUserStrict(
+          this: { getCashboxByUser: (...a: unknown[]) => unknown },
+          ...args: unknown[]
+        ) {
+          return this.getCashboxByUser(...args);
+        },
         getCashboxByUser: jest.fn(async (userId: string, type: Cashbox_type) =>
           financeDb.getRepository(Cashbox).findOne({
             where: { user_id: String(userId), cashbox_type: type },

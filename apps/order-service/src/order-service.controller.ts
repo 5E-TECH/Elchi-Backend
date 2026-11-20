@@ -538,6 +538,28 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * (2026-11-19, D1–D4) Ro'yxat / tafsilot uchun rollback ruxsati — partiya
+   * (≤ 200 id): `{ items: [{ order_id, allowed, code, message }] }`.
+   * Endpoint (`order.rollback_waiting`) bilan AYNI qaror funksiyasi.
+   */
+  @MessagePattern({ cmd: 'order.rollback_eligibility' })
+  rollbackEligibility(
+    @Payload()
+    data: {
+      order_ids?: unknown;
+      requester?: { id: string; roles?: string[]; branch_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.rollbackEligibilityForIds(
+        data?.order_ids,
+        data?.requester ?? null,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.find_by_id' })
   findById(
     @Payload() data: { id: string; requester?: OrderLookupRequester | null },

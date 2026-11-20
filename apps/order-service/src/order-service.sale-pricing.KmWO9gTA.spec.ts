@@ -292,7 +292,21 @@ function makeSaleWorld(opts: WorldOpts = {}) {
       getCouriersByIds: jest.fn(() =>
         Promise.resolve([{ ...COURIER_ROW, ...(opts.courier ?? {}) }]),
       ),
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn().mockResolvedValue(null),
+      // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getCashboxByUserStrict(
+        this: { getCashboxByUser: (...a: unknown[]) => unknown },
+        ...args: unknown[]
+      ) {
+        return this.getCashboxByUser(...args);
+      },
       getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
         Promise.resolve({ id: `${type}-${userId}`, balance: 0 }),
       ),
@@ -347,7 +361,19 @@ function makeRollbackWorld(order: Row, settlement: Row, market: Row = MARKET) {
           ? extraCostApprovalTable()
           : entity === Order
             ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
-            : {},
+            : entity === OrderSettlement
+              ? // B-2 — tranzaksiyadagi sotuv qatori qulfi = qaror surati.
+                {
+                  findOne: (...args: unknown[]) =>
+                    (
+                      s as unknown as {
+                        orderSettlementRepo: {
+                          findOne: (...a: unknown[]) => unknown;
+                        };
+                      }
+                    ).orderSettlementRepo.findOne(...args),
+                }
+              : {},
       ),
     },
   };
@@ -372,7 +398,21 @@ function makeRollbackWorld(order: Row, settlement: Row, market: Row = MARKET) {
       getCouriersByIds: jest.fn((ids: string[]) =>
         Promise.resolve(ids.map((id) => ({ ...COURIER_ROW, id }))),
       ),
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn().mockResolvedValue(null),
+      // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getCashboxByUserStrict(
+        this: { getCashboxByUser: (...a: unknown[]) => unknown },
+        ...args: unknown[]
+      ) {
+        return this.getCashboxByUser(...args);
+      },
       getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
         Promise.resolve({ id: `${type}-${userId}`, balance: 0 }),
       ),

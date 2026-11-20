@@ -320,6 +320,7 @@ jobs:
           apps/order-service/src/settlement/settlement-m4-manager-market.pg.spec.ts
           apps/order-service/src/settlement/settlement-retreat.T6.pg.spec.ts
           apps/order-service/src/settlement/financial-balance-provider-held.pg.spec.ts
+          apps/order-service/src/order-service.rollback-rules.D1D4.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
           apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
           apps/ai-service/src/usage/ai-margin.pg.spec.ts
@@ -357,6 +358,7 @@ jobs:
           # 63HO6cBU (PR-C) — daftar (order_settlement) PG spec'lari: har biri
           # o'z bazasi / sxemasi, elchi_e_test faqat ulanish uchun.
           ORDER_SETTLEMENT_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          ORDER_ROLLBACK_RULES_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # Xarajat kategoriyalari (migratsiya 129/197/214, standart kategoriya qulfi —
           # ega 2026-11-11): o'z vaqtinchalik bazalari, elchi_e_test faqat ulanish uchun.
           # BE-A (migratsiya 215, smena yopishda MAIN karta tekshiruvi sukut yoqiq):

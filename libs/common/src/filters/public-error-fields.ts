@@ -6,6 +6,7 @@ import { CONTACT_ERROR_CODES } from '../contacts/contacts';
 import { SPECIAL_CATEGORIES_ERROR_CODES } from '../order/order-special-categories';
 import { ORDER_OPERATOR_ERROR_CODES } from '../order/order-operator-assign';
 import { ORDER_CREATE_ERROR_CODES } from '../order/order-create-error-codes';
+import { ORDER_ROLLBACK_ERROR_CODES } from '../order/order-rollback';
 import { PARTNER_MARKET_ERROR_CODES } from '../integration/partner-markets';
 import { IDEMPOTENCY_ERROR_CODES } from '../idempotency/idempotency-error-codes';
 import {
@@ -166,6 +167,13 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   // tanlangan operator shu marketniki/faol emas, market operatori faqat o'zi.
   ...Object.fromEntries(
     Object.values(ORDER_CREATE_ERROR_CODES).map((code) => [
+      code,
+      [] as readonly string[],
+    ]),
+  ),
+  // (2026-11-19, D1–D4) buyurtma rollback — 400 / 403 rad etish kodlari.
+  ...Object.fromEntries(
+    Object.values(ORDER_ROLLBACK_ERROR_CODES).map((code) => [
       code,
       [] as readonly string[],
     ]),

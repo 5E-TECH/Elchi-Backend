@@ -118,7 +118,19 @@ function makeRollbackService(
           ? extraCostApprovalTable()
           : entity === Order
             ? { findOne: jest.fn().mockResolvedValue({ ...order }) }
-            : {},
+            : entity === OrderSettlement
+              ? // B-2 — tranzaksiyadagi sotuv qatori qulfi = qaror surati.
+                {
+                  findOne: (...args: unknown[]) =>
+                    (
+                      s as unknown as {
+                        orderSettlementRepo: {
+                          findOne: (...a: unknown[]) => unknown;
+                        };
+                      }
+                    ).orderSettlementRepo.findOne(...args),
+                }
+              : {},
       ),
     },
   };
@@ -183,6 +195,13 @@ function makeRollbackService(
           ids.map((id) => ({ id, tariff_center: 25000, tariff_home: 35000 })),
         ),
       ),
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn((id: string) =>
         Promise.resolve({
           id,
@@ -191,6 +210,13 @@ function makeRollbackService(
           can_sell_cancel: true,
         }),
       ),
+      // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getCashboxByUserStrict(
+        this: { getCashboxByUser: (...a: unknown[]) => unknown },
+        ...args: unknown[]
+      ) {
+        return this.getCashboxByUser(...args);
+      },
       getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
         Promise.resolve(
           opts.cashbox
@@ -201,6 +227,13 @@ function makeRollbackService(
       ensureBranchCashbox: mocks.ensureBranchCashbox,
       resolveSettlementBranchId: jest.fn().mockResolvedValue('77'),
       getHqBranchId: jest.fn().mockResolvedValue('1'),
+      // D4 / M6 (2026-11-19) — kuryerning hozirgi filiali (eligibility).
+      getBranchAssignmentByUser: jest
+        .fn()
+        .mockResolvedValue({ branch_id: '77' }),
+      getBranchAssignmentByUserStrict: jest
+        .fn()
+        .mockResolvedValue({ branch_id: '77' }),
     },
     findById: jest.fn().mockResolvedValue(order),
     updateCashboxBalance: jest.fn((leg: Leg) => {
@@ -579,29 +612,27 @@ describe('M6 — kuryer pulni topshirgandan keyin rollback yo`q', () => {
    * yoziladi. Bu yo'l `fix3b-sa-rollback-courier-credit.spec.ts` da
    * (daftar ↔ kassa izchilligi bilan) to'liq tekshiriladi.
    */
-  it.each([
-    ['kuryer', COURIER],
-    ['menejer', MANAGER],
-  ])(
-    '⭐ COURIER_SETTLED kuryer qatori — %s ham qaytara olmaydi, kassaga hech narsa yozilmaydi',
-    async (_label, requester) => {
-      const h = makeRollbackService({
-        settlement: courierSettlement({
-          status: SettlementStatus.COURIER_SETTLED,
-        }),
-      });
+  it('⭐ COURIER_SETTLED kuryer qatori — kuryer o`zi qaytara olmaydi (COURIER_REMITTED), kassaga hech narsa yozilmaydi', async () => {
+    const h = makeRollbackService({
+      settlement: courierSettlement({
+        status: SettlementStatus.COURIER_SETTLED,
+      }),
+    });
 
-      const error = await rpcError(
-        h.s.rollbackOrderToWaiting(requester, '7001'),
-      );
+    const error = await rpcError(h.s.rollbackOrderToWaiting(COURIER, '7001'));
 
-      expect(error.statusCode).toBe(400);
-      expect(error.message).toContain("topshirib bo'lgan");
-      expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
-      expect(h.legs).toEqual([]);
-      expect(h.resets).toEqual([]);
-    },
-  );
+    expect(error).toMatchObject({
+      statusCode: 400,
+      code: 'COURIER_REMITTED',
+      message:
+        'Pul filialga topshirilgan — buyurtmani menejer yoki superadmin qaytaradi',
+    });
+    expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
+    expect(h.legs).toEqual([]);
+    expect(h.resets).toEqual([]);
+  });
+  // D1 (2026-11-19): menejer endi M6 kredit yo'li bilan qaytaradi —
+  // `fix3b-sa-rollback-courier-credit.spec.ts` va PG spec'da.
 
   it('ishlatilgan (COURIER_SETTLED) bekor krediti ham qaytarilmaydi', async () => {
     const h = makeRollbackService({
@@ -643,22 +674,42 @@ describe('M6 — kuryer pulni topshirgandan keyin rollback yo`q', () => {
 
 describe('RBAC-20 — menejer faqat SOLD/CANCELLED buyurtmani qaytaradi', () => {
   it.each([
-    Order_status.CLOSED,
-    Order_status.RECEIVED,
-    Order_status.ON_THE_ROAD,
-    Order_status.NEW,
-    Order_status.PAID,
-  ])('⭐ menejer %s buyurtmani qaytara olmaydi', async (status) => {
-    const h = makeRollbackService({ order: { status } });
+    [Order_status.CLOSED, 'PARCEL_NOT_IN_BRANCH', undefined],
+    [
+      Order_status.RECEIVED,
+      'STATUS_NOT_ROLLBACKABLE',
+      `Rollback mumkin emas (status: ${Order_status.RECEIVED})`,
+    ],
+    [
+      Order_status.ON_THE_ROAD,
+      'STATUS_NOT_ROLLBACKABLE',
+      `Rollback mumkin emas (status: ${Order_status.ON_THE_ROAD})`,
+    ],
+    [
+      Order_status.NEW,
+      'STATUS_NOT_ROLLBACKABLE',
+      `Rollback mumkin emas (status: ${Order_status.NEW})`,
+    ],
+    [
+      Order_status.PAID,
+      'SUPERADMIN_ONLY',
+      "Market to'langan buyurtmani faqat superadmin qaytara oladi",
+    ],
+  ])(
+    '⭐ menejer %s buyurtmani qaytara olmaydi (%s)',
+    async (status, code, message) => {
+      const h = makeRollbackService({ order: { status } });
 
-    const error = await rpcError(h.s.rollbackOrderToWaiting(MANAGER, '7001'));
+      const error = await rpcError(h.s.rollbackOrderToWaiting(MANAGER, '7001'));
 
-    expect(error).toMatchObject({
-      statusCode: 400,
-      message: `Rollback mumkin emas (status: ${status})`,
-    });
-    expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
-  });
+      expect(error).toMatchObject({
+        statusCode: 400,
+        code,
+        ...(message ? { message } : {}),
+      });
+      expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
+    },
+  );
 
   it('PARTLY_PAID uchun aniqroq "faqat superadmin" xabari saqlanadi', async () => {
     const h = makeRollbackService({
@@ -870,6 +921,13 @@ function makeSellService(
           can_sell_cancel: true,
         },
       ]),
+      // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getUserByIdStrict(
+        this: { getUserById: (id: string) => unknown },
+        id: string,
+      ) {
+        return this.getUserById(id);
+      },
       getUserById: jest.fn().mockResolvedValue({
         id: '201',
         can_add_extra_cost: true,
@@ -877,6 +935,13 @@ function makeSellService(
         tariff_center: 0,
         tariff_home: 0,
       }),
+      // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getCashboxByUserStrict(
+        this: { getCashboxByUser: (...a: unknown[]) => unknown },
+        ...args: unknown[]
+      ) {
+        return this.getCashboxByUser(...args);
+      },
       getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
         Promise.resolve(
           opts.cashbox

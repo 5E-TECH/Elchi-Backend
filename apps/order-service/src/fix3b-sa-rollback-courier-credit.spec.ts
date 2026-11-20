@@ -322,7 +322,21 @@ function makeWorld(opts: { carryTable?: boolean } = {}) {
         })),
       ),
     ),
+    // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+    getUserByIdStrict(
+      this: { getUserById: (id: string) => unknown },
+      id: string,
+    ) {
+      return this.getUserById(id);
+    },
     getUserById: jest.fn().mockResolvedValue(null),
+    // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+    getCashboxByUserStrict(
+      this: { getCashboxByUser: (...a: unknown[]) => unknown },
+      ...args: unknown[]
+    ) {
+      return this.getCashboxByUser(...args);
+    },
     getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
       Promise.resolve({
         id: `${type}-${userId}`,
@@ -812,21 +826,71 @@ const snapshotOf = (w: Awaited<ReturnType<typeof remittedWorld>>) =>
     order: w.state.orders['7001'],
   });
 
-describe('fix3b M6 — kuryer/menejer avvalgidek yopiq', () => {
-  it.each([
-    ['kuryer', COURIER],
-    ['menejer', MANAGER],
-  ])('⭐ %s — 400, hech narsa o`zgarmaydi', async (_label, requester) => {
+describe('fix3b M6 / D1 (2026-11-19) — kuryer yopiq, menejer (huquqi bilan) superadmin kabi', () => {
+  it('⭐ kuryer — 400 COURIER_REMITTED, hech narsa o`zgarmaydi', async () => {
     const w = await remittedWorld();
     const before = snapshotOf(w);
 
-    const error = await rpcError(
-      w.svc.rollbackOrderToWaiting(requester, '7001'),
-    );
+    const error = await rpcError(w.svc.rollbackOrderToWaiting(COURIER, '7001'));
 
-    expect(error.statusCode).toBe(400);
-    expect(error.message).toContain("topshirib bo'lgan");
-    expect(error.message).toContain('faqat superadmin');
+    expect(error).toMatchObject({ statusCode: 400, code: 'COURIER_REMITTED' });
+    expect(snapshotOf(w)).toEqual(before);
+  });
+
+  it('⭐ D3: menejerda `can_sell_cancel` yo`q — 403 NO_PERMISSION, hech narsa o`zgarmaydi', async () => {
+    const w = await remittedWorld();
+    w.lookup.getUserById.mockResolvedValue({
+      id: '201',
+      can_sell_cancel: false,
+    });
+    const before = snapshotOf(w);
+
+    const error = await rpcError(w.svc.rollbackOrderToWaiting(MANAGER, '7001'));
+
+    expect(error).toMatchObject({ statusCode: 403, code: 'NO_PERMISSION' });
+    expect(snapshotOf(w)).toEqual(before);
+  });
+
+  it('⭐ D1: menejer (huquqi bor) — superadmin M6 yo`li: kuryerga kredit, daftar ↔ kassa izchil', async () => {
+    const w = await remittedWorld();
+    w.lookup.getUserById.mockResolvedValue({
+      id: '201',
+      can_sell_cancel: true,
+    });
+
+    const res = (await w.svc.rollbackOrderToWaiting(
+      MANAGER,
+      '7001',
+      undefined,
+      'rb-m',
+    )) as { message: string };
+
+    expect(res.message).toContain(
+      "Kuryer filialga topshirgan 140000 so'm uning keyingi topshirig'iga hisoblanadi",
+    );
+    expect(w.rowOf('7001')).toMatchObject({ isDeleted: true });
+    expect(w.carry('courier_to_branch', COURIER_ID)).toBe(140000);
+    expect(w.cash(Cashbox_type.FOR_COURIER, COURIER_ID)).toBe(-140000);
+    expect(w.cash(Cashbox_type.BRANCH, BRANCH)).toBe(140000);
+    w.assertLedgerMatchesCash();
+  });
+
+  it('⭐ D1 + S1: menejer, kuryer boshqa filialga o`tgan — 400 SUPERADMIN_ONLY (aniq sabab bilan)', async () => {
+    const w = await remittedWorld();
+    w.lookup.getUserById.mockResolvedValue({
+      id: '201',
+      can_sell_cancel: true,
+    });
+    w.lookup.getBranchAssignmentByUserStrict.mockResolvedValue({
+      branch_id: '99',
+      role: 'COURIER',
+    });
+    const before = snapshotOf(w);
+
+    const error = await rpcError(w.svc.rollbackOrderToWaiting(MANAGER, '7001'));
+
+    expect(error).toMatchObject({ statusCode: 400, code: 'SUPERADMIN_ONLY' });
+    expect(error.message).toContain('boshqa filialda');
     expect(snapshotOf(w)).toEqual(before);
   });
 });
@@ -846,11 +910,23 @@ describe('fix3b M6 — superadmin uchun ham xavfsiz bo`lmagan holatlar rad etila
     expect(snapshotOf(w)).toEqual(before);
   };
 
-  it('⭐ HQ`ga yetgan qator (BRANCH_SETTLED) — hamma uchun yopiq (o`zgarmagan)', async () => {
+  it('⭐ D2: HQ`ga yetgan qator (BRANCH_SETTLED) — kuryer va menejer uchun 400 SUPERADMIN_ONLY', async () => {
     const w = await remittedWorld();
     w.rowOf('7001')!.status = SettlementStatus.BRANCH_SETTLED;
+    w.lookup.getUserById.mockResolvedValue({
+      id: '201',
+      can_sell_cancel: true,
+    });
+    const before = snapshotOf(w);
 
-    await expectUnchanged(w, 400, "bosh ofisga to'langan");
+    for (const requester of [COURIER, MANAGER]) {
+      const error = await rpcError(
+        w.svc.rollbackOrderToWaiting(requester, '7001'),
+      );
+      expect(error).toMatchObject({ statusCode: 400, code: 'SUPERADMIN_ONLY' });
+    }
+    expect(snapshotOf(w)).toEqual(before);
+    // Superadmin yo'li (filialga kredit, marketga debet) — PG spec'da.
   });
 
   it('manfiy (kredit) COURIER_SETTLED qator — qoldiq manfiy bo`la olmaydi', async () => {
