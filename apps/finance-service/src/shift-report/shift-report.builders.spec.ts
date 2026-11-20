@@ -1,6 +1,8 @@
 import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import {
+  betweenShiftsLine,
+  buildBranchMessage,
   buildCourierMessage,
   buildMarketMessage,
   buildSuperadminMessage,
@@ -284,5 +286,32 @@ describe('T6 — qaytarilgan to`lovlar smena hisobotida', () => {
     const all = texts.join('\n');
     expect(all).toContain("qaytarilgan 500 000 so'm");
     expect(all).toContain('— qaytarildi');
+  });
+});
+
+describe('smenalar orasidagi (smenasiz) harakat', () => {
+  it('superadmin va filial xabarida alohida qator; harakat yo‘q — qator yo‘q', () => {
+    const gap = {
+      from: new Date('2026-11-20T18:00:30Z'),
+      to: new Date('2026-11-21T04:00:30Z'),
+      income: 50_000,
+      expense: 0,
+      count: 1,
+    };
+    const line = betweenShiftsLine({ between_shifts: gap });
+    expect(line).toBe(
+      "⚠️ Smenalar orasida (smenasiz, 20.11.2026 23:00 → 21.11.2026 09:00): kirim 50 000 so'm, chiqim 0 so'm (1 ta) — ochilish qoldig'ida",
+    );
+    expect(betweenShiftsLine({ between_shifts: null })).toBeNull();
+    const base = snapshot;
+    expect(
+      buildSuperadminMessage({ ...base, between_shifts: gap }, null).body,
+    ).toContain(line!);
+    expect(
+      buildBranchMessage({ ...base, between_shifts: gap }, 'Chilonzor').body,
+    ).toContain(line!);
+    expect(buildBranchMessage(base, 'Chilonzor').body).not.toContain(
+      'Smenalar orasida',
+    );
   });
 });

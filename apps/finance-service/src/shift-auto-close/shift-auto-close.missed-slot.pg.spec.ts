@@ -46,6 +46,7 @@ describePg(
     let checks: ShiftAccountCheckService;
     let schedulerA: ShiftAutoCloseScheduler;
     let schedulerB: ShiftAutoCloseScheduler;
+    let reports: ShiftReportService;
     const outbox = { enqueue: jest.fn() };
     const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
     const identity = {
@@ -99,7 +100,7 @@ describePg(
       );
       const notifications = new FinanceNotificationService(outbox as never);
       checks = new ShiftAccountCheckService(db, activityLog as never, realtime);
-      const reports = new ShiftReportService(
+      reports = new ShiftReportService(
         db,
         activityLog as never,
         checks,
@@ -333,6 +334,28 @@ describePg(
         ]),
       );
       expect(dispatches('finance.shift_late')).toHaveLength(0);
+
+      // Kun 2 yopilgach: tungi (smenasiz) 50 000 hisobotda alohida ko'rinadi.
+      expect((await at('2026-11-21 23:00:30')).closed).toHaveLength(2);
+      const day2 = await db
+        .getRepository(Shift)
+        .findOneByOrFail({ id: main2.id });
+      const snapshot = await reports.buildSnapshot(day2, 1);
+      expect(snapshot.between_shifts).toMatchObject({
+        income: 50_000,
+        expense: 0,
+        count: 1,
+      });
+      expect(new Date(snapshot.between_shifts!.from).toISOString()).toBe(
+        T('2026-11-20 23:00:30').toISOString(),
+      );
+      // Filialda smenasiz harakat yo'q — null.
+      const branch2 = (await shifts()).find(
+        (shift) => shift.cashbox_user_id === '13' && shift.id !== branch1.id,
+      )!;
+      expect((await reports.buildSnapshot(branch2, 1)).between_shifts).toBe(
+        null,
+      );
     });
 
     it('yarim tun: yopish 23:59, ochish 00:00 — bitta tickda eski yopiladi, yangisi ochiladi', async () => {

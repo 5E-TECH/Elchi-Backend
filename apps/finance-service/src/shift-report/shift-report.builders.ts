@@ -105,6 +105,27 @@ export interface ShiftReportSnapshot {
   accounts: ShiftAccountLine[];
   couriers: CourierSlice[];
   markets: MarketSlice[];
+  /**
+   * Oldingi smena yopilgandan shu smena ochilguncha (SMENASIZ) shu kassadagi
+   * harakat — hech qaysi smena kirim/chiqimiga kirmagan, faqat ochilish
+   * qoldig'ida. Yo'q — `null` / berilmagan.
+   */
+  between_shifts?: {
+    from: Date | string;
+    to: Date | string;
+    income: number;
+    expense: number;
+    count: number;
+  } | null;
+}
+
+/** «Smenalar orasida» qatori (harakat bo'lmasa — `null`). */
+export function betweenShiftsLine(
+  snapshot: Pick<ShiftReportSnapshot, 'between_shifts'>,
+): string | null {
+  const gap = snapshot.between_shifts;
+  if (!gap || !gap.count) return null;
+  return `⚠️ Smenalar orasida (smenasiz, ${tashkentDateTime(gap.from)} → ${tashkentDateTime(gap.to)}): kirim ${formatSom(gap.income)}, chiqim ${formatSom(gap.expense)} (${gap.count} ta) — ochilish qoldig'ida`;
 }
 
 export const formatSom = (value: unknown): string => {
@@ -194,6 +215,7 @@ export function buildSuperadminMessage(
           `Karta: ${formatSom(snapshot.card.opening_balance)} → kutilgan ${formatSom(snapshot.card.expected_balance)} (kirim ${formatSom(snapshot.card.total_income)}, chiqim ${formatSom(snapshot.card.total_expense)}); farq: ${discrepancyText(snapshot.card.discrepancy)}`,
         ]),
     ...(accountsText && !isBranch ? [accountsText] : []),
+    ...(betweenShiftsLine(snapshot) ? [betweenShiftsLine(snapshot)!] : []),
     `Kuryerlar: ${snapshot.couriers.length} ta, ${formatSom(courierTotal)} · Marketlar: ${snapshot.markets.length} ta, ${formatSom(marketTotal)}`,
     ...(fileKey ? ["📎 To'liq hisobot ilovada."] : []),
   ];
@@ -399,6 +421,7 @@ export function buildBranchMessage(
           moneyLine('💳 Karta', snapshot.card),
         ]
       : [moneyLine('💰 Kassa', snapshot.cash)]),
+    ...(betweenShiftsLine(snapshot) ? [betweenShiftsLine(snapshot)!] : []),
     '',
     `⬇️ Kuryerlardan qabul: ${formatSom(courierTotal)} (${snapshot.couriers.length} ta kuryer)`,
     ...courierLines,

@@ -108,6 +108,19 @@ export async function buildXlsx(
     sheets.push(addCardsSheet(workbook, snapshot));
   }
 
+  const gap = snapshot.between_shifts;
+  if (gap && gap.count) {
+    summary.addRow([]);
+    summary.addRow(['SMENALAR ORASIDA (smenasiz)', '']).font = { bold: true };
+    summary.addRow([
+      'Oraliq',
+      `${tashkentDateTime(gap.from)} → ${tashkentDateTime(gap.to)}`,
+    ]);
+    summary.addRow(['Kirim', formatSom(gap.income)]);
+    summary.addRow(['Chiqim', formatSom(gap.expense)]);
+    summary.addRow(['Amallar soni', gap.count]);
+  }
+
   const couriers = workbook.addWorksheet('Kuryerlar');
   couriers.columns = [
     { header: 'Kuryer', width: 30 },
