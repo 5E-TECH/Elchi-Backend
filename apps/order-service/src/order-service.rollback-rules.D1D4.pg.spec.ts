@@ -513,8 +513,14 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
     );
     // Kuryer qoldig'i (kredit) — kuryer filialga OLDINDAN bergan naqd: u
     // filial kassasida turibdi, kuryerning keyingi topshirig'idan ayiriladi.
+    // RX-6 — (X, M) qoldig'i: filial marketga OLDINDAN bergan naqd.
+    const branchMarketPrepaid = await sumOf(
+      `SELECT SUM(amount) FROM "${orderSchema}".order_settlement_branch_market_carry
+        WHERE branch_id = $1`,
+      [BRANCH],
+    );
     expect(s.branch).toBeCloseTo(
-      branchOwed - s.carries.branch + s.carries.courier,
+      branchOwed - s.carries.branch + s.carries.courier - branchMarketPrepaid,
       2,
     );
     return s;
@@ -941,7 +947,11 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
       // Market kassasi: −205 000 + 205 000 = 0 → payable = min(ulush, 0) = 0.
       expect(await balance(MARKET_ID, Cashbox_type.FOR_MARKET)).toBe(0);
       await expect(managerPaysMarket(1, 'mm-ms-2')).rejects.toMatchObject({
-        error: { statusCode: 400 },
+        error: {
+          statusCode: 400,
+          message:
+            "Summa to'lash mumkin bo'lgan summadan oshib ketdi (To'lash mumkin: 0 so'm)",
+        },
       });
     }, 60_000);
 
@@ -1046,6 +1056,49 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
   };
 
   describe('B-2 — oddiy yo`l: qulf ostida qayta tekshiruv (STATE_CHANGED)', () => {
+    it.each([1, 2, 3])(
+      '⭐ RX-1 #%i: to`lov qarordan KEYIN, pochta so`rovi oynasida commit bo`ladi (hook`siz) — 400 STATE_CHANGED, kreditsiz o`chirish yo`q',
+      async (round) => {
+        await addOrder('7001');
+        await sell(COURIER, '7001');
+        expect((await saleRow('7001'))?.status).toBe(SettlementStatus.PENDING);
+        // Menejer: qaror pochtasiz; endpointning pochta so'rovi (qarordan
+        // keyin, tranzaksiyadan oldin) — shu oynada kuryer topshiradi.
+        const send = (
+          lifecycle as unknown as { logisticsClient: { send: jest.Mock } }
+        ).logisticsClient.send;
+        let paid = false;
+        send.mockImplementationOnce((_pattern: unknown, payload: Row) =>
+          defer(async () => {
+            await courierPays(COURIER_SHARE, `cp-rx1-${round}`);
+            paid = true;
+            return {
+              data: {
+                id: String(payload?.id ?? '9001'),
+                courier_id: COURIER_ID,
+              },
+            };
+          }),
+        );
+        const error = await rejection(MANAGER, '7001', `rb-rx1-${round}`);
+        expect(paid).toBe(true);
+        expect(error).toMatchObject({ statusCode: 400, code: 'STATE_CHANGED' });
+        await relay();
+        await assertInvariants();
+        expect(await orderStatus('7001')).toBe(Order_status.SOLD);
+        expect((await saleRow('7001'))?.status).toBe(
+          SettlementStatus.COURIER_SETTLED,
+        );
+        // Qayta urinish — D1 (kuryerga kredit).
+        await allowedRollback(MANAGER, '7001', `rb-rx1-retry-${round}`);
+        expect(await carry('courier_to_branch', COURIER_ID)).toBe(
+          COURIER_SHARE,
+        );
+        expect(await equity()).toBe(0);
+      },
+      60_000,
+    );
+
     it.each([1, 2, 3])(
       '⭐ #%i (a) kuryer sotdi (PENDING); qaror va tranzaksiya orasida kuryer topshirdi (COURIER_SETTLED) — 400 STATE_CHANGED, daftar mos',
       async (round) => {

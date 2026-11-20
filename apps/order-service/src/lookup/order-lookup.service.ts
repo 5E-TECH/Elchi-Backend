@@ -97,9 +97,9 @@ export class OrderLookupService implements OnModuleInit {
     return this.hqBranchIdCache;
   }
 
-  async getMarketsByIds(ids: string[]) {
+  async getMarketsByIds(ids: string[], opts: { strict?: boolean } = {}) {
     if (!ids.length) return [];
-    const response = await rmqSend<{
+    const call = rmqSend<{
       data?: Array<{
         id: string;
         name?: string;
@@ -118,11 +118,11 @@ export class OrderLookupService implements OnModuleInit {
         region_id?: string | null;
         district_id?: string | null;
       }>;
-    }>(
-      this.identityClient,
-      { cmd: 'identity.market.find_by_ids' },
-      { ids },
-    ).catch(() => ({ data: [] }));
+    }>(this.identityClient, { cmd: 'identity.market.find_by_ids' }, { ids });
+    // `strict` (rollback, RX-3) — transport xatosi «market yo'q» (404) emas.
+    const response = opts.strict
+      ? await call
+      : await call.catch(() => ({ data: [] }));
     return response?.data ?? [];
   }
 
@@ -195,6 +195,11 @@ export class OrderLookupService implements OnModuleInit {
       const response = await rmqSend<{
         data?: {
           id: string;
+          name?: string;
+          tariff_home?: number;
+          tariff_center?: number;
+          role?: string | null;
+          compensation_mode?: string | null;
           can_add_extra_cost?: boolean | null;
           can_sell_cancel?: boolean | null;
         } | null;

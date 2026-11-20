@@ -2410,7 +2410,7 @@ export class OrderLifecycleService {
           (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0,
       )
     ) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
       );
     }
@@ -5952,9 +5952,14 @@ export class OrderLifecycleService {
      * Audit P1, menejer filiali, HQ'ga yetgan qator, PR-C filial to'lagan
      * qator, kuryer topshirgan pul — M6) shu funksiyaga ko'chirilgan.
      */
+    // RX-1 — qaror o'qigan sotuv qatori (surat) shu yerga olinadi; keyin
+    // qayta O'QILMAYDI: tranzaksiyadagi qulf aynan shu surat bilan
+    // solishtiriladi (oradagi har qanday to'lov — STATE_CHANGED).
+    const decidedSales = new Map<string, OrderSettlement | null>();
     const rollbackContexts = await this.loadRollbackContexts(
       [order],
       requester,
+      { saleRows: decidedSales },
     );
     const rollbackDecision: RollbackEligibility = evaluateRollbackEligibility(
       rollbackContexts.get(String(order.id)) as RollbackEligibilityContext,
@@ -5994,10 +5999,15 @@ export class OrderLifecycleService {
       : { data: undefined };
     const post = rollbackPostRes?.data;
 
-    // (SPEC v2) Faqat SOTUV qatori (`kind = 'sale'`).
-    const existingSettlement = await this.orderSettlementRepo.findOne({
-      where: { order_id: String(id), isDeleted: false, kind: 'sale' },
-    });
+    // (SPEC v2) Faqat SOTUV qatori (`kind = 'sale'`) — RX-1: qaror surati
+    // (ikkinchi o'qish yo'q; post lookup oynasidagi to'lov suratni
+    // o'zgartirmaydi, tranzaksiyadagi qulf farqni ko'radi).
+    if (!decidedSales.has(String(order.id))) {
+      this.rollbackStateChanged(
+        "Rollback holati o'zgargan (hisob-kitob qatori o'qilmadi) — qayta urinib ko'ring",
+      );
+    }
+    const existingSettlement = decidedSales.get(String(order.id)) ?? null;
     /**
      * Daftar yo'li (`rollbackDecision.path`):
      *  • `courier_remitted` — M6 / D1 (superadmin yoki menejer): kuryer
@@ -6099,21 +6109,35 @@ export class OrderLifecycleService {
     });
     const saleCourierId = reversalActor.saleCourierId;
 
+    // RX-3 — qat'iy: identity javob bermasa 503 (ro'yxat maydoni «ruxsat»
+    // degan, endpoint esa kodsiz 404 «Market topilmadi» bergan bo'lardi).
     const [market, financialActor] = await Promise.all([
       this.lookup
-        .getMarketsByIds([String(order.market_id)])
+        .getMarketsByIds([String(order.market_id)], { strict: true })
         .then((rows) => rows[0]),
       // hEjjuJaT: super-kuryer — buyurtma viloyati tarifi (snapshot bo'lmasa).
       saleCourierId
         ? this.lookup
-            .getCouriersByIds([saleCourierId], { region_id: order.region_id })
+            .getCouriersByIds([saleCourierId], {
+              region_id: order.region_id,
+              strict: true,
+            })
             .then((rows) => rows[0])
         : isManagerRequester || saCourierless
-          ? this.lookup.getUserById(String(requester.id))
+          ? this.lookup.getUserByIdStrict(String(requester.id))
           : this.lookup
-              .getCouriersByIds([courierId], { region_id: order.region_id })
+              .getCouriersByIds([courierId], {
+                region_id: order.region_id,
+                strict: true,
+              })
               .then((rows) => rows[0]),
-    ]);
+    ]).catch(() => {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Market yoki kuryer ma'lumotini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    });
     if (!market) {
       this.notFound('Market topilmadi');
     }
@@ -7014,6 +7038,10 @@ export class OrderLifecycleService {
       >
     >,
     requester: { id: string; roles?: string[]; branch_id?: string | null },
+    opts: {
+      /** RX-1 — 2-bosqich o'qigan sotuv qatorlari (qaror surati). */
+      saleRows?: Map<string, OrderSettlement | null>;
+    } = {},
   ): Promise<Map<string, RollbackEligibilityContext>> {
     /**
      * A-F3 — har doim qat'iy: tashqi xizmat javob bermasa 503 (ruxsatni
@@ -7202,6 +7230,9 @@ export class OrderLifecycleService {
         saleByOrder.set(String(row.order_id ?? pendingIds[0]), row);
       }
     }
+    for (const orderId of pendingIds) {
+      opts.saleRows?.set(orderId, saleByOrder.get(orderId) ?? null);
+    }
 
     const extraOrderIds = pending
       .filter((order) => Number(order.extra_cost ?? 0) > 0)
@@ -7365,7 +7396,7 @@ export class OrderLifecycleService {
           )
         : [];
       const creditsCourier = creditsCourierOf(sale);
-      const ledgerMismatch = await this.rollbackLedgerMismatch({
+      const ledgerMismatch = this.rollbackLedgerMismatch({
         order,
         sale,
         approvals: orderApprovals,
@@ -7437,27 +7468,32 @@ export class OrderLifecycleService {
         { orderId: String(order.id), courierId },
       ]);
     }
-    for (const [region, items] of byRegion) {
-      let couriers: Array<{
-        id: string;
-        tariff_center?: number;
-        tariff_home?: number;
-      }>;
-      try {
-        couriers = await this.lookup.getCouriersByIds(
-          [...new Set(items.map((item) => item.courierId))],
-          { region_id: region || null, strict: true },
-        );
-      } catch {
-        throw new RpcException({
-          statusCode: 503,
-          message:
-            "Kuryer tarifini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
-        });
-      }
-      const byId = new Map(couriers.map((c) => [String(c.id), c]));
-      for (const item of items) out.set(item.orderId, byId.get(item.courierId));
-    }
+    // Z-1 — viloyatlar parallel (sahifa 1.5 s chegarasiga sig'sin).
+    await Promise.all(
+      [...byRegion].map(async ([region, items]) => {
+        let couriers: Array<{
+          id: string;
+          tariff_center?: number;
+          tariff_home?: number;
+        }>;
+        try {
+          couriers = await this.lookup.getCouriersByIds(
+            [...new Set(items.map((item) => item.courierId))],
+            { region_id: region || null, strict: true },
+          );
+        } catch {
+          throw new RpcException({
+            statusCode: 503,
+            message:
+              "Kuryer tarifini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+          });
+        }
+        const byId = new Map(couriers.map((c) => [String(c.id), c]));
+        for (const item of items) {
+          out.set(item.orderId, byId.get(item.courierId));
+        }
+      }),
+    );
     return out;
   }
 
@@ -7516,7 +7552,7 @@ export class OrderLifecycleService {
    *    qaytimi qator `courier_amount` (+ zanjir) ga teng bo'lmasa.
    * `null` — mos.
    */
-  private async rollbackLedgerMismatch(params: {
+  private rollbackLedgerMismatch(params: {
     order: Parameters<OrderLifecycleService['loadRollbackContexts']>[0][number];
     sale: OrderSettlement | null;
     approvals: OrderExtraCostApproval[];
@@ -7525,7 +7561,7 @@ export class OrderLifecycleService {
     creditsCourier: boolean;
     /** A-F5 — oldindan (batch) o'qilgan tarif; `undefined` — o'qilmagan. */
     courierTariff?: { tariff_center?: number; tariff_home?: number };
-  }): Promise<string | null> {
+  }): string | null {
     const { order, sale, approvals, extraRows, isSuperAdmin, creditsCourier } =
       params;
     const remittedSale = creditsCourier && isRemittedSale(sale) ? sale : null;
@@ -7630,8 +7666,10 @@ export class OrderLifecycleService {
     after: OrderSettlement | null | undefined,
   ): boolean {
     if (!before || !after) return !before && !after;
-    const same = (a: unknown, b: unknown) =>
-      String(a ?? '').trim() === String(b ?? '').trim();
+    const same = (
+      a: string | number | null | undefined,
+      b: string | number | null | undefined,
+    ) => String(a ?? '').trim() === String(b ?? '').trim();
     return (
       String(before.id) === String(after.id) &&
       same(before.status, after.status) &&
@@ -8010,7 +8048,7 @@ export class OrderLifecycleService {
       lock: { mode: 'pessimistic_write' },
     });
     if (row && this.isSettledToHq(row.status)) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
       );
     }
@@ -8020,7 +8058,7 @@ export class OrderLifecycleService {
       row?.market_paid_by_branch_at ||
       (Number(row?.market_paid_by_branch_amount ?? 0) || 0) !== 0
     ) {
-      this.badRequest(
+      this.rollbackStateChanged(
         "Bu buyurtmaning market ulushi filial kassasidan to'langan — rollback mumkin emas (buxgalteriya tuzatishi kerak)",
       );
     }
@@ -8044,7 +8082,7 @@ export class OrderLifecycleService {
     const existingAmount = Number(courierCarry.amount ?? 0) || 0;
     const existingBranchId = String(courierCarry.branch_id ?? '').trim();
     if (toTiyin(existingAmount) > 0 && existingBranchId !== credit.branchId) {
-      this.badRequest(
+      this.rollbackStateChanged(
         'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
       );
     }
@@ -8133,7 +8171,7 @@ export class OrderLifecycleService {
     let courierCarry: OrderSettlementCarry | null = null;
     if (courierCredit) {
       if (courierCredit.branchId !== plan.branchId) {
-        this.badRequest(
+        this.rollbackStateChanged(
           'Kuryer krediti filiali qator filialiga mos emas — rollback bajarilmadi',
         );
       }
@@ -8199,7 +8237,7 @@ export class OrderLifecycleService {
         toTiyin(existingAmount) > 0 &&
         existingBranchId !== courierCredit.branchId
       ) {
-        this.badRequest(
+        this.rollbackStateChanged(
           'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
         );
       }

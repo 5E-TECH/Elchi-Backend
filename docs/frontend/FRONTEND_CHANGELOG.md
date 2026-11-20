@@ -37,7 +37,9 @@ Deploy: **order-service, api-gateway** (migratsiya yo'q). Joriy prod relizidan K
 | Menejer | **D4:** bekor buyurtma — posilka o'z filialida yoki o'z filiali kuryerida | ✅ |
 | Menejer, kuryer | **D4:** bekor posilka jo'natilgan (bekorlar paketi / pochta — `cancelled (sent)` yoki `canceled_post_id`), HQ'da, marketda, `closed` | ❌ 400 `PARCEL_NOT_IN_BRANCH` |
 | Superadmin | **D2:** hammasi — HQ'ga o'tgan, market to'langan, PR-C qatorlari ham | ✅ — naqd ko'chmaydi, daftar teskari (pastda) |
-| Kuryer | avvalgidek (faqat o'ziga biriktirilgan; topshirilgan pul) | ❌ 400 `COURIER_REMITTED` |
+| Kuryer | o'ziga biriktirilgan, pul o'zida (PENDING) | ✅ |
+| Kuryer | pulni filialga topshirgan (COURIER_SETTLED) | ❌ 400 `COURIER_REMITTED` |
+| Kuryer | pul HQ'ga o'tgan / market to'langan / filial marketga to'lagan | ❌ 400 `SUPERADMIN_ONLY` |
 
 M6 xavfsizlik sabablari (manfiy / kredit qator, filialsiz yoki HQ qatori, kuryer boshqa filialga o'tgan, snapshot mos emas) menejerga ham amal qiladi → 400 `SUPERADMIN_ONLY` (aniq sabab `message` da), superadminga → 400 `CORRECTION_REQUIRED`. Masalan: kuryer qo'shimcha xarajat bilan bekor qilib, o'sha kreditni topshiriqda ishlatgan buyurtma (S6) — avtomatik qaytarilmaydi; xabar yo'l ko'rsatadi: «… Superadmin: Moliya → kuryer to'lovlari tarixida shu topshiriqni qaytaring yoki tahrirlang (T6); shundan keyin buyurtmani qaytarish mumkin bo'ladi».
 
@@ -72,7 +74,7 @@ M6 xavfsizlik sabablari (manfiy / kredit qator, filialsiz yoki HQ qatori, kuryer
 
 **Endpointlar**
 - ✏️ [gateway] `GET /orders` (hamma tablar va rollar), `GET /orders/:id`, kuryer ro'yxatlari (`GET /orders/courier/orders`, `GET /orders/courier-orders`): har buyurtmada **`rollback: { allowed, code, message }`** — joriy foydalanuvchi uchun. Sahifaga bitta qo'shimcha so'rov (N+1 yo'q). Order-service javob bermasa yoki 1.5 s da ulgurmasa — `rollback: null` (noma'lum; ro'yxat kechikmaydi). Ko'p rolli foydalanuvchi: ustunlik superadmin > kuryer > menejer (endpoint bilan bir xil). Rollback qila olmaydigan rol — `allowed: false, code: 'NOT_ALLOWED_ROLE'`. (`GET /scan/:token` javobida buyurtma amallari yo'q — maydon qo'shilmagan.)
-- ✏️ [gateway] `POST /orders/rollback/:id`: rad etilganda tanada `code` (yuqoridagi jadval); 403 — `NO_PERMISSION` (rollback roli yo'q — RolesGuard 403, kodsiz). Tashqi xizmat (identity / branch / logistics) javob bermasa — 503 (ruxsat taxmin qilinmaydi). Timeout **60 s** (sotish / bekor qilishdagidek; avval 8 s). `Idempotency-Key` (mavjud): takror — avvalgi natija (200), ayni kalit boshqa tana bilan — 422, bajarilayotgan — 409.
+- ✏️ [gateway] `POST /orders/rollback/:id`: rad etilganda tanada `code` (yuqoridagi jadval); 403 — `NO_PERMISSION` (rollback roli yo'q — RolesGuard 403, kodsiz). Tashqi xizmat (identity / branch / logistics) javob bermasa — 503 (ruxsat taxmin qilinmaydi). Qaror va bajarish orasida to'lov hisob-kitob qatorini o'zgartirsa — 400 `STATE_CHANGED` (qayta urinish yangi qaror bilan). Timeout **60 s** (sotish / bekor qilishdagidek; avval 8 s). `Idempotency-Key` (mavjud): takror — avvalgi natija (200), ayni kalit boshqa tana bilan — 422, bajarilayotgan — 409.
 
 **Frontend action items:**
 - 🔧 «Qaytarish» (rollback) tugmasi — faqat **`rollback.allowed`** dan (`OrdersTable` / `pages/orders`, kuryer ro'yxati `RollbackOrderDialog`, buyurtma tafsiloti / tahriri `new_orders`). Status / rolga qarab o'zingiz hisoblamang. `rollback === null` — tugmani ko'rsatmang (yoki bosilganda server qaror qiladi).
