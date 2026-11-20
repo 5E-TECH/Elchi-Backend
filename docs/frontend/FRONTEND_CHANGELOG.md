@@ -33,7 +33,9 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
   6. tekshirish: `SELECT max("timestamp") FROM order_schema.migrations` = `1716000000245`, `order_settlement` da `market_paid_by_branch_*` ustunlari yo'q;
   7. eski kodni ishga tushirish.
 
-  Konvertatsiyadan keyin (iz jadvalida qator bor) PR-C kodi filial → market yo'lini yopadi: `manager/markets`, `cashbox/user/:marketId` (menejer) va menejer to'lovi — **503** (rollback yarim yo'lda qolsa ham ikki marta to'lanmaydi). 246 `up()` qayta yurgizilsa ham rad etadi (ulushlar qayta tirilmasin): avval qayta solishtiring, so'ng izni tozalang. Skript qulfni 5 s dan ortiq kutmaydi (`lock_timeout`).
+  Konvertatsiyadan keyin (iz jadvalida qator bor) PR-C kodi filial → market yo'lini yopadi: `manager/markets`, `cashbox/user/:marketId` (menejer) va menejer to'lovi — **503** (rollback yarim yo'lda qolsa ham ikki marta to'lanmaydi). 246 `up()` qayta yurgizilsa ham rad etadi (ulushlar qayta tirilmasin). **Fix-forward** (PR-C ni qayta yoqish): xizmatlar to'xtatilgan holda `psql -v ON_ERROR_STOP=1 -f scripts/order/reconcile-246-after-reup.sql` — izdan filial to'lagan holatni, (X, M) qoldiqlarini tiklaydi, ko'chirilgan summalarni `order_settlement_carry` dan ayiradi, 246 ustunlarini o'zi qo'shadi va izni o'chiradi; so'ng `migration:run`. Konvertatsiyadan keyin daftar o'zgargan bo'lsa (qator holati boshqa / o'chirilgan, qoldiq ishlatilgan) — ABORT, qo'lda solishtirish kerak.
+
+  Qulflar va himoyalar: konvertatsiya skripti avval finance kassalarini `EXCLUSIVE` qulflaydi (ochiq menejer to'lovi tugashini kutadi — u kassa qatorini share tekshiruvidan oldin `FOR UPDATE` qiladi, outbox'ga esa oxirida yozadi), so'ng outbox'ni tekshiradi; 246 `down()` ham finance outbox'da yetkazilmagan (`pending`/`failed`) `branch_to_market` advance bo'lsa rad etadi. Skript qulfni 5 s dan ortiq kutmaydi (`lock_timeout`), lekin jonli yozuvchilar (to'lovlar, FIFO) qulf olinguncha va konvertatsiya davomida to'xtab turadi — shuning uchun 3-qadam (xizmatlarni to'xtatish) baribir shart. `db:revert` oxirgi BAJARILGAN migratsiyani (`id`, TypeORM qaytaradigani) va eng yangi `timestamp` li migratsiyani tekshiradi — ikkalasi `--expect` ga teng bo'lmasa hech narsa qaytarmaydi.
 
 **Ta'riflar**
 - **Filial marketi** — o'chirilmagan buyurtmasida `orders.home_branch_id` = menejer filiali bo'lgan market.
@@ -73,7 +75,8 @@ Deploy: **order-service, finance-service, api-gateway** + **migratsiya 171600000
 - 🟢 [ledger] Menejer to'lovidan keyin «HQ ga berilishi kerak» (`branch_summary.branch_payable`, `all-info`) aynan to'langan summaga kamayadi:
   - qolgan qarz = `branch_amount` − filial to'lagan qism (to'liq to'langanda faqat HQ ulushi `branch_amount − market_amount`);
   - admin filialdan pul olganda to'liq to'langan qatorlar darhol «market to'landi» holatiga o'tadi va HQ ularni marketga qayta to'lamaydi; qisman to'langan qatorni HQ marketga faqat qolgan qismini to'laydi;
-  - market ulushi 0 bo'lgan qator (masalan, market ulushi 0 sotuv) ham filial HQ'ga topshirganda darhol «market to'landi» — HQ → market da 0 so'm bilan osilib qolmaydi;
+  - market ulushi 0 bo'lgan qator (masalan, market ulushi 0 sotuv yoki kechiktirilgan E zanjiri) ham filial HQ'ga topshirganda darhol «market to'landi» — HQ → market da 0 so'm bilan osilib qolmaydi; `hq_to_market_at/_by` ham o'sha lahzada yoziladi (filial marketga to'lagan qatorda — yozilmaydi);
+  - ⚠️ Ma'lum, eskidan qolgan: HQ yo'lidagi market ulushi 0 qatorlar (HQ kuryeri / HQ to'g'ridan sotuvi — kuryerdan to'g'ri HQ'ga) hali `BRANCH_SETTLED` da keyingi HQ → market to'lovini kutadi (bu reliz o'zgartirmaydi);
   - HQ'ning market qarzi (moliyaviy balans) ham shunga kamayadi.
 - 🟢 Market ulushi filial tomonidan (qisman yoki to'liq) to'langan buyurtmani rollback qilib bo'lmaydi (400). Filialdan marketga to'lovni T6 bilan tuzatish yoki qaytarish ham avvalgidek yopiq.
 - 🟢 Olib ketish (pickup-visit) haqlari filial to'lovida ushlanmaydi (global, HQ to'lovida).
