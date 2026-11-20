@@ -820,6 +820,76 @@ export class ShiftReportService {
       }),
       couriers,
       markets: [...marketMap.values()],
+      between_shifts: await this.betweenShifts(
+        shift,
+        cashboxUserId,
+        cashboxType,
+      ),
+    };
+  }
+
+  /**
+   * Oldingi smena yopilgandan shu smena ochilguncha (SMENASIZ) shu kassadagi
+   * pul harakati — hech qaysi smenaning kirim/chiqimiga kirmaydi, faqat shu
+   * smenaning ochilish qoldig'ida ko'rinadi. Hisobotda alohida ko'rsatiladi.
+   * Oldingi smena yo'q yoki harakat yo'q — `null`. Faqat o'qish.
+   */
+  private async betweenShifts(
+    shift: Shift,
+    cashboxUserId: string,
+    cashboxType: Cashbox_type,
+  ): Promise<ShiftReportSnapshot['between_shifts']> {
+    const manager = this.dataSource.manager;
+    const previous = await manager
+      .createQueryBuilder(Shift, 's')
+      .select(['s.id', 's.closed_at'])
+      .where('s.isDeleted = false')
+      .andWhere('s.status = :closed', { closed: ShiftStatus.CLOSED })
+      .andWhere('s.id <> :id', { id: shift.id })
+      .andWhere('s.closed_at <= :openedAt', { openedAt: shift.opened_at })
+      .andWhere(
+        cashboxUserId === MAIN_CASHBOX_USER_ID
+          ? "(s.cashbox_user_id = '0' OR s.cashbox_user_id IS NULL)"
+          : 's.cashbox_user_id = :cashbox',
+        { cashbox: cashboxUserId },
+      )
+      .orderBy('s.closed_at', 'DESC')
+      .limit(1)
+      .getOne();
+    if (!previous?.closed_at) return null;
+    const row = await manager
+      .createQueryBuilder(CashboxHistory, 'h')
+      .innerJoin(Cashbox, 'cb', 'cb.id = h.cashbox_id')
+      .select(
+        `COALESCE(SUM(h.amount) FILTER (WHERE h.operation_type = :income), 0)`,
+        'income',
+      )
+      .addSelect(
+        `COALESCE(SUM(h.amount) FILTER (WHERE h.operation_type = :expense), 0)`,
+        'expense',
+      )
+      .addSelect('COUNT(*)', 'count')
+      .where('h.isDeleted = false')
+      .andWhere('cb.isDeleted = false')
+      .andWhere('cb.user_id = :ownerId', { ownerId: cashboxUserId })
+      .andWhere('cb.cashbox_type = :cbType', { cbType: cashboxType })
+      .andWhere('h.createdAt > :from AND h.createdAt < :to', {
+        from: previous.closed_at,
+        to: shift.opened_at,
+      })
+      .setParameters({
+        income: Operation_type.INCOME,
+        expense: Operation_type.EXPENSE,
+      })
+      .getRawOne<{ income: string; expense: string; count: string }>();
+    const count = Number(row?.count ?? 0);
+    if (!count) return null;
+    return {
+      from: previous.closed_at,
+      to: shift.opened_at,
+      income: num(row?.income) ?? 0,
+      expense: num(row?.expense) ?? 0,
+      count,
     };
   }
 
