@@ -76,6 +76,13 @@ const rawOrder = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+/** D1–D4: market / registrator rollback qila olmaydi (so'rovsiz). */
+const NOT_ALLOWED = {
+  allowed: false,
+  code: 'NOT_ALLOWED_ROLE',
+  message: 'Buyurtmani qaytarish faqat superadmin, menejer va kuryer uchun',
+};
+
 describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () => {
   it('begona kuryer — 403', async () => {
     const { controller } = setup(rawOrder());
@@ -91,7 +98,7 @@ describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () 
 
     await expect(
       controller.findById('10', user('300', ['courier'])),
-    ).resolves.toBe(row);
+    ).resolves.toEqual({ ...row, rollback: null });
   });
 
   it("begona market — 403, o'z marketi — buyurtma qaytadi", async () => {
@@ -102,7 +109,7 @@ describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () 
     ).rejects.toBeInstanceOf(ForbiddenException);
     await expect(
       setup(row).controller.findById('10', user('201', ['market'])),
-    ).resolves.toBe(row);
+    ).resolves.toEqual({ ...row, rollback: NOT_ALLOWED });
   });
 
   it("boshqa filial menejeri — 403, o'z filiali menejeri — buyurtma qaytadi", async () => {
@@ -113,7 +120,7 @@ describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () 
     ).rejects.toBeInstanceOf(ForbiddenException);
     await expect(
       setup(row).controller.findById('10', user('5', ['manager'], '21')),
-    ).resolves.toBe(row);
+    ).resolves.toEqual({ ...row, rollback: null });
   });
 
   it("HQ registratori HQ qo'lidagi buyurtmani ko'radi (holder_branch_id NULL)", async () => {
@@ -127,7 +134,7 @@ describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () 
 
     await expect(
       setup(row).controller.findById('10', user('7', ['registrator'], '1')),
-    ).resolves.toBe(row);
+    ).resolves.toEqual({ ...row, rollback: NOT_ALLOWED });
   });
 
   it('superadmin — filial so`rovisiz buyurtma qaytadi', async () => {
@@ -136,7 +143,7 @@ describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () 
 
     await expect(
       controller.findById('10', user('1', ['superadmin'])),
-    ).resolves.toBe(row);
+    ).resolves.toEqual({ ...row, rollback: null });
     expect(branch.send).not.toHaveBeenCalled();
   });
 
@@ -148,7 +155,10 @@ describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () 
     ).rejects.toBeInstanceOf(ForbiddenException);
     await expect(
       setup(wrapped).controller.findById('10', user('300', ['courier'])),
-    ).resolves.toBe(wrapped);
+    ).resolves.toEqual({
+      ...wrapped,
+      data: { ...wrapped.data, rollback: null },
+    });
   });
 });
 

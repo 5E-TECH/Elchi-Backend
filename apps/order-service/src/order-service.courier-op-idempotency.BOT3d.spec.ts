@@ -111,6 +111,11 @@ function setup() {
       statusCode: 200,
       data: { id: '101', status: 'cancelled' },
     }),
+    rollbackOrderToWaiting: jest.fn().mockResolvedValue({
+      statusCode: 200,
+      message: 'Order WAITING holatiga qaytarildi',
+      data: {},
+    }),
   };
   const controller = new OrderServiceController(
     stub(rmqService),
@@ -314,5 +319,59 @@ describe('BOT-3d — kuryer amali Idempotency-Key bog‘lanishi', () => {
     );
     const [row] = [...repo.rows.values()];
     expect(row.pattern).toBe('order.sell');
+  });
+});
+
+/**
+ * (2026-11-19, D1–D4) Rollback ham Idempotency-Key bilan (gateway kalitni
+ * `request_id` qiladi, `order.rollback_waiting` — `runIdempotentCourierOp`):
+ * takror → saqlangan natija (200), boshqa tana → 422, bajarilayotgan → 409.
+ */
+describe('D1–D4 — rollback Idempotency-Key', () => {
+  const rb = (dto: Record<string, unknown> = {}) =>
+    stub({ id: '101', dto, requester, request_id: KEY });
+
+  it('⭐ takroriy so`rov — bitta bajarilish, avvalgi natija (200)', async () => {
+    const { controller, lifecycle } = setup();
+    const first = await controller.rollbackToWaiting(rb(), ctx);
+    const second = await controller.rollbackToWaiting(rb(), ctx);
+    expect(lifecycle.rollbackOrderToWaiting).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+    expect(second).toMatchObject({ statusCode: 200 });
+  });
+
+  it('⭐ ayni kalit, boshqa tana (target) → 422', async () => {
+    const { controller, lifecycle } = setup();
+    await controller.rollbackToWaiting(rb(), ctx);
+    const error = await controller
+      .rollbackToWaiting(rb({ target_status: 'cancelled' }), ctx)
+      .catch((e: RpcException) => e);
+    expect(error).toBeInstanceOf(RpcException);
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 422,
+    });
+    expect(lifecycle.rollbackOrderToWaiting).toHaveBeenCalledTimes(1);
+  });
+
+  it('⭐ ayni kalitli so`rov hali bajarilmoqda → 409', async () => {
+    const { controller, lifecycle } = setup();
+    let finish!: () => void;
+    lifecycle.rollbackOrderToWaiting.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ statusCode: 200, data: {} });
+        }),
+    );
+    const first = controller.rollbackToWaiting(rb(), ctx);
+    await new Promise((resolve) => setImmediate(resolve));
+    const error = await controller
+      .rollbackToWaiting(rb(), ctx)
+      .catch((e: RpcException) => e);
+    expect((error as RpcException).getError()).toMatchObject({
+      statusCode: 409,
+    });
+    finish();
+    await first;
+    expect(lifecycle.rollbackOrderToWaiting).toHaveBeenCalledTimes(1);
   });
 });

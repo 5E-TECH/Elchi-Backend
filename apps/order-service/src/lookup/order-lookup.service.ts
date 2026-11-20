@@ -97,9 +97,9 @@ export class OrderLookupService implements OnModuleInit {
     return this.hqBranchIdCache;
   }
 
-  async getMarketsByIds(ids: string[]) {
+  async getMarketsByIds(ids: string[], opts: { strict?: boolean } = {}) {
     if (!ids.length) return [];
-    const response = await rmqSend<{
+    const call = rmqSend<{
       data?: Array<{
         id: string;
         name?: string;
@@ -118,11 +118,11 @@ export class OrderLookupService implements OnModuleInit {
         region_id?: string | null;
         district_id?: string | null;
       }>;
-    }>(
-      this.identityClient,
-      { cmd: 'identity.market.find_by_ids' },
-      { ids },
-    ).catch(() => ({ data: [] }));
+    }>(this.identityClient, { cmd: 'identity.market.find_by_ids' }, { ids });
+    // `strict` (rollback, RX-3) — transport xatosi «market yo'q» (404) emas.
+    const response = opts.strict
+      ? await call
+      : await call.catch(() => ({ data: [] }));
     return response?.data ?? [];
   }
 
@@ -131,10 +131,13 @@ export class OrderLookupService implements OnModuleInit {
    * super-kuryerning shu viloyat tarifini (courier_regions ?? yassi) qaytaradi;
    * oddiy kuryer va `opts`siz chaqiruvlar o'zgarmaydi.
    */
-  async getCouriersByIds(ids: string[], opts?: { region_id?: string | null }) {
+  async getCouriersByIds(
+    ids: string[],
+    opts?: { region_id?: string | null; strict?: boolean },
+  ) {
     if (!ids.length) return [];
     const regionId = String(opts?.region_id ?? '').trim();
-    const response = await rmqSend<{
+    const call = rmqSend<{
       data?: Array<{
         id: string;
         name?: string;
@@ -151,7 +154,12 @@ export class OrderLookupService implements OnModuleInit {
       this.identityClient,
       { cmd: 'identity.courier.find_by_ids' },
       regionId ? { ids, region_id: regionId } : { ids },
-    ).catch(() => ({ data: [] }));
+    );
+    // `strict` (rollback, A-F5) — xato yutilmaydi: tarifsiz hisob «mos emas»
+    // degan soxta javob berardi.
+    const response = opts?.strict
+      ? await call
+      : await call.catch(() => ({ data: [] }));
     return response?.data ?? [];
   }
 
@@ -185,7 +193,16 @@ export class OrderLookupService implements OnModuleInit {
   async getUserByIdStrict(id: string) {
     try {
       const response = await rmqSend<{
-        data?: { id: string; can_add_extra_cost?: boolean | null } | null;
+        data?: {
+          id: string;
+          name?: string;
+          tariff_home?: number;
+          tariff_center?: number;
+          role?: string | null;
+          compensation_mode?: string | null;
+          can_add_extra_cost?: boolean | null;
+          can_sell_cancel?: boolean | null;
+        } | null;
       }>(
         this.identityClient,
         { cmd: 'identity.user.find_by_id' },
@@ -244,6 +261,48 @@ export class OrderLookupService implements OnModuleInit {
     );
 
     return response?.data ?? null;
+  }
+
+  /**
+   * Rollback ruxsati (D1 / D4) — bir nechta foydalanuvchining HOZIRGI
+   * filiali, bitta so'rov (`branch.user.find_by_user_ids`, ≤ 500 id).
+   * `strict` — xato yutilmaydi (endpoint: «biriktirilmagan» bilan
+   * «branch-service javob bermadi» aralashmasin); aks holda bo'sh xarita.
+   */
+  async getBranchIdsByUserIds(
+    userIds: string[],
+    opts: { strict?: boolean } = {},
+  ): Promise<Map<string, string | null>> {
+    const ids = [
+      ...new Set(userIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    ];
+    const result = new Map<string, string | null>();
+    if (!ids.length) return result;
+    const call = rmqSend<{
+      data?: Array<{
+        user_id?: string | number;
+        branch?: { id?: string | number | null } | null;
+      }>;
+    }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user_ids' },
+      {
+        user_ids: ids,
+        requester: { id: 'system', roles: ['superadmin'] },
+      },
+      { attachRequestId: false, retries: 1 },
+    );
+    const response = opts.strict
+      ? await call
+      : await call.catch(() => ({ data: [] }));
+    for (const row of response?.data ?? []) {
+      const branchId = row?.branch?.id;
+      result.set(
+        String(row?.user_id ?? ''),
+        branchId === null || branchId === undefined ? null : String(branchId),
+      );
+    }
+    return result;
   }
 
   /**
@@ -367,6 +426,27 @@ export class OrderLookupService implements OnModuleInit {
     );
 
     return response?.data ?? [];
+  }
+
+  /**
+   * `getCashboxByUser` bilan AYNI so'rov, lekin transport xatosi YUTILMAYDI
+   * (rollback, WX-5): 404 — `undefined` (kassa yo'q), boshqa xato —
+   * chaqiruvchiga (503 ga aylantiriladi).
+   */
+  async getCashboxByUserStrict(userId: string, cashboxType: Cashbox_type) {
+    try {
+      const response = await rmqSend<{
+        data?: { id: string; balance?: number };
+      }>(
+        this.financeClient,
+        { cmd: 'finance.cashbox.find_by_user' },
+        { user_id: userId, cashbox_type: cashboxType },
+      );
+      return response?.data;
+    } catch (error) {
+      if (rpcErrorStatusOf(error) === 404) return undefined;
+      throw error;
+    }
   }
 
   async getCashboxByUser(userId: string, cashboxType: Cashbox_type) {

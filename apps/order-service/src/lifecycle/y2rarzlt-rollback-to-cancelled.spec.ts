@@ -21,6 +21,7 @@ import {
 import { OrderLifecycleService } from './order-lifecycle.service';
 import { Order } from '../entities/order.entity';
 import { OrderExtraCostApproval } from '../entities/order-extra-cost-approval.entity';
+import { OrderSettlement } from '../entities/order-settlement.entity';
 import { extraCostApprovalTable } from '../testing/extra-cost-kit-spec';
 
 type Row = Record<string, unknown>;
@@ -99,7 +100,10 @@ function makeService(orderOver: Row = {}) {
         ? approvals
         : entity === Order
           ? orderRepo
-          : {},
+          : entity === OrderSettlement
+            ? // B-2 — tranzaksiyadagi sotuv qatori qulfi (o'zgarmagan).
+              { findOne: jest.fn().mockResolvedValue(pendingSettlement) }
+            : {},
     ),
   };
   const queryRunner = {
@@ -149,6 +153,13 @@ function makeService(orderOver: Row = {}) {
         ),
       ),
       getUserById: jest.fn().mockResolvedValue(null),
+      // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+      getCashboxByUserStrict(
+        this: { getCashboxByUser: (...a: unknown[]) => unknown },
+        ...args: unknown[]
+      ) {
+        return this.getCashboxByUser(...args);
+      },
       getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
         Promise.resolve({ id: `${type}-${userId}`, balance: 0 }),
       ),

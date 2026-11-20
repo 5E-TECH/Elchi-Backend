@@ -30,7 +30,21 @@ describe('rollbackOrderToWaiting PARTLY_PAID guard', () => {
         getHqBranchId: jest.fn().mockResolvedValue('1'),
         getMarketsByIds: jest.fn().mockResolvedValue([]),
         getCouriersByIds: jest.fn().mockResolvedValue([]),
+        // A-F4 — rollback qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+        getUserByIdStrict(
+          this: { getUserById: (id: string) => unknown },
+          id: string,
+        ) {
+          return this.getUserById(id);
+        },
         getUserById: jest.fn().mockResolvedValue(null),
+        // WX-5 — rollback kassani qat'iy o'qiydi; mock oddiy o'qishga yo'naltiriladi.
+        getCashboxByUserStrict(
+          this: { getCashboxByUser: (...a: unknown[]) => unknown },
+          ...args: unknown[]
+        ) {
+          return this.getCashboxByUser(...args);
+        },
         getCashboxByUser: jest.fn().mockResolvedValue(null),
         resolveBranchShare: jest.fn().mockResolvedValue(0),
         ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
