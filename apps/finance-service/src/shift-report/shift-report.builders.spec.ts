@@ -283,6 +283,8 @@ describe('T6 — qaytarilgan to`lovlar smena hisobotida', () => {
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
     const all = texts.join('\n');
     expect(all).toContain("qaytarilgan 500 000 so'm");
-    expect(all).toContain('— qaytarildi');
+    // DejaVu shrifti bo'lmasa (masalan macOS) PDF Helvetica'ga tushadi va
+    // `latin1` «—» ni «-» ga almashtiradi — test shriftdan qat'i nazar o'tsin.
+    expect(all).toMatch(/[—-] qaytarildi/);
   });
 });
