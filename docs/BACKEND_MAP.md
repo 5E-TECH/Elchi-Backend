@@ -669,7 +669,19 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   overpayment allowed → negative balance), `POST :id/cancel` (reason
   required; row kept with `cancelled_*`; legacy `elchi` row → 409; repeat →
   200). Balance = Σ non-deleted earnings − Σ non-deleted, non-cancelled
-  payments (legacy `elchi` payments included). The old superadmin cash-out
+  payments (legacy `elchi` payments included). 2026-11-20 — earning
+  backfill (`OperatorEarningBackfillGatewayController`,
+  `/finance/operator-payments/missing-earnings`, MARKET only): an operator
+  whose commission was unset at sale earned nothing and setting it later
+  never re-computed past sales. `GET ?operator_id` previews, `POST
+  { operator_id }` records: own non-deleted operator (`identity.user.
+  find_by_id` role + market, else 404) → order-service
+  `order.operator.sold_orders` (own market, this operator, currently sold,
+  ≤ 5000) → finance `finance.operator.earning.backfill` — inserts at the
+  CURRENT rate only for orders with NO `operator_earnings` row at all (live
+  and rolled-back rows untouched), `ON CONFLICT (order_id) DO NOTHING`,
+  `dry_run` for the preview; activity log `reason: backfill`. No cashbox
+  effect. The old superadmin cash-out
   (`finance.operator.payment.create`, MAIN cashbox expense + `SALARY` ledger)
   is removed — the RMQ handler answers 410 without writing (deploy window).
   Legacy rows keep their cashbox/ledger rows; migr 242 marks them
