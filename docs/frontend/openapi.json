@@ -25987,6 +25987,73 @@
         ]
       }
     },
+    "/market-operators/unlinked-orders": {
+      "get": {
+        "description": "2026-11-20. Shu marketda `operator_id` yo'q, lekin `operator` matni bor buyurtmalar (integratsiya `external_*` dan tashqari) — ism bo'yicha guruhlar (`#`, katta-kichik harf va bo'shliqlar farq qilmaydi), eng ko'pi birinchi, ko'pi bilan 200 guruh. Har guruhda: `name`, `key`, `total_orders`, `sold_orders` (biriktirilsa ulush darhol yoziladi), `order_ids` (eng yangisi birinchi, ko'pi bilan 500).",
+        "operationId": "MarketOperatorOrdersGatewayController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: { groups: [{ name, key, total_orders, sold_orders, order_ids }], total_orders } }"
+          },
+          "403": {
+            "description": "Market emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: operator ismi yozilgan, lekin operatorga bog'lanmagan buyurtmalar (ism bo'yicha guruh)",
+        "tags": [
+          "Market operators"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
+    "/market-operators/unlinked-orders/assign": {
+      "post": {
+        "description": "2026-11-20. `PUT /orders/:id/operator` bilan AYNI qoida, ko'p buyurtmaga: operator — shu marketning faol operatori (bir marta tekshiriladi, aks holda 400); har buyurtma alohida (operatori bor — 409 `ORDER_OPERATOR_ALREADY_ASSIGNED`, integratsiya — 409, begona — 403) — bittasi yiqilsa qolganlari davom etadi. Sotilgan buyurtmada operator ulushi sotuvdagidek yoziladi. Javob: `{ assigned, failed, earnings_recorded, results: [{ id, ok, earning_recorded?, status_code?, code?, message? }] }`.",
+        "operationId": "MarketOperatorOrdersGatewayController_assign",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignUnlinkedOrdersRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data }"
+          },
+          "400": {
+            "description": "Operator bu marketniki emas / faol emas; order_ids noto'g'ri"
+          },
+          "403": {
+            "description": "Market emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market: bir operatorni ko'p buyurtmaga biriktirish",
+        "tags": [
+          "Market operators"
+        ],
+        "x-roles": [
+          "market"
+        ]
+      }
+    },
     "/customers/suggest": {
       "get": {
         "description": "Telefon har qanday formatda (+998 90 123 45 67, 901234567, 0901234567; kamida 7 raqam). Asosiy telefon VA qo'shimcha raqam (`extra_number`, 9444UAa8) bo'yicha qidiriladi; `matched_by`: `phone` | `extra_number` | `name` — qaysi raqam mos kelgani («Qo'shimcha raqam: …» belgisi shundan). WCuZzUCv: market/market operatori/filial xodimi shu marketda buyurtmasi bor mijozlarni (qisman raqam bilan ham) VA boshqa market mijozini faqat TO'LIQ (9 raqamli) asosiy telefon aniq mos kelganda ko'radi (`in_market: false`, sonlar 0, `new_order_ids: []`, `last_order_at: null`; market/operator rolida `address` va `extra_number` null). Sonlar DOIM faqat shu market bo'yicha — boshqa marketlar soni/ID/sanasi qaytmaydi. Admin — hammasini. Har taklifda shu marketdagi `orders_count`, `new_orders_count`, `has_new_orders` (takroriy buyurtma ogohlantirishi). Ko'pi bilan 10 ta.",
@@ -39411,6 +39478,31 @@
         },
         "required": [
           "status"
+        ]
+      },
+      "AssignUnlinkedOrdersRequestDto": {
+        "type": "object",
+        "properties": {
+          "operator_id": {
+            "type": "string",
+            "example": "41",
+            "description": "Shu marketning FAOL operatori (`GET /market-operators/selectable` ro`yxatidan). Begona / nofaol — 400."
+          },
+          "order_ids": {
+            "example": [
+              "55120",
+              "55121"
+            ],
+            "description": "Biriktiriladigan buyurtmalar (1…100) — odatda `GET market-operators/unlinked-orders` guruhidagi `order_ids`",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "operator_id",
+          "order_ids"
         ]
       },
       "DeliveryTariffRowDto": {
