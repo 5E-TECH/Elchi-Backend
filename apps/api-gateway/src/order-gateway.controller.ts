@@ -3333,15 +3333,67 @@ export class OrderGatewayController {
     ) {
       throw new BadRequestException('market_id majburiy');
     }
+    // Market aniqlangach, mijoz yaratilishidan OLDINgi tekshiruvlar (market,
+    // mahsulotlar, tanlangan operator, operator ismi) bir-biriga bog'liq
+    // emas — faqat `resolvedMarketId` ga. Ular BIRDANIGA ishga tushiriladi
+    // (ilgari ketma-ket: har biri alohida RPC kutishi), natija esa pastda
+    // AVVALGI TARTIBDA kutiladi: birinchi (tartib bo'yicha) xato otiladi —
+    // keyingi tekshiruv tezroq yiqilgan bo'lsa ham. Shuning uchun oddiy
+    // `Promise.all` emas (u vaqt bo'yicha birinchi xatoni beradi).
+    // Tekshiruvlar faqat o'qiydi — xato yo'lidagi ortiqcha so'rov zararsiz.
+    //
     // UER0MpMX: mijoz yaratilishidan OLDIN — rad etilsa yetim mijoz qolmaydi.
     // ai-confirm (opts.marketId) marketni partiya boshida, mahsulot egaligini
     // esa o'z lookup'ida allaqachon tekshirgan — takrorlanmaydi.
-    let marketProfile: OrderMarketPhonePolicy | null =
-      opts?.marketProfile ?? null;
-    if (!opts?.marketId) {
-      marketProfile = await this.assertOrderMarket(resolvedMarketId, roles);
-      await this.assertOrderProductsOwned(resolvedMarketId, dto.items ?? []);
+    const marketCheck: Promise<OrderMarketPhonePolicy | null> = opts?.marketId
+      ? Promise.resolve(opts?.marketProfile ?? null)
+      : this.assertOrderMarket(resolvedMarketId, roles);
+    const productsCheck: Promise<void> = opts?.marketId
+      ? Promise.resolve()
+      : this.assertOrderProductsOwned(resolvedMarketId, dto.items ?? []);
+    // Formadagi «Operator» tanlovi (`operator_id`) — yakuniy market
+    // aniqlangach, mijoz yaratilishidan OLDIN: shu marketning faol operatori
+    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). ai-confirm `orders[].operator_id`
+    // ni shu yerga uzatadi (400 → shu buyurtma `create_failed`); bot yo'li
+    // (`botOrderCreate`) va Telegram AI (hozircha) uni yubormaydi.
+    const chosenOperatorCheck: Promise<ChosenOrderOperator | null> =
+      opts?.chosenOperator
+        ? Promise.resolve(opts.chosenOperator)
+        : resolveChosenOrderOperator({
+            operatorId: dto.operator_id,
+            roles,
+            requesterId: req.user.sub,
+            marketId: resolvedMarketId,
+            loadSelectable: (payload) =>
+              this.sendIdentityWithTimeout(
+                { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
+                payload,
+              ),
+          });
+    // Ism faqat operator TANLANMAGANDA ishlatiladi (pastda). Hisoblash xato
+    // bermaydi (fail-open) va deyarli doim RPC'siz — `requesterName` market
+    // operatorida yuqorida, ai-confirm'da partiya boshida olingan.
+    const operatorNameCheck: Promise<string | null> =
+      this.resolveCreateOperatorName(
+        safeOrderDto.operator,
+        roles,
+        req.user,
+        requesterName,
+      );
+    // Oldingi tekshiruv yiqilsa keyingilari kutilmaydi — ularning xatosi
+    // «unhandled rejection» bo'lib jarayonni yiqitmasin. `await` baribir
+    // asl promise xatosini oladi.
+    for (const check of [
+      marketCheck,
+      productsCheck,
+      chosenOperatorCheck,
+      operatorNameCheck,
+    ]) {
+      check.catch(() => undefined);
     }
+
+    const marketProfile = await marketCheck;
+    await productsCheck;
     // VRyloH62: operator raqamlari va ismi — mijoz yaratilishidan OLDIN
     // (raqam majburiy bo'lsa 400 yetim mijoz qoldirmaydi). Bot formasida
     // raqam maydoni yo'q — u yerda 400 berilmaydi (BeePost bot yo'li kabi).
@@ -3353,34 +3405,10 @@ export class OrderGatewayController {
       secondaryOperatorPhone: dto.secondary_operator_phone,
       strict: opts?.createdVia !== 'bot',
     });
-    // Formadagi «Operator» tanlovi (`operator_id`) — yakuniy market
-    // aniqlangach, mijoz yaratilishidan OLDIN: shu marketning faol operatori
-    // bo'lmasa 400 (SUPERADMIN/ADMIN ham). ai-confirm `orders[].operator_id`
-    // ni shu yerga uzatadi (400 → shu buyurtma `create_failed`); bot yo'li
-    // (`botOrderCreate`) va Telegram AI (hozircha) uni yubormaydi.
-    const chosenOperator =
-      opts?.chosenOperator ??
-      (await resolveChosenOrderOperator({
-        operatorId: dto.operator_id,
-        roles,
-        requesterId: req.user.sub,
-        marketId: resolvedMarketId,
-        loadSelectable: (payload) =>
-          this.sendIdentityWithTimeout(
-            { cmd: MARKET_OPERATOR_SELECTABLE_CMD },
-            payload,
-          ),
-      }));
+    const chosenOperator = await chosenOperatorCheck;
     // Operator tanlangan bo'lsa ism — uniki (yozilgan matn ham, so'rovchi
     // ismi ham ishlatilmaydi).
-    const filledOperatorName = chosenOperator
-      ? null
-      : await this.resolveCreateOperatorName(
-          safeOrderDto.operator,
-          roles,
-          req.user,
-          requesterName,
-        );
+    const filledOperatorName = chosenOperator ? null : await operatorNameCheck;
     // 2026-11-04: yozilgan `operator` — odam ismi («Operator ismi»): har so'z
     // bosh harfi katta (veb forma va AI paneli bilan bir xil). Shu yerdan
     // `POST /orders`, `POST /orders/ai-confirm` (veb AI va Telegram bot) va
