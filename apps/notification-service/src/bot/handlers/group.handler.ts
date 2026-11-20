@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { NotificationServiceService } from '../../notification-service.service';
 import { BotRateLimiterService } from '../bot-rate-limiter.service';
+import { BranchTelegramService } from '../../telegram/branch-telegram.service';
 import type { BotContext, BotMessageHandler } from './bot-context';
 import type { TelegramUser } from '../telegram.types';
 import {
@@ -11,7 +12,7 @@ import {
 } from './start.handler';
 
 export const GROUP_START_TEXT =
-  'Salom. Guruhni marketga ulash uchun Elchi kabinetidagi «Telegram guruhini ulash» havolasini oching va shu guruhni tanlang (havola bir martalik, 10 daqiqa amal qiladi). Bekor qilingan buyurtmalar guruhi uchun alohida havola oling.';
+  'Salom. Guruhni marketga ulash uchun Elchi kabinetidagi «Telegram guruhini ulash» havolasini oching va shu guruhni tanlang (havola bir martalik, 10 daqiqa amal qiladi). Bekor qilingan buyurtmalar guruhi uchun alohida havola oling. Filial kassasi hisobotlari uchun — filial sahifasidagi «Telegram guruhini ulash» havolasi.';
 export const GROUP_HELP_TEXT =
   'Mavjud komandalar: /start, /help, /id (guruh ID si). Ulash — faqat kabinetdagi bir martalik havola orqali. Ulangan guruhni almashtirish faqat admin orqali.';
 /** (6jXw0DDr #1-#3) matnli `group_token-…` bilan ulash olib tashlandi. */
@@ -28,9 +29,12 @@ const GROUP_TOKEN_TEXT_RE = /^group_token-.+/i;
  */
 @Injectable()
 export class GroupHandler implements BotMessageHandler {
+  private readonly logger = new Logger(GroupHandler.name);
+
   constructor(
     private readonly notifications: NotificationServiceService,
     private readonly limiter: BotRateLimiterService,
+    @Optional() private readonly branches?: BranchTelegramService,
   ) {}
 
   async handle(ctx: BotContext): Promise<boolean> {
@@ -47,6 +51,7 @@ export class GroupHandler implements BotMessageHandler {
       const result = await this.notifications.connectGroupByCodeText(
         code[1],
         ctx.chatId,
+        ctx.update.message?.chat?.title ?? null,
       );
       await ctx.reply(result.message);
       return true;
@@ -75,10 +80,15 @@ export class GroupHandler implements BotMessageHandler {
   async onNewMembers(ctx: BotContext, members: TelegramUser[]): Promise<void> {
     const humans = members.filter((member) => member && !member.is_bot);
     if (!humans.length) return;
-    await this.notifications.warnGroupNewMembers(
-      ctx.chatId,
-      ctx.update.message?.chat?.title ?? null,
-      humans,
-    );
+    const title = ctx.update.message?.chat?.title ?? null;
+    await this.notifications.warnGroupNewMembers(ctx.chatId, title, humans);
+    // Filial kassasi guruhi — guruhni ulagan xodim ogohlantiriladi (summalar ko'rinadi).
+    await this.branches
+      ?.warnNewMembers(ctx.chatId, title, humans)
+      .catch((error: unknown) =>
+        this.logger.warn(
+          `filial guruhi yangi a'zo xabari: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
   }
 }

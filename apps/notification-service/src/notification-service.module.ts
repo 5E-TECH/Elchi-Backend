@@ -47,6 +47,9 @@ import { PaymentAckActions } from './bot/finance/payment-ack.actions';
 import { DispatchDedupService } from './dedup/dispatch-dedup.service';
 import { TelegramOrderCard } from './entities/telegram-order-card.entity';
 import { TelegramChat } from './entities/telegram-chat.entity';
+import { TelegramBranchSetting } from './entities/telegram-branch-setting.entity';
+import { BranchTelegramService } from './telegram/branch-telegram.service';
+import { BranchTelegramController } from './telegram/branch-telegram.controller';
 import { TelegramAiDraft } from './entities/telegram-ai-draft.entity';
 import { AiOrderService } from './bot/ai-order/ai-order.service';
 import {
@@ -172,6 +175,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
       TelegramOrderCard,
       // (ysBqD9Nx #5) umumlashtirilgan chat sxemasi (migratsiya 126).
       TelegramChat,
+      // Filial kassasi hisoboti qayerga (migratsiya 247).
+      TelegramBranchSetting,
       // (e7KhaeOO) AI buyurtma qoralamalari (migratsiya 128).
       TelegramAiDraft,
     ]),
@@ -190,6 +195,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     CampaignReportController,
     DispatchHistoryController,
     TelegramDmController,
+    BranchTelegramController,
     CourierScanController,
     NotificationTemplateController,
     AudienceSegmentController,
@@ -277,6 +283,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     NotificationEscalationService,
     DispatchHistoryService,
     TelegramDmService,
+    BranchTelegramService,
     TelegramDmDeliveryReportService,
     NotificationTemplateService,
     AudienceSegmentService,

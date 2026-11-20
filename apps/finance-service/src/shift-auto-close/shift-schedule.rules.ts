@@ -36,11 +36,18 @@ export interface AutoCloseSettings {
   warn_before_min: number;
 }
 
-export type ReportRecipientGroup = 'superadmin' | 'couriers' | 'markets';
+/**
+ * `branches` — filial kassasi (asosiy kassa — HQ filiali) hisoboti: telegram
+ * — filial guruhiga yoki (filial sozlamasi `private`) menejerlarning shaxsiy
+ * chatiga; in_app — filial menejerlariga.
+ */
+export type ReportRecipientGroup =
+  'superadmin' | 'couriers' | 'markets' | 'branches';
 export const REPORT_RECIPIENT_GROUPS: readonly ReportRecipientGroup[] = [
   'superadmin',
   'couriers',
   'markets',
+  'branches',
 ];
 
 export interface ReportChannels {
@@ -63,6 +70,8 @@ export interface ReportSettings {
  * qilinmaguncha haqiqiy kuryer / market / superadminga hech narsa ketmaydi
  * (`deliver` → `report_status = 'skipped'`, outbox / fayl yo'q). Superadmin
  * `PATCH /finance/shift/settings` `report.recipients` bilan yoqadi. Format PDF.
+ * ISTISNO — `branches.telegram` (sukut yoqiq): hisobot faqat filial guruhi
+ * ulanganda yoki filial «shaxsiy chat» ni tanlaganda ketadi.
  */
 export const AUTO_CLOSE_DEFAULTS: AutoCloseSettings = Object.freeze({
   enabled: false,
@@ -76,6 +85,9 @@ export const REPORT_DEFAULTS: ReportSettings = Object.freeze({
     superadmin: { telegram: false, in_app: false },
     couriers: { telegram: false, in_app: false },
     markets: { telegram: false, in_app: false },
+    // Filial guruhi: guruh ULANGANDA (yoki menejer «shaxsiy chat» ni
+    // tanlaganda) hisobot o'zi ketadi — ulashning o'zi rozilik.
+    branches: { telegram: true, in_app: false },
   },
   format: 'pdf',
 }) as ReportSettings;
@@ -487,7 +499,7 @@ export function parseReportPatch(
     for (const key of Object.keys(patch)) {
       if (!REPORT_RECIPIENT_GROUPS.includes(key as ReportRecipientGroup)) {
         throw new ShiftSettingsError(
-          `report.recipients.${key.slice(0, 40)} noma'lum (superadmin | couriers | markets)`,
+          `report.recipients.${key.slice(0, 40)} noma'lum (superadmin | couriers | markets | branches)`,
         );
       }
     }

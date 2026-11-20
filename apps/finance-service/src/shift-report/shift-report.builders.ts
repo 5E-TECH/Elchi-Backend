@@ -319,6 +319,118 @@ export function buildMarketMessage(
   };
 }
 
+/** Ro'yxatda ko'rsatiladigan kuryer / market qatorlari soni (qolgani «… yana N ta»). */
+const BRANCH_LIST_LIMIT = 10;
+
+const branchLabel = (
+  snapshot: Pick<ShiftReportSnapshot, 'cashbox_type' | 'cashbox_user_id'>,
+  branchName: string | null | undefined,
+): string => {
+  const name = String(branchName ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  if (snapshot.cashbox_type === 'main') {
+    return name ? `Asosiy kassa (${name})` : 'Asosiy kassa';
+  }
+  return name
+    ? `«${name}» filiali`
+    : `Filial kassasi #${snapshot.cashbox_user_id}`;
+};
+
+const moneyLine = (label: string, block: ShiftMoneyBlock): string =>
+  `${label}: ${formatSom(block.opening_balance)} → kutilgan ${formatSom(block.expected_balance)} (kirim ${formatSom(block.total_income)}, chiqim ${formatSom(block.total_expense)})` +
+  (block.closing_balance != null
+    ? `\n   Sanalgan: ${formatSom(block.closing_balance)} · farq: ${discrepancyText(block.discrepancy)}`
+    : `\n   Farq: ${discrepancyText(block.discrepancy)}`);
+
+/**
+ * Filial kassasi hisoboti — filial GURUHIGA yoki (filial `private`)
+ * menejerlarning SHAXSIY chatiga. To'liq kassa xulosasi: qoldiq, kirim /
+ * chiqim, sanalgan va farq, kuryerlardan qabul va marketlarga to'lovlar
+ * (ism + summa, birinchi 10 tasi). Filial kassasi bitta jami chelak
+ * (63HO6cBU) — karta qatori faqat asosiy kassada.
+ *
+ * `telegram_text` — guruh uchun tayyor HTML (escape qilingan).
+ */
+export function buildBranchMessage(
+  snapshot: ShiftReportSnapshot,
+  branchName: string | null | undefined,
+  cabinetUrl = DEFAULT_CABINET_URL,
+): ShiftReportMessage & { telegram_text: string } {
+  const auto = snapshot.close_reason === 'auto';
+  const label = branchLabel(snapshot, branchName);
+  const isMain = snapshot.cashbox_type === 'main';
+  const courierTotal = snapshot.couriers.reduce((sum, c) => sum + c.total, 0);
+  const marketTotal = snapshot.markets.reduce((sum, m) => sum + m.total, 0);
+  const courierLines = [...snapshot.couriers]
+    .sort((a, b) => b.total - a.total)
+    .slice(0, BRANCH_LIST_LIMIT)
+    .map(
+      (c) =>
+        `   • ${c.name ?? `Kuryer #${c.courier_id}`} — ${formatSom(c.total)} (${c.count} ta)`,
+    );
+  if (snapshot.couriers.length > BRANCH_LIST_LIMIT) {
+    courierLines.push(
+      `   … yana ${snapshot.couriers.length - BRANCH_LIST_LIMIT} ta`,
+    );
+  }
+  const marketLines = [...snapshot.markets]
+    .sort((a, b) => b.total - a.total)
+    .slice(0, BRANCH_LIST_LIMIT)
+    .map(
+      (m) =>
+        `   • ${m.name ?? `Market #${m.market_id}`} — ${formatSom(m.total)}`,
+    );
+  if (snapshot.markets.length > BRANCH_LIST_LIMIT) {
+    marketLines.push(
+      `   … yana ${snapshot.markets.length - BRANCH_LIST_LIMIT} ta`,
+    );
+  }
+  const lines = [
+    `Smena #${snapshot.shift_id} · ${tashkentDateTime(snapshot.opened_at)} → ${tashkentDateTime(snapshot.closed_at)}`,
+    auto
+      ? `⏰ ${autoClosedLabel(snapshot.closed_at)}`
+      : `👤 Yopdi: ${snapshot.closed_by_name ?? (snapshot.closed_by ? `#${snapshot.closed_by}` : '—')}`,
+    '',
+    ...(isMain
+      ? [
+          moneyLine('💵 Naqd', snapshot.cash),
+          moneyLine('💳 Karta', snapshot.card),
+        ]
+      : [moneyLine('💰 Kassa', snapshot.cash)]),
+    '',
+    `⬇️ Kuryerlardan qabul: ${formatSom(courierTotal)} (${snapshot.couriers.length} ta kuryer)`,
+    ...courierLines,
+    `⬆️ Marketlarga to'lov: ${formatSom(marketTotal)} (${snapshot.markets.length} ta market)`,
+    ...marketLines,
+  ];
+  const title = auto
+    ? `⏰ ${label} — kassa avtomatik yopildi`
+    : `🧾 ${label} — kassa yopildi`;
+  const body = lines.join('\n').slice(0, 3000);
+  return {
+    title,
+    body,
+    data: {
+      ...baseData(snapshot),
+      kind: 'branch',
+      cashbox_type: snapshot.cashbox_type,
+      cashbox_user_id: snapshot.cashbox_user_id,
+      expected_balance: snapshot.cash.expected_balance,
+      closing_balance: snapshot.cash.closing_balance,
+      discrepancy: snapshot.cash.discrepancy,
+      couriers_count: snapshot.couriers.length,
+      couriers_total: Math.round(courierTotal * 100) / 100,
+      markets_count: snapshot.markets.length,
+      markets_total: Math.round(marketTotal * 100) / 100,
+      telegram_cabinet_link: true,
+    },
+    link: SHIFT_REPORT_LINK(snapshot.shift_id),
+    telegram_text: `<b>${escapeTelegramHtml(title)}</b>\n\n${escapeTelegramHtml(body)}\n\n🌐 <a href="${cabinetLinks(cabinetUrl).shiftReport(snapshot.shift_id)}">Kabinetda ochish</a>`,
+  };
+}
+
 /** Telegram `delivery` sababi → «Hisobot kimlarga yuborildi» blokidagi matn. */
 export function deliveryReasonText(reason: string | null | undefined): string {
   const value = String(reason ?? '').trim();
@@ -334,6 +446,9 @@ export function deliveryReasonText(reason: string | null | undefined): string {
     return 'Telegram guruhi ulanmagan';
   }
   if (value === 'no_provider') return 'Telegram bot sozlanmagan';
+  if (value === 'branch_group_inactive') {
+    return 'Filial guruhi nofaol (bot chiqarilgan yoki huquqi olingan)';
+  }
   if (value === 'disabled_by_settings') return "Sozlamada o'chirilgan";
   return value.slice(0, 200);
 }

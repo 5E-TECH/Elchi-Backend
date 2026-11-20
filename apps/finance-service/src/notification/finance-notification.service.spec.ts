@@ -759,21 +759,51 @@ describe('modul ulanishi va TC5 analogi', () => {
     expect(src).toMatch(/FinanceNotificationService/);
   });
 
+  /**
+   * Yagona istisno — FAQAT O'QISH: smena hisoboti filial kassasi hisoboti
+   * qayerga (guruh / shaxsiy chat) ekanini `notification.telegram.branch_route`
+   * bilan so'raydi. Xabar yuborish (dispatch) u yerda ham faqat outbox orqali.
+   */
+  const READ_ONLY_NOTIFICATION_CLIENT = join(
+    'shift-report',
+    'shift-report.service.ts',
+  );
+
   it('grep bo‘sh: notification.dispatch faqat outbox orqali, NOTIFICATION mijozi inject qilinmaydi', () => {
     const offenders: string[] = [];
     for (const file of walk(SRC).filter(
       (f) => f.endsWith('.ts') && !f.endsWith('.spec.ts'),
     )) {
       const src = strip(readFileSync(file, 'utf8'));
+      const readOnlyException = file.endsWith(READ_ONLY_NOTIFICATION_CLIENT);
       if (
         /rmqSend\([^;]*notification\.dispatch/s.test(src) ||
         /\.(send|emit)\(\s*\{\s*cmd:\s*['"]notification\./.test(src) ||
-        /@Inject\(\s*['"]NOTIFICATION['"]\s*\)/.test(src)
+        (!readOnlyException &&
+          /@Inject\(\s*['"]NOTIFICATION['"]\s*\)/.test(src))
       ) {
         offenders.push(file.replace(SRC, ''));
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('istisno: shift-report NOTIFICATION mijozini faqat branch_route (o‘qish) uchun ishlatadi', () => {
+    const src = strip(
+      readFileSync(join(SRC, READ_ONLY_NOTIFICATION_CLIENT), 'utf8'),
+    );
+    const uses = src.match(/this\.notificationClient\b/g) ?? [];
+    // `if (!this.notificationClient …)` tekshiruvlari + bitta rmqSend.
+    const sends = src.match(
+      /rmqSend[^;]*?this\.notificationClient,\s*\{\s*cmd:\s*([A-Z_]+|'[^']+')/g,
+    );
+    expect(sends).toHaveLength(1);
+    expect(sends?.[0]).toContain('BRANCH_TELEGRAM_ROUTE_PATTERN');
+    expect(src).toMatch(
+      /BRANCH_TELEGRAM_ROUTE_PATTERN\s*=\s*'notification\.telegram\.branch_route'/,
+    );
+    expect(src).not.toMatch(/notification\.dispatch/);
+    expect(uses.length).toBeGreaterThanOrEqual(1);
   });
 });
 

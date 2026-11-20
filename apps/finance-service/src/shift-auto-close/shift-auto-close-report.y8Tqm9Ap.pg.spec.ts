@@ -604,6 +604,8 @@ describePg(
           superadmin: { telegram: false, in_app: false },
           couriers: { telegram: false, in_app: false },
           markets: { telegram: false, in_app: false },
+          // Filial guruhi — faqat guruh ulanganda ketadi (bu yerda ulanmagan).
+          branches: { telegram: true, in_app: false },
         });
         await seedOperations();
         await closeManually();
