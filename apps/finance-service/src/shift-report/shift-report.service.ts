@@ -53,7 +53,9 @@ import {
 } from './shift-report.builders';
 import {
   REPORT_MIME,
+  buildMarketXlsx,
   buildReportFile,
+  marketReportFileName,
   reportFileName,
 } from './shift-report.file';
 
@@ -128,6 +130,22 @@ interface PlannedRecipient {
 export interface BranchTelegramRoute {
   report_target: 'group' | 'private';
   group: { active: boolean; inactive_reason: string | null } | null;
+}
+
+/** Xabarga Telegram ilovasini (file-service kaliti) qo'shadi — yangi obyekt. */
+function withExcel<T extends ShiftReportMessage>(
+  message: T,
+  key: string,
+  caption: string,
+): T {
+  return {
+    ...message,
+    data: {
+      ...message.data,
+      telegram_media: [key],
+      telegram_media_caption: caption,
+    },
+  };
 }
 
 export interface ShiftReportDeliverResult {
@@ -289,6 +307,7 @@ export class ShiftReportService {
           if (recipient.kind === 'superadmin') recipient.message = superMessage;
         }
       }
+      await this.attachExcel(snapshot, report, recipients, linked, fileKey);
       const type: FinanceNotificationType =
         snapshot.close_reason === 'auto'
           ? 'finance.shift_auto_closed'
@@ -1140,19 +1159,105 @@ export class ShiftReportService {
   }
 
   /** Fayl → file-service (`shift-report`, private). Xato — ilovasiz davom. */
-  private async storeFile(
+  /**
+   * Xabar + EXCEL: Telegram'ga ketadigan qabul qiluvchilarga XLSX ilova.
+   *  - filial guruhi (faol) va filial menejerlari (shaxsiy chat) — to'liq
+   *    hisobot (shu kassa; asosiy kassa — HQ filiali); superadmin fayli XLSX
+   *    bo'lsa o'sha kalit qayta ishlatiladi;
+   *  - market — egasi Telegram'ga ulangan (shaxsiy chat) bo'lsa, FAQAT o'z
+   *    to'lovlari Excel'i. Ulanmagan market guruhiga — summasiz xabar, fayl
+   *    YO'Q (BOT-2 #3).
+   * Fayl saqlanmasa — xabar baribir ketadi (fail-soft).
+   */
+  private async attachExcel(
+    snapshot: ShiftReportSnapshot,
+    report: ReportSettings,
+    recipients: PlannedRecipient[],
+    linked: Map<string, boolean> | null,
+    superFileKey: string | null,
+  ): Promise<void> {
+    const wantsFull = recipients.filter(
+      (r) =>
+        r.channels.telegram &&
+        ((r.kind === 'branch' && r.group?.active) ||
+          r.kind === 'branch_manager'),
+    );
+    if (wantsFull.length) {
+      const key =
+        superFileKey && report.format === 'xlsx'
+          ? superFileKey
+          : await this.storeBuffer(
+              snapshot.shift_id,
+              () => buildReportFile(snapshot, 'xlsx'),
+              reportFileName(snapshot.shift_id, 'xlsx'),
+              REPORT_MIME.xlsx,
+            );
+      if (key) {
+        for (const recipient of wantsFull) {
+          recipient.message = withExcel(
+            recipient.message,
+            key,
+            "📎 To'liq hisobot (Excel)",
+          );
+        }
+      }
+    }
+    for (const recipient of recipients) {
+      if (
+        recipient.kind !== 'market' ||
+        !recipient.channels.telegram ||
+        linked?.get(recipient.recipient_id) !== true
+      ) {
+        continue;
+      }
+      const slice = snapshot.markets.find(
+        (item) => item.market_id === recipient.recipient_id,
+      );
+      if (!slice) continue;
+      const key = await this.storeBuffer(
+        snapshot.shift_id,
+        () => buildMarketXlsx(snapshot, slice),
+        marketReportFileName(snapshot.shift_id, slice.market_id),
+        REPORT_MIME.xlsx,
+      );
+      if (key) {
+        recipient.message = withExcel(
+          recipient.message,
+          key,
+          "📎 Sizga to'lovlar (Excel)",
+        );
+      }
+    }
+  }
+
+  private storeFile(
     snapshot: ShiftReportSnapshot,
     report: ReportSettings,
   ): Promise<string | null> {
+    return this.storeBuffer(
+      snapshot.shift_id,
+      () => buildReportFile(snapshot, report.format),
+      reportFileName(snapshot.shift_id, report.format),
+      REPORT_MIME[report.format],
+    );
+  }
+
+  /** Fayl → file-service (private, `shift-report`). Xato — `null` (WARN). */
+  private async storeBuffer(
+    shiftId: string,
+    build: () => Promise<Buffer>,
+    fileName: string,
+    mimeType: string,
+  ): Promise<string | null> {
     if (!this.fileClient) return null;
     try {
-      const buffer = await buildReportFile(snapshot, report.format);
+      const buffer = await build();
       const response = await rmqSend<{ data?: { key?: unknown } }>(
         this.fileClient,
         { cmd: 'file.upload' },
         {
-          file_name: reportFileName(snapshot.shift_id, report.format),
-          mime_type: REPORT_MIME[report.format],
+          file_name: fileName,
+          mime_type: mimeType,
           file_base64: buffer.toString('base64'),
           folder: 'shift-report',
           // (dgvwZasd B) Tizim yaratadi — yuklovchi foydalanuvchi yo'q.
@@ -1164,7 +1269,7 @@ export class ShiftReportService {
       return typeof key === 'string' && key ? key : null;
     } catch (error) {
       this.logger.warn(
-        `smena #${snapshot.shift_id} hisobot fayli saqlanmadi: ${short(error)}`,
+        `smena #${shiftId} hisobot fayli (${fileName}) saqlanmadi: ${short(error)}`,
       );
       return null;
     }
