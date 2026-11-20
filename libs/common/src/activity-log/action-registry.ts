@@ -744,6 +744,26 @@ export const ACTIVITY_ACTION_REGISTRY: Readonly<
     'link',
     'green',
   ),
+  // Filial kassasi Telegram guruhi: bir martalik kod bilan ulandi / panelda
+  // uzildi; kassa hisoboti qayerga (guruh | menejerlar shaxsiy chati).
+  'notification.tg_branch_group_linked': entry(
+    'Filial kassa guruhi ulandi',
+    'notification',
+    'link',
+    'green',
+  ),
+  'notification.tg_branch_group_unlinked': entry(
+    'Filial kassa guruhi uzildi',
+    'notification',
+    'unlink',
+    'slate',
+  ),
+  'notification.tg_branch_report_target': entry(
+    "Filial kassa hisoboti manzili o'zgardi",
+    'notification',
+    'settings',
+    'blue',
+  ),
   // (ysBqD9Nx, ega qarori #3) market guruhiga yuborilgan/tahrirlangan buyurtma
   // kartasi — "kim ko'rdi" savoliga iz (qaysi guruh, qaysi buyurtma, qachon).
   'notification.tg_group_card': entry(

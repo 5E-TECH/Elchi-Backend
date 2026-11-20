@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { TelegramChats1716000000126 } from '../../../../../migrations/1716000000126-TelegramChats';
+import { TelegramBranchChats1716000000248 } from '../../../../../migrations/1716000000248-TelegramBranchChats';
 import { TelegramChat } from '../../entities/telegram-chat.entity';
 import { TelegramMarket } from '../../entities/telegram-market.entity';
 import { TelegramOrderCard } from '../../entities/telegram-order-card.entity';
@@ -92,6 +93,8 @@ const DB = 'elchi_telegram_chats_test';
       try {
         await new TelegramChats1716000000126().up(runner);
         await new TelegramChats1716000000126().up(runner);
+        // (248) filial guruhi ustunlari — entity ularni o'qiydi.
+        await new TelegramBranchChats1716000000248().up(runner);
       } finally {
         await runner.release();
       }
@@ -235,6 +238,7 @@ const DB = 'elchi_telegram_chats_test';
           `INSERT INTO notification_schema.telegram_markets (market_id, group_id, group_type) VALUES (8, '-1005', 'create')`,
         );
         await new TelegramChats1716000000126().up(runner);
+        await new TelegramBranchChats1716000000248().up(runner);
       } finally {
         await runner.release();
       }
