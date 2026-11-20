@@ -447,6 +447,31 @@ export class FinanceServiceController {
     );
   }
 
+  /**
+   * 2026-11-20 — komissiya sotuvda belgilanmagan bo'lgan o'tgan sotuvlarga
+   * joriy stavka bo'yicha ulush (faqat qatori umuman yo'q buyurtmalar;
+   * `dry_run` — oldindan ko'rish). Gateway (market) chaqiradi.
+   */
+  @MessagePattern({ cmd: 'finance.operator.earning.backfill' })
+  backfillOperatorEarnings(
+    @Payload()
+    data: {
+      operator_id: string;
+      orders?: Array<{
+        order_id?: unknown;
+        total_price?: unknown;
+        market_id?: unknown;
+      }>;
+      dry_run?: boolean;
+      requested_by?: { id?: string | null; role?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.backfillOperatorEarnings(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.operator.earning.remove' })
   removeOperatorEarning(
     @Payload() data: { order_id: string },

@@ -206,6 +206,10 @@ import {
   type ReplacementReturnsQuery,
 } from './order-replacement';
 import {
+  findUnlinkedOperatorGroups,
+  UNLINKED_GROUP_ID_LIMIT,
+} from './order-operator-unlinked';
+import {
   CANCEL_HANDOVER_TRACKING_ACTION,
   marketHandoverMethodOf,
   canceledPostReceiveCustodyFrom,
@@ -8691,6 +8695,115 @@ export class OrderLifecycleService {
         operator_id: operatorId,
         operator: operatorName ?? previousName,
         earning_recorded: earningQueued,
+      },
+      200,
+      'success',
+    );
+  }
+
+  /**
+   * 2026-11-20 — `order.operator.unlinked`: shu marketda operator ismi
+   * yozilgan, lekin `operator_id` siz buyurtmalar, ism bo'yicha guruhlab
+   * (`order-operator-unlinked.ts`). Market — gateway JWT'dan.
+   */
+  async listUnlinkedOperatorOrders(marketId: unknown) {
+    const market =
+      typeof marketId === 'string' || typeof marketId === 'number'
+        ? String(marketId).trim()
+        : '';
+    if (!/^[1-9]\d{0,18}$/.test(market)) {
+      this.badRequest("market_id noto'g'ri");
+    }
+    const result = await findUnlinkedOperatorGroups(
+      this.dataSource.getRepository(Order),
+      market,
+    );
+    return successRes(result, 200, 'success');
+  }
+
+  /**
+   * 2026-11-20 — `order.operator.assign_bulk`: bir operatorni ko'p
+   * buyurtmaga (eski, operator ismi faqat matn bo'lib qolgan buyurtmalar).
+   * Har buyurtma ALOHIDA `assignOperator` bilan — o'sha qulf, doira,
+   * takror / integratsiya / market tekshiruvi va sotilgan bo'lsa ulush
+   * (outbox, shu buyurtma tranzaksiyasida). Bittasi yiqilsa qolganlari
+   * davom etadi; natija har id uchun. Ko'pi bilan `UNLINKED_GROUP_ID_LIMIT`.
+   */
+  async assignOperatorBulk(
+    orderIds: unknown,
+    input: {
+      operator_id?: unknown;
+      operator_name?: unknown;
+      market_id?: unknown;
+    },
+    requester: { id?: string; roles?: string[]; market_id?: string | null },
+  ) {
+    const ids = [
+      ...new Set(
+        (Array.isArray(orderIds) ? (orderIds as unknown[]) : [])
+          .map((value) =>
+            typeof value === 'string' || typeof value === 'number'
+              ? String(value).trim()
+              : '',
+          )
+          .filter((value) => /^\d{1,18}$/.test(value)),
+      ),
+    ];
+    if (ids.length === 0) {
+      this.badRequest('order_ids majburiy');
+    }
+    if (ids.length > UNLINKED_GROUP_ID_LIMIT) {
+      this.badRequest(
+        `order_ids ko'pi bilan ${UNLINKED_GROUP_ID_LIMIT} ta`,
+      );
+    }
+    const results: Array<{
+      id: string;
+      ok: boolean;
+      earning_recorded?: boolean;
+      status_code?: number;
+      code?: string;
+      message?: string;
+    }> = [];
+    for (const id of ids) {
+      try {
+        const res = (await this.assignOperator(id, input, requester)) as {
+          data?: { earning_recorded?: boolean };
+        };
+        results.push({
+          id,
+          ok: true,
+          earning_recorded: res?.data?.earning_recorded === true,
+        });
+      } catch (error) {
+        const payload =
+          error instanceof RpcException
+            ? (error.getError() as {
+                statusCode?: number;
+                code?: string;
+                message?: string;
+              })
+            : null;
+        results.push({
+          id,
+          ok: false,
+          status_code:
+            typeof payload?.statusCode === 'number' ? payload.statusCode : 500,
+          ...(typeof payload?.code === 'string' ? { code: payload.code } : {}),
+          message:
+            typeof payload?.message === 'string'
+              ? payload.message
+              : 'Biriktirib bo`lmadi',
+        });
+      }
+    }
+    return successRes(
+      {
+        assigned: results.filter((item) => item.ok).length,
+        failed: results.filter((item) => !item.ok).length,
+        earnings_recorded: results.filter((item) => item.earning_recorded)
+          .length,
+        results,
       },
       200,
       'success',

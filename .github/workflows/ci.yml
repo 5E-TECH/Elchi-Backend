@@ -295,6 +295,8 @@ jobs:
           apps/finance-service/src/pickup-visit/pickup-visit.B824gOu5.pg.spec.ts
           apps/finance-service/src/pickup-visit/pickup-visit.migration.B824gOu5.pg.spec.ts
           apps/finance-service/src/operator-payment.pg.spec.ts
+          apps/finance-service/src/operator-earning-backfill.pg.spec.ts
+          apps/order-service/src/analytics/operator-sold-orders.pg.spec.ts
           apps/finance-service/src/operator-payment/operator-payment.migration.F2qp6FtE.pg.spec.ts
           apps/finance-service/src/expense-category/expense-category.pg.spec.ts
           apps/finance-service/src/expense-category/expense-report.ljVOuNz4.pg.spec.ts
@@ -322,6 +324,7 @@ jobs:
           apps/order-service/src/settlement/financial-balance-provider-held.pg.spec.ts
           apps/order-service/src/order-service.rollback-rules.D1D4.pg.spec.ts
           apps/order-service/src/analytics/market-stat-operator.pg.spec.ts
+          apps/order-service/src/lifecycle/order-operator-unlinked.pg.spec.ts
           apps/ai-service/src/advisor/advisor-settings.BE5.pg.spec.ts
           apps/ai-service/src/usage/ai-margin.pg.spec.ts
           apps/ai-service/src/usage/ai-usage.dashboard.pg.spec.ts

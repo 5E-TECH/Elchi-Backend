@@ -69,10 +69,12 @@ import { AiUsageGatewayController } from './ai-usage-gateway.controller';
 import { AiAssistantGatewayController } from './ai-assistant-gateway.controller';
 import { AiAdvisorGatewayController } from './ai-advisor-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
+import { MarketOperatorOrdersGatewayController } from './market-operator-orders-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
 import { PickupVisitGatewayController } from './pickup-visit-gateway.controller';
 import { OperatorPaymentGatewayController } from './operator-payment-gateway.controller';
+import { OperatorEarningBackfillGatewayController } from './operator-earning-backfill-gateway.controller';
 // mSkzzNBJ: ochiq kalkulyator — POST /public/delivery-quote, GET /public/delivery-tariffs.
 import { PublicDeliveryPricingController } from './public-delivery-pricing/public-delivery-pricing.controller';
 import { WarehouseGatewayController } from './warehouse-gateway.controller';
@@ -197,6 +199,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     AiAdvisorGatewayController,
     // i76gGjyq: market o'z operatorlarini boshqaradi (/market-operators).
     MarketOperatorGatewayController,
+    MarketOperatorOrdersGatewayController,
     // hiqRNhkI: GET /customers/suggest — telefon bo'yicha mijoz taklifi.
     CustomerGatewayController,
     // DAqXPeSy: yetkazish narxi dvigateli (/delivery/quote, /delivery/tariffs,
@@ -205,6 +208,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     PickupVisitGatewayController,
     // F2qp6FtE — market o'z operatoriga to'lov yozuvi (Elchi kassasiz).
     OperatorPaymentGatewayController,
+    OperatorEarningBackfillGatewayController,
     // mSkzzNBJ: o'sha dvigatelning ochiq (tokensiz) yo'li — /public/delivery-*.
     PublicDeliveryPricingController,
     // hY7uacJu: vaqtinchalik ombor moduli (/warehouses, /market/warehouse-stock,

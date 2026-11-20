@@ -2250,6 +2250,152 @@ export class OrderAnalyticsService {
     );
   }
 
+  /**
+   * `order.operator.order_counts` (2026-11-20) — market «Operatorlar → To'lovlar»
+   * hisobi: har operator (`orders.operator_id`) bo'yicha shu marketdagi
+   * buyurtmalar soni, BUTUN davr uchun (reyting kabi 30 kun emas):
+   *  - `total_orders` — o'chirilmagan hammasi;
+   *  - `sold_orders` — sotilgan (`sold` / `paid` / `partly_paid`) — komissiya
+   *    shulardan yoziladi (`enqueueFinanceOnStatusChange`);
+   *  - `pending_orders` — hali yo'lda (yangi … mijozni kutmoqda): sotilsa
+   *    komissiya yoziladi.
+   * Ega: «operator nomidan yaratilgan buyurtmalar ko'rsatilmayapti» — daromad
+   * faqat sotuvda yozilgani uchun, sotilmaganlari endi alohida ko'rinadi.
+   * So'ralgan har id qaytadi (buyurtmasiz — 0). Ko'pi bilan 1000 id.
+   */
+  async getOperatorOrderCounts(
+    marketId: unknown,
+    operatorIds: unknown,
+  ): Promise<{
+    items: Array<{
+      operator_id: string;
+      total_orders: number;
+      sold_orders: number;
+      pending_orders: number;
+    }>;
+  }> {
+    const asText = (value: unknown) =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    const market = asText(marketId);
+    if (!/^[1-9]\d{0,18}$/.test(market)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "market_id noto'g'ri",
+      });
+    }
+    const ids = [
+      ...new Set(
+        (Array.isArray(operatorIds) ? (operatorIds as unknown[]) : [])
+          .map(asText)
+          .filter((id) => /^[1-9]\d{0,18}$/.test(id)),
+      ),
+    ];
+    if (ids.length > 1000) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "operator_ids ko'pi bilan 1000 ta",
+      });
+    }
+    if (ids.length === 0) {
+      return { items: [] };
+    }
+
+    const rows = await this.orderRepo
+      .createQueryBuilder('o')
+      .select('o.operator_id::text', 'operator_id')
+      .addSelect('COUNT(*)', 'total_orders')
+      .addSelect(
+        `SUM(CASE WHEN o.status IN (:...sold) THEN 1 ELSE 0 END)`,
+        'sold_orders',
+      )
+      .addSelect(
+        `SUM(CASE WHEN o.status IN (:...pending) THEN 1 ELSE 0 END)`,
+        'pending_orders',
+      )
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.market_id = :market', { market })
+      .andWhere('o.operator_id IN (:...ids)', { ids })
+      .setParameter('sold', this.soldStatuses())
+      .setParameter('pending', [
+        Order_status.CREATED,
+        Order_status.NEW,
+        Order_status.RECEIVED,
+        Order_status.ON_THE_ROAD,
+        Order_status.WAITING,
+        Order_status.WAITING_CUSTOMER,
+      ])
+      .groupBy('o.operator_id')
+      .getRawMany<{
+        operator_id: string;
+        total_orders: string;
+        sold_orders: string;
+        pending_orders: string;
+      }>();
+
+    const byId = new Map(rows.map((row) => [String(row.operator_id), row]));
+    return {
+      items: ids.map((id) => {
+        const row = byId.get(id);
+        return {
+          operator_id: id,
+          total_orders: Number(row?.total_orders ?? 0) || 0,
+          sold_orders: Number(row?.sold_orders ?? 0) || 0,
+          pending_orders: Number(row?.pending_orders ?? 0) || 0,
+        };
+      }),
+    };
+  }
+
+  /**
+   * `order.operator.sold_orders` (2026-11-20) — komissiya «o'tgan sotuvlarga
+   * hisoblash» uchun: shu marketda shu operatorga bog'langan, HOZIR sotilgan
+   * (sold / paid / partly_paid) buyurtmalar — id, narx, market. Finance
+   * ulardan daftarda qatori yo'qlarini joriy stavka bilan yozadi. Ko'pi bilan
+   * 5000 (eng yangisi birinchi), `truncated` — undan ko'p bo'lsa.
+   */
+  async getOperatorSoldOrders(
+    marketId: unknown,
+    operatorId: unknown,
+  ): Promise<{
+    items: Array<{ order_id: string; total_price: number; market_id: string }>;
+    truncated: boolean;
+  }> {
+    const asText = (value: unknown) =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    const market = asText(marketId);
+    const operator = asText(operatorId);
+    if (!/^[1-9]\d{0,18}$/.test(market) || !/^[1-9]\d{0,18}$/.test(operator)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "market_id va operator_id noto'g'ri",
+      });
+    }
+    const LIMIT = 5000;
+    const rows = await this.orderRepo
+      .createQueryBuilder('o')
+      .select('o.id::text', 'order_id')
+      .addSelect('o.total_price', 'total_price')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.market_id = :market', { market })
+      .andWhere('o.operator_id = :operator', { operator })
+      .andWhere('o.status IN (:...sold)', { sold: this.soldStatuses() })
+      .orderBy('o.id', 'DESC')
+      .limit(LIMIT + 1)
+      .getRawMany<{ order_id: string; total_price: string | number | null }>();
+    return {
+      items: rows.slice(0, LIMIT).map((row) => ({
+        order_id: String(row.order_id),
+        total_price: Number(row.total_price ?? 0) || 0,
+        market_id: market,
+      })),
+      truncated: rows.length > LIMIT,
+    };
+  }
+
   async getTopOperatorsByMarket(marketId: string, limit = 10) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
