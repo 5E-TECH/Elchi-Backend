@@ -4066,6 +4066,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     cashbox_user_id: string;
     slot_key: string;
     slot_at: Date;
+    /** Slot server ishlamagan payt o'tkazib yuborilgan — kechikib ochilmoqda. */
+    missed?: boolean;
   }): Promise<{ opened: boolean; reason: string; shift_id: string | null }> {
     const cashboxUserId = String(input.cashbox_user_id);
     this.assertBigIntId(cashboxUserId, 'cashbox_user_id');
@@ -4165,9 +4167,24 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       },
       user_id: null,
       metadata: {
-        description: 'Smena tizim tomonidan avtomatik ochildi',
+        description: input.missed
+          ? 'Smena tizim tomonidan avtomatik ochildi (ochish vaqtida server ishlamagan — kechikib)'
+          : 'Smena tizim tomonidan avtomatik ochildi',
         label: autoOpenedLabel(saved.opened_at),
         slot: input.slot_key,
+        ...(input.missed
+          ? {
+              missed_slot: true,
+              late_by_min: Math.max(
+                0,
+                Math.round(
+                  (new Date(saved.opened_at).getTime() -
+                    input.slot_at.getTime()) /
+                    60_000,
+                ),
+              ),
+            }
+          : {}),
         cashbox_user_id: cashboxUserId,
       },
     });
