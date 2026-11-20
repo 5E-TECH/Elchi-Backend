@@ -21,6 +21,14 @@ export interface MarketOperatorFilterQuery {
   status?: string;
   page?: number;
   limit?: number;
+  /**
+   * O'chirilgan operatorlar ham (har qatorda `is_deleted`). FAQAT ichki — gateway
+   * operator hisobi (`/finance/operator-payments`): o'chirilgan operatorning
+   * daromadi va to'lovlari market hisobidan yo'qolmasin. Ommaviy
+   * `GET /market-operators` uni hech qachon uzatmaydi (so'rov maydonlari aniq
+   * ro'yxat bilan yig'iladi).
+   */
+  include_deleted?: boolean;
 }
 
 export interface FindMarketOperatorsPayload {

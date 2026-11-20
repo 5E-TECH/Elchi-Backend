@@ -56,6 +56,11 @@ describe('F2qp6FtE — /finance/operator-payments gateway', () => {
       providers: [
         { provide: 'FINANCE', useValue: finance },
         { provide: 'IDENTITY', useValue: identity },
+        // 2026-11-20: hisobdagi buyurtmalar soni (alohida spec'da tekshiriladi).
+        {
+          provide: 'ORDER',
+          useValue: { send: jest.fn(() => of({ items: [] })) },
+        },
       ],
     })
       .overrideGuard(JwtAuthGuard)

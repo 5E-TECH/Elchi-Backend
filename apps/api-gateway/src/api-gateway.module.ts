@@ -69,6 +69,7 @@ import { AiUsageGatewayController } from './ai-usage-gateway.controller';
 import { AiAssistantGatewayController } from './ai-assistant-gateway.controller';
 import { AiAdvisorGatewayController } from './ai-advisor-gateway.controller';
 import { MarketOperatorGatewayController } from './market-operator-gateway.controller';
+import { MarketOperatorOrdersGatewayController } from './market-operator-orders-gateway.controller';
 import { CustomerGatewayController } from './customer-gateway.controller';
 import { DeliveryPricingGatewayController } from './delivery-pricing-gateway.controller';
 import { PickupVisitGatewayController } from './pickup-visit-gateway.controller';
@@ -198,6 +199,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     AiAdvisorGatewayController,
     // i76gGjyq: market o'z operatorlarini boshqaradi (/market-operators).
     MarketOperatorGatewayController,
+    MarketOperatorOrdersGatewayController,
     // hiqRNhkI: GET /customers/suggest — telefon bo'yicha mijoz taklifi.
     CustomerGatewayController,
     // DAqXPeSy: yetkazish narxi dvigateli (/delivery/quote, /delivery/tariffs,

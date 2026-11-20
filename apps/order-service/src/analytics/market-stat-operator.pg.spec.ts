@@ -250,5 +250,61 @@ describePg(
         successRate: 0,
       });
     });
+
+    // 2026-11-20: market «Operatorlar → To'lovlar» — har operator buyurtmalari
+    // soni (`order.operator.order_counts`), butun davr, shu market doirasida.
+    it('⭐ getOperatorOrderCounts — jami / sotilgan / yo`lda, market doirasida; so`ralgan har id qaytadi', async () => {
+      const res = await analytics.getOperatorOrderCounts(MARKET, [
+        OPERATOR_A,
+        OPERATOR_B,
+        '777',
+        OPERATOR_A, // takror — bir marta
+        'abc', // yaroqsiz — e'tiborsiz
+      ]);
+      expect(res.items).toEqual([
+        // A: sotilgan + bekor + yangi; boshqa marketdagi sotuvi kirmaydi.
+        {
+          operator_id: OPERATOR_A,
+          total_orders: 3,
+          sold_orders: 1,
+          pending_orders: 1,
+        },
+        // B: sotilgan + to'langan.
+        {
+          operator_id: OPERATOR_B,
+          total_orders: 2,
+          sold_orders: 2,
+          pending_orders: 0,
+        },
+        {
+          operator_id: '777',
+          total_orders: 0,
+          sold_orders: 0,
+          pending_orders: 0,
+        },
+      ]);
+      expect(
+        (await analytics.getOperatorOrderCounts(OTHER_MARKET, [OPERATOR_A]))
+          .items,
+      ).toEqual([
+        {
+          operator_id: OPERATOR_A,
+          total_orders: 1,
+          sold_orders: 1,
+          pending_orders: 0,
+        },
+      ]);
+    });
+
+    it('getOperatorOrderCounts — bo`sh ro`yxat — so`rovsiz bo`sh; yaroqsiz market — 400', async () => {
+      await expect(
+        analytics.getOperatorOrderCounts(MARKET, []),
+      ).resolves.toEqual({ items: [] });
+      await expect(
+        analytics.getOperatorOrderCounts('0', [OPERATOR_A]),
+      ).rejects.toMatchObject({
+        error: expect.objectContaining({ statusCode: 400 }),
+      });
+    });
   },
 );

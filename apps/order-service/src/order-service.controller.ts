@@ -1542,6 +1542,49 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * 2026-11-20: operator ismi faqat matn bo'lib qolgan (operator_id siz) eski
+   * buyurtmalar — ism bo'yicha guruhlar (market «Operatorlar» sahifasi).
+   */
+  @MessagePattern({ cmd: 'order.operator.unlinked' })
+  listUnlinkedOperatorOrders(
+    @Payload() data: { market_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.listUnlinkedOperatorOrders(data?.market_id),
+    );
+  }
+
+  /**
+   * 2026-11-20: bir operatorni ko'p buyurtmaga — har biri `order.operator.assign`
+   * qoidasi bilan (gateway operatorni bir marta tekshiradi).
+   */
+  @MessagePattern({ cmd: 'order.operator.assign_bulk' })
+  assignOperatorBulk(
+    @Payload()
+    data: {
+      order_ids: string[];
+      operator_id: string;
+      operator_name?: string | null;
+      market_id: string;
+      requester: { id: string; roles?: string[]; market_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.assignOperatorBulk(
+        data?.order_ids,
+        {
+          operator_id: data?.operator_id,
+          operator_name: data?.operator_name,
+          market_id: data?.market_id,
+        },
+        data?.requester,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.mark_returned_to_market' })
   markReturnedToMarket(
     @Payload()
@@ -2380,6 +2423,24 @@ export class OrderServiceController {
       this.orderAnalyticsService.getTopOperatorsByMarket(
         data.requester.id,
         data.limit,
+      ),
+    );
+  }
+
+  /**
+   * 2026-11-20: market «Operatorlar → To'lovlar» hisobi — har operator
+   * bo'yicha buyurtmalar soni (jami / sotilgan / yo'lda). `market_id` —
+   * gateway JWT'dan (market o'zi), operatorlar — shu market ro'yxatidan.
+   */
+  @MessagePattern({ cmd: 'order.operator.order_counts' })
+  operatorOrderCounts(
+    @Payload() data: { market_id: string; operator_ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getOperatorOrderCounts(
+        data?.market_id,
+        data?.operator_ids,
       ),
     );
   }
