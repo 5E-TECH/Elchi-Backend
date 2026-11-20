@@ -8055,6 +8055,167 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * 2026-11-20 — `finance.operator.earning.backfill` (ega: «operator nomidan
+   * yaratilgan buyurtmalarga xizmat haqqi yozilmayapti»). Sotuvda operatorning
+   * komissiyasi belgilanmagan bo'lsa `recordOperatorEarning` hech narsa
+   * yozmaydi («zero commission — earning skipped») va keyin komissiya
+   * belgilansa ham o'tgan sotuvlar QAYTA hisoblanmaydi. Bu — market O'ZI
+   * so'raganda o'sha sotuvlarga JORIY stavka bo'yicha yozish:
+   *  - faqat daftarda UMUMAN qatori yo'q buyurtmalar (o'chirilgan — rollback
+   *    qilingan — qatori bor buyurtma tegilmaydi; mavjud snapshotlar
+   *    o'zgarmaydi);
+   *  - buyurtmalar ro'yxatini gateway order-service'dan beradi (shu market,
+   *    shu operator, hozir sotilgan holatda);
+   *  - `dry_run` — hech narsa yozmay, nechta va qancha;
+   *  - `ON CONFLICT (order_id) DO NOTHING` — parallel sotuv yozuvi yoki
+   *    takroriy so'rov ikkinchi qator ochmaydi (idempotent).
+   * Elchi kassasiga ta'sir yo'q (F2qp6FtE: operatorga market o'zi to'laydi).
+   */
+  async backfillOperatorEarnings(input: {
+    operator_id: string;
+    orders?: Array<{
+      order_id?: unknown;
+      total_price?: unknown;
+      market_id?: unknown;
+    }>;
+    dry_run?: boolean;
+    requested_by?: { id?: string | null; role?: string | null };
+  }) {
+    try {
+      this.assertBigIntId(input?.operator_id, 'operator_id');
+      const operatorId = String(input.operator_id);
+      const asText = (value: unknown) =>
+        typeof value === 'string' || typeof value === 'number'
+          ? String(value).trim()
+          : '';
+      const byId = new Map<
+        string,
+        { order_id: string; total_price: number; market_id: string | null }
+      >();
+      for (const raw of Array.isArray(input?.orders) ? input.orders : []) {
+        const orderId = asText(raw?.order_id);
+        if (!/^[1-9]\d{0,18}$/.test(orderId) || byId.has(orderId)) continue;
+        const price = Number(raw?.total_price ?? 0);
+        const marketId = asText(raw?.market_id);
+        byId.set(orderId, {
+          order_id: orderId,
+          total_price: Number.isFinite(price) && price > 0 ? price : 0,
+          market_id: /^[1-9]\d{0,18}$/.test(marketId) ? marketId : null,
+        });
+      }
+      if (byId.size > 5000) {
+        throw new RpcException({
+          statusCode: 400,
+          message: "orders ko'pi bilan 5000 ta",
+        });
+      }
+      const orders = [...byId.values()];
+      const operator = orders.length
+        ? await this.fetchOperatorCommission(operatorId)
+        : null;
+      const commissionType = operator?.commission_type ?? null;
+      const commissionValue = Number(operator?.commission_value ?? 0);
+
+      const existing = orders.length
+        ? await this.earningRepo.find({
+            // `is_deleted` ham — rollback qilingan qator tegilmaydi.
+            where: { order_id: In(orders.map((order) => order.order_id)) },
+            select: { id: true, order_id: true },
+          })
+        : [];
+      const recorded = new Set(existing.map((row) => String(row.order_id)));
+      const missing = orders.filter((order) => !recorded.has(order.order_id));
+      const rows = missing
+        .map((order) => ({
+          order,
+          amount:
+            Math.round(
+              this.computeCommission(
+                commissionType,
+                commissionValue,
+                order.total_price,
+              ) * 100,
+            ) / 100,
+        }))
+        .filter((row) => row.amount > 0);
+      const amountCents = rows.reduce(
+        (sum, row) => sum + Math.round(row.amount * 100),
+        0,
+      );
+      const summary = {
+        operator_id: operatorId,
+        sold_orders: orders.length,
+        already_recorded: orders.length - missing.length,
+        missing: missing.length,
+        commission_type: commissionType,
+        commission_value: commissionValue,
+        // Joriy stavka bilan yoziladigan (yoki yozilgan) qatorlar va summa.
+        to_record: rows.length,
+        amount: amountCents / 100,
+      };
+      if (input?.dry_run === true || rows.length === 0) {
+        return this.successRes(
+          { ...summary, created: 0, dry_run: input?.dry_run === true },
+          200,
+          'operator earnings backfill preview',
+        );
+      }
+
+      const inserted = await this.earningRepo
+        .createQueryBuilder()
+        .insert()
+        .into(OperatorEarning)
+        .values(
+          rows.map(({ order, amount }) => ({
+            operator_id: operatorId,
+            order_id: order.order_id,
+            market_id: order.market_id,
+            amount,
+            commission_type: commissionType,
+            commission_value: commissionValue,
+            order_total_price: order.total_price,
+          })),
+        )
+        .orIgnore()
+        .returning(['id', 'amount'])
+        .execute();
+      const insertedRows = Array.isArray(inserted.raw)
+        ? (inserted.raw as Array<{ id?: unknown; amount?: unknown }>)
+        : [];
+      const createdCents = insertedRows.reduce(
+        (sum, row) => sum + Math.round(Number(row.amount ?? 0) * 100),
+        0,
+      );
+      await this.activityLog.log({
+        entity_type: 'OperatorEarning',
+        entity_id: operatorId,
+        action: ActivityAction.CREATED,
+        new_value: { created: insertedRows.length, amount: createdCents / 100 },
+        metadata: {
+          reason: 'backfill',
+          operator_id: operatorId,
+          commission_type: commissionType,
+          commission_value: commissionValue,
+          requested_by_id: input?.requested_by?.id ?? null,
+          requested_by_role: input?.requested_by?.role ?? null,
+        },
+      });
+      return this.successRes(
+        {
+          ...summary,
+          created: insertedRows.length,
+          created_amount: createdCents / 100,
+          dry_run: false,
+        },
+        200,
+        'operator earnings backfilled',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /**
    * ESKI yo'l (F2qp6FtE, ega qarori 2026-11-16): superadmin operatorga
    * Asosiy kassadan naqd to'lardi («Maosh» xarajati). Endi market o'z
    * operatoriga O'ZI to'laydi va buni kassasiz yozadi

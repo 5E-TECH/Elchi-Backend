@@ -2397,6 +2397,23 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * 2026-11-20: komissiya «o'tgan sotuvlarga hisoblash» — shu market, shu
+   * operator, hozir sotilgan buyurtmalar (id, narx). Gateway (market) beradi.
+   */
+  @MessagePattern({ cmd: 'order.operator.sold_orders' })
+  operatorSoldOrders(
+    @Payload() data: { market_id: string; operator_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getOperatorSoldOrders(
+        data?.market_id,
+        data?.operator_id,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.analytics.top_operators_by_market' })
   analyticsTopOperatorsByMarket(
     @Payload() data: { requester: { id: string }; limit?: number },
