@@ -9,9 +9,10 @@
  *
  * YECHIM (kartadagi ikki variantdan minimal — "yuqoriroq @Throttle"): shu uch
  * route'da global 'default' throttler'ning limiti `SCAN_THROTTLE_LIMIT`
- * (sukut 300/daqiqa/IP — ~5 qurilma × 1 skan/soniya). Hisoblagich AVVALGIDEK
- * per-IP (`CF-Connecting-IP`) va har route o'zinikini sanaydi — anonim/
- * tokensiz trafik ham cheklangan qoladi (`@SkipThrottle` YO'Q).
+ * (sukut 300/daqiqa — ~5 qurilma × 1 skan/soniya). Hisoblagich kaliti —
+ * `GlobalThrottlerGuard`: kirgan xodim — JWT `sub`, anonim/tokensiz trafik —
+ * IP (`CF-Connecting-IP`); har route o'zinikini sanaydi va anonim trafik ham
+ * cheklangan qoladi (`@SkipThrottle` YO'Q).
  *
  * Limit global `THROTTLE_LIMIT` dan HECH QACHON past emas (prod'da global
  * qiymat oshirilgan bo'lsa, skaner route'lari undan qattiqroq bo'lib

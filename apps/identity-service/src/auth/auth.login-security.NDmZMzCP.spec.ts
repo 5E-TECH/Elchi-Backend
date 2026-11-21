@@ -3,7 +3,10 @@ import { JwtService } from '@nestjs/jwt';
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { LOGIN_LOCKED, Roles, Status, requestContext } from '@app/common';
-import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
+import {
+  BcryptEncryption,
+  PASSWORD_LOGIN_DISABLED,
+} from '../../../../libs/common/helpers/bcrypt';
 import { AuthService } from './auth.service';
 import type { LoginThrottleService } from './login-throttle.service';
 
@@ -163,6 +166,23 @@ describe('NDmZMzCP — login: timing, qulf, zaif parol, rehash', () => {
     expect(error).toMatchObject({ statusCode: 401 });
     expect(t.compareDummy).toHaveBeenCalledTimes(1);
     expect(t.compare).not.toHaveBeenCalled();
+  });
+
+  it('buyurtmadan yaratilgan mijoz (PASSWORD_LOGIN_DISABLED) — har qanday parolga 401, soxta bcrypt bilan', async () => {
+    const t = setup(
+      baseUser({
+        role: Roles.CUSTOMER,
+        password: PASSWORD_LOGIN_DISABLED,
+      }),
+    );
+    for (const attempt of [PASSWORD_LOGIN_DISABLED, '', 'Kuchli-Parol-2026']) {
+      const error = await rpcError(t.login('+998935557711', attempt));
+      expect(error).toMatchObject({ statusCode: 401 });
+    }
+    // Timing: parolsiz mijoz noma'lum telefon bilan AYNI narxda rad etiladi.
+    expect(t.compareDummy).toHaveBeenCalledTimes(3);
+    expect(t.sessions.open).not.toHaveBeenCalled();
+    expect(t.throttle.reset).not.toHaveBeenCalled();
   });
 
   it('noto‘g‘ri parol — 401, xato hisoblanadi, reset yo‘q', async () => {

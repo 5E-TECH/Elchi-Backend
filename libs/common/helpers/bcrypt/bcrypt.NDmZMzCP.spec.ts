@@ -1,5 +1,10 @@
 import * as bcrypt from 'bcryptjs';
-import { BCRYPT_ROUNDS, BcryptEncryption } from './index';
+import {
+  BCRYPT_ROUNDS,
+  BcryptEncryption,
+  isBcryptHash,
+  PASSWORD_LOGIN_DISABLED,
+} from './index';
 
 /** (NDmZMzCP) bcrypt narxi 12, eski xeshni aniqlash, timing uchun soxta xesh. */
 describe('NDmZMzCP — BcryptEncryption', () => {
@@ -20,6 +25,23 @@ describe('NDmZMzCP — BcryptEncryption', () => {
     expect(service.needsRehash(null)).toBe(false);
     expect(service.needsRehash('')).toBe(false);
     expect(service.needsRehash('not-a-hash')).toBe(false);
+  });
+
+  it('PASSWORD_LOGIN_DISABLED: bcrypt xeshi emas, compare soxta xesh bilan false', async () => {
+    expect(isBcryptHash(PASSWORD_LOGIN_DISABLED)).toBe(false);
+    expect(isBcryptHash(bcrypt.hashSync('x', 4))).toBe(true);
+    expect(isBcryptHash(null)).toBe(false);
+
+    const dummy = jest.spyOn(service, 'compareDummy');
+    try {
+      await expect(
+        service.compare('istalgan', PASSWORD_LOGIN_DISABLED),
+      ).resolves.toBe(false);
+      // Timing: javob tezda qaytmaydi — soxta xesh bilan AYNI narxdagi bcrypt.
+      expect(dummy).toHaveBeenCalledWith('istalgan');
+    } finally {
+      dummy.mockRestore();
+    }
   });
 
   it('compareDummy har doim false, xato tashlamaydi', async () => {
