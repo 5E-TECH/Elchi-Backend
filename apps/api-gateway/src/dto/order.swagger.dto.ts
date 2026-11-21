@@ -976,8 +976,7 @@ export class CourierBulkSellRequestDto {
   @ApiProperty({
     type: [String],
     example: ['81', '82'],
-    description:
-      "Sotiladigan buyurtmalar id'lari (1–50 ta; takrorlari bir marta).",
+    description: "Buyurtmalar id'lari (1–50 ta; takrorlari bir marta).",
   })
   @IsArray()
   @ArrayNotEmpty({ message: "order_ids bo'sh bo'lmasligi kerak" })
@@ -989,7 +988,7 @@ export class CourierBulkSellRequestDto {
   })
   order_ids!: string[];
 
-  @ApiPropertyOptional({ example: 'Tezkor amal: sotildi' })
+  @ApiPropertyOptional({ example: 'Kuryer tezkor amal orqali yakunladi' })
   @IsOptional()
   @IsString()
   @MaxLength(500)
