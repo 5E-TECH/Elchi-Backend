@@ -79,7 +79,7 @@ export class ClientErrorGatewayController {
   private readonly logger = new Logger('ClientError');
 
   /**
-   * Har qanday kirgan foydalanuvchi (global JWT guard). IP bo'yicha 10 / daqiqa — bitta sahifa takror yiqilsa ham
+   * Har qanday kirgan foydalanuvchi (global JWT guard). Foydalanuvchi (JWT sub) bo'yicha 10 / daqiqa — bitta sahifa takror yiqilsa ham
    * jurnal to'lib ketmaydi (frontend ham bir kodni sessiyada bir marta yuboradi).
    */
   @Post()

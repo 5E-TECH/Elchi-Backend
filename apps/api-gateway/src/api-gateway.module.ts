@@ -22,7 +22,7 @@ import { RolesGuard } from './auth/roles.guard';
 import { SelfGuard } from './auth/self.guard';
 import { PartnerApiKeyGuard } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
-import { ClientIpThrottlerGuard } from './auth/client-ip-throttler.guard';
+import { GlobalThrottlerGuard } from './auth/global-throttler.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { PartnerGatewayController } from './partner-gateway.controller';
 import { PartnerAdminGatewayController } from './partner-admin-gateway.controller';
@@ -111,7 +111,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        // Global per-IP rate limit (har route o'z hisoblagichi bilan).
+        // Global rate limit (har route o'z hisoblagichi bilan): kirgan
+        // foydalanuvchi — JWT `sub`, qolganlari — IP (GlobalThrottlerGuard).
         // Auth endpointlari @Throttle({ default: { ... } }) bilan o'z
         // qiymatini oladi: login — AUTH_THROTTLE_LIMIT (sukut 30/min),
         // refresh — AUTH_REFRESH_THROTTLE_LIMIT (sukut 60/min) (fix3 C10).
@@ -265,11 +266,13 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // kesh: buyurtmalar, paketlar, kuryerlar va qidiruv doirasi.
     LogistRegionScopeService,
     ProblemContactsService,
-    // Rate limit kaliti soxtalashtirib bo'lmaydigan mijoz IP'si bo'yicha
-    // olinadi (audit S3) — standart guard `req.ip` ni ishlatadi, u esa
-    // `trust proxy` yoqilganda mijozning o'z `X-Forwarded-For` qiymati bo'lib
-    // chiqadi va chegarani aylanib o'tish imkonini beradi.
-    { provide: APP_GUARD, useClass: ClientIpThrottlerGuard },
+    // Rate limit kaliti: kirgan foydalanuvchi — JWT `sub` (bitta NAT/CGNAT
+    // ortidagi operatorlar bitta limitni bo'lishmasin); anonim, login va
+    // public route'lar — soxtalashtirib bo'lmaydigan mijoz IP'si (audit S3:
+    // standart guard `req.ip` ni ishlatadi, u esa `trust proxy` yoqilganda
+    // mijozning o'z `X-Forwarded-For` qiymati bo'lib chiqadi).
+    // JwtAuthGuard'dan OLDIN — token imzosini o'zi tekshiradi.
+    { provide: APP_GUARD, useClass: GlobalThrottlerGuard },
     // Default-deny authentication: every HTTP route requires a valid JWT unless
     // explicitly marked @Public() (health, login/refresh, HMAC webhooks, public
     // file view, Partner API which uses its own key guard). (Audit authz P1.)
