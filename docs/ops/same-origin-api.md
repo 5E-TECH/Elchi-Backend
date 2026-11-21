@@ -1,9 +1,10 @@
-# Bir domenli API (same-origin) — staging deploy va orqaga qaytish
+# Bir domenli API (same-origin) — deploy va orqaga qaytish
 
-> **Holat (2026-11-20):** kod tayyor, faqat **staging** uchun (`test-admin.elchipochta.uz`). Production
-> (`admin.elchipochta.uz`) o'zgarmagan — §6 egasi tasdiqlagandan keyin alohida.
+> **Holat (2026-11-21):** **staging** (`test-admin.elchipochta.uz`) — ishlayapti, brauzerda kirib tekshirilgan
+> (§5). **Production** (`admin.elchipochta.uz`) — Elchi-Frontend #400 (sozlama), merge'dan oldin egasi §7.1 ni
+> bajaradi.
 >
-> Branch'lar: Elchi-Frontend `feat/same-origin-api-staging`, Elchi-Backend `feat/same-origin-api-staging`.
+> PR'lar: Elchi-Frontend #396 (Worker, staging), #400 (production); Elchi-Backend #750.
 
 ## 1. Nega
 
@@ -29,7 +30,7 @@ Elchi-Frontend `wrangler.jsonc` → `env.staging`: `main: worker/index.ts`, `ass
 | 1 | Refresh cookie (`Path=/auth`, host-only, `SameSite=Lax`) | Worker `Set-Cookie` ni qayta yozadi: `Path=/auth` → `/api/auth`, `Domain` olinadi (nginx `proxy_cookie_path` kabi). Backend o'zgarmaydi (`refresh-cookie.ts` izohi) — to'g'ridan-to'g'ri API mijozlari ham avvalgidek. **Cutover'da har foydalanuvchi bir marta qayta kiradi** (eski cookie `test-api` hostida, `/api/auth` ga yuborilmaydi). |
 | 2 | Mijoz IP'si (`CF-Connecting-IP` — rate-limit, audit) | Bir zonadagi Worker subrequest'ida Cloudflare `CF-Connecting-IP` ni Worker qo'ygan `x-real-ip` dan oladi. Worker ikkalasini ham kiruvchi so'rovning Cloudflare yozgan `CF-Connecting-IP` iga **majburan** tenglaydi (mijozning soxta `X-Real-IP` si o'tmaydi). `API_ORIGIN` **boshqa** zonada bo'lsa Cloudflare hammaga `2a06:98c0:3600::103` yozadi → hamma bitta login chegarasida (10/daq). Backend buni aniqlab `ClientIp` ogohlantirishini yozadi (5 daqiqada bir marta; `client-ip-throttler.guard.ts`). |
 | 3 | socket.io (`/realtime`) | Frontend `realtimeUrl` o'zgarmadi: nisbiy `BASE_URL` da kabinet origin'i + `/realtime`, yo'l `/socket.io/` — Worker proksi qiladi (WebSocket 101 ham). Backend `CORS_ORIGINS` da `https://test-admin.elchipochta.uz` bor (Origin tekshiruvi o'sha). |
-| 4 | `VITE_BASE_URL` va CSP | `.env.staging`: `VITE_BASE_URL=/api/`, `VITE_PUBLIC_API_URL=https://test-api.elchipochta.uz/` (Carrier API havolalari API hostida qoladi). Staging build CSP `connect-src` ga `wss://test-admin.elchipochta.uz` qo'shadi; `npm run check:target -- staging` Worker sozlamasi bilan mosligini tekshiradi (Worker'siz bir domenli build chiqmaydi). |
+| 4 | `VITE_BASE_URL` va CSP | `.env.<muhit>`: `VITE_BASE_URL=/api/`, `VITE_PUBLIC_API_URL=<API hosti>` (Carrier API havolalari API hostida qoladi). CSP `connect-src` da kabinetning o'z `wss://` hosti (`public/_headers` — `admin`, staging build — `test-admin`); `npm run check:target -- <muhit>` Worker sozlamasi bilan mosligini tekshiradi (Worker'siz bir domenli build chiqmaydi). |
 
 Qo'shimcha: API yetib bo'lmasa yoki Cloudflare HTML 5xx qaytarsa, Worker o'sha status bilan JSON beradi
 (`code: "UPSTREAM_UNAVAILABLE"`) — ilova «Internet aloqasi yo'q» emas, server xatosini ko'radi.
@@ -45,7 +46,7 @@ Qo'shimcha: API yetib bo'lmasa yoki Cloudflare HTML 5xx qaytarsa, Worker o'sha s
    so'rov sifatida qayta sanalishi mumkin. Qoidaga qo'shing:
    `and (cf.worker.upstream_zone == "" or cf.worker.upstream_zone != "elchipochta.uz")`.
 4. Workers tarifi: `/api/*` dagi har so'rov — Worker chaqiruvi (statik fayllar — yo'q). Free: kuniga 100 000
-   so'rov, 10 ms CPU (proksiga yetadi). Staging uchun yetarli; production uchun §6.
+   so'rov, 10 ms CPU (proksiga yetadi). Staging uchun yetarli; production uchun §7.1.
 
 ## 4. Staging deploy
 
@@ -77,6 +78,13 @@ Tartib muhim emas: backend o'zgarishi faqat ogohlantirish logi, frontend backend
 | Telegram Mini App (test bot, `/tg/scan`) | Skan ishlaydi (`/api/tg/*` — Worker orqali; cookie ishlatmaydi) |
 | (ixtiyoriy) gateway'ni qisqa to'xtatish | `curl -s https://test-admin.elchipochta.uz/api/health` → JSON, `code: "UPSTREAM_UNAVAILABLE"` (502/530); ilovada server xatosi, «Internet aloqasi yo'q» emas |
 
+**2026-11-21 natijasi (staging, egasi kirgan brauzerda):** login `POST /api/auth/login` 201; yangi tabda
+(`sessionStorage` bo'sh) `POST /api/auth/refresh` 201 — cookie `/api/auth` ga yetadi; barcha so'rovlar bir
+domenda, `test-api` ga to'g'ridan-to'g'ri so'rov yo'q; Sessiyalar'dagi «Shu qurilma» IP = Cloudflare
+`/cdn-cgi/trace` dagi `ip=`; brauzerdan `wss://test-admin…/socket.io/` ochiladi; `connect-src` buzilishi yo'q.
+Cloudflare Web Analytics beacon'i Report-Only `script-src` ga to'g'ri kelmaydi — bu production'da ham bor, bu ishga
+bog'liq emas (CSP majburiy qilinganda hal qilinadi).
+
 ## 6. Orqaga qaytish
 
 Backend'da qaytariladigan narsa yo'q (faqat ogohlantirish logi; cookie / env o'zgarmagan).
@@ -91,19 +99,46 @@ Backend'da qaytariladigan narsa yo'q (faqat ogohlantirish logi; cookie / env o'z
 3. Natija: so'rovlar yana `test-api.elchipochta.uz` ga (CORS). Foydalanuvchilar yana bir marta qayta kirishi
    mumkin (`/api/auth` dagi cookie endi ishlatilmaydi). Ochiq socketlar qayta ulanadi.
 
-## 7. Production'ga o'tish (hali EMAS — egasi tasdiqlagach, alohida PR)
+## 7. Production
 
-- Workers tarifi: `/api/*` hajmini baholang (Free — kuniga 100 000; oshsa 1027 xatosi) → Workers Paid.
-- `wrangler.jsonc` yuqori daraja: `main`, `assets.binding: "ASSETS"`, `assets.run_worker_first`,
-  `vars.API_ORIGIN: "https://api.elchipochta.uz"`.
-- `.env.production`: `VITE_BASE_URL=/api/`, `VITE_PUBLIC_API_URL=https://api.elchipochta.uz/`;
-  `public/_headers` `connect-src` ga `wss://admin.elchipochta.uz`.
-- `scripts/check-deploy-target.mjs` hozir production'da bir domenli rejimni **rad etadi** — shu PR'da ruxsat
-  beriladi; `src/test/stagingBuild.test.ts` production kutilmalari yangilanadi.
-- Telegram Mini App (`/tg/scan`) ham kabinet origin'idan `/api/tg/*` orqali ishlaydi (staging'da §5 da tekshirilgan
-  bo'ladi).
-- `api.elchipochta.uz` qoladi: Carrier / hamkor API, webhook'lar, Telegram bot, mobil mijozlar.
-- Foydalanuvchilarga: bir marta qayta kirish kerak bo'ladi.
+Kod tomoni Elchi-Frontend #400 da: `wrangler.jsonc` yuqori darajasi (`main`, `assets.binding`,
+`run_worker_first`, `vars.API_ORIGIN=https://api.elchipochta.uz`), `.env.production` (`VITE_BASE_URL=/api/`,
+`VITE_PUBLIC_API_URL`), `public/_headers` (`wss://admin.elchipochta.uz`). `check:target production` Worker
+sharti bajarilmasa deploy'ni to'xtatadi. Backend o'zgarishi shart emas (`CORS_ORIGINS` da
+`https://admin.elchipochta.uz` bor).
+
+### 7.1 Merge'dan OLDIN — faqat egasi (Cloudflare dashboard)
+
+1. **Workers tarifi.** Har `/api/*` so'rovi — Worker chaqiruvi. Workers Free: kuniga 100 000 (UTC yarim tunda
+   yangilanadi); oshsa kabinet API'si `1027` xatosi bilan to'xtaydi. Cloudflare → `api.elchipochta.uz` →
+   Analytics → kunlik so'rovlar (hozirgi hisobda `OPTIONS` ham bor; keyin ular yo'qoladi). Yaqin bo'lsa —
+   Workers Paid ($5/oy). Staging Worker ham shu akkaunt limitidan oladi.
+2. **Rate limiting rules** (Security → WAF): IP bo'yicha qoida bo'lsa — §3.3 dagi `cf.worker.upstream_zone`
+   shartini qo'shing.
+3. **Vaqt va ogohlantirish:** deploy'dan keyin har foydalanuvchi bir marta qayta kiradi (eski refresh cookie
+   `api.elchipochta.uz` hostida). Kam yuklama payti; kuryer va marketlarni oldindan ogohlantiring.
+
+### 7.2 Deploy
+
+`dev` (#400 merge) → `test` (staging deploy; frontend `main` darvozasi aynan shu tree'ning «Deploy (staging)»
+natijasini talab qiladi) → `main` → production deploy (`check:target production` → `wrangler deploy`). Tavsiya:
+backend #750 (`ClientIp` ogohlantirishi) ham shu payt yoki oldinroq backend `main` ga chiqsin.
+
+### 7.3 Deploy'dan keyin (`admin.elchipochta.uz`)
+
+§5 jadvali (`test-admin` → `admin`, `test-api` → `api`), ayniqsa: `/api/*` so'rovlari va `OPTIONS` yo'qligi,
+yangi tabda refresh 201, Sessiyalar'dagi IP, WebSocket, Carrier «Base URL» = `https://api.elchipochta.uz`,
+Telegram Mini App (`/tg/scan`), `$DC logs api-gateway | grep ClientIp` bo'sh. Bir kun Workers → `elchi-frontend`
+→ Metrics: so'rovlar soni va xatolar.
+
+### 7.4 Orqaga qaytish
+
+Cloudflare → Workers & Pages → `elchi-frontend` → Deployments → oldingi versiya → Rollback (yoki
+`npx wrangler deployments list` → `npx wrangler rollback <version-id>`). Ilova yana `api.elchipochta.uz` ga
+to'g'ridan-to'g'ri (CORS) murojaat qiladi; foydalanuvchilar yana bir marta qayta kirishi mumkin. Kod bilan —
+`main` da #400 ni `git revert`.
+
+`api.elchipochta.uz` hech qachon o'chirilmaydi: Carrier / hamkor API, webhook'lar, Telegram bot, mobil mijozlar.
 
 ## 8. Ma'lum cheklovlar
 
