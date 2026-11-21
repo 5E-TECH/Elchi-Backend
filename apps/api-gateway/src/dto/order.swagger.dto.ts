@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { ProblemContactDto } from './contacts.swagger.dto';
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
@@ -965,6 +966,48 @@ export class CancelOrderRequestDto {
   @IsArray()
   @IsString({ each: true })
   proofFileKeys?: string[];
+}
+
+/**
+ * «Tezkor amal» — kunni yakunlash (`POST /orders/bulk/sell`). Har buyurtma
+ * yakka `POST /orders/sell/:id` qoidalari bilan sotiladi (qo'shimcha xarajatsiz).
+ */
+export class CourierBulkSellRequestDto {
+  @ApiProperty({
+    type: [String],
+    example: ['81', '82'],
+    description: "Buyurtmalar id'lari (1–50 ta; takrorlari bir marta).",
+  })
+  @IsArray()
+  @ArrayNotEmpty({ message: "order_ids bo'sh bo'lmasligi kerak" })
+  @ArrayMaxSize(50, { message: "Bitta so'rovda ko'pi bilan 50 ta buyurtma" })
+  @IsString({ each: true })
+  @Matches(/^[0-9]{1,19}$/, {
+    each: true,
+    message: "order_ids — buyurtma id'lari (musbat butun son)",
+  })
+  order_ids!: string[];
+
+  @ApiPropertyOptional({ example: 'Kuryer tezkor amal orqali yakunladi' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  comment?: string;
+}
+
+/**
+ * «Tezkor amal» — kunni yakunlash (`POST /orders/bulk/cancel`). Har buyurtma
+ * yakka `POST /orders/cancel/:id` qoidalari bilan bekor qilinadi.
+ */
+export class CourierBulkCancelRequestDto extends CourierBulkSellRequestDto {
+  @ApiPropertyOptional({
+    enum: CancelReason,
+    description:
+      'Bekor sababi. Berilmasa comment majburiy va sabab OTHER deb yoziladi (yakka bekor bilan bir xil).',
+  })
+  @IsOptional()
+  @IsEnum(CancelReason)
+  reason?: CancelReason;
 }
 
 export class ExtraCostApprovalDecisionDto {

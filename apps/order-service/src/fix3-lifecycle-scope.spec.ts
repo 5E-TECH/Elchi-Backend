@@ -9,7 +9,8 @@
  *   CODE-03 / M11           — registrator faqat o'z filiali doirasida o'chiradi
  *                             va tahrirlaydi; PATCH status/market_id/to'lov
  *                             maydonlarini hech kimga o'zgartirtirmaydi;
- *   LC-04                   — menejer kuryer qo'lidagi buyurtmani sotmaydi;
+ *   LC-04                   — menejer kuryer qo'lidagi buyurtmani faqat KURYER
+ *                             NOMIDAN sotadi (kuryer pul yo'li, 2026-11-21);
  *   LC-05                   — kuryer topshirilgan bekor buyurtmani tiklamaydi;
  *   RBAC-05 (himoya)        — `sold_at` siz "sotilgan" buyurtma rollback
  *                             qilinmaydi (kassaga soxta teskari yozuv yo'q);
@@ -722,27 +723,95 @@ function makeSellHarness(orderOver: Row = {}, approvalRows: Row[] = []) {
   return { s, mocks, updates, approvals };
 }
 
-describe('LC-04 — menejer kuryer qo`lidagi buyurtmani sotmaydi', () => {
-  it.each([
-    ['holder COURIER + courier_id', COURIER_HELD],
-    ['faqat holder_type COURIER', { holder_type: OrderHolderType.COURIER }],
-    ['faqat courier_id', { courier_id: '289' }],
-    ['faqat holder_courier_id', { holder_courier_id: '289' }],
-  ])(
-    '⭐ sellOrder (%s): 400, pul hisoblanmaydi, tranzaksiya ochilmaydi',
-    async (_label, over) => {
-      const h = makeSellHarness(over);
+describe('LC-04 — menejer kuryer qo`lidagi buyurtmani KURYER NOMIDAN sotadi (2026-11-21)', () => {
+  type LookupMocks = {
+    lookup: {
+      getUserById: jest.Mock;
+      getCouriersByIds: jest.Mock;
+      getCashboxByUser: jest.Mock;
+    };
+    logisticsClient: { send: jest.Mock };
+  };
+  const internals = (s: Svc) => s as unknown as LookupMocks;
 
-      const error = await rpcError(h.s.sellOrder(MANAGER, '7001', {}));
+  it.each([
+    ['holder COURIER + courier_id', COURIER_HELD, '289'],
+    ['faqat courier_id', { courier_id: '289' }, '289'],
+    ['faqat holder_courier_id', { holder_courier_id: '312' }, '312'],
+    [
+      'faqat holder_type COURIER (pochta kuryeri)',
+      { holder_type: OrderHolderType.COURIER },
+      '289',
+    ],
+  ])(
+    '⭐ sellOrder (%s): kuryer pul yo`li — kuryer kassasi, ulushi, settlement kuryerda',
+    async (_label, over, courierId) => {
+      const h = makeSellHarness(over);
+      const m = internals(h.s);
+
+      await expect(h.s.sellOrder(MANAGER, '7001', {})).resolves.toMatchObject({
+        statusCode: 200,
+      });
+
+      // Moliyaviy aktyor — kuryer; menejer faqat ruxsati uchun o'qiladi.
+      expect(m.lookup.getCouriersByIds).toHaveBeenCalledWith([courierId], {
+        region_id: undefined,
+      });
+      expect(m.lookup.getUserById).toHaveBeenCalledWith('201');
+      expect(m.lookup.getCashboxByUser).toHaveBeenCalledWith(
+        courierId,
+        Cashbox_type.FOR_COURIER,
+      );
+      expect(h.mocks.createQueryRunner).toHaveBeenCalled();
+    },
+  );
+
+  it('⭐ kuryer aniqlanmasa (holder COURIER, id yo`q, pochtada ham kuryer yo`q) — LC-04 400, tranzaksiya ochilmaydi', async () => {
+    const h = makeSellHarness({ holder_type: OrderHolderType.COURIER });
+    internals(h.s).logisticsClient.send.mockReturnValue(
+      of({ data: { id: '9001', courier_id: '0' } }),
+    );
+
+    const error = await rpcError(h.s.sellOrder(MANAGER, '7001', {}));
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toContain("kuryer qo'lida");
+    expect(h.mocks.getMarketsByIds).not.toHaveBeenCalled();
+    expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
+  });
+
+  it('⭐ kuryer nomidan sotuvda can_sell_cancel — MENEJERNIKI: false bo`lsa 403', async () => {
+    const h = makeSellHarness(COURIER_HELD);
+    internals(h.s).lookup.getUserById.mockResolvedValue({
+      id: '201',
+      can_sell_cancel: false,
+    });
+
+    const error = await rpcError(h.s.sellOrder(MANAGER, '7001', {}));
+
+    expect(error.statusCode).toBe(403);
+    expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['qo`shimcha xarajat', { extraCost: 5000 }],
+    ['marketga to`lov', { paidAmount: 10000 }],
+  ])(
+    '⭐ kuryer nomidan sotuvda %s — 400 (buni kuryerning o`zi qiladi)',
+    async (_label, dto) => {
+      const h = makeSellHarness(COURIER_HELD);
+
+      const error = await rpcError(h.s.sellOrder(MANAGER, '7001', dto));
 
       expect(error.statusCode).toBe(400);
-      expect(error.message).toContain("kuryer qo'lida");
-      expect(h.mocks.getMarketsByIds).not.toHaveBeenCalled();
+      expect(error.message).toContain(
+        "Kuryer qo'lidagi buyurtmani menejer faqat",
+      );
       expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
     },
   );
 
-  it('⭐ partlySellOrder ham to`siladi', async () => {
+  it('⭐ partlySellOrder hali ham to`siladi (qisman sotuvni kuryer qiladi)', async () => {
     const h = makeSellHarness(COURIER_HELD);
 
     const error = await rpcError(
@@ -758,19 +827,23 @@ describe('LC-04 — menejer kuryer qo`lidagi buyurtmani sotmaydi', () => {
     expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
   });
 
-  it('menejer filialda turgan buyurtmani avvalgidek sotadi (`0` — kuryer emas)', async () => {
+  it('menejer filialda turgan buyurtmani avvalgidek o`z pul modeli bilan sotadi (`0` — kuryer emas)', async () => {
     const h = makeSellHarness({ courier_id: '0' });
+    const m = internals(h.s);
 
     await expect(h.s.sellOrder(MANAGER, '7001', {})).resolves.toMatchObject({
       statusCode: 200,
     });
+    expect(m.lookup.getCouriersByIds).not.toHaveBeenCalled();
+    expect(m.lookup.getCashboxByUser).not.toHaveBeenCalledWith(
+      expect.anything(),
+      Cashbox_type.FOR_COURIER,
+    );
   });
 
   it('⭐ menejer can_sell_cancel=false bo`lsa sotolmaydi — 403 (#4)', async () => {
     const h = makeSellHarness({ courier_id: '0' });
-    (
-      h.s as unknown as { lookup: { getUserById: jest.Mock } }
-    ).lookup.getUserById.mockResolvedValue({
+    internals(h.s).lookup.getUserById.mockResolvedValue({
       id: '201',
       can_sell_cancel: false,
       tariff_center: 0,

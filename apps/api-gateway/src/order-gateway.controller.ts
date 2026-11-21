@@ -130,8 +130,16 @@ import {
   ScanAssignOrderRequestDto,
   SellOrderRequestDto,
   CancelOrderRequestDto,
+  CourierBulkSellRequestDto,
+  CourierBulkCancelRequestDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
+import {
+  courierBulkOrderIdempotencyKey,
+  normalizeCourierBulkOrderIds,
+  runCourierBulkSequential,
+  type CourierBulkActionKind,
+} from './order-bulk/courier-bulk-action';
 import { SetOrderSpecialCategoriesRequestDto } from './order-create/order-special-categories';
 import { AssignOrderOperatorRequestDto } from './order-create/order-assign-operator.dto';
 import {
@@ -213,6 +221,7 @@ import {
 } from './auth/logist-scope';
 import {
   mapOrderCreateInProgress,
+  readOrderCreateIdempotencyKey,
   resolveOrderCreateRequestId,
 } from './order-create/order-create-idempotency';
 import {
@@ -6353,6 +6362,13 @@ export class OrderGatewayController {
     enum: Where_deliver,
     description: 'yKtzKXeM: yetkazish turi; berilmasa hammasi',
   })
+  @ApiQuery({
+    name: 'scope',
+    required: false,
+    enum: ['actionable'],
+    description:
+      "«Tezkor amal»: menejer/filial uchun faqat filialda yoki filial kuryerlarida JISMONAN turgan buyurtmalar (yaratilgan filial — home_branch_id — bo'yicha emas). Kuryerga ta'sir qilmaydi.",
+  })
   async findCourierOrdersLegacy(
     @Query('status') status?: string | string[],
     @Query('search') search?: string,
@@ -6362,6 +6378,7 @@ export class OrderGatewayController {
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
     @Query('where_deliver') whereDeliver?: string,
+    @Query('scope') scope?: string,
   ) {
     const pagination = this.parsePaginationQuery(page, limit);
     const statuses = this.parseStatusQuery(status);
@@ -6427,6 +6444,14 @@ export class OrderGatewayController {
       const payload = {
         query: {
           branch_id: String(assignment.branch_id),
+          // «Tezkor amal»: faqat filialda / filial kuryerlarida JISMONAN
+          // turganlar — menejer sota/bekor qila oladiganlari (home_branch_id
+          // bo'yicha boshqa filialdagi buyurtma chiqmaydi).
+          ...(String(scope ?? '')
+            .trim()
+            .toLowerCase() === 'actionable'
+            ? { branch_physical_only: true }
+            : {}),
           status: statuses,
           exclude_statuses: statuses?.length
             ? undefined
@@ -8236,6 +8261,9 @@ export class OrderGatewayController {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     // (2026-11-12) «Yo'lda» — avval avtomatik qabul (tracking: Kutilmoqda).
     await this.autoReceiveOnRoadOrder(id, req);
+    // JWT'da filial bo'lmasa (login paytida branch-service javob bermagan) —
+    // menejer filiali biriktirishdan: ro'yxat ham shu yo'l bilan o'qiladi.
+    const requesterBranchId = await this.resolveRequesterBranchId(req.user);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -8246,7 +8274,7 @@ export class OrderGatewayController {
             requester: {
               id: req.user.sub,
               roles: this.normalizeRoles(req.user.roles),
-              branch_id: req.user.branch_id ?? null,
+              branch_id: requesterBranchId,
             },
             // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
             // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
@@ -8300,6 +8328,9 @@ export class OrderGatewayController {
     const dtoWithProof = await this.withUploadedProof(dto, proof, req.user);
     // (2026-11-12) «Yo'lda» — avval avtomatik qabul (tracking: Kutilmoqda).
     await this.autoReceiveOnRoadOrder(id, req);
+    // JWT'da filial bo'lmasa (login paytida branch-service javob bermagan) —
+    // menejer filiali biriktirishdan: ro'yxat ham shu yo'l bilan o'qiladi.
+    const requesterBranchId = await this.resolveRequesterBranchId(req.user);
     return firstValueFrom(
       this.orderClient
         .send(
@@ -8310,7 +8341,7 @@ export class OrderGatewayController {
             requester: {
               id: req.user.sub,
               roles: this.normalizeRoles(req.user.roles),
-              branch_id: req.user.branch_id ?? null,
+              branch_id: requesterBranchId,
             },
             // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
             // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
@@ -8329,6 +8360,127 @@ export class OrderGatewayController {
       }
       throw error;
     });
+  }
+
+  @Post('bulk/sell')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "Yakunlash kaliti (≤255 belgi). Bitta yakunlashning BARCHA bo'laklariga ayni kalit yuboriladi: har buyurtma uchun barqaror kalit shundan olinadi — bo'lak yoki xato bergan buyurtma qayta yuborilsa amal ikkinchi marta bajarilmaydi.",
+  })
+  @ApiOperation({
+    summary: 'Bulk sell — «Tezkor amal» (courier / branch manager)',
+    description:
+      "Buyurtmalar server ichida KETMA-KET, har biri yakka `POST /orders/sell/:id` qoidalari bilan sotiladi (qo'shimcha xarajatsiz). " +
+      "Bittasining xatosi qolganlarini to'xtatmaydi: javobda `succeeded` (id'lar) va `failed` (`order_id`, `status_code`, `message`). " +
+      "Menejer kuryer qo'lidagi buyurtmani kuryer nomidan sotadi (pul kuryer kassasi orqali).",
+  })
+  @ApiBody({ type: CourierBulkSellRequestDto })
+  async bulkSellOrders(
+    @Body() dto: CourierBulkSellRequestDto,
+    @Req() req: CourierOpRequest,
+  ) {
+    const comment = dto.comment?.trim() || undefined;
+    return this.runCourierBulk('sell', dto.order_ids, req, (id, orderReq) =>
+      this.sellOrder(id, { comment, extraCost: 0 }, undefined, orderReq),
+    );
+  }
+
+  @Post('bulk/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      "Yakunlash kaliti (≤255 belgi) — `POST /orders/bulk/sell` bilan bir xil ma'noda.",
+  })
+  @ApiOperation({
+    summary: 'Bulk cancel — «Tezkor amal» (courier / branch manager)',
+    description:
+      'Buyurtmalar server ichida KETMA-KET, har biri yakka `POST /orders/cancel/:id` qoidalari bilan bekor qilinadi. ' +
+      'Javob: `succeeded` va `failed` (`order_id`, `status_code`, `message`).',
+  })
+  @ApiBody({ type: CourierBulkCancelRequestDto })
+  async bulkCancelOrders(
+    @Body() dto: CourierBulkCancelRequestDto,
+    @Req() req: CourierOpRequest,
+  ) {
+    const comment = dto.comment?.trim() || undefined;
+    return this.runCourierBulk('cancel', dto.order_ids, req, (id, orderReq) =>
+      this.cancelOrder(
+        id,
+        { comment, reason: dto.reason, extraCost: 0 },
+        undefined,
+        orderReq,
+      ),
+    );
+  }
+
+  /**
+   * «Tezkor amal» umumiy yo'li: filial bir marta aniqlanadi, har buyurtma
+   * o'z barqaror `Idempotency-Key` i bilan yakka handler orqali o'tadi.
+   */
+  private async runCourierBulk(
+    action: CourierBulkActionKind,
+    rawOrderIds: readonly unknown[],
+    req: CourierOpRequest,
+    run: (orderId: string, orderReq: CourierOpRequest) => Promise<unknown>,
+  ) {
+    const orderIds = normalizeCourierBulkOrderIds(rawOrderIds ?? []);
+    const runKey = readOrderCreateIdempotencyKey(
+      req.headers?.['idempotency-key'],
+    );
+    const user: JwtUser = {
+      ...req.user,
+      branch_id: await this.resolveRequesterBranchId(req.user),
+    };
+    const outcome = await runCourierBulkSequential(orderIds, (orderId) => {
+      const key = courierBulkOrderIdempotencyKey(runKey, action, orderId);
+      return run(orderId, {
+        user,
+        headers: key ? { 'idempotency-key': key } : {},
+      });
+    });
+    return successRes(
+      { action, total: orderIds.length, ...outcome },
+      200,
+      outcome.failed.length
+        ? `${outcome.succeeded.length} ta bajarildi, ${outcome.failed.length} ta xato`
+        : `${outcome.succeeded.length} ta bajarildi`,
+    );
+  }
+
+  /**
+   * So'rovchi filiali: JWT'dagi `branch_id`, u bo'lmasa (login paytida
+   * branch-service javob bermagan) — MENEJER uchun filial biriktirishidan
+   * (`resolveBranchAssignment`, ro'yxat ham shu yo'l bilan o'qiladi). Ilgari
+   * bunday tokenli menejerga ro'yxat chiqardi, har sotuv/bekor esa
+   * «filialga biriktirilmagan» 400 qaytarardi. Kuryer — o'zgarishsiz.
+   */
+  private async resolveRequesterBranchId(
+    user: JwtUser | undefined,
+  ): Promise<string | null> {
+    const jwtBranchId = String(user?.branch_id ?? '').trim();
+    if (jwtBranchId) return jwtBranchId;
+    const roles = this.normalizeRoles(user?.roles);
+    if (
+      !user ||
+      !roles.includes(RoleEnum.MANAGER) ||
+      roles.includes(RoleEnum.COURIER)
+    ) {
+      return null;
+    }
+    const assignment = await this.resolveBranchAssignment(user).catch(
+      () => null,
+    );
+    if (!this.isBranchStaffAssignment(assignment)) return null;
+    return String(assignment?.branch_id ?? '').trim() || null;
   }
 
   @Post('settlement/courier-to-branch')

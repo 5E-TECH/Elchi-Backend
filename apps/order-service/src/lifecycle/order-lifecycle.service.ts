@@ -5893,6 +5893,28 @@ export class OrderLifecycleService {
   }
 
   /**
+   * LC-04 (2026-11-21): menejer sotuvida buyurtma kuryer qo'lida bo'lsa —
+   * qaysi kuryer nomidan sotiladi. Custody egasi birinchi (`holder_courier_id`),
+   * keyin biriktirilgan kuryer, keyin pochta kuryeri. Buyurtma kuryerda
+   * bo'lmasa yoki kuryer aniqlanmasa — '' (menejer pul modeli / LC-04 xatosi).
+   */
+  private resolveManagerOnBehalfCourierId(
+    order: {
+      holder_type?: OrderHolderType | string | null;
+      holder_courier_id?: string | null;
+      courier_id?: string | null;
+    },
+    post: { courier_id?: string | null } | null | undefined,
+  ): string {
+    if (!this.isHeldByCourier(order)) return '';
+    return (
+      this.normalizeCourierId(order.holder_courier_id) ||
+      this.normalizeCourierId(order.courier_id) ||
+      this.normalizeCourierId(post?.courier_id)
+    );
+  }
+
+  /**
    * RPC xatosidan foydalanuvchiga ko'rsatiladigan qisqa sabab. Mikroservis
    * xatosi `RpcException`, xom `{ statusCode, message }` obyekt yoki oddiy
    * `Error` bo'lib kelishi mumkin.
@@ -12585,7 +12607,7 @@ export class OrderLifecycleService {
 
     // (hwTkXsGi) Pochta o'qilmasa — kuryer tekshiruvi 503 beradi, 400 emas.
     const { post, postLookupFailed } = await this.readOrderPost(order.post_id);
-    const actorCourierId = this.resolveActorCourierId(
+    const requesterActorCourierId = this.resolveActorCourierId(
       requester,
       order,
       post,
@@ -12594,36 +12616,68 @@ export class OrderLifecycleService {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
       !this.hasRole(requester, Roles.COURIER);
-    this.assertManagerSaleNotCourierHeld(isManagerRequester, order);
+    /**
+     * LC-04 (2026-11-21, «Tezkor amal» BeePost modeli): KURYER QO'LIDAGI
+     * buyurtmani menejer KURYER NOMIDAN sotadi — pul yo'li kuryer sotuvi bilan
+     * AYNI (kuryer kassasi, ulushi va qarzi; settlement PENDING), menejer
+     * faqat amalni qayd etgan (`created_by`, audit). Shunda daftar kuryerda
+     * turgan naqdni to'g'ri ko'rsatadi — LC-04 aynan menejer pul modelini
+     * (naqd filial kassasiga) kuryer qo'lidagi buyurtmaga qo'llashni to'sgan.
+     * Kuryer aniqlanmasa — LC-04 xatosi avvalgidek.
+     */
+    const onBehalfCourierId = isManagerRequester
+      ? this.resolveManagerOnBehalfCourierId(order, post)
+      : '';
+    /** Menejer pul modeli (naqd filial kassasiga) — faqat filialda turgan buyurtma. */
+    const isManagerSale = isManagerRequester && !onBehalfCourierId;
+    const actorCourierId = onBehalfCourierId || requesterActorCourierId;
+    this.assertManagerSaleNotCourierHeld(isManagerSale, order);
+    if (
+      onBehalfCourierId &&
+      (this.wholeExtraCost(dto?.extraCost) > 0 || marketPaidAtSale > 0)
+    ) {
+      this.badRequest(
+        "Kuryer qo'lidagi buyurtmani menejer faqat qo'shimcha xarajat va " +
+          "marketga to'lovsiz sota oladi — bunday sotuvni kuryerning o'zi qiladi",
+      );
+    }
 
-    const [market, financialActor] = await Promise.all([
+    const [market, financialActor, onBehalfManager] = await Promise.all([
       this.lookup
         .getMarketsByIds([String(order.market_id)])
         .then((rows) => rows[0]),
-      isManagerRequester
+      isManagerSale
         ? this.lookup.getUserById(String(requester.id))
         : // hEjjuJaT: super-kuryer — buyurtma viloyati tarifi (courier_regions
           // ?? yassi); natija `courier_tariff` ga snapshot bo'ladi.
           this.lookup
             .getCouriersByIds([actorCourierId], { region_id: order.region_id })
             .then((rows) => rows[0]),
+      onBehalfCourierId
+        ? this.lookup.getUserById(String(requester.id))
+        : Promise.resolve(null),
     ]);
     if (!market) {
       this.notFound('Market topilmadi');
     }
     if (!financialActor) {
-      this.notFound(
-        isManagerRequester ? 'Menejer topilmadi' : 'Kuryer topilmadi',
-      );
+      this.notFound(isManagerSale ? 'Menejer topilmadi' : 'Kuryer topilmadi');
     }
-    this.assertManagerCanSellCancel(isManagerRequester, financialActor);
+    if (onBehalfCourierId && !onBehalfManager) {
+      this.notFound('Menejer topilmadi');
+    }
+    // Ruxsat — doim MENEJERNING o'zi (kuryer nomidan sotsa ham).
+    this.assertManagerCanSellCancel(
+      isManagerRequester,
+      onBehalfCourierId ? onBehalfManager : financialActor,
+    );
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.lookup.getCashboxByUser(
         String(order.market_id),
         Cashbox_type.FOR_MARKET,
       ),
-      isManagerRequester
+      isManagerSale
         ? Promise.resolve(null)
         : this.lookup
             .getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER)
@@ -12632,7 +12686,7 @@ export class OrderLifecycleService {
     if (!marketCashbox) {
       this.notFound('Market kassasi topilmadi');
     }
-    if (!courierCashbox && !isManagerRequester) {
+    if (!courierCashbox && !isManagerSale) {
       this.notFound('Kuryer kassasi topilmadi');
     }
 
@@ -12661,7 +12715,7 @@ export class OrderLifecycleService {
      * qo'lda "to'ldirish" bilangina tuzaladigan soxta qarz. Kuryer va market
      * kassasi bilan bir xil: kassa yo'q — sotuv yo'q.
      */
-    if (isManagerRequester && settlementBranchId && !branchCashbox) {
+    if (isManagerSale && settlementBranchId && !branchCashbox) {
       this.notFound(
         "Filial kassasi topilmadi — sotuv to'xtatildi, qaytadan urinib ko'ring",
       );
@@ -12688,7 +12742,7 @@ export class OrderLifecycleService {
     });
     // courierShare = what the courier keeps (0 for salary-only couriers).
     const courierShare = this.resolveSaleActorShare(
-      isManagerRequester,
+      isManagerSale,
       financialActor,
       courierTariff,
     );
@@ -12709,15 +12763,13 @@ export class OrderLifecycleService {
       branchShare,
       engineUnavailable: marketPricing.engineUnavailable,
     });
-    const actorExpenseUserId = isManagerRequester
+    const actorExpenseUserId = isManagerSale
       ? String(requester.branch_id ?? '')
       : actorCourierId;
-    const actorExpenseCashboxType = isManagerRequester
+    const actorExpenseCashboxType = isManagerSale
       ? Cashbox_type.BRANCH
       : Cashbox_type.FOR_COURIER;
-    const actorExpenseCashbox = isManagerRequester
-      ? branchCashbox
-      : courierCashbox;
+    const actorExpenseCashbox = isManagerSale ? branchCashbox : courierCashbox;
 
     const totalPrice = Number(order.total_price ?? 0);
     const extraCost = this.wholeExtraCost(dto?.extraCost);
@@ -12838,7 +12890,7 @@ export class OrderLifecycleService {
     const marketExpense = Math.max(marketTariff - collectible, 0);
     const courierIncome = Math.max(collectible - courierShare, 0);
     const managerBranchCash = this.resolveManagerSaleBranchCash({
-      isManagerRequester,
+      isManagerRequester: isManagerSale,
       settlementBranchId,
       hasBranchCashbox: Boolean(branchCashbox),
       courierIncome,

@@ -458,6 +458,14 @@ export type OrderListQuery = {
    */
   exclude_hq_warehouse?: boolean;
   unbatched_only?: boolean;
+  /**
+   * «Tezkor amal» (2026-11-21): `branch_id` doirasi faqat JISMONIY joylashuv —
+   * `branch_id` (hozir qayerda) yoki `holder_branch_id`. `home_branch_id`
+   * (yaratilgan filial) qo'shilmaydi: boshqa filialda turgan buyurtmani
+   * menejer sota/bekor qila olmaydi (`resolveActorCourierId` — 400), ro'yxatda
+   * esa chiqib qolardi.
+   */
+  branch_physical_only?: boolean | string;
   fetch_all?: boolean | string;
   fetchAll?: boolean | string;
   disable_pagination?: boolean;
@@ -1233,6 +1241,7 @@ export class OrderServiceService {
       warehouse_hq_branch_id,
       exclude_hq_warehouse,
       unbatched_only,
+      branch_physical_only,
     } = query;
     const useCourierHistory =
       include_courier_history === true ||
@@ -1393,12 +1402,17 @@ export class OrderServiceService {
       qb.andWhere('order.district_id = :district_id', { district_id });
     }
     if (branch_id) {
+      const physicalOnly =
+        branch_physical_only === true ||
+        String(branch_physical_only).toLowerCase() === 'true';
       qb.andWhere(
         new Brackets((nested) => {
           nested
             .where('order.branch_id = :branch_id', { branch_id })
-            .orWhere('order.holder_branch_id = :branch_id', { branch_id })
-            .orWhere('order.home_branch_id = :branch_id', { branch_id });
+            .orWhere('order.holder_branch_id = :branch_id', { branch_id });
+          if (!physicalOnly) {
+            nested.orWhere('order.home_branch_id = :branch_id', { branch_id });
+          }
         }),
       );
     }

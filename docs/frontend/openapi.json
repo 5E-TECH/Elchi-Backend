@@ -4461,6 +4461,18 @@
             }
           },
           {
+            "name": "scope",
+            "required": false,
+            "in": "query",
+            "description": "«Tezkor amal»: menejer/filial uchun faqat filialda yoki filial kuryerlarida JISMONAN turgan buyurtmalar (yaratilgan filial — home_branch_id — bo'yicha emas). Kuryerga ta'sir qilmaydi.",
+            "schema": {
+              "enum": [
+                "actionable"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
@@ -5885,6 +5897,96 @@
           }
         ],
         "summary": "Cancel order (courier)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
+        ]
+      }
+    },
+    "/orders/bulk/sell": {
+      "post": {
+        "description": "Buyurtmalar server ichida KETMA-KET, har biri yakka `POST /orders/sell/:id` qoidalari bilan sotiladi (qo'shimcha xarajatsiz). Bittasining xatosi qolganlarini to'xtatmaydi: javobda `succeeded` (id'lar) va `failed` (`order_id`, `status_code`, `message`). Menejer kuryer qo'lidagi buyurtmani kuryer nomidan sotadi (pul kuryer kassasi orqali).",
+        "operationId": "OrderGatewayController_bulkSellOrders",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Yakunlash kaliti (≤255 belgi). Bitta yakunlashning BARCHA bo'laklariga ayni kalit yuboriladi: har buyurtma uchun barqaror kalit shundan olinadi — bo'lak yoki xato bergan buyurtma qayta yuborilsa amal ikkinchi marta bajarilmaydi.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourierBulkSellRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bulk sell — «Tezkor amal» (courier / branch manager)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "courier",
+          "manager"
+        ]
+      }
+    },
+    "/orders/bulk/cancel": {
+      "post": {
+        "description": "Buyurtmalar server ichida KETMA-KET, har biri yakka `POST /orders/cancel/:id` qoidalari bilan bekor qilinadi. Javob: `succeeded` va `failed` (`order_id`, `status_code`, `message`).",
+        "operationId": "OrderGatewayController_bulkCancelOrders",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Yakunlash kaliti (≤255 belgi) — `POST /orders/bulk/sell` bilan bir xil ma'noda.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourierBulkCancelRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bulk cancel — «Tezkor amal» (courier / branch manager)",
         "tags": [
           "Orders"
         ],
@@ -31654,6 +31756,64 @@
             }
           }
         }
+      },
+      "CourierBulkSellRequestDto": {
+        "type": "object",
+        "properties": {
+          "order_ids": {
+            "example": [
+              "81",
+              "82"
+            ],
+            "description": "Buyurtmalar id'lari (1–50 ta; takrorlari bir marta).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "comment": {
+            "type": "string",
+            "example": "Kuryer tezkor amal orqali yakunladi"
+          }
+        },
+        "required": [
+          "order_ids"
+        ]
+      },
+      "CourierBulkCancelRequestDto": {
+        "type": "object",
+        "properties": {
+          "order_ids": {
+            "example": [
+              "81",
+              "82"
+            ],
+            "description": "Buyurtmalar id'lari (1–50 ta; takrorlari bir marta).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "comment": {
+            "type": "string",
+            "example": "Kuryer tezkor amal orqali yakunladi"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "CUSTOMER_NO_ANSWER",
+              "CUSTOMER_REFUSED",
+              "WRONG_ADDRESS",
+              "DEFECTIVE_PRODUCT",
+              "PRICE_DISPUTE",
+              "OTHER"
+            ],
+            "description": "Bekor sababi. Berilmasa comment majburiy va sabab OTHER deb yoziladi (yakka bekor bilan bir xil)."
+          }
+        },
+        "required": [
+          "order_ids"
+        ]
       },
       "CouldNotDeliverOrderRequestDto": {
         "type": "object",
