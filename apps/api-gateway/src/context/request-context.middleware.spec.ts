@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { Logger } from '@nestjs/common';
 import { requestContext } from '@app/common';
 import {
   ClientIpThrottlerGuard,
@@ -180,6 +181,33 @@ describe('requestContextMiddleware', () => {
       'x-request-id',
       (seen as { traceId: string }).traceId,
     );
+  });
+
+  it('kabinet Worker proksisi boshqa zonada (CF-Connecting-IP = Worker umumiy manzili) — ogohlantirish, so`rov o`tadi', () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const next = jest.fn();
+      const res = { setHeader: jest.fn() } as unknown as Response;
+      requestContextMiddleware(
+        req({ headers: { 'cf-connecting-ip': '203.0.113.7' } }),
+        res,
+        next,
+      );
+      expect(warn).not.toHaveBeenCalled();
+
+      requestContextMiddleware(
+        req({ headers: { 'cf-connecting-ip': '2a06:98c0:3600::103' } }),
+        res,
+        next,
+      );
+      expect(next).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('2a06:98c0:3600::103');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

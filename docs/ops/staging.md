@@ -123,6 +123,9 @@ $DC logs --tail 50 api-gateway
    `test` branchi deploy'iga custom domain va API manzili
    `https://test-api.elchipochta.uz`. Bu FE tomoni; backend CORS'i
    (`CORS_ORIGINS`) allaqachon shu ikkala domenga sozlangan.
+   Bir domenli API (`test-admin…/api/*` → Worker → `test-api`, CORS
+   preflight'siz): deploy, tekshiruv va orqaga qaytish —
+   [`same-origin-api.md`](./same-origin-api.md).
 5. (Ixtiyoriy) Zero Trust → Access bilan `test-admin` ni faqat jamoaga ochish.
 
 ## 5. GitHub (repo admini, bir marta)
