@@ -95,7 +95,7 @@ describe.each(JOBS)('%s: env preflight', (job, envFile) => {
     expect(reached()).toBe(true);
   });
 
-  it('«AI kalit va modellar»: master sir / ANTHROPIC_BASE_URL — to`xtaydi; ANTHROPIC_API_KEY — WARN, qiymat logda yo`q', () => {
+  it('«AI kalit va modellar»: master sir / ANTHROPIC_BASE_URL — to`xtaydi, qiymat logda yo`q', () => {
     const base = `POSTGRES_PASSWORD=${PG_OK}\nSUPERADMIN_PASSWORD=${SA_OK}\n`;
     const master = 'MasterSecretValueNeverLogged0123456789';
     for (const line of [
@@ -110,19 +110,52 @@ describe.each(JOBS)('%s: env preflight', (job, envFile) => {
       expect(r.stderr).toContain('docs/ops/ai-config.md');
       expect(r.stdout + r.stderr).not.toContain(master);
     }
+  });
+
+  describe('ANTHROPIC_API_KEY umumiy env faylda (audit 2026-11-22 #15)', () => {
+    const base = `POSTGRES_PASSWORD=${PG_OK}\nSUPERADMIN_PASSWORD=${SA_OK}\n`;
     const key = 'sk-ant-api03-' + 'k'.repeat(40);
-    rmSync(join(dir, 'reached'), { force: true });
-    const w = run(
-      `${base}ANTHROPIC_API_KEY=${key}\nAI_KEY_ENCRYPTION_SECRET_FILE=/run/secrets/ai/ai_key_master\n`,
-    );
-    expect(w.status).toBe(0);
-    expect(reached()).toBe(true);
-    expect(w.stderr).toContain('WARN: ANTHROPIC_API_KEY');
-    expect(w.stdout + w.stderr).not.toContain(key);
-    rmSync(join(dir, 'reached'), { force: true });
-    const empty = run(`${base}ANTHROPIC_API_KEY=\n`);
-    expect(empty.status).toBe(0);
-    expect(empty.stderr).not.toContain('WARN: ANTHROPIC_API_KEY');
+
+    it.each([
+      ['oddiy', `ANTHROPIC_API_KEY=${key}`],
+      ['export', `export ANTHROPIC_API_KEY=${key}`],
+      ['chekinish bilan', `  ANTHROPIC_API_KEY=${key}`],
+      ['= dan keyin bo`shliq', `ANTHROPIC_API_KEY=  ${key}`],
+      ['qo`shtirnoq', `ANTHROPIC_API_KEY="${key}"`],
+      ['bitta qo`shtirnoq', `ANTHROPIC_API_KEY='${key}'`],
+      ['izoh bilan', `ANTHROPIC_API_KEY=${key} # asosiy kalit`],
+      ['CRLF', `ANTHROPIC_API_KEY=${key}\r`],
+      [
+        'bo`sh qatordan keyin takror',
+        `ANTHROPIC_API_KEY=\nANTHROPIC_API_KEY=${key}`,
+      ],
+    ])('%s: deploy to`xtaydi, qiymat logda yo`q', (_name, line) => {
+      const r = run(
+        `${base}${line}\nAI_KEY_ENCRYPTION_SECRET_FILE=/run/secrets/ai/ai_key_master\n`,
+      );
+      expect(r.status).not.toBe(0);
+      expect(reached()).toBe(false);
+      expect(r.stderr).toContain(
+        `!!! ${envFile}: ANTHROPIC_API_KEY must not be set here`,
+      );
+      expect(r.stderr).toContain('docs/ops/ai-config.md §6');
+      expect(r.stdout + r.stderr).not.toContain(key);
+    });
+
+    it.each([
+      ['bo`sh', 'ANTHROPIC_API_KEY='],
+      ['faqat bo`shliq', 'ANTHROPIC_API_KEY=   '],
+      ['bo`sh qo`shtirnoq', 'ANTHROPIC_API_KEY=""'],
+      ['bo`sh bitta qo`shtirnoq', "ANTHROPIC_API_KEY=''"],
+      ['faqat izoh', 'ANTHROPIC_API_KEY= # AI o`chiq'],
+      ['bo`sh CRLF', 'ANTHROPIC_API_KEY=\r'],
+      ['izohdagi qator', `# ANTHROPIC_API_KEY=${key}`],
+    ])('%s: o`tadi', (_name, line) => {
+      const r = run(`${base}${line}\n`);
+      expect(r.status).toBe(0);
+      expect(reached()).toBe(true);
+      expect(r.stderr).not.toContain('ANTHROPIC_API_KEY must not be set');
+    });
   });
 
   it('chegaralar: POSTGRES 24, SUPERADMIN 12', () => {

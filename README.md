@@ -130,8 +130,10 @@ Cloudflare Tunnel. Deploy is driven by `.github/workflows/deploy.yml`.
 zaxiradan tiklaydi — eski fayl jim qoladi; rollback kodni qaytaradi, `.env` ni
 emas. Shuning uchun tartib QAT'IY:
 
-1. SSH → serverdagi `.env.production` ga AI kalitlari QO'LDA qo'shiladi:
-   `ANTHROPIC_API_KEY=sk-ant-…` (faqat shu yerda), `AI_ORDER_MODEL`,
+1. SSH → serverdagi `.env.production` ga AI sozlamalari QO'LDA qo'shiladi.
+   `ANTHROPIC_API_KEY=sk-ant-…` esa FAQAT `.env.ai-secrets` ga (uni ai-service
+   yolg'iz o'qiydi; `.env.production` da qiymati bo'lsa deploy rad etiladi —
+   `docs/ops/ai-config.md` §6). Qolganlari: `AI_ORDER_MODEL`,
    `AI_ORDER_VISION_MODEL`, `AI_CLASSIFY_MODEL`, `AI_DISTRICT_MODEL`,
    `AI_DAILY_USD_CAP`, … (ro'yxat —
    `.env.example` "AI Order" bo'limi). `AI_ORDER_ENABLED=false` bilan boshlang.
