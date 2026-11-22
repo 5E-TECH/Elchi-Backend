@@ -335,9 +335,22 @@ describe('evaluateRollbackEligibility (D1–D4)', () => {
     expect(
       evaluateRollbackEligibility(base({ ...ctx, actor: SA })),
     ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED' });
-    // O'sha filial qoldig'i yoki 0 — to'sqinlik yo'q.
+    // Audit 2026-11-22: boshqa filialdagi MANFIY qoldiq (T6 qarzi) ham rad —
+    // aks holda kredit uni o'z filialiga «ko'chirib» qarz yo'qolardi.
+    expect(
+      evaluateRollbackEligibility(
+        base({ ...ctx, saleCourierCarryAmount: -5000 }),
+      ),
+    ).toMatchObject({
+      allowed: false,
+      code: 'SUPERADMIN_ONLY',
+      message:
+        'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
+    });
+    // O'sha filial qoldig'i (musbat yoki manfiy — qarz) yoki 0 — to'sqinlik yo'q.
     for (const carry of [
       { saleCourierCarryBranchId: BRANCH, saleCourierCarryAmount: 5000 },
+      { saleCourierCarryBranchId: BRANCH, saleCourierCarryAmount: -5000 },
       { saleCourierCarryBranchId: '99', saleCourierCarryAmount: 0 },
     ]) {
       expect(

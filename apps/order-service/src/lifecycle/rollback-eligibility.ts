@@ -240,9 +240,10 @@ export function remittedCreditBlocker(
       "summani uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi"
     );
   }
-  // A-F8 — `creditRemittedCourierCarry` bilan AYNI shart.
+  // A-F8 — `creditRemittedCourierCarry` bilan AYNI shart: boshqa filialga
+  // yozilgan noldan farqli qoldiq (musbat yoki manfiy — kuryer qarzi).
   if (
-    toTiyin(ctx.saleCourierCarryAmount ?? 0) > 0 &&
+    toTiyin(ctx.saleCourierCarryAmount ?? 0) !== 0 &&
     norm(ctx.saleCourierCarryBranchId) !== branchId
   ) {
     return 'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi';

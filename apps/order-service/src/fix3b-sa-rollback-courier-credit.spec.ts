@@ -1039,6 +1039,78 @@ describe('fix3b M6 — superadmin uchun ham xavfsiz bo`lmagan holatlar rad etila
 
     await expectUnchanged(w, 400, 'boshqa filialga tegishli qoldiq');
   });
+
+  it('⭐ audit 2026-11-22: kuryerda BOSHQA filialga tegishli MANFIY qoldiq (T6 qarzi) — 400, qarz boshqa filialga «ko`chib» yo`qolmaydi', async () => {
+    const w = await remittedWorld();
+    const courierCarry = w.state.carries.find(
+      (c) => c.level === 'courier_to_branch' && c.party_id === COURIER_ID,
+    )!;
+    courierCarry.amount = -30000;
+    courierCarry.branch_id = '78';
+
+    await expectUnchanged(w, 400, 'boshqa filialga tegishli qoldiq');
+  });
+});
+
+describe('⭐ audit 2026-11-22 (critical) — rollback kuryer QARZINI (manfiy qoldiq) o`chirmaydi', () => {
+  it('T6 qarzi (−D, o`sha filial) + superadmin rollback: qoldiq = −D + c_A, daftar ↔ kassa tengligi saqlanadi', async () => {
+    const w = await remittedWorld();
+    const cA = 140000;
+    const D = 100000;
+    // T6-BE-3 (to'lov qaytarilgani) holatini yasash: kuryer qoldig'i −D (qarz,
+    // FIFO uni ataylab saqlaydi), kuryer kassasi +D, filial kassasi −D.
+    const courierCarry = w.state.carries.find(
+      (c) => c.level === 'courier_to_branch' && c.party_id === COURIER_ID,
+    )!;
+    courierCarry.amount = -D;
+    courierCarry.branch_id = BRANCH;
+    const courierKey = `${Cashbox_type.FOR_COURIER}:${COURIER_ID}`;
+    const branchKey = `${Cashbox_type.BRANCH}:${BRANCH}`;
+    w.state.cash[courierKey] = money((w.state.cash[courierKey] ?? 0) + D);
+    w.state.cash[branchKey] = money((w.state.cash[branchKey] ?? 0) - D);
+    w.assertLedgerMatchesCash();
+
+    await w.svc.rollbackOrderToWaiting(
+      SUPERADMIN,
+      '7001',
+      undefined,
+      'rb-debt',
+    );
+
+    // Ilgari: Math.max(−D, 0) + c_A = c_A — D qarz izsiz yo'qolardi.
+    expect(w.carry('courier_to_branch', COURIER_ID)).toBe(money(-D + cA));
+    expect(
+      w.state.carries.find(
+        (c) => c.level === 'courier_to_branch' && c.party_id === COURIER_ID,
+      )?.branch_id,
+    ).toBe(BRANCH);
+    w.assertLedgerMatchesCash();
+  });
+
+  it('qarz krediti yopsa ham (−D + c_A > 0) va qoldiq aniq nolga tushsa ham — ishorasi bilan to`g`ri', async () => {
+    for (const D of [40000, 140000]) {
+      const w = await remittedWorld();
+      const courierCarry = w.state.carries.find(
+        (c) => c.level === 'courier_to_branch' && c.party_id === COURIER_ID,
+      )!;
+      courierCarry.amount = -D;
+      courierCarry.branch_id = BRANCH;
+      const courierKey = `${Cashbox_type.FOR_COURIER}:${COURIER_ID}`;
+      const branchKey = `${Cashbox_type.BRANCH}:${BRANCH}`;
+      w.state.cash[courierKey] = money((w.state.cash[courierKey] ?? 0) + D);
+      w.state.cash[branchKey] = money((w.state.cash[branchKey] ?? 0) - D);
+
+      await w.svc.rollbackOrderToWaiting(
+        SUPERADMIN,
+        '7001',
+        undefined,
+        `rb-${D}`,
+      );
+
+      expect(w.carry('courier_to_branch', COURIER_ID)).toBe(money(140000 - D));
+      w.assertLedgerMatchesCash();
+    }
+  });
 });
 
 describe('fix3b M6 — PENDING va nol qatorlar avvalgidek', () => {
