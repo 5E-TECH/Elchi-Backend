@@ -10489,7 +10489,12 @@ export class IntegrationServiceService {
           settled_count: replayed.settled_count,
           unapplied_amount: Number(replayed.unapplied_amount ?? 0),
           advance_applied: Number(replayed.advance_applied ?? 0),
-          cashbox_posted: replayed.cashbox_posted === true,
+          // ZE5zqXxu — NULL "yozilmadi" EMAS, "noma'lum": kassa yozuvi
+          // tranzaksiyadan KEYIN, shuning uchun birinchi so'rov hali kassaga
+          // yozayotgan paytda kelgan takror NULL ni ko'radi (yoki bayroq
+          // saqlanmay qolgan). `false` qaytsa ekran «Kassaga yozilmadi —
+          // qo'lda kiriting» der edi va pul ikki marta kirim bo'lardi.
+          cashbox_posted: replayed.cashbox_posted ?? null,
           idempotent_replay: true,
         },
         200,
