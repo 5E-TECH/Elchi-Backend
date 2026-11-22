@@ -23,6 +23,24 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-23 — `POST /orders/receive` qayta qabulda idempotent (skan auditi)
+
+Deploy: **order-service** (migratsiya yo'q).
+
+- ✏️ [order] — `POST /orders/receive` javobi `data: {}` o'rniga
+  `data: { received_ids: string[], already_received_ids: string[] }`.
+- ✏️ [order] — allaqachon `received` holatidagi buyurtma qayta yuborilsa **200**
+  (`already_received_ids` da, `message: "Buyurtmalar allaqachon qabul qilingan"`). Ilgari
+  404 «Buyurtmalar topilmadi» edi — skaner real posilka uchun «Topilmadi» ko'rsatardi.
+  Bunday buyurtma qayta yozilmaydi (pochta, javobgarlik, webhook yo'q). Aralash so'rovda
+  (`new` + `received`) faqat `new` lari yoziladi. Boshqa holatlar (`on_the_road`, `sold` …)
+  avvalgidek 404/400; begona filialning qabul qilingan buyurtmasi — 403.
+- 🟢 [order] — bir buyurtma bir vaqtda ikki so'rovda kelsa (timeout'dan keyin qayta skan),
+  ikkinchisi birinchisini kutadi va `already_received_ids` bilan qaytadi — pochta
+  hisoblagichi ikki marta oshmaydi.
+  → **Frontendda:** 🔧 skan-qabulda `already_received_ids` ichidagi id — «Allaqachon qabul
+  qilingan» (shu sahifadan avval yuborilgan bo'lsa — o'zimizning qabul, «Qabul qilindi»).
+
 ### 2026-11-22 — Kargo to'lovi takrorida `cashbox_posted: null` bo'lishi mumkin (ZE5zqXxu)
 
 Deploy: **integration-service** (migratsiya yo'q).
