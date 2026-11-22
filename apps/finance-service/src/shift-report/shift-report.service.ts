@@ -120,16 +120,44 @@ interface PlannedRecipient {
   channels: ReportChannels;
   /**
    * `branch` (filial guruhi) — dispatch kimlar nomidan (inbox qatori):
-   * filial menejerlari, bo'lmasa smenani yopgan / ochgan xodim.
+   * filial menejerlari → smenani yopgan / ochgan xodim → superadminlar
+   * (`branchNotifyIds`).
    */
   notify_ids?: string[];
   /** `branch` — guruh holati (`telegram` so'ralganda). */
   group?: { active: boolean; inactive_reason: string | null };
+  /**
+   * (audit 2026-11-22 #3) `branch` — hisobotni yuborib bo'lmaydi (dispatch
+   * qiladigan faol foydalanuvchi yo'q / filial marshruti olinmadi). So'ralgan
+   * kanallar `failed` + shu sabab bilan yoziladi, dispatch YO'Q — hisobot
+   * izsiz yo'qolmaydi, «Hisobot kimlarga yuborildi» blokida ko'rinadi.
+   */
+  unreachable?: {
+    reason: string;
+    channel: Extract<ShiftReportChannel, 'telegram' | 'telegram_group'>;
+  };
 }
 
 export interface BranchTelegramRoute {
   report_target: 'group' | 'private';
   group: { active: boolean; inactive_reason: string | null } | null;
+}
+
+/** (audit #3) Yuborib bo'lmaydigan filial hisoboti — faqat `failed` holat. */
+function unreachableBranch(
+  branchId: string,
+  message: ShiftReportMessage,
+  channels: ReportChannels,
+  reason: string,
+  channel: NonNullable<PlannedRecipient['unreachable']>['channel'],
+): PlannedRecipient {
+  return {
+    kind: 'branch',
+    recipient_id: branchId,
+    message,
+    channels,
+    unreachable: { reason, channel },
+  };
 }
 
 /** Xabarga Telegram ilovasini (file-service kaliti) qo'shadi — yangi obyekt. */
@@ -432,6 +460,21 @@ export class ShiftReportService {
       status: ShiftReportDeliveryStatus;
       failed_reason: string | null;
     }> = [];
+    if (recipient.unreachable) {
+      // (audit #3) Yuborib bo'lmaydi — faqat holat (`failed` + sabab), dispatch yo'q.
+      const failed_reason = deliveryReasonText(recipient.unreachable.reason);
+      if (recipient.channels.in_app) {
+        rows.push({ channel: 'in_app', status: 'failed', failed_reason });
+      }
+      if (recipient.channels.telegram) {
+        rows.push({
+          channel: recipient.unreachable.channel,
+          status: 'failed',
+          failed_reason,
+        });
+      }
+      return this.insertDeliveryRows(manager, snapshot, recipient, type, rows);
+    }
     const channels: string[] = [];
     if (recipient.channels.in_app) {
       channels.push(NotificationChannel.IN_APP, NotificationChannel.REALTIME);
@@ -507,33 +550,32 @@ export class ShiftReportService {
     }
     // Tizim o'chiq + Telegram ulanmagan — dispatch yo'q (faqat holat yoziladi).
     const dispatch = channels.length > 0;
-    let written = 0;
-    for (const row of rows) {
-      const result = await manager
-        .createQueryBuilder()
-        .insert()
-        .into(ShiftReportDelivery)
-        .values({
-          shift_id: snapshot.shift_id,
-          round: snapshot.round,
-          recipient_id: recipient.recipient_id,
-          recipient_kind: recipient.kind,
-          channel: row.channel,
-          status: row.status,
-          failed_reason: row.failed_reason,
-          dispatch_id: dispatch ? dispatchId : null,
-          notification_type: type,
-        })
-        .orIgnore()
-        .returning(['id'])
-        .execute();
-      written += Array.isArray(result.raw) ? result.raw.length : 0;
-    }
+    const written = await this.insertDeliveryRows(
+      manager,
+      snapshot,
+      recipient,
+      type,
+      rows,
+      dispatch ? dispatchId : null,
+    );
     // Qatorlar allaqachon bor (eskirgan `processing` qayta da'vo qilingan,
     // birinchi urinish ham commit bo'lgan) — outbox qayta yozilmaydi.
     if (!dispatch || written === 0) return written;
     const data = { ...recipient.message.data };
-    const groupKey = renderNotificationGroupKey(entry.group_key_pattern, data);
+    const baseGroupKey = renderNotificationGroupKey(
+      entry.group_key_pattern,
+      data,
+    );
+    // (audit #16) Filial guruhi dispatch'i — O'Z kaliti. Umumiy kalitda
+    // (`finance:shift:{id}:report:{round}`) notification-service qatorni
+    // `recipient_id + group_key` bo'yicha yangilaydi: HQ smenasini superadmin
+    // yopsa (notify = closed_by), uning shaxsiy hisobot qatori filial xabari
+    // bilan almashib, `dispatch_id` o'zgarardi va superadmin yetkazishlari
+    // «Hisobot kimlarga yuborildi» blokida abadiy `queued` qolardi.
+    const groupKey =
+      baseGroupKey && recipient.kind === 'branch'
+        ? `${baseGroupKey}:branch:${recipient.recipient_id}`
+        : baseGroupKey;
     await this.notifications.shiftReport(
       {
         type,
@@ -553,6 +595,44 @@ export class ShiftReportService {
       },
       manager,
     );
+    return written;
+  }
+
+  /** `shift_report_deliveries` qatorlari (takror — `orIgnore`). Yozilganlar soni. */
+  private async insertDeliveryRows(
+    manager: EntityManager,
+    snapshot: ShiftReportSnapshot,
+    recipient: PlannedRecipient,
+    type: FinanceNotificationType,
+    rows: Array<{
+      channel: ShiftReportChannel;
+      status: ShiftReportDeliveryStatus;
+      failed_reason: string | null;
+    }>,
+    dispatchId: string | null = null,
+  ): Promise<number> {
+    let written = 0;
+    for (const row of rows) {
+      const result = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(ShiftReportDelivery)
+        .values({
+          shift_id: snapshot.shift_id,
+          round: snapshot.round,
+          recipient_id: recipient.recipient_id,
+          recipient_kind: recipient.kind,
+          channel: row.channel,
+          status: row.status,
+          failed_reason: row.failed_reason,
+          dispatch_id: dispatchId,
+          notification_type: type,
+        })
+        .orIgnore()
+        .returning(['id'])
+        .execute();
+      written += Array.isArray(result.raw) ? result.raw.length : 0;
+    }
     return written;
   }
 
@@ -1007,7 +1087,12 @@ export class ShiftReportService {
    *  - telegram + filial `private` → har menejerga `branch_manager` (shaxsiy
    *    chat, ulanmagan — «Telegram ulanmagan»);
    *  - in_app → menejerlarga ilova ichida.
-   * Guruh ham yo'q, `private` ham emas — hech kim (jim).
+   * Guruh ham yo'q, `private` ham emas — hech kim (jim: filial sozlamagan).
+   *
+   * (audit 2026-11-22 #3) Sozlangan hisobot JIM YO'QOLMAYDI: guruh dispatch'i
+   * uchun faol foydalanuvchi bo'lmasa, `private` da faol menejer bo'lmasa
+   * (HQ'da menejer bo'lmaydi) yoki asosiy kassada marshrut olinmasa —
+   * `unreachable` qatori (`failed` + sabab).
    *
    * Filial kassasida marshrut / menejerlar olinmasa — XATO (da'vo
    * bo'shatiladi, keyingi tick qayta uradi). Asosiy kassada esa fail-soft:
@@ -1020,13 +1105,15 @@ export class ShiftReportService {
     const isMain = snapshot.cashbox_type === 'main';
     // Mijozlar ulanmagan (test / qisman o'rnatish) — filial qismi jim o'tadi.
     if (!this.notificationClient || !this.branchClient) return [];
+    let branchId = '';
+    let wantPrivate = false;
     try {
-      const branchId = isMain
+      branchId = isMain
         ? await this.hqBranchId()
         : String(snapshot.cashbox_user_id);
       if (!isId(branchId)) return [];
       const route = channels.telegram ? await this.branchRoute(branchId) : null;
-      const wantPrivate = Boolean(
+      wantPrivate = Boolean(
         channels.telegram && route?.report_target === 'private',
       );
       const wantGroup = Boolean(
@@ -1050,35 +1137,125 @@ export class ShiftReportService {
         process.env.ELCHI_CABINET_URL || undefined,
       );
       if (wantPrivate) {
-        return managers.map((id) => ({
+        // O'chirilgan menejer id'si bilan dispatch 400 — outbox qatori
+        // yiqilib, yetkazish abadiy `queued` qolardi.
+        const active = await this.activeUserIds(managers);
+        if (!active.length) {
+          return [
+            unreachableBranch(
+              branchId,
+              message,
+              { telegram: true, in_app: channels.in_app },
+              'branch_no_managers',
+              'telegram',
+            ),
+          ];
+        }
+        return active.map((id) => ({
           kind: 'branch_manager' as const,
           recipient_id: id,
           message,
           channels: { telegram: true, in_app: channels.in_app },
         }));
       }
-      const notify = managers.length
-        ? managers
-        : [snapshot.closed_by, snapshot.opened_by].filter((id): id is string =>
-            isId(id),
-          );
-      if (!notify.length) return [];
+      const reportChannels = { telegram: wantGroup, in_app: channels.in_app };
+      const notify = await this.branchNotifyIds(snapshot, managers);
+      if (!notify.length) {
+        return [
+          unreachableBranch(
+            branchId,
+            message,
+            reportChannels,
+            'no_report_recipient',
+            'telegram_group',
+          ),
+        ];
+      }
       return [
         {
           kind: 'branch',
           recipient_id: branchId,
-          notify_ids: [...new Set(notify.map(String))],
+          notify_ids: notify,
           message,
-          channels: { telegram: wantGroup, in_app: channels.in_app },
+          channels: reportChannels,
           ...(wantGroup && route?.group ? { group: route.group } : {}),
         },
       ];
     } catch (error) {
       if (!isMain) throw error;
       this.logger.warn(
-        `smena #${snapshot.shift_id}: asosiy kassa filial hisoboti o'tkazib yuborildi — ${short(error)}`,
+        `smena #${snapshot.shift_id}: asosiy kassa filial hisoboti yuborilmadi — ${short(error)}`,
       );
-      return [];
+      // HQ ma'lum — jim emas: «Hisobot kimlarga yuborildi» da `failed`.
+      if (!isId(branchId)) return [];
+      return [
+        unreachableBranch(
+          branchId,
+          buildBranchMessage(
+            snapshot,
+            null,
+            process.env.ELCHI_CABINET_URL || undefined,
+          ),
+          { telegram: channels.telegram, in_app: channels.in_app },
+          'branch_report_unavailable',
+          wantPrivate ? 'telegram' : 'telegram_group',
+        ),
+      ];
+    }
+  }
+
+  /**
+   * Filial guruhi dispatch'i kimlar nomidan. notification-service
+   * qabul qiluvchisiz dispatch'ni 400 bilan rad etadi, guruh relay'i esa
+   * faqat dispatch ichida navbatga qo'yiladi — ro'yxat bo'sh bo'lsa guruhga
+   * hech narsa ketmasdi. Tartib: faol menejerlar → smenani yopgan / ochgan
+   * xodim → faol superadminlar (HQ'ga menejer biriktirilmaydi, avto-smenada
+   * yopgan / ochgan yo'q). Har bosqich identity'dagi mavjudlik bo'yicha
+   * filtrlanadi (o'chirilgan id bilan dispatch 400 bo'lmasin).
+   * Superadminlar olinmasa — XATO (filial kassasi qayta uradi).
+   */
+  private async branchNotifyIds(
+    snapshot: ShiftReportSnapshot,
+    managers: string[],
+  ): Promise<string[]> {
+    const staff = await this.activeUserIds(managers);
+    if (staff.length) return staff;
+    const actors = await this.activeUserIds([
+      snapshot.closed_by,
+      snapshot.opened_by,
+    ]);
+    if (actors.length) return actors;
+    return this.superadminIds();
+  }
+
+  /**
+   * Identity'da mavjud (o'chirilmagan) foydalanuvchilar — notification-service
+   * dispatch'i ham aynan shu shart bilan tekshiradi. Identity javob bermasa —
+   * filtrsiz (fail-open, avvalgi xatti-harakat).
+   */
+  private async activeUserIds(
+    ids: Array<string | null | undefined>,
+  ): Promise<string[]> {
+    const unique = [...new Set(ids.filter(isId).map(String))];
+    if (!unique.length) return [];
+    try {
+      const response = await rmqSend<{ data?: unknown }>(
+        this.identityClient,
+        { cmd: 'identity.user.find_by_ids' },
+        { ids: unique },
+        { timeoutMs: 5_000, retries: 1 },
+      );
+      const rows = Array.isArray(response?.data) ? response.data : null;
+      if (!rows) return unique;
+      const found = new Set(
+        (rows as Array<{ id?: unknown }>).map((row) => text(row?.id)),
+      );
+      return unique.filter((id) => found.has(id));
+    } catch (error) {
+      this.logger.warn(
+        `hisobot: foydalanuvchilar tekshirilmadi — ${short(error)}`,
+      );
+      return unique;
     }
   }
 
