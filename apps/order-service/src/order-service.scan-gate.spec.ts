@@ -183,6 +183,7 @@ describe("receiveExternalByScan — token qo'riqchisi", () => {
       data: {
         received: number;
         unmatched: Array<{ token: string; reason: string }>;
+        already_received: Array<{ token: string; order_id: string }>;
       };
     };
 
@@ -191,8 +192,13 @@ describe("receiveExternalByScan — token qo'riqchisi", () => {
       res.data.unmatched.map((u) => [u.token, u.reason]),
     );
     expect(byToken['ichki']).toMatch(/tashqi posilka emas/);
-    expect(byToken['allaqachon']).toMatch(/received/);
     expect(byToken['yoq']).toMatch(/topilmadi/);
+    // Skan auditi #22/#89: allaqachon qabul qilingan — «qabul qilinmadi» emas,
+    // alohida ro'yxatda (timeout'dan keyingi qayta bosish «0 qabul» demasin).
+    expect(byToken['allaqachon']).toBeUndefined();
+    expect(res.data.already_received).toEqual([
+      { token: 'allaqachon', order_id: '8' },
+    ]);
   });
 
   it('⭐ monitoring: received=0 bo`lsa sabablari bilan warn log yoziladi (n9o0KYd5)', async () => {

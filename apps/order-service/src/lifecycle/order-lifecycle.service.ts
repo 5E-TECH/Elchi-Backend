@@ -1316,6 +1316,36 @@ export class OrderLifecycleService {
   }
 
   /**
+   * Skan auditi #40 — o'sha xodimga amaldagi ruxsatni QAYTA berish (javob
+   * yo'qolgan/kechikkan QR yoki kod). Yangi token (eskisi bekor), muddat
+   * o'zgarmaydi. Sessiya qulflangan tranzaksiya ichida chaqiriladi.
+   */
+  private async reissueMarketHandoverAuthorization(
+    sessionRepo: Repository<MarketCancelledHandoverSession>,
+    session: MarketCancelledHandoverSession,
+    expiresAt: Date,
+    now: Date,
+  ) {
+    const authorizationToken = this.generateHandoverToken('MHA');
+    session.authorization_token_hash =
+      this.hashHandoverToken(authorizationToken);
+    await sessionRepo.save(session);
+    return {
+      market_id: String(session.market_id),
+      authorized: true,
+      authorization_token: authorizationToken,
+      authorized_at: (session.scanned_at ?? now).toISOString(),
+      expires_at: expiresAt.toISOString(),
+      remaining_seconds: Math.max(
+        0,
+        Math.ceil((expiresAt.getTime() - now.getTime()) / 1000),
+      ),
+      method: marketHandoverMethodOf(session),
+      reissued: true,
+    };
+  }
+
+  /**
    * Market QR topshiruvchini aniqlaydi (F3 — filial darajasi).
    *
    * SA/ADMIN — HQ darajasi, cheklovsiz. MANAGER/REGISTRATOR — O'Z filiali
@@ -9371,6 +9401,30 @@ export class OrderLifecycleService {
       }
 
       const now = new Date();
+      /**
+       * ⚠️ O'SHA XODIMNING QAYTA SKANI — RUXSAT QAYTA BERILADI (skan auditi
+       * 2026-11-23, #40). Javob yo'qolsa yoki kechiksa (gateway 8 s) sessiya
+       * serverda ochilgan, lekin token frontendga yetmagan bo'lardi; qayta
+       * skan «QR allaqachon ishlatilgan» olardi va market yangi QR chiqarishi
+       * kerak edi. Endi ruxsat hali amal qilsa va skanerlagan AYNAN shu xodim
+       * bo'lsa — yangi token (eskisi bekor), muddat O'ZGARMAYDI.
+       */
+      const authExpiresAt = session.authorization_expires_at;
+      if (
+        session.authorization_token_hash &&
+        authExpiresAt &&
+        authExpiresAt.getTime() > now.getTime() &&
+        String(session.scanned_by_user_id ?? '') === requesterId
+      ) {
+        const reissued = await this.reissueMarketHandoverAuthorization(
+          sessionRepo,
+          session,
+          authExpiresAt,
+          now,
+        );
+        await queryRunner.commitTransaction();
+        return successRes(reissued, 200, 'Topshirish ruxsati qayta berildi');
+      }
       if (session.qr_expires_at.getTime() <= now.getTime()) {
         this.badRequest('QR muddati tugagan');
       }
@@ -9463,6 +9517,40 @@ export class OrderLifecycleService {
         lock: { mode: 'pessimistic_write' },
       });
 
+      if (!session) {
+        /**
+         * Skan auditi #40: kod bilan ochilgan ruxsat javobi yo'qolsa, sessiya
+         * endi «skanerlangan» — qayta urinish uni topmasdi. O'sha xodim va
+         * o'sha kod, ruxsat hali amal qilsa — qayta beriladi.
+         */
+        const retryNow = new Date();
+        const authorized = await sessionRepo.findOne({
+          where: {
+            market_id: marketId,
+            scanned_by_user_id: requesterId,
+            isDeleted: false,
+          },
+          order: { scanned_at: 'DESC', id: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const authExpiresAt = authorized?.authorization_expires_at;
+        if (
+          authorized?.pin_hash &&
+          authorized.authorization_token_hash &&
+          authExpiresAt &&
+          authExpiresAt.getTime() > retryNow.getTime() &&
+          this.handoverPinMatches(authorized, pin)
+        ) {
+          const reissued = await this.reissueMarketHandoverAuthorization(
+            sessionRepo,
+            authorized,
+            authExpiresAt,
+            retryNow,
+          );
+          await queryRunner.commitTransaction();
+          return successRes(reissued, 200, 'Topshirish ruxsati qayta berildi');
+        }
+      }
       if (!session || !session.pin_hash) {
         throw this.pinError(
           'Faol QR topilmadi — market yangi QR chiqarsin',
@@ -9631,6 +9719,8 @@ export class OrderLifecycleService {
     await queryRunner.startTransaction();
 
     let handedOverOrders: Order[] = [];
+    /** Shu marketga avvalroq topshirilganlar (qayta skan — idempotent javob). */
+    let alreadyHandedIds: string[] = [];
     // zkRab9M2 (BG6): ruxsat usuli (`qr` | `pin`) — jurnal uchun tranzaksiyadan keyin ham.
     let authorizedVia: Extract<CancelHandoverMethod, 'qr' | 'pin'> | null =
       null;
@@ -9700,9 +9790,31 @@ export class OrderLifecycleService {
       });
 
       if (handedOverOrders.length !== orderIds.length) {
-        this.badRequest(
-          'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas, yoki sizning filialingizda/HQda turmagan',
-        );
+        /**
+         * ⚠️ QAYTA SKAN — «ALLAQACHON TOPSHIRILGAN», 400 EMAS (skan auditi
+         * 2026-11-23, #38/#87). Gateway 8 s da voz kechsa ham tranzaksiya
+         * commit bo'ladi; operator qayta skanerlasa buyurtma endi
+         * `returned_to_market` va ilgari umumiy 400 olardi — ekran topshirilgan
+         * posilkani «xato» deb ko'rsatardi. Shu marketga topshirilganlar
+         * `already_handed_order_ids` da qaytadi, qolganlari avvalgidek 400.
+         */
+        const pickedIds = new Set(handedOverOrders.map((o) => String(o.id)));
+        const missingIds = orderIds.filter((id) => !pickedIds.has(id));
+        const alreadyHanded = await orderRepo.find({
+          where: {
+            id: In(missingIds),
+            market_id: marketId,
+            status: Order_status.RETURNED_TO_MARKET,
+            isDeleted: false,
+          },
+          select: ['id'],
+        });
+        alreadyHandedIds = alreadyHanded.map((order) => String(order.id));
+        if (alreadyHandedIds.length !== missingIds.length) {
+          this.badRequest(
+            'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas, yoki sizning filialingizda/HQda turmagan',
+          );
+        }
       }
       // VkKDSNNn: Markaziy ombor buyurtmasi marketga topshirilmaydi — 409
       // (hammasi-yoki-hech biri; HQ id noma'lum — 503). HQ id filial xodimi
@@ -9799,7 +9911,7 @@ export class OrderLifecycleService {
       }
 
       // Partiya vaqti faqat BIRINCHI topshirishda yoziladi (keyingi skanlar uni o'zgartirmaydi — `batchAt`).
-      if (session && !session.consumed_at) {
+      if (session && !session.consumed_at && handedOverOrders.length) {
         session.consumed_at = now;
         await sessionRepo.save(session);
       }
@@ -9860,9 +9972,12 @@ export class OrderLifecycleService {
         market_id: marketId,
         closed_count: handedOverOrders.length,
         order_ids: handedOverOrders.map((order) => String(order.id)),
+        already_handed_order_ids: alreadyHandedIds,
       },
       200,
-      'Bekor qilingan buyurtmalar marketga topshirildi va yopildi',
+      handedOverOrders.length
+        ? 'Bekor qilingan buyurtmalar marketga topshirildi va yopildi'
+        : 'Buyurtmalar allaqachon marketga topshirilgan',
     );
   }
 
@@ -11279,9 +11394,34 @@ export class OrderLifecycleService {
     }
 
     // 2. Validate customers via RMQ (batch)
+    /**
+     * Skan auditi 2026-11-23 (#104): mijozlar (identity) va tumanlar
+     * (logistics) bir-biriga bog'liq emas — PARALLEL so'raladi. Ilgari ketma-
+     * ket edi va har skan-qabulga bitta RPC aylanishi qo'shilardi. Tumanlar
+     * qidiruv filtridan OLDINGI ro'yxat bo'yicha (ustki to'plam — ortiqcha
+     * tuman zarar qilmaydi).
+     */
     const customerIds = [
       ...new Set(orders.map((o) => o.customer_id).filter(Boolean)),
     ];
+    const districtIds = [
+      ...new Set(orders.map((o) => o.district_id).filter(Boolean) as string[]),
+    ];
+    const districtsPromise = rmqSend<{
+      data: Array<{
+        id: string;
+        assigned_region?: string | number | null;
+        assignedToRegion?: { id?: string | number | null } | null;
+        region_id?: string | number | null;
+        region?: { id?: string | number | null } | null;
+      }>;
+    }>(
+      this.logisticsClient,
+      { cmd: 'logistics.district.find_by_ids' },
+      { ids: districtIds },
+    );
+    // Mijoz so'rovi yiqilsa tuman va'dasi «ushlanmagan rad» bo'lib qolmasin.
+    districtsPromise.catch(() => undefined);
     const customersRes = await rmqSend<{
       data: Array<{ id: string; name?: string; phone_number?: string }>;
     }>(
@@ -11331,22 +11471,7 @@ export class OrderLifecycleService {
     // 5. Fetch district data via RMQ (batch) — xizmat hududi
     // `assigned_region ?? region_id` (LC-13): biriktirilmagan (NULL) eski
     // tuman o'z viloyatiga xizmat qiladi, 404 emas.
-    const districtIds = [
-      ...new Set(orders.map((o) => o.district_id).filter(Boolean) as string[]),
-    ];
-    const districtsRes = await rmqSend<{
-      data: Array<{
-        id: string;
-        assigned_region?: string | number | null;
-        assignedToRegion?: { id?: string | number | null } | null;
-        region_id?: string | number | null;
-        region?: { id?: string | number | null } | null;
-      }>;
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_by_ids' },
-      { ids: districtIds },
-    );
+    const districtsRes = await districtsPromise;
     const districtMap = new Map(
       (districtsRes?.data ?? []).map((d) => [String(d.id), d]),
     );
@@ -11713,6 +11838,15 @@ export class OrderLifecycleService {
      */
     const matched = new Map(orders.map((o) => [String(o.qr_code_token), o]));
     const unmatched: Array<{ token: string; reason: string }> = [];
+    /**
+     * Skan auditi 2026-11-23 (#22/#89): allaqachon `received` posilka —
+     * «qabul qilinmadi» emas. Gateway timeout'idan keyin (order-service ishni
+     * tugatgan) qayta bosilsa ilgari HAR token «allaqachon 'received'
+     * holatida» bo'lib `unmatched` ga tushar va ekran «0 qabul qilindi»
+     * derdi. Endi ular alohida ro'yxatda — operator ularni qabul qilingan deb
+     * ko'radi.
+     */
+    const alreadyReceived: Array<{ token: string; order_id: string }> = [];
     for (const token of tokens) {
       if (matched.has(token)) continue;
       /**
@@ -11729,6 +11863,8 @@ export class OrderLifecycleService {
         unmatched.push({ token, reason: 'tizimda topilmadi' });
       } else if (anyOrder.source !== Order_source.EXTERNAL) {
         unmatched.push({ token, reason: 'tashqi posilka emas' });
+      } else if (anyOrder.status === Order_status.RECEIVED) {
+        alreadyReceived.push({ token, order_id: String(anyOrder.id) });
       } else if (anyOrder.status !== Order_status.NEW) {
         unmatched.push({
           token,
@@ -11758,8 +11894,27 @@ export class OrderLifecycleService {
           `tokens=${tokens.length}, requester=${input.requester?.id ?? '-'}, ` +
           `reasons=${JSON.stringify(reasons)}`,
       );
+      if (alreadyReceived.length) {
+        return successRes(
+          {
+            ok: true,
+            partial: unmatched.length > 0,
+            received: 0,
+            already_received: alreadyReceived,
+            unmatched,
+          },
+          200,
+          'Scanned parcels already received',
+        );
+      }
       return successRes(
-        { ok: false, partial: false, received: 0, unmatched },
+        {
+          ok: false,
+          partial: false,
+          received: 0,
+          already_received: alreadyReceived,
+          unmatched,
+        },
         200,
         'No scannable parcels matched',
       );
@@ -11786,11 +11941,29 @@ export class OrderLifecycleService {
       input.requester,
     );
 
+    // Qabul ichida parallel so'rov ulgurgan buyurtmalar — «allaqachon» (idempotent).
+    const receivedDetail = (result as { data?: unknown } | null)?.data as
+      { received_ids?: unknown; already_received_ids?: unknown } | undefined;
+    const racedIds = new Set(
+      Array.isArray(receivedDetail?.already_received_ids)
+        ? receivedDetail.already_received_ids.map(String)
+        : [],
+    );
+    for (const order of orders) {
+      if (racedIds.has(String(order.id))) {
+        alreadyReceived.push({
+          token: String(order.qr_code_token),
+          order_id: String(order.id),
+        });
+      }
+    }
+
     return successRes(
       {
         ok: true,
         partial: unmatched.length > 0,
-        received: orders.length,
+        received: orders.length - racedIds.size,
+        already_received: alreadyReceived,
         unmatched,
         /**
          * Qaysi skan QOP bo'lib chiqdi — operator "bitta skanerlaganimda

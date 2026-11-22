@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
 import {
   BadRequestException,
   Body,
@@ -1315,6 +1317,8 @@ export class LogisticsGatewayController {
   }
 
   @Patch('post/receive/:id')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     RoleEnum.SUPERADMIN,
@@ -1365,6 +1369,8 @@ export class LogisticsGatewayController {
   }
 
   @Patch('post/receive/scan/:id')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
@@ -1380,6 +1386,8 @@ export class LogisticsGatewayController {
   }
 
   @Patch('post/receive/order/:id')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
