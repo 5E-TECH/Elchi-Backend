@@ -49,7 +49,7 @@ Har (market, operator) uchun `finance_schema.activity_logs` ga audit yoziladi:
 
 ## Ishga tushirish
 
-Skript serverdagi deploy qilingan ops image'dan ishlaydi. Shuning uchun avval shu skriptni o'z ichiga olgan reliz o'sha serverga deploy bo'lishi kerak:
+Skript serverdagi checkout'dan (deploy qilingan kod) qurilgan ops image'da ishlaydi. Workflow image'ni har safar kesh bilan qayta quradi: deploy oxiridagi `docker-gc.sh` konteyneri yo'q image'larni o'chiradi. Shuning uchun avval shu skriptni o'z ichiga olgan reliz o'sha serverga deploy bo'lishi kerak:
 
 - staging uchun — `test` branch;
 - prod uchun — `main` branch.
