@@ -909,12 +909,11 @@ jobs:
               echo "!!! .env.staging: AI_KEY_ENCRYPTION_SECRET* / ANTHROPIC_BASE_URL must not be set here — deploy refused, nothing was touched. docs/ops/ai-config.md" >&2
               exit 1
             fi
-            # ANTHROPIC_API_KEY (audit 2026-11-22 #15) belongs ONLY in
-            # .env.staging.ai-secrets, read by ai-service alone: here every container —
-            # the internet-facing api-gateway too — would carry it. Refused unless the
-            # value is empty the way compose reads it (blanks, "" or '', a trailing
-            # # comment, CRLF). The matching lines only go through the pipe, never to
-            # the log.
+            # ANTHROPIC_API_KEY (audit 2026-11-22 #15) belongs ONLY in .env.staging.ai-secrets,
+            # read by ai-service alone: here every container — the internet-facing
+            # api-gateway too — would carry it. Refused unless the value is empty the
+            # way compose reads it (blanks, "" or '', a trailing # comment, CRLF).
+            # The matching lines only go through the pipe, never to the log.
             if grep -E '^[[:space:]]*(export[[:space:]]+)?ANTHROPIC_API_KEY=' .env.staging \
               | grep -qvE "^[[:space:]]*(export[[:space:]]+)?ANTHROPIC_API_KEY=[[:space:]]*(\"\"|'')?[[:space:]]*(#.*)?\$"; then
               echo "!!! .env.staging: ANTHROPIC_API_KEY must not be set here — move it to .env.staging.ai-secrets (read only by ai-service), docs/ops/ai-config.md §6 — deploy refused, nothing was touched." >&2
