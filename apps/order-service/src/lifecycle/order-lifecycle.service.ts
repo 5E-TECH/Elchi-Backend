@@ -8192,17 +8192,23 @@ export class OrderLifecycleService {
 
     const existingAmount = Number(courierCarry.amount ?? 0) || 0;
     const existingBranchId = String(courierCarry.branch_id ?? '').trim();
-    if (toTiyin(existingAmount) > 0 && existingBranchId !== credit.branchId) {
+    // Boshqa filialga yozilgan NOLDAN FARQLI qoldiq — musbat (topshirilgan
+    // ortiqcha) ham, MANFIY (T6 qarzi) ham — bu kredit bilan aralashmaydi:
+    // `branch_id` almashsa qarz boshqa filialga «ko'chib» yo'qolardi.
+    if (toTiyin(existingAmount) !== 0 && existingBranchId !== credit.branchId) {
       this.rollbackStateChanged(
         "Rollback holati o'zgargan (kuryerda shu orada boshqa filialga tegishli qoldiq paydo bo'lgan) — qayta urinib ko'ring",
       );
     }
+    // ⚠️ Audit 2026-11-22 (critical): ilgari `Math.max(qoldiq, 0) + kredit` —
+    // manfiy qoldiq (T6-BE-3: to'lov qaytarilgandagi kuryer QARZI, FIFO uni
+    // ataylab saqlaydi — `runFifoSettlement`) nolga tushib, qarz daftardan
+    // izsiz yo'qolardi. Qoldiq + kredit — ishorasi bilan.
     await carryRepo.update(
       { id: courierCarry.id },
       {
         amount:
-          (Math.max(toTiyin(existingAmount), 0) +
-            toTiyin(remittedCarryCredit(credit))) /
+          (toTiyin(existingAmount) + toTiyin(remittedCarryCredit(credit))) /
           100,
         branch_id: credit.branchId,
       },
@@ -8344,8 +8350,10 @@ export class OrderLifecycleService {
     if (courierCredit && courierCarry) {
       const existingAmount = Number(courierCarry.amount ?? 0) || 0;
       const existingBranchId = String(courierCarry.branch_id ?? '').trim();
+      // Noldan farqli (musbat yoki manfiy — qarz) boshqa filial qoldig'i —
+      // `creditRemittedCourierCarry` bilan AYNI qoida.
       if (
-        toTiyin(existingAmount) > 0 &&
+        toTiyin(existingAmount) !== 0 &&
         existingBranchId !== courierCredit.branchId
       ) {
         this.rollbackStateChanged(
@@ -8355,8 +8363,9 @@ export class OrderLifecycleService {
       await carryRepo.update(
         { id: courierCarry.id },
         {
+          // Qarz (manfiy qoldiq) saqlanadi: qoldiq + kredit, ishorasi bilan.
           amount:
-            (Math.max(toTiyin(existingAmount), 0) +
+            (toTiyin(existingAmount) +
               toTiyin(remittedCarryCredit(courierCredit))) /
             100,
           branch_id: courierCredit.branchId,
