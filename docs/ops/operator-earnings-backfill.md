@@ -68,7 +68,7 @@ Actions → **Operator earnings backfill** → *Run workflow*.
    - har market va operator bo'yicha qatorlar;
    - nima uchun yozilmaydiganlar soni.
 2. **Yozish.** Hisobot to'g'ri bo'lsa, `mode = apply` va `confirm = YOZISH` bilan qayta ishga tushiring.
-   - Yozishdan oldin bazaning to'liq nusxasi olinadi: `./backups/pre-backfill`, oxirgi 3 tasi saqlanadi.
+   - Yozishdan oldin bazaning to'liq nusxasi olinadi: `./backups/pre-deploy/pre-backfill-*.sql.gz` (deploy nusxalariga tegmaydi), oxirgi 3 tasi saqlanadi.
    - Nusxa olinmasa, hech narsa yozilmaydi.
 3. **Tekshirish.** Market panelida «Operatorlar» sahifasini oching: «Ishlab topdi» summasi oshgan bo'lishi kerak. Yana bir marta `dry-run` qilinsa, «yoziladi: 0 ta» chiqishi kerak.
 4. **Prod.** Prod uchun ham xuddi shu tartib: `target = production`. Avval `dry-run`, keyin `apply`.

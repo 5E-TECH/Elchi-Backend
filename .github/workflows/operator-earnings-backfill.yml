@@ -8,7 +8,7 @@
 #
 # Sukut — DRY-RUN: faqat hisobot, hech narsa yozilmaydi. Yozish uchun
 # mode=apply va confirm=YOZISH; yozishdan oldin bazaning to'liq nusxasi
-# olinadi (./backups/pre-backfill, oxirgi 3 tasi), nusxa olinmasa hech narsa
+# olinadi (./backups/pre-deploy/pre-backfill-*, oxirgi 3 tasi), nusxa olinmasa hech narsa
 # yozilmaydi. Skript serverdagi DEPLOY QILINGAN ops image'dan ishlaydi —
 # avval shu skriptni o'z ichiga olgan reliz deploy bo'lishi kerak.
 # To'liq yo'riqnoma: docs/ops/operator-earnings-backfill.md
@@ -109,11 +109,14 @@ jobs:
 
             # Deploy qilingan ops image (migration-runner). Yo'q bo'lsa compose
             # uni serverda qurib yuborardi — buning o'rniga to'xtaymiz.
-            IMG="$($DC config --images migration-runner | head -n 1)"
+            # `config --images <servis>` bog'liq servislarni (postgres:15) ham
+            # chiqaradi — deploy.yml kabi `-migration-runner` bo'yicha tanlanadi.
+            IMG="$($DC config --images migration-runner | grep -E -- '-migration-runner$' | head -n 1 || true)"
             if [ -z "$IMG" ] || ! docker image inspect "$IMG" >/dev/null 2>&1; then
-              echo "!!! ops image topilmadi ($IMG) — avval deploy qiling. Hech narsa qilinmadi." >&2
+              echo "!!! ops image topilmadi (${IMG:-?}) — avval deploy qiling. Hech narsa qilinmadi." >&2
               exit 1
             fi
+            echo "ops image: $IMG ($(docker image inspect -f '{{.Created}}' "$IMG"))"
             if ! docker run --rm --entrypoint sh "$IMG" -c 'test -f scripts/backfill-operator-earnings.ts'; then
               echo "!!! deploy qilingan image'da skript yo'q — avval shu skriptli relizni deploy qiling. Hech narsa qilinmadi." >&2
               exit 1
@@ -121,12 +124,24 @@ jobs:
 
             ARGS=""
             if [ "$BF_MODE" = apply ]; then
-              echo "== yozishdan oldin bazaning nusxasi (./backups/pre-backfill)"
-              if ! BK="$(BACKUP_COMPOSE_FILE="$BK_COMPOSE" PRE_DEPLOY_BACKUP_DIR=./backups/pre-backfill BACKUP_PRE_DEPLOY_KEEP=3 bash scripts/pre-deploy-backup.sh)"; then
+              # Deploy nusxalari bilan bir papkada (./backups/pre-deploy — deploy
+              # foydalanuvchisi yoza oladi), lekin o'z `pre-backfill-*` nomi va
+              # o'z rotatsiyasi bilan: deploy'ning `pre-deploy-*` nusxalariga tegmaydi.
+              echo "== yozishdan oldin bazaning nusxasi (./backups/pre-deploy/pre-backfill-*)"
+              BK_RESULT="$(mktemp)"
+              if ! BACKUP_S3_TARGET="" BACKUP_DIR=./backups/pre-deploy BACKUP_PREFIX=pre-backfill BACKUP_RETENTION=3 \
+                   BACKUP_COMPOSE_FILE="$BK_COMPOSE" BACKUP_RESULT_FILE="$BK_RESULT" bash scripts/backup-db.sh; then
+                rm -f "$BK_RESULT"
                 echo "!!! nusxa olinmadi — hech narsa yozilmadi." >&2
                 exit 1
               fi
-              echo "nusxa: ${BK:-yo'q (baza bo'sh)}"
+              BK="$(cat "$BK_RESULT")"
+              rm -f "$BK_RESULT"
+              if [ -z "$BK" ] || [ ! -s "$BK" ]; then
+                echo "!!! nusxa fayli yo'q — hech narsa yozilmadi." >&2
+                exit 1
+              fi
+              echo "nusxa: $BK"
               ARGS="--apply"
             fi
 
