@@ -1,0 +1,133 @@
+# O'tgan sotuvlarga operator komissiyasi — JORIY stavka bo'yicha, BARCHA
+# operatorlar uchun bir yo'la (bir martalik). Faqat qo'lda ishga tushiriladi
+# (Actions → «Operator earnings backfill» → Run workflow).
+#
+# Sukut — DRY-RUN: faqat hisobot, hech narsa yozilmaydi. Yozish uchun
+# mode=apply va confirm=YOZISH; yozishdan oldin bazaning to'liq nusxasi
+# olinadi (./backups/pre-backfill, oxirgi 3 tasi), nusxa olinmasa hech narsa
+# yozilmaydi. Skript serverdagi DEPLOY QILINGAN ops image'dan ishlaydi —
+# avval shu skriptni o'z ichiga olgan reliz deploy bo'lishi kerak.
+# To'liq yo'riqnoma: docs/ops/operator-earnings-backfill.md
+name: Operator earnings backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Server'
+        type: choice
+        options: [staging, production]
+        default: staging
+      mode:
+        description: 'dry-run — faqat hisobot; apply — yozish'
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+      confirm:
+        description: "apply uchun shu yerga YOZISH deb yozing"
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operator-earnings-backfill-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Server sirlari (SERVER_IP, SERVER_APP_PATH, …) environment'ga bog'liq —
+    # deploy.yml bilan bir xil; production environment himoyasi ham ishlaydi.
+    environment: ${{ inputs.target }}
+    steps:
+      - name: Guard
+        env:
+          TARGET: ${{ inputs.target }}
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          STAGING_ENABLED: ${{ vars.STAGING_ENABLED }}
+        run: |
+          if [ "$TARGET" = staging ] && [ "$STAGING_ENABLED" != true ]; then
+            echo "::error::staging yoqilmagan (vars.STAGING_ENABLED)"
+            exit 1
+          fi
+          if [ "$MODE" = apply ] && [ "$CONFIRM" != YOZISH ]; then
+            echo "::error::apply uchun confirm maydoniga YOZISH deb yozing — hech narsa qilinmadi"
+            exit 1
+          fi
+          echo "target=$TARGET mode=$MODE"
+
+      - name: Run on server
+        id: run
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          APP_PATH: ${{ secrets.SERVER_APP_PATH }}
+          BF_TARGET: ${{ inputs.target }}
+          BF_MODE: ${{ inputs.mode }}
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          port: ${{ secrets.SERVER_SSH_PORT || 22 }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 40m
+          envs: APP_PATH,BF_TARGET,BF_MODE
+          # deploy.yml bilan bir xil sabab: script_stop `if [ … ]` ni xato deb
+          # biladi; xatolar `set -e` va aniq `exit` bilan.
+          script_stop: false
+          capture_stdout: true
+          script: |
+            set -eu
+            cd "$APP_PATH"
+            if [ "$BF_TARGET" = staging ]; then
+              DC="docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml"
+              BK_COMPOSE="docker-compose.prod.yml:docker-compose.staging.yml"
+            else
+              DC="docker compose -f docker-compose.prod.yml"
+              BK_COMPOSE="docker-compose.prod.yml"
+            fi
+            echo "server: $BF_TARGET, checkout $(git rev-parse --short HEAD 2>/dev/null || echo '?'), mode: $BF_MODE"
+
+            # Deploy qilingan ops image (migration-runner). Yo'q bo'lsa compose
+            # uni serverda qurib yuborardi — buning o'rniga to'xtaymiz.
+            IMG="$($DC config --images migration-runner | head -n 1)"
+            if [ -z "$IMG" ] || ! docker image inspect "$IMG" >/dev/null 2>&1; then
+              echo "!!! ops image topilmadi ($IMG) — avval deploy qiling. Hech narsa qilinmadi." >&2
+              exit 1
+            fi
+            if ! docker run --rm --entrypoint sh "$IMG" -c 'test -f scripts/backfill-operator-earnings.ts'; then
+              echo "!!! deploy qilingan image'da skript yo'q — avval shu skriptli relizni deploy qiling. Hech narsa qilinmadi." >&2
+              exit 1
+            fi
+
+            ARGS=""
+            if [ "$BF_MODE" = apply ]; then
+              echo "== yozishdan oldin bazaning nusxasi (./backups/pre-backfill)"
+              if ! BK="$(BACKUP_COMPOSE_FILE="$BK_COMPOSE" PRE_DEPLOY_BACKUP_DIR=./backups/pre-backfill BACKUP_PRE_DEPLOY_KEEP=3 bash scripts/pre-deploy-backup.sh)"; then
+                echo "!!! nusxa olinmadi — hech narsa yozilmadi." >&2
+                exit 1
+              fi
+              echo "nusxa: ${BK:-yo'q (baza bo'sh)}"
+              ARGS="--apply"
+            fi
+
+            # Bir martalik konteyner (nomlangan migration-runner'ga tegmaydi),
+            # .env.production / .env.staging dagi POSTGRES_URI bilan.
+            $DC run --rm --no-deps -T migration-runner npm run -s db:backfill-operator-earnings -- $ARGS
+
+      - name: Summary
+        if: always()
+        env:
+          OUT: ${{ steps.run.outputs.stdout }}
+          TARGET: ${{ inputs.target }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "### Operator earnings backfill — $TARGET / $MODE"
+            echo '```'
+            printf '%s\n' "$OUT" | grep -v '^◇' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
