@@ -58,7 +58,12 @@ Skript serverdagi deploy qilingan ops image'dan ishlaydi. Shuning uchun avval sh
 
 Actions → **Operator earnings backfill** → *Run workflow*.
 
-1. **Hisobot.** `target = staging`, `mode = dry-run` bilan ishga tushiring. Natija run sahifasining *Summary* qismida chiqadi:
+«Use workflow from» qaysi branch bo'lishi kerak:
+
+- staging uchun — `test` (staging environment faqat shu branch'ga ruxsat beradi);
+- production uchun — `main`.
+
+1. **Hisobot.** `target = staging`, `mode = dry-run` bilan ishga tushiring. Natija run logida, «Run on server» qadamida chiqadi:
    - jami nechta buyurtma va qancha summa yoziladi;
    - har market va operator bo'yicha qatorlar;
    - nima uchun yozilmaydiganlar soni.
