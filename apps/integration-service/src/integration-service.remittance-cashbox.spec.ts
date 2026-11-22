@@ -135,6 +135,40 @@ describe('createRemittance — MAIN kassaga yozuv va cashbox_posted (N3yNa6rO)',
     });
   });
 
+  it.each([
+    [null, null],
+    [undefined, null],
+    [false, false],
+  ])(
+    'ZE5zqXxu: takrorda cashbox_posted=%p → javobda %p (NULL "yozilmadi" emas, "noma`lum")',
+    async (stored, expected) => {
+      rmqSendMock.mockResolvedValue({ statusCode: 200 });
+      const svc = makeSvc();
+      // Birinchi so'rov tranzaksiyani yopgan, lekin kassaga hali yozayotgan
+      // (yoki bayroq saqlanmagan) — ustun NULL.
+      svc.remittanceRepoInTx.findOne.mockResolvedValue({
+        id: '77',
+        amount: '150000.00',
+        settled_amount: '150000.00',
+        unapplied_amount: '0.00',
+        advance_applied: '0.00',
+        settled_count: 1,
+        cashbox_posted: stored,
+      });
+
+      const res: any = await svc.createRemittance({
+        integration_id: '2',
+        amount: 150000,
+        created_by: '1',
+        idempotency_key: 'kalit-null',
+      });
+
+      expect(rmqSendMock).not.toHaveBeenCalled();
+      expect(res.data.idempotent_replay).toBe(true);
+      expect(res.data.cashbox_posted).toBe(expected);
+    },
+  );
+
   it('kalitsiz so`rov tekshirilmaydi, kalit yozuvga saqlanadi', async () => {
     rmqSendMock.mockResolvedValue({ statusCode: 200 });
     const svc = makeSvc();

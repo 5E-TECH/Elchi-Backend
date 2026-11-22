@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-22 — Kargo to'lovi takrorida `cashbox_posted: null` bo'lishi mumkin (ZE5zqXxu)
+
+Deploy: **integration-service** (migratsiya yo'q).
+
+- ✏️ [integration] — `POST /integrations/:id/remittances` ayni `Idempotency-Key` bilan
+  takrorlanganda (`data.idempotent_replay: true`) `data.cashbox_posted` endi
+  `true | false | null`. Ilgari NULL → `false` qaytardi. NULL — kassa holati **noma'lum**:
+  birinchi so'rov hali kassaga yozayotgan bo'lishi mumkin (kassa yozuvi tranzaksiyadan
+  keyin), yoki bayroq saqlanmagan.
+  → **Frontendda:** 🔧 `null` ni «Kassaga yozilmadi — qo'lda kiriting» deb ko'rsatmang
+  (pul ikki marta kirim bo'ladi). Alohida holat: «Kassa holati aniqlanmoqda — Asosiy
+  kassa tarixini tekshiring, qo'lda kiritmang».
+
 ### 2026-11-19 — Buyurtma rollback: menejer, superadmin va kuryer qoidalari (ega qarorlari D1–D4)
 
 Deploy: **order-service, api-gateway** (migratsiya yo'q). Joriy prod relizidan KEYIN.
