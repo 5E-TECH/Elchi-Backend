@@ -130,7 +130,28 @@ const setup = (opts: {
   route?: Route | Error;
   managers?: Array<{ user_id: string; role: string; isDeleted?: boolean }>;
   hqId?: string;
+  /** identity'da mavjud (o'chirilmagan) id'lar; berilmasa — hammasi mavjud. */
+  users?: string[] | Error;
+  superadmins?: string[];
 }) => {
+  const identity = {
+    send: jest.fn((pattern: { cmd: string }, payload: { ids?: string[] }) => {
+      if (pattern.cmd === 'identity.user.find_by_ids') {
+        if (opts.users instanceof Error) {
+          return throwError(() => opts.users);
+        }
+        const existing = opts.users;
+        return of({
+          data: (payload.ids ?? [])
+            .filter((id) => !existing || existing.includes(id))
+            .map((id) => ({ id, name: `U${id}` })),
+        });
+      }
+      return of({
+        data: (opts.superadmins ?? []).map((id) => ({ user_id: id })),
+      });
+    }),
+  };
   const notification = {
     send: jest.fn(() =>
       opts.route instanceof Error
@@ -155,7 +176,7 @@ const setup = (opts: {
     { log: jest.fn() } as never,
     {} as never,
     notifications as never,
-    { send: jest.fn() } as never,
+    identity as never,
     undefined,
     notification as never,
     branch as never,
@@ -172,7 +193,7 @@ const setup = (opts: {
         ) => Promise<Array<Record<string, unknown>>>;
       }
     ).planBranchRecipients(snap, channels);
-  return { service, notification, branch, notifications, plan };
+  return { service, notification, branch, notifications, identity, plan };
 };
 
 const MANAGERS = [
@@ -244,7 +265,7 @@ describe('ShiftReportService — filial qabul qiluvchilari', () => {
     expect(planned[0].notify_ids).toEqual(['900']);
   });
 
-  it('asosiy kassa → HQ filiali; marshrut xatosi asosiy kassada jim (superadmin hisoboti kechikmaydi)', async () => {
+  it('asosiy kassa → HQ filiali; marshrut xatosi asosiy kassada yiqitmaydi, lekin `failed` qatori (jim emas)', async () => {
     const ok = setup({
       route: {
         report_target: 'group',
@@ -259,11 +280,141 @@ describe('ShiftReportService — filial qabul qiluvchilari', () => {
     expect(planned[0]).toMatchObject({ kind: 'branch', recipient_id: '1' });
 
     const failing = setup({ route: new Error('notification down') });
-    await expect(
-      failing.plan(snapshot({ cashbox_type: 'main', cashbox_user_id: '0' })),
-    ).resolves.toEqual([]);
+    const failed = await failing.plan(
+      snapshot({ cashbox_type: 'main', cashbox_user_id: '0' }),
+    );
+    expect(failed).toEqual([
+      expect.objectContaining({
+        kind: 'branch',
+        recipient_id: '1',
+        channels: { telegram: true, in_app: false },
+        unreachable: {
+          reason: 'branch_report_unavailable',
+          channel: 'telegram_group',
+        },
+      }),
+    ]);
+    expect(failed[0].notify_ids).toBeUndefined();
     // Filial kassasida esa XATO — da'vo bo'shatiladi, keyingi tick qayta uradi.
     await expect(failing.plan(snapshot())).rejects.toThrow('notification down');
+  });
+
+  describe('(audit 2026-11-22 #3) guruh hisoboti jim yo‘qolmaydi', () => {
+    const GROUP: Route = {
+      report_target: 'group',
+      group: { active: true, inactive_reason: null },
+    };
+    const HQ_AUTO = {
+      cashbox_type: 'main' as const,
+      cashbox_user_id: '0',
+      close_reason: 'auto' as const,
+      closed_by: null,
+      opened_by: null,
+    };
+
+    it('HQ avto-smenasi (menejer ham, yopgan / ochgan ham yo‘q) — dispatch superadminlar nomidan', async () => {
+      const fx = setup({
+        route: GROUP,
+        managers: [],
+        hqId: '1',
+        superadmins: ['9001', '9002'],
+      });
+      const planned = await fx.plan(snapshot(HQ_AUTO));
+      expect(planned).toEqual([
+        expect.objectContaining({
+          kind: 'branch',
+          recipient_id: '1',
+          notify_ids: ['9001', '9002'],
+          group: { active: true, inactive_reason: null },
+        }),
+      ]);
+      expect(planned[0].unreachable).toBeUndefined();
+    });
+
+    it('yagona menejer identity’da o‘chirilgan — smenani yopgan xodim nomidan (400 emas)', async () => {
+      const fx = setup({
+        route: GROUP,
+        managers: [{ user_id: '301', role: 'MANAGER' }],
+        users: ['900'],
+      });
+      const planned = await fx.plan(
+        snapshot({ closed_by: '900', opened_by: '301' }),
+      );
+      expect(planned[0].notify_ids).toEqual(['900']);
+    });
+
+    it('menejer ham, xodimlar ham o‘chirilgan — superadminlar nomidan', async () => {
+      const fx = setup({
+        route: GROUP,
+        managers: [{ user_id: '301', role: 'MANAGER' }],
+        users: ['9001'],
+        superadmins: ['9001'],
+      });
+      const planned = await fx.plan(snapshot());
+      expect(planned[0].notify_ids).toEqual(['9001']);
+    });
+
+    it('hech kim topilmadi — `failed` qatori (no_report_recipient), dispatch yo‘q', async () => {
+      const fx = setup({
+        route: GROUP,
+        managers: [],
+        hqId: '1',
+        superadmins: [],
+      });
+      const planned = await fx.plan(snapshot(HQ_AUTO));
+      expect(planned).toEqual([
+        expect.objectContaining({
+          kind: 'branch',
+          recipient_id: '1',
+          unreachable: {
+            reason: 'no_report_recipient',
+            channel: 'telegram_group',
+          },
+        }),
+      ]);
+    });
+
+    it('identity javob bermasa — filtrsiz (avvalgi xatti-harakat)', async () => {
+      const fx = setup({
+        route: GROUP,
+        managers: MANAGERS,
+        users: new Error('identity down'),
+      });
+      const planned = await fx.plan(snapshot());
+      expect(planned[0].notify_ids).toEqual(['301', '302']);
+    });
+
+    it('`private`, faol menejer yo‘q (HQ) — `failed` qatori (branch_no_managers)', async () => {
+      const fx = setup({
+        route: { report_target: 'private', group: null },
+        managers: [],
+        hqId: '1',
+      });
+      const planned = await fx.plan(snapshot(HQ_AUTO), {
+        telegram: true,
+        in_app: true,
+      });
+      expect(planned).toEqual([
+        expect.objectContaining({
+          kind: 'branch',
+          recipient_id: '1',
+          channels: { telegram: true, in_app: true },
+          unreachable: { reason: 'branch_no_managers', channel: 'telegram' },
+        }),
+      ]);
+    });
+
+    it('`private`: o‘chirilgan menejer chiqarib tashlanadi', async () => {
+      const fx = setup({
+        route: { report_target: 'private', group: null },
+        managers: MANAGERS,
+        users: ['302'],
+      });
+      const planned = await fx.plan(snapshot());
+      expect(planned.map((p) => [p.kind, p.recipient_id])).toEqual([
+        ['branch_manager', '302'],
+      ]);
+    });
   });
 
   describe('enqueueRecipient', () => {
@@ -326,6 +477,52 @@ describe('ShiftReportService — filial qabul qiluvchilari', () => {
         branch_id: '12',
         text: message.telegram_text,
       });
+      // (audit #16) Filial dispatch'i — o'z group_key'i (superadmin
+      // hisobot qatori bilan almashmasin).
+      expect(payload.group_key).toBe('finance:shift:77:report:1:branch:12');
+    });
+
+    it('shaxsiy hisobot (branch_manager) — umumiy group_key o‘zgarmagan', async () => {
+      const fx = setup({});
+      const { manager } = insertManager();
+      await enqueue(fx.service, manager, {
+        kind: 'branch_manager',
+        recipient_id: '301',
+        message: buildBranchMessage(snapshot(), null),
+        channels: { telegram: true, in_app: true },
+      });
+      const [payload] = fx.notifications.shiftReport.mock.calls[0] as [
+        Record<string, any>,
+      ];
+      expect(payload.group_key).toBe('finance:shift:77:report:1');
+    });
+
+    it('(audit #3) yuborib bo‘lmaydi: so‘ralgan kanallar `failed` + sabab, dispatch yo‘q', async () => {
+      const fx = setup({});
+      const { manager, inserted } = insertManager();
+      await enqueue(fx.service, manager, {
+        kind: 'branch',
+        recipient_id: '1',
+        message: buildBranchMessage(snapshot(), null),
+        channels: { telegram: true, in_app: true },
+        unreachable: { reason: 'branch_no_managers', channel: 'telegram' },
+      });
+      expect(inserted).toEqual([
+        expect.objectContaining({
+          recipient_kind: 'branch',
+          recipient_id: '1',
+          channel: 'in_app',
+          status: 'failed',
+          dispatch_id: null,
+          failed_reason: expect.stringContaining("faol menejer yo'q"),
+        }),
+        expect.objectContaining({
+          channel: 'telegram',
+          status: 'failed',
+          dispatch_id: null,
+        }),
+      ]);
+      expect(fx.notifications.shiftReport).not.toHaveBeenCalled();
     });
 
     it('nofaol guruh: failed qatori, dispatch yo‘q', async () => {

@@ -473,5 +473,14 @@ export function deliveryReasonText(reason: string | null | undefined): string {
     return 'Filial guruhi nofaol (bot chiqarilgan yoki huquqi olingan)';
   }
   if (value === 'disabled_by_settings') return "Sozlamada o'chirilgan";
+  if (value === 'branch_no_managers') {
+    return "Filialda faol menejer yo'q — shaxsiy chatga yuborib bo'lmaydi (guruhga o'tkazing)";
+  }
+  if (value === 'no_report_recipient') {
+    return 'Yuboradigan faol xodim topilmadi';
+  }
+  if (value === 'branch_report_unavailable') {
+    return 'Filial sozlamasi olinmadi (xizmat javob bermadi)';
+  }
   return value.slice(0, 200);
 }
