@@ -449,7 +449,7 @@ export class AiConfirmOrderDto {
       'To‘g‘ri bo‘lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e’tiborsiz; AI auditida ham shu ism). ' +
       'Musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa) — aks holda 400 (DTO). Bo‘sh satr — tanlanmagan. ' +
       'Berilmasa — avvalgi xulq (`operator` matni; market operatori — o‘zi; qolganlar — operatorsiz). ' +
-      '⚠️ Faqat odam select’da tanlaydi: AI `operator` matnidan operator_id ni AVTOMATIK tanlamang; market operatori roli uni yubormasin (u baribir o‘zi).',
+      'Frontend AI kartasi: `operator` matni ro‘yxatdagi YAGONA operatorga mos kelsa, uni o‘zi tanlab yuboradi (ega, 2026-11-23; odam yaratishdan oldin ko‘radi va o‘zgartira oladi), bir nechta mos yoki mos kelmasa — odam tanlaydi. Backend matndan operator_id ni o‘zi aniqlamaydi. Market operatori roli uni yubormasin (u baribir o‘zi).',
   })
   @OptionalChosenOperatorId()
   operator_id?: string | null;
