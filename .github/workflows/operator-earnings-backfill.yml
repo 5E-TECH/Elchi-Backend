@@ -9,8 +9,8 @@
 # Sukut — DRY-RUN: faqat hisobot, hech narsa yozilmaydi. Yozish uchun
 # mode=apply va confirm=YOZISH; yozishdan oldin bazaning to'liq nusxasi
 # olinadi (./backups/pre-deploy/pre-backfill-*, oxirgi 3 tasi), nusxa olinmasa hech narsa
-# yozilmaydi. Skript serverdagi DEPLOY QILINGAN ops image'dan ishlaydi —
-# avval shu skriptni o'z ichiga olgan reliz deploy bo'lishi kerak.
+# yozilmaydi. Ops image serverdagi checkout'dan (deploy qilingan kod) kesh
+# bilan quriladi — avval shu skriptni o'z ichiga olgan reliz deploy bo'lishi kerak.
 # To'liq yo'riqnoma: docs/ops/operator-earnings-backfill.md
 name: Operator earnings backfill
 
@@ -107,18 +107,26 @@ jobs:
             fi
             echo "server: $BF_TARGET, checkout $(git rev-parse --short HEAD 2>/dev/null || echo '?'), mode: $BF_MODE"
 
-            # Deploy qilingan ops image (migration-runner). Yo'q bo'lsa compose
-            # uni serverda qurib yuborardi — buning o'rniga to'xtaymiz.
+            # Ops image (migration-runner) shu checkout'dan quriladi: deploy
+            # oxiridagi scripts/docker-gc.sh konteyneri yo'q image'larni o'chiradi,
+            # migration-runner konteyneri esa migratsiyadan keyin olib tashlanadi —
+            # ya'ni deploy'dan keyin bu image odatda yo'q. Kesh bilan (package-lock
+            # o'zgarmagan bo'lsa `npm ci` qatlami tayyor) — deploy ham shunday quradi.
+            echo "== ops image (migration-runner) $(git rev-parse --short HEAD 2>/dev/null || echo '?') dan quriladi"
+            if ! $DC build migration-runner; then
+              echo "!!! ops image qurilmadi — hech narsa qilinmadi." >&2
+              exit 1
+            fi
             # `config --images <servis>` bog'liq servislarni (postgres:15) ham
             # chiqaradi — deploy.yml kabi `-migration-runner` bo'yicha tanlanadi.
             IMG="$($DC config --images migration-runner | grep -E -- '-migration-runner$' | head -n 1 || true)"
             if [ -z "$IMG" ] || ! docker image inspect "$IMG" >/dev/null 2>&1; then
-              echo "!!! ops image topilmadi (${IMG:-?}) — avval deploy qiling. Hech narsa qilinmadi." >&2
+              echo "!!! ops image topilmadi (${IMG:-?}) — hech narsa qilinmadi." >&2
               exit 1
             fi
             echo "ops image: $IMG ($(docker image inspect -f '{{.Created}}' "$IMG"))"
             if ! docker run --rm --entrypoint sh "$IMG" -c 'test -f scripts/backfill-operator-earnings.ts'; then
-              echo "!!! deploy qilingan image'da skript yo'q — avval shu skriptli relizni deploy qiling. Hech narsa qilinmadi." >&2
+              echo "!!! serverdagi checkout'da skript yo'q — avval shu skriptli relizni deploy qiling. Hech narsa qilinmadi." >&2
               exit 1
             fi
 
