@@ -1462,6 +1462,7 @@
     },
     "/markets/{id}/cancelled-handover-qr": {
       "patch": {
+        "description": "Sukut — `true` (bekor buyurtma marketga faqat market QR / kodi bilan). `false` — QR so‘ralmaydi (skan yoki qo‘lda topshirish, usul `no_qr`). Faqat SUPERADMIN/ADMIN.",
         "operationId": "ApiGatewayController_updateMarketCancelledHandoverQr",
         "parameters": [
           {
@@ -1503,8 +1504,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "market"
+          "admin"
         ]
       }
     },
