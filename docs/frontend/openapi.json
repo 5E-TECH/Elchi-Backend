@@ -26789,7 +26789,7 @@
         ]
       },
       "post": {
-        "description": "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
+        "description": "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). O'chirilgan operatorga (audit 2026-11-22 #10) — faqat to'lanmagan qoldiqni yopish uchun: summa qoldiqdan oshsa yoki qoldiq yo'q bo'lsa — 409. `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
         "operationId": "OperatorPaymentGatewayController_record",
         "parameters": [
           {
@@ -26975,7 +26975,7 @@
     },
     "/finance/operator-payments/missing-earnings": {
       "get": {
-        "description": "2026-11-20. Hech narsa yozilmaydi. `{ sold_orders, already_recorded, missing, to_record, amount, commission_type, commission_value, operator_name, truncated }` — `to_record` / `amount`: joriy stavka bo'yicha yoziladigan qatorlar va summa (stavka yo'q — 0).",
+        "description": "2026-11-20. Hech narsa yozilmaydi. `{ sold_orders, already_recorded, missing, to_record, amount, commission_type, commission_value, operator_name, truncated }` — `to_record` / `amount`: joriy stavka bo'yicha yoziladigan qatorlar va summa (stavka yo'q — 0). Barcha sotuvlar 5000 talik sahifalarda ko'riladi (audit 2026-11-22 #9); `truncated: true` — faqat 100 000 dan ortiq sotuvda (ko'rilmagan qismi qoldi).",
         "operationId": "OperatorEarningBackfillGatewayController_preview",
         "parameters": [
           {
@@ -27014,7 +27014,7 @@
         ]
       },
       "post": {
-        "description": "2026-11-20. Faqat daftarda qatori umuman yo'q (rollback qilinmagan) hozir sotilgan buyurtmalar; mavjud qatorlar o'zgarmaydi. Takror — ikkinchi qator yo'q (`created: 0`). Javob: oldindan ko'rish maydonlari + `created`, `created_amount`. Elchi kassasiga ta'sir yo'q.",
+        "description": "2026-11-20. Faqat daftarda qatori umuman yo'q (rollback qilinmagan) hozir sotilgan buyurtmalar; mavjud qatorlar o'zgarmaydi. Takror — ikkinchi qator yo'q (`created: 0`). Javob: oldindan ko'rish maydonlari + `created`, `created_amount`, `revoked` — yozish paytida sotuvdan chiqqan buyurtmalar soni (ulushi darhol olib tashlandi, audit 2026-11-22 #8). Barcha sotuvlar sahifalab yoziladi (#9). Elchi kassasiga ta'sir yo'q.",
         "operationId": "OperatorEarningBackfillGatewayController_record",
         "parameters": [],
         "requestBody": {

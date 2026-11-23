@@ -683,6 +683,9 @@ export function isNoMessageHandlerError(error: unknown): boolean {
   return text.toLowerCase().includes('no matching message handler');
 }
 
+/** Skan-biriktirish javobiga qo'shiladigan ixtiyoriy xulosa uchun muddat (#59). */
+const SCAN_ORDER_SUMMARY_TIMEOUT_MS = 1_500;
+
 @ApiTags('Orders')
 @Controller('orders')
 // Javob tanasidagi statusCode (masalan 202 — market tasdig'i kutilmoqda) HTTP
@@ -4612,6 +4615,8 @@ export class OrderGatewayController {
    * market posilka qabul qilmaydi.
    */
   @Post('external/receive-by-scan')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   // Yangi resurs yaratilmaydi — 201 emas, 200. Tana ichidagi `statusCode` ham
   // 200, ya'ni HTTP va tana bir xil signal beradi; natija `data.ok` da
   // (n9o0KYd5).
@@ -7929,6 +7934,8 @@ export class OrderGatewayController {
   }
 
   @Get('qr-code/:token')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...ORDER_QR_LOOKUP_ROLES)
   @ApiBearerAuth()
@@ -8065,8 +8072,19 @@ export class OrderGatewayController {
       return response;
     }
     try {
+      /**
+       * ⚠️ QISQA MUDDAT (skan auditi 2026-11-23, #59/#85). Ilgari xulosa ham
+       * 8 s kutardi (light yiqilsa enriched yana 8 s) — biriktirish allaqachon
+       * bo'lgan, lekin javob 16+ s kechikib FE chegarasidan oshardi va qayta
+       * skan «Allaqachon sizda» berardi. Xulosa ixtiyoriy: kechiksa — usiz.
+       */
       const light = await sendOrderQrLight(
-        (pattern) => this.sendOrderWithTimeout(pattern, { token }),
+        (pattern) =>
+          this.sendOrderWithTimeout(
+            pattern,
+            { token },
+            SCAN_ORDER_SUMMARY_TIMEOUT_MS,
+          ),
         { cmd: 'order.find_by_qr_enriched' },
       );
       const order = scanOrderSummary(light);

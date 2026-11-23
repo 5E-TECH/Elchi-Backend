@@ -5838,7 +5838,9 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     // Har skan so'rovida bitta yozuv (kim, qaysi buyurtmalar, pochta holati).
-    await this.activityLog.log({
+    // Skan auditi #45: jurnal yozuvlari javobni KUTDIRMAYDI (qabul allaqachon
+    // commit bo'lgan; `log` xatoni o'zi yutadi) — har skan tezroq qaytadi.
+    void this.activityLog.log({
       entity_type: 'Post',
       entity_id: postId,
       action: 'logistics.post_scan_receive',
@@ -5862,7 +5864,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     // Pochta STATUS_CHANGE — faqat holat haqiqatan o'zgarganda.
     if (post.status !== postStatusBefore) {
-      await this.activityLog.log({
+      void this.activityLog.log({
         entity_type: 'Post',
         entity_id: postId,
         action: ActivityAction.STATUS_CHANGE,
@@ -5882,7 +5884,7 @@ export class LogisticsServiceService implements OnModuleInit {
     // anKpzwxk (4-band): SA/ADMIN o'tkazma pochtasini manzil menejeri o'rniga
     // qabul qildi — avvalgidek har so'rovda (qabul bo'lgan bo'lsa).
     if (access.isBranchTransferPost && access.isPrivileged && received.length) {
-      await this.activityLog.log({
+      void this.activityLog.log({
         entity_type: 'Post',
         entity_id: postId,
         action: 'logistics.post_receive_override',
@@ -13674,68 +13676,84 @@ export class LogisticsServiceService implements OnModuleInit {
       const regionId = String(first?.assigned_region ?? '').trim();
       const targetPostStatus = first?.assigned_post_status ?? Post_status.NEW;
       const assignedBranch = String(first?.assigned_branch ?? '').trim();
-      let post = await this.postRepo.findOne({
-        where: {
-          region_id: regionId,
-          status: targetPostStatus,
-          branch_id: assignedBranch || IsNull(),
-          // HQ → filial o'tkazmasi faqat kuryersiz ('0') SENT pochtaga
-          // qo'shiladi: filial kuryerining faol pochtasi (branch_id bilan)
-          // hech qachon dispatch maqsadi bo'lmasin. Har kun — alohida pochta
-          // (egasi qarori 2026-11-03, BeePost kabi): kechagi qisman qabul
-          // qilingan o'tkazmaga bugungi jo'natma qo'shilmaydi.
-          ...(targetPostStatus === Post_status.SENT
-            ? {
-                courier_id: '0',
-                createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
-              }
-            : {}),
-        },
+      const addedCount = regionOrders.length;
+      const addedTotal = regionOrders.reduce(
+        (sum, ro) => sum + Number(ro.total_price ?? 0),
+        0,
+      );
+
+      /**
+       * ⚠️ PARALLEL QABUL HISOBNI YO'QOTMAYDI (skan auditi 2026-11-23, #80/#105).
+       *
+       * MUAMMO. Har skan alohida `POST /orders/receive` — bir hududga ketma-ket
+       * skanlar bu yerga parallel keladi (RMQ prefetch 20). Ilgari pochta
+       * qulfsiz topilardi va hisoblagich `eski + n` deb yozilardi: ikki so'rov
+       * bir xil eski qiymatni o'qib, bittasining qo'shgani yo'qolardi; pochta
+       * yo'q bo'lsa ikkalasi ham YANGI pochta ochardi.
+       *
+       * Endi bitta (holat, hudud, filial) kaliti uchun topish/yaratish
+       * `pg_advisory_xact_lock` ostida ketma-ket, hisoblagich esa atomik
+       * `SET x = x + n` (boshqa oqimlar ham shu ustunni o'zgartiradi).
+       */
+      const post = await this.postRepo.manager.transaction(async (manager) => {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+          `post_receive_orders:${targetPostStatus}:${regionId}:${assignedBranch}`,
+        ]);
+        const repo = manager.getRepository(Post);
+        let found = await repo.findOne({
+          where: {
+            region_id: regionId,
+            status: targetPostStatus,
+            branch_id: assignedBranch || IsNull(),
+            // HQ → filial o'tkazmasi faqat kuryersiz ('0') SENT pochtaga
+            // qo'shiladi: filial kuryerining faol pochtasi (branch_id bilan)
+            // hech qachon dispatch maqsadi bo'lmasin. Har kun — alohida pochta
+            // (egasi qarori 2026-11-03, BeePost kabi): kechagi qisman qabul
+            // qilingan o'tkazmaga bugungi jo'natma qo'shilmaydi.
+            ...(targetPostStatus === Post_status.SENT
+              ? {
+                  courier_id: '0',
+                  createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
+                }
+              : {}),
+          },
+        });
+
+        if (!found) {
+          found = await repo.save(
+            repo.create({
+              courier_id: '0',
+              qr_code_token: this.generateToken(),
+              region_id: regionId,
+              branch_id: assignedBranch || null,
+              status: targetPostStatus,
+              post_total_price: 0,
+              order_quantity: 0,
+            }),
+          );
+        }
+
+        // Pochta filiali — doim so'ralgan filial (yo'q bo'lsa NULL).
+        const desiredBranch = assignedBranch || null;
+        if (String(found.branch_id ?? '') !== String(desiredBranch ?? '')) {
+          await repo.update({ id: found.id }, { branch_id: desiredBranch });
+          found.branch_id = desiredBranch;
+        }
+
+        await repo.increment({ id: found.id }, 'order_quantity', addedCount);
+        await repo.increment({ id: found.id }, 'post_total_price', addedTotal);
+        // Qidiruv indeksi uchun (best-effort) — haqiqat bazadagi atomik yig'indi.
+        found.order_quantity = Number(found.order_quantity ?? 0) + addedCount;
+        found.post_total_price =
+          Number(found.post_total_price ?? 0) + addedTotal;
+        return found;
       });
 
-      if (
-        post &&
-        targetPostStatus === Post_status.NEW &&
-        String(post.branch_id ?? '').trim()
-      ) {
-        post.branch_id = null;
-        post = await this.postRepo.save(post);
-        void this.syncPostToSearch(post);
-      }
-
-      if (!post) {
-        post = this.postRepo.create({
-          courier_id: '0',
-          qr_code_token: this.generateToken(),
-          region_id: regionId,
-          branch_id: assignedBranch || null,
-          status: targetPostStatus,
-          post_total_price: 0,
-          order_quantity: 0,
-        });
-        post = await this.postRepo.save(post);
-        void this.syncPostToSearch(post);
-      }
-
-      if (
-        assignedBranch &&
-        String(post.branch_id ?? '').trim() !== assignedBranch
-      ) {
-        post.branch_id = assignedBranch;
-      }
-
-      let addedTotal = 0;
       for (const ro of regionOrders) {
         assignments.push({ order_id: ro.order_id, post_id: post.id });
-        addedTotal += Number(ro.total_price ?? 0);
       }
-
-      post.order_quantity =
-        Number(post.order_quantity ?? 0) + regionOrders.length;
-      post.post_total_price = Number(post.post_total_price ?? 0) + addedTotal;
-      const saved = await this.postRepo.save(post);
-      void this.syncPostToSearch(saved);
-      touchedPostIds.push(String(saved.id));
+      void this.syncPostToSearch(post);
+      touchedPostIds.push(String(post.id));
     }
 
     await this.activityLog.log({

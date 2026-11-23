@@ -23,6 +23,76 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-23 — Skan auditi: idempotent topshirish/QR, filial paketi sabablari, skan limiti
+
+Deploy: **order-service, logistics-service, branch-service, api-gateway** (migratsiya yo'q).
+
+- ✏️ [order] `POST /orders/markets/:id/cancelled/handover` — allaqachon shu marketga topshirilgan
+  (`returned_to_market`) buyurtma qayta yuborilsa **200**, `data.already_handed_order_ids` da (ilgari umumiy 400).
+  Hech narsa topshirilmasa `closed_count: 0`, `message: "Buyurtmalar allaqachon marketga topshirilgan"`.
+  → **Frontendda:** 🔧 `already_handed_order_ids` — «Allaqachon topshirilgan», qator topshirilganlarga o'tadi.
+- ✏️ [order] `POST /scan/market-cancelled` (QR va kod) — ruxsat hali amal qilsa va skanerlagan AYNAN shu xodim
+  bo'lsa, qayta skan/kod **200** (yangi `authorization_token`, `expires_at` o'zgarmaydi, `reissued: true`).
+  Ilgari «QR allaqachon ishlatilgan». Boshqa xodim — avvalgidek 400.
+- ✏️ [order] `POST /branches/transfer-batches` xatosi endi sababi bilan: `code` =
+  `ORDER_NOT_FOUND` | `ORDER_OTHER_BRANCH` | `ORDER_ALREADY_IN_BATCH` (`details.batch_id`) | `ORDER_NOT_NEW`
+  (`details.status`) | `ORDER_NOT_ASSIGNABLE`. «allaqachon» so'zi faqat `ORDER_ALREADY_IN_BATCH` matnida.
+  → **Frontendda:** 🔧 «allaqachon» substringi o'rniga `code` ga tayaning.
+- ✏️ [order] transfer batch tafsiloti va qolganlari (`GET transfer-batches/:id`, `/remaining`) — har `items[]` da
+  `qr_code_token` (boyitish yiqilsa ham bor). `order.transfer_batch.create` javobida `created_batch_ids`.
+- ✏️ [order] `POST /orders/external/receive-by-scan` — allaqachon `received` posilka `unmatched` emas,
+  `data.already_received: [{ token, order_id }]` da; hammasi qabul qilingan bo'lsa `ok: true, received: 0`.
+  → **Frontendda:** 🔧 `already_received` — qabul qilingan deb ko'rsating («0 qabul qilindi» emas).
+- 🟢 [gateway] skan route'lari global 60/daq emas, `SCAN_THROTTLE` (sukut 300/daq): `GET orders/qr-code/:token`,
+  receive-by-scan, `PATCH post/receive/:id`, `post/receive/scan/:id`, `post/receive/order/:id`,
+  `POST branches/transfer-batches`, `transfer-batches/:id/receive-orders`, `POST scan/market-cancelled`,
+  `POST integrations/:slug/scan-intake`.
+- 🟢 [logistics] pochta hisoblagichi parallel qabulda yo'qolmaydi (atomik); skan-biriktirish xulosasi 1,5 s.
+
+### 2026-11-23 — Operator komissiyasi va to'lovlari (audit 2026-11-22 #8, #9, #10, #23)
+
+Deploy: **api-gateway**, **finance-service**, **order-service** (migratsiya yo'q).
+
+- ✏️ [finance] — `GET/POST /finance/operator-payments/missing-earnings`: endi operatorning
+  BARCHA sotuvlari ko'riladi (5000 talik sahifalar, ichkarida). Avval faqat eng yangi 5000 ta
+  olinardi va eskilari hech qachon hisoblanmasdi. `truncated: true` endi faqat 100 000 dan
+  ortiq sotuvda (yoki deploy oynasida eski order-service bilan) — «qolgani keyingi bosishda»
+  degan va'da noto'g'ri bo'lardi.
+  → **Frontendda:** 🔧 `MissingEarningsDialog`: `truncated: true` bo'lsa «barcha sotuvlarga
+  komissiya yozilgan» / «Hisoblanadigan buyurtma yo'q» matnini ko'rsatmang — «Sotuvlar juda
+  ko'p, hammasi ko'rilmadi» deng.
+- 🆕 [finance] — `POST …/missing-earnings` javobida `revoked` — yozish paytida sotuvdan
+  chiqqan (rollback) buyurtmalar soni; ularning ulushi darhol olib tashlanadi. Odatda 0.
+  → 🟢 ko'rsatish shart emas.
+- ✏️ [finance] — `POST /finance/operator-payments`: **o'chirilgan** o'z operatoriga ham to'lov
+  yoziladi (avval 404 «Operator topilmadi» — qoldig'i «Qoldiq»da abadiy qolardi), lekin faqat
+  to'lanmagan qoldiqni yopish uchun: summa qoldiqdan oshsa yoki qoldiq yo'q bo'lsa — **409**
+  (`message` da ko'pi bilan qancha yozish mumkinligi). O'chirilmagan operatorga avvalgidek
+  avans ham yoziladi.
+  → **Frontendda:** 🔧 «Operatorlar → To'lovlar» da `status: 'deleted'` va `balance > 0`
+  operatorga «To'lov yozish» tugmasini yoqing (summa sukut — qoldiq), 409 xabarini ko'rsating.
+- 🟢 [finance] — `GET /finance/operator-payments/earnings` va `/finance/operators/me/earnings`
+  sahifalari barqaror (`createdAt`, keyin `id`): backfill qatorlari endi sahifalarda
+  takrorlanmaydi va yo'qolmaydi.
+
+### 2026-11-23 — `POST /orders/receive` qayta qabulda idempotent (skan auditi)
+
+Deploy: **order-service** (migratsiya yo'q).
+
+- ✏️ [order] — `POST /orders/receive` javobi `data: {}` o'rniga
+  `data: { received_ids: string[], already_received_ids: string[] }`.
+- ✏️ [order] — allaqachon `received` holatidagi buyurtma qayta yuborilsa **200**
+  (`already_received_ids` da, `message: "Buyurtmalar allaqachon qabul qilingan"`). Ilgari
+  404 «Buyurtmalar topilmadi» edi — skaner real posilka uchun «Topilmadi» ko'rsatardi.
+  Bunday buyurtma qayta yozilmaydi (pochta, javobgarlik, webhook yo'q). Aralash so'rovda
+  (`new` + `received`) faqat `new` lari yoziladi. Boshqa holatlar (`on_the_road`, `sold` …)
+  avvalgidek 404/400; begona filialning qabul qilingan buyurtmasi — 403.
+- 🟢 [order] — bir buyurtma bir vaqtda ikki so'rovda kelsa (timeout'dan keyin qayta skan),
+  ikkinchisi birinchisini kutadi va `already_received_ids` bilan qaytadi — pochta
+  hisoblagichi ikki marta oshmaydi.
+  → **Frontendda:** 🔧 skan-qabulda `already_received_ids` ichidagi id — «Allaqachon qabul
+  qilingan» (shu sahifadan avval yuborilgan bo'lsa — o'zimizning qabul, «Qabul qilindi»).
+
 ### 2026-11-22 — Kargo to'lovi takrorida `cashbox_posted: null` bo'lishi mumkin (ZE5zqXxu)
 
 Deploy: **integration-service** (migratsiya yo'q).

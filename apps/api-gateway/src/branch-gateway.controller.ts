@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
 import {
   BadRequestException,
   Body,
@@ -773,6 +775,8 @@ export class BranchGatewayController {
   }
 
   @Post('branches/transfer-batches')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,
@@ -1133,6 +1137,8 @@ export class BranchGatewayController {
   }
 
   @Post('transfer-batches/:id/receive-orders')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,

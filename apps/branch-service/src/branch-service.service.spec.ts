@@ -1041,6 +1041,42 @@ describe('BranchServiceService', () => {
     );
   });
 
+  it('⭐ skan auditi #99: mavjud PENDING paketga qo‘shilganda QR qayta chizilmaydi, tarix yozilmaydi', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce({ id: '10', parent_id: '1', isDeleted: false })
+      .mockResolvedValueOnce({ id: '1', isDeleted: false });
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '10', role: 'REGISTRATOR', isDeleted: false },
+    ]);
+    orderClient.send.mockReturnValueOnce(
+      of({
+        statusCode: 201,
+        data: {
+          idempotent: false,
+          batches: [
+            { id: '501', qr_code_token: 'BTB-abc123xy', target_region_id: '6' },
+          ],
+          created_batch_ids: [],
+        },
+      }),
+    );
+    fileClient.send.mockClear();
+
+    const res = await service.createTransferBatches(
+      '10',
+      { orderIds: ['901'] },
+      { id: '77', roles: ['branch'] },
+    );
+
+    expect(res.statusCode).toBe(201);
+    expect(res.data.batches[0].qr_file).toBeNull();
+    expect(fileClient.send).not.toHaveBeenCalled();
+    expect(orderClient.send).not.toHaveBeenCalledWith(
+      { cmd: 'order.transfer_batch.history.add' },
+      expect.anything(),
+    );
+  });
+
   it('createTransferBatches keeps batches when QR generation fails', async () => {
     // Manba filial (10) va uning OTA filiali (1) — destination = parent_id.
     branchRepo.findOne
