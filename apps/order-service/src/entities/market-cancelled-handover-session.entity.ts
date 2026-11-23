@@ -61,4 +61,8 @@ export class MarketCancelledHandoverSession extends BaseEntity {
   authorized_via!: MarketHandoverAuthorizedVia | null;
 }
 
-export type MarketHandoverAuthorizedVia = 'qr' | 'pin';
+/**
+ * `no_qr` — QR talab qilinmaydigan market (admin o'chirgan, skan auditi #43)
+ * topshirishlarini «Topshirilgan» partiyasiga yig'adigan ichki sessiya: tokensiz.
+ */
+export type MarketHandoverAuthorizedVia = 'qr' | 'pin' | 'no_qr';

@@ -109,6 +109,7 @@ describe('OrderServiceService market cancelled handover', () => {
       rollbackTransaction: jest.fn(),
       release: jest.fn(),
       manager: {
+        query: jest.fn(),
         getRepository: jest.fn((entity: { name: string }) => {
           if (entity.name === MarketCancelledHandoverSession.name) {
             return sessionRepo;
@@ -607,10 +608,8 @@ describe('OrderServiceService market cancelled handover', () => {
     );
   });
 
-  it('⭐ market QR MAJBURIY — konfig o`chirilgan bo`lsa ham QR`siz topshirib bo`lmaydi (F1)', async () => {
-    // Ilgari `cancelled_handover_qr_required=false` bilan QR'ni butunlay
-    // chetlab o'tish mumkin edi. Endi konfig E'TIBORSIZ — QR har doim majburiy.
-    const { service, sessionRepo } = setup({ marketQrRequired: false });
+  it('⭐ skan auditi #43: QR sukut bo`yicha MAJBURIY — sozlama yoqiq bo`lsa tokensiz 400', async () => {
+    const { service, sessionRepo } = setup();
 
     await expectRpc(
       service.completeMarketCancelledHandover({
@@ -623,6 +622,45 @@ describe('OrderServiceService market cancelled handover', () => {
     );
     // Token yo'q — sessiya umuman qidirilmaydi, topshirish bo'lmaydi.
     expect(sessionRepo.findOne).not.toHaveBeenCalled();
+  });
+
+  it('⭐ skan auditi #43: admin market QR talabini o`chirgan bo`lsa — tokensiz topshiriladi (no_qr), ichki sessiyaga yig`iladi', async () => {
+    // Ega qarori 2026-11-23: sukut — QR majburiy, superadmin/admin aniq market
+    // uchun o'chirsa — QR so'ralmaydi, oqim o'sha (skan / qo'lda topshirish).
+    const { service, sessionRepo, orderRepo, queryRunner } = setup({
+      marketQrRequired: false,
+    });
+    sessionRepo.findOne.mockResolvedValue(null);
+
+    const response: any = await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    expect(response.data.closed_count).toBe(1);
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: Order_status.RETURNED_TO_MARKET,
+        market_handover_method: 'no_qr',
+      }),
+    );
+    // «Topshirilgan» partiyasi uchun ichki sessiya: tokensiz, shu xodim.
+    expect(sessionRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        market_id: '16',
+        scanned_by_user_id: '9',
+        authorized_via: 'no_qr',
+        authorization_token_hash: null,
+      }),
+    );
+    expect(sessionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ consumed_at: expect.any(Date) }),
+    );
+    expect(queryRunner.manager.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['no_qr_handover:16:9'],
+    );
   });
 
   it('emits a returned_to_market partner signal after closing cancelled orders', async () => {
