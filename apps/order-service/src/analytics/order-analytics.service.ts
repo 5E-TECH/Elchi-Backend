@@ -2352,47 +2352,110 @@ export class OrderAnalyticsService {
    * `order.operator.sold_orders` (2026-11-20) — komissiya «o'tgan sotuvlarga
    * hisoblash» uchun: shu marketda shu operatorga bog'langan, HOZIR sotilgan
    * (sold / paid / partly_paid) buyurtmalar — id, narx, market. Finance
-   * ulardan daftarda qatori yo'qlarini joriy stavka bilan yozadi. Ko'pi bilan
-   * 5000 (eng yangisi birinchi), `truncated` — undan ko'p bo'lsa.
+   * ulardan daftarda qatori yo'qlarini joriy stavka bilan yozadi.
+   *
+   * Audit 2026-11-22 #9: sahifa ko'pi bilan 5000, id O'SISH tartibida;
+   * `truncated` bo'lsa `next_after_id` — keyingi sahifa `after_id` bilan
+   * so'raladi. Avval har chaqiruv eng yangi 5000 tani qaytarardi va undan
+   * eskilari hech qachon hisoblanmasdi. `cursor: 'id_asc'` — gateway shu
+   * versiya bilan gaplashayotganini biladi (eski servis bu maydonni bermaydi).
+   *
+   * Audit #8: `order_ids` (≤ 5000) — faqat shu buyurtmalardan hozir
+   * sotilganlari (backfill yozganidan keyin qayta tekshirish uchun);
+   * javobda `filtered_by_ids: true`.
    */
   async getOperatorSoldOrders(
     marketId: unknown,
     operatorId: unknown,
+    options: { afterId?: unknown; orderIds?: unknown; pageSize?: number } = {},
   ): Promise<{
     items: Array<{ order_id: string; total_price: number; market_id: string }>;
     truncated: boolean;
+    next_after_id: string | null;
+    cursor: 'id_asc';
+    filtered_by_ids?: true;
   }> {
+    const ID_RE = /^[1-9]\d{0,18}$/;
     const asText = (value: unknown) =>
       typeof value === 'string' || typeof value === 'number'
         ? String(value).trim()
         : '';
     const market = asText(marketId);
     const operator = asText(operatorId);
-    if (!/^[1-9]\d{0,18}$/.test(market) || !/^[1-9]\d{0,18}$/.test(operator)) {
+    if (!ID_RE.test(market) || !ID_RE.test(operator)) {
       throw new RpcException({
         statusCode: 400,
         message: "market_id va operator_id noto'g'ri",
       });
     }
-    const LIMIT = 5000;
-    const rows = await this.orderRepo
+    const MAX_PAGE = 5000;
+    const afterId =
+      options.afterId === undefined || options.afterId === null
+        ? ''
+        : asText(options.afterId);
+    if (afterId && !ID_RE.test(afterId)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "after_id noto'g'ri",
+      });
+    }
+    let orderIds: string[] | null = null;
+    if (options.orderIds !== undefined && options.orderIds !== null) {
+      if (!Array.isArray(options.orderIds)) {
+        throw new RpcException({
+          statusCode: 400,
+          message: "order_ids ro'yxat bo'lishi kerak",
+        });
+      }
+      orderIds = [...new Set(options.orderIds.map((id) => asText(id)))].filter(
+        (id) => ID_RE.test(id),
+      );
+      if (orderIds.length > MAX_PAGE) {
+        throw new RpcException({
+          statusCode: 400,
+          message: `order_ids ko'pi bilan ${MAX_PAGE} ta`,
+        });
+      }
+    }
+    const limit = Math.min(
+      Math.max(Math.trunc(options.pageSize ?? MAX_PAGE), 1),
+      MAX_PAGE,
+    );
+    if (orderIds && orderIds.length === 0) {
+      return {
+        items: [],
+        truncated: false,
+        next_after_id: null,
+        cursor: 'id_asc',
+        filtered_by_ids: true,
+      };
+    }
+    const query = this.orderRepo
       .createQueryBuilder('o')
       .select('o.id::text', 'order_id')
       .addSelect('o.total_price', 'total_price')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('o.market_id = :market', { market })
       .andWhere('o.operator_id = :operator', { operator })
-      .andWhere('o.status IN (:...sold)', { sold: this.soldStatuses() })
-      .orderBy('o.id', 'DESC')
-      .limit(LIMIT + 1)
+      .andWhere('o.status IN (:...sold)', { sold: this.soldStatuses() });
+    if (afterId) query.andWhere('o.id > :afterId', { afterId });
+    if (orderIds) query.andWhere('o.id IN (:...orderIds)', { orderIds });
+    const rows = await query
+      .orderBy('o.id', 'ASC')
+      .limit(limit + 1)
       .getRawMany<{ order_id: string; total_price: string | number | null }>();
+    const items = rows.slice(0, limit).map((row) => ({
+      order_id: String(row.order_id),
+      total_price: Number(row.total_price ?? 0) || 0,
+      market_id: market,
+    }));
+    const truncated = rows.length > limit;
     return {
-      items: rows.slice(0, LIMIT).map((row) => ({
-        order_id: String(row.order_id),
-        total_price: Number(row.total_price ?? 0) || 0,
-        market_id: market,
-      })),
-      truncated: rows.length > LIMIT,
+      items,
+      truncated,
+      next_after_id: truncated ? items[items.length - 1].order_id : null,
+      cursor: 'id_asc',
+      ...(orderIds ? { filtered_by_ids: true as const } : {}),
     };
   }
 

@@ -154,6 +154,8 @@ describePg('operator earning backfill (haqiqiy Postgres)', () => {
     expect(first).toMatchObject({
       created: 1,
       created_amount: 10000,
+      // Audit 2026-11-22 #8: gateway qayta tekshiradigan ro'yxat.
+      created_order_ids: ['7003'],
       dry_run: false,
     });
 
@@ -193,6 +195,39 @@ describePg('operator earning backfill (haqiqiy Postgres)', () => {
     const results = await Promise.all([run(false), run(false)]);
     expect(results.map((item) => item.created).sort()).toEqual([0, 1]);
     expect(await earnings().count({ where: { order_id: '7003' } })).toBe(1);
+  });
+
+  it('audit 2026-11-22 #23: backfill qatorlari (createdAt bir xil) sahifalarda takrorlanmaydi va yo`qolmaydi', async () => {
+    const many = Array.from({ length: 23 }, (_, index) => ({
+      order_id: String(8000 + index),
+      total_price: 100000,
+      market_id: MARKET,
+    }));
+    expect(await run(false, many)).toMatchObject({ created: 23 });
+    const stamps = await earnings()
+      .createQueryBuilder('e')
+      .select('COUNT(DISTINCT e.createdAt)::text', 'n')
+      .where('e.order_id >= :min', { min: 8000 })
+      .getRawOne<{ n: string }>();
+    expect(stamps?.n).toBe('1');
+
+    const seen: string[] = [];
+    let total = 0;
+    for (let offset = 0; offset < 30; offset += 5) {
+      const res = (await finance.listOperatorEarnings({
+        operator_id: OPERATOR,
+        limit: 5,
+        offset,
+      })) as { data: { rows: OperatorEarning[]; total: number } };
+      total = res.data.total;
+      seen.push(...res.data.rows.map((row) => String(row.id)));
+    }
+    // 23 ta yangi + 1 ta tirik (7001); o'chirilgan 7002 chiqmaydi.
+    expect(total).toBe(24);
+    expect(seen).toHaveLength(24);
+    expect(new Set(seen).size).toBe(24);
+    const backfilled = seen.slice(0, 23).map(Number);
+    expect(backfilled).toEqual([...backfilled].sort((a, b) => b - a));
   });
 
   it('stavka belgilanmagan — hech narsa yozilmaydi', async () => {
