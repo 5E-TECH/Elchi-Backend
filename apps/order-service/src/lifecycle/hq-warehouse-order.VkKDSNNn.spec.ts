@@ -233,7 +233,11 @@ describe('VkKDSNNn — createOnce: Markaziy ombor buyurtmasi', () => {
       logisticsClient,
       outbox,
       activityLog,
-      lookup: { getHqBranchId: jest.fn().mockResolvedValue(HQ_ID) },
+      lookup: {
+        getHqBranchId: jest.fn().mockResolvedValue(HQ_ID),
+        // Skan auditi #43: market QR sozlamasi (bo'sh — sukut, QR majburiy).
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+      },
       custody,
       orderWarehouse,
     });
@@ -717,7 +721,11 @@ describe('VkKDSNNn — marketga topshirish: Markaziy ombor buyurtmasi 409', () =
         createQueryBuilder: jest.fn(() => batchQb),
       };
       const dataSource = { createQueryRunner: jest.fn() };
-      const lookup = { getHqBranchId: jest.fn().mockResolvedValue(hqId) };
+      const lookup = {
+        getHqBranchId: jest.fn().mockResolvedValue(hqId),
+        // Skan auditi #43: market QR sozlamasi (bo'sh — sukut, QR majburiy).
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+      };
       const service = buildService({
         dataSource,
         orderRepo: { findOne: jest.fn().mockResolvedValue(order) },

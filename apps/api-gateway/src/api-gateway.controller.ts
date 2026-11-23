@@ -1372,7 +1372,7 @@ export class ApiGatewayController {
       "SUPERADMIN/ADMIN — barcha foydalanuvchilar (superadmin va mijozsiz). MANAGER — o'z filialining faol a'zolari " +
       "(`branch_users`: menejer, registrator, kuryer) VA o'zi yaratgan marketlar (`role = market`, `created_by` = menejer, 2026-11-12); " +
       'admin, logist, investor, boshqa filial xodimlari va boshqalar yaratgan marketlar chiqmaydi. ' +
-      "`meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. " +
+      '`meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. ' +
       "Filialga biriktirilmagan menejer — bo'sh sahifa (meta shakli o'zgarmaydi, sonlar 0).",
   })
   @ApiQuery({ name: 'search', required: false, type: String })
@@ -2002,8 +2002,8 @@ export class ApiGatewayController {
   @ApiOperation({
     summary: 'Create market',
     description:
-      "SUPERADMIN/ADMIN — cheklovsiz. MANAGER — faqat «Qabul punkti» (PICKUP) yoki «Aralash» (HYBRID) filial menejeri " +
-      "(2026-11-12; ilgari faqat HYBRID), boshqa filial turi yoki biriktirilmagan — 403. `created_by` = yaratgan foydalanuvchi; " +
+      'SUPERADMIN/ADMIN — cheklovsiz. MANAGER — faqat «Qabul punkti» (PICKUP) yoki «Aralash» (HYBRID) filial menejeri ' +
+      '(2026-11-12; ilgari faqat HYBRID), boshqa filial turi yoki biriktirilmagan — 403. `created_by` = yaratgan foydalanuvchi; ' +
       "menejer o'zi yaratgan marketni GET /users ro'yxatida va GET /users/:id da ko'radi.",
   })
   @ApiBody({ type: CreateMarketRequestDto })
@@ -2036,7 +2036,7 @@ export class ApiGatewayController {
       // olsin» — PICKUP («Qabul punkti») va HYBRID («Aralash») filial menejeri.
       if (!UserGatewayMarketCreatorBranchTypes.has(branchType)) {
         throw new ForbiddenException(
-          "Faqat «Qabul punkti» yoki «Aralash» filial menejeri market yarata oladi",
+          'Faqat «Qabul punkti» yoki «Aralash» filial menejeri market yarata oladi',
         );
       }
     }
@@ -2061,7 +2061,12 @@ export class ApiGatewayController {
             weight_volume_pricing: dto.weight_volume_pricing,
             default_tariff: dto.default_tariff,
             add_order: dto.add_order,
-            cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
+            // Skan auditi #43 (ega 2026-11-23): QR talabini faqat
+            // superadmin/admin o'chiradi — menejer yaratgan market sukut
+            // bo'yicha QR bilan (identity `?? true`).
+            cancelled_handover_qr_required: isManager
+              ? undefined
+              : dto.cancelled_handover_qr_required,
             expense_proof_conditions: dto.expense_proof_conditions,
             // w2bDrE3i (faqat admin/superadmin — identity tekshiradi).
             extra_cost_enabled: dto.extra_cost_enabled,
@@ -2357,11 +2362,17 @@ export class ApiGatewayController {
 
   @Patch('markets/:id/cancelled-handover-qr')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  // Skan auditi #43 (ega 2026-11-23): QR talabi endi haqiqatan ishlaydi
+  // (o'chirilsa topshirish QR'siz) — uni faqat superadmin/admin o'zgartiradi.
+  // Ilgari market o'zinikini ham o'zgartira olardi.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
       'Update whether market cancelled-order handover requires market QR scan',
+    description:
+      'Sukut — `true` (bekor buyurtma marketga faqat market QR / kodi bilan). `false` — QR so‘ralmaydi ' +
+      '(skan yoki qo‘lda topshirish, usul `no_qr`). Faqat SUPERADMIN/ADMIN.',
   })
   @ApiParam({ name: 'id', description: 'Market user ID' })
   @ApiBody({ type: UpdateMarketCancelledHandoverQrRequestDto })
@@ -2372,20 +2383,7 @@ export class ApiGatewayController {
   updateMarketCancelledHandoverQr(
     @Param('id') id: string,
     @Body() dto: UpdateMarketCancelledHandoverQrRequestDto,
-    @Req() req: { user: JwtUser },
   ) {
-    const requesterRoles = (req.user.roles ?? []).map((role) =>
-      String(role).toLowerCase(),
-    );
-    if (
-      requesterRoles.includes(RoleEnum.MARKET) &&
-      String(req.user.sub) !== id
-    ) {
-      throw new ForbiddenException(
-        'Market faqat o‘z QR topshirish sozlamasini o‘zgartira oladi',
-      );
-    }
-
     return this.identityClient
       .send(
         { cmd: 'identity.market.update' },
