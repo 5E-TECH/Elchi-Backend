@@ -2400,16 +2400,25 @@ export class OrderServiceController {
   /**
    * 2026-11-20: komissiya «o'tgan sotuvlarga hisoblash» — shu market, shu
    * operator, hozir sotilgan buyurtmalar (id, narx). Gateway (market) beradi.
+   * Audit 2026-11-22: `after_id` — keyingi sahifa (#9), `order_ids` — faqat
+   * shu buyurtmalardan hozir sotilganlari (#8).
    */
   @MessagePattern({ cmd: 'order.operator.sold_orders' })
   operatorSoldOrders(
-    @Payload() data: { market_id: string; operator_id: string },
+    @Payload()
+    data: {
+      market_id: string;
+      operator_id: string;
+      after_id?: string;
+      order_ids?: string[];
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderAnalyticsService.getOperatorSoldOrders(
         data?.market_id,
         data?.operator_id,
+        { afterId: data?.after_id, orderIds: data?.order_ids },
       ),
     );
   }

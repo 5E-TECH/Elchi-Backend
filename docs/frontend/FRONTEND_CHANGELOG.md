@@ -49,6 +49,32 @@ Deploy: **order-service, logistics-service, branch-service, api-gateway** (migra
   `POST integrations/:slug/scan-intake`.
 - 🟢 [logistics] pochta hisoblagichi parallel qabulda yo'qolmaydi (atomik); skan-biriktirish xulosasi 1,5 s.
 
+### 2026-11-23 — Operator komissiyasi va to'lovlari (audit 2026-11-22 #8, #9, #10, #23)
+
+Deploy: **api-gateway**, **finance-service**, **order-service** (migratsiya yo'q).
+
+- ✏️ [finance] — `GET/POST /finance/operator-payments/missing-earnings`: endi operatorning
+  BARCHA sotuvlari ko'riladi (5000 talik sahifalar, ichkarida). Avval faqat eng yangi 5000 ta
+  olinardi va eskilari hech qachon hisoblanmasdi. `truncated: true` endi faqat 100 000 dan
+  ortiq sotuvda (yoki deploy oynasida eski order-service bilan) — «qolgani keyingi bosishda»
+  degan va'da noto'g'ri bo'lardi.
+  → **Frontendda:** 🔧 `MissingEarningsDialog`: `truncated: true` bo'lsa «barcha sotuvlarga
+  komissiya yozilgan» / «Hisoblanadigan buyurtma yo'q» matnini ko'rsatmang — «Sotuvlar juda
+  ko'p, hammasi ko'rilmadi» deng.
+- 🆕 [finance] — `POST …/missing-earnings` javobida `revoked` — yozish paytida sotuvdan
+  chiqqan (rollback) buyurtmalar soni; ularning ulushi darhol olib tashlanadi. Odatda 0.
+  → 🟢 ko'rsatish shart emas.
+- ✏️ [finance] — `POST /finance/operator-payments`: **o'chirilgan** o'z operatoriga ham to'lov
+  yoziladi (avval 404 «Operator topilmadi» — qoldig'i «Qoldiq»da abadiy qolardi), lekin faqat
+  to'lanmagan qoldiqni yopish uchun: summa qoldiqdan oshsa yoki qoldiq yo'q bo'lsa — **409**
+  (`message` da ko'pi bilan qancha yozish mumkinligi). O'chirilmagan operatorga avvalgidek
+  avans ham yoziladi.
+  → **Frontendda:** 🔧 «Operatorlar → To'lovlar» da `status: 'deleted'` va `balance > 0`
+  operatorga «To'lov yozish» tugmasini yoqing (summa sukut — qoldiq), 409 xabarini ko'rsating.
+- 🟢 [finance] — `GET /finance/operator-payments/earnings` va `/finance/operators/me/earnings`
+  sahifalari barqaror (`createdAt`, keyin `id`): backfill qatorlari endi sahifalarda
+  takrorlanmaydi va yo'qolmaydi.
+
 ### 2026-11-23 — `POST /orders/receive` qayta qabulda idempotent (skan auditi)
 
 Deploy: **order-service** (migratsiya yo'q).

@@ -106,7 +106,8 @@ describe('F2qp6FtE — /finance/operator-payments gateway', () => {
         { cmd: 'identity.market_operator.find_by_market' },
         {
           market_id: '12',
-          query: { page: 1, limit: 100 },
+          // Audit 2026-11-22 #10: o'chirilganlar ham (qoldig'ini yopish uchun).
+          query: { page: 1, limit: 100, include_deleted: true },
           requester: { id: '12', roles: ['market'] },
         },
       );
@@ -122,6 +123,7 @@ describe('F2qp6FtE — /finance/operator-payments gateway', () => {
             recorded_by_id: '12',
             recorded_by_role: 'market',
             idempotency_key: 'op-key-1',
+            operator_deleted: false,
           },
         ],
       ]);
