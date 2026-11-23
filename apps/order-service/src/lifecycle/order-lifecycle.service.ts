@@ -8784,9 +8784,7 @@ export class OrderLifecycleService {
       this.badRequest('order_ids majburiy');
     }
     if (ids.length > UNLINKED_GROUP_ID_LIMIT) {
-      this.badRequest(
-        `order_ids ko'pi bilan ${UNLINKED_GROUP_ID_LIMIT} ta`,
-      );
+      this.badRequest(`order_ids ko'pi bilan ${UNLINKED_GROUP_ID_LIMIT} ta`);
     }
     const results: Array<{
       id: string;
@@ -11028,6 +11026,17 @@ export class OrderLifecycleService {
     return null;
   }
 
+  /**
+   * Hozir qabul qilinayotgan buyurtmalar: `order_id → shu qabulning tugash
+   * va'dasi`. Lazy, chunki testlar xizmatni `Object.create` bilan
+   * konstruktorsiz quradi.
+   */
+  private receiveInFlightMap?: Map<string, Promise<void>>;
+
+  private get receiveInFlight(): Map<string, Promise<void>> {
+    return (this.receiveInFlightMap ??= new Map());
+  }
+
   async receiveNewOrders(
     orderIds: string[],
     search?: string,
@@ -11041,12 +11050,70 @@ export class OrderLifecycleService {
     internal?: { scanVerified?: boolean },
   ) {
     const uniqueOrderIds = Array.from(
-      new Set((orderIds ?? []).filter(Boolean)),
+      new Set((orderIds ?? []).filter(Boolean).map(String)),
     );
     if (!uniqueOrderIds.length) {
       this.badRequest('order_ids majburiy');
     }
 
+    /**
+     * ⚠️ BITTA BUYURTMA BIR VAQTDA IKKI MARTA QABUL QILINMAYDI (skan auditi
+     * 2026-11-23).
+     *
+     * MUAMMO. Gateway 8 s da timeout beradi, order-service esa ishni davom
+     * ettirib keyinroq commit qiladi. Operator xatoni ko'rib qayta
+     * skanerlaydi — ikkinchi so'rov birinchisi hali commit qilmagan paytda
+     * kelib, buyurtmani yana `new` holatida ko'rardi. Natija: pochta
+     * hisoblagichi (`order_quantity`, `post_total_price`) IKKI MARTA
+     * oshardi, javobgarlik yozuvlari ikkilanardi.
+     *
+     * Endi ikkinchi so'rov birinchisi tugashini kutadi, keyin buyurtmani
+     * qayta o'qiydi — u allaqachon `received`, ya'ni «allaqachon qabul
+     * qilingan» deb muvaffaqiyat qaytadi. order-service bitta nusxada
+     * ishlaydi (docker-compose.prod.yml); bir nechta nusxa bo'lsa ham
+     * pastdagi `status = 'new'` shartli UPDATE ikkinchi yozuvni to'sadi.
+     */
+    const inFlight = this.receiveInFlight;
+    for (let round = 0; round < 3; round += 1) {
+      const pending = Array.from(
+        new Set(
+          uniqueOrderIds
+            .map((id) => inFlight.get(id))
+            .filter((task): task is Promise<void> => Boolean(task)),
+        ),
+      );
+      if (!pending.length) break;
+      await Promise.allSettled(pending);
+    }
+    // `run` birinchi `await` gacha sinxron ishlaydi, ro'yxatga olish esa
+    // undan keyin darhol, oraliqda `await` yo'q — boshqa so'rov kirib
+    // qololmaydi.
+    const run = this.receiveNewOrdersExclusive(
+      uniqueOrderIds,
+      search,
+      requester,
+      internal,
+    );
+    const marker = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    for (const id of uniqueOrderIds) inFlight.set(id, marker);
+    try {
+      return await run;
+    } finally {
+      for (const id of uniqueOrderIds) {
+        if (inFlight.get(id) === marker) inFlight.delete(id);
+      }
+    }
+  }
+
+  private async receiveNewOrdersExclusive(
+    uniqueOrderIds: string[],
+    search: string | undefined,
+    requester: { id?: string; roles?: string[] } | null | undefined,
+    internal: { scanVerified?: boolean } | undefined,
+  ) {
     // 0. Filial doirasi — menejer/registrator faqat o'z filialida ishlaydi.
     const scopeBranchId = await this.resolveReceiveBranchScope(requester);
 
@@ -11059,9 +11126,52 @@ export class OrderLifecycleService {
       },
     });
 
-    if (!orders.length) {
+    /**
+     * ⚠️ QAYTA QABUL — 404 EMAS, «ALLAQACHON QABUL QILINGAN» (skan auditi
+     * 2026-11-23).
+     *
+     * MUAMMO. Skaner ekrani javobni kutmasdan qayta skanerlaganda yoki
+     * timeout'dan keyin operator qayta urinsa, buyurtma allaqachon
+     * `received` bo'lardi va server 404 «Buyurtmalar topilmadi» qaytarardi.
+     * Operator real bor posilka uchun «topilmadi» ko'rardi, keyingi skan esa
+     * «allaqachon» derdi — ishonch yo'qolardi.
+     *
+     * Endi `received` holatidagi buyurtma QABUL MAQSADIGA ERISHGAN deb
+     * hisoblanadi: u qayta yozilmaydi (pochta, javobgarlik, webhook yo'q),
+     * javobda `already_received_ids` da qaytadi. Boshqa holatlar
+     * (`on_the_road`, `sold`...) avvalgidek topilmadi/xato — ular qabul
+     * bosqichidan o'tib ketgan, «qabul qilindi» deyish noto'g'ri bo'lardi.
+     */
+    const newIds = new Set(orders.map((order) => String(order.id)));
+    const missingIds = uniqueOrderIds.filter((id) => !newIds.has(id));
+    let alreadyReceived: Order[] = [];
+    if (missingIds.length) {
+      const missingSet = new Set(missingIds);
+      alreadyReceived = (
+        await this.orderRepo.find({
+          where: {
+            id: In(missingIds),
+            isDeleted: false,
+            status: Order_status.RECEIVED,
+          },
+        })
+      ).filter(
+        (order) =>
+          missingSet.has(String(order.id)) &&
+          order.status === Order_status.RECEIVED,
+      );
+    }
+
+    if (!orders.length && !alreadyReceived.length) {
       this.notFound('Buyurtmalar topilmadi');
     }
+    const alreadyReceivedIds = alreadyReceived.map((order) => String(order.id));
+    const alreadyReceivedResult = () =>
+      successRes(
+        { received_ids: [], already_received_ids: alreadyReceivedIds },
+        200,
+        'Buyurtmalar allaqachon qabul qilingan',
+      );
 
     /**
      * ⚠️ TASHQI POSILKA FAQAT SKANERLAB QABUL QILINADI (audit K2).
@@ -11150,7 +11260,9 @@ export class OrderLifecycleService {
      * farqni hech kim sezmasdi.
      */
     if (scopeBranchId) {
-      const foreign = orders.filter(
+      // Allaqachon qabul qilinganlar ham tekshiriladi — begona filial
+      // buyurtmasi haqida «qabul qilingan» deb javob berilmaydi.
+      const foreign = [...orders, ...alreadyReceived].filter(
         (order) => String(order.branch_id ?? '') !== scopeBranchId,
       );
       if (foreign.length) {
@@ -11159,6 +11271,11 @@ export class OrderLifecycleService {
             'faqat o‘z filialingiz buyurtmalarini qabul qila olasiz',
         );
       }
+    }
+
+    // Hammasi allaqachon qabul qilingan — yozadigan narsa yo'q.
+    if (!orders.length) {
+      return alreadyReceivedResult();
     }
 
     // 2. Validate customers via RMQ (batch)
@@ -11188,11 +11305,17 @@ export class OrderLifecycleService {
       );
       orders = orders.filter((o) => matchingIds.has(o.customer_id));
       if (!orders.length) {
+        if (alreadyReceived.length) {
+          return alreadyReceivedResult();
+        }
         this.notFound("Qidiruv bo'yicha buyurtma topilmadi");
       }
     }
 
-    if (orders.length !== uniqueOrderIds.length && !search?.trim()) {
+    if (
+      orders.length + alreadyReceived.length !== uniqueOrderIds.length &&
+      !search?.trim()
+    ) {
       this.badRequest(
         'Buyurtmalarning bir qismi topilmadi yoki yangi (NEW) holatda emas',
       );
@@ -11303,6 +11426,8 @@ export class OrderLifecycleService {
       : 'system';
 
     // 8. Update order statuses + enqueue search sync (single TX)
+    /** Parallel so'rov oldinroq yozib ulgurgan buyurtmalar (pastga qarang). */
+    const racedIds = new Set<string>();
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -11332,7 +11457,14 @@ export class OrderLifecycleService {
         const regionFill = String(order.region_id ?? '').trim()
           ? null
           : (regionByOrderId.get(String(order.id)) ?? null);
-        await queryRunner.manager
+        /**
+         * ⚠️ `status = 'new'` SHARTI — qabulni faqat bitta so'rov yozadi.
+         * UPDATE qatorni qulflaydi; parallel so'rov kutadi, keyin shartni
+         * qayta tekshiradi va 0 qator oladi. Bunday buyurtma bu so'rovda
+         * QAYTA yozilmaydi (javobgarlik/webhook ikkilanmaydi) va javobda
+         * «allaqachon qabul qilingan» bo'lib qaytadi.
+         */
+        const updateResult = await queryRunner.manager
           .createQueryBuilder()
           .update(Order)
           .set({
@@ -11345,8 +11477,21 @@ export class OrderLifecycleService {
             last_handover_at: receivedAt,
             last_handover_by: receivedBy,
           })
-          .where('id = :id', { id: order.id })
+          .where('id = :id AND "status" = :expectedStatus', {
+            id: order.id,
+            expectedStatus: Order_status.NEW,
+          })
           .execute();
+        if (updateResult?.affected === 0) {
+          racedIds.add(String(order.id));
+          // Pochta hisoblagichiga bu buyurtma ikkinchi marta qo'shildi
+          // (logistics chaqiruvi tranzaksiyadan tashqarida) — kuzatish uchun.
+          this.logger.warn(
+            `receive: #${order.id} parallel so'rovda allaqachon qabul ` +
+              `qilingan; pochta #${postId ?? '-'} hisoblagichini tekshiring`,
+          );
+          continue;
+        }
 
         if (previousStatus !== nextStatus) {
           await this.custody.createTrackingEvent(
@@ -11420,7 +11565,12 @@ export class OrderLifecycleService {
       await queryRunner.release();
     }
 
-    for (const order of orders) {
+    // Faqat SHU so'rov yozgan buyurtmalar — parallel so'rovniki o'zida.
+    const receivedOrders = orders.filter(
+      (order) => !racedIds.has(String(order.id)),
+    );
+
+    for (const order of receivedOrders) {
       await this.activityLog.log({
         entity_type: 'Order',
         entity_id: String(order.id),
@@ -11443,7 +11593,7 @@ export class OrderLifecycleService {
      * yopilgandan KEYIN va kutilmaydi: integration-service ishlamasa ham
      * qabul javobi 200 (signal yo'qolsa — faqat log).
      */
-    for (const order of orders) {
+    for (const order of receivedOrders) {
       if (!order.external_id) continue;
       void this.queueExternalStatusSync(
         order,
@@ -11458,7 +11608,14 @@ export class OrderLifecycleService {
       );
     }
 
-    return successRes({}, 200, 'Orders received');
+    return successRes(
+      {
+        received_ids: receivedOrders.map((order) => String(order.id)),
+        already_received_ids: [...alreadyReceivedIds, ...racedIds],
+      },
+      200,
+      'Orders received',
+    );
   }
 
   /**
