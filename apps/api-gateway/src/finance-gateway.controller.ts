@@ -6454,9 +6454,14 @@ export class FinanceGatewayController {
     );
   }
 
+  // B1te60bD — operator hisobi (balans, daromad, to'lovlar) FAQAT superadmin va
+  // admin uchun, faqat o'qish. Menejer olib tashlandi: filial bo'yicha cheklov
+  // yo'q edi — istalgan market operatorining hisobini o'qiy olardi (FE bu
+  // yo'llarni faqat superadmin/admin uchun chaqiradi). Market — o'z
+  // operatorlari `operator-payments/*`, operator o'zi — `operators/me/*`.
   @Get('operators/:operator_id/balance')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Operator earned/paid/balance summary' })
   @ApiParam({
@@ -6469,7 +6474,7 @@ export class FinanceGatewayController {
 
   @Get('operators/:operator_id/earnings')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN) // B1te60bD — menejer yo'q
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List an operator earnings' })
   @ApiParam({
@@ -6495,7 +6500,7 @@ export class FinanceGatewayController {
 
   @Get('operators/:operator_id/payments')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN) // B1te60bD — menejer yo'q
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List an operator payouts' })
   @ApiParam({
