@@ -18,6 +18,16 @@ describe('har kun — alohida pochta (Toshkent kuni)', () => {
     orderClient?: Row;
     branchClient?: Row;
   }) {
+    // `receiveOrdersIntoPosts` tranzaksiyada ishlaydi (qulf + atomik qo'shish).
+    const repo = options.postRepo;
+    repo.update ??= jest.fn(() => Promise.resolve({ affected: 1 }));
+    repo.increment ??= jest.fn(() => Promise.resolve({ affected: 1 }));
+    repo.manager ??= {
+      query: jest.fn(),
+      transaction: jest.fn((fn: (m: Row) => unknown) =>
+        fn({ query: jest.fn(), getRepository: () => repo }),
+      ),
+    };
     return new LogisticsServiceService(
       options.postRepo as any,
       {} as any,

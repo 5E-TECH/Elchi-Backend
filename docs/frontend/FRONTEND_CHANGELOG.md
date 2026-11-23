@@ -23,6 +23,32 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-23 — Skan auditi: idempotent topshirish/QR, filial paketi sabablari, skan limiti
+
+Deploy: **order-service, logistics-service, branch-service, api-gateway** (migratsiya yo'q).
+
+- ✏️ [order] `POST /orders/markets/:id/cancelled/handover` — allaqachon shu marketga topshirilgan
+  (`returned_to_market`) buyurtma qayta yuborilsa **200**, `data.already_handed_order_ids` da (ilgari umumiy 400).
+  Hech narsa topshirilmasa `closed_count: 0`, `message: "Buyurtmalar allaqachon marketga topshirilgan"`.
+  → **Frontendda:** 🔧 `already_handed_order_ids` — «Allaqachon topshirilgan», qator topshirilganlarga o'tadi.
+- ✏️ [order] `POST /scan/market-cancelled` (QR va kod) — ruxsat hali amal qilsa va skanerlagan AYNAN shu xodim
+  bo'lsa, qayta skan/kod **200** (yangi `authorization_token`, `expires_at` o'zgarmaydi, `reissued: true`).
+  Ilgari «QR allaqachon ishlatilgan». Boshqa xodim — avvalgidek 400.
+- ✏️ [order] `POST /branches/transfer-batches` xatosi endi sababi bilan: `code` =
+  `ORDER_NOT_FOUND` | `ORDER_OTHER_BRANCH` | `ORDER_ALREADY_IN_BATCH` (`details.batch_id`) | `ORDER_NOT_NEW`
+  (`details.status`) | `ORDER_NOT_ASSIGNABLE`. «allaqachon» so'zi faqat `ORDER_ALREADY_IN_BATCH` matnida.
+  → **Frontendda:** 🔧 «allaqachon» substringi o'rniga `code` ga tayaning.
+- ✏️ [order] transfer batch tafsiloti va qolganlari (`GET transfer-batches/:id`, `/remaining`) — har `items[]` da
+  `qr_code_token` (boyitish yiqilsa ham bor). `order.transfer_batch.create` javobida `created_batch_ids`.
+- ✏️ [order] `POST /orders/external/receive-by-scan` — allaqachon `received` posilka `unmatched` emas,
+  `data.already_received: [{ token, order_id }]` da; hammasi qabul qilingan bo'lsa `ok: true, received: 0`.
+  → **Frontendda:** 🔧 `already_received` — qabul qilingan deb ko'rsating («0 qabul qilindi» emas).
+- 🟢 [gateway] skan route'lari global 60/daq emas, `SCAN_THROTTLE` (sukut 300/daq): `GET orders/qr-code/:token`,
+  receive-by-scan, `PATCH post/receive/:id`, `post/receive/scan/:id`, `post/receive/order/:id`,
+  `POST branches/transfer-batches`, `transfer-batches/:id/receive-orders`, `POST scan/market-cancelled`,
+  `POST integrations/:slug/scan-intake`.
+- 🟢 [logistics] pochta hisoblagichi parallel qabulda yo'qolmaydi (atomik); skan-biriktirish xulosasi 1,5 s.
+
 ### 2026-11-23 — Operator komissiyasi va to'lovlari (audit 2026-11-22 #8, #9, #10, #23)
 
 Deploy: **api-gateway**, **finance-service**, **order-service** (migratsiya yo'q).

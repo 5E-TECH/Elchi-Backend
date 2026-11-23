@@ -2701,7 +2701,11 @@ export class BranchServiceService implements OnModuleInit {
 
     const createRes = await this.sendOrderCommand<{
       statusCode?: number;
-      data?: { idempotent?: boolean; batches?: Array<Record<string, any>> };
+      data?: {
+        idempotent?: boolean;
+        batches?: Array<Record<string, any>>;
+        created_batch_ids?: unknown;
+      };
       message?: string;
     }>('order.transfer_batch.create', {
       source_branch_id: sourceBranchId,
@@ -2730,8 +2734,19 @@ export class BranchServiceService implements OnModuleInit {
 
     const qrFiles: Array<{ batch_id: string; key: string; url: string }> = [];
     const qrErrors: Array<{ batch_id: string; message: string }> = [];
+    /**
+     * Skan auditi #99: filial skanerida har skan shu yerga keladi va mavjud
+     * PENDING paketga qo'shiladi. QR rasmi (PNG chizish + yuklash) va tarix
+     * yozuvi faqat YANGI paket uchun — token o'zgarmaydi. Eski order-service
+     * maydonni bermasa — avvalgidek hammasi uchun.
+     */
+    const createdBatchIds = createRes?.data?.created_batch_ids;
+    const newlyCreatedIds = Array.isArray(createdBatchIds)
+      ? new Set(createdBatchIds.map((id) => String(id)))
+      : null;
     for (const batch of createdBatches) {
       const batchId = String(batch.id);
+      if (newlyCreatedIds && !newlyCreatedIds.has(batchId)) continue;
       const token = String(batch?.qr_code_token ?? '').trim();
       if (!token) {
         qrErrors.push({
