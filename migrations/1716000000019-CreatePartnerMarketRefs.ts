@@ -5,7 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * jadvali: hamkorning `external_seller_id` ↔ Elchi `elchi_market_id`.
  * Idempotentlik (unique (partner_id, external_seller_id)) + egalik.
  * Mavjud order/logistics/finance/identity jadvallariga TEGMAYDI — faqat yangi
- * integration_schema jadvali. Kontrakt: docs/PARTNER_API.md §3.2.
+ * integration_schema jadvali. Kontrakt: docs/public/MARKETPLACE_API.md §5.1.
  */
 export class CreatePartnerMarketRefs1716000000019 implements MigrationInterface {
   name = 'CreatePartnerMarketRefs1716000000019';

@@ -154,7 +154,8 @@ Buni ish vaqtidan tashqari qiling.
 
 - `docs/BACKEND_MAP.md` — authoritative service/endpoint/entity map (read this
   first for whole-project work).
-- `docs/PARTNER_API.md` — external marketplace Partner API.
+- `docs/public/MARKETPLACE_API.md` — external Marketplace (Partner) API; Postman
+  collection: `docs/public/elchi-partner-api.postman_collection.json`.
 - `docs/frontend/` — OpenAPI spec + frontend integration guide + coverage report.
 - `docs/audit/` — production-readiness / lifecycle / money audits + runbooks.
 - `docs/BRANCH_SYSTEM_PLAN.md`, `docs/comparison/` — branch-system TZ & PCS↔Elchi
