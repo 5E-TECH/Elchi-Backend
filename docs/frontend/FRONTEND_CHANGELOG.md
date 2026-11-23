@@ -23,6 +23,21 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-23 — Bekorlarni marketga topshirish: market QR sukut bo'yicha majburiy, admin o'chira oladi (skan auditi #43)
+
+Deploy: **order-service, api-gateway** (migratsiya yo'q). Ega qarori 2026-11-23.
+
+- ✏️ [order] `POST /orders/markets/:id/cancelled/handover` va `POST /orders/:id/mark-returned-to-market` —
+  market `cancelled_handover_qr_required !== false` (sukut) bo'lsa avvalgidek `authorization_token` (MHA-…)
+  majburiy. `false` bo'lsa token SO'RALMAYDI: topshirish QR'siz, usul `market_handover_method = 'no_qr'`
+  (qo'lda — `manual`). 2026-10-02 dan beri bayroqqa qaramay QR talab qilinardi — bayroq `false` marketga
+  topshirish to'xtab qolardi.
+- 🟢 [order] QR'siz ommaviy topshirishlar ham «Topshirilgan» partiyasiga yig'iladi (xodim + market uchun 5
+  daqiqalik ichki sessiya, `authorized_via = 'no_qr'`, tokensiz).
+- ⚠️ [gateway] `PATCH markets/:id/cancelled-handover-qr` — endi FAQAT SUPERADMIN/ADMIN (market roli — 403).
+  `POST markets` da menejer `cancelled_handover_qr_required` yubora olmaydi (e'tiborsiz — sukut `true`).
+  → **Frontendda:** 🔧 «Marketga qaytarish» oynasi (`MarkReturnedModal`) bayroq `false` bo'lsa QR so'ramasin.
+
 ### 2026-11-23 — Operator hisobi faqat superadmin va admin uchun (B1te60bD)
 
 Deploy: **api-gateway** (migratsiya yo'q).

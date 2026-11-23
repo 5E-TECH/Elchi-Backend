@@ -163,6 +163,18 @@ describe('OrderServiceService return flow', () => {
     };
   }
 
+  /** Lookup — market QR sozlamasi bilan (skan auditi #43). */
+  const withMarketQrFlag = (
+    service: unknown,
+    flag: boolean | undefined,
+  ): void => {
+    (
+      service as { lookup: { getMarketsByIds: jest.Mock } }
+    ).lookup.getMarketsByIds.mockResolvedValue([
+      { id: '16', cancelled_handover_qr_required: flag },
+    ]);
+  };
+
   async function expectRpc(promise: Promise<unknown>, code: number) {
     try {
       await promise;
@@ -477,6 +489,40 @@ describe('OrderServiceService return flow', () => {
     });
     await expectRpc(
       // token berilmadi — market QR majburiy
+      service.markReturnedToMarket({ id: '9', roles: ['superadmin'] }, '101'),
+      400,
+    );
+  });
+
+  it('⭐ skan auditi #43: admin market QR talabini o`chirgan bo`lsa — tokensiz topshiriladi (usul no_qr)', async () => {
+    const { service, orderRepo, trackingRepo } = makeService({
+      orderStatus: Order_status.RECEIVED,
+      hasReceivedReturnBatch: true,
+    });
+    withMarketQrFlag(service, false);
+
+    const res: any = await service.markReturnedToMarket(
+      { id: '9', roles: ['superadmin'] },
+      '101',
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: Order_status.RETURNED_TO_MARKET,
+        market_handover_method: 'no_qr',
+      }),
+    );
+    expect(trackingRepo.save).toHaveBeenCalled();
+  });
+
+  it('skan auditi #43: QR sozlamasi yoqiq (sukut) — tokensiz avvalgidek 400', async () => {
+    const { service } = makeService({
+      orderStatus: Order_status.RECEIVED,
+      hasReceivedReturnBatch: true,
+    });
+    withMarketQrFlag(service, true);
+    await expectRpc(
       service.markReturnedToMarket({ id: '9', roles: ['superadmin'] }, '101'),
       400,
     );

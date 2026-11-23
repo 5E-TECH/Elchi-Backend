@@ -5,6 +5,7 @@ import {
   DataSource,
   In,
   IsNull,
+  MoreThan,
   Not,
   QueryFailedError,
   Repository,
@@ -9019,11 +9020,17 @@ export class OrderLifecycleService {
     // bo'lmaydi. (Shikastlangan posilka yorlig'i bu yerda muammo emas: buyurtma
     // id bo'yicha tanlanadi, parcel-QR skan qilinmaydi.)
     const handoverCtx = await this.resolveMarketHandoverRequester(requester);
+    // Skan auditi #43: QR sukut bo'yicha majburiy; superadmin/admin market
+    // uchun o'chirib qo'ygan bo'lsa — tokensiz (usul `no_qr`).
+    const [orderMarket] = await this.lookup.getMarketsByIds([
+      String(order.market_id ?? ''),
+    ]);
+    const isQrRequired = orderMarket?.cancelled_handover_qr_required !== false;
     const handoverToken = String(authorizationToken ?? '').trim();
-    if (!handoverToken) {
+    if (isQrRequired && !handoverToken) {
       this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
     }
-    if (!handoverToken.startsWith('MHA-')) {
+    if (isQrRequired && !handoverToken.startsWith('MHA-')) {
       this.badRequest('authorization_token noto‘g‘ri');
     }
     // F3 — filial xodimi FAQAT o'z filialidagi bekor buyurtmani topshira oladi.
@@ -9142,24 +9149,28 @@ export class OrderLifecycleService {
       // biri alohida markReturnedToMarket) ishlatilishi mumkin; bulk `complete`
       // ham ko'p martalik (skan = topshirish), `consumed_at` u yerda partiya vaqti.
       const marketId = String(order.market_id ?? '').trim();
-      const session = await sessionRepo.findOne({
-        where: {
-          authorization_token_hash: this.hashHandoverToken(handoverToken),
-          isDeleted: false,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!session || !session.authorization_expires_at) {
-        this.forbidden('Topshirish ruxsati topilmadi');
-      }
-      if (String(session.market_id) !== marketId) {
-        this.forbidden('Ruxsat bu buyurtma marketiga tegishli emas');
-      }
-      if (String(session.scanned_by_user_id ?? '') !== String(requester.id)) {
-        this.forbidden('Ruxsat boshqa xodimga tegishli');
-      }
-      if (session.authorization_expires_at.getTime() <= Date.now()) {
-        this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+      const session = isQrRequired
+        ? await sessionRepo.findOne({
+            where: {
+              authorization_token_hash: this.hashHandoverToken(handoverToken),
+              isDeleted: false,
+            },
+            lock: { mode: 'pessimistic_write' },
+          })
+        : null;
+      if (isQrRequired) {
+        if (!session || !session.authorization_expires_at) {
+          this.forbidden('Topshirish ruxsati topilmadi');
+        }
+        if (String(session.market_id) !== marketId) {
+          this.forbidden('Ruxsat bu buyurtma marketiga tegishli emas');
+        }
+        if (String(session.scanned_by_user_id ?? '') !== String(requester.id)) {
+          this.forbidden('Ruxsat boshqa xodimga tegishli');
+        }
+        if (session.authorization_expires_at.getTime() <= Date.now()) {
+          this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+        }
       }
 
       // Capture the prior custody holder before closing the chain.
@@ -9181,7 +9192,9 @@ export class OrderLifecycleService {
       order.last_handover_at = handoverAt;
       order.last_handover_by = handoverBy;
       // zkRab9M2 (BG6): ruxsat market kodi bilan ochilgan bo'lsa — `pin`.
-      const handoverMethod = marketHandoverMethodOf(session);
+      const handoverMethod: CancelHandoverMethod = session
+        ? marketHandoverMethodOf(session)
+        : 'no_qr';
       order.market_handover_at = handoverAt;
       order.market_handover_by = handoverBy;
       order.market_handover_method = handoverMethod;
@@ -9208,7 +9221,7 @@ export class OrderLifecycleService {
             branch_id: handoverBranchId,
             branch_name: handoverBranchName,
             from_holder_type: priorHolderType,
-            handover_session_id: session.id ? String(session.id) : null,
+            handover_session_id: session?.id ? String(session.id) : null,
           },
         },
         trackingRepo,
@@ -9632,6 +9645,62 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * QR talab qilinmaydigan market (skan auditi #43): topshirishlar baribir
+   * «sessiya»ga yig'iladi — «Topshirilgan» partiyalari (`handover-batches.ts`)
+   * sessiyaning `consumed_at` vaqti bo'yicha tuziladi; sessiyasiz har skan
+   * alohida «partiya» bo'lib, ro'yxatda umuman ko'rinmasdi.
+   *
+   * Bitta xodim + market uchun 5 daqiqalik ichki sessiya (QR ruxsati bilan bir
+   * xil muddat): QR/kod/ruxsat tokeni YO'Q (`authorization_token_hash` NULL —
+   * QR talab qilinadigan yo'lda token bilan topilmaydi, `scanned_at` bor — kod
+   * yo'li ham topmaydi). Parallel skanlar advisory qulf bilan bitta sessiyaga.
+   */
+  private async openNoQrHandoverSession(
+    manager: EntityManager,
+    marketId: string,
+    requesterId: string,
+    now: Date,
+  ): Promise<MarketCancelledHandoverSession> {
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `no_qr_handover:${marketId}:${requesterId}`,
+    ]);
+    const sessionRepo = manager.getRepository(MarketCancelledHandoverSession);
+    const live = await sessionRepo.findOne({
+      where: {
+        market_id: marketId,
+        scanned_by_user_id: requesterId,
+        authorized_via: 'no_qr',
+        authorization_expires_at: MoreThan(now),
+        isDeleted: false,
+      },
+      order: { createdAt: 'DESC' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (live) return live;
+    return sessionRepo.save(
+      sessionRepo.create({
+        market_id: marketId,
+        // Noyob (indeks talab qiladi), lekin hech qachon skanerlanmaydi.
+        qr_token_hash: this.hashHandoverToken(
+          this.generateHandoverToken('MCR'),
+        ),
+        qr_expires_at: now,
+        scanned_at: now,
+        scanned_by_user_id: requesterId,
+        authorization_token_hash: null,
+        authorization_expires_at: new Date(
+          now.getTime() + MARKET_HANDOVER_AUTH_TTL_SECONDS * 1000,
+        ),
+        authorized_via: 'no_qr',
+        consumed_at: null,
+        pin_hash: null,
+        pin_failed_attempts: 0,
+        pin_blocked_at: null,
+      }),
+    );
+  }
+
   async completeMarketCancelledHandover(input: {
     market_id: string;
     order_ids: string[];
@@ -9691,18 +9760,26 @@ export class OrderLifecycleService {
     if (!market) {
       this.badRequest('Market topilmadi');
     }
-    // ⚠️ MARKET QR MAJBURIY (return-market-qr-majburiy). Ilgari
-    // `cancelled_handover_qr_required=false` bilan QR'ni butunlay o'chirib
-    // qo'yish mumkin edi — ya'ni marketning roziligisiz (QR'isiz) bekor
-    // buyurtmani unga «topshirilgan» deb belgilash mumkin edi. Endi QR har doim
-    // talab qilinadi; faqat alohida posilkaning YORLIG'I shikastlangan bo'lsa,
-    // market QR bilan ochilgan sessiya ICHIDA `manual_overrides` orqali qo'lda
-    // tasdiqlanadi (bu market QR'ni emas, parcel-yorliqni chetlab o'tadi).
-    const isQrRequired = true;
-    if (!authorizationToken) {
+    /**
+     * ⚠️ MARKET QR — SUKUT BO'YICHA MAJBURIY, ADMIN O'CHIRA OLADI (ega qarori
+     * 2026-11-23, skan auditi #43).
+     *
+     * Har market uchun `cancelled_handover_qr_required` sukut bo'yicha `true`:
+     * bekor buyurtma marketga faqat uning QR'i (yoki kodi) bilan ochilgan
+     * ruxsat ichida topshiriladi. Superadmin/admin aniq bir market uchun
+     * o'chirib qo'ygan bo'lsa (`false`) — QR so'ralmaydi, oqim o'sha: skan
+     * yoki «QR buzilgan» bilan qo'lda topshirish (usul `no_qr` / `manual`).
+     * Bayroqni faqat superadmin/admin o'zgartiradi (gateway).
+     *
+     * Tarix: 2026-10-02 (9f735161) bayroqqa qaramay QR har doim talab
+     * qilinardi, frontend esa bayroq `false` bo'lsa tokensiz yuborardi — bunday
+     * marketga topshirish butunlay to'xtab qolardi.
+     */
+    const isQrRequired = market.cancelled_handover_qr_required !== false;
+    if (isQrRequired && !authorizationToken) {
       this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
     }
-    if (!authorizationToken.startsWith('MHA-')) {
+    if (isQrRequired && !authorizationToken.startsWith('MHA-')) {
       this.badRequest('authorization_token noto‘g‘ri');
     }
 
@@ -9761,9 +9838,18 @@ export class OrderLifecycleService {
         if (session.authorization_expires_at.getTime() <= now.getTime()) {
           this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
         }
+      } else {
+        session = await this.openNoQrHandoverSession(
+          queryRunner.manager,
+          marketId,
+          requesterId,
+          now,
+        );
       }
 
-      authorizedVia = session ? marketHandoverMethodOf(session) : null;
+      // QR'siz marketning ichki sessiyasi (`no_qr`) — «qr/pin» ruxsati emas.
+      authorizedVia =
+        isQrRequired && session ? marketHandoverMethodOf(session) : null;
       // «Topshirilgan» partiyasi = market + `market_handover_at` + xodim (`handover-batches.ts`), sessiya esa
       // `consumed_at` bilan tanib olinadi. Shuning uchun bitta sessiyadagi HAR skan sessiyaning birinchi
       // topshirish vaqti bilan yoziladi — partiya bitta bo'lib qoladi. Haqiqiy vaqt — `last_handover_at` va tracking.
