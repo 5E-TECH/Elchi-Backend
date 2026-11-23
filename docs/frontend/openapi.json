@@ -12951,8 +12951,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -13002,8 +13001,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -13053,8 +13051,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },

@@ -23,6 +23,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-23 — Operator hisobi faqat superadmin va admin uchun (B1te60bD)
+
+Deploy: **api-gateway** (migratsiya yo'q).
+
+- ⚠️ [finance] `GET /finance/operators/:operator_id/{balance,earnings,payments}` — rollardan
+  `manager` olib tashlandi, endi faqat `superadmin`, `admin`. Menejer filial cheklovisiz
+  istalgan market operatorining hisobini o'qiy olardi. Menejer va boshqa rollar → **403**.
+  `x-roles` `openapi.json` da yangilangan.
+  → Frontend: o'zgarish shart emas — «Hisob» bo'limi (`OperatorAccountSection`) faqat
+  superadmin/admin uchun chiziladi. `useOperatorPayments.ts` dagi «SUPERADMIN, ADMIN, MANAGER»
+  izohi eskirgan (🟢).
+
 ### 2026-11-23 — Skan auditi: idempotent topshirish/QR, filial paketi sabablari, skan limiti
 
 Deploy: **order-service, logistics-service, branch-service, api-gateway** (migratsiya yo'q).
