@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
 import {
   BadRequestException,
   Body,
@@ -696,6 +698,8 @@ export class IntegrationGatewayController {
    * ⚠️ MANAGER ham kiradi: posilkalarni HQ menejeri qabul qiladi.
    */
   @Post(':slug/scan-intake')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,

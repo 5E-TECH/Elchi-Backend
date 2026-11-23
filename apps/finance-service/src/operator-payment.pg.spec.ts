@@ -319,6 +319,100 @@ describePg(
       });
     });
 
+    describe('audit 2026-11-22 #10 — o`chirilgan operator qoldig`ini yopish', () => {
+      const deleted = (extra: Record<string, unknown> = {}) =>
+        base({ operator_deleted: true, ...extra });
+      const paymentsOf42 = () =>
+        db.getRepository(OperatorPayment).count({
+          where: { operator_id: '42' },
+        });
+
+      it('⭐ qoldiq doirasida yoziladi; qoldiqdan oshsa yoki qoldiq yo`q bo`lsa — 409 va yozuvsiz', async () => {
+        // Qoldiq: 15000 + 5000 = 20000.
+        await expect(
+          payments.record(deleted({ amount: 25000 })),
+        ).rejects.toMatchObject({
+          error: {
+            statusCode: 409,
+            message: expect.stringContaining("ko'pi bilan 20000 so'm"),
+          },
+        });
+        expect(await paymentsOf42()).toBe(0);
+
+        const first: any = await payments.record(deleted({ amount: 15000 }));
+        expect(first.statusCode).toBe(201);
+        await expect(
+          payments.record(deleted({ amount: 6000 })),
+        ).rejects.toMatchObject({ error: { statusCode: 409 } });
+        const second: any = await payments.record(deleted({ amount: 5000 }));
+        expect(second.statusCode).toBe(201);
+
+        await expect(
+          payments.record(deleted({ amount: 1 })),
+        ).rejects.toMatchObject({
+          error: {
+            statusCode: 409,
+            message: expect.stringContaining("to'lanmagan qoldiq yo'q"),
+          },
+        });
+        const balance: any = await finance.findOperatorBalance({
+          operator_id: '42',
+        });
+        expect(balance.data).toMatchObject({ paid: 20000, balance: 0 });
+        expect(activityLog.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: 'finance.operator_payment_recorded',
+            metadata: { source: 'market', operator_deleted: true },
+          }),
+        );
+        await expectCashUntouched();
+      });
+
+      it('parallel ikki to`lov (har biri qoldiqdan kichik, yig`indisi katta) — faqat bittasi yoziladi', async () => {
+        const results = await Promise.allSettled([
+          payments.record(deleted({ amount: 12000 })),
+          payments.record(deleted({ amount: 12000 })),
+        ]);
+        expect(results.map((item) => item.status).sort()).toEqual([
+          'fulfilled',
+          'rejected',
+        ]);
+        expect(await paymentsOf42()).toBe(1);
+      });
+
+      it('ayni kalit bilan takror — qoldiq 0 bo`lsa ham o`sha yozuv (200); bekor qilingan to`lov qoldiqni qaytaradi', async () => {
+        const key = `k-${randomUUID()}`;
+        const first: any = await payments.record(
+          deleted({ amount: 20000, idempotency_key: key }),
+        );
+        const again: any = await payments.record(
+          deleted({ amount: 20000, idempotency_key: key }),
+        );
+        expect(again.statusCode).toBe(200);
+        expect(again.data).toMatchObject({
+          id: first.data.id,
+          idempotent: true,
+        });
+
+        await payments.cancel({
+          market_id: MARKET,
+          payment_id: first.data.id,
+          reason: 'Xato summa',
+          cancelled_by_id: MARKET,
+          cancelled_by_role: 'market',
+        });
+        const after: any = await payments.record(deleted({ amount: 20000 }));
+        expect(after.statusCode).toBe(201);
+      });
+
+      it('o`chirilmagan operator — avvalgidek qoldiqdan ortiq ham yoziladi (avans)', async () => {
+        const res: any = await payments.record(
+          base({ amount: 25000, operator_deleted: false }),
+        );
+        expect(res.statusCode).toBe(201);
+      });
+    });
+
     it('bekor qilish: sabab majburiy, begona — 404, takror — 200 (jurnal bir marta), «To`landi» dan chiqadi', async () => {
       const created: any = await payments.record(base({ amount: 7000 }));
       const id = created.data.id;

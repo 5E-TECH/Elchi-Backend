@@ -8177,10 +8177,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           })),
         )
         .orIgnore()
-        .returning(['id', 'amount'])
+        .returning(['id', 'amount', 'order_id'])
         .execute();
       const insertedRows = Array.isArray(inserted.raw)
-        ? (inserted.raw as Array<{ id?: unknown; amount?: unknown }>)
+        ? (inserted.raw as Array<{
+            id?: unknown;
+            amount?: unknown;
+            order_id?: unknown;
+          }>)
         : [];
       const createdCents = insertedRows.reduce(
         (sum, row) => sum + Math.round(Number(row.amount ?? 0) * 100),
@@ -8205,6 +8209,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           ...summary,
           created: insertedRows.length,
           created_amount: createdCents / 100,
+          // Audit 2026-11-22 #8: gateway yozilganlarni order-service'da qayta
+          // tekshiradi — ro'yxat olingandan keyin sotuvdan chiqqan buyurtma
+          // (rollback'i yozuvdan OLDIN kelib, «o'chiradigan qator yo'q» bo'lgan)
+          // ulushi shu ro'yxat bo'yicha olib tashlanadi.
+          created_order_ids: insertedRows
+            .map((row) =>
+              typeof row.order_id === 'string' ||
+              typeof row.order_id === 'number'
+                ? String(row.order_id)
+                : '',
+            )
+            .filter((id) => id !== ''),
           dry_run: false,
         },
         200,
@@ -8300,7 +8316,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const skip = Math.max(Number(input.offset ?? 0), 0);
       const [rows, total] = await this.earningRepo.findAndCount({
         where: { operator_id: String(input.operator_id), isDeleted: false },
-        order: { createdAt: 'DESC' },
+        // Audit 2026-11-22 #23: backfill bitta INSERT bilan yozadi — hamma
+        // qatorda createdAt bir xil; `id` siz LIMIT/OFFSET sahifalari bir-
+        // biriga kirib ketadi (takror / yo'qolgan qatorlar).
+        order: { createdAt: 'DESC', id: 'DESC' },
         take,
         skip,
       });

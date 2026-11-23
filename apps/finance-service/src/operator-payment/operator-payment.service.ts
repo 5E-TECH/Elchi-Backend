@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
-import { Brackets, DataSource, QueryFailedError } from 'typeorm';
+import { Brackets, DataSource, EntityManager, QueryFailedError } from 'typeorm';
 import {
   ActivityDescribeUz,
   ActivityLogService,
@@ -22,6 +22,11 @@ export interface OperatorPaymentRecordInput {
   recorded_by_id?: unknown;
   recorded_by_role?: unknown;
   idempotency_key?: unknown;
+  /**
+   * Audit 2026-11-22 #10: operator o'chirilgan (gateway identity'dan biladi).
+   * Unga faqat to'lanmagan qoldiqdan oshmaydigan to'lov yoziladi.
+   */
+  operator_deleted?: unknown;
 }
 
 export interface OperatorPaymentCancelInput {
@@ -254,6 +259,7 @@ export class OperatorPaymentService {
       max: OPERATOR_PAYMENT_NOTE_MAX,
     });
     const key = this.parseKey(input?.idempotency_key);
+    const operatorDeleted = input?.operator_deleted === true;
     const repo = this.dataSource.getRepository(OperatorPayment);
 
     const replay = (existing: OperatorPayment) => {
@@ -282,20 +288,42 @@ export class OperatorPaymentService {
 
       let saved: OperatorPayment;
       try {
-        saved = await repo.save(
-          repo.create({
-            operator_id: operatorId,
-            market_id: marketId,
-            paid_by_id: recordedBy,
-            recorded_by_role: role,
-            amount,
-            paid_at: paidAt,
-            note,
-            source: 'market',
-            affects_cashbox: false,
-            idempotency_key: key,
-          }),
-        );
+        const entity = repo.create({
+          operator_id: operatorId,
+          market_id: marketId,
+          paid_by_id: recordedBy,
+          recorded_by_role: role,
+          amount,
+          paid_at: paidAt,
+          note,
+          source: 'market',
+          affects_cashbox: false,
+          idempotency_key: key,
+        });
+        saved = operatorDeleted
+          ? await this.dataSource.transaction(async (manager) => {
+              // Ayni operatorga parallel ikki to'lov qoldiqni birga oshirib
+              // yubormasin — tekshiruv va yozuv bitta qulf ostida.
+              await manager.query(
+                'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+                [`operator-payment:balance:${operatorId}`],
+              );
+              const balance = await this.balanceCents(manager, operatorId);
+              if (balance <= 0) {
+                reject(
+                  409,
+                  "Operator o'chirilgan va unga to'lanmagan qoldiq yo'q — to'lov yozilmaydi",
+                );
+              }
+              if (toCents(amount) > balance) {
+                reject(
+                  409,
+                  `Operator o'chirilgan: faqat to'lanmagan qoldiqni yopish mumkin — ko'pi bilan ${fromCents(balance)} so'm`,
+                );
+              }
+              return manager.getRepository(OperatorPayment).save(entity);
+            })
+          : await repo.save(entity);
       } catch (error) {
         // Ayni kalitli parallel so'rov oldin yozib bo'ldi — UNIQUE ushladi.
         if (this.isUniqueViolation(error)) {
@@ -321,7 +349,10 @@ export class OperatorPaymentService {
           },
           user_id: recordedBy,
           user_role: role,
-          metadata: { source: 'market' },
+          metadata: {
+            source: 'market',
+            ...(operatorDeleted ? { operator_deleted: true } : {}),
+          },
           description: ActivityDescribeUz.operatorPaymentRecorded(
             operatorId,
             amount,
@@ -503,6 +534,37 @@ export class OperatorPaymentService {
   }
 
   // --------------------------------------------------------------- balances
+
+  /**
+   * Bitta operatorning «Qoldiq»i tiyinda — {@link balances} bilan AYNI qoida
+   * (o'chirilmagan daromadlar − o'chirilmagan va bekor qilinmagan to'lovlar).
+   * Chaqiruvchining tranzaksiyasi ichida (qulf ostida) o'qiladi.
+   */
+  private async balanceCents(
+    manager: EntityManager,
+    operatorId: string,
+  ): Promise<number> {
+    const [earned, paid] = await Promise.all([
+      manager
+        .getRepository(OperatorEarning)
+        .createQueryBuilder('e')
+        .select('COALESCE(SUM(e.amount), 0)', 'total')
+        .where('e.operator_id = :operatorId', { operatorId })
+        .andWhere('e.is_deleted = false')
+        .getRawOne<{ total: string }>(),
+      manager
+        .getRepository(OperatorPayment)
+        .createQueryBuilder('p')
+        .select('COALESCE(SUM(p.amount), 0)', 'total')
+        .where('p.operator_id = :operatorId', { operatorId })
+        .andWhere('p.is_deleted = false')
+        .andWhere('p.cancelled_at IS NULL')
+        .getRawOne<{ total: string }>(),
+    ]);
+    return (
+      toCents(Number(earned?.total ?? 0)) - toCents(Number(paid?.total ?? 0))
+    );
+  }
 
   /**
    * Har operator uchun «Ishlab topdi» (o'chirilmagan daromadlar — `/me/balance`

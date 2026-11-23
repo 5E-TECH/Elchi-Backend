@@ -387,6 +387,8 @@ export class ScanGatewayController {
   }
 
   @Post('market-cancelled')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @HttpCode(200)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()

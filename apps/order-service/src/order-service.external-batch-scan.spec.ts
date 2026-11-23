@@ -58,10 +58,7 @@ function buildSvc(rows: {
             want.has(
               String(
                 (r.external_batch_token as
-                  | string
-                  | number
-                  | null
-                  | undefined) ?? '',
+                  string | number | null | undefined) ?? '',
               ),
             ),
           ),
@@ -205,7 +202,10 @@ describe('receiveExternalByScan — qop yorlig`i', () => {
     const res: any = await svc.receiveExternalByScan({ tokens: ['QOP-1'] });
 
     expect(res.data.received).toBe(0);
-    expect(res.data.unmatched).toHaveLength(1);
+    // Skan auditi #22/#89: qabul qilingan — «allaqachon», qabul xatosi emas.
+    expect(res.data.unmatched).toHaveLength(0);
+    expect(res.data.already_received).toHaveLength(1);
+    expect(res.data.ok).toBe(true);
   });
 
   it('bo`sh token ro`yxati -> 400', async () => {

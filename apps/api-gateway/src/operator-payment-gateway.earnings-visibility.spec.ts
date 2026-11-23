@@ -251,7 +251,7 @@ describe('operator hisobi — buyurtmalar soni, o`chirilganlar, daromad qatorlar
     expect(finance.send).not.toHaveBeenCalled();
   });
 
-  it('POST (to`lov yozish) — avvalgidek faqat o`chirilmagan operatorlar ichidan', async () => {
+  it('POST (to`lov yozish) — o`chirilmagan operator: `operator_deleted: false`', async () => {
     finance.send.mockReturnValueOnce(
       of({ statusCode: 201, data: { id: '301', operator_id: '41' } }),
     );
@@ -263,7 +263,45 @@ describe('operator hisobi — buyurtmalar soni, o`chirilganlar, daromad qatorlar
       .expect(201);
     expect(identity.send).toHaveBeenCalledWith(
       { cmd: 'identity.market_operator.find_by_market' },
-      expect.objectContaining({ query: { page: 1, limit: 100 } }),
+      expect.objectContaining({
+        query: { page: 1, limit: 100, include_deleted: true },
+      }),
     );
+    expect(finance.send).toHaveBeenCalledWith(
+      { cmd: 'finance.operator.market_payment.record' },
+      expect.objectContaining({ operator_id: '41', operator_deleted: false }),
+    );
+  });
+
+  it('POST (audit 2026-11-22 #10) — o`chirilgan o`z operatori: 404 emas, finance qoldiq doirasida yozadi (`operator_deleted: true`)', async () => {
+    finance.send.mockReturnValueOnce(
+      of({ statusCode: 201, data: { id: '302', operator_id: '47' } }),
+    );
+    const res = await request(http())
+      .post('/finance/operator-payments')
+      .set(asMarket)
+      .set('Idempotency-Key', 'k-2')
+      .send({ operator_id: '47', amount: 50, paid_at: '2026-11-17' })
+      .expect(201);
+    expect(finance.send).toHaveBeenCalledWith(
+      { cmd: 'finance.operator.market_payment.record' },
+      expect.objectContaining({
+        market_id: '12',
+        operator_id: '47',
+        amount: 50,
+        operator_deleted: true,
+      }),
+    );
+    expect(res.body.data).toMatchObject({ operator_name: 'Sevinch' });
+  });
+
+  it('POST — begona (ro`yxatda yo`q) operator baribir 404, finance chaqirilmaydi', async () => {
+    await request(http())
+      .post('/finance/operator-payments')
+      .set(asMarket)
+      .set('Idempotency-Key', 'k-3')
+      .send({ operator_id: '99', amount: 60, paid_at: '2026-11-17' })
+      .expect(404);
+    expect(finance.send).not.toHaveBeenCalled();
   });
 });

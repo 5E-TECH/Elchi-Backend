@@ -146,6 +146,203 @@ describe('finance/operator-payments/missing-earnings gateway', () => {
     expect(finance.send).not.toHaveBeenCalled();
   });
 
+  describe('audit 2026-11-22 #9 — barcha sotuvlar sahifalab', () => {
+    const page = (
+      items: Array<Record<string, unknown>>,
+      extra: Record<string, unknown>,
+    ) => of({ items, cursor: 'id_asc', ...extra });
+    const P1 = [
+      { order_id: '7001', total_price: 100000, market_id: '12' },
+      { order_id: '7002', total_price: 100000, market_id: '12' },
+    ];
+    const P2 = [{ order_id: '7009', total_price: 40000, market_id: '12' }];
+    const backfill = (data: Record<string, unknown>) =>
+      of({ statusCode: 200, message: 'ok', data });
+
+    it('⭐ truncated → keyingi sahifa after_id bilan; finance har sahifaga, natija yig`iladi', async () => {
+      identity.send.mockReturnValueOnce(operatorUser());
+      order.send
+        .mockReturnValueOnce(
+          page(P1, { truncated: true, next_after_id: '7002' }),
+        )
+        .mockReturnValueOnce(
+          page(P2, { truncated: false, next_after_id: null }),
+        );
+      finance.send
+        .mockReturnValueOnce(
+          backfill({
+            sold_orders: 2,
+            already_recorded: 1,
+            missing: 1,
+            to_record: 1,
+            amount: 5000.1,
+            commission_type: 'percent',
+            commission_value: 5,
+            created: 0,
+          }),
+        )
+        .mockReturnValueOnce(
+          backfill({
+            sold_orders: 1,
+            already_recorded: 0,
+            missing: 1,
+            to_record: 1,
+            amount: 2000.2,
+            commission_type: 'percent',
+            commission_value: 5,
+            created: 0,
+          }),
+        );
+      const res = await request(http())
+        .get('/finance/operator-payments/missing-earnings?operator_id=41')
+        .set(as(['market']))
+        .expect(200);
+
+      expect(order.send.mock.calls.map((call) => call[1])).toEqual([
+        { market_id: '12', operator_id: '41' },
+        { market_id: '12', operator_id: '41', after_id: '7002' },
+      ]);
+      expect(
+        finance.send.mock.calls.map((call) => call[1].orders as unknown[]),
+      ).toEqual([P1, P2]);
+      expect(res.body.data).toEqual({
+        operator_id: '41',
+        sold_orders: 3,
+        already_recorded: 1,
+        missing: 2,
+        commission_type: 'percent',
+        commission_value: 5,
+        to_record: 2,
+        amount: 7000.3,
+        created: 0,
+        dry_run: true,
+        operator_name: 'Sevinch Karimova',
+        truncated: false,
+      });
+    });
+
+    it('eski order-service (cursor yo`q) — bitta sahifa, aylanib qolmaydi, truncated: true', async () => {
+      identity.send.mockReturnValueOnce(operatorUser());
+      order.send.mockReturnValue(of({ items: P1, truncated: true }));
+      const res = await request(http())
+        .get('/finance/operator-payments/missing-earnings?operator_id=41')
+        .set(as(['market']))
+        .expect(200);
+      expect(order.send).toHaveBeenCalledTimes(1);
+      expect(finance.send).toHaveBeenCalledTimes(1);
+      expect(res.body.data.truncated).toBe(true);
+    });
+
+    it('next_after_id o`smasa — to`xtaydi (himoya)', async () => {
+      identity.send.mockReturnValueOnce(operatorUser());
+      order.send.mockReturnValue(
+        page(P1, { truncated: true, next_after_id: '7002' }),
+      );
+      const res = await request(http())
+        .get('/finance/operator-payments/missing-earnings?operator_id=41')
+        .set(as(['market']))
+        .expect(200);
+      // 1-sahifa → after_id 7002; 2-sahifa yana 7002 ni beradi → to'xtaydi.
+      expect(order.send).toHaveBeenCalledTimes(2);
+      expect(res.body.data.truncated).toBe(true);
+    });
+  });
+
+  describe('audit 2026-11-22 #8 — yozilganlar sotuvdan chiqqan bo`lsa ulush olib tashlanadi', () => {
+    const route = (recheck: () => unknown) => {
+      order.send.mockImplementation((_pattern, payload) =>
+        payload.order_ids
+          ? recheck()
+          : of({ items: SOLD, truncated: false, cursor: 'id_asc' }),
+      );
+      finance.send.mockImplementation((pattern) =>
+        pattern.cmd === 'finance.operator.earning.backfill'
+          ? of({
+              statusCode: 200,
+              data: {
+                sold_orders: 2,
+                missing: 2,
+                to_record: 2,
+                amount: 12500,
+                created: 2,
+                created_amount: 12500,
+                created_order_ids: ['7003', '7004'],
+              },
+            })
+          : of({ statusCode: 200, data: null }),
+      );
+    };
+    const removes = () =>
+      finance.send.mock.calls
+        .filter((call) => call[0].cmd === 'finance.operator.earning.remove')
+        .map((call) => call[1]);
+
+    it('⭐ qayta tekshiruv: 7004 endi sotilmagan → faqat uning ulushi o`chiriladi, `revoked: 1`', async () => {
+      identity.send.mockReturnValueOnce(operatorUser());
+      route(() =>
+        of({
+          items: [SOLD[0]],
+          truncated: false,
+          cursor: 'id_asc',
+          filtered_by_ids: true,
+        }),
+      );
+      const res = await request(http())
+        .post('/finance/operator-payments/missing-earnings')
+        .set(as(['market']))
+        .send({ operator_id: '41' })
+        .expect(200);
+      expect(order.send).toHaveBeenCalledWith(
+        { cmd: 'order.operator.sold_orders' },
+        { market_id: '12', operator_id: '41', order_ids: ['7003', '7004'] },
+      );
+      expect(removes()).toEqual([{ order_id: '7004' }]);
+      expect(res.body.data).toMatchObject({
+        created: 2,
+        created_amount: 12500,
+        revoked: 1,
+        dry_run: false,
+      });
+      // Ichki ro'yxat HTTP javobiga chiqmaydi.
+      expect(res.body.data.created_order_ids).toBeUndefined();
+    });
+
+    it('eski order-service (`filtered_by_ids` yo`q) — hech narsa o`chirilmaydi', async () => {
+      identity.send.mockReturnValueOnce(operatorUser());
+      route(() => of({ items: [], truncated: false }));
+      const res = await request(http())
+        .post('/finance/operator-payments/missing-earnings')
+        .set(as(['market']))
+        .send({ operator_id: '41' })
+        .expect(200);
+      expect(removes()).toEqual([]);
+      expect(res.body.data.revoked).toBe(0);
+    });
+
+    it('qayta tekshiruv ishlamasa — javob baribir 200, o`chirish yo`q', async () => {
+      identity.send.mockReturnValueOnce(operatorUser());
+      route(() => throwError(() => new Error('order-service down')));
+      const res = await request(http())
+        .post('/finance/operator-payments/missing-earnings')
+        .set(as(['market']))
+        .send({ operator_id: '41' })
+        .expect(200);
+      expect(removes()).toEqual([]);
+      expect(res.body.data).toMatchObject({ created: 2, revoked: 0 });
+    });
+
+    it('GET (dry_run) — qayta tekshiruv ham, o`chirish ham yo`q', async () => {
+      identity.send.mockReturnValueOnce(operatorUser());
+      route(() => of({ items: [], filtered_by_ids: true }));
+      await request(http())
+        .get('/finance/operator-payments/missing-earnings?operator_id=41')
+        .set(as(['market']))
+        .expect(200);
+      expect(order.send).toHaveBeenCalledTimes(1);
+      expect(removes()).toEqual([]);
+    });
+  });
+
   it('market emas — 403; operator_id yo`q / noto`g`ri / ortiqcha maydon — 400', async () => {
     await request(http())
       .get('/finance/operator-payments/missing-earnings?operator_id=41')
