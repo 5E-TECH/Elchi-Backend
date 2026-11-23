@@ -1517,6 +1517,16 @@ describe('receiveOrdersIntoPosts — HQ → filial dispatch kuryer pochtasiga tu
       save: jest.fn((entity: Row) =>
         Promise.resolve({ ...entity, id: entity.id ?? 'p-new' }),
       ),
+      update: jest.fn(() => Promise.resolve({ affected: 1 })),
+      increment: jest.fn(() => Promise.resolve({ affected: 1 })),
+      manager: {} as Row,
+    };
+    // Tranzaksiya: qulf so'rovi + shu repo (topish/yaratish/atomik qo'shish).
+    postRepo.manager = {
+      query: jest.fn(),
+      transaction: jest.fn((fn: (m: Row) => unknown) =>
+        fn({ query: jest.fn(), getRepository: () => postRepo }),
+      ),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -1601,6 +1611,69 @@ describe('receiveOrdersIntoPosts — HQ → filial dispatch kuryer pochtasiga tu
       .map(([query]) => query.where)
       .find((where: Row) => where.status === Post_status.NEW);
     expect(newLookup).not.toHaveProperty('courier_id');
+  });
+});
+
+describe('receiveOrdersIntoPosts — parallel qabul hisobni yo`qotmaydi (skan auditi #80/#105)', () => {
+  it('⭐ topish/yaratish advisory qulf ostida, hisoblagich atomik `+ n` (eski qiymat ustidan yozilmaydi)', async () => {
+    const existing: Row = {
+      id: '900',
+      status: Post_status.NEW,
+      courier_id: '0',
+      branch_id: null,
+      region_id: '6',
+      order_quantity: 5,
+      post_total_price: 500_000,
+    };
+    const lockQuery = jest.fn();
+    const postRepo: Row = {
+      findOne: jest.fn(() => Promise.resolve(existing)),
+      create: jest.fn((payload: Row) => ({ ...payload })),
+      save: jest.fn((entity: Row) => Promise.resolve(entity)),
+      update: jest.fn(() => Promise.resolve({ affected: 1 })),
+      increment: jest.fn(() => Promise.resolve({ affected: 1 })),
+    };
+    postRepo.manager = {
+      transaction: jest.fn((fn: (m: Row) => unknown) =>
+        fn({ query: lockQuery, getRepository: () => postRepo }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      { send: jest.fn(() => of({})) } as any,
+      { send: jest.fn(() => of({ data: null })) } as any,
+      { send: jest.fn(() => of({ data: [] })) } as any,
+      { send: jest.fn(() => of({})) } as any,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+
+    const res: any = await service.receiveOrdersIntoPosts([
+      { order_id: '1', assigned_region: '6', total_price: 100_000 },
+      { order_id: '2', assigned_region: '6', total_price: 50_000 },
+    ]);
+
+    expect(lockQuery).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      [`post_receive_orders:${Post_status.NEW}:6:`],
+    );
+    expect(postRepo.increment).toHaveBeenCalledWith(
+      { id: '900' },
+      'order_quantity',
+      2,
+    );
+    expect(postRepo.increment).toHaveBeenCalledWith(
+      { id: '900' },
+      'post_total_price',
+      150_000,
+    );
+    // Hisoblagich `save` bilan (o'qilgan eski qiymat + n) yozilmaydi.
+    expect(postRepo.save).not.toHaveBeenCalled();
+    expect(res.data).toEqual([
+      { order_id: '1', post_id: '900' },
+      { order_id: '2', post_id: '900' },
+    ]);
   });
 });
 

@@ -43,7 +43,49 @@
       ]
     },
     {
-      "name": "2. Sotuvchini ro'yxatga olish",
+      "name": "2. Ping — noto'g'ri kalit (401)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "elp_notogri_kalit",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/ping",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "ping"
+          ]
+        },
+        "description": "Yaroqsiz `X-Api-Key` — 401, bir xil xato shakli va `trace_id` (§2, §3). Qayta urinilmaydi."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 401\", function () {",
+              "  pm.expect(pm.response.code).to.eql(401);",
+              "});",
+              "pm.test(\"xato shakli: statusCode 401 va trace_id\", function () {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json.statusCode).to.eql(401);",
+              "  pm.expect(json.trace_id).to.be.a(\"string\");",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Sotuvchini ro'yxatga olish",
       "request": {
         "method": "POST",
         "header": [
@@ -96,7 +138,7 @@
       ]
     },
     {
-      "name": "3. Posilka yuborish",
+      "name": "4. Posilka yuborish (A — uyga, naqd)",
       "request": {
         "method": "POST",
         "header": [
@@ -149,7 +191,173 @@
       ]
     },
     {
-      "name": "4. Ko'p posilka holati",
+      "name": "5. Posilka yuborish — takror (200 idempotent)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments"
+          ]
+        },
+        "description": "Ayni `external_order_id` (DEMO-ORDER-1) bilan qayta yuborish — yangi posilka YARATILMAYDI: 200, `idempotent: true`, o'sha `shipment_id` (§5.2 «Idempotentlik»). Timeout bo'lganda qayta yuborish shuning uchun xavfsiz.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"external_order_id\": \"DEMO-ORDER-1\",\n  \"elchi_market_id\": \"{{elchi_market_id}}\",\n  \"customer\": {\n    \"name\": \"Demo Mijoz\",\n    \"phone\": \"+998900000001\"\n  },\n  \"district_id\": \"1\",\n  \"where_deliver\": \"address\",\n  \"address\": \"Demo ko'chasi 1\",\n  \"items\": [\n    {\n      \"name\": \"Demo mahsulot\",\n      \"quantity\": 1,\n      \"external_product_id\": \"DEMO-SKU-1\"\n    }\n  ],\n  \"cod_amount\": 100000,\n  \"subtotal\": 100000,\n  \"comment\": \"Sinov posilkasi\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200 (201 emas)\", function () {",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "});",
+              "pm.test(\"idempotent: true va o'sha shipment_id\", function () {",
+              "  const data = pm.response.json().data;",
+              "  pm.expect(data.idempotent).to.eql(true);",
+              "  pm.expect(String(data.shipment_id)).to.eql(pm.collectionVariables.get(\"shipment_id\"));",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Posilka yuborish (B — punktga, oldindan to'langan)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments"
+          ]
+        },
+        "description": "`where_deliver: \"center\"` (punktdan olib ketish), `cod_amount: 0` — oldindan to'langan; `subtotal` — to'liq narx (§5.2 «cod_amount va subtotal»). Javobdagi shipment_id {{shipment_id_b}} ga yoziladi.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"external_order_id\": \"DEMO-ORDER-2\",\n  \"elchi_market_id\": \"{{elchi_market_id}}\",\n  \"customer\": {\n    \"name\": \"Demo Mijoz B\",\n    \"phone\": \"+998900000002\"\n  },\n  \"district_id\": \"1\",\n  \"where_deliver\": \"center\",\n  \"items\": [\n    {\n      \"name\": \"Demo mahsulot B\",\n      \"quantity\": 1,\n      \"external_product_id\": \"DEMO-SKU-2\"\n    }\n  ],\n  \"cod_amount\": 0,\n  \"subtotal\": 100000,\n  \"comment\": \"Sinov posilkasi B (oldindan to'langan)\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200 / 201\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+              "});",
+              "const data = pm.response.json()?.data;",
+              "pm.test(\"to_be_paid 0 — kuryer mijozdan pul yig'maydi\", function () {",
+              "  pm.expect(Number(data?.to_be_paid)).to.eql(0);",
+              "});",
+              "if (data?.shipment_id) pm.collectionVariables.set('shipment_id_b', String(data.shipment_id));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Posilka yuborish — noto'g'ri telefon (400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments"
+          ]
+        },
+        "description": "Telefon O'zbekiston raqami bo'lishi shart (`+998XXXXXXXXX`; probel/qavs/defis bilan ham). `not-a-phone` — 400, posilka yaratilmaydi (§5.2 «Telefon formati»).",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"external_order_id\": \"DEMO-ORDER-BAD-PHONE\",\n  \"elchi_market_id\": \"{{elchi_market_id}}\",\n  \"customer\": {\n    \"name\": \"Demo Mijoz\",\n    \"phone\": \"not-a-phone\"\n  },\n  \"district_id\": \"1\",\n  \"where_deliver\": \"address\",\n  \"address\": \"Demo ko'chasi 1\",\n  \"items\": [\n    {\n      \"name\": \"Demo mahsulot\",\n      \"quantity\": 1,\n      \"external_product_id\": \"DEMO-SKU-1\"\n    }\n  ],\n  \"cod_amount\": 100000,\n  \"subtotal\": 100000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 400\", function () {",
+              "  pm.expect(pm.response.code).to.eql(400);",
+              "});",
+              "pm.test(\"trace_id bor\", function () {",
+              "  pm.expect(pm.response.json().trace_id).to.be.a(\"string\");",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Ko'p posilka holati",
       "request": {
         "method": "POST",
         "header": [
@@ -178,7 +386,7 @@
         "description": "100 tagacha id; shipment_id yoki external_order_id (§5.6).",
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"shipment_ids\": [\n    \"{{shipment_id}}\",\n    \"DEMO-ORDER-1\"\n  ]\n}",
+          "raw": "{\n  \"shipment_ids\": [\n    \"{{shipment_id}}\",\n    \"{{shipment_id_b}}\",\n    \"DEMO-ORDER-1\"\n  ]\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -201,7 +409,7 @@
       ]
     },
     {
-      "name": "5. Posilka holati",
+      "name": "9. Posilka holati",
       "request": {
         "method": "GET",
         "header": [
@@ -239,7 +447,7 @@
       ]
     },
     {
-      "name": "6. Posilkani yangilash",
+      "name": "10. Posilkani yangilash",
       "request": {
         "method": "PATCH",
         "header": [
@@ -291,7 +499,7 @@
       ]
     },
     {
-      "name": "7. Posilkani bekor qilish",
+      "name": "11. Posilkani bekor qilish",
       "request": {
         "method": "POST",
         "header": [
@@ -313,7 +521,46 @@
             "cancel"
           ]
         },
-        "description": "Bekor qilish 200; allaqachon bekor — 200 idempotent: true; yetkazilgan — 409 (§5.4)."
+        "description": "Bekor qilish 200; allaqachon bekor — 200 idempotent: true; yetkazilgan — 409 (§5.4). Sinovdan keyin A posilka shu bilan bekor qilinadi."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12. B posilkani bekor qilish (sinovdan keyin tozalash)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{api_key}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/partner/shipments/{{shipment_id_b}}/cancel",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "partner",
+            "shipments",
+            "{{shipment_id_b}}",
+            "cancel"
+          ]
+        },
+        "description": "Sinov B posilkasini bekor qiladi (prod'da sinovdan keyin iz qolmasin). Allaqachon bekor — 200 idempotent (§5.4)."
       },
       "event": [
         {
@@ -345,6 +592,10 @@
     },
     {
       "key": "shipment_id",
+      "value": ""
+    },
+    {
+      "key": "shipment_id_b",
       "value": ""
     }
   ]

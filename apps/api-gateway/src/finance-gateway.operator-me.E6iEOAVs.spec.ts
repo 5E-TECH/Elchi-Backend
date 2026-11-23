@@ -176,6 +176,54 @@ describe('E6iEOAVs — GET /finance/operators/me/* (market operatori o`z daromad
     expect(finance.send).not.toHaveBeenCalled();
   });
 
+  it('B1te60bD: admin variantlari rollari — faqat superadmin va admin (menejer yo`q)', () => {
+    for (const method of [
+      'findOperatorBalance',
+      'listOperatorEarnings',
+      'listOperatorPayments',
+    ]) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        FinanceGatewayController.prototype,
+        method,
+      );
+      expect(Reflect.getMetadata(ROLES_KEY, descriptor?.value)).toEqual([
+        'superadmin',
+        'admin',
+      ]);
+    }
+  });
+
+  it('B1te60bD: menejer va market boshqa operator hisobini o`qiy olmaydi → 403', async () => {
+    for (const role of ['manager', 'market', 'courier', 'logist']) {
+      for (const path of ['balance', 'earnings', 'payments']) {
+        const result = await request(http())
+          .get(`/finance/operators/42/${path}`)
+          .set('x-test-role', role);
+        expect(result.status).toBe(403);
+      }
+    }
+    expect(finance.send).not.toHaveBeenCalled();
+  });
+
+  it('B1te60bD: superadmin va admin uchala yo`lni o`qiydi → 200', async () => {
+    for (const role of ['superadmin', 'admin']) {
+      for (const path of ['balance', 'earnings', 'payments']) {
+        const result = await request(http())
+          .get(`/finance/operators/42/${path}`)
+          .set('x-test-role', role);
+        expect(result.status).toBe(200);
+      }
+    }
+    expect(calls().map(([pattern]) => pattern.cmd)).toEqual([
+      'finance.operator.balance.find',
+      'finance.operator.earning.list',
+      'finance.operator.payment.list',
+      'finance.operator.balance.find',
+      'finance.operator.earning.list',
+      'finance.operator.payment.list',
+    ]);
+  });
+
   it('REGRESSIYA: admin varianti o`zgarmagan — superadmin operators/42/balance', async () => {
     const result = await request(http())
       .get('/finance/operators/42/balance')

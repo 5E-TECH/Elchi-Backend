@@ -152,7 +152,8 @@ export class OperatorPaymentGatewayController {
    * Marketning barcha o'chirilmagan operatorlari (faol va nofaol).
    * `includeDeleted` (2026-11-20; hisob, tarix, daromad qatorlari) —
    * o'chirilganlari ham: ularning daromadi va to'lovlari market hisobidan
-   * yo'qolmasin. To'lov YOZISH — avvalgidek faqat o'chirilmaganlarga.
+   * yo'qolmasin. To'lov YOZISH — o'chirilganiga faqat qoldiq doirasida
+   * (audit 2026-11-22 #10, finance tekshiradi).
    */
   private async marketOperators(
     req: { user: JwtUser },
@@ -450,7 +451,7 @@ export class OperatorPaymentGatewayController {
   @ApiOperation({
     summary: "Market o'z operatoriga to'lovni yozadi (Elchi kassasiz)",
     description:
-      "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
+      "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). O'chirilgan operatorga (audit 2026-11-22 #10) — faqat to'lanmagan qoldiqni yopish uchun: summa qoldiqdan oshsa yoki qoldiq yo'q bo'lsa — 409. `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -478,7 +479,13 @@ export class OperatorPaymentGatewayController {
         'Idempotency-Key sarlavhasi majburiy (1-255 belgi)',
       );
     }
-    const operators = await this.marketOperators(req, marketId);
+    // Audit 2026-11-22 #10: o'chirilgan operator ham — uning qoldig'i
+    // «Qoldiq»da turadi (yo'ldagi buyurtmalari sotilganda ulush yozilaveradi)
+    // va market uni yopa olishi kerak. Finance bunday operatorga faqat
+    // to'lanmagan qoldiqdan oshmaydigan to'lovni yozadi.
+    const operators = await this.marketOperators(req, marketId, {
+      includeDeleted: true,
+    });
     const operator = operators.find((item) => item.id === dto.operator_id);
     if (!operator) {
       throw new NotFoundException('Operator topilmadi');
@@ -496,6 +503,7 @@ export class OperatorPaymentGatewayController {
       recorded_by_id: marketId,
       recorded_by_role: RoleEnum.MARKET,
       idempotency_key: key,
+      operator_deleted: operator.deleted,
     });
     return {
       ...res,
