@@ -148,15 +148,17 @@ describePg('getOperatorSoldOrders (Postgres)', () => {
     }
   });
 
-  it('⭐ faqat shu market, shu operator, hozir sotilgan (sold / paid / partly_paid), tirik — eng yangisi birinchi', async () => {
+  it('⭐ faqat shu market, shu operator, hozir sotilgan (sold / paid / partly_paid), tirik — id o`sish tartibida', async () => {
     const res = await analytics.getOperatorSoldOrders(MARKET, OPERATOR);
     expect(res).toEqual({
       items: [
-        { order_id: ids.partly, total_price: 90000, market_id: MARKET },
-        { order_id: ids.paid, total_price: 150000, market_id: MARKET },
         { order_id: ids.sold, total_price: 200000, market_id: MARKET },
+        { order_id: ids.paid, total_price: 150000, market_id: MARKET },
+        { order_id: ids.partly, total_price: 90000, market_id: MARKET },
       ],
       truncated: false,
+      next_after_id: null,
+      cursor: 'id_asc',
     });
   });
 
@@ -164,11 +166,65 @@ describePg('getOperatorSoldOrders (Postgres)', () => {
     expect(await analytics.getOperatorSoldOrders(MARKET, '999')).toEqual({
       items: [],
       truncated: false,
+      next_after_id: null,
+      cursor: 'id_asc',
     });
     await expect(
       analytics.getOperatorSoldOrders(MARKET, 'abc'),
     ).rejects.toMatchObject({
       error: expect.objectContaining({ statusCode: 400 }),
     });
+  });
+
+  it('audit 2026-11-22 #9: sahifa to`lsa `next_after_id`, keyingisi `after_id` dan keyin — eskilari ham chiqadi, takror yo`q', async () => {
+    const first = await analytics.getOperatorSoldOrders(MARKET, OPERATOR, {
+      pageSize: 2,
+    });
+    expect(first.items.map((item) => item.order_id)).toEqual([
+      ids.sold,
+      ids.paid,
+    ]);
+    expect(first).toMatchObject({ truncated: true, next_after_id: ids.paid });
+
+    const second = await analytics.getOperatorSoldOrders(MARKET, OPERATOR, {
+      pageSize: 2,
+      afterId: first.next_after_id,
+    });
+    expect(second.items.map((item) => item.order_id)).toEqual([ids.partly]);
+    expect(second).toMatchObject({ truncated: false, next_after_id: null });
+  });
+
+  it('audit #8: `order_ids` — faqat shulardan hozir sotilganlari (boshqa operator / holat / o`chirilgan kirmaydi)', async () => {
+    const res = await analytics.getOperatorSoldOrders(MARKET, OPERATOR, {
+      orderIds: [
+        ids.sold,
+        ids.new,
+        ids['other-op'],
+        ids.deleted,
+        ids.partly,
+        'abc',
+      ],
+    });
+    expect(res.items.map((item) => item.order_id)).toEqual([
+      ids.sold,
+      ids.partly,
+    ]);
+    expect(res).toMatchObject({ truncated: false, filtered_by_ids: true });
+
+    expect(
+      await analytics.getOperatorSoldOrders(MARKET, OPERATOR, {
+        orderIds: [],
+      }),
+    ).toMatchObject({ items: [], filtered_by_ids: true });
+  });
+
+  it('yaroqsiz `after_id` / `order_ids` — 400', async () => {
+    for (const options of [{ afterId: '0' }, { orderIds: 'x' }]) {
+      await expect(
+        analytics.getOperatorSoldOrders(MARKET, OPERATOR, options),
+      ).rejects.toMatchObject({
+        error: expect.objectContaining({ statusCode: 400 }),
+      });
+    }
   });
 });
