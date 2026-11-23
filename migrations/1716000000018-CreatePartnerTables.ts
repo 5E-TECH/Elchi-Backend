@@ -10,7 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *    bog'lanishi (idempotentlik + teskari qidiruv).
  *
  * Mavjud order/logistics/finance state machine'lariga TEGMAYDI — faqat yangi
- * integration_schema jadvallari. Kontrakt: docs/PARTNER_API.md.
+ * integration_schema jadvallari. Kontrakt: docs/public/MARKETPLACE_API.md.
  */
 export class CreatePartnerTables1716000000018 implements MigrationInterface {
   name = 'CreatePartnerTables1716000000018';

@@ -1,6 +1,6 @@
 /// <reference types="jest" />
 import 'reflect-metadata';
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { CreatePartnerShipmentRequestDto } from './dto/partner-shipment.swagger.dto';
 import { CreatePartnerMarketRequestDto } from './dto/partner-market.swagger.dto';
@@ -61,5 +61,34 @@ describe('MARKETPLACE_API.md ↔ gateway DTO (T1 K4)', () => {
   it('kod izohlarida eski docs/PARTNER_API.md havolasi qolmagan', () => {
     // Fayl o'chirilgan — hujjat yagona: docs/public/MARKETPLACE_API.md.
     expect(DOC).not.toContain('PARTNER_API.md');
+  });
+
+  it('8yt25yIO: README, apps/, libs/, migrations/, docs/ da eski hujjat havolasi qolmagan', () => {
+    // Shu spec (eski test nomida havola bor) tekshirilmaydi.
+    const needle = ['docs', 'PARTNER_API.md'].join('/');
+    const root = join(__dirname, '../../..');
+    const skip = new Set(['node_modules', 'dist', 'coverage', '.git']);
+    const found: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        if (skip.has(name)) continue;
+        const path = join(dir, name);
+        if (path === __filename) continue;
+        if (statSync(path).isDirectory()) {
+          walk(path);
+        } else if (/\.(ts|md|json|sql|sh|ya?ml)$/.test(name)) {
+          if (readFileSync(path, 'utf8').includes(needle)) {
+            found.push(path.slice(root.length + 1));
+          }
+        }
+      }
+    };
+    for (const dir of ['apps', 'libs', 'migrations', 'docs']) {
+      walk(join(root, dir));
+    }
+    if (readFileSync(join(root, 'README.md'), 'utf8').includes(needle)) {
+      found.push('README.md');
+    }
+    expect(found).toEqual([]);
   });
 });
