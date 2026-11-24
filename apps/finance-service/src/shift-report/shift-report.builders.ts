@@ -472,6 +472,9 @@ export function deliveryReasonText(reason: string | null | undefined): string {
   if (value === 'branch_group_inactive') {
     return 'Filial guruhi nofaol (bot chiqarilgan yoki huquqi olingan)';
   }
+  if (value === 'branch_group_not_linked') {
+    return 'Filial guruhi ulanmagan — filial sahifasida «Kassa hisoboti · Telegram» → «Ulash» orqali ulang';
+  }
   if (value === 'disabled_by_settings') return "Sozlamada o'chirilgan";
   if (value === 'branch_no_managers') {
     return "Filialda faol menejer yo'q — shaxsiy chatga yuborib bo'lmaydi (guruhga o'tkazing)";
