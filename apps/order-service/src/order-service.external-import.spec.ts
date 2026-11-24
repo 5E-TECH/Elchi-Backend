@@ -345,14 +345,61 @@ describe('⭐ NARX — `NaN` moliyani zaharlaydi', () => {
    * market hisobi, kassa yig'indisi, dashboard — hammasi `NaN` bo'lib
    * qoladi. Eng yomon turdagi xato: jimgina va butun moliyani buzadi.
    */
-  it("son bo'lmagan narx qatorni TASHLAYDI", async () => {
-    const { res, created } = await runFull({
-      ...VALID,
-      total_price: '250 000',
-    });
+  it.each([
+    'tekin',
+    "150 000 so'm",
+    // Vergul va nuqta — bir ma'noli emas (99 ming yoki 99), taxmin QILINMAYDI.
+    '99,000',
+    '1,500,000',
+    '150,5',
+    '150 000,50',
+    '150 000.50',
+    // Minglik bo'linishi emas.
+    '15 0',
+    '1500 000',
+    '150 00',
+    '150  000',
+    '0 150',
+    '-150 000',
+    '1 000 000 000 000',
+    ['150 000'],
+    true,
+    NaN,
+  ])("son bo'lmagan narx qatorni TASHLAYDI (%p)", async (total_price) => {
+    const { res, created } = await runFull({ ...VALID, total_price });
 
     expect(created).toHaveLength(0);
     expect(res.data.skipped[0]).toMatchObject({ reason: 'price_invalid' });
+  });
+
+  /**
+   * Ega qarori 2026-11-25: sayt narxni minglik bo'shlig'i bilan yuborsa
+   * («150 000») — 150000 deb o'qiladi. FAQAT shu yozuv; vergul, nuqta va
+   * valyuta avvalgidek rad etiladi (yuqoridagi jadval).
+   */
+  it.each([
+    ['150 000', 150000],
+    ['99 000', 99000],
+    ['1 500 000', 1500000],
+    [' 150 000 ', 150000],
+    ['150\u00a0000', 150000],
+    ['150\u202f000', 150000],
+    ['150\u2009000', 150000],
+    ['999 999 999 999', 999999999999],
+  ])('⭐ minglik bo`shlig`i bilan yozilgan narx: %p → %p', async (raw, sum) => {
+    const { res, created } = await runFull({ ...VALID, total_price: raw });
+
+    expect(res.data.skipped).toEqual([]);
+    expect(created[0].total_price).toBe(sum);
+  });
+
+  it('⭐ yetkazish narxi ham shunday o`qiladi; qat`iy (CRM) rejimda ham', async () => {
+    const { created } = await runFull(
+      { ...VALID, total_price: '150 000', delivery_price: '30 000' },
+      { strict: true },
+    );
+
+    expect(created[0].total_price).toBe(180000);
   });
 
   it('yetkazish narxi ham tekshiriladi', async () => {

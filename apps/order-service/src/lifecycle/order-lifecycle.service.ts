@@ -146,6 +146,7 @@ import {
   fitTotalQuantity,
 } from './external-item-limits';
 import { readExternalItemsText } from './external-items-text';
+import { ungroupThousands } from './external-price';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import {
   OrderNotificationService,
@@ -12824,8 +12825,11 @@ export class OrderLifecycleService {
         ext,
         fieldMapping.delivery_price_field ?? 'delivery_price',
       );
-      const totalPrice = this.safeExternalAmount(priceRaw);
-      const deliveryPrice = this.safeExternalAmount(deliveryRaw);
+      // Minglik bo'shlig'i («150 000») — faqat import narxida (`external-price.ts`).
+      const totalPrice = this.safeExternalAmount(ungroupThousands(priceRaw));
+      const deliveryPrice = this.safeExternalAmount(
+        ungroupThousands(deliveryRaw),
+      );
       if (totalPrice === null || deliveryPrice === null) {
         skipped.push({ external_id: externalId, reason: 'price_invalid' });
         continue;

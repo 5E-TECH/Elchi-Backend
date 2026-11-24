@@ -149,6 +149,10 @@ describe("Onlayn to'lovni qayd etish", () => {
   });
 
   describe('⭐ SUMMA tekshiruvi', () => {
+    /**
+     * Sayt importi narxida minglik bo'shlig'i o'qiladi (ega 2026-11-25,
+     * `lifecycle/external-price.ts`), TO'LOV summasida — YO'Q.
+     */
     it('son bo`lmagan summa rad etiladi', async () => {
       const { s, updates } = svc(ORDER);
       const res: any = await call(s, { amount: '250 000' });

@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — «Tashqi saytlar»: minglik bo'shlig'i bilan yozilgan narx («150 000») o'qiladi
+
+Deploy: **order-service** (migratsiya yo'q). Ega qarori 2026-11-25.
+
+- ✏️ [order] `POST /orders/external/receive` — `total_price` / `delivery_price` satri minglik bo'shlig'i bilan yozilgan
+  bo'lsa (`"150 000"`, `"1 500 000"`; oddiy, NBSP, tor va ingichka bo'shliq) son deb o'qiladi. Ilgari `price_invalid`
+  bilan tashlanardi. CRM (qat'iy) importida ham shunday.
+- 🟢 [order] Vergul, nuqta, valyuta va noto'g'ri guruh (`"99,000"`, `"150,5"`, `"150 000 so'm"`, `"15 0"`) avvalgidek
+  `price_invalid`. Onlayn to'lov summasi (webhook) avvalgidek qat'iy — bo'shliqli matn rad etiladi.
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readAmount` — aynan shu qoida
+  (`apps/order-service/src/lifecycle/external-price.ts`). Hozir u `"99,000"` ni 99, `"15 0"` ni 150 deb ko'rsatadi,
+  backend esa rad etadi.
+
 ### 2026-11-25 — «Tashqi saytlar»: massiv `items` dagi kasr son va uzun nom importni to'xtatmaydi
 
 Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi.
