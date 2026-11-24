@@ -624,7 +624,11 @@ export class OrderLookupService implements OnModuleInit {
     const bySato = await rmqSend<{ data?: { id?: string } }>(
       this.logisticsClient,
       { cmd: 'logistics.district.find_by_sato' },
-      { satoCode: raw },
+      // ⚠️ Kalit AYNAN `sato_code` (logistics kontrolleri shuni o'qiydi).
+      // Ilgari `satoCode` edi: logistics `undefined` bo'yicha izlab,
+      // jadvaldagi BIRINCHI tumanni qaytarardi — sayt buyurtmalarining
+      // hammasi bitta tumanga tushardi (prod 2026-11-24).
+      { sato_code: raw },
     ).catch(() => ({ data: undefined }));
     if (bySato?.data?.id) {
       return String(bySato.data.id);
