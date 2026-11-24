@@ -12,7 +12,7 @@ import {
 } from './start.handler';
 
 export const GROUP_START_TEXT =
-  'Salom. Guruhni marketga ulash uchun Elchi kabinetidagi «Telegram guruhini ulash» havolasini oching va shu guruhni tanlang (havola bir martalik, 10 daqiqa amal qiladi). Bekor qilingan buyurtmalar guruhi uchun alohida havola oling. Filial kassasi hisobotlari uchun — filial sahifasidagi «Telegram guruhini ulash» havolasi.';
+  'Salom. Guruhni marketga ulash uchun Elchi kabinetidagi «Telegram guruhini ulash» havolasini oching va shu guruhni tanlang (havola bir martalik, 10 daqiqa amal qiladi). Bekor qilingan buyurtmalar guruhi uchun alohida havola oling. Filial kassasi hisobotlari uchun — filial sahifasidagi «Kassa hisoboti · Telegram» → «Ulash» (asosiy kassa — HQ filiali).';
 export const GROUP_HELP_TEXT =
   'Mavjud komandalar: /start, /help, /id (guruh ID si). Ulash — faqat kabinetdagi bir martalik havola orqali. Ulangan guruhni almashtirish faqat admin orqali.';
 /** (6jXw0DDr #1-#3) matnli `group_token-…` bilan ulash olib tashlandi. */

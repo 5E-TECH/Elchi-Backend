@@ -124,7 +124,7 @@ interface PlannedRecipient {
    * (`branchNotifyIds`).
    */
   notify_ids?: string[];
-  /** `branch` — guruh holati (`telegram` so'ralganda). */
+  /** `branch` — guruh holati (`telegram` so'ralganda); yo'q — ulanmagan. */
   group?: { active: boolean; inactive_reason: string | null };
   /**
    * (audit 2026-11-22 #3) `branch` — hisobotni yuborib bo'lmaydi (dispatch
@@ -159,6 +159,16 @@ function unreachableBranch(
     unreachable: { reason, channel },
   };
 }
+
+const reportNotificationType = (
+  snapshot: Pick<ShiftReportSnapshot, 'close_reason'>,
+): FinanceNotificationType =>
+  snapshot.close_reason === 'auto'
+    ? 'finance.shift_auto_closed'
+    : 'finance.shift_closed';
+
+/** Filialga Telegram guruhi umuman ulanmagan (`route.group = null`). */
+const BRANCH_GROUP_NOT_LINKED = 'branch_group_not_linked';
 
 /** Xabarga Telegram ilovasini (file-service kaliti) qo'shadi — yangi obyekt. */
 function withExcel<T extends ShiftReportMessage>(
@@ -319,6 +329,15 @@ export class ShiftReportService {
       if (!recipients.length) {
         return await this.markSkipped(shiftId, round);
       }
+      // Yagona qabul qiluvchi — guruhi ulanmagan filial: hech narsa ketmaydi
+      // (`skipped`), lekin sababi «Hisobot kimlarga yuborildi» da ko'rinadi.
+      if (
+        recipients.every(
+          (r) => r.unreachable?.reason === BRANCH_GROUP_NOT_LINKED,
+        )
+      ) {
+        return await this.markSkipped(shiftId, round, snapshot, recipients);
+      }
       // (BOT-2 #3) market ham — egasi shaxsiy Telegram'ga ulanganmi.
       // `branch` — filial id (foydalanuvchi emas), guruhga ketadi.
       const linked = await this.telegramLinked(
@@ -336,10 +355,7 @@ export class ShiftReportService {
         }
       }
       await this.attachExcel(snapshot, report, recipients, linked, fileKey);
-      const type: FinanceNotificationType =
-        snapshot.close_reason === 'auto'
-          ? 'finance.shift_auto_closed'
-          : 'finance.shift_closed';
+      const type = reportNotificationType(snapshot);
       let deliveries = 0;
       await this.dataSource.transaction(async (manager) => {
         for (const recipient of recipients) {
@@ -416,16 +432,29 @@ export class ShiftReportService {
     );
   }
 
-  /** Yuboriladigan hech kim yo'q — `skipped` (outbox / fayl yo'q, qayta urinilmaydi). */
+  /**
+   * Yuboriladigan hech kim yo'q — `skipped` (outbox / fayl yo'q, qayta
+   * urinilmaydi). `unreachable` qabul qiluvchilar berilsa — sababi bilan
+   * `failed` qatorlari ham shu tranzaksiyada yoziladi.
+   */
   private async markSkipped(
     shiftId: string,
     round: number,
+    snapshot?: ShiftReportSnapshot,
+    unreachable: PlannedRecipient[] = [],
   ): Promise<ShiftReportDeliverResult> {
-    await this.dataSource.manager.update(
-      Shift,
-      { id: shiftId },
-      { report_status: 'skipped' },
-    );
+    const patch = { report_status: 'skipped' as const };
+    if (snapshot && unreachable.length) {
+      const type = reportNotificationType(snapshot);
+      await this.dataSource.transaction(async (manager) => {
+        for (const recipient of unreachable) {
+          await this.enqueueRecipient(manager, snapshot, recipient, type, null);
+        }
+        await manager.update(Shift, { id: shiftId }, patch);
+      });
+    } else {
+      await this.dataSource.manager.update(Shift, { id: shiftId }, patch);
+    }
     return {
       claimed: true,
       shift_id: shiftId,
@@ -498,7 +527,9 @@ export class ShiftReportService {
         rows.push({
           channel: 'telegram_group',
           status: 'failed',
-          failed_reason: deliveryReasonText('branch_group_inactive'),
+          failed_reason: deliveryReasonText(
+            recipient.group ? 'branch_group_inactive' : BRANCH_GROUP_NOT_LINKED,
+          ),
         });
       }
     } else if (recipient.channels.telegram) {
@@ -1086,8 +1117,10 @@ export class ShiftReportService {
    *    nofaol guruh — `failed` + sabab);
    *  - telegram + filial `private` → har menejerga `branch_manager` (shaxsiy
    *    chat, ulanmagan — «Telegram ulanmagan»);
+   *  - telegram + filial `group` + guruh ULANMAGAN → `failed` qatori «Filial
+   *    guruhi ulanmagan» (prod 2026-11-25: bot guruhga qo'shilgan, lekin
+   *    ulanmagan — hisobot sababsiz `skipped` bo'lib, ega sababini ko'rmagan);
    *  - in_app → menejerlarga ilova ichida.
-   * Guruh ham yo'q, `private` ham emas — hech kim (jim: filial sozlamagan).
    *
    * (audit 2026-11-22 #3) Sozlangan hisobot JIM YO'QOLMAYDI: guruh dispatch'i
    * uchun faol foydalanuvchi bo'lmasa, `private` da faol menejer bo'lmasa
@@ -1117,9 +1150,25 @@ export class ShiftReportService {
         channels.telegram && route?.report_target === 'private',
       );
       const wantGroup = Boolean(
-        channels.telegram && route?.report_target !== 'private' && route?.group,
+        channels.telegram && route && route.report_target !== 'private',
       );
       if (!wantPrivate && !wantGroup && !channels.in_app) return [];
+      // Faqat guruh so'ralgan, u esa ulanmagan — nom / menejerlar kerak emas.
+      if (wantGroup && !route?.group && !channels.in_app) {
+        return [
+          unreachableBranch(
+            branchId,
+            buildBranchMessage(
+              snapshot,
+              null,
+              process.env.ELCHI_CABINET_URL || undefined,
+            ),
+            { telegram: true, in_app: false },
+            BRANCH_GROUP_NOT_LINKED,
+            'telegram_group',
+          ),
+        ];
+      }
       const [branchName, managers] = await Promise.all([
         this.branchName(branchId),
         wantPrivate
