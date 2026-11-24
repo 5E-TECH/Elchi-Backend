@@ -33,6 +33,20 @@ Deploy: **order-service** (migratsiya yo'q).
   kodiga zid. `region` yuborilmasa yoki SOATO bo'lmasa tekshirilmaydi.
   → **Frontendda:** 🔧 matn va «Tuzatish»: tuman qo'lda tanlansa `region` maydoni bo'shatilsin (aks holda zid qoladi).
 
+### 2026-11-25 — Asosiy kassa smenasi yopilganda har ulangan filialga O'Z hisoboti
+
+Deploy: **notification-service**, **finance-service** (migratsiya / env yo'q; yangi ichki RMQ
+`notification.telegram.branch_routes`, HTTP kontrakt o'zgarmadi).
+
+- ✏️ [finance] ASOSIY kassa smenasi yopilganda (qo'lda / avtomatik / qayta yuborish) hisobot manzili sozlangan HAR
+  filialga (HQ'dan tashqari) faqat o'z bo'lagi ketadi: shu smenada HQ'ga topshirgan puli (to'lovlar, jami, o'z Excel'i)
+  va kassasidagi qoldiq. Manzil — filial sozlamasi (guruh yoki menejerlar). Boshqa filial / kuryer / market / asosiy
+  kassa summasi yo'q. `report.recipients.branches.telegram` o'chirilsa — ketmaydi.
+- ✏️ [finance] HQ (asosiy kassa) xabari, superadmin xabari, XLSX «Filiallar» varag'i va PDF — filiallardan qabul.
+- ✏️ [finance] `GET /finance/shift/:id/report` → `deliveries[]`: `recipient_kind: 'branch'` qatorlari endi bir nechta
+  (HQ + filiallar; `recipient_name` — filial nomi).
+  → **Frontendda:** 🔧 qayta yuborish tasdig'ida «barcha ulangan filial guruhlari»; filial kartasi izohi.
+
 ### 2026-11-25 — Smena hisoboti: «Filial guruhi ulanmagan» sababi ko'rinadi, bot ulanmagan guruhda ogohlantiradi
 
 Deploy: **finance-service**, **notification-service** (migratsiya / env yo'q).

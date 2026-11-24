@@ -18,12 +18,14 @@ export const BRANCH_TELEGRAM_PATTERNS = {
   reportTarget: 'notification.telegram.branch_report_target',
   unlink: 'notification.telegram.branch_unlink',
   route: 'notification.telegram.branch_route',
+  routes: 'notification.telegram.branch_routes',
 } as const;
 
 /**
  * Filial kassasi Telegram guruhi. Panel buyruqlari (`link_code`, `status`,
  * `report_target`, `unlink`) — faqat gateway'dan, filialga kirish huquqi
- * u yerda tekshirilgan; `route` — finance-service smena hisoboti.
+ * u yerda tekshirilgan; `route` / `routes` — finance-service smena hisoboti
+ * (faqat o'qish).
  */
 @Controller()
 export class BranchTelegramController {
@@ -85,6 +87,13 @@ export class BranchTelegramController {
   route(@Payload() data: { branch_id?: string }, @Ctx() context: RmqContext) {
     return executeAndAck(this.rmqService, context, () =>
       this.branches.route(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: BRANCH_TELEGRAM_PATTERNS.routes })
+  routes(@Ctx() context: RmqContext) {
+    return executeAndAck(this.rmqService, context, () =>
+      this.branches.routes(),
     );
   }
 }
