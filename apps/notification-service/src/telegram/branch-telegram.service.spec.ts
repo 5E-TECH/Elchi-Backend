@@ -318,6 +318,40 @@ describe('BranchTelegramService — panel', () => {
   });
 });
 
+describe('BranchTelegramService.routes — hisobot manzili sozlangan filiallar', () => {
+  it('ulangan (nofaoli ham) va `private`; panelda uzilgan — yo‘q', async () => {
+    const fx = setup();
+    fx.chats.find.mockResolvedValue([
+      { owner_id: '16', is_active: true, inactive_reason: null },
+      { owner_id: '37', is_active: false, inactive_reason: 'kicked' },
+      { owner_id: '40', is_active: false, inactive_reason: 'unlinked' },
+      { owner_id: '41', is_active: false, inactive_reason: 'unlinked' },
+    ]);
+    const find = jest
+      .fn()
+      .mockResolvedValue([{ branch_id: '41' }, { branch_id: '16' }]);
+    Object.assign(fx.settings, { find });
+    const result = await fx.service.routes();
+    expect(result.data).toEqual([
+      {
+        branch_id: '16',
+        report_target: 'private',
+        group: { active: true, inactive_reason: null },
+      },
+      {
+        branch_id: '37',
+        report_target: 'group',
+        group: { active: false, inactive_reason: 'kicked' },
+      },
+      { branch_id: '41', report_target: 'private', group: null },
+    ]);
+    expect(fx.chats.find).toHaveBeenCalledWith({
+      where: { owner_type: 'branch', scope: BRANCH_CHAT_SCOPE },
+    });
+    expect(find).toHaveBeenCalledWith({ where: { report_target: 'private' } });
+  });
+});
+
 describe('BranchTelegramService — bot hodisalari', () => {
   it('bot chiqarildi: filial qatori nofaol + ulagan xodimga xabar', async () => {
     const fx = setup({

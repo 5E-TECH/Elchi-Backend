@@ -694,6 +694,129 @@ describePg(
         expect(shift.report_file_format).toBe('pdf');
       });
 
+      it("asosiy kassa: filiallardan kelgan pul (qaytarilgani bilan) — har ulangan filialga faqat o'zi", async () => {
+        await db.query(
+          `DELETE FROM "${schema}".finance_settings WHERE key = 'shift.report.recipients'`,
+        );
+        await seedOperations();
+        const repo = db.getRepository(CashboxHistory);
+        const row = (patch: Partial<CashboxHistory>) =>
+          repo.create({
+            cashbox_id: mainCashboxId,
+            balance_after: 0,
+            payment_method: PaymentMethod.CASH,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.BRANCH_TO_MAIN,
+            ...patch,
+          } as Partial<CashboxHistory>);
+        const [wrong] = await repo.save([
+          row({ source_user_id: '16', amount: 111_111 }),
+          row({
+            source_user_id: '16',
+            amount: 222_222,
+            payment_method: PaymentMethod.CLICK,
+          }),
+          row({ source_user_id: '37', amount: 777_777 }),
+        ]);
+        // 111 111 qaytarildi; kuryer to'lovining teskarisi (source_user_id
+        // ham 16) filialga aralashmasin.
+        const courier = await repo.save(
+          row({
+            source_type: Source_type.COURIER_PAYMENT,
+            source_user_id: '16',
+            amount: 5_005,
+          }),
+        );
+        await repo.save([
+          row({
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.PAYMENT_REVERSAL,
+            source_user_id: '16',
+            amount: 111_111,
+            reverses_history_id: String(wrong.id),
+          }),
+          row({
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.PAYMENT_REVERSAL,
+            source_user_id: '16',
+            amount: 5_005,
+            reverses_history_id: String(courier.id),
+          }),
+        ]);
+        await closeManually();
+        const group = { active: true, inactive_reason: null };
+        const withBranches = new ShiftReportService(
+          db,
+          activityLog as never,
+          checks,
+          new FinanceNotificationService(outbox as never),
+          identity as never,
+          file as never,
+          {
+            send: jest.fn((pattern: { cmd: string }) =>
+              of({
+                data:
+                  pattern.cmd === 'notification.telegram.branch_routes'
+                    ? ['1', '16', '37'].map((branch_id) => ({
+                        branch_id,
+                        report_target: 'group',
+                        group,
+                      }))
+                    : { report_target: 'group', group },
+              }),
+            ),
+          } as never,
+          {
+            send: jest.fn((pattern: { cmd: string }) =>
+              of({
+                data:
+                  pattern.cmd === 'branch.find_hq'
+                    ? { id: '1' }
+                    : pattern.cmd === 'branch.find_all'
+                      ? {
+                          items: [
+                            { id: '1', name: 'HQ' },
+                            { id: '16', name: 'Andijon' },
+                            { id: '37', name: 'Samarqand' },
+                          ],
+                        }
+                      : [],
+              }),
+            ),
+          } as never,
+        );
+        expect(await withBranches.deliver(mainShiftId)).toMatchObject({
+          status: 'sent',
+          recipients: 3,
+        });
+        const byBranch = new Map(
+          dispatches('finance.shift_closed').map((payload) => [
+            payload.telegram.branch_id,
+            payload,
+          ]),
+        );
+        expect([...byBranch.keys()].sort()).toEqual(['1', '16', '37']);
+        expect(byBranch.get('1').body).toContain(
+          "Filiallardan qabul: 999 999 so'm (2 ta filial)",
+        );
+        const andijon = JSON.stringify(byBranch.get('16'));
+        expect(andijon).toContain("topshirilgan: 222 222 so'm (2 ta)");
+        expect(andijon).toContain('qaytarildi');
+        expect(andijon).not.toContain('777 777');
+        expect(andijon).not.toContain('5 005');
+        expect(JSON.stringify(byBranch.get('37'))).not.toContain('222 222');
+        const deliveries = await db.getRepository(ShiftReportDelivery).find();
+        expect(
+          deliveries
+            .map((d) => [d.recipient_kind, d.recipient_id, d.channel, d.status])
+            .sort(),
+        ).toEqual([
+          ['branch', '1', 'telegram_group', 'queued'],
+          ['branch', '16', 'telegram_group', 'queued'],
+          ['branch', '37', 'telegram_group', 'queued'],
+        ]);
+      });
+
       it('takroriy deliver / scheduler — yangi outbox yo‘q (idempotent)', async () => {
         await seedOperations();
         await closeManually();
