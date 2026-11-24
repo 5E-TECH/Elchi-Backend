@@ -226,7 +226,7 @@ export const AI_DRAFT_GONE_TEXT =
 export const AI_UNACKED_SKIPPED_TEXT =
   'AI ogohlantirishi tasdiqlanmagan — kabinetda yarating';
 
-/** (BOT-3b) 2 daqiqadan eski `parsing` — ishchi yiqilgan / qotgan. */
+/** (BOT-3b) `AI_STALE_AFTER_MS` (4 daqiqa) dan eski `parsing` — ishchi yiqilgan / qotgan. */
 export const AI_STALE_TEXT =
   '⏳ AI javobi kechikdi. Matningiz saqlangan — «🔁 Qayta urinish» ni bosing.';
 
@@ -354,8 +354,8 @@ interface ConfirmResult {
  * chaqirardi. Endi update «⏳» xabari bilan darhol tugaydi; qoralamani
  * fondagi ishchi oladi (`worker_at`), QAYTA URINMAYDI (xato — «🔁 Qayta
  * urinish» tugmasi). Qoralama id'si update'dan deterministik — takror
- * update ikkinchi qoralama ochmaydi. 2 daqiqadan eski `parsing` /
- * `creating` (ishchi yiqilgan) tiklanadi.
+ * update ikkinchi qoralama ochmaydi. `AI_STALE_AFTER_MS` (4 daqiqa) dan eski
+ * `parsing` / `creating` (ishchi yiqilgan) tiklanadi.
  */
 @Injectable()
 export class AiOrderService implements OnModuleDestroy {
@@ -618,7 +618,7 @@ export class AiOrderService implements OnModuleDestroy {
     }
   }
 
-  /** 2 daqiqadan eski parsing → «🔁 Qayta urinish»; creating → preview. */
+  /** `AI_STALE_AFTER_MS` (4 daqiqa) dan eski parsing → «🔁 Qayta urinish»; creating → preview. */
   private async recoverStale(): Promise<void> {
     const rows = rowsOf<TelegramAiDraft & { old_status: string }>(
       await this.drafts.query(
