@@ -23,6 +23,36 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — «Tashqi saytlar»: `items` matn bo'lib kelganda ham mahsulot qatori yoziladi
+
+Deploy: **order-service** (migratsiya yo'q). Eski buyurtmalar orqaga to'ldirilmaydi.
+
+- ✏️ [order] `POST /orders/external/receive` — `items_field` qiymati MATN bo'lsa (Lidershop, Alion:
+  `"Diskali soat x 1 = 99 000 so'm"`) undan mahsulot nomi va soni olinadi; qatorlar vergul / `;` / yangi qator
+  bilan ajraladi. Ilgari matn tashlanardi: `items = []`, `product_quantity = 0`.
+- ✏️ [order] Matn TO'LIQ ajralmasa — butun matn (255 belgigacha) bitta qator nomi, soni `total_count_field`
+  (sukut `total_count`, musbat butun son) yoki 1. Harf ham raqam ham yo'q matn — bo'sh ro'yxat.
+- 🟢 Summa matndan OLINMAYDI (avvalgidek `total_price` / `delivery_price`); `product_id` — `null`; massiv yo'li o'zgarmadi.
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readItems` — aynan shu qoida
+  (`apps/order-service/src/lifecycle/external-items-text.ts`), aks holda ro'yxatda mahsulot ko'rinmaydi.
+
+### 2026-11-25 — «Aloqani sinash» va saytdan olingan buyurtmalar soni
+
+Deploy: **integration-service, order-service** (migratsiya yo'q).
+
+- ✏️ [integration] `POST /integrations/:id/healthcheck` (va `/test`) — `endpoint` berilmasa bosh manzildagi
+  404 / 405 / 403 (login o'tgan bo'lsa) xato EMAS: server javob berdi va login o'tdi. Yiqilish: login o'tmadi,
+  401, 5xx, javob yo'q. `endpoint` berilsa avvalgidek faqat 2xx.
+- ✏️ Javob `data`: `ok`, yangi `reason` (`auth_failed` · `auth_rejected` · `timeout` · `unreachable` ·
+  `server_error` · `endpoint_failed` yoki `null`), yangi `auth_verified`, `status` (javob bo'lmasa `null`).
+  Yiqilganda `message` — o'zbekcha sabab; «integration healthcheck completed» endi hech qachon kelmaydi.
+  → **Frontendda:** 🔧 `reason` bo'yicha matn (uz/ru/en); `ctlDone` o'rniga «Aloqa bor».
+- 🆕 [integration] `GET /integrations` va `GET /integrations/:id` — har qatorda `imported_orders`:
+  `{ total, today, last_at }` (shu saytdan olingan buyurtmalar, buyurtmalarning o'zidan sanaladi; `today` —
+  Toshkent kuni). `null` — noma'lum (order-service javob bermadi), 0 EMAS. `total_synced_orders` / `last_sync_at`
+  bu emas — ular chiquvchi holat sinxroni.
+  → **Frontendda:** 🔧 «Tashqi saytlar» va konsolda shu maydon ko'rsatilsin.
+
 ### 2026-11-25 — «Tashqi saytlar»: buyurtma saytdagi tuman va viloyat pochtasiga tushadi (prod hodisasi)
 
 Deploy: **order-service, logistics-service** (migratsiya yo'q).
