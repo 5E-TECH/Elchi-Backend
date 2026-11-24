@@ -23,6 +23,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — «Aloqani sinash»: ishlab turgan sayt endi xato chiqmaydi
+
+Deploy: **integration-service** (migratsiya yo'q).
+
+- ✏️ [integration] `POST /integrations/:id/healthcheck` (va `/test`) — `endpoint` berilmasa bosh manzildagi
+  404 / 405 / 403 (login o'tgan bo'lsa) xato EMAS: server javob berdi va login o'tdi. Yiqilish: login o'tmadi,
+  401, 5xx, javob yo'q. `endpoint` berilsa avvalgidek faqat 2xx.
+- ✏️ Javob `data`: `ok`, yangi `reason` (`auth_failed` · `auth_rejected` · `timeout` · `unreachable` ·
+  `server_error` · `endpoint_failed` yoki `null`), yangi `auth_verified`, `status` (javob bo'lmasa `null`).
+  Yiqilganda `message` — o'zbekcha sabab; «integration healthcheck completed» endi hech qachon kelmaydi.
+  → **Frontendda:** 🔧 `reason` bo'yicha matn (uz/ru/en); `ctlDone` o'rniga «Aloqa bor».
+
 ### 2026-11-23 — Bekorlarni marketga topshirish: market QR sukut bo'yicha majburiy, admin o'chira oladi (skan auditi #43)
 
 Deploy: **order-service, api-gateway** (migratsiya yo'q). Ega qarori 2026-11-23.

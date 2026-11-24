@@ -43,6 +43,7 @@ import {
   ORDER_INTAKE_CLOSED,
   orderIntakeClosedPartnerMessage,
   readOrderIntakeClosed,
+  SsrfRedirectBlockedError,
 } from '@app/common';
 import {
   ExternalIntegration,
@@ -219,6 +220,15 @@ const INBOUND_ORDER_OUTCOMES = new Set<string>([
   'no_status',
   'no_shipment',
 ]);
+
+/** «Aloqani sinash» yiqilganda sababi — frontend shu bo'yicha matn tanlaydi. */
+export type IntegrationHealthReason =
+  | 'auth_failed'
+  | 'auth_rejected'
+  | 'timeout'
+  | 'unreachable'
+  | 'server_error'
+  | 'endpoint_failed';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -6258,6 +6268,24 @@ export class IntegrationServiceService {
     return successRes({ id: saved.id }, 200, 'integration deleted');
   }
 
+  /**
+   * «ALOQANI SINASH» (`POST /integrations/:id/healthcheck`, `/test`).
+   *
+   * ⚠️ 2026-11-25 (ega): ishlab turgan sayt «xato» chiqardi. Sinov API'ning
+   * BOSH manziliga `GET /` yuboradi, API'larda esa u yo'q — 404 «ulanmadi» deb
+   * olinardi va muvaffaqiyat matni («healthcheck completed») qizil xabar bo'lib
+   * chiqardi. Endi savol aniq: server javob beradimi, login o'tadimi, kalit
+   * rad etilmaydimi.
+   *
+   *  - `endpoint` berilmasa (tugma): har qanday HTTP javob — server bor. Yiqilgan
+   *    hisoblanadi: ulanib bo'lmadi, login o'tmadi, 401, 5xx; 403 — faqat login
+   *    o'tmagan (kalitli) turda (login yangi token olgan bo'lsa bosh manzildagi
+   *    403 kalit haqida hech narsa demaydi).
+   *  - `endpoint` berilsa — avvalgidek qat'iy: faqat 2xx muvaffaqiyat.
+   *
+   * Login turida token DOIM yangi olinadi: keshdagi token bilan sinov
+   * almashtirilgan parolni «ishlayapti» deb ko'rsatardi.
+   */
   async healthcheckIntegration(input: {
     id?: string;
     slug?: string;
@@ -6285,67 +6313,137 @@ export class IntegrationServiceService {
     }
 
     const method = (input?.method ?? 'GET').toUpperCase() as HttpMethod;
-    const endpoint = input?.endpoint ?? '/';
-    const url = this.buildExternalUrl(integration.api_url, endpoint);
+    const explicitEndpoint = String(input?.endpoint ?? '').trim();
+    const url = this.buildExternalUrl(
+      integration.api_url,
+      explicitEndpoint || '/',
+    );
+    const isLogin = integration.auth_type === 'login';
     const useAuth = input?.use_auth ?? true;
+    const startedAt = Date.now();
+    const target = {
+      id: integration.id,
+      slug: integration.slug,
+      name: integration.name,
+      is_active: integration.is_active,
+    };
+    const details = (status: number | null, authVerified: boolean) => ({
+      status,
+      auth_verified: authVerified,
+      response_time_ms: Date.now() - startedAt,
+      method,
+      url,
+      integration: target,
+    });
+    const failed = (
+      reason: IntegrationHealthReason,
+      message: string,
+      status: number | null,
+      authVerified = false,
+    ) =>
+      errorRes(message, 502, {
+        ok: false,
+        reason,
+        ...details(status, authVerified),
+      });
 
     const headers: Record<string, string> = {};
-    const syncConfig = this.toSyncConfig(integration);
-    const headerPrefix = syncConfig.auth?.header_prefix ?? 'Bearer';
-
+    let authVerified = false;
     if (useAuth) {
-      const token = await this.getValidToken(integration);
-      if (token) {
-        headers.Authorization = `${headerPrefix} ${token}`;
+      try {
+        if (isLogin) this.clearTokenCache(integration.id);
+        const token = await this.getValidToken(integration);
+        if (token) {
+          const prefix =
+            this.toSyncConfig(integration).auth?.header_prefix ?? 'Bearer';
+          headers.Authorization = `${prefix} ${token}`;
+          authVerified = isLogin;
+        }
+      } catch (error) {
+        return failed(
+          'auth_failed',
+          `Login o'tmadi — login, parol yoki login manzilini tekshiring (${this.healthErrorText(error)})`,
+          null,
+        );
       }
     }
 
-    const startedAt = Date.now();
     await this.assertOutboundUrlSafe(url);
+    const timeoutMs = Math.max(1000, input?.timeout_ms ?? 8000);
+    let status: number;
     try {
       const response = await this.outboundFetch(url, {
         method,
         headers,
-        signal: AbortSignal.timeout(Math.max(1000, input?.timeout_ms ?? 8000)),
+        signal: AbortSignal.timeout(timeoutMs),
       });
-
-      return successRes(
-        {
-          ok: response.ok,
-          status: response.status,
-          response_time_ms: Date.now() - startedAt,
-          method,
-          url,
-          integration: {
-            id: integration.id,
-            slug: integration.slug,
-            name: integration.name,
-            is_active: integration.is_active,
-          },
-        },
-        200,
-        'integration healthcheck completed',
-      );
-    } catch (error: any) {
-      return errorRes(
-        error?.message
-          ? String(error.message)
-          : 'integration healthcheck failed',
-        502,
-        {
-          ok: false,
-          response_time_ms: Date.now() - startedAt,
-          method,
-          url,
-          integration: {
-            id: integration.id,
-            slug: integration.slug,
-            name: integration.name,
-            is_active: integration.is_active,
-          },
-        },
+      status = response.status;
+    } catch (error) {
+      // Yo'naltirish (bosh manzil → hujjat sahifasi) — server javob berdi;
+      // unga ergashilmaydi (SSRF), sinov uchun shu yetarli.
+      if (error instanceof SsrfRedirectBlockedError && !explicitEndpoint) {
+        return successRes(
+          { ok: true, reason: null, ...details(null, authVerified) },
+          200,
+          'Aloqa bor',
+        );
+      }
+      const timedOut =
+        error instanceof Error &&
+        (error.name === 'TimeoutError' || error.name === 'AbortError');
+      return failed(
+        timedOut ? 'timeout' : 'unreachable',
+        timedOut
+          ? `Sayt ${Math.round(timeoutMs / 1000)} soniyada javob bermadi`
+          : `Saytga ulanib bo'lmadi (${this.healthErrorText(error)})`,
+        null,
+        authVerified,
       );
     }
+
+    if (status === 401 || (status === 403 && !authVerified)) {
+      return failed(
+        'auth_rejected',
+        `Sayt kirish kalitini qabul qilmadi (HTTP ${status})`,
+        status,
+        authVerified,
+      );
+    }
+    if (status >= 500) {
+      return failed(
+        'server_error',
+        `Saytning o'zida xato (HTTP ${status})`,
+        status,
+        authVerified,
+      );
+    }
+    if (explicitEndpoint && (status < 200 || status >= 300)) {
+      return failed(
+        'endpoint_failed',
+        `So'ralgan manzil xato qaytardi (HTTP ${status})`,
+        status,
+        authVerified,
+      );
+    }
+    return successRes(
+      { ok: true, reason: null, ...details(status, authVerified) },
+      200,
+      'Aloqa bor',
+    );
+  }
+
+  /** Sinov xabari uchun qisqa sabab (login xatosining ichki takrori olinadi). */
+  private healthErrorText(error: unknown): string {
+    const rpc = error instanceof RpcException ? error.getError() : null;
+    const message =
+      rpc && typeof rpc === 'object'
+        ? (rpc as { message?: unknown }).message
+        : error instanceof Error
+          ? error.message
+          : null;
+    const raw = typeof message === 'string' ? message.trim() : '';
+    const text = raw.replace(/^(Integration login failed:\s*)+/i, '').trim();
+    return (text || "noma'lum sabab").slice(0, 160);
   }
 
   async externalRequest(input: ExternalRequestInput) {
