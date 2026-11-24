@@ -23,6 +23,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — «Tashqi saytlar»: massiv `items` dagi kasr son va uzun nom importni to'xtatmaydi
+
+Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi.
+
+- ✏️ [order] `POST /orders/external/receive` — `items` massiv bo'lganda qator ustunga sig'diriladi: son musbat butun
+  bo'lmasa (`1.5`) yoki int4 ga sig'masa — 1; nom 255 belgiga kesiladi; buyurtma bo'yicha sonlar yig'indisini int4 dan
+  oshiradigan qator — 1. Ilgari bunday qator 400/500 berib, bo'lakni yarim yo'lda uzardi (oldingilari yaratilgan,
+  keyingilari yo'q), mijoz esa buyurtmasiz yaratilib qolardi. Matn yo'lidagi chegara bilan bir xil
+  (`apps/order-service/src/lifecycle/external-item-limits.ts`).
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readItems` massiv shoxi — shu chegaralar, aks holda
+  ro'yxatda `1.5 dona` ko'rinib, buyurtmaga 1 yoziladi.
+
 ### 2026-11-25 — «Tashqi saytlar»: `items` matn bo'lib kelganda ham mahsulot qatori yoziladi
 
 Deploy: **order-service** (migratsiya yo'q). Eski buyurtmalar orqaga to'ldirilmaydi.
