@@ -10,6 +10,7 @@ import {
   AI_STATUS_LABELS,
   PAYMENT_METHOD_LABELS,
   formatSom,
+  type BranchSlice,
   type MarketSlice,
   type ShiftMoneyBlock,
   type ShiftReportSnapshot,
@@ -20,7 +21,9 @@ import {
  *  - to'liq hisobot (PDF | XLSX) — superadmin; XLSX — filial guruhi /
  *    filial menejerlari (o'z filiali kassasi; asosiy kassa — HQ filiali);
  *  - market Excel'i — FAQAT shu marketning o'z to'lovlari (`buildMarketXlsx`,
- *    boshqa market / kuryer ma'lumoti yo'q).
+ *    boshqa market / kuryer ma'lumoti yo'q);
+ *  - filial Excel'i (asosiy kassa smenasi) — FAQAT shu filial HQ'ga topshirgan
+ *    pul (`buildBranchSliceXlsx`).
  */
 
 export const REPORT_MIME: Record<ReportFormat, string> = {
@@ -33,6 +36,9 @@ export const reportFileName = (shiftId: string, format: ReportFormat) =>
 
 export const marketReportFileName = (shiftId: string, marketId: string) =>
   `smena-${shiftId}-market-${marketId}-tolovlar.xlsx`;
+
+export const branchReportFileName = (shiftId: string, branchId: string) =>
+  `smena-${shiftId}-filial-${branchId}-hq.xlsx`;
 
 const moneyRows = (block: ShiftMoneyBlock): Array<[string, string]> => [
   ['Ochilish qoldig‘i', formatSom(block.opening_balance)],
@@ -173,6 +179,30 @@ export async function buildXlsx(
       ]);
     }
   }
+  if (!isBranch && snapshot.branches?.length) {
+    const branches = workbook.addWorksheet('Filiallar');
+    branches.columns = [
+      { header: 'Filial', width: 30 },
+      { header: 'Summa', width: 16 },
+      { header: 'Usul', width: 18 },
+      { header: 'Vaqt', width: 18 },
+      { header: 'Kassa qoldig‘i', width: 18 },
+      { header: 'Izoh', width: 14 },
+    ];
+    for (const slice of snapshot.branches) {
+      for (const line of slice.payments) {
+        branches.addRow([
+          slice.name ?? `#${slice.branch_id}`,
+          line.amount,
+          PAYMENT_METHOD_LABELS[line.payment_method] ?? line.payment_method,
+          tashkentDateTime(line.at),
+          slice.balance,
+          line.reversed ? 'qaytarildi' : '',
+        ]);
+      }
+    }
+    sheets.push(branches);
+  }
   for (const sheet of [...sheets, couriers, markets]) {
     sheet.getRow(1).font = { bold: true };
   }
@@ -220,6 +250,39 @@ export async function buildMarketXlsx(
   sheet.addRow(['Jami', slice.total]).font = { bold: true };
   if (slice.balance != null) {
     sheet.addRow(['Hisobingizdagi qoldiq', slice.balance]);
+  }
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+/**
+ * Filial Excel'i (asosiy kassa smenasi) — FAQAT shu filial HQ'ga topshirgan
+ * pul (`slice`): har to'lov (summa, usul, vaqt, izoh), jami, kassa qoldig'i.
+ */
+export async function buildBranchSliceXlsx(
+  snapshot: Pick<ShiftReportSnapshot, 'shift_id' | 'closed_at'>,
+  slice: BranchSlice,
+): Promise<Buffer> {
+  const workbook = new Workbook();
+  workbook.creator = 'Elchi';
+  const sheet = workbook.addWorksheet("HQ'ga topshirilgan");
+  sheet.columns = [{ width: 26 }, { width: 18 }, { width: 20 }, { width: 14 }];
+  sheet.addRow(['Asosiy kassa smenasi', `#${snapshot.shift_id}`]);
+  sheet.addRow(['Filial', slice.name ?? `#${slice.branch_id}`]);
+  sheet.addRow(['Yopilgan', tashkentDateTime(snapshot.closed_at)]);
+  sheet.addRow([]);
+  sheet.addRow(['Summa', 'Usul', 'Vaqt', 'Izoh']).font = { bold: true };
+  for (const line of slice.payments) {
+    sheet.addRow([
+      line.amount,
+      PAYMENT_METHOD_LABELS[line.payment_method] ?? line.payment_method,
+      tashkentDateTime(line.at),
+      line.reversed ? 'qaytarildi' : '',
+    ]);
+  }
+  sheet.addRow([]);
+  sheet.addRow(['Jami', slice.total]).font = { bold: true };
+  if (slice.balance != null) {
+    sheet.addRow(['Filial kassasidagi qoldiq', slice.balance]);
   }
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
@@ -291,6 +354,17 @@ export async function buildPdf(snapshot: ShiftReportSnapshot): Promise<Buffer> {
           item.entered_balance == null ? '—' : formatSom(item.entered_balance)
         }; farq ${item.difference == null ? '—' : formatSom(item.difference)}; AI: ${
           AI_STATUS_LABELS[item.ai_status] ?? item.ai_status
+        }`,
+      );
+    }
+  }
+  if (!isBranch && snapshot.branches?.length) {
+    heading(`Filiallar (${snapshot.branches.length})`);
+    for (const slice of snapshot.branches) {
+      line(
+        slice.name ?? `#${slice.branch_id}`,
+        `${slice.payments.length} ta, ${formatSom(slice.total)}; kassa qoldig‘i ${
+          slice.balance == null ? '—' : formatSom(slice.balance)
         }`,
       );
     }
