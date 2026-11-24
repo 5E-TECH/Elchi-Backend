@@ -135,6 +135,7 @@ import {
 import {
   OrderLookupService,
   rpcErrorStatusOf,
+  siteRegionConflicts,
 } from '../lookup/order-lookup.service';
 import {
   isIntegrationOrderCreate,
@@ -12613,7 +12614,6 @@ export class OrderLifecycleService {
       this.badRequest('orders is required');
     }
 
-    const fallbackDistrictId = await this.lookup.getDefaultDistrictId();
     const created: Array<{
       id: string;
       external_id: string | null;
@@ -12724,21 +12724,35 @@ export class OrderLifecycleService {
         fieldMapping.district_code_field ?? 'district',
       );
       /**
-       * ⚠️ Qat'iy rejimda ANIQLANGAN tuman talab qilinadi. Moslik faqat
-       * SOATO kodi yoki ichki ID bo'yicha izlanadi — NOM bo'yicha emas,
-       * ya'ni "Chilonzor" deb yuborgan tizim hech qachon mos kelmaydi va
-       * zaxira tuman ishlatilardi.
+       * ⚠️ TUMAN ANIQLANMASA BUYURTMA YARATILMAYDI — har qanday rejimda
+       * (ega 2026-11-25). Ilgari oddiy rejimda zaxira tuman qo'yilardi va
+       * posilka jimgina begona viloyatga ketardi; endi qator `skipped` da,
+       * operator tumanni o'zi tanlaydi («Tashqi saytlar» → «Tuzatish»).
        */
-      const resolvedDistrict =
-        await this.lookup.resolveDistrictIdOrNull(districtExternal);
-      if (strict && !resolvedDistrict) {
+      const district =
+        await this.lookup.resolveExternalDistrict(districtExternal);
+      if (!district) {
         skipped.push({
           external_id: externalId,
           reason: 'district_unresolved',
         });
         continue;
       }
-      const districtId = resolvedDistrict ?? fallbackDistrictId;
+      /**
+       * ⚠️ SAYTNING VILOYATI TUMANGA ZID — YARATILMAYDI. 2026-11-24 da sayt
+       * 12 xil viloyat (1703, 1706, …) yuborgan, hammasi Bektemir (1726283)
+       * deb yozilgan edi: bu solishtirish birinchi buyurtmadayoq to'xtatardi.
+       */
+      if (
+        siteRegionConflicts(
+          this.getFieldValue(ext, fieldMapping.region_code_field ?? 'region'),
+          district,
+        )
+      ) {
+        skipped.push({ external_id: externalId, reason: 'region_mismatch' });
+        continue;
+      }
+      const districtId = district.id;
       /**
        * ⚠️ VILOYAT FAQAT TUMANDAN (prod 2026-11-24). Saytning `region` i
        * Elchi viloyat id'si EMAS: saytlar SOATO viloyat kodini (masalan 1703
