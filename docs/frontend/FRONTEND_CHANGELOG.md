@@ -40,6 +40,16 @@ Deploy: **integration-service, order-service** (migratsiya yo'q).
   bu emas — ular chiquvchi holat sinxroni.
   → **Frontendda:** 🔧 «Tashqi saytlar» va konsolda shu maydon ko'rsatilsin.
 
+### 2026-11-25 — «Tashqi saytlar»: buyurtma saytdagi tuman va viloyat pochtasiga tushadi (prod hodisasi)
+
+Deploy: **order-service, logistics-service** (migratsiya yo'q).
+
+- ✏️ [order] `POST /orders/external/receive` — tuman SOATO kodi bo'yicha HAQIQATAN topiladi (ilgari kod
+  logistics'ga yetmasdi va har buyurtma jadvaldagi birinchi tumanga, ya'ni bitta pochtaga tushardi).
+- ✏️ [order] Buyurtma viloyati FAQAT tumandan olinadi; saytning `region` i (SOATO kodi) `region_id` ga
+  yozilmaydi. Tuman viloyatga biriktirilmagan bo'lsa — `skipped[].reason = 'region_unresolved'` (avvalgidek).
+- 🟢 Ulanish sozlamasidagi «Viloyat» maydoni (`region_code_field`) endi o'qilmaydi — kontrakt o'zgarmadi.
+
 ### 2026-11-23 — Bekorlarni marketga topshirish: market QR sukut bo'yicha majburiy, admin o'chira oladi (skan auditi #43)
 
 Deploy: **order-service, api-gateway** (migratsiya yo'q). Ega qarori 2026-11-23.
