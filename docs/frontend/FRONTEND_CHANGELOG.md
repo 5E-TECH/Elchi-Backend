@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — «Tashqi saytlar»: `items` matn bo'lib kelganda ham mahsulot qatori yoziladi
+
+Deploy: **order-service** (migratsiya yo'q). Eski buyurtmalar orqaga to'ldirilmaydi.
+
+- ✏️ [order] `POST /orders/external/receive` — `items_field` qiymati MATN bo'lsa (Lidershop, Alion:
+  `"Diskali soat x 1 = 99 000 so'm"`) undan mahsulot nomi va soni olinadi; qatorlar vergul / `;` / yangi qator
+  bilan ajraladi. Ilgari matn tashlanardi: `items = []`, `product_quantity = 0`.
+- ✏️ [order] Matn TO'LIQ ajralmasa — butun matn (255 belgigacha) bitta qator nomi, soni `total_count_field`
+  (sukut `total_count`, musbat butun son) yoki 1. Harf ham raqam ham yo'q matn — bo'sh ro'yxat.
+- 🟢 Summa matndan OLINMAYDI (avvalgidek `total_price` / `delivery_price`); `product_id` — `null`; massiv yo'li o'zgarmadi.
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readItems` — aynan shu qoida
+  (`apps/order-service/src/lifecycle/external-items-text.ts`), aks holda ro'yxatda mahsulot ko'rinmaydi.
+
 ### 2026-11-25 — «Aloqani sinash» va saytdan olingan buyurtmalar soni
 
 Deploy: **integration-service, order-service** (migratsiya yo'q).

@@ -245,13 +245,95 @@ describe('EI-12 — mahsulot qatorlari', () => {
     expect(dto.items.map((i: any) => i.quantity)).toEqual([1, 1]);
   });
 
-  it("`items` massiv bo'lmasa bo'sh ro'yxat — yiqilmaydi", async () => {
+  it.each([undefined, null, 5, true, { name: 'Telefon' }, '', '  '])(
+    "`items` massiv ham, matn ham bo'lmasa bo'sh ro'yxat — yiqilmaydi (%p)",
+    async (items) => {
+      const dto = await run({ id: 'Y5', phone: '+998901112233', items });
+      expect(dto.items).toEqual([]);
+    },
+  );
+});
+
+/**
+ * Prod 2026-11-25: Lidershop va Alion `items` ni MATN qilib yuboradi. Ilgari
+ * matn tashlanardi — buyurtma mahsulotsiz (`product_quantity = 0`) tushardi.
+ * Ajratish qoidasi — `lifecycle/external-items-text.spec.ts`.
+ */
+describe("⭐ `items` matn bo'lib kelganda mahsulot qatori yoziladi", () => {
+  it('⭐ prod holati: nom va son matndan, katalogga bog`lanmaydi', async () => {
     const dto = await run({
-      id: 'Y5',
-      phone: '+998901112233',
-      items: 'salom',
+      ...VALID,
+      items: "Diskali soat x 1 = 99 000 so'm",
+      total_count: 1,
     });
-    expect(dto.items).toEqual([]);
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'Diskali soat', quantity: 1 },
+    ]);
+  });
+
+  it('bir nechta qator — har biri alohida', async () => {
+    const dto = await run({
+      ...VALID,
+      items: "Soat x 1 = 99 000 so'm, Kamar x 2 = 50 000 so'm",
+      total_count: 3,
+    });
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'Soat', quantity: 1 },
+      { product_id: null, product_name: 'Kamar', quantity: 2 },
+    ]);
+  });
+
+  it('⭐ ajralmaydigan matn — bitta qator, soni `total_count`', async () => {
+    const dto = await run({ ...VALID, items: 'salom', total_count: '3' });
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'salom', quantity: 3 },
+    ]);
+  });
+
+  it('`total_count` yo`q — soni 1', async () => {
+    const dto = await run({ ...VALID, items: 'salom' });
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'salom', quantity: 1 },
+    ]);
+  });
+
+  it('⭐ SUMMA matndan olinmaydi — narx avvalgidek maydonlardan', async () => {
+    const dto = await run({
+      ...VALID,
+      total_price: 150000,
+      delivery_price: 30000,
+      items: "Diskali soat x 1 = 99 000 so'm",
+    });
+    expect(dto.total_price).toBe(180000);
+
+    const noPrice = await run({
+      id: 'X1',
+      phone: '+998901112233',
+      items: "Diskali soat x 1 = 99 000 so'm",
+    });
+    expect(noPrice.total_price).toBe(0);
+  });
+
+  it('maydon nomlari ulanish xaritasidan (`items_field`, `total_count_field`)', async () => {
+    const { created } = await runFull(
+      { ...VALID, order: { goods: 'salom', count: 4 }, items: 'boshqa' },
+      undefined,
+      (svcObj) => {
+        svcObj.lookup.getIntegrationById.mockResolvedValue({
+          id: '5',
+          slug: 'lidershop',
+          market_id: '500',
+          is_active: true,
+          field_mapping: {
+            items_field: 'order.goods',
+            total_count_field: 'order.count',
+          },
+        });
+      },
+    );
+    expect(created[0].items).toEqual([
+      { product_id: null, product_name: 'salom', quantity: 4 },
+    ]);
   });
 });
 
