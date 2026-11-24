@@ -10959,8 +10959,13 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async findDistrictById(id: string) {
+    // Bo'sh id — 404 (`findDistrictBySatoCode` dagi izoh).
+    const districtId = String(id ?? '').trim();
+    if (!districtId) {
+      this.notFound('Tuman topilmadi');
+    }
     const district = await this.districtRepo.findOne({
-      where: { id },
+      where: { id: districtId },
       relations: ['region', 'assignedToRegion'],
     });
     if (!district) {
@@ -12418,8 +12423,18 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async findDistrictBySatoCode(satoCode: string) {
+    /**
+     * ⚠️ BO'SH KOD — 404. TypeORM `where` dagi `undefined` shartni TASHLAB
+     * YUBORADI va jadvaldagi birinchi tumanni qaytaradi. Chaqiruvchi yukda
+     * kalit nomini xato yozsa (`satoCode`), har qanday kod «topilardi» —
+     * sayt buyurtmalari bitta tumanga tushgan (prod 2026-11-24).
+     */
+    const code = String(satoCode ?? '').trim();
+    if (!code) {
+      this.notFound('Tuman topilmadi');
+    }
     const district = await this.districtRepo.findOne({
-      where: { sato_code: satoCode },
+      where: { sato_code: code },
       relations: ['region', 'assignedToRegion'],
     });
     if (!district) {

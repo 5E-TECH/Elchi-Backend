@@ -112,14 +112,20 @@ describe("EI-06 — `region` matn bo'lsa 500 bermaydi", () => {
     expect(dto.region_id).toBe('9');
   });
 
-  it('SON region saqlanadi — tumandan so`ralmaydi', async () => {
+  /**
+   * Prod 2026-11-24: ilgari SON xom saqlanardi. Saytlar esa SOATO viloyat
+   * kodini (1703) yuboradi — u Elchi viloyat id'si emas.
+   */
+  it('⭐ SON region ham xom YOZILMAYDI — viloyat tumandan olinadi', async () => {
     const { s, created } = svc();
     await (s as any).receiveExternalOrders({
       integration_id: '5',
-      orders: [{ id: 'X2', phone: '+998901112233', region: '14' }],
+      orders: [{ id: 'X2', phone: '+998901112233', region: 1703 }],
     });
-    expect(created[0].region_id).toBe('14');
-    expect((s as any).lookup.resolveRegionIdForDistrict).not.toHaveBeenCalled();
+    expect(created[0].region_id).toBe('9');
+    expect((s as any).lookup.resolveRegionIdForDistrict).toHaveBeenCalledWith(
+      '12',
+    );
   });
 
   it("bo'sh va yo'q qiymat — tumandan olinadi (endi NULL emas)", async () => {

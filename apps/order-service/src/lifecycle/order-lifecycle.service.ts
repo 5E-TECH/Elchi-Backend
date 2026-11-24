@@ -712,27 +712,6 @@ export class OrderLifecycleService {
     throw new RpcException({ statusCode: 404, message });
   }
 
-  /**
-   * Tashqi manbadan kelgan `region` qiymatini XAVFSIZ o'qish.
-   *
-   * `region_id` — bigint FK. Sayt u yerga matn yuborsa Postgres tip xatosi
-   * beradi va import partiyasi yarim yo'lda uziladi. Shu bois faqat butun
-   * son qabul qilinadi.
-   */
-  private numericRegionId(value: unknown): string | null {
-    if (
-      typeof value !== 'string' &&
-      typeof value !== 'number' &&
-      typeof value !== 'bigint' &&
-      typeof value !== 'boolean'
-    ) {
-      return null;
-    }
-    const raw = String(value).trim();
-    if (!raw) return null;
-    return /^\d+$/.test(raw) ? raw : null;
-  }
-
   private badRequest(message: string): never {
     throw new RpcException({ statusCode: 400, message });
   }
@@ -12744,23 +12723,21 @@ export class OrderLifecycleService {
         continue;
       }
       const districtId = resolvedDistrict ?? fallbackDistrictId;
-      const regionExternal = this.getFieldValue(
-        ext,
-        fieldMapping.region_code_field ?? 'region',
-      );
       /**
-       * ⚠️ fix3b (LC-13) — `region_id` BO'SH QOLMAYDI. Sayt viloyatni
-       * yubormasa (yoki matn yuborsa) u ilgari NULL yozilardi; filial
-       * dispatch esa buyurtmaning `region_id` siga tayanadi va NULL da
-       * Postgres 22P02 bilan yarim yo'lda yiqilardi. Endi tumandan olinadi
-       * (`assigned_region`, bo'lmasa tumanning o'z viloyati). Baribir
-       * aniqlanmasa — qator yaratilMAYDI va `skipped` da aniq sabab bilan
-       * qaytadi (partiya yarim yo'lda uzilmasin: 400 butun importni
-       * to'xtatardi). Mijoz yaratilishidan OLDIN — yetim mijoz qolmasin.
+       * ⚠️ VILOYAT FAQAT TUMANDAN (prod 2026-11-24). Saytning `region` i
+       * Elchi viloyat id'si EMAS: saytlar SOATO viloyat kodini (masalan 1703
+       * — Andijon) yuboradi. Ilgari son bo'lsa xom yozilardi — buyurtma yo'q
+       * viloyatga bog'lanib, hudud filtrlari va filial dispatch'idan tushib
+       * qolardi; `newPosts` o'zini tiklashi esa pochta FK'sida yiqilardi.
+       * BeePost ham sayt viloyatini o'qimaydi.
+       *
+       * fix3b (LC-13) — `region_id` BO'SH QOLMAYDI: tumanning xizmat
+       * viloyati (`assigned_region`, bo'lmasa o'z viloyati). Aniqlanmasa —
+       * qator yaratilMAYDI va `skipped` da aniq sabab bilan qaytadi (partiya
+       * yarim yo'lda uzilmasin: 400 butun importni to'xtatardi). Mijoz
+       * yaratilishidan OLDIN — yetim mijoz qolmasin.
        */
-      const regionId =
-        this.numericRegionId(regionExternal) ??
-        (await this.lookup.resolveRegionIdForDistrict(districtId));
+      const regionId = await this.lookup.resolveRegionIdForDistrict(districtId);
       if (!regionId) {
         skipped.push({
           external_id: externalId,
@@ -12890,18 +12867,9 @@ export class OrderLifecycleService {
           null,
         operator,
         district_id: districtId,
-        /**
-         * ⚠️ ILGARI TASHQI QIYMAT XOM YOZILARDI va bu 500 berardi (audit
-         * EI-06): `region_id` — bigint FK, sayt esa u yerga "Toshkent" yoki
-         * "TSH" kabi matn yuborishi mumkin. Postgres tip xatosi
-         * (`22P02`) chiqarardi va import BITTALAB ketgani uchun partiya
-         * YARIM YO'LDA uzilardi — bir qismi yaratilib, qolgani yo'q.
-         *
-         * Endi faqat SON qabul qilinadi. Matn yoki bo'sh bo'lsa (fix3b,
-         * LC-13) tumandan aniqlangan viloyat yoziladi — yuqoridagi izoh:
-         * HQ qabuli `assigned_region` bo'yicha ishlasa ham, filial dispatch
-         * buyurtmaning `region_id` siga tayanadi.
-         */
+        // Tumandan aniqlangan viloyat (yuqoridagi izoh); sayt qiymati xom
+        // yozilmaydi — matn 22P02 berardi (EI-06), SOATO kodi esa yo'q
+        // viloyatga bog'lardi.
         region_id: regionId,
         address:
           this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ??
