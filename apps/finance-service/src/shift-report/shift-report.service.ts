@@ -41,6 +41,7 @@ import type {
 } from '../shift-auto-close/shift-schedule.rules';
 import {
   buildBranchMessage,
+  buildBranchSliceMessage,
   buildCourierMessage,
   buildMarketMessage,
   buildSuperadminMessage,
@@ -48,11 +49,14 @@ import {
   type CourierSlice,
   type MarketSlice,
   type ShiftMoneyBlock,
+  type BranchSlice,
   type ShiftReportMessage,
   type ShiftReportSnapshot,
 } from './shift-report.builders';
 import {
   REPORT_MIME,
+  branchReportFileName,
+  buildBranchSliceXlsx,
   buildMarketXlsx,
   buildReportFile,
   marketReportFileName,
@@ -70,6 +74,10 @@ export const IDENTITY_ACTIVE_BY_ROLE_PATTERN =
 /** notification-service — filial kassasi hisoboti qayerga (guruh / shaxsiy). */
 export const BRANCH_TELEGRAM_ROUTE_PATTERN =
   'notification.telegram.branch_route';
+export const BRANCH_TELEGRAM_ROUTES_PATTERN =
+  'notification.telegram.branch_routes';
+/** `branch.find_all` sahifasi (servis chegarasi — 100). */
+const BRANCH_PAGE_LIMIT = 100;
 /** branch-service `branch.find_by_id` / `find_by_branch` — tizim nomidan. */
 const SYSTEM_BRANCH_REQUESTER = { id: 'system', roles: ['superadmin'] };
 
@@ -124,7 +132,12 @@ interface PlannedRecipient {
    * (`branchNotifyIds`).
    */
   notify_ids?: string[];
-  /** `branch` — guruh holati (`telegram` so'ralganda). */
+  /**
+   * Asosiy kassa smenasi — filialning FAQAT O'Z bo'lagi: to'liq hisobot
+   * Excel'i bu qabul qiluvchiga HECH QACHON biriktirilmaydi (faqat o'ziniki).
+   */
+  slice?: BranchSlice;
+  /** `branch` — guruh holati (`telegram` so'ralganda); yo'q — ulanmagan. */
   group?: { active: boolean; inactive_reason: string | null };
   /**
    * (audit 2026-11-22 #3) `branch` — hisobotni yuborib bo'lmaydi (dispatch
@@ -159,6 +172,21 @@ function unreachableBranch(
     unreachable: { reason, channel },
   };
 }
+
+/** Hisobot manzili sozlangan filial (`notification.telegram.branch_routes`). */
+export interface BranchTelegramRouteRow extends BranchTelegramRoute {
+  branch_id: string;
+}
+
+const reportNotificationType = (
+  snapshot: Pick<ShiftReportSnapshot, 'close_reason'>,
+): FinanceNotificationType =>
+  snapshot.close_reason === 'auto'
+    ? 'finance.shift_auto_closed'
+    : 'finance.shift_closed';
+
+/** Filialga Telegram guruhi umuman ulanmagan (`route.group = null`). */
+const BRANCH_GROUP_NOT_LINKED = 'branch_group_not_linked';
 
 /** Xabarga Telegram ilovasini (file-service kaliti) qo'shadi — yangi obyekt. */
 function withExcel<T extends ShiftReportMessage>(
@@ -319,6 +347,15 @@ export class ShiftReportService {
       if (!recipients.length) {
         return await this.markSkipped(shiftId, round);
       }
+      // Yagona qabul qiluvchi — guruhi ulanmagan filial: hech narsa ketmaydi
+      // (`skipped`), lekin sababi «Hisobot kimlarga yuborildi» da ko'rinadi.
+      if (
+        recipients.every(
+          (r) => r.unreachable?.reason === BRANCH_GROUP_NOT_LINKED,
+        )
+      ) {
+        return await this.markSkipped(shiftId, round, snapshot, recipients);
+      }
       // (BOT-2 #3) market ham — egasi shaxsiy Telegram'ga ulanganmi.
       // `branch` — filial id (foydalanuvchi emas), guruhga ketadi.
       const linked = await this.telegramLinked(
@@ -336,10 +373,7 @@ export class ShiftReportService {
         }
       }
       await this.attachExcel(snapshot, report, recipients, linked, fileKey);
-      const type: FinanceNotificationType =
-        snapshot.close_reason === 'auto'
-          ? 'finance.shift_auto_closed'
-          : 'finance.shift_closed';
+      const type = reportNotificationType(snapshot);
       let deliveries = 0;
       await this.dataSource.transaction(async (manager) => {
         for (const recipient of recipients) {
@@ -382,6 +416,9 @@ export class ShiftReportService {
           branch_groups: recipients.filter((r) => r.kind === 'branch').length,
           branch_managers: recipients.filter((r) => r.kind === 'branch_manager')
             .length,
+          branch_slices: new Set(
+            recipients.filter((r) => r.slice).map((r) => r.slice!.branch_id),
+          ).size,
         },
         user_id: null,
       });
@@ -416,16 +453,29 @@ export class ShiftReportService {
     );
   }
 
-  /** Yuboriladigan hech kim yo'q — `skipped` (outbox / fayl yo'q, qayta urinilmaydi). */
+  /**
+   * Yuboriladigan hech kim yo'q — `skipped` (outbox / fayl yo'q, qayta
+   * urinilmaydi). `unreachable` qabul qiluvchilar berilsa — sababi bilan
+   * `failed` qatorlari ham shu tranzaksiyada yoziladi.
+   */
   private async markSkipped(
     shiftId: string,
     round: number,
+    snapshot?: ShiftReportSnapshot,
+    unreachable: PlannedRecipient[] = [],
   ): Promise<ShiftReportDeliverResult> {
-    await this.dataSource.manager.update(
-      Shift,
-      { id: shiftId },
-      { report_status: 'skipped' },
-    );
+    const patch = { report_status: 'skipped' as const };
+    if (snapshot && unreachable.length) {
+      const type = reportNotificationType(snapshot);
+      await this.dataSource.transaction(async (manager) => {
+        for (const recipient of unreachable) {
+          await this.enqueueRecipient(manager, snapshot, recipient, type, null);
+        }
+        await manager.update(Shift, { id: shiftId }, patch);
+      });
+    } else {
+      await this.dataSource.manager.update(Shift, { id: shiftId }, patch);
+    }
     return {
       claimed: true,
       shift_id: shiftId,
@@ -498,7 +548,9 @@ export class ShiftReportService {
         rows.push({
           channel: 'telegram_group',
           status: 'failed',
-          failed_reason: deliveryReasonText('branch_group_inactive'),
+          failed_reason: deliveryReasonText(
+            recipient.group ? 'branch_group_inactive' : BRANCH_GROUP_NOT_LINKED,
+          ),
         });
       }
     } else if (recipient.channels.telegram) {
@@ -857,6 +909,11 @@ export class ShiftReportService {
       marketMap.set(id, slice);
     }
 
+    const branches =
+      cashboxType === Cashbox_type.MAIN
+        ? await this.branchTransfers(window)
+        : null;
+
     const accountRows = await this.checks.listForShift(String(shift.id), shift);
     const block = (kind: 'cash' | 'card'): ShiftMoneyBlock => ({
       opening_balance: num(shift[`opening_balance_${kind}`]),
@@ -900,12 +957,124 @@ export class ShiftReportService {
       }),
       couriers,
       markets: [...marketMap.values()],
+      ...(branches ? { branches } : {}),
       between_shifts: await this.betweenShifts(
         shift,
         cashboxUserId,
         cashboxType,
       ),
     };
+  }
+
+  /**
+   * Asosiy kassa smenasi oynasida FILIALLARDAN kelgan pul (`branch_to_main`
+   * KIRIM; `source_user_id` — filial id) va shu oynada qaytarilganlari (manfiy
+   * «qaytarildi» qatori). `payment_reversal` faqat asl oyoq `branch_to_main`
+   * KIRIM bo'lsa olinadi: `source_user_id` foydalanuvchi va filial id'larini
+   * aralash saqlaydi.
+   */
+  private async branchTransfers(
+    window: (
+      qb: ReturnType<EntityManager['createQueryBuilder']>,
+    ) => ReturnType<EntityManager['createQueryBuilder']>,
+  ): Promise<BranchSlice[]> {
+    const manager = this.dataSource.manager;
+    type Row = {
+      id: string;
+      branch_id: string;
+      amount: string;
+      payment_method: string;
+      at: Date;
+    };
+    const columns = (qb: ReturnType<EntityManager['createQueryBuilder']>) =>
+      qb
+        .select('h.id', 'id')
+        .addSelect('h.source_user_id', 'branch_id')
+        .addSelect('h.amount', 'amount')
+        .addSelect('h.payment_method', 'payment_method')
+        .addSelect('h.createdAt', 'at')
+        .andWhere('h.source_user_id IS NOT NULL');
+    const [received, reversed] = await Promise.all([
+      columns(window(manager.createQueryBuilder(CashboxHistory, 'h')))
+        .andWhere('h.operation_type = :income', {
+          income: Operation_type.INCOME,
+        })
+        .andWhere('h.source_type = :branchToMain', {
+          branchToMain: Source_type.BRANCH_TO_MAIN,
+        })
+        .getRawMany<Row>(),
+      columns(
+        window(manager.createQueryBuilder(CashboxHistory, 'h')).innerJoin(
+          CashboxHistory,
+          'o',
+          'o.id = h.reverses_history_id',
+        ),
+      )
+        .andWhere('h.source_type = :reversal', {
+          reversal: Source_type.PAYMENT_REVERSAL,
+        })
+        .andWhere('o.source_type = :branchToMain', {
+          branchToMain: Source_type.BRANCH_TO_MAIN,
+        })
+        .andWhere('o.operation_type = :income', {
+          income: Operation_type.INCOME,
+        })
+        .getRawMany<Row>(),
+    ]);
+    const lines = [
+      ...received.map((row) => ({ row, reversed: false })),
+      ...reversed.map((row) => ({ row, reversed: true })),
+    ].sort(
+      (a, b) =>
+        new Date(a.row.at).getTime() - new Date(b.row.at).getTime() ||
+        Number(a.row.id) - Number(b.row.id),
+    );
+    if (!lines.length) return [];
+    const ids = [...new Set(lines.map(({ row }) => String(row.branch_id)))];
+    const [directory, balances] = await Promise.all([
+      this.branchDirectory(),
+      this.branchBalances(ids),
+    ]);
+    const slices = new Map<string, BranchSlice>();
+    for (const { row, reversed: isReversal } of lines) {
+      const id = String(row.branch_id);
+      const slice = slices.get(id) ?? {
+        branch_id: id,
+        name: directory?.get(id) ?? null,
+        payments: [],
+        total: 0,
+        balance: balances.get(id) ?? null,
+      };
+      const amount = (num(row.amount) ?? 0) * (isReversal ? -1 : 1);
+      slice.payments.push({
+        history_id: String(row.id),
+        amount,
+        payment_method: String(row.payment_method),
+        at: row.at,
+        ...(isReversal ? { reversed: true } : {}),
+      });
+      slice.total = Math.round((slice.total + amount) * 100) / 100;
+      slices.set(id, slice);
+    }
+    return [...slices.values()];
+  }
+
+  /** Filial kassalaridagi joriy qoldiq (`cashboxes.user_id` — filial id). */
+  private async branchBalances(ids: string[]): Promise<Map<string, number>> {
+    const balances = new Map<string, number>();
+    if (!ids.length) return balances;
+    const rows = await this.dataSource.manager.find(Cashbox, {
+      where: {
+        user_id: In(ids),
+        cashbox_type: Cashbox_type.BRANCH,
+        isDeleted: false,
+      },
+    });
+    for (const row of rows) {
+      const value = num(row.balance);
+      if (value != null) balances.set(String(row.user_id), value);
+    }
+    return balances;
   }
 
   /**
@@ -1075,9 +1244,137 @@ export class ShiftReportService {
           snapshot,
           report.recipients.branches,
         )),
+        ...(await this.planBranchSlices(snapshot, report.recipients.branches)),
       );
     }
     return planned;
+  }
+
+  /**
+   * ASOSIY kassa smenasi yopildi → hisobot manzili sozlangan HAR filialga
+   * (HQ'dan tashqari) FAQAT O'Z bo'lagi: HQ'ga topshirgan puli va o'z kassasi
+   * qoldig'i (ega 2026-11-25: filial smenasi yopilishini kutmaydi). Manzil —
+   * filial sozlamasi: guruh yoki `private` (menejerlar). Ulanmagan filial —
+   * ro'yxatda yo'q (qator ham yozilmaydi); nofaol guruh — `failed` + sabab.
+   *
+   * Fail-soft: manzillar / HQ olinmasa — faqat WARN, HQ va superadmin hisoboti
+   * kechikmaydi («Hisobotni qayta yuborish» bilan qayta urinish mumkin).
+   */
+  private async planBranchSlices(
+    snapshot: ShiftReportSnapshot,
+    channels: ReportChannels,
+  ): Promise<PlannedRecipient[]> {
+    if (snapshot.cashbox_type !== 'main' || !channels.telegram) return [];
+    if (!this.notificationClient || !this.branchClient) return [];
+    try {
+      const routes = await this.branchRoutes();
+      if (!routes.length) return [];
+      const [hqId, directory] = await Promise.all([
+        this.hqBranchId(),
+        this.branchDirectory(),
+      ]);
+      // HQ noma'lum — uning guruhiga «filial bo'lagi» ketib qolmasin.
+      if (!isId(hqId)) throw new Error('HQ filiali topilmadi');
+      // O'chirilgan filial — ro'yxatda yo'q (ro'yxat olinmasa filtrsiz).
+      const targets = routes.filter(
+        (route) =>
+          route.branch_id !== hqId &&
+          (!directory || directory.has(route.branch_id)) &&
+          (route.report_target === 'private' || route.group),
+      );
+      const balances = await this.branchBalances(
+        targets.map((route) => route.branch_id),
+      );
+      const planned: PlannedRecipient[] = [];
+      for (const route of targets) {
+        const own = snapshot.branches?.find(
+          (item) => item.branch_id === route.branch_id,
+        );
+        const slice: BranchSlice = {
+          branch_id: route.branch_id,
+          name: directory?.get(route.branch_id) ?? own?.name ?? null,
+          payments: own?.payments ?? [],
+          total: own?.total ?? 0,
+          balance: balances.get(route.branch_id) ?? null,
+        };
+        planned.push(
+          ...(await this.planBranchSlice(snapshot, route, slice, channels)),
+        );
+      }
+      return planned;
+    } catch (error) {
+      this.logger.warn(
+        `smena #${snapshot.shift_id}: filiallarga o'z hisoboti yuborilmadi — ${short(error)}`,
+      );
+      return [];
+    }
+  }
+
+  private async planBranchSlice(
+    snapshot: ShiftReportSnapshot,
+    route: BranchTelegramRouteRow,
+    slice: BranchSlice,
+    channels: ReportChannels,
+  ): Promise<PlannedRecipient[]> {
+    const message = buildBranchSliceMessage(
+      snapshot,
+      slice,
+      process.env.ELCHI_CABINET_URL || undefined,
+    );
+    const isPrivate = route.report_target === 'private';
+    const failed = (reason: string): PlannedRecipient[] => [
+      {
+        ...unreachableBranch(
+          slice.branch_id,
+          message,
+          { telegram: true, in_app: false },
+          reason,
+          isPrivate ? 'telegram' : 'telegram_group',
+        ),
+        slice,
+      },
+    ];
+    let managers: string[] = [];
+    try {
+      managers = await this.activeUserIds(
+        await this.branchManagerIds(slice.branch_id),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `filial #${slice.branch_id} menejerlari olinmadi: ${short(error)}`,
+      );
+      if (isPrivate) return failed('branch_report_unavailable');
+    }
+    if (isPrivate) {
+      if (!managers.length) return failed('branch_no_managers');
+      return managers.map((id) => ({
+        kind: 'branch_manager' as const,
+        recipient_id: id,
+        message,
+        channels: { telegram: true, in_app: channels.in_app },
+        slice,
+      }));
+    }
+    // Menejersiz filial: dispatch smenani yopgan xodim nomidan — ilova ichida
+    // unga begona filial xabari yozilmasin (faqat guruhga).
+    const notify = managers.length
+      ? managers
+      : await this.branchNotifyIds(snapshot, []);
+    if (!notify.length) return failed('no_report_recipient');
+    return [
+      {
+        kind: 'branch',
+        recipient_id: slice.branch_id,
+        notify_ids: notify,
+        message,
+        channels: {
+          telegram: true,
+          in_app: channels.in_app && managers.length > 0,
+        },
+        ...(route.group ? { group: route.group } : {}),
+        slice,
+      },
+    ];
   }
 
   /**
@@ -1086,8 +1383,10 @@ export class ShiftReportService {
    *    nofaol guruh — `failed` + sabab);
    *  - telegram + filial `private` → har menejerga `branch_manager` (shaxsiy
    *    chat, ulanmagan — «Telegram ulanmagan»);
+   *  - telegram + filial `group` + guruh ULANMAGAN → `failed` qatori «Filial
+   *    guruhi ulanmagan» (prod 2026-11-25: bot guruhga qo'shilgan, lekin
+   *    ulanmagan — hisobot sababsiz `skipped` bo'lib, ega sababini ko'rmagan);
    *  - in_app → menejerlarga ilova ichida.
-   * Guruh ham yo'q, `private` ham emas — hech kim (jim: filial sozlamagan).
    *
    * (audit 2026-11-22 #3) Sozlangan hisobot JIM YO'QOLMAYDI: guruh dispatch'i
    * uchun faol foydalanuvchi bo'lmasa, `private` da faol menejer bo'lmasa
@@ -1117,9 +1416,25 @@ export class ShiftReportService {
         channels.telegram && route?.report_target === 'private',
       );
       const wantGroup = Boolean(
-        channels.telegram && route?.report_target !== 'private' && route?.group,
+        channels.telegram && route && route.report_target !== 'private',
       );
       if (!wantPrivate && !wantGroup && !channels.in_app) return [];
+      // Faqat guruh so'ralgan, u esa ulanmagan — nom / menejerlar kerak emas.
+      if (wantGroup && !route?.group && !channels.in_app) {
+        return [
+          unreachableBranch(
+            branchId,
+            buildBranchMessage(
+              snapshot,
+              null,
+              process.env.ELCHI_CABINET_URL || undefined,
+            ),
+            { telegram: true, in_app: false },
+            BRANCH_GROUP_NOT_LINKED,
+            'telegram_group',
+          ),
+        ];
+      }
       const [branchName, managers] = await Promise.all([
         this.branchName(branchId),
         wantPrivate
@@ -1301,6 +1616,73 @@ export class ShiftReportService {
     };
   }
 
+  /** notification-service: hisobot manzili sozlangan filiallar. Xato — throw. */
+  async branchRoutes(): Promise<BranchTelegramRouteRow[]> {
+    if (!this.notificationClient) {
+      throw new Error('NOTIFICATION mijozi yo‘q');
+    }
+    const response = await rmqSend<{ data?: unknown }>(
+      this.notificationClient,
+      { cmd: BRANCH_TELEGRAM_ROUTES_PATTERN },
+      {},
+      { timeoutMs: 5_000, retries: 1 },
+    );
+    if (!Array.isArray(response?.data)) {
+      throw new Error(`${BRANCH_TELEGRAM_ROUTES_PATTERN}: javob yaroqsiz`);
+    }
+    return (response.data as Array<Record<string, unknown>>)
+      .filter((row) => row && isId(row.branch_id))
+      .map((row) => {
+        const group =
+          row.group && typeof row.group === 'object'
+            ? (row.group as Record<string, unknown>)
+            : null;
+        return {
+          branch_id: text(row.branch_id),
+          report_target:
+            row.report_target === 'private'
+              ? ('private' as const)
+              : ('group' as const),
+          group: group
+            ? {
+                active: group.active === true,
+                inactive_reason: text(group.inactive_reason) || null,
+              }
+            : null,
+        };
+      });
+  }
+
+  /** Hamma (o'chirilmagan) filial nomlari. Olinmasa — `null` (fail-open). */
+  private async branchDirectory(): Promise<Map<string, string> | null> {
+    if (!this.branchClient) return null;
+    try {
+      const names = new Map<string, string>();
+      for (let page = 1; page <= 10; page += 1) {
+        const response = await rmqSend<{ data?: { items?: unknown } | null }>(
+          this.branchClient,
+          { cmd: 'branch.find_all' },
+          {
+            query: { page, limit: BRANCH_PAGE_LIMIT },
+            requester: SYSTEM_BRANCH_REQUESTER,
+          },
+          { timeoutMs: 5_000, retries: 1 },
+        );
+        const items = response?.data?.items;
+        if (!Array.isArray(items)) return null;
+        for (const item of items as Array<Record<string, unknown>>) {
+          const id = text(item?.id);
+          if (isId(id)) names.set(id, text(item.name).trim().slice(0, 80));
+        }
+        if (items.length < BRANCH_PAGE_LIMIT) return names;
+      }
+      return names;
+    } catch (error) {
+      this.logger.warn(`filiallar ro'yxati olinmadi: ${short(error)}`);
+      return null;
+    }
+  }
+
   /** Filial nomi — fail-open (`null`). */
   private async branchName(branchId: string): Promise<string | null> {
     if (!this.branchClient) return null;
@@ -1411,6 +1793,8 @@ export class ShiftReportService {
    *  - filial guruhi (faol) va filial menejerlari (shaxsiy chat) — to'liq
    *    hisobot (shu kassa; asosiy kassa — HQ filiali); superadmin fayli XLSX
    *    bo'lsa o'sha kalit qayta ishlatiladi;
+   *  - filial bo'lagi (`slice`, asosiy kassa smenasi) — FAQAT o'z HQ
+   *    to'lovlari Excel'i; to'liq hisobot unga HECH QACHON ketmaydi;
    *  - market — egasi Telegram'ga ulangan (shaxsiy chat) bo'lsa, FAQAT o'z
    *    to'lovlari Excel'i. Ulanmagan market guruhiga — summasiz xabar, fayl
    *    YO'Q (BOT-2 #3).
@@ -1423,12 +1807,35 @@ export class ShiftReportService {
     linked: Map<string, boolean> | null,
     superFileKey: string | null,
   ): Promise<void> {
-    const wantsFull = recipients.filter(
+    const toBranch = recipients.filter(
       (r) =>
         r.channels.telegram &&
         ((r.kind === 'branch' && r.group?.active) ||
           r.kind === 'branch_manager'),
     );
+    const sliceKeys = new Map<string, string | null>();
+    for (const recipient of toBranch) {
+      const { slice } = recipient;
+      if (!slice?.payments.length) continue;
+      let key = sliceKeys.get(slice.branch_id);
+      if (key === undefined) {
+        key = await this.storeBuffer(
+          snapshot.shift_id,
+          () => buildBranchSliceXlsx(snapshot, slice),
+          branchReportFileName(snapshot.shift_id, slice.branch_id),
+          REPORT_MIME.xlsx,
+        );
+        sliceKeys.set(slice.branch_id, key);
+      }
+      if (key) {
+        recipient.message = withExcel(
+          recipient.message,
+          key,
+          "📎 HQ'ga topshirilgan (Excel)",
+        );
+      }
+    }
+    const wantsFull = toBranch.filter((r) => !r.slice);
     if (wantsFull.length) {
       const key =
         superFileKey && report.format === 'xlsx'
@@ -1565,7 +1972,15 @@ export class ShiftReportService {
 
   private async branchNames(ids: string[]): Promise<Map<string, string>> {
     const names = new Map<string, string>();
-    for (const id of [...new Set(ids.filter(isId))].slice(0, 20)) {
+    const unique = [...new Set(ids.filter(isId))];
+    if (!unique.length) return names;
+    // Asosiy kassa hisoboti o'nlab filialga ketadi — bitta so'rov bilan.
+    const directory = unique.length > 1 ? await this.branchDirectory() : null;
+    for (const id of unique) {
+      const known = directory?.get(id);
+      if (known) names.set(id, known);
+    }
+    for (const id of unique.filter((item) => !names.has(item)).slice(0, 20)) {
       const name = await this.branchName(id);
       if (name) names.set(id, name);
     }

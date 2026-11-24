@@ -374,6 +374,42 @@ export class BranchTelegramService {
     };
   }
 
+  /**
+   * Hisobot manzili SOZLANGAN hamma filiallar (asosiy kassa smenasi
+   * yopilganda har filialga o'z bo'lagi): guruh ulangan (nofaoli sababi bilan)
+   * yoki filial `private` tanlagan. Panelda uzilgan / hech qachon ulanmagan
+   * filial — ro'yxatda yo'q.
+   */
+  async routes() {
+    const [rows, privates] = await Promise.all([
+      this.chats.find({
+        where: { owner_type: 'branch', scope: BRANCH_CHAT_SCOPE },
+      }),
+      this.settings.find({ where: { report_target: 'private' } }),
+    ]);
+    const privateIds = new Set(privates.map((row) => String(row.branch_id)));
+    const groups = new Map(
+      rows
+        .filter((row) => row.is_active || row.inactive_reason !== 'unlinked')
+        .map((row) => [
+          String(row.owner_id),
+          {
+            active: row.is_active,
+            inactive_reason: row.inactive_reason ?? null,
+          },
+        ]),
+    );
+    return {
+      statusCode: 200,
+      message: 'Branch Telegram routes',
+      data: [...new Set([...groups.keys(), ...privateIds])].map((branchId) => ({
+        branch_id: branchId,
+        report_target: privateIds.has(branchId) ? 'private' : 'group',
+        group: groups.get(branchId) ?? null,
+      })),
+    };
+  }
+
   /** Relay: filialning FAOL guruh chat'lari (dispatch tranzaksiyasi ichida). */
   async activeGroupChats(
     manager: EntityManager,

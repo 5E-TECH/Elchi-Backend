@@ -762,7 +762,7 @@ describe('modul ulanishi va TC5 analogi', () => {
   /**
    * Yagona istisno — FAQAT O'QISH: smena hisoboti filial kassasi hisoboti
    * qayerga (guruh / shaxsiy chat) ekanini `notification.telegram.branch_route`
-   * bilan so'raydi. Xabar yuborish (dispatch) u yerda ham faqat outbox orqali.
+   * (bitta filial) va `…branch_routes` (hamma sozlangan filial) bilan so'raydi. Xabar yuborish (dispatch) u yerda ham faqat outbox orqali.
    */
   const READ_ONLY_NOTIFICATION_CLIENT = join(
     'shift-report',
@@ -788,17 +788,23 @@ describe('modul ulanishi va TC5 analogi', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('istisno: shift-report NOTIFICATION mijozini faqat branch_route (o‘qish) uchun ishlatadi', () => {
+  it('istisno: shift-report NOTIFICATION mijozini faqat branch_route / branch_routes (o‘qish) uchun ishlatadi', () => {
     const src = strip(
       readFileSync(join(SRC, READ_ONLY_NOTIFICATION_CLIENT), 'utf8'),
     );
     const uses = src.match(/this\.notificationClient\b/g) ?? [];
-    // `if (!this.notificationClient …)` tekshiruvlari + bitta rmqSend.
+    // `if (!this.notificationClient …)` tekshiruvlari + ikkita o'qish rmqSend'i.
     const sends = src.match(
       /rmqSend[^;]*?this\.notificationClient,\s*\{\s*cmd:\s*([A-Z_]+|'[^']+')/g,
     );
-    expect(sends).toHaveLength(1);
-    expect(sends?.[0]).toContain('BRANCH_TELEGRAM_ROUTE_PATTERN');
+    expect(sends).toHaveLength(2);
+    expect(sends?.map((send) => /cmd:\s*([A-Z_]+)$/.exec(send)?.[1])).toEqual([
+      'BRANCH_TELEGRAM_ROUTE_PATTERN',
+      'BRANCH_TELEGRAM_ROUTES_PATTERN',
+    ]);
+    expect(src).toMatch(
+      /BRANCH_TELEGRAM_ROUTES_PATTERN\s*=\s*'notification\.telegram\.branch_routes'/,
+    );
     expect(src).toMatch(
       /BRANCH_TELEGRAM_ROUTE_PATTERN\s*=\s*'notification\.telegram\.branch_route'/,
     );

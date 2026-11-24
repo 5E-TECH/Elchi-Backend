@@ -243,12 +243,57 @@ describe('ShiftReportService — filial qabul qiluvchilari', () => {
     expect(planned[0].channels).toEqual({ telegram: true, in_app: false });
   });
 
-  it('guruh ulanmagan va `group` — hech kim (jim)', async () => {
-    const fx = setup({
-      route: { report_target: 'group', group: null },
-      managers: MANAGERS,
+  describe('guruh ulanmagan (prod 2026-11-25) — sababi ko‘rinadi', () => {
+    const NOT_LINKED: Route = { report_target: 'group', group: null };
+
+    it.each([
+      ['filial kassasi', {}, '12'],
+      [
+        'asosiy kassa → HQ',
+        { cashbox_type: 'main' as const, cashbox_user_id: '0' },
+        '1',
+      ],
+    ])('%s: `failed` (branch_group_not_linked)', async (_l, patch, id) => {
+      const fx = setup({ route: NOT_LINKED, managers: MANAGERS, hqId: '1' });
+      await expect(fx.plan(snapshot(patch))).resolves.toEqual([
+        expect.objectContaining({
+          kind: 'branch',
+          recipient_id: id,
+          channels: { telegram: true, in_app: false },
+          unreachable: {
+            reason: 'branch_group_not_linked',
+            channel: 'telegram_group',
+          },
+        }),
+      ]);
+      // Menejerlar / superadminlar so'ralmaydi — hech narsa yuborilmaydi.
+      expect(fx.identity.send).not.toHaveBeenCalled();
     });
-    await expect(fx.plan(snapshot())).resolves.toEqual([]);
+
+    it('in_app ham yoqilgan — menejerlarga ilova ichida, telegram esa so‘ralgan (guruhsiz)', async () => {
+      const fx = setup({ route: NOT_LINKED, managers: MANAGERS });
+      const planned = await fx.plan(snapshot(), {
+        telegram: true,
+        in_app: true,
+      });
+      expect(planned).toEqual([
+        expect.objectContaining({
+          kind: 'branch',
+          notify_ids: ['301', '302'],
+          channels: { telegram: true, in_app: true },
+        }),
+      ]);
+      expect(planned[0].group).toBeUndefined();
+      expect(planned[0].unreachable).toBeUndefined();
+    });
+
+    it('telegram sozlamada o‘chiq — marshrut so‘ralmaydi, hech kim', async () => {
+      const fx = setup({ route: NOT_LINKED, managers: MANAGERS });
+      await expect(
+        fx.plan(snapshot(), { telegram: false, in_app: false }),
+      ).resolves.toEqual([]);
+      expect(fx.notification.send).not.toHaveBeenCalled();
+    });
   });
 
   it('menejer yo‘q — guruh xabari smenani yopgan xodim nomidan', async () => {
@@ -546,6 +591,31 @@ describe('ShiftReportService — filial qabul qiluvchilari', () => {
       expect(fx.notifications.shiftReport).not.toHaveBeenCalled();
     });
 
+    it('guruh ulanmagan + in_app: ilova ichida ketadi, guruh — failed «ulanmagan»', async () => {
+      const fx = setup({});
+      const { manager, inserted } = insertManager();
+      await enqueue(fx.service, manager, {
+        kind: 'branch',
+        recipient_id: '12',
+        notify_ids: ['301'],
+        message: buildBranchMessage(snapshot(), null),
+        channels: { telegram: true, in_app: true },
+      });
+      expect(inserted).toEqual([
+        expect.objectContaining({ channel: 'in_app', status: 'queued' }),
+        expect.objectContaining({
+          channel: 'telegram_group',
+          status: 'failed',
+          failed_reason: expect.stringContaining('Filial guruhi ulanmagan'),
+        }),
+      ]);
+      const [payload] = fx.notifications.shiftReport.mock.calls[0] as [
+        Record<string, any>,
+      ];
+      expect(payload.channels).toEqual(['in_app', 'realtime']);
+      expect(payload.telegram).toBeUndefined();
+    });
+
     it('filial va foydalanuvchi id bir xil bo‘lsa ham dispatch id farqli', async () => {
       const fx = setup({});
       const a = insertManager();
@@ -567,5 +637,106 @@ describe('ShiftReportService — filial qabul qiluvchilari', () => {
       });
       expect(a.inserted[0].dispatch_id).not.toEqual(b.inserted[0].dispatch_id);
     });
+  });
+});
+
+describe('ShiftReportService.deliver — yagona qabul qiluvchi guruhi ulanmagan filial', () => {
+  const BRANCH_ONLY = {
+    recipients: {
+      superadmin: { telegram: false, in_app: false },
+      couriers: { telegram: false, in_app: false },
+      markets: { telegram: false, in_app: false },
+      branches: { telegram: true, in_app: false },
+    },
+    format: 'pdf',
+  };
+
+  const deliver = async (group: Route['group']) => {
+    const inserted: Array<Record<string, unknown>> = [];
+    const qb: Record<string, jest.Mock> = {};
+    for (const name of ['insert', 'into', 'orIgnore', 'returning']) {
+      qb[name] = jest.fn(() => qb);
+    }
+    qb.values = jest.fn((row: Record<string, unknown>) => {
+      inserted.push(row);
+      return qb;
+    });
+    qb.execute = jest.fn(() => Promise.resolve({ raw: [{ id: '1' }] }));
+    const manager = {
+      findOne: jest.fn().mockResolvedValue({ id: '77' }),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      createQueryBuilder: jest.fn(() => qb),
+    };
+    const activityLog = { log: jest.fn().mockResolvedValue(undefined) };
+    const notifications = { shiftReport: jest.fn() };
+    const file = { send: jest.fn(() => throwError(() => new Error('off'))) };
+    const fx = setup({
+      route: { report_target: 'group', group },
+      managers: MANAGERS,
+      hqId: '1',
+    });
+    const service = new ShiftReportService(
+      {
+        manager,
+        transaction: (run: (m: unknown) => Promise<unknown>) => run(manager),
+      } as never,
+      activityLog as never,
+      {
+        loadAutomationSettings: () => Promise.resolve({ report: BRANCH_ONLY }),
+      } as never,
+      notifications as never,
+      fx.identity as never,
+      file as never,
+      fx.notification as never,
+      fx.branch as never,
+    );
+    Object.assign(service, {
+      claim: () => Promise.resolve({ round: 1 }),
+      buildSnapshot: () =>
+        Promise.resolve(
+          snapshot({ cashbox_type: 'main', cashbox_user_id: '0' }),
+        ),
+    });
+    const result = await service.deliver('77');
+    return { result, inserted, manager, activityLog, notifications, file };
+  };
+
+  it('holat `skipped`, sababi yoziladi; fayl, outbox va «yuborildi» jurnali yo‘q', async () => {
+    const fx = await deliver(null);
+    expect(fx.result).toEqual({
+      claimed: true,
+      shift_id: '77',
+      round: 1,
+      status: 'skipped',
+      recipients: 0,
+    });
+    expect(fx.inserted).toEqual([
+      expect.objectContaining({
+        shift_id: '77',
+        recipient_kind: 'branch',
+        recipient_id: '1',
+        channel: 'telegram_group',
+        status: 'failed',
+        dispatch_id: null,
+        failed_reason: expect.stringContaining('Filial guruhi ulanmagan'),
+      }),
+    ]);
+    expect(fx.manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: '77' },
+      { report_status: 'skipped' },
+    );
+    expect(fx.notifications.shiftReport).not.toHaveBeenCalled();
+    expect(fx.file.send).not.toHaveBeenCalled();
+    expect(fx.activityLog.log).not.toHaveBeenCalled();
+  });
+
+  it('guruh ulangach (qayta yuborish) — `sent` va dispatch ketadi', async () => {
+    const fx = await deliver({ active: true, inactive_reason: null });
+    expect(fx.result).toMatchObject({ status: 'sent', recipients: 1 });
+    expect(fx.inserted).toEqual([
+      expect.objectContaining({ channel: 'telegram_group', status: 'queued' }),
+    ]);
+    expect(fx.notifications.shiftReport).toHaveBeenCalledTimes(1);
   });
 });
