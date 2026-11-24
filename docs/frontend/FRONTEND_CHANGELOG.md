@@ -23,9 +23,9 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
-### 2026-11-25 — «Aloqani sinash»: ishlab turgan sayt endi xato chiqmaydi
+### 2026-11-25 — «Aloqani sinash» va saytdan olingan buyurtmalar soni
 
-Deploy: **integration-service** (migratsiya yo'q).
+Deploy: **integration-service, order-service** (migratsiya yo'q).
 
 - ✏️ [integration] `POST /integrations/:id/healthcheck` (va `/test`) — `endpoint` berilmasa bosh manzildagi
   404 / 405 / 403 (login o'tgan bo'lsa) xato EMAS: server javob berdi va login o'tdi. Yiqilish: login o'tmadi,
@@ -34,6 +34,11 @@ Deploy: **integration-service** (migratsiya yo'q).
   `server_error` · `endpoint_failed` yoki `null`), yangi `auth_verified`, `status` (javob bo'lmasa `null`).
   Yiqilganda `message` — o'zbekcha sabab; «integration healthcheck completed» endi hech qachon kelmaydi.
   → **Frontendda:** 🔧 `reason` bo'yicha matn (uz/ru/en); `ctlDone` o'rniga «Aloqa bor».
+- 🆕 [integration] `GET /integrations` va `GET /integrations/:id` — har qatorda `imported_orders`:
+  `{ total, today, last_at }` (shu saytdan olingan buyurtmalar, buyurtmalarning o'zidan sanaladi; `today` —
+  Toshkent kuni). `null` — noma'lum (order-service javob bermadi), 0 EMAS. `total_synced_orders` / `last_sync_at`
+  bu emas — ular chiquvchi holat sinxroni.
+  → **Frontendda:** 🔧 «Tashqi saytlar» va konsolda shu maydon ko'rsatilsin.
 
 ### 2026-11-23 — Bekorlarni marketga topshirish: market QR sukut bo'yicha majburiy, admin o'chira oladi (skan auditi #43)
 

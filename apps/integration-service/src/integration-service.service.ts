@@ -221,6 +221,13 @@ const INBOUND_ORDER_OUTCOMES = new Set<string>([
   'no_shipment',
 ]);
 
+/** Saytdan olingan buyurtmalar (`order.external.import_stats`). */
+interface ImportedOrdersStats {
+  total: number;
+  today: number;
+  last_at: string | null;
+}
+
 /** «Aloqani sinash» yiqilganda sababi — frontend shu bo'yicha matn tanlaydi. */
 export type IntegrationHealthReason =
   | 'auth_failed'
@@ -5573,6 +5580,57 @@ export class IntegrationServiceService {
     }));
   }
 
+  /**
+   * `imported_orders` — shu saytdan olingan buyurtmalar (order-service sanaydi).
+   * Best-effort: javob kelmasa `null` («noma'lum» — 0 EMAS), ro'yxat baribir
+   * qaytadi.
+   */
+  private async attachImportStats<T extends { slug?: string | null }>(
+    rows: T[],
+  ): Promise<Array<T & { imported_orders: ImportedOrdersStats | null }>> {
+    const slugs = rows
+      .map((row) => String(row.slug ?? '').trim())
+      .filter(Boolean);
+    const response = slugs.length
+      ? await this.rmqRequest<{
+          data?: Array<ImportedOrdersStats & { slug: string }>;
+        }>(
+          this.orderClient,
+          { cmd: 'order.external.import_stats' },
+          { slugs },
+          2000,
+        )
+      : null;
+    const bySlug = Array.isArray(response?.data)
+      ? new Map(response.data.map((stat) => [stat.slug, stat]))
+      : null;
+    return rows.map((row) => {
+      const stat = bySlug?.get(String(row.slug ?? '').trim());
+      return {
+        ...row,
+        imported_orders: bySlug
+          ? {
+              total: Number(stat?.total ?? 0),
+              today: Number(stat?.today ?? 0),
+              last_at: stat?.last_at ?? null,
+            }
+          : null,
+      };
+    });
+  }
+
+  /** Market nomlari va import sonlari bir-biriga bog'liq emas — parallel. */
+  private async attachMarketsAndImports(rows: any[]): Promise<any[]> {
+    const [withMarkets, withImports] = await Promise.all([
+      this.attachMarkets(rows),
+      this.attachImportStats(rows),
+    ]);
+    return withMarkets.map((row, index) => ({
+      ...row,
+      imported_orders: withImports[index].imported_orders,
+    }));
+  }
+
   private sanitizeMarket(market: any): any {
     if (!market || typeof market !== 'object') {
       return null;
@@ -5980,7 +6038,7 @@ export class IntegrationServiceService {
         where,
         order: { createdAt: 'DESC' },
       });
-      const enriched = await this.attachMarkets(rows as any);
+      const enriched = await this.attachMarketsAndImports(rows as any);
       return successRes(this.sanitizeIntegrationRows(enriched as any[]));
     }
 
@@ -5990,7 +6048,7 @@ export class IntegrationServiceService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    const enriched = await this.attachMarkets(items as any);
+    const enriched = await this.attachMarketsAndImports(items as any);
     const sanitizedItems = this.sanitizeIntegrationRows(enriched as any[]);
     const {
       items: itemsWithoutMarket,
@@ -6021,7 +6079,7 @@ export class IntegrationServiceService {
     if (!row) {
       this.notFound('integration not found');
     }
-    const [enriched] = await this.attachMarkets([row as any]);
+    const [enriched] = await this.attachMarketsAndImports([row as any]);
     return successRes(this.sanitizeIntegrationRow(enriched));
   }
 
