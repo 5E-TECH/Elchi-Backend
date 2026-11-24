@@ -48,6 +48,18 @@ Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi.
   → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readItems` massiv shoxi — shu chegaralar, aks holda
   ro'yxatda `1.5 dona` ko'rinib, buyurtmaga 1 yoziladi.
 
+### 2026-11-25 — Smena hisoboti: «Filial guruhi ulanmagan» sababi ko'rinadi, bot ulanmagan guruhda ogohlantiradi
+
+Deploy: **finance-service**, **notification-service** (migratsiya / env yo'q).
+
+- ✏️ [finance] `GET /finance/shift/:id/report` → `data.deliveries[]`: filial kassasi (asosiy kassa — HQ filiali)
+  hisoboti Telegram guruhga sozlangan, guruh esa ULANMAGAN bo'lsa — `recipient_kind: 'branch'`,
+  `channel: 'telegram_group'`, `status: 'failed'`, `failed_reason: 'Filial guruhi ulanmagan — …'`. Boshqa qabul
+  qiluvchi bo'lmasa `data.report.status` avvalgidek `skipped` (qayta urinilmaydi). Ilgari `deliveries` bo'sh edi.
+- ✏️ [finance] `POST /finance/shift/:id/report/resend` — shu holatda `data.status: 'skipped'` + sababli `deliveries`.
+  → **Frontendda:** 🔧 `status: 'skipped'` javobida «Hisobot qayta yuborildi» deyilmasin; `skipped` bo'sh holat matni.
+- 🟢 [notification] Bot guruhga qo'shilib 20 soniyada hech narsaga ulanmasa — guruhga ulash yo'li yoziladi (bir marta).
+
 ### 2026-11-25 — «Tashqi saytlar»: `items` matn bo'lib kelganda ham mahsulot qatori yoziladi
 
 Deploy: **order-service** (migratsiya yo'q). Eski buyurtmalar orqaga to'ldirilmaydi.

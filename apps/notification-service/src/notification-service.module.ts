@@ -24,6 +24,7 @@ import { BotActionsService } from './bot/bot-actions.service';
 import { BotRateLimiterService } from './bot/bot-rate-limiter.service';
 import { BotChannelService } from './bot/bot-channel.service';
 import { BotOutboxService } from './bot/bot-outbox.service';
+import { GroupLinkHintService } from './bot/group-link-hint.service';
 import { BotActorService } from './bot/bot-actor.service';
 import { BotRouterService } from './bot/bot-router.service';
 import { BotRuntimeService } from './bot/bot-runtime.service';
@@ -218,6 +219,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     StartHandler,
     GroupHandler,
     MarketHandler,
+    GroupLinkHintService,
     MembershipHandler,
     CommandGateHandler,
     TelegramLinkService,
