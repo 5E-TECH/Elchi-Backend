@@ -1,0 +1,166 @@
+# Sayt importini tiklash (2026-11-24 hodisasi) — bir martalik, qo'lda (Actions →
+# «Site import repair» → Run workflow).
+#
+# «Use workflow from»: staging uchun `test`, production uchun `main`. Hisobot
+# «Run on server» qadamining logida.
+#
+# Sukut — DRY-RUN: hech narsa yozilmaydi. Yozish uchun mode=apply va
+# confirm=YOZISH; yozishdan oldin bazaning to'liq nusxasi olinadi, olinmasa
+# hech narsa yozilmaydi. Yo'riqnoma: docs/ops/site-import-repair.md
+name: Site import repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Server'
+        type: choice
+        options: [staging, production]
+        default: staging
+      mode:
+        description: 'dry-run — faqat hisobot; apply — yozish'
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+      extra:
+        description: "Qo'shimcha buyurtmalar (buyurtma:sayt:saytdagi_id:SOATO,…) — odatda bo'sh"
+        type: string
+        required: false
+        default: ''
+      confirm:
+        description: "apply uchun shu yerga YOZISH deb yozing"
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-import-repair-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Server sirlari (SERVER_IP, SERVER_APP_PATH, …) environment'ga bog'liq —
+    # deploy.yml bilan bir xil; production environment himoyasi ham ishlaydi.
+    environment: ${{ inputs.target }}
+    steps:
+      - name: Guard
+        env:
+          TARGET: ${{ inputs.target }}
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          EXTRA: ${{ inputs.extra }}
+          STAGING_ENABLED: ${{ vars.STAGING_ENABLED }}
+        run: |
+          if [ "$TARGET" = staging ] && [ "$STAGING_ENABLED" != true ]; then
+            echo "::error::staging yoqilmagan (vars.STAGING_ENABLED)"
+            exit 1
+          fi
+          if [ "$MODE" = apply ] && [ "$CONFIRM" != YOZISH ]; then
+            echo "::error::apply uchun confirm maydoniga YOZISH deb yozing — hech narsa qilinmadi"
+            exit 1
+          fi
+          # Serverdagi shell'ga faqat xavfsiz belgilar ketadi.
+          if [ -n "$EXTRA" ] && ! printf '%s' "$EXTRA" | grep -Eq '^[A-Za-z0-9:_,-]+$'; then
+            echo "::error::extra noto'g'ri — faqat buyurtma:sayt:saytdagi_id:SOATO, vergul bilan"
+            exit 1
+          fi
+          echo "target=$TARGET mode=$MODE"
+
+      - name: Run on server
+        id: run
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          APP_PATH: ${{ secrets.SERVER_APP_PATH }}
+          BF_TARGET: ${{ inputs.target }}
+          BF_MODE: ${{ inputs.mode }}
+          BF_EXTRA: ${{ inputs.extra }}
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          port: ${{ secrets.SERVER_SSH_PORT || 22 }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 40m
+          envs: APP_PATH,BF_TARGET,BF_MODE,BF_EXTRA
+          # deploy.yml bilan bir xil sabab: script_stop `if [ … ]` ni xato deb
+          # biladi; xatolar `set -e` va aniq `exit` bilan.
+          script_stop: false
+          script: |
+            set -eu
+            cd "$APP_PATH"
+            # Server turi tekshiruvi (deploy.yml bilan bir xil): staging checkout'da
+            # .env.production bo'lmaydi; noto'g'ri bazaga ulanib qolmaslik uchun.
+            if [ "$BF_TARGET" = staging ]; then
+              if [ -f .env.production ] || [ ! -f .env.staging ]; then
+                echo "!!! $(pwd) staging checkout emas (.env.production bor yoki .env.staging yo'q) — hech narsa qilinmadi." >&2
+                exit 1
+              fi
+              # Compose ${…} interpolyatsiyasi .env.staging'dan (deploy.yml kabi).
+              export COMPOSE_ENV_FILES=.env.staging
+              DC="docker compose -f docker-compose.prod.yml -f docker-compose.staging.yml"
+              BK_COMPOSE="docker-compose.prod.yml:docker-compose.staging.yml"
+            else
+              if [ ! -f .env.production ]; then
+                echo "!!! $(pwd) production checkout emas (.env.production yo'q) — hech narsa qilinmadi." >&2
+                exit 1
+              fi
+              # Production'da interpolyatsiya .env'dan (compose sukuti, deploy.yml kabi).
+              DC="docker compose -f docker-compose.prod.yml"
+              BK_COMPOSE="docker-compose.prod.yml"
+            fi
+            echo "server: $BF_TARGET, checkout $(git rev-parse --short HEAD 2>/dev/null || echo '?'), mode: $BF_MODE"
+
+            # Ops image (migration-runner) shu checkout'dan quriladi: deploy
+            # oxiridagi scripts/docker-gc.sh konteyneri yo'q image'larni o'chiradi,
+            # migration-runner konteyneri esa migratsiyadan keyin olib tashlanadi —
+            # ya'ni deploy'dan keyin bu image odatda yo'q. Kesh bilan (package-lock
+            # o'zgarmagan bo'lsa `npm ci` qatlami tayyor) — deploy ham shunday quradi.
+            echo "== ops image (migration-runner) $(git rev-parse --short HEAD 2>/dev/null || echo '?') dan quriladi"
+            if ! $DC build migration-runner; then
+              echo "!!! ops image qurilmadi — hech narsa qilinmadi." >&2
+              exit 1
+            fi
+            # `config --images <servis>` bog'liq servislarni (postgres:15) ham
+            # chiqaradi — deploy.yml kabi `-migration-runner` bo'yicha tanlanadi.
+            IMG="$($DC config --images migration-runner | grep -E -- '-migration-runner$' | head -n 1 || true)"
+            if [ -z "$IMG" ] || ! docker image inspect "$IMG" >/dev/null 2>&1; then
+              echo "!!! ops image topilmadi (${IMG:-?}) — hech narsa qilinmadi." >&2
+              exit 1
+            fi
+            echo "ops image: $IMG ($(docker image inspect -f '{{.Created}}' "$IMG"))"
+            if ! docker run --rm --entrypoint sh "$IMG" -c 'test -f scripts/repair-site-import.ts'; then
+              echo "!!! serverdagi checkout'da skript yo'q — avval shu skriptli relizni deploy qiling. Hech narsa qilinmadi." >&2
+              exit 1
+            fi
+
+            ARGS=""
+            if [ "$BF_MODE" = apply ]; then
+              # Deploy nusxalari bilan bir papkada (./backups/pre-deploy — deploy
+              # foydalanuvchisi yoza oladi), lekin o'z `pre-repair-*` nomi va
+              # o'z rotatsiyasi bilan: deploy'ning `pre-deploy-*` nusxalariga tegmaydi.
+              echo "== yozishdan oldin bazaning nusxasi (./backups/pre-deploy/pre-repair-*)"
+              BK_RESULT="$(mktemp)"
+              if ! BACKUP_S3_TARGET="" BACKUP_DIR=./backups/pre-deploy BACKUP_PREFIX=pre-repair BACKUP_RETENTION=3 \
+                   BACKUP_COMPOSE_FILE="$BK_COMPOSE" BACKUP_RESULT_FILE="$BK_RESULT" bash scripts/backup-db.sh; then
+                rm -f "$BK_RESULT"
+                echo "!!! nusxa olinmadi — hech narsa yozilmadi." >&2
+                exit 1
+              fi
+              BK="$(cat "$BK_RESULT")"
+              rm -f "$BK_RESULT"
+              if [ -z "$BK" ] || [ ! -s "$BK" ]; then
+                echo "!!! nusxa fayli yo'q — hech narsa yozilmadi." >&2
+                exit 1
+              fi
+              echo "nusxa: $BK"
+              ARGS="--apply"
+            fi
+
+            # Bir martalik konteyner (nomlangan migration-runner'ga tegmaydi),
+            # .env.production / .env.staging dagi POSTGRES_URI bilan.
+            if [ -n "${BF_EXTRA:-}" ]; then ARGS="$ARGS --extra=$BF_EXTRA"; fi
+            $DC run --rm --no-deps -T migration-runner npm run -s db:repair-site-import -- $ARGS
