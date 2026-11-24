@@ -1912,6 +1912,17 @@ export class OrderServiceController {
    * Kiruvchi posilkalarning manbalari — "Kiruvchi posilkalar" ekrani avval
    * manba so'raydi, keyin o'sha manbaning posilkalarini skanerlaydi.
    */
+  /** Saytlardan olingan buyurtmalar soni (integration-service ro'yxati uchun). */
+  @MessagePattern({ cmd: 'order.external.import_stats' })
+  findExternalImportStats(
+    @Payload() data: { slugs?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () =>
+      successRes(await this.orderService.findExternalImportStats(data?.slugs)),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.find_external_sources' })
   findExternalSources(
     @Payload() data: { branch_id?: string } | undefined,
