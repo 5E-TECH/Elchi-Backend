@@ -48,6 +48,7 @@ import {
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
   tashkentDayRange,
+  startOfTashkentDay,
 } from '@app/common';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import {
@@ -111,6 +112,9 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
 const CUSTOMER_SEARCH_LIMIT = 1000;
 const MAX_FETCH_ALL = 5000;
+
+/** Sayt importi buyurtmasining `operator` i: `external_<slug>` (`receiveExternalOrders`). */
+const EXTERNAL_OPERATOR_PREFIX = 'external_';
 
 /**
  * Qidiruv matni buyurtma raqamimi (Elchida buyurtma raqami = `id`)? Faqat
@@ -3783,6 +3787,66 @@ export class OrderServiceService {
       orders_count: Number(row.orders_count),
       total_price_sum: Number(row.total_price_sum),
       oldest_at: row.oldest_at ? new Date(row.oldest_at).toISOString() : null,
+    }));
+  }
+
+  /**
+   * Saytlardan olingan buyurtmalar (2026-11-25): «Integratsiyalar» va «Tashqi
+   * saytlar» da «nechta buyurtma olindi, oxirgisi qachon».
+   *
+   * ⚠️ Buyurtmalarning O'ZIDAN sanaladi (`operator = external_<slug>`).
+   * `external_integrations.total_synced_orders` buni bildirmaydi: u chiquvchi
+   * HOLAT sinxronini sanaydi va importda o'zgarmaydi — 49 ta buyurtma olingan
+   * sayt «0 ta · Sinxronlanmagan» bo'lib turardi.
+   */
+  async findExternalImportStats(
+    slugs: unknown,
+  ): Promise<
+    Array<{
+      slug: string;
+      total: number;
+      today: number;
+      last_at: string | null;
+    }>
+  > {
+    const operators = (Array.isArray(slugs) ? slugs : [])
+      .filter((slug): slug is string => typeof slug === 'string')
+      .map((slug) => slug.trim())
+      .filter(Boolean)
+      .slice(0, 200)
+      .map((slug) => `${EXTERNAL_OPERATOR_PREFIX}${slug}`);
+    if (!operators.length) return [];
+
+    let rows: Array<{
+      operator: string;
+      total: string;
+      today: string;
+      last_at: Date | null;
+    }> = [];
+    try {
+      rows = await this.orderRepo
+        .createQueryBuilder('order')
+        .select('order.operator', 'operator')
+        .addSelect('COUNT(order.id)', 'total')
+        .addSelect(
+          'COUNT(order.id) FILTER (WHERE order.createdAt >= :dayStart)',
+          'today',
+        )
+        .addSelect('MAX(order.createdAt)', 'last_at')
+        .where('order.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('order.source = :source', { source: Order_source.EXTERNAL })
+        .andWhere('order.operator IN (:...operators)', { operators })
+        .setParameter('dayStart', startOfTashkentDay(new Date()))
+        .groupBy('order.operator')
+        .getRawMany();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    return rows.map((row) => ({
+      slug: row.operator.slice(EXTERNAL_OPERATOR_PREFIX.length),
+      total: Number(row.total),
+      today: Number(row.today),
+      last_at: row.last_at ? new Date(row.last_at).toISOString() : null,
     }));
   }
 
