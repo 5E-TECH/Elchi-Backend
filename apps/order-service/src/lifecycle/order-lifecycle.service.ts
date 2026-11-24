@@ -140,6 +140,7 @@ import {
   isIntegrationOrderCreate,
   resolveOrderCreateContent,
 } from './order-create-content';
+import { readExternalItemsText } from './external-items-text';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import {
   OrderNotificationService,
@@ -12676,13 +12677,28 @@ export class OrderLifecycleService {
        * `item_qty_field` — massiv ichidagi element maydonlari. Uchalasi ham
        * sozlanadi, chunki har sayt boshqacha nomlaydi.
        *
-       * Massiv bo'lmasa yoki nom bo'sh bo'lsa qator TASHLANADI — yarim
-       * to'ldirilgan qator buyurtmani buzardi.
+       * Nomi bo'sh element TASHLANADI — yarim to'ldirilgan qator buyurtmani
+       * buzardi.
+       *
+       * Ba'zi saytlar (Lidershop, Alion) massiv o'rniga MATN yuboradi —
+       * "Diskali soat x 1 = 99 000 so'm" (`readExternalItemsText`; ajralmasa
+       * butun matn bitta qator, soni `total_count_field` dan). Massiv ham matn
+       * ham bo'lmasa — bo'sh ro'yxat.
        */
       const rawItems = this.getFieldValue(
         ext,
         fieldMapping.items_field ?? 'items',
       );
+      const textItems =
+        typeof rawItems === 'string'
+          ? readExternalItemsText(
+              rawItems,
+              this.getFieldValue(
+                ext,
+                fieldMapping.total_count_field ?? 'total_count',
+              ),
+            ).map((item) => ({ product_id: null, ...item }))
+          : [];
       const mappedItems = (Array.isArray(rawItems) ? rawItems : [])
         .map((row: unknown) => {
           const name = String(
@@ -12890,7 +12906,7 @@ export class OrderLifecycleService {
          * katalogimizga mos kelmaydi va har nomni katalogda yaratish
          * katalogni axlatga to'ldirardi. Nom va soni yetarli.
          */
-        items: mappedItems,
+        items: [...mappedItems, ...textItems],
       });
 
       created.push({
