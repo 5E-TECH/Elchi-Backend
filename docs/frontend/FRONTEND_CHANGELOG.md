@@ -59,6 +59,18 @@ Deploy: **finance-service**, **notification-service** (migratsiya / env yo'q).
   → **Frontendda:** 🔧 `status: 'skipped'` javobida «Hisobot qayta yuborildi» deyilmasin; `skipped` bo'sh holat matni.
 - 🟢 [notification] Bot guruhga qo'shilib 20 soniyada hech narsaga ulanmasa — guruhga ulash yo'li yoziladi (bir marta).
 
+### 2026-11-25 — «Tashqi saytlar»: bitta nosoz mijoz yoki narx importni to'xtatmaydi
+
+Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi, yangi sabab yo'q.
+
+- ✏️ [order] `POST /orders/external/receive` — telefon xodim / marketniki bo'lsa (identity 409) butun so'rov yiqilmaydi:
+  faqat shu qator `skipped[].reason = 'customer_create_failed'`. Identity nosozligi (timeout, 5xx) avvalgidek xato.
+- ✏️ [order] Jami narx (yetkazish bilan) 999 999 999 999.99 dan katta bo'lsa — `price_invalid` (ilgari 500).
+- 🟢 [order] Narx va QR mijozdan OLDIN tekshiriladi: rad etilgan buyurtma mijoz yaratmaydi, mavjudini yangilamaydi.
+- 🟢 [order] Mijoz kartasida uzun ism (100) va manzil (255) kesiladi, buyurtmada manzil to'liq qoladi. 20 belgidan uzun
+  qo'shimcha raqam kesilmaydi: bitta raqam bo'lsa kanonik shakli, aks holda yozilmaydi.
+  → **Frontendda:** shart emas (`customer_create_failed` va `price_invalid` matnlari bor).
+
 ### 2026-11-25 — «Tashqi saytlar»: minglik bo'shlig'i bilan yozilgan narx («150 000») o'qiladi
 
 Deploy: **order-service** (migratsiya yo'q). Ega qarori 2026-11-25.
