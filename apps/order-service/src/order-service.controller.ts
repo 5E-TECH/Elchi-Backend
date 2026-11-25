@@ -1302,7 +1302,12 @@ export class OrderServiceController {
   settlementRetreat(
     @Payload()
     data: {
-      level: 'courier_to_branch' | 'hq_to_market';
+      level:
+        | 'courier_to_branch'
+        | 'branch_to_hq'
+        | 'hq_to_market'
+        // (2026-11-26) B — filial kassasidan marketga to'lov, match "X:M".
+        | 'branch_to_market';
       match_value: string;
       amount: number;
       requester_id?: string;

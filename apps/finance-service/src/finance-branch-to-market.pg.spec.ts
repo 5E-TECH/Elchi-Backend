@@ -30,7 +30,7 @@ import { PaymentCorrectionService } from './payment-correction/payment-correctio
  * (`FINANCE_OPERATOR_PG_TEST_URI`): kassa oyoqlari (filial −X karta, MAIN
  * +X/−X, market −X, bitta `transfer_id`), daftar siljishlari (`branch_to_hq`
  * + `hq_to_market`), filial «Kassa qarzga ishlaydi», qo'riqchilar,
- * idempotentlik, chek va T6 tuzatish (rad).
+ * idempotentlik, chek va T6 (2026-11-26: faqat qaytarish).
  */
 // CI: FINANCE_PG_TEST_URI (o`z sxemasi — umumiy bazada xavfsiz).
 const pgUri =
@@ -638,41 +638,157 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
     expect(advances()).toEqual([['branch_to_hq', BRANCH, 200_000, 'gw:bm-10']]);
   });
 
-  it('⭐ T6: to`rt oyoqning hech biri qaytarilmaydi / tuzatilmaydi — 409 NOT_CORRECTABLE, pul joyida', async () => {
-    await toMarket(250_000, 'gw:bm-11');
-    const snapshot = {
+  it('⭐ T6 (2026-11-26, ega): istalgan oyoqdan QAYTARILADI — filial +X, MAIN sof 0, market +X; 4 teskari qator; daftar hq_to_market → branch_to_hq; summa tahriri — 409 reverse_only', async () => {
+    const before = {
       branch: await box(BRANCH, Cashbox_type.BRANCH),
       main: await box('0', Cashbox_type.MAIN),
       market: await box(MARKET, Cashbox_type.FOR_MARKET),
     };
+    await toMarket(250_000, 'gw:bm-11');
+    const original = await legs();
+    expect(original).toHaveLength(4);
 
-    for (const leg of await legs()) {
-      const base = {
-        history_id: leg.id,
-        reason: "Xato kiritilgan to'lov",
-        idempotency_key: randomUUID(),
-        ...SA,
-      };
-      expect(await errorBody(corrections.reverse(base))).toMatchObject({
+    // Tahrir — hech bir oyoqdan: 409 reverse_only, hech narsa o'zgarmaydi.
+    for (const leg of original) {
+      expect(
+        await errorBody(
+          corrections.correctAmount({
+            history_id: leg.id,
+            reason: "Xato kiritilgan to'lov",
+            idempotency_key: randomUUID(),
+            new_amount: 100_000,
+            ...SA,
+          }),
+        ),
+      ).toMatchObject({
+        statusCode: 409,
+        code: 'NOT_CORRECTABLE',
+        reason: 'reverse_only',
+      });
+    }
+    expect(await db.getRepository(PaymentCorrection).count()).toBe(0);
+
+    // Tafsilot: blok bor, faqat qaytarish (`edit_allowed: false`), yo'nalish C.
+    const mainIncome = original.find(
+      (leg) =>
+        leg.box === Cashbox_type.MAIN && leg.op === Operation_type.INCOME,
+    )!;
+    const detail: any = await service.findHistoryById(mainIncome.id, {
+      include_correctable: true,
+    });
+    expect(detail.data.correctable).toMatchObject({
+      allowed: true,
+      edit_allowed: false,
+      transfer: {
+        kind: 'market_payment',
+        variant: 'branch_click_market',
+        payment_method: 'click_to_market',
+        amount: 250_000,
+        receiver: { cashbox_type: 'branch', branch_id: BRANCH },
+        courier: null,
+        market: { id: MARKET },
+      },
+    });
+
+    outbox.enqueue.mockClear();
+    const res: any = await corrections.reverse({
+      history_id: mainIncome.id,
+      reason: "Xato kiritilgan to'lov",
+      idempotency_key: randomUUID(),
+      ...SA,
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.data.correction).toMatchObject({
+      action: 'reverse',
+      payment_kind: 'market_payment',
+      original_amount: 250_000,
+      new_amount: null,
+    });
+
+    // Kassalar to'lovdan oldingi holatda (naqd / karta bo'laklari ham).
+    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual(before.branch);
+    expect(await box('0', Cashbox_type.MAIN)).toEqual(before.main);
+    expect(await box(MARKET, Cashbox_type.FOR_MARKET)).toEqual(before.market);
+
+    // Har asl oyoqqa bitta teskari qator (asl qatorlar o'zgarmaydi).
+    const reversals = await db.getRepository(CashboxHistory).find({
+      where: { source_type: Source_type.PAYMENT_REVERSAL },
+      relations: ['cashbox'],
+    });
+    expect(reversals).toHaveLength(4);
+    expect(
+      reversals.map((row) => String(row.reverses_history_id)).sort(),
+    ).toEqual(original.map((leg) => leg.id).sort());
+    for (const row of reversals) {
+      const leg = original.find(
+        (item) => item.id === String(row.reverses_history_id),
+      )!;
+      expect(row.operation_type).not.toBe(leg.op);
+      expect(Number(row.amount)).toBe(250_000);
+      expect(row.payment_method).toBe(PaymentMethod.CLICK_TO_MARKET);
+    }
+
+    // Daftar orqaga: AVVAL market bo'g'ini, keyin filial → HQ.
+    const retreats = outbox.enqueue.mock.calls
+      .filter((call) => call[1] === 'order.settlement.retreat')
+      .map((call) => {
+        const payload = call[2] as Record<string, unknown>;
+        return [payload.level, payload.match_value, payload.amount];
+      });
+    expect(retreats).toEqual([
+      ['hq_to_market', MARKET, 250_000],
+      ['branch_to_hq', BRANCH, 250_000],
+    ]);
+    expect(
+      outbox.enqueue.mock.calls.filter(
+        (call) => call[1] === 'order.settlement.advance',
+      ),
+    ).toEqual([]);
+
+    // Ikkinchi marta (boshqa oyoqdan ham) — 409 ALREADY_CORRECTED.
+    const branchLeg = original.find((leg) => leg.box === Cashbox_type.BRANCH)!;
+    expect(
+      await errorBody(
+        corrections.reverse({
+          history_id: branchLeg.id,
+          reason: "Xato kiritilgan to'lov",
+          idempotency_key: randomUUID(),
+          ...SA,
+        }),
+      ),
+    ).toMatchObject({ statusCode: 409, code: 'ALREADY_CORRECTED' });
+    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual(before.branch);
+  });
+
+  it('T6: oddiy filial → HQ topshirig`i (naqd) — tuzatish bloki yo`q, qaytarib bo`lmaydi', async () => {
+    await service.paymentFromBranchToMain({
+      branch_id: BRANCH,
+      amount: 100_000,
+      payment_method: PaymentMethod.CASH,
+      created_by: '1',
+      dedup_epoch: 'gw:bm-plain',
+    });
+    const rows = await legs();
+    expect(rows).toHaveLength(2);
+    for (const leg of rows) {
+      const detail: any = await service.findHistoryById(leg.id, {
+        include_correctable: true,
+      });
+      expect(detail.data.correctable).toBeNull();
+      expect(
+        await errorBody(
+          corrections.reverse({
+            history_id: leg.id,
+            reason: "Xato kiritilgan to'lov",
+            idempotency_key: randomUUID(),
+            ...SA,
+          }),
+        ),
+      ).toMatchObject({
         statusCode: 409,
         code: 'NOT_CORRECTABLE',
         reason: 'unsupported_type',
       });
-      expect(
-        await errorBody(
-          corrections.correctAmount({
-            ...base,
-            idempotency_key: randomUUID(),
-            new_amount: 100_000,
-          }),
-        ),
-      ).toMatchObject({ statusCode: 409, code: 'NOT_CORRECTABLE' });
     }
-
-    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual(snapshot.branch);
-    expect(await box('0', Cashbox_type.MAIN)).toEqual(snapshot.main);
-    expect(await box(MARKET, Cashbox_type.FOR_MARKET)).toEqual(snapshot.market);
-    expect(await db.getRepository(CashboxHistory).count()).toBe(4);
-    expect(await db.getRepository(PaymentCorrection).count()).toBe(0);
   });
 });

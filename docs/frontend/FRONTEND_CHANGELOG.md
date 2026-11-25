@@ -23,6 +23,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-26 — To'lovni qaytarish: filial ishtirokidagi to'lovlar ham (ega)
+
+Deploy: **order-service** (avval yoki birga), **finance-service**, api-gateway (faqat hujjat). Migratsiya, env yo'q.
+⚠️ Frontend shu PR bilan birga yoki OLDIN chiqsin: eski frontend B uchun «Asosiy kassa → Market» deb noto'g'ri yozadi
+va «Summani tahrirlash» tugmasini ko'rsatadi (bossa 409 `reverse_only`).
+
+- ✏️ [finance] `POST /finance/cashbox/history/:id/reverse` endi uch yangi yo'lni ham QAYTARADI (oldin 409
+  `unsupported_type`):
+  - **A** `courier_click_branch` — «Marketga o'tkazma», menejer yozgan (kuryer → filial → market): kuryer +X, market
+    +X, filial sof 0;
+  - **B** `market_branch` — filial kassasidan marketga to'lov: filial +X, market +X;
+  - **C** `branch_click_market` — «Filialdan marketga o'tkazma» (HQ yozgan): filial +X, MAIN sof 0, market +X.
+  Har birida buyurtmalar daftari ham orqaga (A: market → filial → kuryer; B: filial → market; C: market → filial → HQ).
+- ⚠️ [finance] A / B / C da `POST …/correct-amount` — 409 `NOT_CORRECTABLE` + `reason: 'reverse_only'` (yangi sabab;
+  «faqat qaytarish mumkin»).
+- 🆕 [finance] `GET /finance/cashbox/history/:id` → `correctable.edit_allowed: boolean` va `correctable.transfer.variant`
+  (`courier` | `courier_click` | `courier_click_branch` | `market` | `market_branch` | `branch_click_market`).
+  `transfer.receiver` — pul QAYTADIGAN kassa (B va C da filial).
+- 🟢 [finance] Oddiy filial → HQ topshirig'i (`branch_to_main`, naqd / o'tkazma) — avvalgidek `correctable: null`.
+  → **Frontendda:** 🔧 «Qayerdan → Qayerga» `variant` bo'yicha (filial kassasi → market va h.k.); `edit_allowed: false`
+  — «Summani tahrirlash» yo'q, izoh; `reverse_only` xato matni; «yozuvlari to'liq emas» o'rniga tushunarli matn.
+
+
 ### 2026-11-25 — GET /orders/:id: filial kontakti va kuryer kontakti (0Rn5U6AD)
 
 Deploy: **branch-service, api-gateway** (migratsiya, env yo'q; tartib muhim emas — branch-service eski bo'lsa maydonlar

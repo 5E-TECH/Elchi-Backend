@@ -156,6 +156,7 @@ import {
   attachCorrectionViews,
   buildTransferView,
   evaluateCorrectable,
+  isBranchTransferType,
   isCorrectableType,
   readWindowSetting,
   resolveRootHistoryId,
@@ -3291,15 +3292,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * T6 — `/history/:id` dagi `correctable: { allowed, code?, reason?,
-   * deadline, window_days, root_history_id, transfer }`. Smena / balans /
+   * deadline, window_days, edit_allowed, root_history_id, transfer }`. Smena / balans /
    * karta amal paytida tekshiriladi. Qamrovdan tashqari tur — `null`
    * (iPlY5yop). `transfer` (mUhkJHmi) — to'lov shakli topilganda tomonlar,
    * aks holda `null`; nom so'rovlari fail-open (blokni `null` qilmaydi).
    */
   private async correctableBlock(history: HistoryWithCashbox) {
     try {
+      const branchTransfer = isBranchTransferType(history.source_type);
       if (
         !isCorrectableType(history.source_type) &&
+        !branchTransfer &&
         history.source_type !== Source_type.PAYMENT_REVERSAL
       ) {
         return null;
@@ -3310,6 +3313,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         history,
         { windowDays: window_days },
       );
+      // (2026-11-26) `branch_to_main` — faqat C («Filialdan marketga
+      // o'tkazma») shakli; oddiy filial → HQ topshirig'ida blok yo'q (avvalgidek).
+      if (branchTransfer && !verdict.shape) {
+        return null;
+      }
       const [rootHistoryId, transfer] = await Promise.all([
         resolveRootHistoryId(this.dataSource.manager, history, verdict.root),
         this.correctableTransfer(verdict.shape),
@@ -3320,6 +3328,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         ...(verdict.reason ? { reason: verdict.reason } : {}),
         deadline: verdict.deadline,
         window_days: verdict.window_days,
+        // (2026-11-26) A / B / C — faqat «Qaytarish» (summa tahriri yo'q).
+        edit_allowed: verdict.shape ? !verdict.shape.reverseOnly : false,
         root_history_id: rootHistoryId,
         transfer,
       };
@@ -6665,10 +6675,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * Chek (2026-11-12, Dilshod) — «O'tkazma» (`click`) bilan bir xil:
    * `branch_to_hq` turi, `hq_transfer` sozlamasi (rasm majburiy bo'lsa
    * `receipt_id` siz → 400 `RECEIPT_REQUIRED`); `history_id` — MAIN INCOME,
-   * `counter` — filial EXPENSE; takrorda asl chek qaytadi. T6 tuzatish bu
-   * shaklni QO'LLAMAYDI: `classifyTransfer` filial → MAIN → market guruhini
-   * tanimaydi → 409 `NOT_CORRECTABLE` / `unsupported_type` (daftarni orqaga
-   * surish `branch_to_hq` ni bilmaydi — pul yarim teskarilanib qolmasin).
+   * `counter` — filial EXPENSE; takrorda asl chek qaytadi. T6 tuzatish
+   * (2026-11-26, ega): bu shakl (`branch_click_market`) faqat QAYTARILADI —
+   * to'rt oyoqqa teskari qator, daftar `hq_to_market` → `branch_to_hq`
+   * orqaga; summa tahriri — 409 `NOT_CORRECTABLE` / `reverse_only`.
    */
   private async paymentFromBranchToMarket(
     data: Parameters<FinanceServiceService['paymentFromBranchToMain']>[0],
