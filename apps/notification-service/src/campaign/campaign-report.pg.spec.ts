@@ -1,5 +1,7 @@
+import { Workbook } from 'exceljs';
 import { DataSource } from 'typeorm';
 import { OutboxEvent, OutboxService } from '@app/common';
+import { XLSX_MIME } from '@app/report-kit';
 import { Notification } from '../entities/notification.entity';
 import { SmsCampaign } from '../entities/sms-campaign.entity';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
@@ -7,6 +9,7 @@ import { CreateNotificationCampaigns1716000000076 } from '../../../../migrations
 import { NotificationCampaignPausedUntil1716000000106 } from '../../../../migrations/1716000000106-NotificationCampaignPausedUntil';
 import { NotificationCampaignRequestedAt1716000000151 } from '../../../../migrations/1716000000151-NotificationCampaignRequestedAt';
 import { CreateCampaignReportExports1716000000107 } from '../../../../migrations/1716000000107-CreateCampaignReportExports';
+import { CampaignReportExportFile1716000000250 } from '../../../../migrations/1716000000250-CampaignReportExportFile';
 import { CampaignReportExport } from './campaign-report-export.entity';
 import {
   CAMPAIGN_EXPORT_RUN_PATTERN,
@@ -24,9 +27,10 @@ jest.mock('@app/common', () => {
 });
 
 /**
- * (H7kpCman) Haqiqiy Postgres: migratsiya 107, kanal kesimi (jsonb
+ * (H7kpCman) Haqiqiy Postgres: migratsiya 107 + 250, kanal kesimi (jsonb
  * `delivery`), SMS agregatlari (DLR yo'q — null), yetkazilmaganlar va
- * 10 000+ qatorli eksport FON vazifasi orqali (sinxron emas).
+ * 10 000+ qatorli .xlsx eksport FON vazifasi orqali (sinxron emas), eski CSV
+ * vazifalari va TTL tozalash.
  *
  *   NOTIFICATION_CAMPAIGN_REPORT_PG_TEST_URI=postgres://postgres@127.0.0.1:55491/elchi_campaign_report_test
  */
@@ -40,8 +44,12 @@ const localTestDatabase = (() => {
   );
 })();
 
-const EOL = String.fromCharCode(13, 10);
 const superadmin = { id: '26', roles: ['superadmin'] };
+const sheetOf = async (base64: string) => {
+  const workbook = new Workbook();
+  await workbook.xlsx.load(Buffer.from(base64, 'base64') as never);
+  return workbook.getWorksheet('Yetkazilmaganlar')!;
+};
 
 (localTestDatabase ? describe : describe.skip)(
   'H7kpCman — kampaniya hisoboti (Postgres)',
@@ -87,6 +95,7 @@ const superadmin = { id: '26', roles: ['superadmin'] };
         // (fb4qy6bd) requested_at + quiet_hours_shifted.
         await new NotificationCampaignRequestedAt1716000000151().up(runner);
         await new CreateCampaignReportExports1716000000107().up(runner);
+        await new CampaignReportExportFile1716000000250().up(runner);
       } finally {
         await runner.release();
       }
@@ -185,6 +194,51 @@ const superadmin = { id: '26', roles: ['superadmin'] };
           await runner.hasTable('notification_schema.campaign_report_exports'),
         ).toBe(false);
         await migration.up(runner);
+        await new CampaignReportExportFile1716000000250().up(runner);
+      } finally {
+        await runner.release();
+      }
+    });
+
+    it('migratsiya 250: eski CSV qatori saqlanadi, idempotent, down faqat yangi ustunlarni oladi', async () => {
+      const runner = db.createQueryRunner();
+      const table = 'notification_schema.campaign_report_exports';
+      const migration = new CampaignReportExportFile1716000000250();
+      try {
+        await migration.down(runner);
+        expect(await runner.hasColumn(table, 'file_data')).toBe(false);
+        // Eski versiya yozgan tayyor eksport.
+        const [{ id }] = await runner.query(
+          `INSERT INTO ${table} (campaign_kind, campaign_id, status, row_count, csv, filename, finished_at, expires_at)
+           VALUES ('notification', 7, 'done', 1, 'recipient_id', 'eski.csv', now(), now() + interval '1 day')
+           RETURNING id`,
+        );
+        await migration.up(runner);
+        await migration.up(runner);
+        for (const column of ['file_data', 'content_type', 'csv']) {
+          expect(await runner.hasColumn(table, column)).toBe(true);
+        }
+        // Eski vazifa yangi kodda ham CSV holida yuklab olinadi.
+        activityLog.log.mockClear();
+        const file: any = await service.downloadExport({
+          export_id: String(id),
+          requester: superadmin,
+          accept: 'xlsx',
+        });
+        expect(file.data).toEqual(
+          expect.objectContaining({
+            filename: 'eski.csv',
+            content_type: 'text/csv; charset=utf-8',
+            csv: 'recipient_id',
+          }),
+        );
+        expect(activityLog.log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            metadata: expect.objectContaining({ format: 'csv' }),
+          }),
+        );
+        activityLog.log.mockClear();
+        await runner.query(`DELETE FROM ${table}`);
       } finally {
         await runner.release();
       }
@@ -398,7 +452,7 @@ const superadmin = { id: '26', roles: ['superadmin'] };
       expect(JSON.stringify(list.data)).not.toContain('901237402');
     });
 
-    it('TC8/TC9: ≤10 000 — darhol CSV; 10 000+ — fon vazifasi (outbox), tayyor fayl yuklanadi, `export` jurnali', async () => {
+    it('TC8/TC9: ≤10 000 — darhol .xlsx; 10 000+ — fon vazifasi (outbox), tayyor fayl yuklanadi, `export` jurnali, TTL tozalaydi', async () => {
       // kichik — sinxron
       const small = await campaign({ total: 2, sent: 2 });
       await inbox(String(small.id), 2, { in_app: 'sent', push: 'failed' }, 500);
@@ -406,10 +460,14 @@ const superadmin = { id: '26', roles: ['superadmin'] };
         kind: 'notification',
         id: String(small.id),
         requester: superadmin,
+        accept: 'xlsx',
       });
       expect(sync.statusCode).toBe(200);
       expect(sync.data.mode).toBe('sync');
-      expect(sync.data.csv.split(EOL)).toHaveLength(4);
+      const smallSheet = await sheetOf(sync.data.file_base64);
+      expect(smallSheet.getCell('C10').value).toBe(501);
+      expect(smallSheet.getCell('C11').value).toBe(502);
+      expect(smallSheet.getCell('B12').value).toBe('JAMI');
       expect(activityLog.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'export',
@@ -432,6 +490,7 @@ const superadmin = { id: '26', roles: ['superadmin'] };
         kind: 'notification',
         id: bigId,
         requester: superadmin,
+        accept: 'xlsx',
       });
       expect(queued.statusCode).toBe(202);
       expect(queued.data).toEqual(
@@ -483,16 +542,40 @@ const superadmin = { id: '26', roles: ['superadmin'] };
           download_url: `/notifications/campaigns/exports/${exportId}/download`,
         }),
       );
+      // Holat so'rovi fayl baytlarini o'qimaydi (`select: false`).
+      const row = await db
+        .getRepository(CampaignReportExport)
+        .findOneByOrFail({ id: exportId });
+      expect(row.file_data).toBeUndefined();
+      expect(row.csv).toBeNull();
+      expect(row.content_type).toBe(XLSX_MIME);
+
       const file: any = await service.downloadExport({
         export_id: exportId,
         requester: superadmin,
+        accept: 'xlsx',
       });
-      const lines = file.data.csv.split(EOL);
-      // sarlavha + 10 050 qator + oxirgi bo'sh
-      expect(lines).toHaveLength(10_052);
-      expect(lines[1]).toMatch(
-        /^100001,User 100001,courier,,push,failed,410,\d+$/,
-      );
+      expect(file.data.filename).toMatch(/\.xlsx$/);
+      expect(file.data.content_type).toBe(XLSX_MIME);
+      const ws = await sheetOf(file.data.file_base64);
+      expect(
+        Array.from({ length: 8 }, (_, i) => ws.getCell(10, i + 2).value),
+      ).toEqual([
+        1,
+        100_001,
+        'User 100001',
+        'Kuryer',
+        '—',
+        'Push',
+        'Xato',
+        'Push obunasi eskirgan',
+      ]);
+      // 10 050 qator + JAMI
+      expect(ws.getCell(10_060, 2).value).toBe('JAMI');
+      expect(ws.getCell(10_060, 4).value).toEqual({
+        formula: 'SUBTOTAL(2,B10:B10059)',
+        result: 10_050,
+      });
       expect(activityLog.log).toHaveBeenCalledTimes(1);
       expect(activityLog.log).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -504,9 +587,48 @@ const superadmin = { id: '26', roles: ['superadmin'] };
             mode: 'async',
             rows: 10_050,
             export_id: exportId,
+            format: 'xlsx',
           }),
         }),
       );
+
+      // Aralash versiya: eski gateway (accept yo'q) — 409, jurnal yozilmaydi.
+      await expect(
+        service.downloadExport({ export_id: exportId, requester: superadmin }),
+      ).rejects.toMatchObject({ error: { statusCode: 409 } });
+      expect(activityLog.log).toHaveBeenCalledTimes(1);
+
+      // TTL: muddati o'tgan fayl keyingi eksportda bazadan tozalanadi.
+      await db.query(
+        `UPDATE notification_schema.campaign_report_exports
+            SET expires_at = now() - interval '1 minute' WHERE id = $1`,
+        [exportId],
+      );
+      await service.exportUndelivered({
+        kind: 'notification',
+        id: String(small.id),
+        requester: superadmin,
+        accept: 'xlsx',
+      });
+      const [purged] = await db.query(
+        `SELECT csv, file_data, content_type, status
+           FROM notification_schema.campaign_report_exports WHERE id = $1`,
+        [exportId],
+      );
+      expect(purged).toEqual(
+        expect.objectContaining({
+          csv: null,
+          file_data: null,
+          status: 'done',
+        }),
+      );
+      await expect(
+        service.downloadExport({
+          export_id: exportId,
+          requester: superadmin,
+          accept: 'xlsx',
+        }),
+      ).rejects.toMatchObject({ error: { statusCode: 410 } });
     }, 120_000);
   },
 );

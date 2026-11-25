@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { Workbook } from 'exceljs';
 import { of, throwError } from 'rxjs';
 import request from 'supertest';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -28,6 +29,7 @@ describe('Zv3MLn0a — /finance/cashbox/cards gateway kontrakti', () => {
   const branch = {
     send: jest.fn(() => of({ statusCode: 200, data: { id: '13' } })),
   };
+  const identity = { send: jest.fn((): any => of({ data: [] })) };
 
   const SUPERADMIN = { sub: '9', roles: ['superadmin'] };
   const ADMIN = { sub: '8', roles: ['admin'] };
@@ -38,7 +40,7 @@ describe('Zv3MLn0a — /finance/cashbox/cards gateway kontrakti', () => {
       controllers: [FinanceGatewayController],
       providers: [
         { provide: 'FINANCE', useValue: finance },
-        { provide: 'IDENTITY', useValue: { send: jest.fn() } },
+        { provide: 'IDENTITY', useValue: identity },
         { provide: 'BRANCH', useValue: branch },
         { provide: 'ORDER', useValue: { send: jest.fn() } },
       ],
@@ -305,6 +307,73 @@ describe('Zv3MLn0a — /finance/cashbox/cards gateway kontrakti', () => {
       { cmd: 'finance.cashbox.cards.ledger' },
       expect.objectContaining({ id: '5', from_date: '2026-10-01', all: true }),
     ]);
+  });
+
+  it("ko'chirma Excel (B4): nomlar bulk — qarshi karta va «Kiritgan»; xato bo'lsa #id bilan fayl chiqadi", async () => {
+    const ledger = {
+      cashbox_type: 'branch',
+      branch_id: '13',
+      card: { id: '5', name: 'Humo', last4: '4417' },
+      summary: {
+        opening_balance: 0,
+        closing_balance: 1000,
+        current_balance: 1000,
+      },
+      items: [
+        {
+          kind: 'transfer_in',
+          created_at: '2026-10-25T10:00:00.000Z',
+          amount: 1000,
+          delta: 1000,
+          balance_after: 1000,
+          counterparty_card_id: '9',
+          comment: '=HYPERLINK("x")',
+          created_by: '77',
+        },
+      ],
+    };
+    const serve = (cards: () => unknown) =>
+      finance.send.mockImplementation(((pattern: { cmd: string }) =>
+        pattern.cmd === 'finance.cashbox.cards.list'
+          ? cards()
+          : of({ statusCode: 200, data: ledger })) as never);
+    const sheet = async () => {
+      const res = await request(app.getHttpServer())
+        .get('/finance/cashbox/cards/5/ledger/export')
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => cb(null, Buffer.concat(chunks)));
+        });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-disposition']).toBe(
+        'attachment; filename="karta-5-kochirma.xlsx"',
+      );
+      const workbook = new Workbook();
+      await workbook.xlsx.load(res.body as never);
+      return workbook.worksheets[0];
+    };
+
+    user = MANAGER;
+    identity.send.mockImplementation(() =>
+      of({ data: [{ id: '77', name: 'Ali Valiyev' }] }),
+    );
+    serve(() => of({ data: { cards: [{ id: '9', name: 'Uzcard zaxira' }] } }));
+    const named = await sheet();
+    expect(named.getCell('J12').value).toBe('Uzcard zaxira');
+    expect(named.getCell('L12').value).toBe('Ali Valiyev');
+    expect(named.getCell('K12').value).toBe('=HYPERLINK("x")');
+    expect(lastCall()).toEqual([
+      { cmd: 'finance.cashbox.cards.list' },
+      { include_inactive: true, branch_id: '13' },
+    ]);
+
+    identity.send.mockImplementation(() => throwError(() => new Error('x')));
+    serve(() => throwError(() => new Error('timeout')));
+    const anonymous = await sheet();
+    expect(anonymous.getCell('J12').value).toBe('#9');
+    expect(anonymous.getCell('L12').value).toBe('#77');
   });
 
   it('to`lovlar: filial→HQ `card_id` finance ga, `branch_card_id` (63HO6cBU) — e`tiborsiz; kuryerdan qabul DTO `card_id` ni qabul qiladi (raqam bo`lmasa xato)', async () => {

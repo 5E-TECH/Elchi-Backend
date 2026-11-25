@@ -122,6 +122,12 @@ export interface ShiftReportSnapshot {
   markets: MarketSlice[];
   /** Faqat asosiy kassa: filiallardan HQ'ga kelgan pul (filial smenasida yo'q). */
   branches?: BranchSlice[];
+  /** Filial kassasi: filial nomi (olinmasa — null, «Filial kassasi #id»). */
+  branch_name?: string | null;
+  /** Filial kassasi: shu smenada HQ'ga topshirilgan pul (sof, qaytarilgani alohida). */
+  hq_transfers?: { count: number; total: number; reversed: number } | null;
+  /** Smenani tizim ochgan («Kun tartibi»). */
+  opened_by_system?: boolean;
   /**
    * Oldingi smena yopilgandan shu smena ochilguncha (SMENASIZ) shu kassadagi
    * harakat — hech qaysi smena kirim/chiqimiga kirmagan, faqat ochilish
@@ -388,6 +394,18 @@ const moneyLine = (label: string, block: ShiftMoneyBlock): string =>
     ? `\n   Sanalgan: ${formatSom(block.closing_balance)} · farq: ${discrepancyText(block.discrepancy)}`
     : `\n   Farq: ${discrepancyText(block.discrepancy)}`);
 
+/** Filial smenasi: HQ'ga topshirilgan pul (sof) — bo'lmasa qator yo'q. */
+const hqTransferLines = (snapshot: ShiftReportSnapshot): string[] => {
+  const hq = snapshot.hq_transfers;
+  if (snapshot.cashbox_type !== 'branch' || !hq) return [];
+  if (!hq.count && !hq.reversed) return [];
+  return [
+    `⬆️ HQ'ga topshirilgan: ${formatSom(hq.total)} (${hq.count} ta)${
+      hq.reversed ? ` · qaytarilgan ${formatSom(hq.reversed)}` : ''
+    }`,
+  ];
+};
+
 /**
  * Filial kassasi hisoboti — filial GURUHIGA yoki (filial `private`)
  * menejerlarning SHAXSIY chatiga. To'liq kassa xulosasi: qoldiq, kirim /
@@ -465,6 +483,7 @@ export function buildBranchMessage(
       : []),
     `⬇️ Kuryerlardan qabul: ${formatSom(courierTotal)} (${snapshot.couriers.length} ta kuryer)`,
     ...courierLines,
+    ...hqTransferLines(snapshot),
     `⬆️ Marketlarga to'lov: ${formatSom(marketTotal)} (${snapshot.markets.length} ta market)`,
     ...marketLines,
   ];

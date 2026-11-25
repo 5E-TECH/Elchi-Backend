@@ -32,6 +32,7 @@ import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  CAMPAIGN_EXPORT_ACCEPT,
   CAMPAIGN_EXPORT_TIMEOUT_MS,
   sendCampaignExport,
 } from './campaign-report-export.util';
@@ -268,11 +269,11 @@ export class SmsGatewayController {
     });
   }
 
-  /** CSV — FAQAT superadmin, `export` jurnali; >10 000 — 202 fon vazifasi. */
+  /** Excel — FAQAT superadmin, `export` jurnali; >10 000 — 202 fon vazifasi. */
   @Get('campaigns/:id/undelivered/export')
   @Roles(RoleEnum.SUPERADMIN)
   @ApiOperation({
-    summary: 'Yetkazilmagan SMS CSV (superadmin, telefon maskalangan)',
+    summary: 'Yetkazilmagan SMS Excel (superadmin, telefon maskalangan)',
   })
   async exportCampaignUndelivered(
     @Param('id') id: string,
@@ -285,6 +286,7 @@ export class SmsGatewayController {
         kind: 'sms',
         id,
         requester: { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] },
+        accept: CAMPAIGN_EXPORT_ACCEPT,
       },
       CAMPAIGN_EXPORT_TIMEOUT_MS,
     );

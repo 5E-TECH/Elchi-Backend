@@ -18,8 +18,8 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'crypto';
-import PDFDocument from 'pdfkit';
 import * as QRCode from 'qrcode';
+import { buildDocumentPdf } from './document-pdf';
 import { GeneratePdfDto } from './dto/generate-pdf.dto';
 import { GenerateQrDto } from './dto/generate-qr.dto';
 import { UploadFileDto } from './dto/upload-file.dto';
@@ -541,26 +541,9 @@ export class FileServiceService implements OnModuleInit {
   async generatePdf(data: GeneratePdfDto) {
     try {
       const content = String(data?.content ?? '').trim();
-      const title = String(data?.title ?? 'Document').trim();
       if (!content) throw new BadRequestException('content majburiy');
 
-      const buffer = await new Promise<Buffer>((resolve, reject) => {
-        const doc = new PDFDocument({ size: 'A4', margin: 50 });
-        const chunks: Buffer[] = [];
-        doc.on('data', (chunk) =>
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
-        );
-        doc.on('error', reject);
-        doc.on('end', () => resolve(Buffer.concat(chunks)));
-
-        doc.fontSize(18).text(title, { align: 'left' });
-        doc.moveDown();
-        doc.fontSize(12).text(content, {
-          align: 'left',
-          lineGap: 4,
-        });
-        doc.end();
-      });
+      const buffer = await buildDocumentPdf({ title: data?.title, content });
 
       const result = await this.uploadBuffer({
         buffer,

@@ -23,6 +23,24 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — Barcha Excel / PDF hisobotlar yangi dizaynda (ega tasdiqladi)
+
+Deploy: **notification-service** (migratsiya 1716000000250), **finance-service**, **file-service**, **api-gateway**. Env yo'q.
+Yorliq / chek stikerlari o'zgarmadi.
+
+- 🆕 [gateway] `GET /export/cashbox-report.xlsx` — SUPERADMIN / ADMIN: asosiy kassa; MANAGER: faqat o'z filiali. `shift_id`
+  (davr — shu smena; boshqa kassaniki — 404) YOKI `from_date` / `to_date` (YYYY-MM-DD, Toshkent); hech biri — BUGUN.
+  → **Frontendda:** 🔧 brauzerdagi `.xls` (`exportMainCashboxReport`) o'rniga; smena yopilganda `?shift_id=`.
+- 🆕 [gateway] `POST /export/old-mails.xlsx` — sof render: `{ title, subtitle?, capped?, hide_courier?, labels?, rows[≤10 000] }`.
+  → **Frontendda:** 🔧 `exportOldMailsToExcel` o'rniga.
+- ✏️ [gateway] `GET /export/shifts.xlsx` — «Kassa», «Ochgan», «Yopgan» ustunlari; sanalmagan smenada soxta kamomad yo'q.
+- ✏️ [gateway] `export/*.xlsx`, `orders/export/excel`, `post/:id/orders.xlsx`, `warehouses/:id/export`, karta ko'chirmasi —
+  yo'l, parametr va ruxsatlar o'zgarmagan; 50 000 dan oshsa faylda DIQQAT (ilgari jim qirqilardi).
+- ✏️ [notification] kampaniya «Yetkazilmaganlar» eksporti — `.xlsx` (200 content-type va fayl nomi); eski tugagan fon
+  fayllari 7 kungacha `.csv`. → **Frontendda:** 🔧 «CSV» matnlari, zaxira fayl nomi.
+- ✏️ [finance] smena hisoboti Excel / PDF; filial smenasida «HQ'ga topshirilgan» alohida qator (Telegram matnida ham).
+- ✏️ [file] `POST /files/pdf` — rasmiy blank, shrift hujjat ichida (o'zbek belgilari buzilmaydi).
+
 ### 2026-11-25 — Sayt buyurtmasi noto'g'ri tumanga jimgina tushmaydi (himoya)
 
 Deploy: **order-service** (migratsiya yo'q).

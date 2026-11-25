@@ -60,6 +60,7 @@ import { FileGatewayController } from './file-gateway.controller';
 import { ScanGatewayController } from './scan-gateway.controller';
 import { PrinterGatewayController } from './printer-gateway.controller';
 import { ExcelGatewayController } from './excel-gateway.controller';
+import { OldMailsExportController } from './old-mails-export.controller';
 import { RealtimeGateway } from './realtime/realtime.gateway';
 import { RealtimeController } from './realtime/realtime.controller';
 import { AuditGatewayController } from './audit-gateway.controller';
@@ -182,6 +183,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     AnalyticsGatewayController,
     PrinterGatewayController,
     ExcelGatewayController,
+    OldMailsExportController,
     RealtimeController,
     AuditGatewayController,
     PartnerGatewayController,

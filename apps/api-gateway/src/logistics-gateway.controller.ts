@@ -1166,8 +1166,8 @@ export class LogisticsGatewayController {
       'Pochta buyurtmalari Excel (.xlsx) — pochtaga har qachon kirganlar',
     description:
       "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). " +
-      "Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «Jami» qatori. " +
-      "LOGIST — «Narxi» ustuni va jami summa yo'q. Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa faylda DIQQAT qatori.",
+      "Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «JAMI» qatori (filtrga moslashadi), 2-varaq — «Xulosa» (holat, joy, tuman, firma bo'yicha). " +
+      "LOGIST — narx ustuni va hech qanday summa yo'q («Xulosa» da ham). Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa DIQQAT — tepada va «Xulosa» da.",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiOkResponse({

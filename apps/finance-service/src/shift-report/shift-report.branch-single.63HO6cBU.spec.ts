@@ -62,13 +62,25 @@ describe('63HO6cBU — filial smenasi hisoboti bitta jami', () => {
       'Kuryerlar',
       'Marketlar',
     ]);
-    const labels: string[] = [];
-    branch.getWorksheet('Xulosa')!.eachRow((row) => {
-      labels.push(row.getCell(1).text);
-    });
-    expect(labels).toContain('JAMI');
-    expect(labels).not.toContain('KARTA');
+    const texts = (workbook: Workbook, sheet = 'Xulosa') => {
+      const found: string[] = [];
+      workbook.getWorksheet(sheet)!.eachRow((row) => {
+        row.eachCell((cell) => {
+          if (typeof cell.value === 'string') found.push(cell.value);
+        });
+      });
+      return found;
+    };
+    // Bitta «Jami» ustuni — naqd / karta ustunlari yo'q.
+    expect(texts(branch)).toEqual(
+      expect.arrayContaining(['Kassa hisobi', 'Jami', 'JAMI']),
+    );
+    expect(texts(branch)).not.toContain('Karta');
+    expect(texts(branch)).not.toContain('Naqd');
     const main = await read(await buildXlsx(snapshot('main')));
     expect(main.worksheets.map((sheet) => sheet.name)).toContain('Kartalar');
+    expect(texts(main)).toEqual(
+      expect.arrayContaining(['Naqd', 'Karta', 'Jami']),
+    );
   });
 });

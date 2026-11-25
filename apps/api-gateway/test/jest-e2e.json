@@ -12,6 +12,7 @@
     "/node_modules/(?!(@nestjs/jwt|promise-breaker)/)"
   ],
   "moduleNameMapper": {
-    "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1"
+    "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1",
+    "^@app/report-kit(|/.*)$": "<rootDir>/libs/report-kit/src/$1"
   }
 }

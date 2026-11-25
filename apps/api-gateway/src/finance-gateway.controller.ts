@@ -143,12 +143,12 @@ import {
   type OriginRequest,
 } from './file-link';
 import { fileOwnerOf } from './file-ownership';
+import { buildCardLedgerReport } from './excel/finance-reports/card-ledger.report';
 import {
-  buildXlsx,
-  excelDate,
-  excelNumber,
-  type ExcelColumn,
-} from './excel/excel.util';
+  fetchBranchNames,
+  fetchCardNames,
+  fetchUserNames,
+} from './excel/finance-reports/report-names';
 
 /** (kiZgTybn) Smena yopish: karta qoldig'i rasmi chegaralari. */
 const SHIFT_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
@@ -307,29 +307,6 @@ export const CARD_OTHER_BRANCH_MESSAGE =
 /** Zv3MLn0a — smena sozlamalari faqat superadmin. */
 export const CARD_SHIFT_SETTINGS_SUPERADMIN_MESSAGE =
   "Smena sozlamalarini (rasm / AI tekshiruvi) faqat superadmin o'zgartiradi";
-
-/** Zv3MLn0a — karta ko'chirmasi Excel ustunlari. */
-const CARD_LEDGER_EXCEL_COLUMNS: ExcelColumn[] = [
-  { header: 'Sana', key: 'date', width: 20 },
-  { header: 'Amal', key: 'kind', width: 22 },
-  { header: 'Summa', key: 'amount', width: 14 },
-  { header: "O'zgarish", key: 'delta', width: 14 },
-  { header: 'Qoldiq', key: 'balance_after', width: 14 },
-  { header: "To'lov usuli", key: 'payment_method', width: 14 },
-  { header: 'Manba', key: 'source_type', width: 18 },
-  { header: 'Qarshi karta ID', key: 'counterparty_card_id', width: 14 },
-  { header: 'Izoh', key: 'comment', width: 30 },
-  { header: 'Kiritgan (ID)', key: 'created_by', width: 14 },
-];
-
-const CARD_LEDGER_KIND_LABEL: Record<string, string> = {
-  income: 'Kirim',
-  expense: 'Chiqim',
-  transfer_in: "Kartaga o'tkazma",
-  transfer_out: "Kartadan o'tkazma",
-  cash_to_card: 'Naqddan kartaga',
-  card_to_cash: 'Kartadan naqdga',
-};
 
 export const BRANCH_TO_MAIN_HQ_ONLY_MESSAGE =
   "Filial pulini HQ (superadmin yoki admin) o'zi qabul qiladi — menejer HQ'ga pul o'tkazmaydi";
@@ -5972,12 +5949,7 @@ export class FinanceGatewayController {
   ): Promise<void> {
     const cardId = this.assertCardId(id);
     const scope = await this.resolveCardScope(req?.user);
-    const result = await this.send<{
-      data?: {
-        card?: Record<string, unknown>;
-        items?: Array<Record<string, unknown>>;
-      };
-    }>(
+    const result = await this.send<{ data?: Record<string, unknown> }>(
       { cmd: 'finance.cashbox.cards.ledger' },
       {
         id: cardId,
@@ -5987,23 +5959,33 @@ export class FinanceGatewayController {
         ...scope,
       },
     );
-    const items = result?.data?.items ?? [];
-    const buffer = await buildXlsx(
-      "Karta ko'chirmasi",
-      CARD_LEDGER_EXCEL_COLUMNS,
-      items.map((row) => ({
-        date: excelDate(row.created_at),
-        kind: CARD_LEDGER_KIND_LABEL[toText(row.kind)] ?? toText(row.kind),
-        amount: excelNumber(row.amount),
-        delta: excelNumber(row.delta),
-        balance_after: excelNumber(row.balance_after),
-        payment_method: toText(row.payment_method),
-        source_type: toText(row.source_type),
-        counterparty_card_id: toText(row.counterparty_card_id),
-        comment: toText(row.comment),
-        created_by: toText(row.created_by),
-      })),
-    );
+    const data = result?.data ?? {};
+    const items = Array.isArray(data.items)
+      ? (data.items as Array<Record<string, unknown>>)
+      : [];
+    const branchId =
+      data.cashbox_type === 'branch' ? toText(data.branch_id) || null : null;
+    // Nomlar — bulk va fail-open (xato bo'lsa `#id` bilan fayl baribir chiqadi).
+    const [userNames, cardNames, branchNames] = await Promise.all([
+      fetchUserNames(
+        this.identityClient,
+        items.map((row) => row.created_by),
+      ),
+      items.some((row) => toText(row.counterparty_card_id))
+        ? fetchCardNames(this.financeClient, branchId)
+        : new Map<string, string>(),
+      branchId
+        ? fetchBranchNames(this.branchClient, this.toRequester(req?.user))
+        : new Map<string, string>(),
+    ]);
+    const buffer = await buildCardLedgerReport({
+      data,
+      from_date: fromDate,
+      to_date: toDate,
+      cardNames,
+      userNames,
+      branchNames,
+    });
     res.set({
       'Content-Type':
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

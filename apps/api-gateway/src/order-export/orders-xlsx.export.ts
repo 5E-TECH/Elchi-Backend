@@ -18,7 +18,9 @@
  *   - `ORDER_EXPORT_MAX_ROWS` dan oshsa fayl birinchi N qator bilan chiqadi,
  *     lekin JIMGINA emas: `X-Export-Truncated: true` + `X-Export-Total`
  *     sarlavhalari va faylning o'zida "DIQQAT" qatori;
- *   - oxirida «Jami» (soni + narx yig'indisi) qatori.
+ *   - oxirida «JAMI» (soni + narx yig'indisi, filtrga moslashadi) qatori va
+ *     «Xulosa» varag'i (holat / viloyat / firma / kuryer bo'yicha — oqimda
+ *     faqat Map yig'uvchilar, qatorlar to'planmaydi).
  *
  * Birinchi sahifa olinmaguncha javobga hech narsa yozilmaydi — xato
  * (403/400/timeout) oddiy HTTP xato bo'lib qaytadi. Keyingi sahifada xato
@@ -26,7 +28,29 @@
  * chala fayl "to'liq" bo'lib saqlanmaydi.
  */
 import { Order_status } from '@app/common';
-import { stream as excelStream } from 'exceljs';
+import {
+  REPORT_COLORS,
+  REPORT_FMT,
+  addKpis,
+  addReportSheet,
+  toExcelDate,
+  type ReportTone,
+} from '@app/report-kit';
+import {
+  LIST_ID_FMT,
+  ReportList,
+  ReportTally,
+  SUMMARY_WIDTHS,
+  addAttention,
+  addShareTable,
+  addTextBanner,
+  countFormat,
+  createStreamReport,
+  groupDigits,
+  reportDateTime,
+  type ReportListColumn,
+} from '@app/report-kit/stream';
+import type { Workbook } from 'exceljs';
 import type { Writable } from 'node:stream';
 
 /** Bitta eksport fayliga sig'adigan buyurtmalar chegarasi. */
@@ -183,23 +207,111 @@ export function orderExportStatusLabel(order: Record<string, unknown>): string {
   return humanizeStatus(order.status) ?? ORDER_EXPORT_UNKNOWN_STATUS_LABEL;
 }
 
-export const ORDER_EXPORT_COLUMNS: Array<{
-  header: string;
-  key: string;
-  width: number;
-}> = [
-  { header: 'N', key: 'n', width: 8 },
-  { header: 'Buyurtma ID', key: 'id', width: 12 },
-  { header: 'Viloyat', key: 'region', width: 18 },
-  { header: 'Tuman', key: 'district', width: 18 },
-  { header: 'Firma', key: 'market', width: 22 },
-  { header: 'Mahsulot', key: 'products', width: 36 },
-  { header: 'Mijoz', key: 'customer', width: 22 },
-  { header: 'Telefon raqam', key: 'phone', width: 16 },
-  { header: 'Narxi', key: 'total_price', width: 14 },
-  { header: 'Kuryer', key: 'courier', width: 22 },
-  { header: 'Holati', key: 'status', width: 16 },
-  { header: 'Sana', key: 'created_at', width: 18 },
+const LABEL = ORDER_EXPORT_STATUS_LABELS;
+const STAGE = ORDER_EXPORT_CANCEL_STAGE_LABELS;
+
+/**
+ * Holat yorlig'i → ton (FE `statusRegistry` ranglari) va «Xulosa» dagi tartib.
+ * Ro'yxatda yo'q yorliq (noma'lum holat) — rangsiz, jadval oxirida.
+ */
+export const ORDER_EXPORT_STATUS_TONES: ReadonlyArray<
+  readonly [string, ReportTone]
+> = [
+  [LABEL[Order_status.NEW], 'info'],
+  [LABEL[Order_status.CREATED], 'info'],
+  [LABEL[Order_status.RECEIVED], 'info'],
+  [LABEL[Order_status.ON_THE_ROAD], 'warning'],
+  [LABEL[Order_status.WAITING], 'warning'],
+  [LABEL[Order_status.WAITING_CUSTOMER], 'warning'],
+  [LABEL[Order_status.PARTLY_PAID], 'warning'],
+  [LABEL[Order_status.SOLD], 'success'],
+  [LABEL[Order_status.PAID], 'success'],
+  [LABEL[Order_status.CANCELLED], 'danger'],
+  [STAGE.courier, 'danger'],
+  [STAGE.in_transit, 'danger'],
+  [STAGE.branch, 'danger'],
+  [STAGE.hq, 'danger'],
+  [LABEL[Order_status.CANCELLED_SENT], 'danger'],
+  [LABEL[Order_status.RETURNED_TO_MARKET], 'neutral'],
+  [ORDER_EXPORT_WAREHOUSE_RETURN_LABEL, 'neutral'],
+  [LABEL[Order_status.CLOSED], 'neutral'],
+];
+const STATUS_TONE: ReadonlyMap<string, ReportTone> = new Map(
+  ORDER_EXPORT_STATUS_TONES,
+);
+export const orderExportStatusTone = (
+  label: unknown,
+): ReportTone | undefined =>
+  typeof label === 'string' ? STATUS_TONE.get(label) : undefined;
+
+/** «Xulosa» dagi holatlar tartibi. */
+export const ORDER_EXPORT_STATUS_ORDER: readonly string[] =
+  ORDER_EXPORT_STATUS_TONES.map(([label]) => label);
+
+/** «Sotilgan» kartasi: sotilgan, to'langan, qisman to'langan. */
+export const ORDER_EXPORT_SOLD_LABELS: readonly string[] = [
+  LABEL[Order_status.PARTLY_PAID],
+  LABEL[Order_status.SOLD],
+  LABEL[Order_status.PAID],
+];
+/** «Bekor va qaytgan» kartasi: bekor bosqichlari, marketga / omborga qaytgan. */
+export const ORDER_EXPORT_CANCELLED_LABELS: readonly string[] = [
+  ...ORDER_EXPORT_STATUS_TONES.filter(([, tone]) => tone === 'danger').map(
+    ([label]) => label,
+  ),
+  LABEL[Order_status.RETURNED_TO_MARKET],
+  ORDER_EXPORT_WAREHOUSE_RETURN_LABEL,
+];
+const CLOSED_LABEL = LABEL[Order_status.CLOSED];
+
+/** Kuryeri yo'q buyurtmalar — «Xulosa» dagi nom. */
+export const ORDER_EXPORT_NO_COURIER = 'Biriktirilmagan';
+
+export const ORDER_EXPORT_COLUMNS: readonly ReportListColumn[] = [
+  {
+    header: '№',
+    key: 'n',
+    width: 6.5,
+    align: 'center',
+    fmt: REPORT_FMT.int,
+    color: REPORT_COLORS.muted,
+  },
+  {
+    header: 'Buyurtma ID',
+    key: 'id',
+    width: 10,
+    fmt: LIST_ID_FMT,
+    align: 'left',
+    bold: true,
+  },
+  { header: 'Viloyat', key: 'region', width: 17.5 },
+  { header: 'Tuman', key: 'district', width: 13 },
+  { header: 'Firma', key: 'market', width: 16 },
+  { header: 'Mahsulot', key: 'products', width: 34, wrap: true },
+  { header: 'Mijoz', key: 'customer', width: 17 },
+  { header: 'Telefon raqam', key: 'phone', width: 18 },
+  {
+    header: "Narxi, so'm",
+    key: 'total_price',
+    width: 15.5,
+    fmt: REPORT_FMT.som,
+    bold: true,
+  },
+  { header: 'Kuryer', key: 'courier', width: 16.5 },
+  {
+    header: 'Holati',
+    key: 'status',
+    width: 20,
+    badge: true,
+    tone: (row) => orderExportStatusTone(row.status),
+  },
+  {
+    header: 'Sana',
+    key: 'created_at',
+    width: 17,
+    fmt: REPORT_FMT.dateTime,
+    color: REPORT_COLORS.muted,
+  },
 ];
 
 export interface OrderExportPage {
@@ -263,6 +375,27 @@ export const formatTashkentDateTime = (value: unknown): string => {
     .replace('T', ' ');
 };
 
+/**
+ * Excel sanasi (Toshkent soati); o'qilmagan matn — o'zicha, bo'sh — bo'sh.
+ */
+export const orderExportDate = (value: unknown): Date | string =>
+  toExcelDate(value) ?? (typeof value === 'string' ? value : '');
+
+/** Raqamli ID — son (bigint xavfsiz chegaradan oshsa — matn). */
+export const orderExportId = (value: unknown): number | string => {
+  const id = text(value);
+  return /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id))
+    ? Number(id)
+    : id;
+};
+
+/** `998901234567` → «+998 90 123 45 67»; boshqa ko'rinish (yashirilgan) — o'zicha. */
+export const orderExportPhone = (value: unknown): string => {
+  const phone = text(value);
+  const match = /^\+?998(\d{2})(\d{3})(\d{2})(\d{2})$/.exec(phone.trim());
+  return match ? `+998 ${match.slice(1).join(' ')}` : phone;
+};
+
 const productNames = (order: Obj): string => {
   const items = Array.isArray(order.items) ? (order.items as unknown[]) : [];
   const names = items
@@ -276,14 +409,14 @@ const productNames = (order: Obj): string => {
   return text(obj(order.product)?.name, order.product_name);
 };
 
-/** Bitta buyurtma → eksport qatori (frontend exportOrdersToExcel bilan mos). */
+/** Bitta buyurtma → eksport qatori. */
 export function toOrderExportRow(order: Obj, index: number): Obj {
   const customer = obj(order.customer) ?? {};
   const customerDistrict = obj(customer.district) ?? {};
   const district = obj(order.district) ?? {};
   return {
     n: index,
-    id: text(order.id),
+    id: orderExportId(order.id),
     region: text(
       obj(order.region)?.name,
       obj(district.region)?.name,
@@ -294,7 +427,7 @@ export function toOrderExportRow(order: Obj, index: number): Obj {
     market: text(obj(order.market)?.name, order.market_name),
     products: productNames(order),
     customer: text(customer.name),
-    phone: text(customer.phone_number, order.phone_number),
+    phone: orderExportPhone(text(customer.phone_number, order.phone_number)),
     total_price: money(order.total_price),
     courier: text(
       obj(order.courier)?.name,
@@ -302,15 +435,151 @@ export function toOrderExportRow(order: Obj, index: number): Obj {
       order.courier_name,
     ),
     status: orderExportStatusLabel(order),
-    created_at: formatTashkentDateTime(order.createdAt ?? order.created_at),
+    created_at: orderExportDate(order.createdAt ?? order.created_at),
   };
 }
 
-export const formatCount = (n: number) =>
-  String(Math.trunc(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+export const formatCount = groupDigits;
 
 export const orderExportFileName = (now: Date = new Date()) =>
   `barcha_buyurtmalar_${formatTashkentDateTime(now).slice(0, 10)}.xlsx`;
+
+/** Qidiruvga 1 000 dan ortiq mijoz mos kelgan. */
+export const ORDER_EXPORT_SEARCH_WARNING =
+  'DIQQAT: qidiruvga 1 000 dan ortiq mijoz mos keldi — faqat birinchi 1 000 mijozning buyurtmalari kiritildi. Qidiruvni aniqlashtiring.';
+
+/** Chegaraga yetib kesilgan fayl ogohlantirishi. */
+export const orderExportLimitWarning = (
+  maxRows: number,
+  total: number,
+  written: number,
+): string =>
+  `DIQQAT: eksport ${formatCount(maxRows)} ta buyurtma bilan cheklangan — ` +
+  `filtr bo'yicha jami ${formatCount(total)} ta, faylda faqat ` +
+  `birinchi ${formatCount(written)} tasi. To'liq ro'yxat uchun sana, ` +
+  'holat yoki market filtri bilan toraytirib, qismlab eksport qiling.';
+
+/** Eksport paytida ro'yxat o'zgargan (kutilgandan kam qator). */
+export const orderExportShrunkWarning = (
+  total: number,
+  written: number,
+): string =>
+  `DIQQAT: eksport paytida ro'yxat o'zgardi — kutilgan ${formatCount(total)} ` +
+  `ta, faylda ${formatCount(written)} ta. Eksportni qayta bajaring.`;
+
+/** «Xulosa» yig'uvchilari — oqimda faqat guruhlar (qatorlar emas). */
+export class OrderExportTotals {
+  count = 0;
+  sum = 0;
+  readonly statuses = new ReportTally(ORDER_EXPORT_UNKNOWN_STATUS_LABEL);
+  readonly regions = new ReportTally();
+  readonly markets = new ReportTally();
+  readonly couriers = new ReportTally(ORDER_EXPORT_NO_COURIER);
+
+  add(row: Obj): void {
+    const price = money(row.total_price);
+    this.count += 1;
+    this.sum += price;
+    this.statuses.add(text(row.status), price);
+    this.regions.add(text(row.region), price);
+    this.markets.add(text(row.market), price);
+    this.couriers.add(text(row.courier), price);
+  }
+
+  /** Holat guruhlari — belgi rangi va tartibi bilan. */
+  statusRows() {
+    return this.statuses.list({
+      order: ORDER_EXPORT_STATUS_ORDER,
+      tone: orderExportStatusTone,
+    });
+  }
+}
+
+/** Xulosa: «Boshqalar» gacha ko'rsatiladigan firma / kuryer soni. */
+const SUMMARY_TOP = 15;
+
+/** «Xulosa» varag'i — oxirgi: yig'uvchilar oqim tugagach ma'lum. */
+function writeOrdersSummary(
+  workbook: Workbook,
+  totals: OrderExportTotals,
+  o: { subtitle: string; now: Date; warnings: readonly string[] },
+): void {
+  const sheet = addReportSheet(workbook, 'Xulosa', SUMMARY_WIDTHS, {
+    tab: REPORT_COLORS.action,
+    footer: 'Buyurtmalar — xulosa',
+  });
+  const count = formatCount(totals.count);
+  const sold = totals.statuses.total(ORDER_EXPORT_SOLD_LABELS);
+  const cancelled = totals.statuses.total(ORDER_EXPORT_CANCELLED_LABELS);
+  const active =
+    totals.count -
+    sold.count -
+    cancelled.count -
+    totals.statuses.get(CLOSED_LABEL).count;
+  let r = addTextBanner(sheet, {
+    title: 'Buyurtmalar xulosasi',
+    subtitle: o.subtitle,
+    right: `${count} ta`,
+    rightSub: reportDateTime(o.now),
+  });
+  for (const warning of o.warnings) {
+    r = addAttention(sheet, r, warning, 46);
+    sheet.getRow(r).height = 8;
+    r += 1;
+  }
+  r = addKpis(sheet, r, [
+    {
+      label: "Jami narxi, so'm",
+      value: totals.sum,
+      sub: `${count} ta buyurtma`,
+    },
+    {
+      label: "Sotilgan, so'm",
+      value: sold.sum,
+      tone: 'success',
+      sub: `${formatCount(sold.count)} ta · sotilgan, to'langan, qisman`,
+    },
+    {
+      label: "Bekor va qaytgan, so'm",
+      value: cancelled.sum,
+      tone: 'danger',
+      sub: `${formatCount(cancelled.count)} ta`,
+    },
+  ]);
+  r = addShareTable(sheet, r, {
+    title: "Holatlar bo'yicha",
+    note: `${count} ta buyurtma · jarayonda ${formatCount(active)} ta`,
+    head: 'Holati',
+    rows: totals.statusRows(),
+    badge: true,
+  });
+  r = addShareTable(sheet, r, {
+    title: "Viloyatlar bo'yicha",
+    head: 'Viloyat',
+    rows: totals.regions.list(),
+  });
+  r = addShareTable(sheet, r, {
+    title: "Firmalar bo'yicha",
+    head: 'Firma',
+    rows: totals.markets.list({ top: SUMMARY_TOP }),
+  });
+  addShareTable(sheet, r, {
+    title: "Kuryerlar bo'yicha",
+    head: 'Kuryer',
+    rows: totals.couriers.list({ top: SUMMARY_TOP }),
+  });
+  sheet.commit();
+}
+
+export interface OrderExportOptions {
+  maxRows?: number;
+  now?: Date;
+  /**
+   * Banner osti matni (davr, holat …) — chaqiruvchi filtrlardan beradi;
+   * market / viloyat NOMI birinchi sahifa qatorlaridan olinadi.
+   */
+  subtitle?: (rows: ReadonlyArray<Record<string, unknown>>) => string;
+}
 
 /**
  * Sahifalarni ketma-ket o'qib, .xlsx ni `res` ga oqim bilan yozadi.
@@ -320,9 +589,10 @@ export const orderExportFileName = (now: Date = new Date()) =>
 export async function streamOrdersXlsx(
   res: OrderExportResponse,
   fetchPage: (page: number) => Promise<OrderExportPage>,
-  options: { maxRows?: number; now?: Date } = {},
+  options: OrderExportOptions = {},
 ): Promise<OrderExportResult> {
   const maxRows = options.maxRows ?? ORDER_EXPORT_MAX_ROWS;
+  const now = options.now ?? new Date();
 
   const first = await fetchPage(1);
   const total = Math.max(0, Math.trunc(Number(first.total) || 0));
@@ -339,32 +609,53 @@ export async function streamOrdersXlsx(
   res.setHeader(ORDER_EXPORT_HEADERS.limit, String(maxRows));
   res.setHeader(ORDER_EXPORT_HEADERS.truncated, truncated ? 'true' : 'false');
 
-  const workbook = new excelStream.xlsx.WorkbookWriter({
-    stream: res,
-    useStyles: true,
-    useSharedStrings: false,
-  });
-  workbook.created = options.now ?? new Date();
-  const sheet = workbook.addWorksheet('Buyurtmalar', {
-    views: [{ state: 'frozen', ySplit: 1 }],
-  });
-  sheet.columns = ORDER_EXPORT_COLUMNS.map((c) => ({ ...c }));
-  sheet.getColumn('total_price').numFmt = '#,##0';
-  const header = sheet.getRow(1);
-  header.font = { bold: true };
-  header.alignment = { vertical: 'middle', horizontal: 'center' };
-  header.fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FFFFC000' },
-  };
-  header.commit();
-
   const seen = new Set<string>();
+  const totals = new OrderExportTotals();
   let written = 0;
-  let sum = 0;
 
   try {
+    const subtitle =
+      options.subtitle?.(Array.isArray(first.rows) ? first.rows : []) ?? '';
+    const expected = Math.min(total, maxRows);
+    // Tepadagi ogohlantirishlar — birinchi sahifadan ma'lum bo'lganlari
+    // (fayl oxirida ham takrorlanadi).
+    const topWarnings = [
+      ...(truncated ? [orderExportLimitWarning(maxRows, total, expected)] : []),
+      ...(searchTruncated ? [ORDER_EXPORT_SEARCH_WARNING] : []),
+    ];
+    const headRow = 6 + topWarnings.length * 2;
+
+    const workbook = createStreamReport(res, "Buyurtmalar ro'yxati", now);
+    const sheet = addReportSheet(
+      workbook,
+      'Buyurtmalar',
+      ORDER_EXPORT_COLUMNS.map((column) => column.width),
+      {
+        orientation: 'landscape',
+        freeze: headRow,
+        freezeColumns: 3,
+        footer: "Buyurtmalar ro'yxati",
+      },
+    );
+    let r = addTextBanner(sheet, {
+      title: "Buyurtmalar ro'yxati",
+      subtitle,
+      right: `${formatCount(expected)} ta buyurtma`,
+      rightSub: truncated
+        ? `filtr bo'yicha jami ${formatCount(total)} ta`
+        : `${reportDateTime(now)} da yuklandi`,
+    });
+    for (const warning of topWarnings) {
+      r = addAttention(sheet, r, warning);
+      sheet.getRow(r).height = 6;
+      r += 1;
+    }
+    const list = new ReportList(sheet, ORDER_EXPORT_COLUMNS);
+    list.header(r);
+    sheet.getRow(r).commit();
+    r += 1;
+    const firstRow = r;
+
     let batch = first;
     for (let page = 1; page <= ORDER_EXPORT_MAX_PAGES; page++) {
       if (page > 1) {
@@ -381,46 +672,49 @@ export async function streamOrdersXlsx(
         if (id) seen.add(id);
         written += 1;
         const row = toOrderExportRow(order, written);
-        sum += Number(row.total_price) || 0;
-        sheet.addRow(row).commit();
+        totals.add(row);
+        list.row(r, row, written - 1);
+        sheet.getRow(r).commit();
+        r += 1;
       }
       if (!rows.length || written >= maxRows || seen.size >= total) break;
     }
 
-    const totalRow = sheet.addRow({
-      n: 'Jami',
-      products: `${formatCount(written)} ta buyurtma`,
-      total_price: sum,
+    const lastRow = r - 1;
+    if (!written) {
+      list.empty(r, 'Buyurtma topilmadi');
+      sheet.getRow(r).commit();
+      r += 1;
+    }
+    list.total(r, {
+      products: {
+        value: list.subtotal('n', firstRow, lastRow, written, 2),
+        fmt: countFormat('ta buyurtma'),
+        align: 'left',
+      },
+      total_price: {
+        value: list.subtotal('total_price', firstRow, lastRow, totals.sum),
+      },
     });
-    totalRow.font = { bold: true };
-    totalRow.commit();
+    sheet.getRow(r).commit();
+    r += 1;
 
     const warnings: string[] = [];
     if (truncated) {
-      warnings.push(
-        `DIQQAT: eksport ${formatCount(maxRows)} ta buyurtma bilan cheklangan — ` +
-          `filtr bo'yicha jami ${formatCount(total)} ta, faylda faqat ` +
-          `birinchi ${formatCount(written)} tasi. To'liq ro'yxat uchun sana, ` +
-          'holat yoki market filtri bilan toraytirib, qismlab eksport qiling.',
-      );
+      warnings.push(orderExportLimitWarning(maxRows, total, written));
     } else if (written < total) {
-      warnings.push(
-        `DIQQAT: eksport paytida ro'yxat o'zgardi — kutilgan ${formatCount(total)} ` +
-          `ta, faylda ${formatCount(written)} ta. Eksportni qayta bajaring.`,
-      );
+      warnings.push(orderExportShrunkWarning(total, written));
     }
-    if (searchTruncated) {
-      warnings.push(
-        'DIQQAT: qidiruvga 1 000 dan ortiq mijoz mos keldi — faqat birinchi 1 000 mijozning buyurtmalari kiritildi. Qidiruvni aniqlashtiring.',
-      );
-    }
+    if (searchTruncated) warnings.push(ORDER_EXPORT_SEARCH_WARNING);
     for (const warning of warnings) {
-      const row = sheet.addRow({ n: warning });
-      row.font = { bold: true, color: { argb: 'FFC00000' } };
-      row.commit();
+      sheet.getRow(r).height = 8;
+      r = addAttention(sheet, r + 1, warning, 28);
+      sheet.getRow(r - 1).commit();
     }
 
+    list.finish(headRow, firstRow, lastRow);
     sheet.commit();
+    writeOrdersSummary(workbook, totals, { subtitle, now, warnings });
     await workbook.commit();
     return { status: 'completed', total, written, truncated };
   } catch (error) {

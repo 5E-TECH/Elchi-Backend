@@ -16,6 +16,7 @@ import {
   gatewayCorsDelegate,
   setupGatewaySwagger,
 } from './gateway-http.setup';
+import { applyOldMailsBodyLimit } from './order-export/old-mails-body-limit';
 import { CARRIER_SWAGGER_PATH, setupCarrierSwagger } from './carrier-swagger';
 import {
   RpcExceptionFilter,
@@ -79,6 +80,8 @@ async function bootstrap() {
   // Batafsil: gateway-http.setup.ts.
   applyGatewaySecurityHeaders(app);
   app.enableCors(gatewayCorsDelegate());
+  // «Eski pochtalar» eksporti tanasi (10 000 qator) — faqat shu yo'lda.
+  applyOldMailsBodyLimit(app);
 
   app.useGlobalPipes(
     // (ZDweRm02) class-validator standart xabarlari — o'zbekcha.
