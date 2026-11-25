@@ -82,22 +82,17 @@ describe('T7 B3 — market telefoni menejer/kuryerdan yashiriladi', () => {
     }
   });
 
-  it('⭐ QM3: menejer GET /orders/:id — market.phone_number, operator_phone yo`q; customer, market_tariff bor', () => {
+  it('⭐ QM3: menejer GET /orders/:id — market.phone_number, operator_phone yo`q; customer bor, market tarifi yo`q (D5NxxpJW)', () => {
     const projected = projectOrderPayloadForRoles(['manager'], {
       data: orderRow({ problem_contacts: [ANDIJON_LOGIST] }),
     }) as { data: Record<string, any> };
     const row = projected.data;
     expect(row).not.toHaveProperty('operator_phone');
     expect(row).not.toHaveProperty('secondary_operator_phone');
-    expect(row.market).toEqual({
-      id: '37',
-      name: 'TEST Market',
-      tariff_home: 30000,
-      tariff_center: 20000,
-    });
+    expect(row.market).toEqual({ id: '37', name: 'TEST Market' });
     expect(row.customer.phone_number).toBe('+998935556677');
     expect(row.courier.phone_number).toBe('+998911112233');
-    expect(row.market_tariff).toBe(20000);
+    expect(row).not.toHaveProperty('market_tariff');
     expect(row.problem_contacts).toEqual([ANDIJON_LOGIST]);
   });
 

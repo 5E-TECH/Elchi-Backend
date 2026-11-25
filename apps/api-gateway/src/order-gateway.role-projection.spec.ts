@@ -4,6 +4,7 @@ import { ScanGatewayController } from './scan-gateway.controller';
 import { LogisticsGatewayController } from './logistics-gateway.controller';
 import { FinanceGatewayController } from './finance-gateway.controller';
 import {
+  BRANCH_STAFF_HIDDEN_ORDER_FIELDS,
   projectOrderPayloadForRoles,
   resolveOrderProjection,
 } from './auth/order-role-projection';
@@ -13,8 +14,11 @@ import {
  *
  * 2026-10-09 prod UI testi: TEST Claude Kuryer uchun GET /orders/25 javobida
  * `market_tariff:20000`, `branch_share`, `order.market.tariff_center` ham
- * kelardi. Karta talabi: superadmin/menejer — hammasi; market — faqat market
- * tarifi; kuryer — faqat kuryer tarifi. Proyeksiyasiz kod bu spec'da qizil.
+ * kelardi. Karta talabi: superadmin — hammasi; market — faqat market tarifi;
+ * kuryer — faqat kuryer tarifi. Proyeksiyasiz kod bu spec'da qizil.
+ * D5NxxpJW (ega 2026-11-20 / 2026-11-25): menejer, filial va registrator —
+ * market tarifi va undan hisoblanadigan maydonlarsiz; filial ulushi, kuryer
+ * tarifi va ulushi bor.
  */
 type Handlers = Record<string, unknown>;
 
@@ -117,6 +121,24 @@ const COURIER_SECRET_MARKET_KEYS = [
   'commission_value',
 ];
 
+/** D5NxxpJW: menejer / filial / registrator ko'rinishi. */
+function expectBranchStaffView(row: Record<string, any>) {
+  for (const key of BRANCH_STAFF_HIDDEN_ORDER_FIELDS) {
+    expect(row).not.toHaveProperty(key);
+  }
+  for (const key of COURIER_SECRET_MARKET_KEYS) {
+    expect(row.market).not.toHaveProperty(key);
+  }
+  expect(row.market.name).toBe('TEST E2E Market');
+  expect(row).toMatchObject({
+    total_price: 100000,
+    branch_share: 0,
+    branch_cashbox_amount: 0,
+    courier_tariff: 15000,
+    courier_share: 15000,
+  });
+}
+
 function expectCourierView(row: Record<string, any>) {
   for (const key of COURIER_SECRET_KEYS) {
     expect(row).not.toHaveProperty(key);
@@ -212,22 +234,63 @@ function orderGateway(
 }
 
 describe('kH2zZsz3 — projectOrderPayloadForRoles', () => {
-  it("superadmin/admin/menejer/filial/registrator — to'liq ko'rinish (asl havola)", () => {
+  it("superadmin/admin — to'liq ko'rinish (asl havola); boshqa rol bilan birga ham", () => {
     const payload = { statusCode: 200, data: order25() };
-    for (const roles of [['superadmin'], ['admin'], ['registrator']]) {
+    for (const roles of [['superadmin'], ['admin'], ['manager', 'admin']]) {
       expect(resolveOrderProjection(roles)).toBeNull();
       expect(projectOrderPayloadForRoles(roles, payload)).toBe(payload);
     }
-    // T7 (QPq2C1co, B3): menejer/filial pulni to'liq ko'radi, lekin market
-    // telefonini emas (alohida aloqa proyeksiyasi).
-    for (const roles of [['manager'], ['branch'], ['courier', 'manager']]) {
-      expect(resolveOrderProjection(roles)).toBeNull();
-      const projected: any = projectOrderPayloadForRoles(roles, payload);
-      expect(projected.data.market_tariff).toBe(20000);
-      expect(projected.data.courier_tariff).toBe(15000);
-      expect(projected.data.market).not.toHaveProperty('phone_number');
-      expect(projected.data.market.name).toBe('TEST E2E Market');
+  });
+
+  it("⭐ D5NxxpJW: menejer/filial/registrator — market tarifi va undan hisoblanadiganlar yo'q, filial va kuryer pullari bor", () => {
+    const row = order25({
+      quoted_market_tariff: 20000,
+      sale_market_paid_amount: 5000,
+      sale_market_paid_max: 80000,
+    });
+    for (const roles of [
+      ['manager'],
+      ['branch'],
+      ['registrator'],
+      // Torroq rol bilan birga — filial xodimi ko'rinishi ustun (avvalgidek).
+      ['courier', 'manager'],
+      [' MANAGER '],
+    ]) {
+      const projected: any = projectOrderPayloadForRoles(roles, {
+        statusCode: 200,
+        data: { data: [row] },
+      });
+      expectBranchStaffView(projected.data.data[0]);
     }
+    // Asl obyekt o'zgarmaydi (copy-on-write); mijoz obyekti qisqarmaydi.
+    expect(row.market_tariff).toBe(20000);
+    const manager: any = projectOrderPayloadForRoles(['manager'], row);
+    expect(manager.customer).toEqual(row.customer);
+    // T7 (QPq2C1co, B3): market telefoni menejerda yo'q, registratorda bor.
+    const registrator: any = projectOrderPayloadForRoles(['registrator'], row);
+    expect(manager.market).not.toHaveProperty('phone_number');
+    expect(registrator.market.phone_number).toBe('+998887000701');
+  });
+
+  it('⭐ D5NxxpJW: tarix (old_value/new_value) va camelCase ko`rinishlar ham qamraladi', () => {
+    const projected = projectOrderPayloadForRoles(['manager'], {
+      data: [
+        {
+          action: 'tariff_updated',
+          old_value: { market_tariff: 1, courier_tariff: 2 },
+          new_value: { marketTariff: 3, toBePaid: 4, total_price: 5 },
+        },
+      ],
+    });
+    expect(projected).toEqual({
+      data: [
+        {
+          action: 'tariff_updated',
+          old_value: { courier_tariff: 2 },
+          new_value: { total_price: 5 },
+        },
+      ],
+    });
   });
 
   it("kuryer — market tarifi, filial ulushi va market profili tariflari yo'q", () => {
@@ -356,7 +419,7 @@ describe('kH2zZsz3 — GET /orders/:id rol proyeksiyasi', () => {
     ).resolves.toEqual({ ...row, rollback: null });
   });
 
-  it("menejer (o'z filiali) — to'liq ko'rinish", async () => {
+  it("⭐ D5NxxpJW: menejer (o'z filiali) — market tarifisiz", async () => {
     const row = order25();
     const controller = orderGateway({ 'order.find_by_id_enriched': row });
 
@@ -364,12 +427,8 @@ describe('kH2zZsz3 — GET /orders/:id rol proyeksiyasi', () => {
       '25',
       user('5', ['manager'], '3'),
     );
-    // Pul — to'liq; market telefoni — yo'q (T7 B3).
-    expect(res).toMatchObject({
-      market_tariff: 20000,
-      courier_tariff: 15000,
-      branch_share: row.branch_share,
-    });
+    expectBranchStaffView(res);
+    // Market telefoni ham yo'q (T7 B3).
     expect(res.market).not.toHaveProperty('phone_number');
   });
 });

@@ -80,7 +80,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
   );
 
   it.each([['manager'], ['registrator'], ['branch']])(
-    "%s: {id, name, status, (registrator: phone_number)} + tariflar (yiFTzkzH) — login, kassa yo'q",
+    "%s: {id, name, status, (registrator: phone_number va narxlar — yiFTzkzH)}, menejer/filial narxsiz (D5NxxpJW) — login, kassa yo'q",
     async (role) => {
       const res = await controller.getMarkets(
         user([role]),
@@ -91,8 +91,10 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
       );
 
       const tariffs = {
-        tariff_home: 30000,
-        tariff_center: 20000,
+        // D5NxxpJW (ega 2026-11-25): market narxlari faqat registratorga.
+        ...(role === 'registrator'
+          ? { tariff_home: 30000, tariff_center: 20000 }
+          : {}),
         default_tariff: 'center',
         // KmWO9gTA: maydon yo'q (eski qator) — sukut true.
         weight_volume_pricing: true,
@@ -135,8 +137,15 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
     },
   );
 
-  // T7 (B3): menejerda `phone_number` umuman yo'q (null ham emas).
-  it("yiFTzkzH: filial xodimi — tarif maydoni yo'q market'da null (undefined emas)", async () => {
+  it('⭐ D5NxxpJW: menejer + registrator — torroq ko`rinish (narxsiz)', async () => {
+    const res = await controller.getMarkets(
+      user(['registrator', 'manager']),
+      'mar',
+    );
+    expect(JSON.stringify(res)).not.toMatch(/tariff_home|tariff_center/);
+  });
+
+  it("yiFTzkzH: registrator — tarif maydoni yo'q market'da null (undefined emas)", async () => {
     identityClient.send.mockReturnValueOnce(
       of({
         statusCode: 200,
@@ -155,7 +164,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
       }),
     );
 
-    const res = (await controller.getMarkets(user(['manager']))) as {
+    const res = (await controller.getMarkets(user(['registrator']))) as {
       data: { items: unknown[] };
     };
 
@@ -164,6 +173,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         id: '9',
         name: 'Yangi',
         status: 'active',
+        phone_number: null,
         tariff_home: null,
         tariff_center: null,
         default_tariff: null,
@@ -174,6 +184,7 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
         id: '10',
         name: 'Standart',
         status: 'active',
+        phone_number: null,
         tariff_home: null,
         tariff_center: null,
         default_tariff: null,
