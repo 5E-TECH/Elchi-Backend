@@ -64,7 +64,10 @@ import {
   WarehouseThresholdRequestDto,
   WarehouseThresholdResponseDto,
 } from './dto/warehouse.swagger.dto';
-import { buildXlsx, excelDate } from './excel/excel.util';
+import {
+  buildWarehouseStockXlsx,
+  type WarehouseStockSource,
+} from './excel/warehouse-stock-xlsx';
 
 interface JwtUser {
   sub: string;
@@ -126,12 +129,6 @@ export const MARKET_STOCK_ROLES = [
 
 const CATALOG_TIMEOUT_MS = 10_000;
 const ID_PATTERN = /^[1-9]\d{0,18}$/;
-
-const LEVEL_LABEL: Record<string, string> = {
-  ok: 'Yetarli',
-  low: 'Kam qoldi',
-  out: 'Tugagan',
-};
 
 /**
  * hY7uacJu — vaqtinchalik ombor moduli (HTTP → catalog-service RMQ).
@@ -859,7 +856,7 @@ export class WarehouseGatewayController {
   @ApiOperation({
     summary: 'Qoldiqni Excel (.xlsx) ga yuklash',
     description:
-      "«Excelga yuklash»: shu ombor qoldig'i (filtrlar `stock` bilan bir xil, sahifasiz, ≤10 000 qator).",
+      "«Excelga yuklash»: shu ombor qoldig'i (filtrlar `stock` bilan bir xil, sahifasiz, ≤10 000 qator; ortig'i bo'lsa faylda DIQQAT). 1-varaq «Xulosa» — tugagan / kam qolganlar va marketlar; 2-varaq «Qoldiq» — to'liq ro'yxat (Tugagan → Kam qoldi → Yetarli).",
   })
   @ApiParam({ name: 'id', description: 'Warehouse ID' })
   @ApiQuery({ name: 'market_id', required: false, type: String })
@@ -879,53 +876,20 @@ export class WarehouseGatewayController {
     const warehouseId = this.assertId(id);
     const scope = await this.resolveScope(req.user);
     const result = await this.send<{
-      warehouse?: { name?: string };
-      data?: Array<Record<string, any>>;
+      warehouse?: { name?: string | null };
+      data?: WarehouseStockSource[];
+      total?: number;
     }>(WAREHOUSE_RPC.STOCK, {
       id: warehouseId,
       query: { market_id: marketId, level, search, all: true },
       ...(scope ? { scope } : {}),
     });
-    const rows = (result?.data ?? []).map((row) => ({
-      product: row.product?.name ?? '',
-      code: row.product?.code?.value ?? '',
-      code_kind:
-        row.product?.code?.kind === 'barcode'
-          ? `Zavod shtrix kodi (${row.product?.code?.format ?? ''})`
-          : 'Elchi QR kodi',
-      market: row.market?.name ?? row.market?.id ?? '',
-      on_hand: row.on_hand ?? 0,
-      reserved: row.reserved ?? 0,
-      available: row.available ?? 0,
-      threshold: row.threshold ?? 0,
-      level: LEVEL_LABEL[String(row.level)] ?? String(row.level ?? ''),
-      weight:
-        row.product?.chargeable_weight_kg === null ||
-        row.product?.chargeable_weight_kg === undefined
-          ? ''
-          : row.product.chargeable_weight_kg,
-      basis:
-        row.product?.chargeable_basis === 'volumetric' ? "hajm bo'yicha" : '',
-      last_movement_at: excelDate(row.last_movement_at),
-    }));
-    const buffer = await buildXlsx(
-      'Qoldiq',
-      [
-        { header: 'Mahsulot', key: 'product', width: 32 },
-        { header: 'Kod', key: 'code', width: 20 },
-        { header: 'Kod turi', key: 'code_kind', width: 26 },
-        { header: 'Market', key: 'market', width: 22 },
-        { header: 'Qoldiq', key: 'on_hand', width: 10 },
-        { header: 'Band', key: 'reserved', width: 10 },
-        { header: 'Mavjud', key: 'available', width: 10 },
-        { header: 'Chegara', key: 'threshold', width: 10 },
-        { header: 'Holat', key: 'level', width: 12 },
-        { header: 'Hisob vazni, kg', key: 'weight', width: 14 },
-        { header: 'Hisob asosi', key: 'basis', width: 14 },
-        { header: 'Oxirgi harakat', key: 'last_movement_at', width: 22 },
-      ],
-      rows,
-    );
+    const buffer = await buildWarehouseStockXlsx({
+      rows: result?.data ?? [],
+      warehouseName: result?.warehouse?.name,
+      filters: { marketId, level, search },
+      total: result?.total,
+    });
     res.set({
       'Content-Type':
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

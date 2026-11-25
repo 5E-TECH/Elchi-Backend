@@ -1,7 +1,8 @@
+import { Workbook } from 'exceljs';
 import { ExpenseCategory, FinancialSource_type } from '@app/common';
+import { buildFinancialBalanceReport } from '../excel/finance-reports/financial-balance.report';
 import {
   EXPENSE_CATEGORY_LABEL_UZ,
-  FINANCIAL_BALANCE_EXPORT_COLUMNS,
   toFinancialBalanceExportRow,
 } from './financial-balance.util';
 
@@ -13,10 +14,27 @@ describe('ljVOuNz4 — daftar eksportidagi kategoriya', () => {
       new Map(),
     ).category;
 
-  it('«Kategoriya» ustuni bor', () => {
-    expect(FINANCIAL_BALANCE_EXPORT_COLUMNS.map((c) => c.key)).toContain(
-      'category',
+  it('«Kategoriya» ustuni bor', async () => {
+    const workbook = new Workbook();
+    await workbook.xlsx.load(
+      (await buildFinancialBalanceReport({
+        items: [
+          {
+            id: '1',
+            amount: -5000,
+            source_type: 'manual_expense',
+            expense_category: 'fuel',
+          },
+        ],
+        total: 1,
+        limit: 10,
+        filters: {},
+        actors: new Map(),
+      })) as never,
     );
+    const sheet = workbook.getWorksheet('Daftar')!;
+    expect(sheet.getCell('E6').value).toBe('Kategoriya');
+    expect(sheet.getCell('E7').value).toBe("Yoqilg'i");
   });
 
   it('18 kategoriyaning hammasiga o`zbekcha nom', () => {

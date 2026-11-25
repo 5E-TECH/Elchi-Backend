@@ -246,6 +246,7 @@ import {
   streamOrdersXlsx,
   type OrderExportPage,
 } from './order-export/orders-xlsx.export';
+import { orderExportSubtitle } from './order-export/order-export-subtitle';
 
 /**
  * (BOT-3d) Kuryer amali so'rovi. `Idempotency-Key` `req.headers` dan o'qiladi
@@ -5347,7 +5348,7 @@ export class OrderGatewayController {
       'Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. ' +
       "Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, " +
       'X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). ' +
-      "Oxirgi qatorlar: «Jami» (soni va narx yig'indisi).",
+      "Oxirgi qator: «JAMI» (soni va narx yig'indisi, filtrga moslashadi); 2-varaq — «Xulosa» (holat, viloyat, firma, kuryer bo'yicha).",
   })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
@@ -5511,7 +5512,24 @@ export class OrderGatewayController {
       };
     };
 
-    const result = await streamOrdersXlsx(res, fetchPage);
+    const result = await streamOrdersXlsx(res, fetchPage, {
+      // Banner: davr / holat matni; nomlar — birinchi sahifa qatorlaridan.
+      subtitle: (rows) =>
+        orderExportSubtitle(
+          {
+            start_day,
+            end_day,
+            status,
+            cancel_stage,
+            market_id,
+            region_id,
+            district_id,
+            courier_id,
+            search,
+          },
+          rows,
+        ),
+    });
     if (result.status === 'aborted') {
       this.logger.error(
         `Buyurtmalar eksporti uzildi: ${result.written}/${result.total} qator yozilgan`,

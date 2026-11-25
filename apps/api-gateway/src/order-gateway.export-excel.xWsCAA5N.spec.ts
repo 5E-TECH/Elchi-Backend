@@ -26,7 +26,7 @@ import {
  *     ogohlantirish (sarlavha + faylda DIQQAT qatori);
  *   - TC3: bitta HTTP so'rov;
  *   - TC4: haqiqiy .xlsx (openxml, zip);
- *   - TC5: «Jami» qatori;
+ *   - TC5: «JAMI» qatori (filtrga moslashadi) va «Xulosa» varag'i;
  *   - TC1/TC6 (regressiya): kuryer ismi, filtr/doira GET /orders bilan AYNAN.
  *
  * order-service `find_all_enriched` soxtasi uning sahifalash qoidasini
@@ -84,16 +84,44 @@ const binary = (
   res.on('end', () => cb(null, Buffer.concat(chunks)));
 };
 
-const readSheet = async (buffer: Buffer) => {
+/** Katak → oddiy qiymat: formula — natijasi, DIQQAT (richText) — matni. */
+const plain = (value: unknown): unknown => {
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const cell = value as {
+      formula?: string;
+      result?: unknown;
+      richText?: Array<{ text: string }>;
+    };
+    if (cell.richText) return cell.richText.map((part) => part.text).join('');
+    // exceljs o'qishda 0 natijani tashlab yuboradi.
+    if (cell.formula) return cell.result ?? 0;
+  }
+  return value;
+};
+
+const loadBook = async (buffer: Buffer) => {
   const wb = new Workbook();
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
-  const ws = wb.getWorksheet('Buyurtmalar')!;
+  return wb;
+};
+
+/** Varaq qatorlari (B ustundan), banner va DIQQAT bilan. */
+const sheetRows = (wb: Workbook, name: string): unknown[][] => {
   const rows: unknown[][] = [];
-  ws.eachRow({ includeEmpty: false }, (row) => {
-    rows.push((row.values as unknown[]).slice(1));
+  wb.getWorksheet(name)!.eachRow({ includeEmpty: false }, (row) => {
+    rows.push((row.values as unknown[]).slice(2).map(plain));
   });
   return rows;
 };
+
+/** «Buyurtmalar»: sarlavhadan boshlab (sarlavha, buyurtmalar, JAMI, DIQQAT). */
+const readSheet = async (buffer: Buffer) => {
+  const rows = sheetRows(await loadBook(buffer), 'Buyurtmalar');
+  return rows.slice(rows.findIndex((row) => row[0] === '№'));
+};
+
+const isWarning = (row: unknown[]) =>
+  typeof row[0] === 'string' && row[0].startsWith('DIQQAT');
 
 const col = (key: string) =>
   ORDER_EXPORT_COLUMNS.findIndex((c) => c.key === key);
@@ -188,14 +216,15 @@ describe('xWsCAA5N — GET /orders/export/excel', () => {
     );
 
     const rows = await readSheet(res.body as Buffer);
-    // sarlavha + 12 345 buyurtma + «Jami»
+    // sarlavha + 12 345 buyurtma + «JAMI»
     expect(rows).toHaveLength(1 + 12_345 + 1);
     const ids = rows.slice(1, -1).map((r) => r[col('id')]);
     expect(new Set(ids).size).toBe(12_345);
-    expect(ids[0]).toBe('12345');
-    expect(ids[ids.length - 1]).toBe('1');
+    // ID — son (matn emas).
+    expect(ids[0]).toBe(12_345);
+    expect(ids[ids.length - 1]).toBe(1);
     // Ogohlantirish qatori YO'Q (hammasi chiqdi).
-    expect(rows.some((r) => String(r[0]).startsWith('DIQQAT'))).toBe(false);
+    expect(rows.some(isWarning)).toBe(false);
 
     // Gateway order-service'ni 500 talik sahifalar bilan aylanadi.
     const queries = listQueries();
@@ -230,19 +259,90 @@ describe('xWsCAA5N — GET /orders/export/excel', () => {
     expect(rows[0]).toEqual(ORDER_EXPORT_COLUMNS.map((c) => c.header));
   });
 
-  it('⭐ TC5: oxirgi qator «Jami» — buyurtmalar soni va Narxi yig‘indisi', async () => {
+  it('⭐ TC5: oxirgi qator «JAMI» — soni va Narxi yig‘indisi, filtrga moslashadi (SUBTOTAL)', async () => {
     total = 1_234;
     let expectedSum = 0;
     for (let id = 1; id <= total; id++) {
       expectedSum += Number(makeOrder(id).total_price);
     }
 
-    const rows = await readSheet((await exportGet()).body as Buffer);
+    const wb = await loadBook((await exportGet()).body as Buffer);
+    const rows = sheetRows(wb, 'Buyurtmalar');
+    const ws = wb.getWorksheet('Buyurtmalar')!;
 
     const last = rows[rows.length - 1];
-    expect(last[col('n')]).toBe('Jami');
-    expect(String(last[col('products')])).toBe('1 234 ta buyurtma');
+    expect(last[col('n')]).toBe('JAMI');
+    expect(last[col('products')]).toBe(1_234);
     expect(last[col('total_price')]).toBe(expectedSum);
+    // Sarlavha 6-qatorda (banner 1–4), ma'lumot 7-qatordan.
+    const totalRow = 7 + total;
+    const counter = ws.getCell(totalRow, col('products') + 2);
+    expect(counter.formula).toBe(`SUBTOTAL(2,B7:B${totalRow - 1})`);
+    expect(counter.numFmt).toBe('#,##0" ta buyurtma"');
+    expect(ws.getCell(totalRow, col('total_price') + 2).formula).toBe(
+      `SUBTOTAL(9,J7:J${totalRow - 1})`,
+    );
+    expect(ws.autoFilter).toBe(`B6:M${totalRow - 1}`);
+    expect(ws.pageSetup.printTitlesRow).toBe('6:6');
+  });
+
+  it('banner: davr va holat filtrdan, market / viloyat NOMI — qatorlardan (RPC yo‘q); nomsiz id qo‘yilmaydi', async () => {
+    total = 3;
+
+    const wb = await loadBook(
+      (
+        await exportGet(
+          '?start_day=2026-11-16&end_day=2026-11-25&status=sold&market_id=37&region_id=3&district_id=999',
+        )
+      ).body as Buffer,
+    );
+    const ws = wb.getWorksheet('Buyurtmalar')!;
+
+    expect(ws.getCell('B1').value).toBe('ELCHI POCHTA');
+    expect(ws.getCell('B2').value).toBe("Buyurtmalar ro'yxati");
+    expect(ws.getCell('B3').value).toBe(
+      'Davr: 16.11.2026 – 25.11.2026 · Holat: Sotilgan · Market: TEST Market · Viloyat: Andijon',
+    );
+    expect(sheetRows(wb, 'Buyurtmalar')[1]).toContain('3 ta buyurtma');
+    // Nom uchun qo'shimcha so'rov yo'q.
+    expect(orderSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('filtrsiz — «Davr: barchasi · Holat: barchasi»', async () => {
+    total = 1;
+    const wb = await loadBook((await exportGet()).body as Buffer);
+    expect(wb.getWorksheet('Buyurtmalar')!.getCell('B3').value).toBe(
+      'Davr: barchasi · Holat: barchasi',
+    );
+  });
+
+  it('«Xulosa»: holat / viloyat / firma / kuryer jamlari ro‘yxat bilan bir xil', async () => {
+    total = 700;
+    let sold = 0;
+    let all = 0;
+    for (let id = 1; id <= total; id++) {
+      const price = Number(makeOrder(id).total_price);
+      all += price;
+      if (id % 3 === 0) sold += price;
+    }
+
+    const wb = await loadBook((await exportGet()).body as Buffer);
+    const rows = sheetRows(wb, 'Xulosa');
+
+    const values = rows.find((row) => row.includes(all));
+    expect(values).toEqual(expect.arrayContaining([all, sold, 0]));
+    const named = (name: string) => rows.find((row) => row[0] === name)!;
+    expect(named('Sotilgan')).toEqual(expect.arrayContaining([233, sold]));
+    expect(named('Yangi')).toEqual(expect.arrayContaining([467, all - sold]));
+    expect(named('Andijon')).toEqual(expect.arrayContaining([700, all]));
+    expect(named('TEST Market')).toEqual(expect.arrayContaining([700, all]));
+    expect(named('Biriktirilmagan')).toEqual(expect.arrayContaining([350]));
+    expect(named('TEST Claude Kuryer')).toEqual(expect.arrayContaining([350]));
+    // Ulush chizig'i — REPT formulasi natijasi bilan (oqimda data bar yo'q).
+    expect(named('Yangi')).toContain('█'.repeat(12));
+    for (const row of rows.filter((r) => r[0] === 'JAMI')) {
+      expect(row).toEqual(expect.arrayContaining([700, 1, all]));
+    }
   });
 
   it('⭐ TC1 (regressiya): Kuryer ustuni — courier.name; kuryer telefoni faylga yozilmaydi', async () => {
@@ -255,10 +355,15 @@ describe('xWsCAA5N — GET /orders/export/excel', () => {
       rows.slice(1, -1).map((r) => [String(r[col('id')]), r] as const),
     );
     expect(byId.get('4')?.[col('courier')]).toBe('TEST Claude Kuryer');
-    expect(byId.get('3')?.[col('courier')] ?? '').toBe('');
+    expect(byId.get('3')?.[col('courier')]).toBe('—');
     expect((res.body as Buffer).includes('887009102')).toBe(false);
     expect(byId.get('3')?.[col('status')]).toBe('Sotilgan');
-    expect(byId.get('3')?.[col('created_at')]).toBe('2026-10-14 15:05');
+    // Sana — haqiqiy Excel sanasi (Toshkent soati), telefon o'qiladigan.
+    expect(byId.get('3')?.[col('created_at')]).toEqual(
+      new Date('2026-10-14T15:05:00.000Z'),
+    );
+    expect(byId.get('3')?.[col('phone')]).toBe('+998 90 111 22 33');
+    expect(byId.get('3')?.[col('total_price')]).toBe(4_000);
   });
 
   it('⭐ TC6 (regressiya): filtr va doira GET /orders bilan AYNAN — market: market_id = token sub', async () => {
@@ -386,16 +491,112 @@ describe('xWsCAA5N — streamOrdersXlsx (chegara va uzilish)', () => {
     expect(stream.headers['x-export-truncated']).toBe('true');
     expect(stream.headers['x-export-total']).toBe('2500');
     expect(stream.headers['x-export-limit']).toBe('1000');
-    const rows = await readSheet(body());
-    const data = rows.filter(
-      (r) =>
-        typeof r[col('id')] === 'string' &&
-        /^\d+$/.test(r[col('id')] as string),
-    );
+    const wb = await loadBook(body());
+    const all = sheetRows(wb, 'Buyurtmalar');
+    const head = all.findIndex((r) => r[0] === '№');
+    const data = all
+      .slice(head + 1)
+      .filter((r) => typeof r[col('id')] === 'number');
     expect(data).toHaveLength(1_000);
-    const warning = rows.find((r) => String(r[0]).startsWith('DIQQAT'));
-    expect(String(warning?.[0])).toContain('2 500');
-    expect(String(warning?.[0])).toContain('1 000');
+    // DIQQAT tepada ham (sarlavhadan oldin), oxirida ham, «Xulosa» da ham.
+    const warnings = all.filter(isWarning).map((r) => String(r[0]));
+    expect(warnings).toHaveLength(2);
+    expect(all.findIndex(isWarning)).toBeLessThan(head);
+    expect(isWarning(all[all.length - 1])).toBe(true);
+    for (const warning of warnings) {
+      expect(warning).toContain('2 500');
+      expect(warning).toContain('1 000');
+    }
+    expect(sheetRows(wb, 'Xulosa').some(isWarning)).toBe(true);
+    // Banner: faylda 1 000 ta, filtr bo'yicha 2 500 ta.
+    expect(all[1]).toContain('1 000 ta buyurtma');
+    expect(all[2]).toContain("filtr bo'yicha jami 2 500 ta");
+    // Muzlatilgan qatorlar sarlavha bilan tugaydi.
+    expect(wb.getWorksheet('Buyurtmalar')!.views[0]).toMatchObject({
+      state: 'frozen',
+      ySplit: 8,
+      xSplit: 3,
+    });
+    const jami = all.find((r) => r[0] === 'JAMI')!;
+    expect(jami[col('products')]).toBe(1_000);
+  });
+
+  it('qidiruv 1 000 mijozdan oshgan — DIQQAT tepada va oxirida', async () => {
+    const { stream, body } = fakeRes();
+    const ended = new Promise((resolve) => stream.on('end', resolve));
+    await streamOrdersXlsx(stream, (page) =>
+      pages(3)(page).then((res) => ({ ...res, searchTruncated: true })),
+    );
+    await ended;
+    const rows = sheetRows(await loadBook(body()), 'Buyurtmalar');
+    expect(rows.filter(isWarning)).toHaveLength(2);
+    expect(rows.findIndex(isWarning)).toBeLessThan(
+      rows.findIndex((r) => r[0] === '№'),
+    );
+  });
+
+  it('ro‘yxat eksport paytida qisqargan — DIQQAT faqat oxirida (tepada hali noma’lum)', async () => {
+    const { stream, body } = fakeRes();
+    const ended = new Promise((resolve) => stream.on('end', resolve));
+    const result = await streamOrdersXlsx(stream, (page) =>
+      Promise.resolve(
+        page === 1
+          ? { rows: [makeOrder(1), makeOrder(2)], total: 5 }
+          : { rows: [], total: 5 },
+      ),
+    );
+    await ended;
+    expect(result).toMatchObject({ status: 'completed', written: 2 });
+    const rows = sheetRows(await loadBook(body()), 'Buyurtmalar');
+    const warnings = rows.filter(isWarning);
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0][0])).toContain("ro'yxat o'zgardi");
+    expect(rows.findIndex(isWarning)).toBeGreaterThan(
+      rows.findIndex((r) => r[0] === 'JAMI'),
+    );
+  });
+
+  it('bo‘sh ro‘yxat — fayl ochiladi, JAMI 0 (formula o‘z-o‘ziga murojaat qilmaydi)', async () => {
+    const { stream, body } = fakeRes();
+    const ended = new Promise((resolve) => stream.on('end', resolve));
+    await streamOrdersXlsx(stream, () =>
+      Promise.resolve({ rows: [], total: 0 }),
+    );
+    await ended;
+    const wb = await loadBook(body());
+    const rows = sheetRows(wb, 'Buyurtmalar');
+    expect(rows.some((r) => r[0] === 'Buyurtma topilmadi')).toBe(true);
+    const jami = rows.find((r) => r[0] === 'JAMI')!;
+    expect(jami[col('products')]).toBe(0);
+    expect(jami[col('total_price')]).toBe(0);
+    const ws = wb.getWorksheet('Buyurtmalar')!;
+    expect(ws.getCell('J8').formula).toBeUndefined();
+    expect(ws.autoFilter ?? null).toBeNull();
+    expect(wb.getWorksheet('Xulosa')).toBeDefined();
+  });
+
+  it('matn «=», «+», «-», «@» bilan boshlansa ham matn (formula emas)', async () => {
+    const { stream, body } = fakeRes();
+    const ended = new Promise((resolve) => stream.on('end', resolve));
+    const evil = {
+      ...makeOrder(1),
+      customer: { name: '=HYPERLINK("http://x")', phone_number: '+1-SUM(1)' },
+      market: { name: '@cmd' },
+      district: { name: '-2+3' },
+    };
+    await streamOrdersXlsx(stream, () =>
+      Promise.resolve({ rows: [evil], total: 1 }),
+    );
+    await ended;
+    const ws = (await loadBook(body())).getWorksheet('Buyurtmalar')!;
+    const cell = (key: string) => ws.getCell(7, col(key) + 2);
+    expect(cell('customer').value).toBe('=HYPERLINK("http://x")');
+    expect(cell('market').value).toBe('@cmd');
+    expect(cell('district').value).toBe('-2+3');
+    expect(cell('phone').value).toBe('+1-SUM(1)');
+    for (const key of ['customer', 'market', 'district', 'phone']) {
+      expect(cell(key).formula).toBeUndefined();
+    }
   });
 
   it('keyingi sahifada xato — oqim uziladi (aborted), fayl "to‘liq" bo‘lib yopilmaydi', async () => {
@@ -449,7 +650,9 @@ describe('xWsCAA5N — eski GET /export/orders.xlsx 100 qatorda kesilmaydi', () 
     );
 
     const rows = await readSheet(buffer);
-    expect(rows).toHaveLength(1 + totalOrders);
+    // sarlavha + buyurtmalar + «JAMI»
+    expect(rows).toHaveLength(1 + totalOrders + 1);
+    expect(rows.some(isWarning)).toBe(false);
     const firstCall = orderClient.send.mock.calls[0] as unknown as [
       unknown,
       { query: Order },

@@ -68,17 +68,18 @@ const readSheet = async (buffer: Buffer) => {
   const wb = new Workbook();
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   const ws = wb.getWorksheet('Buyurtmalar')!;
+  // Kontent B ustundan; banner qatorlari tashlanadi (sarlavhadan boshlab).
   const rows: unknown[][] = [];
   ws.eachRow({ includeEmpty: false }, (row) => {
-    rows.push((row.values as unknown[]).slice(1));
+    rows.push((row.values as unknown[]).slice(2));
   });
-  return rows;
+  return rows.slice(rows.findIndex((row) => row[0] === '№'));
 };
 
 const cellText = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 
-/** «Holati» ustuni: buyurtma id → yorliq (sarlavha va «Jami» qatorisiz). */
+/** «Holati» ustuni: buyurtma id → yorliq (sarlavha va «JAMI» qatorisiz). */
 const statusById = (rows: unknown[][]) =>
   new Map(
     rows
