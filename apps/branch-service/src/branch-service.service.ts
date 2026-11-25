@@ -5675,6 +5675,51 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(branch, 200, 'Branch found');
   }
 
+  /**
+   * 0Rn5U6AD — filial aloqa kontakti: nomi, telefoni va FAOL menejeri. Bir
+   * nechta menejer bo'lsa `branches.manager_id` dagisi, u faol emas/bo'sh —
+   * eng kichik id (natija barqaror). Identity javob bermasa — menejersiz.
+   */
+  async findBranchContact(id: string) {
+    const branchId = String(id ?? '').trim();
+    if (!/^\d{1,19}$/.test(branchId)) {
+      this.badRequest("Filial id noto'g'ri");
+    }
+    const branch = await this.getBranchOrThrow(branchId);
+    const managerIds = await this.findBranchManagerUserIds(branchId);
+    const usersById = managerIds.length
+      ? await this.getUsersByIdsBatch(managerIds)
+      : null;
+    const headId = String(branch.manager_id ?? '');
+    const rank = (userId: string) => (userId === headId ? 0 : 1);
+    const manager = managerIds
+      .filter((userId) => this.isActiveManagerUser(usersById?.get(userId)))
+      .sort(
+        (a, b) =>
+          rank(a) - rank(b) || a.length - b.length || a.localeCompare(b),
+      )
+      .map((userId) => {
+        const user = usersById?.get(userId) ?? {};
+        return {
+          id: userId,
+          name: typeof user.name === 'string' ? user.name : null,
+          phone_number:
+            typeof user.phone_number === 'string' ? user.phone_number : null,
+        };
+      })[0];
+
+    return successRes(
+      {
+        id: String(branch.id),
+        name: branch.name,
+        phone_number: branch.phone_number ?? null,
+        manager: manager ?? null,
+      },
+      200,
+      'Branch contact',
+    );
+  }
+
   async findHqBranch() {
     const branch = await this.branchRepo.findOne({
       where: { code: this.hqCode, isDeleted: false },
