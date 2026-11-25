@@ -20,6 +20,19 @@ export class FindHistoryDto {
   @IsString()
   expense_category_id?: string;
 
+  /**
+   * KRN902pg — to'lov usuli: vergul bilan `cash`, `click`, `click_to_market`,
+   * `none` (servis tekshiradi, noma'lum → 400).
+   */
+  @IsOptional()
+  @IsString()
+  payment_method?: string;
+
+  /** KRN902pg — karta: vergul bilan karta ID'lari va/yoki `none`. */
+  @IsOptional()
+  @IsString()
+  card_id?: string;
+
   /** T3 — `receipt` blokini qo'shish (FAQAT gateway, SA/admin/menejer). */
   @IsOptional()
   @IsBoolean()

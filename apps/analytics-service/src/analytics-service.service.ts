@@ -4,13 +4,15 @@ import {
   Order_status,
   Roles,
   RmqSendOptions,
-  TASHKENT_OFFSET_MINUTES,
-  endOfTashkentDay,
+  businessDayEnd,
+  businessDayKey,
+  businessDayStart,
+  endOfBusinessDay,
   parseDateOnly,
   rmqSend,
-  startOfTashkentDay,
-  startOfTashkentMonth,
-  startOfTashkentWeek,
+  startOfBusinessDay,
+  startOfBusinessMonth,
+  startOfBusinessWeek,
 } from '@app/common';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
@@ -271,10 +273,12 @@ export class AnalyticsServiceService {
   private normalizeDateRange(filter: { startDate?: string; endDate?: string }) {
     const { startDate, endDate } = filter;
 
+    // xhiXv3w3 — kunlar ISH KUNI chegarasida (`business-day.ts`, sukut
+    // Toshkent 00:00): «bugun» joriy ish kuni, `YYYY-MM-DD` — o'sha ish kuni.
     if (!startDate || !endDate) {
       const now = new Date();
-      const start = startOfTashkentDay(now);
-      const end = endOfTashkentDay(now);
+      const start = startOfBusinessDay(now);
+      const end = endOfBusinessDay(now);
       return {
         startDate: start.toISOString(),
         endDate: end.toISOString(),
@@ -284,16 +288,17 @@ export class AnalyticsServiceService {
     const startOnly = parseDateOnly(startDate);
     const endOnly = parseDateOnly(endDate);
 
+    const dayKey = (value: Date) => value.toISOString().slice(0, 10);
     const start = startOnly
-      ? startOfTashkentDay(startOnly)
+      ? businessDayStart(dayKey(startOnly))
       : new Date(startDate);
-    const end = endOnly ? endOfTashkentDay(endOnly) : new Date(endDate);
+    const end = endOnly ? businessDayEnd(dayKey(endOnly)) : new Date(endDate);
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       const now = new Date();
       return {
-        startDate: startOfTashkentDay(now).toISOString(),
-        endDate: endOfTashkentDay(now).toISOString(),
+        startDate: startOfBusinessDay(now).toISOString(),
+        endDate: endOfBusinessDay(now).toISOString(),
       };
     }
 
@@ -314,15 +319,16 @@ export class AnalyticsServiceService {
 
     const period = String(filter.period ?? 'today').toLowerCase();
     const now = new Date();
-    const end = endOfTashkentDay(now);
-    let start = startOfTashkentDay(now);
+    const end = endOfBusinessDay(now);
+    let start = startOfBusinessDay(now);
 
-    // Tashkent day/week/month bounds come from the shared libs/common helper
-    // (SqVMuhKo), so GET /orders and the dashboard read a day the same way.
+    // Business day/week/month bounds come from the shared libs/common helper
+    // (xhiXv3w3, SqVMuhKo), so GET /orders and the dashboard read a day the
+    // same way.
     if (period === 'week') {
-      start = startOfTashkentWeek(now);
+      start = startOfBusinessWeek(now);
     } else if (period === 'month') {
-      start = startOfTashkentMonth(now);
+      start = startOfBusinessMonth(now);
     }
 
     return {
@@ -460,7 +466,7 @@ export class AnalyticsServiceService {
     };
     const isSingleTashkentDay =
       start.getTime() <= end.getTime() &&
-      startOfTashkentDay(end).getTime() <= start.getTime();
+      startOfBusinessDay(end).getTime() <= start.getTime();
     if (!isSingleTashkentDay) {
       return {
         startDate: normalized.startDate,
@@ -470,10 +476,13 @@ export class AnalyticsServiceService {
         ...selected,
       };
     }
-    const from = new Date(
-      startOfTashkentDay(end).getTime() -
+    const fromKey = new Date(
+      Date.parse(`${businessDayKey(end)}T00:00:00.000Z`) -
         (DASHBOARD_RANKING_FALLBACK_DAYS - 1) * DAY_MS,
-    );
+    )
+      .toISOString()
+      .slice(0, 10);
+    const from = businessDayStart(fromKey);
     return {
       startDate: from.toISOString(),
       endDate: normalized.endDate,
@@ -644,12 +653,12 @@ export class AnalyticsServiceService {
     return this.fetchBranchCourierIds(branchId, requester);
   }
 
-  /** `date` tushgan Toshkent oyi, 'YYYY-MM' (CODE-22: UTC oy emas). */
+  /**
+   * `date` tushgan ISH oyi, 'YYYY-MM' (CODE-22: UTC oy emas; xhiXv3w3 — ish
+   * kuni sanasi bo'yicha).
+   */
   private tashkentMonthKey(date: Date): string {
-    const shifted = new Date(
-      date.getTime() + TASHKENT_OFFSET_MINUTES * 60 * 1000,
-    );
-    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
+    return businessDayKey(date).slice(0, 7);
   }
 
   /**

@@ -30,7 +30,8 @@ import {
   Cashbox_type,
   FinancialSource_type,
   Roles as RoleEnum,
-  tashkentDayRange,
+  businessDayKey,
+  businessDayRange,
 } from '@app/common';
 import { XLSX_MIME } from '@app/report-kit';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -714,7 +715,8 @@ export class ExcelGatewayController {
 
   /**
    * Davr: smena oynasi (`opened_at … closed_at`, ochiq — hozirgacha) yoki
-   * Toshkent kunlari. Hech narsa berilmasa — BUGUN (butun tarix EMAS).
+   * ISH kunlari (xhiXv3w3, kun almashish soati; sukut — Toshkent kunlari).
+   * Hech narsa berilmasa — BUGUNGI ish kuni (butun tarix EMAS).
    */
   private reportPeriod(
     query: Record<string, unknown>,
@@ -723,7 +725,7 @@ export class ExcelGatewayController {
   ) {
     const fromQuery = this.queryText(query, 'from_date');
     const toQuery = this.queryText(query, 'to_date');
-    const today = isoDayText(now);
+    const today = businessDayKey(now);
     // Faqat `to_date` — o'sha kun; faqat `from_date` — hozirgacha.
     const from = shift
       ? shift.openedAt
@@ -731,7 +733,7 @@ export class ExcelGatewayController {
     const to = shift
       ? (shift.closedAt ?? undefined)
       : (toQuery ?? (fromQuery ? undefined : today));
-    const range = tashkentDayRange(from || undefined, to);
+    const range = businessDayRange(from || undefined, to);
     const start = range.start?.getTime() ?? NaN;
     const end = range.end ? range.end.getTime() : now.getTime();
     if (Number.isNaN(start) || Number.isNaN(end)) {
@@ -745,8 +747,10 @@ export class ExcelGatewayController {
       );
     }
     const untilNow = !range.end || end >= now.getTime();
-    const firstDay = isoDayText(start);
-    const lastDay = isoDayText(untilNow ? Math.max(start, now.getTime()) : end);
+    const firstDay = businessDayKey(new Date(start));
+    const lastDay = businessDayKey(
+      new Date(untilNow ? Math.max(start, now.getTime()) : end),
+    );
     return {
       from,
       to,

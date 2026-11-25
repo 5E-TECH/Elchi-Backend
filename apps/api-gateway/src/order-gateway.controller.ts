@@ -4125,7 +4125,9 @@ export class OrderGatewayController {
       '(`reopens_at`, `cutoff_time`). Qabul qilish chegarasi (`receive_cutoff_time`): `receive_closes_at` dan ' +
       'kun almashguncha POST /orders/receive va /orders/external/receive-by-scan → 409 `ORDER_RECEIVE_CLOSED` ' +
       '(`reopens_at`, `receive_cutoff_time`). `receive_cutoff_time` kaliti har doim bor (`null` — cheklovsiz). ' +
-      'Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.',
+      'Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha. xhiXv3w3: bu soat BUTUN ' +
+      'tizimning ish kuni (dashboard, buyurtmalar sana filtri, moliya kunlik hisoboti, Excel, kunlik pochtalar); ' +
+      'o`zgarsa keyingi kun almashishidan amal qiladi (`day_change_schedule`), o`tgan kunlar qayta hisoblanmaydi.',
   })
   @ApiOkResponse({ description: ORDER_INTAKE_STATE_DESCRIPTION })
   getIntakeSettings() {

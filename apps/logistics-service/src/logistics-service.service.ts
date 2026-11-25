@@ -80,9 +80,9 @@ import {
   Roles,
   Status,
   Where_deliver,
-  endOfTashkentDay,
-  startOfTashkentDay,
-  tashkentDayRange,
+  endOfBusinessDay,
+  startOfBusinessDay,
+  businessDayRange,
   type PostReceiveKind,
 } from '@app/common';
 
@@ -783,7 +783,7 @@ export const POST_LIST_MAX_LIMIT = 100;
  * - `region_id` / `courier_id` — bigint id. Raqam emas (masalan UUID) —
  *   hech narsaga mos kelmaydi → bo'sh sahifa (avval jimgina tashlanib, 59 ta
  *   qaytardi);
- * - `startDate` / `endDate` — Toshkent kuni bo'yicha (tashkentDayRange,
+ * - `startDate` / `endDate` — ISH KUNI bo'yicha (businessDayRange, xhiXv3w3;
  *   SqVMuhKo bilan bitta qoida): 'YYYY-MM-DD' → 00:00:00.000 / 23:59:59.999;
  * - `has_orders` — faqat `order_quantity > 0` (frontenddagi hasOrders
  *   filtrini serverga ko'chirish uchun; sahifalash va `total` to'g'ri qoladi).
@@ -1719,8 +1719,8 @@ export class LogisticsServiceService implements OnModuleInit {
     const sourceDay =
       sourceCreatedAt && !Number.isNaN(sourceCreatedAt.getTime())
         ? {
-            start: startOfTashkentDay(sourceCreatedAt).getTime(),
-            end: endOfTashkentDay(sourceCreatedAt).getTime(),
+            start: startOfBusinessDay(sourceCreatedAt).getTime(),
+            end: endOfBusinessDay(sourceCreatedAt).getTime(),
           }
         : null;
     const postsById = new Map<string, Post>([
@@ -3309,7 +3309,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const startRaw = String(filters?.startDate ?? '').trim();
     const endRaw = String(filters?.endDate ?? '').trim();
-    const { start, end } = tashkentDayRange(startRaw, endRaw);
+    const { start, end } = businessDayRange(startRaw, endRaw);
     if (start && Number.isNaN(start.getTime())) {
       this.badRequest("startDate noto'g'ri (YYYY-MM-DD kutiladi)");
     }
@@ -8212,12 +8212,12 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    // Har kun — kuryerning alohida pochtasi (Toshkent kuni). COURIER-SCAN:
+    // Har kun — kuryerning alohida pochtasi (ish kuni, xhiXv3w3). COURIER-SCAN:
     // bugungi SENT pochta (menejer jo'natgan) → bugungi RECEIVED pochta →
     // yangi pochta, darhol RECEIVED (skan bilan olingan posilka allaqachon
     // qo'lda — uni «qabul qilinadigan» pochtaga qo'yib bo'lmaydi). Kechagi
     // pochta qayta ishlatilmaydi.
-    const todayStart = startOfTashkentDay(new Date());
+    const todayStart = startOfBusinessDay(new Date());
     // Buyurtmaning o'z (kechagi) kuryer pochtasi — ko'chgandan keyin yopiladi.
     const previousOwnPost = targetPost;
     if (
@@ -8907,7 +8907,7 @@ export class LogisticsServiceService implements OnModuleInit {
    * kuryeri (`dispatchPostToCourier`) uchun BITTA kod (ikki yo'l ajralib
    * ketmasin). Chaqiruvchi barcha tekshiruvlarni OLDIN bajaradi.
    *
-   *  - Har kun — kuryerning alohida pochtasi (Toshkent kuni): bugungi ochiq
+   *  - Har kun — kuryerning alohida pochtasi (ish kuni, xhiXv3w3): bugungi ochiq
    *    (SENT) pochta qayta ishlatiladi, yo'q bo'lsa `newPostRegionId` bilan
    *    yangisi yaratiladi;
    *  - har buyurtma: NEW → RECEIVED (faqat NEW bo'lsa), keyin kuryer,
@@ -8926,13 +8926,13 @@ export class LogisticsServiceService implements OnModuleInit {
   }): Promise<{ targetPost: Post; createdNewPost: boolean }> {
     const { orders, courierId, requester, requesterId, notes } = input;
 
-    // Har kun — kuryerning alohida pochtasi (Toshkent kuni): kechagi ochiq
+    // Har kun — kuryerning alohida pochtasi (ish kuni, xhiXv3w3): kechagi ochiq
     // pochtaga (yetkazilmay qolganlari bilan) bugungi buyurtma qo'shilmaydi.
     let targetPost = await this.postRepo.findOne({
       where: {
         courier_id: courierId,
         status: Post_status.SENT,
-        createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
+        createdAt: MoreThanOrEqual(startOfBusinessDay(new Date())),
       },
       order: { createdAt: 'DESC' },
     });
@@ -9688,7 +9688,7 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('Buyurtmalar tanlanmagan');
     }
     const courierBranchId = await this.findCourierBranchId(requester);
-    // Har kun — alohida qaytarish pochtasi (Toshkent kuni): filial hali qabul
+    // Har kun — alohida qaytarish pochtasi (ish kuni, xhiXv3w3): filial hali qabul
     // qilmagan kechagi pochtaga bugungi qaytarish qo'shilmaydi. Kechagi
     // pochtadagi buyurtma o'sha pochtada qoladi (`isOrderInActiveCanceledPost`).
     let canceledPost = await this.postRepo.findOne({
@@ -9696,7 +9696,7 @@ export class LogisticsServiceService implements OnModuleInit {
         courier_id: requester.id,
         branch_id: courierBranchId,
         status: Post_status.CANCELED,
-        createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
+        createdAt: MoreThanOrEqual(startOfBusinessDay(new Date())),
       },
     });
 
@@ -10124,7 +10124,7 @@ export class LogisticsServiceService implements OnModuleInit {
           status: Post_status.CANCELED,
           // Har kun — alohida pochta: kechagi ochiq qaytarish pochtasiga
           // qo'shilmaydi.
-          createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
+          createdAt: MoreThanOrEqual(startOfBusinessDay(new Date())),
         } as any,
       });
       const createdReturnPost = !returnPost;
@@ -13728,7 +13728,7 @@ export class LogisticsServiceService implements OnModuleInit {
             ...(targetPostStatus === Post_status.SENT
               ? {
                   courier_id: '0',
-                  createdAt: MoreThanOrEqual(startOfTashkentDay(new Date())),
+                  createdAt: MoreThanOrEqual(startOfBusinessDay(new Date())),
                 }
               : {}),
           },

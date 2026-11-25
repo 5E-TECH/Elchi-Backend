@@ -11,10 +11,12 @@ import {
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
+  And,
   Between,
   DataSource,
   EntityManager,
   EntityMetadataNotFoundError,
+  FindOperator,
   FindOptionsOrder,
   FindOptionsWhere,
   In,
@@ -35,6 +37,13 @@ import {
   DEFAULT_CARD_NAME,
 } from './cashbox-card/cashbox-card.service';
 import { CashboxCard } from './entities/cashbox-card.entity';
+import {
+  historyMethodCardSql,
+  namedSqlBinder,
+  quoteTablePath,
+  resolveHistoryMethodCardFilter,
+  type HistoryMethodCardInput,
+} from './history-filters/history-method-card.filter';
 import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
 import {
   aggregateExpenseReport,
@@ -79,7 +88,8 @@ import {
   rmqSend,
   OutboxService,
   OutboxEvent,
-  tashkentDayRange,
+  businessDayLocalSql,
+  businessDayRange,
   toPublicUserSummary,
   type PublicUserSummary,
 } from '@app/common';
@@ -739,7 +749,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       .getRawOne<{ income: string; outcome: string }>();
     const monthlyRows = await unpaged()
       .select(
-        `to_char(h."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM')`,
+        // xhiXv3w3 — oy ISH KUNI sanasi bo'yicha (sukut — Toshkent oyi).
+        `to_char(${businessDayLocalSql('h."createdAt"')}, 'YYYY-MM')`,
         'month',
       )
       .addSelect(income, 'income')
@@ -813,8 +824,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Kassa tarixi sana filtri — Toshkent kuni, dashboard va GET /orders bilan
-   * AYNI qoida (SqVMuhKo). Ilgari 'YYYY-MM-DD' UTC yarim tuni, oxiri esa
+   * Kassa tarixi sana filtri — ISH KUNI (xhiXv3w3), dashboard va GET /orders
+   * bilan AYNI qoida (SqVMuhKo). Ilgari 'YYYY-MM-DD' UTC yarim tuni, oxiri esa
    * server TZ'idagi setHours edi (prod UTC → kun Toshkentda 05:00-04:59).
    * To'liq ISO qiymat o'zgarishsiz ishlatiladi. Yaroqsiz qiymat avvalgidek
    * 400 'Invalid date format: <v>'.
@@ -822,7 +833,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private parseDateRange(fromDate?: string, toDate?: string) {
     this.parseDate(fromDate ?? null);
     this.parseDate(toDate ?? null);
-    return tashkentDayRange(fromDate, toDate);
+    return businessDayRange(fromDate, toDate);
   }
 
   /** `order.find_all` sahifasi — order-service `MAX_LIMIT` (100) bilan bir xil. */
@@ -2131,6 +2142,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         if (start && end) historyWhere.createdAt = Between(start, end);
         else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
         else if (end) historyWhere.createdAt = LessThanOrEqual(end);
+        // KRN902pg — «To'lov usuli» / «Karta» (`pagination.total` ham shu filtr bilan).
+        const methodCardId = await this.historyMethodCardIdCondition(dto);
+        if (methodCardId) historyWhere.id = methodCardId;
 
         const [rows, total] = await this.historyRepo.findAndCount({
           where: historyWhere,
@@ -2217,6 +2231,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         historyQuery.andWhere('history.createdAt <= :historyTo', {
           historyTo,
         });
+      }
+      // KRN902pg — «To'lov usuli» / «Karta».
+      const methodCard = await this.historyMethodCardIdSql(dto);
+      if (methodCard) {
+        historyQuery.andWhere(methodCard.sql('history.id'), methodCard.params);
       }
 
       const [rows, total] = await historyQuery.getManyAndCount();
@@ -2682,6 +2701,60 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       .join('.');
   }
 
+  /**
+   * KRN902pg — `payment_method` / `card_id` filtri `id` ustuniga shart
+   * (`id IN (SELECT …)`, chek holati filtri bilan `And`). Filtr yo'q — `null`.
+   * Noma'lum qiymat — 400 (`history-method-card.filter`).
+   */
+  private async historyMethodCardIdCondition(
+    input: HistoryMethodCardInput,
+  ): Promise<FindOperator<string> | null> {
+    const condition = await this.historyMethodCardIdSql(input);
+    return condition ? Raw(condition.sql, condition.params) : null;
+  }
+
+  /** `historyMethodCardIdCondition` ning SQL ko'rinishi (QueryBuilder uchun). */
+  private async historyMethodCardIdSql(input: HistoryMethodCardInput): Promise<{
+    sql: (idColumn: string) => string;
+    params: Record<string, unknown>;
+  } | null> {
+    const filter = await resolveHistoryMethodCardFilter(input, (ids) =>
+      this.defaultCardsAmong(ids),
+    );
+    if (!filter) return null;
+    const history = this.historyTableSql();
+    const cashboxes = quoteTablePath(
+      this.dataSource.getMetadata(Cashbox).tablePath,
+    );
+    const { bind, params } = namedSqlBinder('hmc_');
+    const condition = historyMethodCardSql(
+      'hf',
+      filter,
+      { history, cashboxes },
+      bind,
+    );
+    return {
+      sql: (idColumn) =>
+        `${idColumn} IN (SELECT hf."id" FROM ${history} hf WHERE hf."is_deleted" = false AND ${condition})`,
+      params,
+    };
+  }
+
+  /** KRN902pg — berilgan karta ID'laridan Asosiy (`is_default`) bo'lganlari. */
+  private async defaultCardsAmong(
+    ids: string[],
+  ): Promise<Array<{ id: string; cashbox_id: string }>> {
+    if (!ids.length) return [];
+    const cards = await this.dataSource.manager.find(CashboxCard, {
+      where: { id: In(ids), is_default: true, isDeleted: false },
+      select: ['id', 'cashbox_id'],
+    });
+    return cards.map((card) => ({
+      id: String(card.id),
+      cashbox_id: String(card.cashbox_id),
+    }));
+  }
+
   private emptyHistoryPage(page: number, limit: number) {
     return this.successRes(
       {
@@ -2873,6 +2946,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           this.assertBigIntId(dto.expense_category_id, 'expense_category_id');
           where.expense_category_id = dto.expense_category_id;
         }
+      }
+      // KRN902pg — «To'lov usuli» / «Karta» filtrlari (`counts` ham shu filtr bilan).
+      const methodCardId = await this.historyMethodCardIdCondition(dto);
+      if (methodCardId) {
+        where.id = where.id
+          ? And(where.id as FindOperator<string>, methodCardId)
+          : methodCardId;
       }
       if (historyCashboxType) {
         const cashboxesByType = await this.cashboxRepo.find({

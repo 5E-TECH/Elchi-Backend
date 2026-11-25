@@ -4,6 +4,7 @@ import { AnalyticsServiceController } from './analytics-service.controller';
 import { AnalyticsServiceService } from './analytics-service.service';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   RmqModule,
   analyticsValidationSchema,
 } from '@app/common';
@@ -16,6 +17,9 @@ import {
       validationSchema: analyticsValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'analytics-service' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), bazasiz: order-service
+    // `order.intake.state` orqali daqiqada bir.
+    BusinessDayModule.forRoot({ source: { rmqClient: 'ORDER' } }),
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'FINANCE' }),

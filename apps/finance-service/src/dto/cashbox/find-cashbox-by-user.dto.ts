@@ -10,6 +10,16 @@ import {
 } from 'class-validator';
 
 export class FindCashboxByUserDto {
+  /** KRN902pg — tarix: to'lov usuli (vergul bilan; servis tekshiradi). */
+  @IsOptional()
+  @IsString()
+  payment_method?: string;
+
+  /** KRN902pg — tarix: karta ID'lari va/yoki `none` (vergul bilan). */
+  @IsOptional()
+  @IsString()
+  card_id?: string;
+
   /** T3 — `receipt` blokini qo'shish (FAQAT gateway, SA/admin/menejer). */
   @IsOptional()
   @IsBoolean()
