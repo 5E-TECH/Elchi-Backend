@@ -49,6 +49,31 @@ Deploy: **finance-service**, **notification-service** (migratsiya / env yo'q).
   → **Frontendda:** 🔧 `status: 'skipped'` javobida «Hisobot qayta yuborildi» deyilmasin; `skipped` bo'sh holat matni.
 - 🟢 [notification] Bot guruhga qo'shilib 20 soniyada hech narsaga ulanmasa — guruhga ulash yo'li yoziladi (bir marta).
 
+### 2026-11-25 — «Tashqi saytlar»: minglik bo'shlig'i bilan yozilgan narx («150 000») o'qiladi
+
+Deploy: **order-service** (migratsiya yo'q). Ega qarori 2026-11-25.
+
+- ✏️ [order] `POST /orders/external/receive` — `total_price` / `delivery_price` satri minglik bo'shlig'i bilan yozilgan
+  bo'lsa (`"150 000"`, `"1 500 000"`; oddiy, NBSP, tor va ingichka bo'shliq) son deb o'qiladi. Ilgari `price_invalid`
+  bilan tashlanardi. CRM (qat'iy) importida ham shunday.
+- 🟢 [order] Vergul, nuqta, valyuta va noto'g'ri guruh (`"99,000"`, `"150,5"`, `"150 000 so'm"`, `"15 0"`) avvalgidek
+  `price_invalid`. Onlayn to'lov summasi (webhook) avvalgidek qat'iy — bo'shliqli matn rad etiladi.
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readAmount` — aynan shu qoida
+  (`apps/order-service/src/lifecycle/external-price.ts`). Hozir u `"99,000"` ni 99, `"15 0"` ni 150 deb ko'rsatadi,
+  backend esa rad etadi.
+
+### 2026-11-25 — «Tashqi saytlar»: massiv `items` dagi kasr son va uzun nom importni to'xtatmaydi
+
+Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi.
+
+- ✏️ [order] `POST /orders/external/receive` — `items` massiv bo'lganda qator ustunga sig'diriladi: son musbat butun
+  bo'lmasa (`1.5`) yoki int4 ga sig'masa — 1; nom 255 belgiga kesiladi; buyurtma bo'yicha sonlar yig'indisini int4 dan
+  oshiradigan qator — 1. Ilgari bunday qator 400/500 berib, bo'lakni yarim yo'lda uzardi (oldingilari yaratilgan,
+  keyingilari yo'q), mijoz esa buyurtmasiz yaratilib qolardi. Matn yo'lidagi chegara bilan bir xil
+  (`apps/order-service/src/lifecycle/external-item-limits.ts`).
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readItems` massiv shoxi — shu chegaralar, aks holda
+  ro'yxatda `1.5 dona` ko'rinib, buyurtmaga 1 yoziladi.
+
 ### 2026-11-25 — «Tashqi saytlar»: `items` matn bo'lib kelganda ham mahsulot qatori yoziladi
 
 Deploy: **order-service** (migratsiya yo'q). Eski buyurtmalar orqaga to'ldirilmaydi.

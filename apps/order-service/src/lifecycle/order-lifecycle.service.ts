@@ -140,7 +140,13 @@ import {
   isIntegrationOrderCreate,
   resolveOrderCreateContent,
 } from './order-create-content';
+import {
+  fitProductName,
+  fitQuantity,
+  fitTotalQuantity,
+} from './external-item-limits';
 import { readExternalItemsText } from './external-items-text';
+import { ungroupThousands } from './external-price';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import {
   OrderNotificationService,
@@ -12678,7 +12684,9 @@ export class OrderLifecycleService {
        * sozlanadi, chunki har sayt boshqacha nomlaydi.
        *
        * Nomi bo'sh element TASHLANADI — yarim to'ldirilgan qator buyurtmani
-       * buzardi.
+       * buzardi. Nom va son ustunga SIG'DIRILADI (`external-item-limits.ts`):
+       * 1.5 yoki 255 belgidan uzun nom `create()` ni yiqitib, partiyani yarim
+       * yo'lda uzardi va mijoz buyurtmasiz qolardi.
        *
        * Ba'zi saytlar (Lidershop, Alion) massiv o'rniga MATN yuboradi —
        * "Diskali soat x 1 = 99 000 so'm" (`readExternalItemsText`; ajralmasa
@@ -12713,8 +12721,8 @@ export class OrderLifecycleService {
           );
           return {
             product_id: null,
-            product_name: name,
-            quantity: Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1,
+            product_name: fitProductName(name),
+            quantity: fitQuantity(qtyRaw),
           };
         })
         .filter((item) => item.product_name.length > 0);
@@ -12817,8 +12825,11 @@ export class OrderLifecycleService {
         ext,
         fieldMapping.delivery_price_field ?? 'delivery_price',
       );
-      const totalPrice = this.safeExternalAmount(priceRaw);
-      const deliveryPrice = this.safeExternalAmount(deliveryRaw);
+      // Minglik bo'shlig'i («150 000») — faqat import narxida (`external-price.ts`).
+      const totalPrice = this.safeExternalAmount(ungroupThousands(priceRaw));
+      const deliveryPrice = this.safeExternalAmount(
+        ungroupThousands(deliveryRaw),
+      );
       if (totalPrice === null || deliveryPrice === null) {
         skipped.push({ external_id: externalId, reason: 'price_invalid' });
         continue;
@@ -12906,7 +12917,7 @@ export class OrderLifecycleService {
          * katalogimizga mos kelmaydi va har nomni katalogda yaratish
          * katalogni axlatga to'ldirardi. Nom va soni yetarli.
          */
-        items: [...mappedItems, ...textItems],
+        items: fitTotalQuantity([...mappedItems, ...textItems]),
       });
 
       created.push({
