@@ -25,3 +25,10 @@ export function ungroupThousands(value: unknown): unknown {
   const text = value.trim();
   return GROUPED_THOUSANDS.test(text) ? text.replace(/\D/g, '') : value;
 }
+
+/** `orders.total_price` — numeric(14,2): yaxlitlangani 10^12 dan kichik. */
+const PRICE_LIMIT = 1e12;
+
+/** Sig'masa INSERT yiqilib, import partiyasi yarim yo'lda uzilardi. */
+export const fitsOrderPrice = (amount: number): boolean =>
+  Math.abs(Number(amount.toFixed(2))) < PRICE_LIMIT;
