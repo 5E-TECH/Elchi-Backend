@@ -208,4 +208,30 @@ describe('FileServiceService', () => {
     expect(res.statusCode).toBe(201);
     expect(res.data.key).toBe('pdf-k');
   });
+
+  it('generatePdf — kontrakt: PDF bayti, fayl nomi / papka, sarlavhasiz ham', async () => {
+    const upload = jest
+      .spyOn(service as any, 'uploadBuffer')
+      .mockResolvedValue({ key: 'pdf-k' });
+
+    await service.generatePdf({ content: ' Қўқон 🔥 oʻzbek ' });
+    expect(upload).toHaveBeenCalledWith({
+      buffer: expect.any(Buffer),
+      fileName: 'document.pdf',
+      mimeType: 'application/pdf',
+      folder: 'pdf',
+    });
+    const { buffer } = upload.mock.calls[0][0] as { buffer: Buffer };
+    expect(buffer.subarray(0, 5).toString()).toBe('%PDF-');
+
+    await service.generatePdf({
+      content: 'x',
+      title: 'T',
+      file_name: ' hisob.pdf ',
+      folder: 'invoices',
+    });
+    expect(upload).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fileName: 'hisob.pdf', folder: 'invoices' }),
+    );
+  });
 });

@@ -32,6 +32,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  CAMPAIGN_EXPORT_ACCEPT,
   CAMPAIGN_EXPORT_TIMEOUT_MS,
   sendCampaignExport,
 } from './campaign-report-export.util';
@@ -248,15 +249,15 @@ export class NotificationCampaignGatewayController {
   }
 
   /**
-   * CSV — FAQAT superadmin; eksportning o'zi faoliyat jurnaliga `export`
-   * amali bilan yoziladi. ≤10 000 qator — 200 text/csv; kattasi — 202
+   * Excel — FAQAT superadmin; eksportning o'zi faoliyat jurnaliga `export`
+   * amali bilan yoziladi. ≤10 000 qator — 200 .xlsx; kattasi — 202
    * `{ export_id }` (fon vazifasi, sinxron emas).
    */
   @Get('campaigns/:id/undelivered/export')
   @Roles(RoleEnum.SUPERADMIN)
   @ApiOperation({
     summary:
-      'Yetkazilmaganlar CSV (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi',
+      'Yetkazilmaganlar Excel (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi',
   })
   @ApiParam({ name: 'id', example: '7' })
   async exportCampaignUndelivered(
@@ -266,7 +267,12 @@ export class NotificationCampaignGatewayController {
   ) {
     const result = await this.send(
       'notification.campaign.export',
-      { kind: 'notification', id, requester: this.actor(req) },
+      {
+        kind: 'notification',
+        id,
+        requester: this.actor(req),
+        accept: CAMPAIGN_EXPORT_ACCEPT,
+      },
       CAMPAIGN_EXPORT_TIMEOUT_MS,
     );
     sendCampaignExport(res, result);
@@ -290,7 +296,8 @@ export class NotificationCampaignGatewayController {
   @Get('campaigns/exports/:export_id/download')
   @Roles(RoleEnum.SUPERADMIN)
   @ApiOperation({
-    summary: 'Tayyor CSV (superadmin) — har yuklash jurnalga `export`',
+    summary:
+      'Tayyor eksport fayli (superadmin) — har yuklash jurnalga `export`',
   })
   @ApiParam({ name: 'export_id', example: '3' })
   async campaignExportDownload(
@@ -300,7 +307,11 @@ export class NotificationCampaignGatewayController {
   ) {
     const result = await this.send(
       'notification.campaign.export.download',
-      { export_id: exportId, requester: this.actor(req) },
+      {
+        export_id: exportId,
+        requester: this.actor(req),
+        accept: CAMPAIGN_EXPORT_ACCEPT,
+      },
       CAMPAIGN_EXPORT_TIMEOUT_MS,
     );
     sendCampaignExport(res, result);

@@ -142,12 +142,17 @@ import {
   resolveOrderCreateContent,
 } from './order-create-content';
 import {
+  fitCustomerAddress,
+  fitCustomerName,
+  fitExtraNumber,
+} from './external-customer-limits';
+import {
   fitProductName,
   fitQuantity,
   fitTotalQuantity,
 } from './external-item-limits';
 import { readExternalItemsText } from './external-items-text';
-import { ungroupThousands } from './external-price';
+import { fitsOrderPrice, ungroupThousands } from './external-price';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import {
   OrderNotificationService,
@@ -12784,40 +12789,6 @@ export class OrderLifecycleService {
         continue;
       }
 
-      const customerResponse = await rmqSend<{ data?: { id?: string } }>(
-        this.identityClient,
-        { cmd: 'identity.customer.create' },
-        {
-          dto: {
-            market_id: marketId,
-            name: customerName,
-            phone_number: phone,
-            district_id: districtId,
-            extra_number:
-              this.getFieldValue(
-                ext,
-                fieldMapping.extra_phone_field ?? 'additional_phone',
-              ) ?? undefined,
-            address:
-              this.getFieldValue(
-                ext,
-                fieldMapping.address_field ?? 'address',
-              ) ?? undefined,
-          },
-        },
-      );
-
-      const customerId = customerResponse?.data?.id
-        ? String(customerResponse.data.id)
-        : '';
-      if (!customerId) {
-        skipped.push({
-          external_id: externalId,
-          reason: 'customer_create_failed',
-        });
-        continue;
-      }
-
       /**
        * ⚠️ NARX — `Number()` NI XOM ISHLATISH MUMKIN EMAS (adversarial
        * tekshiruv, kritik).
@@ -12844,7 +12815,11 @@ export class OrderLifecycleService {
       const deliveryPrice = this.safeExternalAmount(
         ungroupThousands(deliveryRaw),
       );
-      if (totalPrice === null || deliveryPrice === null) {
+      const finalPrice =
+        totalPrice === null || deliveryPrice === null
+          ? null
+          : Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
+      if (finalPrice === null || !fitsOrderPrice(finalPrice)) {
         skipped.push({ external_id: externalId, reason: 'price_invalid' });
         continue;
       }
@@ -12857,7 +12832,6 @@ export class OrderLifecycleService {
         skipped.push({ external_id: externalId, reason: 'price_missing' });
         continue;
       }
-      const finalPrice = Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
 
       /**
        * SKAN TOKENI — TO'QNASHUV TEKSHIRUVI (adversarial tekshiruv).
@@ -12884,6 +12858,66 @@ export class OrderLifecycleService {
         }
       }
       const qrCode = providedQr || this.generateCustomToken();
+
+      /**
+       * Mijoz — HAMMA TEKSHIRUVDAN KEYIN: narx yoki QR sababli rad etilgan
+       * buyurtma mijoz yaratmaydi va mavjudining ism / manzilini almashtirmaydi.
+       */
+      let customerResponse: { data?: { id?: string } };
+      try {
+        customerResponse = await rmqSend<{ data?: { id?: string } }>(
+          this.identityClient,
+          { cmd: 'identity.customer.create' },
+          {
+            dto: {
+              market_id: marketId,
+              name: fitCustomerName(customerName),
+              phone_number: phone,
+              district_id: districtId,
+              extra_number: fitExtraNumber(
+                this.getFieldValue(
+                  ext,
+                  fieldMapping.extra_phone_field ?? 'additional_phone',
+                ),
+              ),
+              address: fitCustomerAddress(
+                this.getFieldValue(
+                  ext,
+                  fieldMapping.address_field ?? 'address',
+                ),
+              ),
+            },
+          },
+        );
+      } catch (error) {
+        /**
+         * Identity SHU QATORNI rad etdi (409 — telefon xodim / marketniki,
+         * 400): faqat qator tashlanadi. Identity nosozligi (timeout, 5xx)
+         * yuqoriga: hammasini «yaratilmadi» deb 201 qaytarib bo'lmaydi.
+         */
+        const status = rpcErrorStatusOf(error);
+        if (status !== 400 && status !== 409) throw error;
+        this.logger.warn(
+          `receiveExternalOrders: mijoz yaratilmadi (${operator}, ` +
+            `external_id=${externalId ?? '-'}): identity ${status}`,
+        );
+        skipped.push({
+          external_id: externalId,
+          reason: 'customer_create_failed',
+        });
+        continue;
+      }
+
+      const customerId = customerResponse?.data?.id
+        ? String(customerResponse.data.id)
+        : '';
+      if (!customerId) {
+        skipped.push({
+          external_id: externalId,
+          reason: 'customer_create_failed',
+        });
+        continue;
+      }
 
       const createdOrder = await this.create({
         market_id: marketId,

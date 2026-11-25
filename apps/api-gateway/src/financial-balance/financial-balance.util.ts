@@ -4,7 +4,7 @@ import {
   LEDGER_SOURCE_CATEGORY,
   ledgerSourceAsksCategory,
 } from '@app/common/finance/expense-category';
-import { excelDate, excelNumber, type ExcelColumn } from '../excel/excel.util';
+import { excelDate, excelNumber } from '../excel/excel.util';
 
 /**
  * MOLIYAVIY DAFTAR (financial balance) — gateway yordamchilari
@@ -121,6 +121,9 @@ export const EXPENSE_CATEGORY_LABEL_UZ: Readonly<
   [ExpenseCategory.OTHER]: 'Boshqa',
 });
 
+/** Kategoriyasiz xarajat (manbasi kategoriya so'raydigan qator). */
+export const UNCATEGORIZED_EXPENSE_LABEL = 'Kategoriyasiz';
+
 /**
  * Daftar qatorining kategoriya matni: xarajatda hisobot bilan bir xil qoida
  * (kategoriya → manba ma'nosi → «Kategoriyasiz»), xarajat emas — bo'sh.
@@ -133,21 +136,8 @@ const expenseCategoryLabel = (row: Record<string, unknown>): string => {
   if (category) {
     return EXPENSE_CATEGORY_LABEL_UZ[category] ?? category;
   }
-  return ledgerSourceAsksCategory(source) ? 'Kategoriyasiz' : '';
+  return ledgerSourceAsksCategory(source) ? UNCATEGORIZED_EXPENSE_LABEL : '';
 };
-
-export const FINANCIAL_BALANCE_EXPORT_COLUMNS: ExcelColumn[] = [
-  { header: 'ID', key: 'id', width: 10 },
-  { header: 'Sana', key: 'date', width: 22 },
-  { header: 'Manba', key: 'source', width: 22 },
-  { header: "O'zgarish", key: 'change', width: 16 },
-  { header: 'Oldingi balans', key: 'balance_before', width: 18 },
-  { header: 'Keyingi balans', key: 'balance_after', width: 18 },
-  { header: 'Izoh', key: 'comment', width: 40 },
-  { header: 'Kim kiritgan', key: 'created_by', width: 22 },
-  { header: 'Buyurtma ID', key: 'order_id', width: 14 },
-  { header: 'Kategoriya', key: 'category', width: 20 },
-];
 
 /**
  * Bitta daftar qatori → Excel qatori. O'zgarish jadvaldagidek: balans farqi
@@ -155,7 +145,7 @@ export const FINANCIAL_BALANCE_EXPORT_COLUMNS: ExcelColumn[] = [
  */
 export const toFinancialBalanceExportRow = (
   row: Record<string, unknown>,
-  actors: Map<string, FinancialActor | null>,
+  actors: ReadonlyMap<string, FinancialActor | null>,
 ): Record<string, unknown> => {
   const before = Number(row.balance_before);
   const after = Number(row.balance_after);

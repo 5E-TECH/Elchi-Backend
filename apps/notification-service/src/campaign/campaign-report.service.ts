@@ -19,6 +19,7 @@ import {
   maskPhonesForLog,
   rmqSend,
 } from '@app/common';
+import { XLSX_MIME } from '@app/report-kit';
 import { successRes } from '../../../../libs/common/helpers/response';
 import { SmsCampaign } from '../entities/sms-campaign.entity';
 import { UNDELIVERED_STATUSES } from '../history/dispatch-history.service';
@@ -31,6 +32,7 @@ import {
   CampaignReportExport,
   CampaignReportKind,
 } from './campaign-report-export.entity';
+import { UndeliveredReport } from './campaign-report.xlsx';
 import { campaignDisplayStatus, toTashkentIso } from './campaign-schedule';
 import {
   CAMPAIGN_TERMINAL_STATUSES,
@@ -43,11 +45,20 @@ export const CAMPAIGN_EXPORT_RUN_PATTERN = 'notification.campaign.export.run';
 export const CAMPAIGN_EXPORT_SYNC_MAX_ROWS = 10_000;
 /** Bitta eksportning yuqori chegarasi (= kampaniya auditoriyasi shifti). */
 export const CAMPAIGN_EXPORT_MAX_ROWS = 100_000;
-/** Tayyor fayl shuncha vaqt yuklab olinadi, keyin CSV matni tozalanadi. */
+/** Tayyor fayl shuncha vaqt yuklab olinadi, keyin bazadan tozalanadi. */
 export const CAMPAIGN_EXPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** `running` da shuncha turgan vazifa — jarayon uzilgan deb hisoblanadi. */
 const EXPORT_STALE_MS = 10 * 60 * 1000;
 const CSV_CONTENT_TYPE = 'text/csv; charset=utf-8';
+/** Gateway so'rovdagi belgi: javobda `file_base64` (.xlsx) ni tushunadi. */
+export const CAMPAIGN_EXPORT_ACCEPT_XLSX = 'xlsx';
+/**
+ * Fayl RMQ javobida base64 bo'lib ketadi. RabbitMQ 3.13 xabar chegarasi —
+ * 128 MiB; katta xabar butun kanalni yopardi, shuning uchun chegara oldindan
+ * tekshiriladi (64 MiB fayl ≈ 85 MiB base64). O'lchov: 10 000 qator — 0,5 MB,
+ * 100 000 qator — ~5 MB.
+ */
+export const CAMPAIGN_EXPORT_MAX_FILE_BYTES = 64 * 1024 * 1024;
 const PAGE_MAX = 100;
 const EXPORT_PAGE = 1000;
 /** identity `find_by_ids` bir chaqiruvda ko'pi bilan 500 id oladi. */
@@ -136,6 +147,8 @@ export interface CampaignReportInput {
   kind?: unknown;
   id?: unknown;
   requester?: Requester | null;
+  /** `xlsx` — gateway Excel faylni tushunadi; yo'q — eski gateway (CSV). */
+  accept?: unknown;
 }
 
 export interface UndeliveredItem {
@@ -211,6 +224,10 @@ const actorId = (requester: Requester | null | undefined): string | null => {
 
 const actorRoles = (requester: Requester | null | undefined) =>
   (requester?.roles ?? []).map((role) => text(role)).filter(Boolean);
+
+const acceptsXlsx = (accept: unknown): boolean =>
+  text(accept).trim().toLowerCase() === CAMPAIGN_EXPORT_ACCEPT_XLSX;
+
 /** CSV ustunlari — bitta qator = bitta qabul qiluvchi. */
 const CSV_HEADER = [
   'recipient_id',
@@ -250,9 +267,9 @@ const csvLine = (item: UndeliveredItem): string =>
  *     sent / failed / skipped / pending + xom holatlar;
  *   - SMS bloki (bo'laklar, kodlash, narx) — FAQAT SMS kampaniyasida;
  *     bildirishnoma kampaniyasida (in_app/realtime/push) `sms: null`;
- *   - "Yetkazilmaganlar" — ism / rol + sabab; CSV eksport faqat superadmin,
- *     eksportning o'zi faoliyat jurnaliga `export` amali bilan yoziladi;
- *     10 000 qatordan katta eksport — fon vazifasi (sinxron emas).
+ *   - "Yetkazilmaganlar" — ism / rol + sabab; Excel eksport faqat
+ *     superadmin, eksportning o'zi faoliyat jurnaliga `export` amali bilan
+ *     yoziladi; 10 000 qatordan katta eksport — fon vazifasi (sinxron emas).
  *
  * ⚠️ O'lchanmagan qiymat `null` (frontend "—" ko'rsatadi), HECH QACHON 0
  * emas: DLR hali kelmagan bo'lsa `delivered: null` (0% = hammasi yiqildi
@@ -318,7 +335,7 @@ export class CampaignReportService {
   private assertSuperadmin(requester: Requester | null | undefined) {
     if (!isSuperadmin(requester)) {
       throw new ForbiddenException(
-        'CSV eksport faqat superadmin uchun (telefon/ism tizimdan chiqadi)',
+        'Eksport faqat superadmin uchun (telefon/ism tizimdan chiqadi)',
       );
     }
   }
@@ -934,26 +951,25 @@ export class CampaignReportService {
     }
   }
 
-  // ==================== CSV EXPORT ====================
+  // ==================== EXPORT ====================
 
-  private filename(kind: CampaignReportKind, id: string) {
+  private filename(
+    kind: CampaignReportKind,
+    id: string,
+    extension: 'xlsx' | 'csv' = 'xlsx',
+  ) {
     const stamp = (toTashkentIso(new Date()) ?? '')
       .slice(0, 16)
       .replace(/[-:]/g, '')
       .replace('T', '-');
-    return `kampaniya-${kind}-${id}-yetkazilmaganlar-${stamp}.csv`;
+    return `kampaniya-${kind}-${id}-yetkazilmaganlar-${stamp}.${extension}`;
   }
 
-  /**
-   * CSV (UTF-8 BOM — Excel kirill/o'zbekchani to'g'ri ochsin). Bitta qator =
-   * bitta qabul qiluvchi; bir nechta kanal — " | " bilan. Telefon faqat
-   * maskalangan; IP / moliyaviy qiymat yo'q. Keyset sahifalar (1000 tadan).
-   */
-  async buildCsv(
+  /** Eksport qatorlari — keyset sahifalar (1000 tadan), chegaragacha. */
+  private async *undeliveredPages(
     kind: CampaignReportKind,
     id: string,
-  ): Promise<{ csv: string; rows: number }> {
-    const lines = [CSV_HEADER.join(',')];
+  ): AsyncGenerator<UndeliveredItem[]> {
     let after = '0';
     let rows = 0;
     let more = true;
@@ -964,14 +980,49 @@ export class CampaignReportService {
         offset: 0,
       });
       if (!page.length) break;
-      for (const item of await this.toItems(kind, page)) {
-        lines.push(csvLine(item));
-        rows += 1;
-      }
+      yield await this.toItems(kind, page);
+      rows += page.length;
       after = String(page[page.length - 1].id);
       more = page.length === EXPORT_PAGE && rows < CAMPAIGN_EXPORT_MAX_ROWS;
     }
-    return { csv: CSV_BOM + lines.join(CSV_EOL) + CSV_EOL, rows };
+  }
+
+  /**
+   * Excel (.xlsx): «Xulosa» + «Yetkazilmaganlar». Bitta qator = bitta qabul
+   * qiluvchi; bir nechta kanal — katakda alohida satrda. Telefon faqat
+   * maskalangan; IP / moliyaviy qiymat yo'q.
+   */
+  async buildXlsx(
+    kind: CampaignReportKind,
+    id: string,
+  ): Promise<{ file: Buffer; rows: number }> {
+    const report = new UndeliveredReport(kind, id);
+    for await (const items of this.undeliveredPages(kind, id)) {
+      for (const item of items) report.add(item);
+    }
+    const file = await report.toXlsx();
+    if (file.length > CAMPAIGN_EXPORT_MAX_FILE_BYTES) {
+      throw new Error("Eksport fayli juda katta — bo'laklab eksport qiling");
+    }
+    return { file, rows: report.size };
+  }
+
+  /**
+   * Eski CSV (UTF-8 BOM). FAQAT `accept: 'xlsx'` yubormagan gateway uchun:
+   * deploy paytida gateway hali eski bo'lsa base64'ni fayl deb yubora olmaydi.
+   */
+  async buildCsv(
+    kind: CampaignReportKind,
+    id: string,
+  ): Promise<{ csv: string; rows: number }> {
+    const lines = [CSV_HEADER.join(',')];
+    for await (const items of this.undeliveredPages(kind, id)) {
+      for (const item of items) lines.push(csvLine(item));
+    }
+    return {
+      csv: CSV_BOM + lines.join(CSV_EOL) + CSV_EOL,
+      rows: lines.length - 1,
+    };
   }
 
   private async logExport(
@@ -989,22 +1040,21 @@ export class CampaignReportService {
       metadata: {
         scope: 'campaign_undelivered',
         campaign_kind: kind,
-        format: 'csv',
         phone: 'masked',
         ...metadata,
       },
     });
   }
 
-  /** Muddati o'tgan tayyor fayllar matni tozalanadi (PII uzoq yotmasin). */
+  /** Muddati o'tgan tayyor fayllar tozalanadi (PII uzoq yotmasin). */
   private async purgeExpired() {
     try {
       await this.exports
         .createQueryBuilder()
         .update(CampaignReportExport)
-        .set({ csv: null })
+        .set({ csv: null, file_data: null })
         .where('expires_at < now()')
-        .andWhere('csv IS NOT NULL')
+        .andWhere('(csv IS NOT NULL OR file_data IS NOT NULL)')
         .execute();
     } catch (error) {
       this.logger.warn(`eksport tozalash: ${shortError(error)}`);
@@ -1032,9 +1082,9 @@ export class CampaignReportService {
   }
 
   /**
-   * "Yetkazilmaganlar" CSV — FAQAT superadmin. ≤ 10 000 qator — darhol
-   * (javobda `csv`), eksport jurnalga `export` amali bilan yoziladi. Katta —
-   * SINXRON EMAS: fon vazifasi (202 `{ export_id }`), outbox orqali.
+   * "Yetkazilmaganlar" Excel — FAQAT superadmin. ≤ 10 000 qator — darhol
+   * (javobda `file_base64`), eksport jurnalga `export` amali bilan yoziladi.
+   * Katta — SINXRON EMAS: fon vazifasi (202 `{ export_id }`), outbox orqali.
    */
   async exportUndelivered(input: CampaignReportInput = {}) {
     try {
@@ -1052,8 +1102,28 @@ export class CampaignReportService {
         );
       }
       if (total <= CAMPAIGN_EXPORT_SYNC_MAX_ROWS) {
-        const { csv, rows } = await this.buildCsv(kind, id);
+        if (!acceptsXlsx(input?.accept)) {
+          const { csv, rows } = await this.buildCsv(kind, id);
+          await this.logExport(kind, id, input?.requester, {
+            format: 'csv',
+            rows,
+            mode: 'sync',
+          });
+          return successRes(
+            {
+              mode: 'sync',
+              rows,
+              filename: this.filename(kind, id, 'csv'),
+              content_type: CSV_CONTENT_TYPE,
+              csv,
+            },
+            200,
+            'Export ready',
+          );
+        }
+        const { file, rows } = await this.buildXlsx(kind, id);
         await this.logExport(kind, id, input?.requester, {
+          format: 'xlsx',
           rows,
           mode: 'sync',
         });
@@ -1062,8 +1132,8 @@ export class CampaignReportService {
             mode: 'sync',
             rows,
             filename: this.filename(kind, id),
-            content_type: CSV_CONTENT_TYPE,
-            csv,
+            content_type: XLSX_MIME,
+            file_base64: file.toString('base64'),
           },
           200,
           'Export ready',
@@ -1126,7 +1196,7 @@ export class CampaignReportService {
 
   /**
    * Outbox iste'molchisi: vazifani DA'VO qiladi (queued → running; uzilgan
-   * `running` 10 daqiqadan keyin qayta olinadi) va CSV'ni FONDA yig'adi —
+   * `running` 10 daqiqadan keyin qayta olinadi) va faylni FONDA yig'adi —
    * outbox publisher (20 s javob muddati) katta eksportni kutib turmaydi.
    * Qayta yetkazilgan xabar ikkinchi marta yig'maydi.
    */
@@ -1164,7 +1234,7 @@ export class CampaignReportService {
 
   private async build(job: CampaignReportExport): Promise<void> {
     try {
-      const { csv, rows } = await this.buildCsv(
+      const { file, rows } = await this.buildXlsx(
         job.campaign_kind,
         String(job.campaign_id),
       );
@@ -1173,7 +1243,9 @@ export class CampaignReportService {
         { id: job.id, status: 'running' },
         {
           status: 'done',
-          csv,
+          csv: null,
+          file_data: file,
+          content_type: XLSX_MIME,
           row_count: rows,
           filename: this.filename(job.campaign_kind, String(job.campaign_id)),
           error: null,
@@ -1233,31 +1305,57 @@ export class CampaignReportService {
     }
   }
 
+  /** Tayyor fayl baytlari (`select: false` — holat so'rovida o'qilmaydi). */
+  private async fileData(id: string): Promise<Buffer | null> {
+    const row = await this.exports.findOne({
+      where: { id },
+      select: { id: true, file_data: true },
+    });
+    return row?.file_data?.length ? row.file_data : null;
+  }
+
   /**
    * Tayyor faylni yuklab olish (superadmin). Har yuklash — ma'lumot tizimdan
-   * chiqishi: faoliyat jurnaliga `export` amali yoziladi.
+   * chiqishi: faoliyat jurnaliga `export` amali yoziladi. Eski vazifalar
+   * bazada CSV matn — o'sha holicha beriladi.
    */
   async downloadExport(
-    input: { export_id?: unknown; requester?: Requester | null } = {},
+    input: {
+      export_id?: unknown;
+      requester?: Requester | null;
+      accept?: unknown;
+    } = {},
   ) {
     try {
       const job = await this.loadJob(input?.export_id, input?.requester);
       if (job.status !== 'done') {
         throw new ConflictException(`Eksport hali tayyor emas (${job.status})`);
       }
-      if (
-        !job.csv ||
-        (job.expires_at && new Date(job.expires_at).getTime() < Date.now())
-      ) {
+      const expired =
+        job.expires_at && new Date(job.expires_at).getTime() < Date.now();
+      const file =
+        expired || job.csv ? null : await this.fileData(String(job.id));
+      if (expired || (!job.csv && !file)) {
         throw new GoneException(
           "Eksport fayli muddati o'tgan — qaytadan eksport qiling",
+        );
+      }
+      if (file && !acceptsXlsx(input?.accept)) {
+        // Eski gateway base64'ni fayl deb yubora olmaydi (deploy oynasi).
+        throw new ConflictException(
+          "Tizim yangilanmoqda — bir daqiqadan keyin qayta urinib ko'ring",
         );
       }
       await this.logExport(
         job.campaign_kind,
         String(job.campaign_id),
         input?.requester,
-        { rows: job.row_count, mode: 'async', export_id: String(job.id) },
+        {
+          format: file ? 'xlsx' : 'csv',
+          rows: job.row_count,
+          mode: 'async',
+          export_id: String(job.id),
+        },
       );
       return successRes(
         {
@@ -1266,9 +1364,17 @@ export class CampaignReportService {
           rows: job.row_count,
           filename:
             job.filename ??
-            this.filename(job.campaign_kind, String(job.campaign_id)),
-          content_type: CSV_CONTENT_TYPE,
-          csv: job.csv,
+            this.filename(
+              job.campaign_kind,
+              String(job.campaign_id),
+              file ? 'xlsx' : 'csv',
+            ),
+          ...(file
+            ? {
+                content_type: job.content_type ?? XLSX_MIME,
+                file_base64: file.toString('base64'),
+              }
+            : { content_type: CSV_CONTENT_TYPE, csv: job.csv }),
         },
         200,
         'Export file',

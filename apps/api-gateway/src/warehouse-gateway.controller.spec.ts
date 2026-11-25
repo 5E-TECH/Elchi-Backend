@@ -7,6 +7,7 @@ import {
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { Workbook } from 'exceljs';
 import { Observable, of, throwError } from 'rxjs';
 import { WAREHOUSE_RPC } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -541,6 +542,20 @@ describe('hY7uacJu — WarehouseGatewayController', () => {
       );
       const buffer = res.end.mock.calls[0][0] as Buffer;
       expect(buffer.subarray(0, 2).toString()).toBe('PK');
+      // Ombor nomi va qator fayl ichida (tafsil: warehouse-stock-xlsx.spec.ts).
+      const wb = new Workbook();
+      await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+      const texts: unknown[] = [];
+      wb.getWorksheet('Qoldiq')!.eachRow((row) =>
+        row.eachCell((cell) => texts.push(cell.value)),
+      );
+      expect(texts).toEqual(
+        expect.arrayContaining([
+          'Samarqand ombori · barcha market · barcha holat',
+          'Shapka',
+          'Kam qoldi',
+        ]),
+      );
     });
   });
 

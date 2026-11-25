@@ -3801,7 +3801,7 @@
     },
     "/orders/export/excel": {
       "get": {
-        "description": "Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). Oxirgi qatorlar: «Jami» (soni va narx yig'indisi).",
+        "description": "Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). Oxirgi qator: «JAMI» (soni va narx yig'indisi, filtrga moslashadi); 2-varaq — «Xulosa» (holat, viloyat, firma, kuryer bo'yicha).",
         "operationId": "OrderGatewayController_exportOrdersExcel",
         "parameters": [
           {
@@ -7192,7 +7192,7 @@
     },
     "/post/{id}/orders.xlsx": {
       "get": {
-        "description": "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «Jami» qatori. LOGIST — «Narxi» ustuni va jami summa yo'q. Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa faylda DIQQAT qatori.",
+        "description": "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «JAMI» qatori (filtrga moslashadi), 2-varaq — «Xulosa» (holat, joy, tuman, firma bo'yicha). LOGIST — narx ustuni va hech qanday summa yo'q («Xulosa» da ham). Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa DIQQAT — tepada va «Xulosa» da.",
         "operationId": "LogisticsGatewayController_exportPostOrdersXlsx",
         "parameters": [
           {
@@ -13522,7 +13522,7 @@
             "bearer": []
           }
         ],
-        "summary": "Yetkazilmaganlar CSV (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi",
+        "summary": "Yetkazilmaganlar Excel (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi",
         "tags": [
           "Notification campaigns"
         ],
@@ -13588,7 +13588,7 @@
             "bearer": []
           }
         ],
-        "summary": "Tayyor CSV (superadmin) — har yuklash jurnalga `export`",
+        "summary": "Tayyor eksport fayli (superadmin) — har yuklash jurnalga `export`",
         "tags": [
           "Notification campaigns"
         ],
@@ -15246,7 +15246,7 @@
             "bearer": []
           }
         ],
-        "summary": "Yetkazilmagan SMS CSV (superadmin, telefon maskalangan)",
+        "summary": "Yetkazilmagan SMS Excel (superadmin, telefon maskalangan)",
         "tags": [
           "SMS"
         ],
@@ -20927,6 +20927,7 @@
     },
     "/export/orders.xlsx": {
       "get": {
+        "description": "Hisob bilan: jami narx, marketga to'lanishi kerak / to'langan / qoldi; holat o'zbekcha, kuryer ismi; 2-varaq — «Xulosa» (marketlar bilan hisob). 50 000 qatordan oshsa faylda DIQQAT.",
         "operationId": "ExcelGatewayController_exportOrders",
         "parameters": [
           {
@@ -21236,6 +21237,117 @@
         "x-roles": [
           "admin",
           "superadmin"
+        ]
+      }
+    },
+    "/export/cashbox-report.xlsx": {
+      "get": {
+        "description": "SUPERADMIN / ADMIN — asosiy kassa; MANAGER — FAQAT o'z filiali kassasi (bitta jami, naqd/karta qoldig'i yo'q). Boshqa kassa so'ralsa (`branch_id`, `cashbox_user_id`, `user_id`, `cashbox_type`, `cashbox_id`) — 403. Davr: `shift_id` (smena oynasi, ochiq smena — hozirgacha; berilsa `from_date`/`to_date` e'tiborga olinmaydi) YOKI `from_date`/`to_date`. Faqat `from_date` — hozirgacha, faqat `to_date` — o'sha kun, hech biri — BUGUN (Toshkent). Fayl nomi: `kassa-hisobot-<YYYY-MM-DD>.xlsx`, bir necha kunda `kassa-hisobot-<dan>_<gacha>.xlsx` (Content-Disposition). Balans nazorati («Kassa balansiga teng» / «Mos kelmadi: farq …») davr hozirgacha bo'lganda.",
+        "operationId": "ExcelGatewayController_exportCashboxReport",
+        "parameters": [
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "description": "'YYYY-MM-DD' — Toshkent kunining oxirigacha (kun kiradi)",
+            "schema": {
+              "example": "2026-11-24",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "description": "'YYYY-MM-DD' — Toshkent kunining boshidan (kun kiradi)",
+            "schema": {
+              "example": "2026-11-18",
+              "type": "string"
+            }
+          },
+          {
+            "name": "shift_id",
+            "required": false,
+            "in": "query",
+            "description": "Smena ID si (raqam). Shu kassaniki bo'lishi shart, aks holda 404",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Excel fayl",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sana yoki shift_id noto'g'ri"
+          },
+          "403": {
+            "description": "Rol yoki boshqa kassa so'ralgan; menejer filiali topilmadi"
+          },
+          "404": {
+            "description": "Smena topilmadi yoki boshqa kassaniki"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kassa hisoboti (.xlsx): kirim, chiqim va kassa balansi",
+        "tags": [
+          "Excel Export"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/export/old-mails.xlsx": {
+      "post": {
+        "description": "Qatorlarni sahifa o'zi yuboradi (`GET /post` / `post/courier/old-posts` / `transfer-batches` dan yig'ilgan), server faqat Excel qiladi — bazadan o'qimaydi. Chegara: 10 000 qator, tana ≤ 4 MB (katta bo‘lsa 413). Ortig‘i bo‘lsa — birinchi 10 000 qator va `capped: true`. `hide_courier: true` — «Filial paketlari» rejimi. Fayl: `old-mails-<YYYY-MM-DD>.xlsx` (Toshkent kuni).",
+        "operationId": "OldMailsExportController_exportOldMails",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OldMailsExportRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Eski pochtalar hisoboti — .xlsx (sof render)",
+        "tags": [
+          "Excel Export"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "courier"
         ]
       }
     },
@@ -28198,7 +28310,7 @@
     },
     "/warehouses/{id}/export": {
       "get": {
-        "description": "«Excelga yuklash»: shu ombor qoldig'i (filtrlar `stock` bilan bir xil, sahifasiz, ≤10 000 qator).",
+        "description": "«Excelga yuklash»: shu ombor qoldig'i (filtrlar `stock` bilan bir xil, sahifasiz, ≤10 000 qator; ortig'i bo'lsa faylda DIQQAT). 1-varaq «Xulosa» — tugagan / kam qolganlar va marketlar; 2-varaq «Qoldiq» — to'liq ro'yxat (Tugagan → Kam qoldi → Yetarli).",
         "operationId": "WarehouseGatewayController_exportStock",
         "parameters": [
           {
@@ -38069,6 +38181,240 @@
       "PrintOrdersDto": {
         "type": "object",
         "properties": {}
+      },
+      "OldMailsExportLabelsDto": {
+        "type": "object",
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "default": "Yaratilgan vaqt",
+            "maxLength": 80
+          },
+          "no": {
+            "type": "string",
+            "default": "T/r",
+            "maxLength": 80
+          },
+          "mail_id": {
+            "type": "string",
+            "default": "Pochta raqami",
+            "maxLength": 80
+          },
+          "region": {
+            "type": "string",
+            "default": "Viloyat",
+            "maxLength": 80
+          },
+          "courier": {
+            "type": "string",
+            "default": "Kuryer",
+            "maxLength": 80
+          },
+          "status": {
+            "type": "string",
+            "default": "Holati",
+            "maxLength": 80
+          },
+          "orders": {
+            "type": "string",
+            "default": "Buyurtmalar",
+            "maxLength": 80
+          },
+          "amount": {
+            "type": "string",
+            "default": "Summa",
+            "maxLength": 80
+          },
+          "date": {
+            "type": "string",
+            "default": "Pochta sanasi",
+            "maxLength": 80
+          },
+          "total_mails": {
+            "type": "string",
+            "default": "Jami pochtalar",
+            "maxLength": 80
+          },
+          "total_orders": {
+            "type": "string",
+            "default": "Jami buyurtmalar",
+            "maxLength": 80
+          },
+          "total_amount": {
+            "type": "string",
+            "default": "Jami summa",
+            "maxLength": 80
+          },
+          "currency": {
+            "type": "string",
+            "default": "so'm",
+            "maxLength": 20
+          },
+          "summary_title": {
+            "type": "string",
+            "default": "Eski pochtalar xulosasi",
+            "maxLength": 120
+          },
+          "by_status": {
+            "type": "string",
+            "default": "Holatlar bo'yicha",
+            "maxLength": 80
+          },
+          "by_region": {
+            "type": "string",
+            "default": "Viloyatlar bo'yicha",
+            "maxLength": 80
+          },
+          "by_courier": {
+            "type": "string",
+            "default": "Kuryerlar bo'yicha",
+            "maxLength": 80
+          },
+          "mails": {
+            "type": "string",
+            "default": "Pochtalar",
+            "maxLength": 80
+          },
+          "share": {
+            "type": "string",
+            "default": "Ulushi",
+            "maxLength": 80
+          },
+          "total": {
+            "type": "string",
+            "default": "JAMI",
+            "maxLength": 20
+          },
+          "others": {
+            "type": "string",
+            "default": "Boshqalar",
+            "maxLength": 80
+          },
+          "unassigned": {
+            "type": "string",
+            "default": "Biriktirilmagan",
+            "maxLength": 80
+          },
+          "mails_unit": {
+            "type": "string",
+            "default": "ta pochta",
+            "maxLength": 20
+          },
+          "orders_unit": {
+            "type": "string",
+            "default": "ta buyurtma",
+            "maxLength": 20
+          },
+          "capped_note": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "`capped: true` dagi DIQQAT matni (sukut — o'zbekcha, qatorlar soni bilan)"
+          }
+        }
+      },
+      "OldMailsExportRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "2417",
+            "maxLength": 40
+          },
+          "region": {
+            "type": "string",
+            "example": "Andijon viloyati",
+            "maxLength": 120
+          },
+          "courier": {
+            "type": "string",
+            "nullable": true,
+            "example": "Jasur Tursunov",
+            "maxLength": 120,
+            "description": "Bo'sh / null — «—». `hide_courier` da e'tiborsiz."
+          },
+          "status": {
+            "type": "string",
+            "example": "Jo'natilgan",
+            "maxLength": 60,
+            "description": "Tayyor yorliq (foydalanuvchi tilida)"
+          },
+          "status_tone": {
+            "type": "string",
+            "enum": [
+              "success",
+              "warning",
+              "danger",
+              "neutral",
+              "info"
+            ],
+            "description": "Holat rangi; yo'q — rangsiz"
+          },
+          "orders": {
+            "type": "number",
+            "example": 24,
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "amount": {
+            "type": "number",
+            "example": 11310000,
+            "minimum": -100000000000,
+            "maximum": 100000000000,
+            "description": "Summa, so'm (son)"
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-11-21T12:32:00.000Z",
+            "maxLength": 40,
+            "description": "Pochta sanasi (ISO). Faylda Toshkent vaqti; o'qilmasa — matn, bo'sh — «—»."
+          }
+        },
+        "required": [
+          "id",
+          "region",
+          "status",
+          "orders",
+          "amount",
+          "created_at"
+        ]
+      },
+      "OldMailsExportRequestDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "example": "Eski pochtalar hisoboti",
+            "maxLength": 120
+          },
+          "subtitle": {
+            "type": "string",
+            "example": "Davr: 14.11.2026 – 21.11.2026 · Holat: barchasi",
+            "maxLength": 300,
+            "description": "Banner osti matni (filtrlar)"
+          },
+          "capped": {
+            "type": "boolean",
+            "description": "Ro'yxat chegaraga yetib kesilgan — faylda DIQQAT (tepada, oxirida va «Xulosa» da)"
+          },
+          "hide_courier": {
+            "type": "boolean",
+            "description": "«Filial paketlari» rejimi: kuryer ustuni va jadvali yo'q"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/OldMailsExportLabelsDto"
+          },
+          "rows": {
+            "maxItems": 10000,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OldMailsExportRowDto"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "rows"
+        ]
       },
       "CreatePartnerMarketRequestDto": {
         "type": "object",

@@ -3,6 +3,7 @@ import { ExecutionContext, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Order_status } from '@app/common';
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import { PassThrough } from 'node:stream';
 import { of } from 'rxjs';
 import request from 'supertest';
@@ -66,19 +67,22 @@ const col = (key: string) =>
 
 const readSheet = async (buffer: Buffer) => {
   const wb = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   const ws = wb.getWorksheet('Buyurtmalar')!;
+  // Kontent B ustundan; banner qatorlari tashlanadi (sarlavhadan boshlab).
   const rows: unknown[][] = [];
   ws.eachRow({ includeEmpty: false }, (row) => {
-    rows.push((row.values as unknown[]).slice(1));
+    rows.push((row.values as unknown[]).slice(2));
   });
-  return rows;
+  return rows.slice(rows.findIndex((row) => row[0] === '№'));
 };
 
 const cellText = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 
-/** «Holati» ustuni: buyurtma id → yorliq (sarlavha va «Jami» qatorisiz). */
+/** «Holati» ustuni: buyurtma id → yorliq (sarlavha va «JAMI» qatorisiz). */
 const statusById = (rows: unknown[][]) =>
   new Map(
     rows

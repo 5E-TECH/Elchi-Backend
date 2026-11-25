@@ -909,10 +909,15 @@ export class ShiftReportService {
       marketMap.set(id, slice);
     }
 
-    const branches =
-      cashboxType === Cashbox_type.MAIN
-        ? await this.branchTransfers(window)
-        : null;
+    const isBranch = cashboxType === Cashbox_type.BRANCH;
+    const branches = isBranch ? null : await this.branchTransfers(window);
+    // Filial kassasi: nomi va HQ'ga topshirgani (ikkalasi fail-open).
+    const branchExtras = isBranch
+      ? await Promise.all([
+          isId(cashboxUserId) ? this.branchName(cashboxUserId) : null,
+          this.hqTransfers(window),
+        ])
+      : null;
 
     const accountRows = await this.checks.listForShift(String(shift.id), shift);
     const block = (kind: 'cash' | 'card'): ShiftMoneyBlock => ({
@@ -958,6 +963,10 @@ export class ShiftReportService {
       couriers,
       markets: [...marketMap.values()],
       ...(branches ? { branches } : {}),
+      ...(branchExtras
+        ? { branch_name: branchExtras[0], hq_transfers: branchExtras[1] }
+        : {}),
+      opened_by_system: Boolean(shift.opened_by_system),
       between_shifts: await this.betweenShifts(
         shift,
         cashboxUserId,
@@ -1057,6 +1066,64 @@ export class ShiftReportService {
       slices.set(id, slice);
     }
     return [...slices.values()];
+  }
+
+  /**
+   * FILIAL smenasi oynasida shu filial kassasidan HQ'ga topshirilgan pul
+   * (`branch_to_main` CHIQIM): soni, SOF summa va shu oynada qaytarilgani
+   * (`payment_reversal`, asl oyoq — `branch_to_main` CHIQIM). Xato — `null`:
+   * hisobot yiqilmaydi, summa «Boshqa chiqim» ichida qoladi.
+   */
+  private async hqTransfers(
+    window: (
+      qb: ReturnType<EntityManager['createQueryBuilder']>,
+    ) => ReturnType<EntityManager['createQueryBuilder']>,
+  ): Promise<{ count: number; total: number; reversed: number } | null> {
+    try {
+      const manager = this.dataSource.manager;
+      const totals = (qb: ReturnType<EntityManager['createQueryBuilder']>) =>
+        qb
+          .select('COUNT(*)', 'count')
+          .addSelect('COALESCE(SUM(h.amount), 0)', 'total');
+      const [sent, back] = await Promise.all([
+        totals(window(manager.createQueryBuilder(CashboxHistory, 'h')))
+          .andWhere('h.operation_type = :expense', {
+            expense: Operation_type.EXPENSE,
+          })
+          .andWhere('h.source_type = :branchToMain', {
+            branchToMain: Source_type.BRANCH_TO_MAIN,
+          })
+          .getRawOne<{ count: string; total: string }>(),
+        totals(
+          window(manager.createQueryBuilder(CashboxHistory, 'h')).innerJoin(
+            CashboxHistory,
+            'o',
+            'o.id = h.reverses_history_id',
+          ),
+        )
+          .andWhere('h.source_type = :reversal', {
+            reversal: Source_type.PAYMENT_REVERSAL,
+          })
+          .andWhere('o.source_type = :branchToMain', {
+            branchToMain: Source_type.BRANCH_TO_MAIN,
+          })
+          .andWhere('o.operation_type = :expense', {
+            expense: Operation_type.EXPENSE,
+          })
+          .getRawOne<{ count: string; total: string }>(),
+      ]);
+      const reversed = num(back?.total) ?? 0;
+      return {
+        count: Number(sent?.count ?? 0) || 0,
+        total: Math.round(((num(sent?.total) ?? 0) - reversed) * 100) / 100,
+        reversed,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `hisobot: HQ'ga topshirilgan pul hisoblanmadi — ${short(error)}`,
+      );
+      return null;
+    }
   }
 
   /** Filial kassalaridagi joriy qoldiq (`cashboxes.user_id` — filial id). */
@@ -1436,7 +1503,8 @@ export class ShiftReportService {
         ];
       }
       const [branchName, managers] = await Promise.all([
-        this.branchName(branchId),
+        // Filial smenasida nom snapshot'da bor — qayta so'ralmaydi.
+        snapshot.branch_name ?? this.branchName(branchId),
         wantPrivate
           ? this.branchManagerIds(branchId)
           : this.branchManagerIds(branchId).catch((error) => {

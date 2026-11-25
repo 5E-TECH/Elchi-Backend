@@ -1,13 +1,17 @@
 import { RpcException } from '@nestjs/microservices';
 import { PATTERN_METADATA } from '@nestjs/microservices/constants';
+import { Workbook, type Worksheet } from 'exceljs';
 import { ActivityAction } from '@app/common';
+import { XLSX_MIME } from '@app/report-kit';
 import { CampaignReportController } from './campaign-report.controller';
 import {
+  CAMPAIGN_EXPORT_MAX_FILE_BYTES,
   CAMPAIGN_EXPORT_RUN_PATTERN,
   CAMPAIGN_EXPORT_SYNC_MAX_ROWS,
   CampaignReportService,
   csvCell,
 } from './campaign-report.service';
+import { UndeliveredReport } from './campaign-report.xlsx';
 
 const rmqSendMock = jest.fn();
 jest.mock('@app/common', () => {
@@ -484,7 +488,19 @@ describe('H7kpCman — CampaignReportService', () => {
     });
   });
 
-  describe('CSV eksport', () => {
+  const sheetOf = async (file: Buffer) => {
+    const workbook = new Workbook();
+    await workbook.xlsx.load(file as never);
+    expect(workbook.worksheets.map((ws) => ws.name)).toEqual([
+      'Xulosa',
+      'Yetkazilmaganlar',
+    ]);
+    return workbook.getWorksheet('Yetkazilmaganlar')!;
+  };
+  const cells = (ws: Worksheet, row: number) =>
+    Array.from({ length: 9 }, (_, i) => ws.getCell(row, i + 2).text);
+
+  describe('Eksport', () => {
     const undeliveredRows = [
       {
         id: '100',
@@ -519,7 +535,117 @@ describe('H7kpCman — CampaignReportService', () => {
       expect(activityLog.log).not.toHaveBeenCalled();
     });
 
-    it('TC8: ≤10 000 — darhol CSV, faoliyat jurnaliga `export` amali', async () => {
+    it('TC8: ≤10 000 — darhol .xlsx (base64), faoliyat jurnaliga `export` amali', async () => {
+      count(2);
+      pageRows();
+      const res: any = await service.exportUndelivered({
+        kind: 'notification',
+        id: '7',
+        requester: superadmin,
+        accept: 'xlsx',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.data).toEqual(
+        expect.objectContaining({
+          mode: 'sync',
+          rows: 2,
+          content_type: XLSX_MIME,
+        }),
+      );
+      expect(res.data).not.toHaveProperty('csv');
+      expect(res.data.filename).toMatch(
+        /^kampaniya-notification-7-yetkazilmaganlar-\d{8}-\d{4}\.xlsx$/,
+      );
+      const ws = await sheetOf(Buffer.from(res.data.file_base64, 'base64'));
+      expect(cells(ws, 10)).toEqual([
+        '1',
+        '42',
+        'User 42',
+        'Kuryer',
+        '***0042',
+        'Push',
+        'Xato',
+        'Push yetkazilmadi',
+        '100',
+      ]);
+      expect(cells(ws, 11)).toEqual([
+        '2',
+        '43',
+        'User 43',
+        'Market',
+        '***0043',
+        'Darhol\nPush',
+        "Xato\nO'tkazib yuborildi",
+        "Yetkazilmadi\nPush obunasi yo'q",
+        '101',
+      ]);
+      // To'liq telefon faylga tushmaydi.
+      const text = JSON.stringify(ws.model.rows);
+      expect(text).not.toContain('9989');
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity_type: 'NotificationCampaign',
+          entity_id: '7',
+          action: ActivityAction.EXPORT,
+          user_id: '26',
+          user_role: 'superadmin',
+          metadata: expect.objectContaining({
+            scope: 'campaign_undelivered',
+            rows: 2,
+            mode: 'sync',
+            format: 'xlsx',
+            phone: 'masked',
+          }),
+        }),
+      );
+      expect(outbox.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('identity javob bermasa — ism va telefonsiz, fayl baribir chiqadi', async () => {
+      rmqSendMock.mockRejectedValue(new Error('timeout'));
+      count(2);
+      pageRows();
+      const res: any = await service.exportUndelivered({
+        kind: 'notification',
+        id: '7',
+        requester: superadmin,
+        accept: 'xlsx',
+      });
+      const ws = await sheetOf(Buffer.from(res.data.file_base64, 'base64'));
+      expect(cells(ws, 10).slice(0, 5)).toEqual([
+        '1',
+        '42',
+        '—',
+        'Kuryer',
+        '—',
+      ]);
+    });
+
+    it('juda katta fayl RMQ’ga berilmaydi (xabar chegarasi) — xato, jurnal yozilmaydi', async () => {
+      count(2);
+      pageRows();
+      const spy = jest
+        .spyOn(UndeliveredReport.prototype, 'toXlsx')
+        .mockResolvedValueOnce(
+          Buffer.alloc(CAMPAIGN_EXPORT_MAX_FILE_BYTES + 1),
+        );
+      try {
+        const err = await errorOf(
+          service.exportUndelivered({
+            kind: 'notification',
+            id: '7',
+            requester: superadmin,
+            accept: 'xlsx',
+          }),
+        );
+        expect(err.statusCode).toBe(500);
+        expect(activityLog.log).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('aralash versiya: eski gateway (`accept` yo’q) — avvalgidek CSV', async () => {
       count(2);
       pageRows();
       const res: any = await service.exportUndelivered({
@@ -567,7 +693,7 @@ describe('H7kpCman — CampaignReportService', () => {
       expect(outbox.enqueue).not.toHaveBeenCalled();
     });
 
-    it('TC9: 10 000 dan katta — SINXRON EMAS: fon vazifasi (202), CSV bu so’rovda yig’ilmaydi', async () => {
+    it('TC9: 10 000 dan katta — SINXRON EMAS: fon vazifasi (202), fayl bu so’rovda yig’ilmaydi', async () => {
       count(CAMPAIGN_EXPORT_SYNC_MAX_ROWS + 1);
       const res: any = await service.exportUndelivered({
         kind: 'notification',
@@ -643,7 +769,17 @@ describe('H7kpCman — CampaignReportService', () => {
         expect.objectContaining({ status: 'done', row_count: 2 }),
       );
       const done = exportsRepo.update.mock.calls[0][1];
-      expect(done.csv.split(EOL)).toHaveLength(4);
+      expect(done).toEqual(
+        expect.objectContaining({
+          csv: null,
+          content_type: XLSX_MIME,
+          filename: expect.stringMatching(
+            /^kampaniya-notification-7-.*\.xlsx$/,
+          ),
+        }),
+      );
+      const ws = await sheetOf(done.file_data);
+      expect(cells(ws, 10).slice(1, 4)).toEqual(['42', 'User 42', 'Kuryer']);
       expect(done.expires_at.getTime()).toBeGreaterThan(Date.now());
 
       updateResult = { affected: 0 };
@@ -653,7 +789,102 @@ describe('H7kpCman — CampaignReportService', () => {
       });
     });
 
-    it('yuklab olish: tayyor emas — 409, muddati o’tgan — 410, admin — 403; tayyor — CSV + `export` jurnali', async () => {
+    it('muddati o’tgan fayllar tozalanadi — csv va file_data birga', async () => {
+      count(2);
+      pageRows();
+      await service.exportUndelivered({
+        kind: 'notification',
+        id: '7',
+        requester: superadmin,
+        accept: 'xlsx',
+      });
+      expect(exportsRepo.qb.set).toHaveBeenCalledWith({
+        csv: null,
+        file_data: null,
+      });
+      expect(exportsRepo.qb.andWhere).toHaveBeenCalledWith(
+        '(csv IS NOT NULL OR file_data IS NOT NULL)',
+      );
+    });
+
+    it('yuklab olish (.xlsx): base64 fayl + `export` jurnali; holat so’rovida bayt yo’q', async () => {
+      const job = {
+        id: '5',
+        campaign_kind: 'notification',
+        campaign_id: '7',
+        status: 'done',
+        row_count: 12_000,
+        csv: null,
+        content_type: XLSX_MIME,
+        filename: 'kampaniya-notification-7.xlsx',
+        started_at: new Date(),
+        expires_at: new Date(Date.now() + 60_000),
+      };
+      const file = Buffer.from([0x50, 0x4b, 3, 4, 255]);
+      const load = (bytes: Buffer | null) =>
+        exportsRepo.findOne
+          .mockResolvedValueOnce({ ...job })
+          .mockResolvedValueOnce({ id: '5', file_data: bytes });
+
+      exportsRepo.findOne.mockResolvedValueOnce({ ...job });
+      const status: any = await service.getExport({
+        export_id: '5',
+        requester: superadmin,
+      });
+      expect(JSON.stringify(status)).not.toContain('file_data');
+      expect(exportsRepo.findOne).toHaveBeenCalledTimes(1);
+
+      load(file);
+      const res: any = await service.downloadExport({
+        export_id: '5',
+        requester: superadmin,
+        accept: 'xlsx',
+      });
+      expect(res.data).toEqual({
+        mode: 'file',
+        export_id: '5',
+        rows: 12_000,
+        filename: 'kampaniya-notification-7.xlsx',
+        content_type: XLSX_MIME,
+        file_base64: file.toString('base64'),
+      });
+      expect(activityLog.log).toHaveBeenCalledTimes(1);
+      expect(activityLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            format: 'xlsx',
+            mode: 'async',
+            export_id: '5',
+          }),
+        }),
+      );
+
+      // Aralash versiya: eski gateway .xlsx ni yubora olmaydi — 409, jurnalsiz.
+      load(file);
+      expect(
+        (
+          await errorOf(
+            service.downloadExport({ export_id: '5', requester: superadmin }),
+          )
+        ).statusCode,
+      ).toBe(409);
+      // Tozalangan (TTL) — 410.
+      load(null);
+      expect(
+        (
+          await errorOf(
+            service.downloadExport({
+              export_id: '5',
+              requester: superadmin,
+              accept: 'xlsx',
+            }),
+          )
+        ).statusCode,
+      ).toBe(410);
+      expect(activityLog.log).toHaveBeenCalledTimes(1);
+    });
+
+    it('yuklab olish (eski CSV vazifasi): tayyor emas — 409, muddati o’tgan — 410, admin — 403; tayyor — CSV + `export` jurnali', async () => {
       const job = (over: Record<string, unknown> = {}) => ({
         id: '5',
         campaign_kind: 'sms',
@@ -686,20 +917,28 @@ describe('H7kpCman — CampaignReportService', () => {
       const res: any = await service.downloadExport({
         export_id: '5',
         requester: superadmin,
+        // Yangi gateway ham eski CSV vazifasini CSV holida oladi.
+        accept: 'xlsx',
       });
       expect(res.data).toEqual(
         expect.objectContaining({
           rows: 12_000,
           filename: 'kampaniya-sms-9.csv',
+          content_type: 'text/csv; charset=utf-8',
           csv: BOM + 'recipient_id',
         }),
       );
+      expect(res.data).not.toHaveProperty('file_base64');
       expect(activityLog.log).toHaveBeenCalledWith(
         expect.objectContaining({
           entity_type: 'SmsCampaign',
           entity_id: '9',
           action: 'export',
-          metadata: expect.objectContaining({ mode: 'async', export_id: '5' }),
+          metadata: expect.objectContaining({
+            format: 'csv',
+            mode: 'async',
+            export_id: '5',
+          }),
         }),
       );
     });

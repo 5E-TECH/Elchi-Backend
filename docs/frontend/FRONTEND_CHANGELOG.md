@@ -23,6 +23,24 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — Barcha Excel / PDF hisobotlar yangi dizaynda (ega tasdiqladi)
+
+Deploy: **notification-service** (migratsiya 1716000000250), **finance-service**, **file-service**, **api-gateway**. Env yo'q.
+Yorliq / chek stikerlari o'zgarmadi.
+
+- 🆕 [gateway] `GET /export/cashbox-report.xlsx` — SUPERADMIN / ADMIN: asosiy kassa; MANAGER: faqat o'z filiali. `shift_id`
+  (davr — shu smena; boshqa kassaniki — 404) YOKI `from_date` / `to_date` (YYYY-MM-DD, Toshkent); hech biri — BUGUN.
+  → **Frontendda:** 🔧 brauzerdagi `.xls` (`exportMainCashboxReport`) o'rniga; smena yopilganda `?shift_id=`.
+- 🆕 [gateway] `POST /export/old-mails.xlsx` — sof render: `{ title, subtitle?, capped?, hide_courier?, labels?, rows[≤10 000] }`.
+  → **Frontendda:** 🔧 `exportOldMailsToExcel` o'rniga.
+- ✏️ [gateway] `GET /export/shifts.xlsx` — «Kassa», «Ochgan», «Yopgan» ustunlari; sanalmagan smenada soxta kamomad yo'q.
+- ✏️ [gateway] `export/*.xlsx`, `orders/export/excel`, `post/:id/orders.xlsx`, `warehouses/:id/export`, karta ko'chirmasi —
+  yo'l, parametr va ruxsatlar o'zgarmagan; 50 000 dan oshsa faylda DIQQAT (ilgari jim qirqilardi).
+- ✏️ [notification] kampaniya «Yetkazilmaganlar» eksporti — `.xlsx` (200 content-type va fayl nomi); eski tugagan fon
+  fayllari 7 kungacha `.csv`. → **Frontendda:** 🔧 «CSV» matnlari, zaxira fayl nomi.
+- ✏️ [finance] smena hisoboti Excel / PDF; filial smenasida «HQ'ga topshirilgan» alohida qator (Telegram matnida ham).
+- ✏️ [file] `POST /files/pdf` — rasmiy blank, shrift hujjat ichida (o'zbek belgilari buzilmaydi).
+
 ### 2026-11-25 — Sayt buyurtmasi noto'g'ri tumanga jimgina tushmaydi (himoya)
 
 Deploy: **order-service** (migratsiya yo'q).
@@ -58,6 +76,18 @@ Deploy: **finance-service**, **notification-service** (migratsiya / env yo'q).
 - ✏️ [finance] `POST /finance/shift/:id/report/resend` — shu holatda `data.status: 'skipped'` + sababli `deliveries`.
   → **Frontendda:** 🔧 `status: 'skipped'` javobida «Hisobot qayta yuborildi» deyilmasin; `skipped` bo'sh holat matni.
 - 🟢 [notification] Bot guruhga qo'shilib 20 soniyada hech narsaga ulanmasa — guruhga ulash yo'li yoziladi (bir marta).
+
+### 2026-11-25 — «Tashqi saytlar»: bitta nosoz mijoz yoki narx importni to'xtatmaydi
+
+Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi, yangi sabab yo'q.
+
+- ✏️ [order] `POST /orders/external/receive` — telefon xodim / marketniki bo'lsa (identity 409) butun so'rov yiqilmaydi:
+  faqat shu qator `skipped[].reason = 'customer_create_failed'`. Identity nosozligi (timeout, 5xx) avvalgidek xato.
+- ✏️ [order] Jami narx (yetkazish bilan) 999 999 999 999.99 dan katta bo'lsa — `price_invalid` (ilgari 500).
+- 🟢 [order] Narx va QR mijozdan OLDIN tekshiriladi: rad etilgan buyurtma mijoz yaratmaydi, mavjudini yangilamaydi.
+- 🟢 [order] Mijoz kartasida uzun ism (100) va manzil (255) kesiladi, buyurtmada manzil to'liq qoladi. 20 belgidan uzun
+  qo'shimcha raqam kesilmaydi: bitta raqam bo'lsa kanonik shakli, aks holda yozilmaydi.
+  → **Frontendda:** shart emas (`customer_create_failed` va `price_invalid` matnlari bor).
 
 ### 2026-11-25 — «Tashqi saytlar»: minglik bo'shlig'i bilan yozilgan narx («150 000») o'qiladi
 

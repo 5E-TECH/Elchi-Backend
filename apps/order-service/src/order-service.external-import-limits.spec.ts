@@ -7,9 +7,10 @@ jest.mock('@app/common', () => {
   return { ...actual, rmqSend: jest.fn() };
 });
 
-import { of } from 'rxjs';
+import { of, TimeoutError } from 'rxjs';
 import { getMetadataArgsStorage } from 'typeorm';
-import { rmqSend as rmqSendFn } from '@app/common';
+import { normalizePersonName, rmqSend as rmqSendFn } from '@app/common';
+import { User } from '../../identity-service/src/entities/user.entity';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
@@ -17,17 +18,20 @@ import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 const rmqSend = rmqSendFn as unknown as jest.Mock;
 
 /**
- * SAYT IMPORTI — MASSIV `items` USTUN SIG'IMIGA KELTIRILADI.
+ * SAYT IMPORTI — BITTA NOSOZ QATOR PARTIYANI UZMASIN.
  *
- * Saytdan kelgan `quantity: 1.5` yoki int4 ga sig'maydigan son, 255 belgidan
- * uzun nom `create()` ni yiqitardi. `receiveExternalOrders` tsikli esa
- * bittalab ketadi: yiqilgan qatorgacha buyurtmalar yaratilgan, undan keyingilari
- * yo'q, javob 400/500 — operator nima yaratilganini bilmaydi. Yiqilgan qatorning
- * mijozi `identity.customer.create` da allaqachon yaratilgan bo'ladi (yetim).
+ * `receiveExternalOrders` tsikli bittalab ketadi: qator yiqilsa, undan oldingi
+ * buyurtmalar yaratilgan, keyingilari yo'q, javob 400/409/500 — operator nima
+ * yaratilganini bilmaydi. Yiqilgan (yoki rad etilgan) qatorning mijozi esa
+ * `identity.customer.create` da allaqachon yaratilgan / yangilangan bo'ladi.
+ *
+ * Uch manba: massiv `items` (kasr / int4 dan katta son, uzun nom), narx
+ * (`numeric(14,2)` ga sig'maydi), mijoz (telefon xodimniki, uzun ism / manzil /
+ * qo'shimcha raqam).
  *
  * Shu bois bu yerda `create()` MOCK QILINMAYDI: haqiqiy kod, bazaning o'rnida
  * esa ustun turini entity metama'lumotidan o'qib, Postgres kabi rad etadigan
- * soxta repo.
+ * soxta repo; identity ham `users` ustunlari bilan shunday rad etadi.
  */
 type Row = Record<string, any>;
 
@@ -36,7 +40,10 @@ const columnOf = (entity: unknown, property: string) =>
     (column) => column.target === entity && column.propertyName === property,
   )?.options;
 
-/** Postgres kabi: `varchar(n)` — belgilar bo'yicha, `int` — butun va int4. */
+/**
+ * Postgres kabi: `varchar(n)` — belgilar bo'yicha, `int` — butun va int4,
+ * `numeric(p,s)` — s xonagacha yaxlitlab, 10^(p-s) dan kichik.
+ */
 const assertFits = (entity: unknown, row: Row) => {
   for (const [property, value] of Object.entries(row)) {
     const column = columnOf(entity, property);
@@ -46,6 +53,12 @@ const assertFits = (entity: unknown, row: Row) => {
         throw new Error(
           `value too long for type character varying(${column.length})`,
         );
+      }
+    }
+    if (column.type === 'numeric') {
+      const limit = 10 ** (Number(column.precision) - Number(column.scale));
+      if (Math.abs(Number(Number(value).toFixed(column.scale))) >= limit) {
+        throw new Error('numeric field overflow');
       }
     }
     if (column.type === 'int') {
@@ -59,9 +72,17 @@ const assertFits = (entity: unknown, row: Row) => {
   }
 };
 
+/** Boshqa servis xatosi `Error` emas, oddiy obyekt (`rmq-client.helper.ts`). */
+const rpcError = (payload: Error) => Promise.reject(payload);
+
+/** Xodimning raqami: identity mijoz yaratmaydi — 409. */
+const STAFF_PHONE = '+998907777777';
+
 function makeService() {
   const orders: Row[] = [];
   const items: Row[] = [];
+  /** identity'da yaratilgan / yangilangan mijozlar. */
+  const customers: Row[] = [];
   let seq = 900;
   /** Tranzaksiya: rollback shu buyurtmaning qatorlarini ham qaytaradi. */
   let pending: { order?: Row; items: Row[] } = { items: [] };
@@ -72,6 +93,7 @@ function makeService() {
         ? {
             create: (value: Row) => value,
             save: (value: Row) => {
+              assertFits(Order, value);
               seq += 1;
               pending.order = { product_quantity: 0, ...value, id: `${seq}` };
               return Promise.resolve(pending.order);
@@ -111,12 +133,36 @@ function makeService() {
   };
 
   rmqSend.mockReset();
-  rmqSend.mockImplementation((_client: unknown, pattern: { cmd: string }) => {
-    if (pattern.cmd === 'identity.customer.create') {
+  rmqSend.mockImplementation(
+    (_client: unknown, pattern: { cmd: string }, payload: { dto: Row }) => {
+      if (pattern.cmd !== 'identity.customer.create') {
+        return Promise.reject(new Error(`kutilmagan RPC: ${pattern.cmd}`));
+      }
+      const { name, phone_number, extra_number, address } = payload.dto;
+      if (phone_number === STAFF_PHONE) {
+        return rpcError({
+          statusCode: 409,
+          message: 'Bu telefon band',
+        } as Row as Error);
+      }
+      const row = {
+        name: normalizePersonName(String(name)),
+        phone_number,
+        extra_number,
+        address,
+      };
+      try {
+        assertFits(User, row);
+      } catch {
+        return rpcError({
+          status: 'error',
+          message: 'Internal server error',
+        } as Row as Error);
+      }
+      customers.push(row);
       return Promise.resolve({ data: { id: '801' } });
-    }
-    return Promise.reject(new Error(`kutilmagan RPC: ${pattern.cmd}`));
-  });
+    },
+  );
 
   const service = Object.create(OrderLifecycleService.prototype) as Row;
   Object.assign(service, {
@@ -153,7 +199,7 @@ function makeService() {
       Promise.resolve(orders.find((order) => order.id === id)),
     ),
   });
-  return { service, orders, items };
+  return { service, orders, items, customers };
 }
 
 const order = (id: string, items: unknown) => ({
@@ -163,17 +209,29 @@ const order = (id: string, items: unknown) => ({
   items,
 });
 
-/** Uch buyurtma: o'rtadagisi nosoz — chetdagilar ham, o'zi ham yaratilsin. */
-const importAround = async (brokenItems: unknown) => {
-  const { service, orders, items } = makeService();
-  const res = await service.receiveExternalOrders({
+/** Uch buyurtma: o'rtadagisi nosoz, chetdagilari butun. */
+const importBroken = async (
+  broken: Row,
+  prepare?: (service: Row) => void,
+  options?: { strict?: boolean },
+) => {
+  const harness = makeService();
+  prepare?.(harness.service);
+  const res = await harness.service.receiveExternalOrders({
     integration_id: '5',
     orders: [
       order('A', [{ name: 'Soat', quantity: 2 }]),
-      order('B', brokenItems),
+      { ...order('B', [{ name: 'Gilam', quantity: 1 }]), ...broken },
       order('C', [{ name: 'Kamar', quantity: 1 }]),
     ],
+    options,
   });
+  return { ...harness, res };
+};
+
+/** Nosoz `items`: chetdagilar ham, o'zi ham yaratilsin. */
+const importAround = async (brokenItems: unknown) => {
+  const { res, orders, items } = await importBroken({ items: brokenItems });
   const broken = orders.find((row) => row.external_id === 'B');
   return {
     res,
@@ -275,5 +333,194 @@ describe("⭐ massiv `items` ustun sig'imiga keltiriladi — partiya uzilmaydi",
     const h = await importAround([{ name: '  Soat  qora ', quantity: 1 }]);
 
     expect(h.brokenItems[0].product_name).toBe('Soat  qora');
+  });
+});
+
+describe("⭐ narx `numeric(14,2)` ga sig'masa — qator tashlanadi, partiya uzilmaydi", () => {
+  it('soxta baza chegarani haqiqiy ustundan oladi', () => {
+    expect(columnOf(Order, 'total_price')).toMatchObject({
+      type: 'numeric',
+      precision: 14,
+      scale: 2,
+    });
+  });
+
+  it.each([
+    ['1e15', { total_price: 1e15 }],
+    ['matn', { total_price: '1000000000000000' }],
+    ['chegaraning o`zi', { total_price: 1e12 }],
+    ['yaxlitlansa chegaraga chiqadi', { total_price: 999_999_999_999.999 }],
+    ['yetkazish narxi', { delivery_price: 1e13 }],
+    [
+      'yig`indi',
+      { total_price: 600_000_000_000, delivery_price: 600_000_000_000 },
+    ],
+    ['cheksizlik', { total_price: 1e308, delivery_price: 1e308 }],
+  ])('⭐ %s — price_invalid, qolganlari yaratiladi', async (_label, price) => {
+    const h = await importBroken(price);
+
+    expect(h.orders.map((row) => row.external_id)).toEqual(['A', 'C']);
+    expect(h.res.data.skipped).toEqual([
+      { external_id: 'B', reason: 'price_invalid' },
+    ]);
+    expect(h.customers).toHaveLength(2);
+  });
+
+  it('sig`adigan eng katta narx O`ZGARMAYDI', async () => {
+    const h = await importBroken({ total_price: '999999999999.99' });
+
+    expect(h.orders.map((row) => row.external_id)).toEqual(['A', 'B', 'C']);
+    expect(h.orders[1].total_price).toBe(999_999_999_999.99);
+  });
+});
+
+describe('⭐ rad etilgan buyurtma mijoz YARATMAYDI va YANGILAMAYDI', () => {
+  it.each([
+    ['narx', { total_price: '99,000' }, 'price_invalid'],
+    ['yetkazish narxi', { delivery_price: 'bepul' }, 'price_invalid'],
+  ])('⭐ %s noto`g`ri', async (_label, broken, reason) => {
+    const h = await importBroken({ ...broken, phone: '+998935554433' });
+
+    expect(h.res.data.skipped).toEqual([{ external_id: 'B', reason }]);
+    expect(h.customers.map((row) => row.phone_number)).toEqual([
+      '+998901112233',
+      '+998901112233',
+    ]);
+  });
+
+  it('⭐ QR boshqa buyurtmaniki', async () => {
+    const h = await importBroken(
+      { qr_code: 'BAND', phone: '+998935554433' },
+      (service) => {
+        service.orderRepo.findOne.mockImplementation(
+          ({ where }: { where: Row }) =>
+            Promise.resolve(
+              where.qr_code_token === 'BAND' ? { id: '7' } : null,
+            ),
+        );
+      },
+    );
+
+    expect(h.res.data.skipped).toEqual([
+      { external_id: 'B', reason: 'qr_code_conflict' },
+    ]);
+    expect(h.customers).toHaveLength(2);
+  });
+
+  it('⭐ qat`iy rejim: narx berilmagan', async () => {
+    const h = await importBroken(
+      { total_price: undefined, phone: '+998935554433' },
+      undefined,
+      { strict: true },
+    );
+
+    expect(h.res.data.skipped).toEqual([
+      { external_id: 'B', reason: 'price_missing' },
+    ]);
+    expect(h.customers).toHaveLength(2);
+  });
+});
+
+describe('⭐ mijoz yaratilmasa — faqat shu qator tashlanadi', () => {
+  it('⭐ telefon xodimniki (identity 409) — customer_create_failed', async () => {
+    const h = await importBroken({ phone: STAFF_PHONE });
+
+    expect(h.orders.map((row) => row.external_id)).toEqual(['A', 'C']);
+    expect(h.res.data.skipped).toEqual([
+      { external_id: 'B', reason: 'customer_create_failed' },
+    ]);
+  });
+
+  it('sabab logda, telefon raqami esa YO`Q', async () => {
+    const h = await importBroken({ phone: STAFF_PHONE });
+
+    const logged = JSON.stringify(h.service.logger.warn.mock.calls);
+    expect(logged).toContain('409');
+    expect(logged).toContain('inhayat');
+    expect(logged).not.toContain(STAFF_PHONE.slice(1));
+  });
+
+  /**
+   * Identity javob bermasa yoki yiqilsa hamma qatorni «mijoz yaratilmadi» deb
+   * tashlab, 201 qaytarish noto'g'ri: chaqiruvchi xatoni ko'rib qayta yuboradi
+   * (yaratilganlari `already_exists` bo'ladi).
+   */
+  it.each([
+    ['timeout', new TimeoutError()],
+    ['503', { statusCode: 503, message: 'band' }],
+    ['ichki xato', { status: 'error', message: 'Internal server error' }],
+  ])(
+    'identity nosoz (%s) — xato avvalgidek yuqoriga',
+    async (_label, error) => {
+      const { service } = makeService();
+      rmqSend.mockReset();
+      rmqSend.mockRejectedValue(error);
+
+      await expect(
+        service.receiveExternalOrders({
+          integration_id: '5',
+          orders: [order('A', [])],
+        }),
+      ).rejects.toBe(error);
+    },
+  );
+});
+
+describe("⭐ mijoz kartasi `users` ustunlariga sig'diriladi", () => {
+  it('soxta identity chegarani haqiqiy ustundan oladi', () => {
+    expect(columnOf(User, 'name')?.length).toBe(100);
+    expect(columnOf(User, 'address')?.length).toBe(255);
+    expect(columnOf(User, 'extra_number')?.length).toBe(20);
+  });
+
+  it('⭐ 100 belgidan uzun ism kesiladi, uchala buyurtma ham yaratiladi', async () => {
+    const h = await importBroken({ full_name: `${'a'.repeat(99)}🎁ortiqcha` });
+
+    expect(h.orders.map((row) => row.external_id)).toEqual(['A', 'B', 'C']);
+    expect(h.customers[1].name).toBe(`A${'a'.repeat(98)}🎁`);
+  });
+
+  it('⭐ uzun manzil: mijoz kartasida kesiladi, buyurtmada TO`LIQ qoladi', async () => {
+    const address = 'Toshkent, '.repeat(40);
+    const h = await importBroken({ address });
+
+    expect(h.orders.map((row) => row.external_id)).toEqual(['A', 'B', 'C']);
+    expect(h.customers[1].address).toBe(address.slice(0, 255));
+    expect(h.orders[1].address).toBe(address);
+  });
+
+  it.each([
+    ['bezakli bitta raqam', '+998 (90) 111 - 22 - 33', '+998901112233'],
+    ['ikki raqam', '+998901112233, +998935554433', undefined],
+    ['massiv', ['+998901112233', '+998935554433'], undefined],
+  ])(
+    '⭐ sig`maydigan qo`shimcha raqam (%s) KESILMAYDI: boshqa odamniki chiqib qolmasin',
+    async (_label, additional_phone, expected) => {
+      const h = await importBroken({ additional_phone });
+
+      expect(h.orders.map((row) => row.external_id)).toEqual(['A', 'B', 'C']);
+      expect(h.customers[1].extra_number).toBe(expected);
+    },
+  );
+
+  it('sig`adigan qiymatlar identity ga AYNAN ketadi', async () => {
+    await importBroken({
+      full_name: '  ali   valiyev ',
+      address: 'a'.repeat(255),
+      additional_phone: '90 111 22 33',
+    });
+
+    expect(rmqSend.mock.calls[1][2].dto).toMatchObject({
+      name: '  ali   valiyev ',
+      address: 'a'.repeat(255),
+      extra_number: '90 111 22 33',
+    });
+  });
+
+  it('berilmagan manzil va qo`shimcha raqam — yuborilmaydi (kartadagisi o`chmasin)', async () => {
+    await importBroken({});
+
+    expect(rmqSend.mock.calls[1][2].dto.address).toBeUndefined();
+    expect(rmqSend.mock.calls[1][2].dto.extra_number).toBeUndefined();
   });
 });
