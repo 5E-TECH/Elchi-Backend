@@ -11,15 +11,12 @@
  * xuddi shunday yozilsin. Qoida o'zgarsa ikkalasi birga o'zgaradi.
  */
 
+import { fitProductName, fitQuantity } from './external-item-limits';
+
 export interface ExternalTextItem {
   product_name: string;
   quantity: number;
 }
-
-/** `order_items.product_name` — varchar(255): uzunroq nom INSERT'ni yiqitardi. */
-const PRODUCT_NAME_MAX = 255;
-/** `order_items.quantity` — int4: kattaroq son INSERT'ni yiqitardi. */
-const QUANTITY_MAX = 2_147_483_647;
 
 /**
  * Bitta qator: `<nom> x <son> = <summa>`, so'ng vergul / `;` / yangi qator yoki
@@ -48,21 +45,16 @@ const normalizeText = (raw: string): string =>
     .replace(/[^\S\n]+/g, ' ')
     .trim();
 
-/** Belgilar bo'yicha (surrogat juftlik bo'linmasin) ustun sig'imiga kesadi. */
+/** Har xil bo'shliq bittaga keltirilgan va ustun sig'imiga kesilgan nom. */
 const productName = (raw: string): string =>
-  Array.from(raw.replace(/\s+/g, ' ').trim())
-    .slice(0, PRODUCT_NAME_MAX)
-    .join('');
+  fitProductName(raw.replace(/\s+/g, ' ').trim());
 
 /** `total_count` — musbat butun son (yoki shunday matn), aks holda 1. */
 const fallbackQuantity = (totalCount: unknown): number => {
   if (typeof totalCount !== 'number' && typeof totalCount !== 'string') {
     return 1;
   }
-  const count = Number(totalCount);
-  return Number.isInteger(count) && count > 0 && count <= QUANTITY_MAX
-    ? count
-    : 1;
+  return fitQuantity(Number(totalCount));
 };
 
 /** Matn TO'LIQ qatorlarga ajralsa — ular, bir bo'lagi ham qolsa — `null`. */

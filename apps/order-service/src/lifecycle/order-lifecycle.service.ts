@@ -135,12 +135,19 @@ import {
 import {
   OrderLookupService,
   rpcErrorStatusOf,
+  siteRegionConflicts,
 } from '../lookup/order-lookup.service';
 import {
   isIntegrationOrderCreate,
   resolveOrderCreateContent,
 } from './order-create-content';
+import {
+  fitProductName,
+  fitQuantity,
+  fitTotalQuantity,
+} from './external-item-limits';
 import { readExternalItemsText } from './external-items-text';
+import { ungroupThousands } from './external-price';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import {
   OrderNotificationService,
@@ -12613,7 +12620,6 @@ export class OrderLifecycleService {
       this.badRequest('orders is required');
     }
 
-    const fallbackDistrictId = await this.lookup.getDefaultDistrictId();
     const created: Array<{
       id: string;
       external_id: string | null;
@@ -12678,7 +12684,9 @@ export class OrderLifecycleService {
        * sozlanadi, chunki har sayt boshqacha nomlaydi.
        *
        * Nomi bo'sh element TASHLANADI — yarim to'ldirilgan qator buyurtmani
-       * buzardi.
+       * buzardi. Nom va son ustunga SIG'DIRILADI (`external-item-limits.ts`):
+       * 1.5 yoki 255 belgidan uzun nom `create()` ni yiqitib, partiyani yarim
+       * yo'lda uzardi va mijoz buyurtmasiz qolardi.
        *
        * Ba'zi saytlar (Lidershop, Alion) massiv o'rniga MATN yuboradi —
        * "Diskali soat x 1 = 99 000 so'm" (`readExternalItemsText`; ajralmasa
@@ -12713,8 +12721,8 @@ export class OrderLifecycleService {
           );
           return {
             product_id: null,
-            product_name: name,
-            quantity: Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1,
+            product_name: fitProductName(name),
+            quantity: fitQuantity(qtyRaw),
           };
         })
         .filter((item) => item.product_name.length > 0);
@@ -12724,21 +12732,35 @@ export class OrderLifecycleService {
         fieldMapping.district_code_field ?? 'district',
       );
       /**
-       * ⚠️ Qat'iy rejimda ANIQLANGAN tuman talab qilinadi. Moslik faqat
-       * SOATO kodi yoki ichki ID bo'yicha izlanadi — NOM bo'yicha emas,
-       * ya'ni "Chilonzor" deb yuborgan tizim hech qachon mos kelmaydi va
-       * zaxira tuman ishlatilardi.
+       * ⚠️ TUMAN ANIQLANMASA BUYURTMA YARATILMAYDI — har qanday rejimda
+       * (ega 2026-11-25). Ilgari oddiy rejimda zaxira tuman qo'yilardi va
+       * posilka jimgina begona viloyatga ketardi; endi qator `skipped` da,
+       * operator tumanni o'zi tanlaydi («Tashqi saytlar» → «Tuzatish»).
        */
-      const resolvedDistrict =
-        await this.lookup.resolveDistrictIdOrNull(districtExternal);
-      if (strict && !resolvedDistrict) {
+      const district =
+        await this.lookup.resolveExternalDistrict(districtExternal);
+      if (!district) {
         skipped.push({
           external_id: externalId,
           reason: 'district_unresolved',
         });
         continue;
       }
-      const districtId = resolvedDistrict ?? fallbackDistrictId;
+      /**
+       * ⚠️ SAYTNING VILOYATI TUMANGA ZID — YARATILMAYDI. 2026-11-24 da sayt
+       * 12 xil viloyat (1703, 1706, …) yuborgan, hammasi Bektemir (1726283)
+       * deb yozilgan edi: bu solishtirish birinchi buyurtmadayoq to'xtatardi.
+       */
+      if (
+        siteRegionConflicts(
+          this.getFieldValue(ext, fieldMapping.region_code_field ?? 'region'),
+          district,
+        )
+      ) {
+        skipped.push({ external_id: externalId, reason: 'region_mismatch' });
+        continue;
+      }
+      const districtId = district.id;
       /**
        * ⚠️ VILOYAT FAQAT TUMANDAN (prod 2026-11-24). Saytning `region` i
        * Elchi viloyat id'si EMAS: saytlar SOATO viloyat kodini (masalan 1703
@@ -12817,8 +12839,11 @@ export class OrderLifecycleService {
         ext,
         fieldMapping.delivery_price_field ?? 'delivery_price',
       );
-      const totalPrice = this.safeExternalAmount(priceRaw);
-      const deliveryPrice = this.safeExternalAmount(deliveryRaw);
+      // Minglik bo'shlig'i («150 000») — faqat import narxida (`external-price.ts`).
+      const totalPrice = this.safeExternalAmount(ungroupThousands(priceRaw));
+      const deliveryPrice = this.safeExternalAmount(
+        ungroupThousands(deliveryRaw),
+      );
       if (totalPrice === null || deliveryPrice === null) {
         skipped.push({ external_id: externalId, reason: 'price_invalid' });
         continue;
@@ -12906,7 +12931,7 @@ export class OrderLifecycleService {
          * katalogimizga mos kelmaydi va har nomni katalogda yaratish
          * katalogni axlatga to'ldirardi. Nom va soni yetarli.
          */
-        items: [...mappedItems, ...textItems],
+        items: fitTotalQuantity([...mappedItems, ...textItems]),
       });
 
       created.push({

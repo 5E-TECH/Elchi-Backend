@@ -44,14 +44,10 @@ function svc() {
         is_active: true,
         field_mapping: {},
       }),
-      getDefaultDistrictId: jest.fn().mockResolvedValue('1'),
-      /**
-       * ⚠️ `resolveDistrictIdOrNull` — mos kelmasa `null`. Zaxira tuman
-       * (jadvaldagi birinchi) ni chaqiruvchi o'zi qo'yadi, shu bois
-       * "aniqlandimi" degan savolga javob shu metoddan keladi.
-       */
-      resolveDistrictIdOrNull: jest.fn().mockResolvedValue('12'),
-      resolveDistrictId: jest.fn().mockResolvedValue('12'),
+      // Mos kelmasa `null` — zaxira tuman YO'Q (2026-11-25).
+      resolveExternalDistrict: jest
+        .fn()
+        .mockResolvedValue({ id: '12', sato_code: null }),
       /**
        * fix3b (LC-13): `region` son bo'lmasa (yoki yo'q bo'lsa) viloyat
        * tumandan olinadi (`logistics.district.find_by_id`).
@@ -345,14 +341,61 @@ describe('⭐ NARX — `NaN` moliyani zaharlaydi', () => {
    * market hisobi, kassa yig'indisi, dashboard — hammasi `NaN` bo'lib
    * qoladi. Eng yomon turdagi xato: jimgina va butun moliyani buzadi.
    */
-  it("son bo'lmagan narx qatorni TASHLAYDI", async () => {
-    const { res, created } = await runFull({
-      ...VALID,
-      total_price: '250 000',
-    });
+  it.each([
+    'tekin',
+    "150 000 so'm",
+    // Vergul va nuqta — bir ma'noli emas (99 ming yoki 99), taxmin QILINMAYDI.
+    '99,000',
+    '1,500,000',
+    '150,5',
+    '150 000,50',
+    '150 000.50',
+    // Minglik bo'linishi emas.
+    '15 0',
+    '1500 000',
+    '150 00',
+    '150  000',
+    '0 150',
+    '-150 000',
+    '1 000 000 000 000',
+    ['150 000'],
+    true,
+    NaN,
+  ])("son bo'lmagan narx qatorni TASHLAYDI (%p)", async (total_price) => {
+    const { res, created } = await runFull({ ...VALID, total_price });
 
     expect(created).toHaveLength(0);
     expect(res.data.skipped[0]).toMatchObject({ reason: 'price_invalid' });
+  });
+
+  /**
+   * Ega qarori 2026-11-25: sayt narxni minglik bo'shlig'i bilan yuborsa
+   * («150 000») — 150000 deb o'qiladi. FAQAT shu yozuv; vergul, nuqta va
+   * valyuta avvalgidek rad etiladi (yuqoridagi jadval).
+   */
+  it.each([
+    ['150 000', 150000],
+    ['99 000', 99000],
+    ['1 500 000', 1500000],
+    [' 150 000 ', 150000],
+    ['150\u00a0000', 150000],
+    ['150\u202f000', 150000],
+    ['150\u2009000', 150000],
+    ['999 999 999 999', 999999999999],
+  ])('⭐ minglik bo`shlig`i bilan yozilgan narx: %p → %p', async (raw, sum) => {
+    const { res, created } = await runFull({ ...VALID, total_price: raw });
+
+    expect(res.data.skipped).toEqual([]);
+    expect(created[0].total_price).toBe(sum);
+  });
+
+  it('⭐ yetkazish narxi ham shunday o`qiladi; qat`iy (CRM) rejimda ham', async () => {
+    const { created } = await runFull(
+      { ...VALID, total_price: '150 000', delivery_price: '30 000' },
+      { strict: true },
+    );
+
+    expect(created[0].total_price).toBe(180000);
   });
 
   it('yetkazish narxi ham tekshiriladi', async () => {
@@ -387,34 +430,38 @@ describe('⭐ NARX — `NaN` moliyani zaharlaydi', () => {
   });
 });
 
-describe('⭐ TUMAN — zaxira jimgina boshqa viloyatga yuborardi', () => {
+describe("⭐ TUMAN — aniqlanmasa buyurtma YARATILMAYDI (zaxira yo'q)", () => {
   /**
-   * ADVERSARIAL TOPILMA. `resolveDistrictId` mos kelmasa zaxira qiymatni
-   * qaytaradi, zaxira esa `getDefaultDistrictId()` — JADVALDAGI BIRINCHI
-   * tuman. Tuman viloyat va pochta marshrutini, tarifni ham belgilaydi.
-   *
-   * Ustiga moslik faqat SOATO kodi yoki ichki ID bo'yicha izlanadi —
-   * NOM bo'yicha EMAS. Ya'ni "Chilonzor" deb yuborgan CRM'ning HAR BIR
-   * buyurtmasi birinchi tumanga tushardi.
+   * Ega 2026-11-25: «bundan keyin bunday muammo kelib chiqmasin». Ilgari oddiy
+   * rejimda zaxira tuman qo'yilardi — posilka jimgina begona viloyat
+   * pochtasiga ketardi.
    */
-  const unresolved = (svcObj: any) => {
-    svcObj.lookup.resolveDistrictIdOrNull = jest.fn().mockResolvedValue(null);
-  };
-
-  it('oddiy rejimda zaxira ISHLATILADI (xatti-harakat o`zgarmadi)', async () => {
-    const { res, created } = await runFull(VALID, undefined, unresolved);
-
-    expect(res.data.skipped).toHaveLength(0);
-    expect(created[0].district_id).toBe('1'); // getDefaultDistrictId
-  });
-
-  it('⭐ QAT`IY rejimda buyurtma YARATILMAYDI', async () => {
-    const { res, created } = await runFull(VALID, { strict: true }, unresolved);
-
+  it.each([undefined, { strict: true }])('rejim: %p', async (options) => {
+    rmqSend.mockClear();
+    const { res, created } = await runFull(VALID, options, (svcObj) => {
+      svcObj.lookup.resolveExternalDistrict = jest.fn().mockResolvedValue(null);
+    });
     expect(created).toHaveLength(0);
     expect(res.data.skipped[0]).toMatchObject({
+      external_id: 'X1',
       reason: 'district_unresolved',
     });
+    // Yetim mijoz qolmaydi.
+    expect(rmqSend).not.toHaveBeenCalled();
+  });
+
+  it("bitta yaroqsiz qator partiyani to'xtatmaydi", async () => {
+    const { s, created } = svc();
+    s.lookup.resolveExternalDistrict = jest
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: '12', sato_code: null });
+    const res = await (s as any).receiveExternalOrders({
+      integration_id: '5',
+      orders: [VALID, { ...VALID, id: 'X2' }],
+    });
+    expect(created).toHaveLength(1);
+    expect(res.data.skipped).toHaveLength(1);
   });
 });
 

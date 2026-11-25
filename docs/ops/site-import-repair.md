@@ -12,14 +12,16 @@ Har buyurtma uchun, bitta tranzaksiyada:
 - tegilgan pochtalar sanog'i va summasi qayta hisoblanadi;
 - `order_schema.activity_logs` ga audit yoziladi (`metadata.reason = 'site_import_district_repair'`, `run_id`).
 
-Narx, pul, holat va egalik (custody) o'zgarmaydi.
+**Allaqachon jo'natilgan, lekin to'g'ri viloyat pochtasidagi** buyurtmada (masalan 2026-11-25 da xodimlar qo'lda ajratib jo'natgan 9 ta Toshkent shahri buyurtmasi) faqat tuman va viloyat to'g'rilanadi — pochta, holat va egalik o'zgarmaydi. Hisobotda «joyida» deb chiqadi.
+
+Narx, pul, holat va egalik (custody) hech qachon o'zgarmaydi.
 
 ## Nimaga tegmaydi
 
 Buyurtma o'tkazib yuboriladi va sababi hisobotda chiqadi, agar:
 
-- pochtasi allaqachon **jo'natilgan** yoki buyurtma kuryerda / filialda / paketda;
-- holati `received` emas yoki o'chirilgan;
+- allaqachon jo'natilgan va **boshqa viloyatga** ketgan, yoki tumanga boshqa filial xizmat qiladi;
+- o'chirilgan;
 - viloyati allaqachon to'g'ri (qayta yurgizish xavfsiz);
 - sayt, saytdagi id yoki viloyat kodi ro'yxatga mos emas.
 

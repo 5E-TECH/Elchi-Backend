@@ -44,6 +44,19 @@ function rpcErrorMessageOf(error: unknown): string {
  * inject ONE owner of these resolvers (and ONE warmed hqBranchIdCache) instead
  * of duplicating them. onModuleInit warms the HQ cache up-front.
  */
+interface ExternalDistrictRow {
+  id?: string | number | null;
+  sato_code?: string | null;
+  isDeleted?: boolean;
+}
+
+/** Sayt / CRM kodi bo'yicha TOPILGAN tuman. */
+export interface ExternalDistrictMatch {
+  id: string;
+  /** Rasmiy 7 raqamli SOATO kodi; noma'lum bo'lsa `null`. */
+  sato_code: string | null;
+}
+
 @Injectable()
 export class OrderLookupService implements OnModuleInit {
   private readonly logger = new Logger(OrderLookupService.name);
@@ -572,88 +585,90 @@ export class OrderLookupService implements OnModuleInit {
     return integration;
   }
 
-  async getDefaultDistrictId(): Promise<string> {
-    const response = await rmqSend<{
-      data?: { items?: Array<{ id: string }> } | Array<{ id: string }>;
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_all' },
-      { query: { page: 1, limit: 1 } },
-    ).catch(() => ({ data: [] }));
-
-    const rows = Array.isArray(response?.data)
-      ? response.data
-      : ((response?.data as any)?.items ?? []);
-
-    const districtId = rows?.[0]?.id ? String(rows[0].id) : '';
-    if (!districtId) {
-      this.notFound('No district found for external order import');
-    }
-    return districtId;
-  }
-
   /**
-   * Tumanni aniqlash — MOS KELMASA `null`.
+   * SAYT / CRM TUMANINI ANIQLASH — mos kelmasa `null`.
    *
-   * ⚠️ NEGA ALOHIDA METOD KERAK BO'LDI (adversarial tekshiruv). Chaqiruvchi
-   * "aniqlandimi yoki zaxira ishlatildimi" degan savolga javob olishi
-   * kerak edi. `resolveDistrictId` ikkisini AJRATMAYDI — u zaxira qiymatni
-   * qaytaradi va chaqiruvchi buni haqiqiy moslik deb qabul qiladi.
+   * ⚠️ ZAXIRA TUMAN YO'Q (ega 2026-11-25: «bundan keyin bunday muammo kelib
+   * chiqmasin»). Ilgari topilmagan tuman o'rniga jadvaldagi bitta tuman
+   * qo'yilardi: posilka JIMGINA begona viloyat pochtasiga ketardi (logistics
+   * bir lahza javob bermaganda ham). Endi buyurtma yaratilmaydi, operator
+   * sababini ko'radi va tuzatadi.
    *
-   * Zaxira esa `getDefaultDistrictId()` — u JADVALDAGI BIRINCHI tuman
-   * (`limit: 1`). Tuman viloyat va pochta marshrutini, tarifni ham
-   * belgilaydi; ya'ni mos kelmagan buyurtma JIMGINA boshqa viloyatga
-   * ketardi.
+   * ⚠️ JAVOB TEKSHIRILADI: topilgan tumanning kodi (yoki id'si) AYNAN
+   * so'ralganidek bo'lishi shart. 2026-11-24 da so'rov kaliti xato bo'lgani
+   * uchun logistics har qanday kodga birinchi tumanni qaytargan va u haqiqiy
+   * moslik deb qabul qilingan — bu tekshiruv o'sha javobni rad etadi.
    *
-   * ⚠️ Moslik faqat SOATO kodi yoki ichki ID bo'yicha izlanadi — NOM
-   * bo'yicha EMAS. Ya'ni "Chilonzor" deb yuborgan tizim hech qachon mos
-   * kelmaydi.
+   * Moslik faqat SOATO kodi yoki ichki ID bo'yicha — NOM bo'yicha EMAS.
    */
-  async resolveDistrictIdOrNull(
+  async resolveExternalDistrict(
     externalDistrictValue: unknown,
-  ): Promise<string | null> {
+  ): Promise<ExternalDistrictMatch | null> {
     const raw =
       typeof externalDistrictValue === 'string' ||
       typeof externalDistrictValue === 'number' ||
-      typeof externalDistrictValue === 'bigint' ||
-      typeof externalDistrictValue === 'boolean'
+      typeof externalDistrictValue === 'bigint'
         ? String(externalDistrictValue).trim()
         : '';
     if (!raw) return null;
 
-    const bySato = await rmqSend<{ data?: { id?: string } }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_by_sato' },
-      // ⚠️ Kalit AYNAN `sato_code` (logistics kontrolleri shuni o'qiydi).
-      // Ilgari `satoCode` edi: logistics `undefined` bo'yicha izlab,
-      // jadvaldagi BIRINCHI tumanni qaytarardi — sayt buyurtmalarining
-      // hammasi bitta tumanga tushardi (prod 2026-11-24).
-      { sato_code: raw },
-    ).catch(() => ({ data: undefined }));
-    if (bySato?.data?.id) {
-      return String(bySato.data.id);
-    }
+    const find = async (
+      cmd: string,
+      payload: Record<string, string>,
+      matches: (district: ExternalDistrictRow) => boolean,
+    ): Promise<ExternalDistrictMatch | null> => {
+      const response = await rmqSend<{ data?: ExternalDistrictRow | null }>(
+        this.logisticsClient,
+        { cmd },
+        payload,
+      ).catch(() => null);
+      const district = response?.data;
+      if (!district?.id || district.isDeleted === true) return null;
+      if (!matches(district)) {
+        this.logger?.error(
+          `${cmd}: so'ralgan ${JSON.stringify(payload)} ga boshqa tuman qaytdi ` +
+            `(#${district.id}, sato_code=${district.sato_code ?? '-'}) — rad etildi`,
+        );
+        return null;
+      }
+      return {
+        id: String(district.id),
+        sato_code: district.sato_code ? String(district.sato_code) : null,
+      };
+    };
 
-    const byId = await rmqSend<{ data?: { id?: string } }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_by_id' },
-      { id: raw },
-    ).catch(() => ({ data: undefined }));
-    if (byId?.data?.id) {
-      return String(byId.data.id);
-    }
-
-    return null;
-  }
-
-  /** Eski xatti-harakat: mos kelmasa zaxira tuman. */
-  async resolveDistrictId(
-    externalDistrictValue: unknown,
-    fallbackDistrictId: string,
-  ): Promise<string> {
     return (
-      (await this.resolveDistrictIdOrNull(externalDistrictValue)) ??
-      fallbackDistrictId
+      // Kalit AYNAN `sato_code` — logistics kontrolleri shuni o'qiydi.
+      (await find(
+        'logistics.district.find_by_sato',
+        { sato_code: raw },
+        (district) => String(district.sato_code ?? '') === raw,
+      )) ??
+      (await find(
+        'logistics.district.find_by_id',
+        { id: raw },
+        (district) => String(district.id) === raw,
+      ))
     );
   }
+}
+
+/**
+ * Saytning viloyat kodi topilgan tumanga ZIDmi (masalan sayt 1703 — Andijon,
+ * tuman esa 1726283 — Bektemir). Faqat ikkalasi ham SOATO bo'lsa solishtiriladi;
+ * sayt viloyat yubormasa yoki nom yuborsa — tekshirilmaydi.
+ */
+export function siteRegionConflicts(
+  siteRegion: unknown,
+  district: ExternalDistrictMatch,
+): boolean {
+  const region =
+    typeof siteRegion === 'string' || typeof siteRegion === 'number'
+      ? String(siteRegion).trim()
+      : '';
+  return (
+    /^17\d{2}$/.test(region) &&
+    /^17\d{5}$/.test(district.sato_code ?? '') &&
+    !district.sato_code!.startsWith(region)
+  );
 }
