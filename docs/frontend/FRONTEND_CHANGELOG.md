@@ -23,6 +23,16 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — Sayt buyurtmasi noto'g'ri tumanga jimgina tushmaydi (himoya)
+
+Deploy: **order-service** (migratsiya yo'q).
+
+- ⚠️ [order] `POST /orders/external/receive` — tuman aniqlanmasa buyurtma YARATILMAYDI:
+  `skipped[].reason = 'district_unresolved'` (ilgari zaxira tuman qo'yilardi, faqat CRM rad etardi).
+- 🆕 `skipped[].reason = 'region_mismatch'` — saytning SOATO viloyati (`region`, masalan 1703) tumanning SOATO
+  kodiga zid. `region` yuborilmasa yoki SOATO bo'lmasa tekshirilmaydi.
+  → **Frontendda:** 🔧 matn va «Tuzatish»: tuman qo'lda tanlansa `region` maydoni bo'shatilsin (aks holda zid qoladi).
+
 ### 2026-11-25 — Asosiy kassa smenasi yopilganda har ulangan filialga O'Z hisoboti
 
 Deploy: **notification-service**, **finance-service** (migratsiya / env yo'q; yangi ichki RMQ

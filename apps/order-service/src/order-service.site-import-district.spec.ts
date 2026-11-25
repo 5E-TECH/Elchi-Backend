@@ -144,13 +144,18 @@ const importOne = async (over: Row = {}, options?: { strict?: boolean }) => {
 describe('sayt importi — tuman SOATO kodi bo`yicha', () => {
   it('⭐ lookup yuborgan kod logistics`ga yetadi — o`sha tuman topiladi', async () => {
     const { lookup } = makeOrderService();
-    await expect(lookup.resolveDistrictIdOrNull(1703211)).resolves.toBe('30');
-    await expect(lookup.resolveDistrictIdOrNull('1706215')).resolves.toBe('44');
+    await expect(lookup.resolveExternalDistrict(1703211)).resolves.toEqual({
+      id: '30',
+      sato_code: '1703211',
+    });
+    await expect(
+      lookup.resolveExternalDistrict('1706215'),
+    ).resolves.toMatchObject({ id: '44' });
   });
 
   it('⭐ noma`lum SOATO — `null` (jadvaldagi birinchi tuman EMAS)', async () => {
     const { lookup } = makeOrderService();
-    await expect(lookup.resolveDistrictIdOrNull('1799999')).resolves.toBeNull();
+    await expect(lookup.resolveExternalDistrict('1799999')).resolves.toBeNull();
   });
 
   it('⭐ prod holati: Jalaquduq (1703211) buyurtmasi o`z tumani va viloyatida', async () => {
@@ -169,16 +174,79 @@ describe('sayt importi — tuman SOATO kodi bo`yicha', () => {
     expect(created[0]).toMatchObject({ district_id: '44', region_id: '9' });
   });
 
-  it('⭐ qat`iy rejim (CRM): noma`lum tuman — buyurtma yaratilmaydi', async () => {
-    const { result, created } = await importOne(
-      { district: '1799999' },
-      { strict: true },
-    );
-    expect(created).toHaveLength(0);
-    expect(result.data.skipped[0]).toMatchObject({
-      reason: 'district_unresolved',
+  it.each([undefined, { strict: true }])(
+    '⭐ noma`lum tuman — buyurtma yaratilmaydi (rejim: %p)',
+    async (options) => {
+      const { result, created } = await importOne(
+        { district: '1799999', region: 1799 },
+        options,
+      );
+      expect(created).toHaveLength(0);
+      expect(result.data.skipped[0]).toMatchObject({
+        reason: 'district_unresolved',
+      });
+    },
+  );
+});
+
+/**
+ * QAYTMASLIK KAFOLATI (ega 2026-11-25). Kod yana xato qilsa ham buyurtma
+ * noto'g'ri tumanga JIMGINA tushmaydi.
+ */
+describe('himoya — noto`g`ri tuman jimgina yozilmaydi', () => {
+  /** 2026-11-24 dagi logistics: har qanday kodga birinchi tuman. */
+  const brokenLogistics = (
+    _client: unknown,
+    pattern: { cmd: string },
+  ): Promise<unknown> =>
+    pattern.cmd === 'identity.customer.create'
+      ? Promise.resolve({ data: { id: 'c1' } })
+      : Promise.resolve({ statusCode: 200, data: DISTRICTS[0] });
+
+  it('⭐ logistics boshqa tuman qaytarsa — rad etiladi va logga ERROR yoziladi', async () => {
+    const { lookup, service, created } = makeOrderService();
+    const error = jest.fn();
+    lookup.logger = { error, warn: jest.fn() };
+    rmqSend.mockImplementation(brokenLogistics);
+
+    const result = await service.receiveExternalOrders({
+      integration_id: '3',
+      orders: [siteOrder()],
     });
+
+    expect(created).toHaveLength(0);
+    expect(result.data.skipped[0].reason).toBe('district_unresolved');
+    expect(error).toHaveBeenCalled();
   });
+
+  it('⭐ logistics javob bermasa ham zaxira tuman qo`yilmaydi', async () => {
+    const { service, created } = makeOrderService();
+    rmqSend.mockRejectedValue(new Error('timeout'));
+    const result = await service.receiveExternalOrders({
+      integration_id: '3',
+      orders: [siteOrder()],
+    });
+    expect(created).toHaveLength(0);
+    expect(result.data.skipped[0].reason).toBe('district_unresolved');
+  });
+
+  it('⭐ saytning viloyati tumanga zid (1703 ↔ 1706215) — yaratilmaydi', async () => {
+    const { result, created } = await importOne({
+      region: 1703,
+      district: 1706215,
+    });
+    expect(created).toHaveLength(0);
+    expect(result.data.skipped[0]).toMatchObject({ reason: 'region_mismatch' });
+  });
+
+  it.each([1703, '1703', null, undefined, '', 'Andijon', 3])(
+    'viloyat mos / yo`q / SOATO emas (%p) — yaratiladi',
+    async (region) => {
+      const { created } = await importOne({ region });
+      expect(created).toHaveLength(1);
+      expect(created[0].district_id).toBe('30');
+    },
+  );
 });
 
 describe('logistics — bo`sh kod / id hech qachon «birinchi tuman» emas', () => {

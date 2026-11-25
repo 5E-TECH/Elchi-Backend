@@ -8,11 +8,15 @@
  *
  * Xavfsizlik — buyurtmaga faqat HAMMASI to'g'ri kelsa tegiladi:
  *  - `external`, `operator = external_<sayt>`, `external_id` ro'yxatdagidek;
- *  - hali `received`, HQ'da, kuryersiz, paketsiz, o'chirilmagan;
+ *  - o'chirilmagan;
  *  - `region_id` Elchi viloyati EMAS (hodisa belgisi) va tuman kodi aynan shu
  *    qiymat bilan boshlanadi (ro'yxat adashib boshqa buyurtmaga tushmasin);
- *  - pochtasi hali YANGI (yoki o'chirilgan / yo'q). Jo'natilgan pochtaga
- *    TEGILMAYDI — sababi hisobotda.
+ *  - KO'CHIRISH — faqat hali HQ'da: `received`, kuryersiz, paketsiz, pochtasi
+ *    YANGI (yoki o'chirilgan / yo'q);
+ *  - JOYIDA — buyurtma allaqachon jo'natilgan va TO'G'RI viloyat pochtasida
+ *    (xodim qo'lda ajratib jo'natgan): pochta, holat va egalik o'zgarmaydi,
+ *    faqat tuman va viloyat to'g'rilanadi. Boshqa viloyatga ketgan bo'lsa yoki
+ *    tumanga boshqa filial xizmat qilsa — tegilmaydi, sababi hisobotda.
  * Pul, narx, holat, egalik (custody) o'zgarmaydi. Hammasi bitta tranzaksiyada,
  * buyurtmalar FOR UPDATE; qayta yurgizish xavfsiz (tuzatilgani endi belgiga
  * to'g'ri kelmaydi). DRY-RUN ham shu tranzaksiyada hisoblanib, ROLLBACK
@@ -53,6 +57,7 @@ interface OrderRow {
   holder_type: string | null;
   courier_id: string | null;
   current_batch_id: string | null;
+  branch_id: string | null;
   customer_id: string;
   district_id: string | null;
   region_id: string | null;
@@ -66,6 +71,13 @@ interface DistrictRow {
   sato_code: string;
   region_id: string | null;
   region: string | null;
+  serving_branch_id: string | null;
+}
+
+interface PostRow {
+  id: string;
+  status: string;
+  region_id: string | null;
 }
 
 function ident(name: string): string {
@@ -75,11 +87,10 @@ function ident(name: string): string {
   return `"${name}"`;
 }
 
-/** Tegib bo'lmaydigan buyurtma sababi; `null` — tuzatsa bo'ladi. */
+/** Buyurtma umuman shu hodisanikimi; `null` — ha. */
 export function siteImportSkipReason(
   row: SiteImportRepairRow,
   order: OrderRow | undefined,
-  postStatus: string | null,
 ): string | null {
   if (!order) return 'buyurtma topilmadi';
   if (order.is_deleted) return "o'chirilgan";
@@ -94,12 +105,39 @@ export function siteImportSkipReason(
   if (!row.sato.startsWith(String(order.region_id))) {
     return `tuman kodi ${row.sato} buyurtma viloyati ${order.region_id} ga mos emas`;
   }
+  return null;
+}
+
+/** Nega KO'CHIRIB bo'lmaydi; `null` — hali HQ'da, ko'chirsa bo'ladi. */
+export function moveBlockReason(
+  order: OrderRow,
+  post: PostRow | null,
+): string | null {
   if (order.status !== 'received') return `holati '${order.status}'`;
   if (order.holder_type !== 'HQ') return `HQ'da emas (${order.holder_type})`;
   if (order.courier_id) return 'kuryerda';
   if (order.current_batch_id) return 'filial paketida';
-  if (postStatus && postStatus !== 'new') {
-    return `pochta #${order.post_id} jo'natilgan ('${postStatus}')`;
+  if (post && post.status !== 'new') {
+    return `pochta #${post.id} jo'natilgan ('${post.status}')`;
+  }
+  return null;
+}
+
+/** Nega JOYIDA tuzatib bo'lmaydi; `null` — to'g'ri viloyatda, tuzatsa bo'ladi. */
+export function inPlaceBlockReason(
+  order: OrderRow,
+  post: PostRow | null,
+  district: DistrictRow,
+): string | null {
+  if (!post) return "pochtasi yo'q";
+  if (post.region_id !== district.region_id) {
+    return `boshqa viloyat pochtasida (#${post.id})`;
+  }
+  if (
+    district.serving_branch_id &&
+    district.serving_branch_id !== order.branch_id
+  ) {
+    return `tumanga filial ${district.serving_branch_id} xizmat qiladi, buyurtma filial ${order.branch_id ?? '-'} da`;
   }
   return null;
 }
@@ -138,6 +176,7 @@ export async function runSiteImportRepair(
               o.holder_type::text AS holder_type,
               o.courier_id::text AS courier_id,
               o.current_batch_id::text AS current_batch_id,
+              o.branch_id::text AS branch_id,
               o.customer_id::text AS customer_id,
               o.district_id::text AS district_id,
               o.region_id::text AS region_id, o.post_id::text AS post_id,
@@ -156,15 +195,18 @@ export async function runSiteImportRepair(
       ),
     ];
     const postRows = (await q.query(
-      `SELECT id::text AS id, status::text AS status FROM ${posts}
+      `SELECT id::text AS id, status::text AS status,
+              region_id::text AS region_id
+         FROM ${posts}
         WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE`,
       [postIds],
-    )) as Array<{ id: string; status: string }>;
-    const postStatus = new Map(postRows.map((post) => [post.id, post.status]));
+    )) as PostRow[];
+    const postById = new Map(postRows.map((post) => [post.id, post]));
 
     const districtRows = (await q.query(
       `SELECT d.id::text AS id, d.name, d.sato_code,
-              r.id::text AS region_id, r.name AS region
+              r.id::text AS region_id, r.name AS region,
+              d.serving_branch_id::text AS serving_branch_id
          FROM ${districts} d
          LEFT JOIN ${regions} r ON r.id = COALESCE(d.assigned_region, d.region_id)
         WHERE d.sato_code = ANY($1::varchar[]) AND d.is_deleted = false`,
@@ -177,35 +219,39 @@ export async function runSiteImportRepair(
 
     for (const row of rows) {
       const order = orderById.get(row.order_id);
-      const reason = siteImportSkipReason(
-        row,
-        order,
-        order?.post_id ? (postStatus.get(order.post_id) ?? null) : null,
-      );
+      const skip = (reason: string) =>
+        report.skipped.push({ order_id: row.order_id, reason });
+      const reason = siteImportSkipReason(row, order);
       if (reason || !order) {
-        report.skipped.push({
-          order_id: row.order_id,
-          reason: reason ?? 'buyurtma topilmadi',
-        });
+        skip(reason ?? 'buyurtma topilmadi');
         continue;
       }
       const district = districtBySato.get(row.sato);
       if (!district?.region_id) {
-        report.skipped.push({
-          order_id: row.order_id,
-          reason: `tuman ${row.sato} topilmadi yoki viloyatsiz`,
-        });
+        skip(`tuman ${row.sato} topilmadi yoki viloyatsiz`);
+        continue;
+      }
+      const post = order.post_id ? (postById.get(order.post_id) ?? null) : null;
+      const moveBlocked = moveBlockReason(order, post);
+      const inPlaceBlocked = moveBlocked
+        ? inPlaceBlockReason(order, post, district)
+        : null;
+      if (moveBlocked && inPlaceBlocked) {
+        skip(`${moveBlocked}; ${inPlaceBlocked}`);
         continue;
       }
 
       const regionId = district.region_id;
-      let targetPostId = targetPostByRegion.get(regionId);
-      if (!targetPostId) {
-        targetPostId = await findOrCreateNewPost(q, posts, regionId);
-        targetPostByRegion.set(regionId, targetPostId);
+      let targetPostId: string | null = order.post_id;
+      if (!moveBlocked) {
+        targetPostId = targetPostByRegion.get(regionId) ?? null;
+        if (!targetPostId) {
+          targetPostId = await findOrCreateNewPost(q, posts, regionId);
+          targetPostByRegion.set(regionId, targetPostId);
+        }
         touchedPosts.add(targetPostId);
+        if (post) touchedPosts.add(post.id);
       }
-      if (order.post_id) touchedPosts.add(order.post_id);
 
       await q.query(
         `UPDATE ${orders}
@@ -249,12 +295,15 @@ export async function runSiteImportRepair(
             run_id: runId,
             sato: row.sato,
           }),
-          `Buyurtma #${order.id}: saytdagi haqiqiy tuman (${district.name}, ${district.region ?? '-'}) va viloyat pochtasi #${targetPostId} yozildi`,
+          moveBlocked
+            ? `Buyurtma #${order.id}: saytdagi haqiqiy tuman yozildi (${district.name}, ${district.region ?? '-'}), pochtasi o'zgarmadi`
+            : `Buyurtma #${order.id}: saytdagi haqiqiy tuman (${district.name}, ${district.region ?? '-'}) va viloyat pochtasi #${targetPostId} yozildi`,
         ],
       );
       const planRow: SiteImportRepairPlanRow = {
         order_id: order.id,
         site: row.site,
+        in_place: Boolean(moveBlocked),
         old_post_id: order.post_id,
         new_post_id: targetPostId,
         district_id: district.id,

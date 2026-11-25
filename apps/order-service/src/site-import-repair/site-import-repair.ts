@@ -20,6 +20,8 @@ export interface SiteImportRepairArgs {
 export interface SiteImportRepairPlanRow {
   order_id: string;
   site: string;
+  /** Jo'natilgan, to'g'ri viloyatda: faqat tuman/viloyat, pochta o'zgarmaydi. */
+  in_place: boolean;
   old_post_id: string | null;
   new_post_id: string | null;
   district_id: string;
@@ -108,7 +110,9 @@ export function formatSiteImportRepairReport(
   for (const row of report.planned) {
     lines.push(
       `  #${row.order_id} ${row.site}: ${row.district} / ${row.region}, ` +
-        `pochta ${row.old_post_id ?? '-'} → ${row.new_post_id ?? 'yangi'}`,
+        (row.in_place
+          ? `joyida (pochta ${row.old_post_id ?? '-'})`
+          : `pochta ${row.old_post_id ?? '-'} → ${row.new_post_id ?? 'yangi'}`),
     );
   }
   lines.push(`O'tkazib yuborildi: ${report.skipped.length} ta`);

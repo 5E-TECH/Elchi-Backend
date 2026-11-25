@@ -55,7 +55,7 @@ describePg('sayt importini tiklash (haqiqiy Postgres)', () => {
       CREATE TABLE ${L}.regions (id BIGINT PRIMARY KEY, name VARCHAR NOT NULL);
       CREATE TABLE ${L}.districts (
         id BIGINT PRIMARY KEY, name VARCHAR NOT NULL, sato_code VARCHAR,
-        region_id BIGINT NOT NULL, assigned_region BIGINT,
+        region_id BIGINT NOT NULL, assigned_region BIGINT, serving_branch_id BIGINT,
         is_deleted BOOLEAN NOT NULL DEFAULT false
       );
       CREATE TYPE ${L}.posts_status_enum AS ENUM ('new', 'sent', 'received');
@@ -85,7 +85,7 @@ describePg('sayt importini tiklash (haqiqiy Postgres)', () => {
         operator VARCHAR, external_id VARCHAR,
         status ${O}.orders_status_enum NOT NULL DEFAULT 'received',
         holder_type ${O}.orders_holder_enum NOT NULL DEFAULT 'HQ',
-        courier_id BIGINT, current_batch_id BIGINT, customer_id BIGINT NOT NULL,
+        courier_id BIGINT, current_batch_id BIGINT, branch_id BIGINT, customer_id BIGINT NOT NULL,
         district_id BIGINT, region_id BIGINT, post_id BIGINT,
         total_price NUMERIC(14, 2) NOT NULL DEFAULT 0
       );
@@ -215,6 +215,58 @@ describePg('sayt importini tiklash (haqiqiy Postgres)', () => {
     expect(report.planned).toHaveLength(0);
     expect(report.skipped[0].reason).toContain(reason);
     expect((await orders())[0]).toEqual(before);
+  });
+
+  /** 2026-11-25 04:04: 9 ta haqiqiy Toshkent buyurtmasi filialga jo'natilgan. */
+  const sendOrder3 = (post: string) =>
+    db.query(`
+      INSERT INTO ${L}.posts (id, courier_id, region_id, branch_id, status) VALUES (1402, 0, 1, 41, 'sent'), (1403, 0, 4, 41, 'sent');
+      UPDATE ${O}.orders SET post_id = ${post}, status = 'on the road', holder_type = 'BRANCH', branch_id = 41 WHERE id = 3;
+    `);
+
+  it("⭐ jo'natilgan, to'g'ri viloyatda — faqat tuman va viloyat; pochta, holat, egalik o'zgarmaydi", async () => {
+    await sendOrder3('1402');
+    const report = await run([LIST[2]], true);
+    expect(report.planned).toHaveLength(1);
+    expect(report.planned[0]).toMatchObject({
+      in_place: true,
+      old_post_id: '1402',
+    });
+    expect((await orders())[2]).toMatchObject({
+      district_id: '5',
+      region_id: '1',
+      post_id: '1402',
+    });
+    const [row3] = await db.query<Array<Record<string, string>>>(
+      `SELECT status::text, holder_type::text, branch_id::text FROM ${O}.orders WHERE id = 3`,
+    );
+    expect(row3).toEqual({
+      status: 'on the road',
+      holder_type: 'BRANCH',
+      branch_id: '41',
+    });
+    const [post] = await db.query<Array<Record<string, string>>>(
+      `SELECT order_quantity::text AS n FROM ${L}.posts WHERE id = 1402`,
+    );
+    expect(post.n).toBe('0');
+  });
+
+  it("⭐ jo'natilgan, BOSHQA viloyatga — tegilmaydi", async () => {
+    await sendOrder3('1403');
+    const report = await run([LIST[2]], true);
+    expect(report.planned).toHaveLength(0);
+    expect(report.skipped[0].reason).toContain('boshqa viloyat pochtasida');
+    expect((await orders())[2].region_id).toBe('1726');
+  });
+
+  it("tumanga boshqa filial xizmat qilsa — jo'natilganiga tegilmaydi", async () => {
+    await sendOrder3('1402');
+    await db.query(
+      `UPDATE ${L}.districts SET serving_branch_id = 9 WHERE id = 5`,
+    );
+    const report = await run([LIST[2]], true);
+    expect(report.planned).toHaveLength(0);
+    expect(report.skipped[0].reason).toContain('filial 9 xizmat qiladi');
   });
 
   it("⭐ ro'yxatda yo'q buzilgan buyurtma hisobotda chiqadi, tegilmaydi", async () => {
