@@ -252,6 +252,114 @@ describe('T7 — ContactsService (identity)', () => {
       expect.objectContaining({ statusCode: 404 }),
     );
   });
+
+  /**
+   * (txZJQiCe) order-service market Telegram xabaridagi «Elchi mas'ulingiz»
+   * AYNAN shu javobni (`identity.contacts.for_user`, market user_id) oladi.
+   */
+  it('txZJQiCe TC3/TC5: market — biriktirilgan → sukut → zaxira (har raqam alohida) → []; almashtirish darhol', async () => {
+    const market: Row = user({ id: '20', role: Roles.MARKET });
+    const logist = user({
+      id: '50',
+      role: Roles.LOGIST,
+      name: 'Laylo Logist',
+      phone_number: '+998901234567',
+    });
+    const other = user({
+      id: '51',
+      role: Roles.LOGIST,
+      name: 'Yangi Logist',
+      phone_number: '+998901000002',
+    });
+    const fallback = user({
+      id: '60',
+      role: Roles.REGISTRATOR,
+      name: 'Sukut Registrator',
+      phone_number: '+998935556677',
+    });
+    const contactsOf = async (
+      over: Row,
+      settings: { support?: string[]; defaultId?: string | null },
+    ) => {
+      Object.assign(market, { market_responsible_id: null, ...over });
+      const { service } = build({
+        users: [market, logist, other, fallback],
+        settings,
+      });
+      return ((await service.myContacts('20')) as any).data;
+    };
+    const support = ['+998712001122', '+998712003344'];
+
+    expect(
+      await contactsOf(
+        { market_responsible_id: '50' },
+        { defaultId: '60', support },
+      ),
+    ).toEqual({
+      kind: 'market_responsible',
+      source: 'assigned',
+      regions: [],
+      contacts: [
+        {
+          user_id: '50',
+          name: 'Laylo Logist',
+          phone: '+998901234567',
+          role: Roles.LOGIST,
+        },
+      ],
+    });
+    // mas'ulsiz → sukut mas'ul
+    expect(await contactsOf({}, { defaultId: '60', support })).toEqual(
+      expect.objectContaining({
+        source: 'default',
+        contacts: [expect.objectContaining({ user_id: '60' })],
+      }),
+    );
+    // biriktirilgan mas'ul nofaol → sukut
+    logist.status = Status.INACTIVE;
+    expect(
+      (
+        await contactsOf(
+          { market_responsible_id: '50' },
+          { defaultId: '60', support },
+        )
+      ).source,
+    ).toBe('default');
+    logist.status = Status.ACTIVE;
+    // sukut ham yo'q → zaxira raqamlar, har biri alohida element
+    expect(await contactsOf({}, { defaultId: null, support })).toEqual({
+      kind: 'market_responsible',
+      source: 'support',
+      regions: [],
+      contacts: support.map((phone) => ({
+        user_id: null,
+        name: null,
+        phone,
+        role: null,
+      })),
+    });
+    // hech narsa yo'q → []
+    expect(await contactsOf({}, { defaultId: null, support: [] })).toEqual({
+      kind: 'market_responsible',
+      source: null,
+      regions: [],
+      contacts: [],
+    });
+
+    // TC5: identity keshlamaydi — almashtirilgan mas'ul darhol
+    const { service } = build({
+      users: [market, logist, other, fallback],
+      settings: { defaultId: '60', support },
+    });
+    market.market_responsible_id = '50';
+    expect(
+      ((await service.myContacts('20')) as any).data.contacts[0].user_id,
+    ).toBe('50');
+    market.market_responsible_id = '51';
+    expect(
+      ((await service.myContacts('20')) as any).data.contacts[0].user_id,
+    ).toBe('51');
+  });
 });
 
 /**

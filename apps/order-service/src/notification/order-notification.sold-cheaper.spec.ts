@@ -188,7 +188,7 @@ describe('buildOrderNotificationPayload — order.sold_cheaper', () => {
       asPayloadOrder(order()),
       {
         customer: { name: 'Ali <VIP>', phone_number: '+998901112233' },
-        courier: { name: 'Vali', phone_number: '+998907778899' },
+        courier: { name: 'Vali' },
         items: [{ name: 'Telefon', quantity: 1 }],
       },
     );

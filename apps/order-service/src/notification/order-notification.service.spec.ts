@@ -172,7 +172,7 @@ describe('buildOrderNotificationPayload', () => {
       }),
       {
         customer: { name: '<Ali> & *Vali*', phone_number: '+998901234567' },
-        courier: { name: 'Kuryer <K&K>', phone_number: '+998907654321' },
+        courier: { name: 'Kuryer <K&K>' },
         items: [{ name: 'Telefon <Pro> & *Max*', quantity: 2 }],
       },
     );
@@ -299,7 +299,7 @@ describe('OA16fdSq TC8/TC9 — Telegram matni Telegram HTML tekshiruvidan o‘ta
         {
           telegram: {
             customer: { name, phone_number: '+998901234567' },
-            courier: { name, phone_number: '+998907654321' },
+            courier: { name },
             region_name: name,
             district_name: name,
             items: [{ name, quantity: 1 }],
@@ -368,7 +368,7 @@ describe('OA16fdSq TC8/TC9 — Telegram matni Telegram HTML tekshiruvidan o‘ta
         order({ address: word(400), comment: word(900), operator: word(150) }),
         {
           customer: { name: word(150), phone_number: word(50) },
-          courier: { name: word(150), phone_number: word(50) },
+          courier: { name: word(150) },
           region_name: word(50),
           district_name: word(50),
           items: Array.from({ length: Math.floor(random() * 25) }, () => ({
