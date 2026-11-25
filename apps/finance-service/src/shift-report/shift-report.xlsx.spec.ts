@@ -1,5 +1,6 @@
 import { of, throwError } from 'rxjs';
 import { Workbook, type Cell, type Worksheet } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import type { ShiftReportSnapshot } from './shift-report.builders';
 import { ShiftReportService } from './shift-report.service';
 import { buildXlsx } from './shift-report.xlsx';
@@ -155,7 +156,10 @@ const plain = (cell: Cell): unknown =>
 
 const open = async (snapshot: ShiftReportSnapshot) => {
   const workbook = new Workbook();
-  await workbook.xlsx.load((await buildXlsx(snapshot)) as never);
+  const file = await buildXlsx(snapshot);
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(file)).toEqual([]);
+  await workbook.xlsx.load(file as never);
   return workbook;
 };
 

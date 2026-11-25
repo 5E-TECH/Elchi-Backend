@@ -12,6 +12,7 @@ import {
 import { Test } from '@nestjs/testing';
 import { AllExceptionsFilter } from '@app/common';
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import request from 'supertest';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { OLD_MAILS_EXPORT_MAX_ROWS } from './dto/old-mails-export.swagger.dto';
@@ -88,6 +89,8 @@ const plain = (value: unknown): unknown => {
 
 const load = async (buffer: Buffer) => {
   const wb = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   return wb;
 };

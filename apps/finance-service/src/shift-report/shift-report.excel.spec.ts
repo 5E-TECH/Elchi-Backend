@@ -1,4 +1,5 @@
 import { Workbook, type Cell } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import { of } from 'rxjs';
 import {
   buildBranchMessage,
@@ -86,6 +87,8 @@ const plain = (cell: Cell): unknown =>
 
 const load = async (buffer: Buffer) => {
   const workbook = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await workbook.xlsx.load(buffer as never);
   return workbook;
 };

@@ -1,4 +1,5 @@
 import { Workbook, type Cell, type Worksheet } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import {
   buildCashboxReport,
   type CashboxReportInput,
@@ -88,6 +89,8 @@ const build = async (extra: Partial<CashboxReportInput> = {}) => {
     ...extra,
   });
   const workbook = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await workbook.xlsx.load(buffer as never);
   return workbook.worksheets[0];
 };

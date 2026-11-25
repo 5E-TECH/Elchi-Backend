@@ -5,6 +5,7 @@ import {
   GatewayTimeoutException,
 } from '@nestjs/common';
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import { PassThrough } from 'node:stream';
 import { NEVER, of, throwError, TimeoutError } from 'rxjs';
 import { ROLES_KEY } from './auth/roles.decorator';
@@ -205,6 +206,8 @@ const plain = (value: unknown): unknown => {
 
 const loadBook = async (buffer: Buffer) => {
   const wb = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   return wb;
 };

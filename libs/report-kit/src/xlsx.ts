@@ -11,6 +11,7 @@ import {
   type Style,
   type Worksheet,
 } from 'exceljs';
+import './exceljs-fix';
 import { ELCHI_LOGO_NAVY_PNG_BASE64 } from './assets/logo';
 
 /**

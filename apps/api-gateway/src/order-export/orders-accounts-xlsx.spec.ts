@@ -1,4 +1,5 @@
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import {
   ORDERS_ACCOUNTS_COLUMNS,
   buildOrdersAccountsXlsx,
@@ -27,6 +28,8 @@ const plain = (value: unknown): unknown => {
 
 const load = async (buffer: Buffer) => {
   const wb = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   return wb;
 };

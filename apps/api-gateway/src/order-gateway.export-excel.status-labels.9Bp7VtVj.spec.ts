@@ -3,6 +3,7 @@ import { ExecutionContext, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Order_status } from '@app/common';
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import { PassThrough } from 'node:stream';
 import { of } from 'rxjs';
 import request from 'supertest';
@@ -66,6 +67,8 @@ const col = (key: string) =>
 
 const readSheet = async (buffer: Buffer) => {
   const wb = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   const ws = wb.getWorksheet('Buyurtmalar')!;
   // Kontent B ustundan; banner qatorlari tashlanadi (sarlavhadan boshlab).

@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { ExecutionContext, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import { PassThrough } from 'node:stream';
 import { of, throwError } from 'rxjs';
 import request from 'supertest';
@@ -101,6 +102,8 @@ const plain = (value: unknown): unknown => {
 
 const loadBook = async (buffer: Buffer) => {
   const wb = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   return wb;
 };

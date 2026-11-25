@@ -1,4 +1,5 @@
 import { Workbook, type CellRichTextValue, type Worksheet } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import type { UndeliveredItem } from './campaign-report.service';
 import {
   channelLabel,
@@ -43,6 +44,8 @@ const item = (
 
 const load = async (file: Buffer) => {
   const workbook = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(file)).toEqual([]);
   await workbook.xlsx.load(file as never);
   return workbook;
 };

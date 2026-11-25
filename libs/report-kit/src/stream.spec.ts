@@ -1,4 +1,5 @@
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from './testing/sheet-order';
 import { PassThrough } from 'node:stream';
 import { addReportSheet, createReport, reportToBuffer } from './xlsx';
 import {
@@ -35,6 +36,8 @@ const COLUMNS: readonly ReportListColumn[] = [
 
 const load = async (buffer: Buffer) => {
   const wb = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   return wb;
 };

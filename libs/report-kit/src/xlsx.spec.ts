@@ -1,4 +1,5 @@
 import { Workbook } from 'exceljs';
+import { sheetOrderProblems } from './testing/sheet-order';
 import {
   REPORT_FMT,
   addBanner,
@@ -79,11 +80,23 @@ const build = (rows = ROWS) => {
 
 const reread = async (workbook: Workbook) => {
   const copy = new Workbook();
-  await copy.xlsx.load((await reportToBuffer(workbook)) as never);
+  const buffer = await reportToBuffer(workbook);
+  expect(sheetOrderProblems(buffer)).toEqual([]);
+  await copy.xlsx.load(buffer as never);
   return copy;
 };
 
 describe('report-kit xlsx', () => {
+  it('⭐ guruhlangan qatorlar + «bir bet kengligida»: sheetPr tartibi (Excel «Repaired» qilmaydi)', async () => {
+    const { workbook } = build();
+    workbook.worksheets[0].properties.outlineProperties = {
+      summaryBelow: false,
+      summaryRight: false,
+    };
+    expect(workbook.worksheets[0].pageSetup.fitToPage).toBe(true);
+    expect(sheetOrderProblems(await reportToBuffer(workbook))).toEqual([]);
+  });
+
   it('⭐ summa — son, sana — Excel sanasi (Toshkent), jami — formula natijasi bilan', async () => {
     const { workbook, table } = build();
     const ws = (await reread(workbook)).getWorksheet('Namuna')!;
