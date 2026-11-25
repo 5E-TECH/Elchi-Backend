@@ -35,7 +35,8 @@ import {
   receiptReanalyzeBlock,
   receiptSettingGroupOf,
   rmqSend,
-  tashkentDayRange,
+  businessDayKey,
+  businessDayRange,
   type CashboxReceiptErrorCode,
   type CashboxReceiptKind,
   type CashboxReceiptSettings,
@@ -151,9 +152,8 @@ export function parseSummaryPeriod(
   toRaw: unknown,
   now: Date = new Date(),
 ): { from: string; to: string } {
-  const today = new Date(now.getTime() + 5 * 3_600_000)
-    .toISOString()
-    .slice(0, 10);
+  // xhiXv3w3 — «bugun» joriy ISH KUNI (sukut — Toshkent sanasi).
+  const today = businessDayKey(now);
   const to = parseYmd(toRaw, 'to') ?? today;
   const from = parseYmd(fromRaw, 'from') ?? `${to.slice(0, 8)}01`;
   if (from > to) throw new BadRequestException("from to dan keyin bo'lmasin");
@@ -844,7 +844,7 @@ export class CashboxReceiptService {
       if (aiStatus !== undefined && !isReceiptFilterStatus(aiStatus)) {
         throw new BadRequestException("ai_status noto'g'ri");
       }
-      const range = tashkentDayRange(period.from, period.to);
+      const range = businessDayRange(period.from, period.to);
       const data = await loadReceiptChecksSummary(
         this.dataSource.manager,
         {

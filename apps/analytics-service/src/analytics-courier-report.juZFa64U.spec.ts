@@ -5,6 +5,8 @@ const rmqSendMock = jest.fn();
 
 jest.mock('@app/common', () => ({
   ...jest.requireActual('@app/common/time/tashkent-time'),
+  // xhiXv3w3 — ish kuni helperlari (servis barrel'dan oladi).
+  ...jest.requireActual('@app/common/time/business-day'),
   Order_status: {
     SOLD: 'sold',
     PAID: 'paid',

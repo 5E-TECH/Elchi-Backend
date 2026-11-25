@@ -1,48 +1,48 @@
-import { TASHKENT_OFFSET_MINUTES } from '@app/common';
+import {
+  addDayKey,
+  businessDayEnd,
+  businessDayKey,
+  businessDayStart,
+  isDayKey,
+} from '@app/common';
 
 /**
- * qzjTMWPb — kunlik agregatlar uchun Toshkent kalendar kuni yordamchilari.
+ * qzjTMWPb — kunlik agregatlar uchun kun yordamchilari.
  *
- * Kun kaliti — `'YYYY-MM-DD'` (Toshkent, UTC+5, yozgi vaqt yo'q). Chegaralar
- * `tashkent-time.ts` dagi qoida bilan AYNI: kun 00:00:00.000 dan
- * 23:59:59.999 gacha (UTC sifatida qaytadi). Server TZ'iga bog'liq emas.
+ * Kun kaliti — `'YYYY-MM-DD'` ISH KUNI sanasi (xhiXv3w3). Alohida qoida YO'Q:
+ * hammasi `@app/common` `time/business-day.ts` dan (kun almashish soati,
+ * sukut Toshkent 00:00 — 00:00:00.000 → 23:59:59.999). Soat o'zgarsa yangi
+ * chegara faqat keyingi kunlardan — saqlangan snapshot'lar qayta
+ * hisoblanmaydi. Server TZ'iga bog'liq emas.
  */
-const OFFSET_MS = TASHKENT_OFFSET_MINUTES * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DAY_KEY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Lahza tushgan Toshkent kunining kaliti. */
+/** Lahza tushgan ish kunining kaliti. */
 export function tashkentDayKey(date: Date): string {
-  return new Date(date.getTime() + OFFSET_MS).toISOString().slice(0, 10);
+  return businessDayKey(date);
 }
 
 /** Aniq 'YYYY-MM-DD' (haqiqiy sana) bo'lsa — o'zi, aks holda null. */
 export function parseDayKey(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  const match = DAY_KEY_RE.exec(trimmed);
-  if (!match) return null;
-  const ms = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   // '2026-02-30' kabi oydan oshgan kunlar rad etiladi (jim surilmaydi).
-  return new Date(ms).toISOString().slice(0, 10) === trimmed ? trimmed : null;
+  return isDayKey(trimmed) ? trimmed : null;
 }
 
 /** Kun kalitiga `days` kun qo'shadi (manfiy — ayiradi). */
 export function addDays(dayKey: string, days: number): string {
-  const ms = Date.parse(`${dayKey}T00:00:00.000Z`) + days * DAY_MS;
-  return new Date(ms).toISOString().slice(0, 10);
+  return addDayKey(dayKey, days);
 }
 
-/** Toshkent kunining boshi (00:00:00.000) — UTC lahza. */
+/** Ish kunining boshi — UTC lahza. */
 export function dayStart(dayKey: string): Date {
-  return new Date(Date.parse(`${dayKey}T00:00:00.000Z`) - OFFSET_MS);
+  return businessDayStart(dayKey);
 }
 
-/** Toshkent kunining oxiri (23:59:59.999) — UTC lahza. */
+/** Ish kunining oxiri (keyingi kun boshi − 1 ms) — UTC lahza. */
 export function dayEnd(dayKey: string): Date {
-  return new Date(
-    Date.parse(`${dayKey}T00:00:00.000Z`) + DAY_MS - OFFSET_MS - 1,
-  );
+  return businessDayEnd(dayKey);
 }
 
 /** [from, to] oralig'idagi barcha kun kalitlari (ikkala chet ham kiradi). */

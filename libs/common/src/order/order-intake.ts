@@ -1,5 +1,15 @@
 import { RpcException } from '@nestjs/microservices';
 import { TASHKENT_OFFSET_MINUTES } from '../time/tashkent-time';
+import {
+  BUSINESS_DAY_SETTING_KEY,
+  addDayKey,
+  businessDayChangeTimeFor,
+  businessDayKey,
+  businessDayStart,
+  configuredBusinessDayTime,
+  normalizeBusinessDaySchedule,
+  type BusinessDayRule,
+} from '../time/business-day';
 
 /**
  * «KUN TARTIBI» — BUYURTMA YARATISH / QABUL QILISH CHEGARALARI + KUN ALMASHISH
@@ -23,9 +33,11 @@ import { TASHKENT_OFFSET_MINUTES } from '../time/tashkent-time';
  * keyingi kun almashish soatigacha bo'lgan 24 soatlik oyna. Masalan kun
  * `18:00` da almashsa, 9-noyabr 18:00 → 10-noyabr 18:00 bitta ish kuni.
  *
- * ⚠️ Kun almashish soati hozircha FAQAT shu qabul oynasini belgilaydi.
- * Hisobotlar, kunlik pochtalar, smena va moliya kunlari avvalgidek
- * Toshkent 00:00 bo'yicha (`time/tashkent-time.ts`).
+ * Kun almashish soati — butun tizimning «ISH KUNI» (xhiXv3w3,
+ * `time/business-day.ts`): qabul oynasi, dashboard, hisobotlar, kunlik
+ * pochtalar va moliya kunlari bitta jadvaldan. Soat o'zgarsa yangi qoida
+ * FAQAT OLDINGA — keyingi kun almashishidan (`day_change_effective_from`)
+ * amal qiladi, joriy ish kuni yangi chegarada tugaydi.
  *
  * Bu modul TOZA (DB / RMQ yo'q): vaqt hisobi va xato shakli shu yerda, DB
  * o'qish/yozish — order-service `intake/order-intake.service.ts`.
@@ -45,8 +57,11 @@ export const ORDER_INTAKE_DEFAULT_DAY_CHANGE_TIME = '00:00';
 
 /** `order_schema.order_settings.key` qiymatlari. */
 export const ORDER_INTAKE_SETTING_KEYS = Object.freeze({
-  /** `{ time: 'HH:MM' }` — doimiy sozlama. */
-  dayChangeTime: 'intake.day_change_time',
+  /**
+   * `{ time: 'HH:MM', schedule: [{ from, time }] }` — doimiy sozlama + ish
+   * kuni qoidalari (`StoredBusinessDaySetting`, xhiXv3w3).
+   */
+  dayChangeTime: BUSINESS_DAY_SETTING_KEY,
   /**
    * Yaratish chegarasi — `{ cutoff_time: 'HH:MM' | null }`, DOIMIY. 2026-11-09
    * dagi eski shakl (`window_start`, `date` bilan) ham o'qiladi — qo'shimcha
@@ -202,31 +217,70 @@ export interface OrderIntakeState {
   receive_is_open: boolean;
   receive_closes_at: string | null;
   receive_reopens_at: string | null;
-  /** Kun almashish soati (`HH:MM`, Toshkent). */
+  /** Kun almashish soati (`HH:MM`, Toshkent) — oxirgi o'rnatilgani. */
   day_change_time: string;
   /** Joriy ish kuni boshlangan lahza (ISO). */
   day_started_at: string;
   /** Keyingi kun almashish lahzasi (ISO) — chegaralardan qat'i nazar. */
   next_day_change_at: string;
+  /**
+   * Joriy ish kuni qaysi soatda BOSHLANGAN (`HH:MM`). Soat yaqinda
+   * o'zgargan bo'lsa `day_change_time` dan farq qiladi (yangisi ertadan).
+   */
+  current_day_change_time: string;
+  /**
+   * `day_change_time` qaysi ish kunidan (`YYYY-MM-DD`) amal qiladi; `null` —
+   * hech qachon o'zgartirilmagan (sukut 00:00).
+   */
+  day_change_effective_from: string | null;
+  /** Ish kuni qoidalari (servislar shu bilan kun chegarasini hisoblaydi). */
+  day_change_schedule: BusinessDayRule[];
+}
+
+/**
+ * Eski chaqiruv (`dayChangeTime`, jadvalsiz) — o'sha soat HAMMA kunlarga
+ * (testlar va DB'siz hisob uchun).
+ */
+function constantSchedule(dayChangeTime: unknown): BusinessDayRule[] {
+  const minutes = parseClockTime(dayChangeTime);
+  return minutes === null
+    ? []
+    : normalizeBusinessDaySchedule([
+        { from: '1970-01-01', time: formatClockTime(minutes) },
+      ]);
 }
 
 /** Sozlamalar + hozirgi vaqt → holat (ikkala chegara ham shu ish kuni uchun). */
 export function resolveOrderIntakeState(input: {
   now: Date;
+  /** Ish kuni qoidalari (DB `schedule`). Berilsa `dayChangeTime` e'tiborsiz. */
+  schedule?: readonly BusinessDayRule[] | null;
   dayChangeTime?: unknown;
   cutoff?: unknown;
   receiveCutoff?: unknown;
 }): OrderIntakeState {
+  const rules = input.schedule
+    ? normalizeBusinessDaySchedule(input.schedule)
+    : constantSchedule(input.dayChangeTime);
+  const key = businessDayKey(input.now, rules);
+  const startTime = businessDayChangeTimeFor(key, rules);
   const dayChangeMinutes =
-    parseClockTime(input.dayChangeTime) ?? DEFAULT_DAY_CHANGE_MINUTES;
-  const window = resolveOrderIntakeWindow(input.now, dayChangeMinutes);
+    parseClockTime(startTime) ?? DEFAULT_DAY_CHANGE_MINUTES;
+  const window: OrderIntakeWindow = {
+    start: businessDayStart(key, rules),
+    end: businessDayStart(addDayKey(key, 1), rules),
+    date: key,
+  };
   const gate = (stored: unknown) => {
     const time = storedCutoffTime(stored);
     const minutes = parseClockTime(time);
-    const closesAt =
+    let closesAt =
       minutes === null
         ? null
         : cutoffInstant(window, minutes, dayChangeMinutes);
+    // O'tish kuni (soat o'zgargan, kun < 24 soat): chegara soati shu kunga
+    // sig'masa — bu ish kunida yopilmaydi.
+    if (closesAt && closesAt.getTime() >= window.end.getTime()) closesAt = null;
     return {
       time: minutes === null ? null : time,
       isOpen: closesAt === null || input.now.getTime() < closesAt.getTime(),
@@ -246,9 +300,14 @@ export function resolveOrderIntakeState(input: {
     receive_is_open: receive.isOpen,
     receive_closes_at: receive.closesAt,
     receive_reopens_at: receive.reopensAt,
-    day_change_time: formatClockTime(dayChangeMinutes),
+    day_change_time: configuredBusinessDayTime(rules),
     day_started_at: window.start.toISOString(),
     next_day_change_at: window.end.toISOString(),
+    current_day_change_time: startTime,
+    day_change_effective_from: rules.length
+      ? rules[rules.length - 1].from
+      : null,
+    day_change_schedule: rules,
   };
 }
 

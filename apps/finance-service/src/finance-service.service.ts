@@ -79,7 +79,8 @@ import {
   rmqSend,
   OutboxService,
   OutboxEvent,
-  tashkentDayRange,
+  businessDayLocalSql,
+  businessDayRange,
   toPublicUserSummary,
   type PublicUserSummary,
 } from '@app/common';
@@ -739,7 +740,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       .getRawOne<{ income: string; outcome: string }>();
     const monthlyRows = await unpaged()
       .select(
-        `to_char(h."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM')`,
+        // xhiXv3w3 — oy ISH KUNI sanasi bo'yicha (sukut — Toshkent oyi).
+        `to_char(${businessDayLocalSql('h."createdAt"')}, 'YYYY-MM')`,
         'month',
       )
       .addSelect(income, 'income')
@@ -813,8 +815,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Kassa tarixi sana filtri — Toshkent kuni, dashboard va GET /orders bilan
-   * AYNI qoida (SqVMuhKo). Ilgari 'YYYY-MM-DD' UTC yarim tuni, oxiri esa
+   * Kassa tarixi sana filtri — ISH KUNI (xhiXv3w3), dashboard va GET /orders
+   * bilan AYNI qoida (SqVMuhKo). Ilgari 'YYYY-MM-DD' UTC yarim tuni, oxiri esa
    * server TZ'idagi setHours edi (prod UTC → kun Toshkentda 05:00-04:59).
    * To'liq ISO qiymat o'zgarishsiz ishlatiladi. Yaroqsiz qiymat avvalgidek
    * 400 'Invalid date format: <v>'.
@@ -822,7 +824,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private parseDateRange(fromDate?: string, toDate?: string) {
     this.parseDate(fromDate ?? null);
     this.parseDate(toDate ?? null);
-    return tashkentDayRange(fromDate, toDate);
+    return businessDayRange(fromDate, toDate);
   }
 
   /** `order.find_all` sahifasi — order-service `MAX_LIMIT` (100) bilan bir xil. */

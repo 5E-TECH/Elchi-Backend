@@ -5,6 +5,7 @@ import { LogisticsServiceController } from './logistics-service.controller';
 import { LogisticsServiceService } from './logistics-service.service';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   RmqModule,
   DatabaseModule,
   logisticsValidationSchema,
@@ -30,6 +31,8 @@ import { DeliveryPricingService } from './delivery-pricing/delivery-pricing.serv
       validationSchema: logisticsValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'logistics-service' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), daqiqada bir.
+    BusinessDayModule.forRoot(),
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'BRANCH' }),

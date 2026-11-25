@@ -99,11 +99,13 @@ describe('KwodkKWY — POST /csp-report (gateway, e2e)', () => {
 
   afterEach(() => {
     warn.mockRestore();
-    // RMQ'ga hech narsa ketmaydi (`ai.status` — AiStatusPoller'ning o'z
-    // fon so'rovi, marshrutga aloqasi yo'q).
+    // RMQ'ga hech narsa ketmaydi (`ai.status` — AiStatusPoller'ning,
+    // `order.intake.state` — BusinessDayModule'ning (xhiXv3w3) o'z fon
+    // so'rovi, marshrutga aloqasi yo'q).
+    const background = new Set(['ai.status', 'order.intake.state']);
     for (const client of clients.values()) {
       const sent = client.send.mock.calls.filter(
-        ([pattern]) => pattern.cmd !== 'ai.status',
+        ([pattern]) => !background.has(pattern.cmd),
       );
       expect(sent).toEqual([]);
       expect(client.emit).not.toHaveBeenCalled();

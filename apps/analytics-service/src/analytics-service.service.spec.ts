@@ -6,6 +6,8 @@ jest.mock('@app/common', () => ({
   // Real Tashkent day helpers (SqVMuhKo): the service imports them from the
   // barrel, and dashboard ranges must be computed by the actual code.
   ...jest.requireActual('@app/common/time/tashkent-time'),
+  // xhiXv3w3 — ish kuni helperlari (servis barrel'dan oladi).
+  ...jest.requireActual('@app/common/time/business-day'),
   Order_status: {
     NEW: 'new',
     RECEIVED: 'received',

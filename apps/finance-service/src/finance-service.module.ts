@@ -6,6 +6,7 @@ import { FinanceServiceController } from './finance-service.controller';
 import { FinanceServiceService } from './finance-service.service';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   RmqModule,
   DatabaseModule,
   financeValidationSchema,
@@ -77,6 +78,8 @@ import { OperatorPaymentController } from './operator-payment/operator-payment.c
       validationSchema: financeValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'finance-service' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), daqiqada bir.
+    BusinessDayModule.forRoot(),
     // (y8Tqm9Ap) Smena avtomatik yopish jadvali (CronJob, Asia/Tashkent).
     ScheduleModule.forRoot(),
     RmqModule,

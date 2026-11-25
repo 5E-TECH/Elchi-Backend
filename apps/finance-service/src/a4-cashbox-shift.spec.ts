@@ -27,6 +27,8 @@ jest.mock('@app/common', () => ({
   // vf4513Zn — tarixdagi foydalanuvchi proyeksiyasi (sof funksiya) haqiqiy.
   ...jest.requireActual('@app/common/security/user-summary'),
   ...jest.requireActual('@app/common/time/tashkent-time'),
+  // xhiXv3w3 — ish kuni helperlari (servis barrel'dan oladi).
+  ...jest.requireActual('@app/common/time/business-day'),
   ...jest.requireActual('@app/common/activity-log/describe-uz'),
   Cashbox_type: {
     MAIN: 'main',

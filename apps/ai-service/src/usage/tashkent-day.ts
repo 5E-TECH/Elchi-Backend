@@ -1,6 +1,13 @@
+import { TASHKENT_OFFSET_MINUTES, addDayKey, isDayKey } from '@app/common';
+
 /**
  * Toshkent kun-bucketi — AI xarajati va global kunlik shift uchun YAGONA
  * sana qoidasi (lYVuADRE #12/#23, wFSMEIIy #11/#18).
+ *
+ * xhiXv3w3: alohida qoida yo'q — siljish va sana yordamchilari `@app/common`
+ * (`time/tashkent-time.ts`, `time/business-day.ts`) dan. AI xarajat limiti
+ * KALENDAR kunida qoladi (provayder xarajati sutka bo'yicha, `reset_at` —
+ * yarim tun), ish kuni (kun almashish soati) unga ta'sir qilmaydi.
  *
  * ⚠️ O'zbekiston 1991 yildan beri doimiy UTC+5 (yozgi vaqt YO'Q) — shuning
  * uchun JS tomonda sobit +5 soat siljish ishlatiladi (server TZ'iga
@@ -11,7 +18,7 @@
  */
 
 /** Toshkentning UTC'dan siljishi (ms). */
-export const TASHKENT_UTC_OFFSET_MS = 5 * 60 * 60 * 1000;
+export const TASHKENT_UTC_OFFSET_MS = TASHKENT_OFFSET_MINUTES * 60 * 1000;
 
 /** ISO satrdagi Toshkent siljishi. */
 export const TASHKENT_OFFSET_ISO = '+05:00';
@@ -28,9 +35,6 @@ export const TASHKENT_DAY_SQL = `("createdAt" AT TIME ZONE 'Asia/Tashkent')::dat
  */
 export const TASHKENT_DAY_SQL_CREATED_AT = `(created_at AT TIME ZONE 'Asia/Tashkent')::date`;
 
-const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 /** Berilgan vaqtning Toshkent sanasi (YYYY-MM-DD) — `period_key`. */
 export function tashkentDay(d: Date = new Date()): string {
   return new Date(d.getTime() + TASHKENT_UTC_OFFSET_MS)
@@ -40,18 +44,12 @@ export function tashkentDay(d: Date = new Date()): string {
 
 /** Haqiqiy kalendar sanasi (YYYY-MM-DD)? '2026-02-31' → false. */
 export function isYmd(value: unknown): value is string {
-  if (typeof value !== 'string' || !YMD_RE.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00Z`);
-  return (
-    !Number.isNaN(parsed.getTime()) &&
-    parsed.toISOString().slice(0, 10) === value
-  );
+  return isDayKey(value);
 }
 
 /** YYYY-MM-DD sanaga `days` kun qo'shadi (manfiy ham bo'ladi). */
 export function addDaysYmd(ymd: string, days: number): string {
-  const base = new Date(`${ymd}T00:00:00Z`).getTime();
-  return new Date(base + days * DAY_MS).toISOString().slice(0, 10);
+  return addDayKey(ymd, days);
 }
 
 /** Toshkent sanasining boshlanishi — ISO satr `YYYY-MM-DDT00:00:00+05:00`. */

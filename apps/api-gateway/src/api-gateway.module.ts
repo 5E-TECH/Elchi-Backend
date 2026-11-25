@@ -4,6 +4,7 @@ import { ApiGatewayService } from './api-gateway.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   RmqModule,
   gatewayValidationSchema,
 } from '@app/common';
@@ -98,6 +99,9 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
       validationSchema: gatewayValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'api-gateway' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), bazasiz: order-service
+    // `order.intake.state` orqali daqiqada bir.
+    BusinessDayModule.forRoot({ source: { rmqClient: 'ORDER' } }),
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],

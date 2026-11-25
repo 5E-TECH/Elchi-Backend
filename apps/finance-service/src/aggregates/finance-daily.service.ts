@@ -1,6 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { Cashbox_type, Operation_type, Source_type } from '@app/common';
+import {
+  Cashbox_type,
+  Operation_type,
+  Source_type,
+  businessDayKeySql,
+} from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
@@ -401,7 +406,7 @@ export class FinanceDailyService {
       income_count: string | number;
       expense_count: string | number;
     }> = await this.dataSource.query(
-      `SELECT to_char(h."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day,
+      `SELECT ${businessDayKeySql('h."createdAt"')} AS day,
               COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'income'), 0) AS income,
               COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'expense'), 0) AS expense,
               COUNT(*) FILTER (WHERE h."operation_type" = 'income') AS income_count,
@@ -565,7 +570,7 @@ export class FinanceDailyService {
       cnt: string | number;
       closing: string | null;
     }> = await this.dataSource.query(
-      `SELECT to_char("createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day,
+      `SELECT ${businessDayKeySql('"createdAt"')} AS day,
               COALESCE(SUM("amount") FILTER (WHERE "amount" > 0), 0) AS income,
               COALESCE(SUM(-"amount") FILTER (WHERE "amount" < 0), 0) AS expense,
               COUNT(*) AS cnt,

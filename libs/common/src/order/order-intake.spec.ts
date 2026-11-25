@@ -118,6 +118,10 @@ describe('order-intake — «Kun tartibi»: chegaralar va kun almashish soati', 
         day_change_time: '00:00',
         day_started_at: tashkent('2026-11-09T00:00:00').toISOString(),
         next_day_change_at: tashkent('2026-11-10T00:00:00').toISOString(),
+        // xhiXv3w3 — ish kuni jadvali bo'sh (00:00, avvalgidek).
+        current_day_change_time: '00:00',
+        day_change_effective_from: null,
+        day_change_schedule: [],
       });
     });
 

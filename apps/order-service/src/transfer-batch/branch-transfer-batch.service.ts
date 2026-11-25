@@ -18,12 +18,16 @@ import {
   BranchTransferBatchStatus,
   BranchTransferDirection,
   Order_status,
-  endOfTashkentDay,
-  endOfTashkentMonth,
+  businessDayEnd,
+  businessDayKey,
+  businessDayStart,
+  endOfBusinessDay,
+  endOfBusinessMonth,
+  isDayKey,
   isHqBranch,
-  startOfTashkentDay,
-  startOfTashkentMonth,
-  startOfTashkentWeek,
+  startOfBusinessDay,
+  startOfBusinessMonth,
+  startOfBusinessWeek,
   transferBatchCancelBlock,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
@@ -1581,16 +1585,20 @@ export class BranchTransferBatchService {
       return parsed;
     };
 
-    // Kun/davr chegaralari — Toshkent vaqti, libs/common'dagi yagona helper
-    // (SqVMuhKo). Ilgari server TZ'idagi setHours va qo'lda +5/-5 soat edi:
-    // natija faqat konteyner UTC'da bo'lganda to'g'ri chiqardi.
+    // Kun/davr chegaralari — ISH KUNI (xhiXv3w3, `business-day.ts`; sukut
+    // Toshkent 00:00, SqVMuhKo). Ilgari server TZ'idagi setHours va qo'lda
+    // +5/-5 soat edi: natija faqat konteyner UTC'da bo'lganda to'g'ri chiqardi.
     // (15N7AHkp) PENDING yig'ishdagi "yangiroq partiya" ham AYNI vaqt
     // oynasidan bo'lishi kerak (sahifa ichidagi eski xulq bilan bir xil).
     let collapseWindowSql: string | null = null;
     if (dateRaw) {
       const parsedDate = parseDate(dateRaw, 'date');
-      const dayStart = startOfTashkentDay(parsedDate);
-      const dayEnd = endOfTashkentDay(parsedDate);
+      // `YYYY-MM-DD` — o'sha ish kuni; to'liq ISO — lahza tushgan ish kuni.
+      const dayKey = isDayKey(dateRaw.trim())
+        ? dateRaw.trim()
+        : businessDayKey(parsedDate);
+      const dayStart = businessDayStart(dayKey);
+      const dayEnd = businessDayEnd(dayKey);
       qb.andWhere('batch.createdAt BETWEEN :dayStart AND :dayEnd', {
         dayStart,
         dayEnd,
@@ -1605,16 +1613,16 @@ export class BranchTransferBatchService {
       }
 
       const now = new Date();
-      let periodStart = startOfTashkentDay(now);
-      let periodEnd = endOfTashkentDay(now);
+      let periodStart = startOfBusinessDay(now);
+      let periodEnd = endOfBusinessDay(now);
 
       if (periodRaw === 'week') {
-        periodStart = startOfTashkentWeek(now);
+        periodStart = startOfBusinessWeek(now);
       }
 
       if (periodRaw === 'month') {
-        periodStart = startOfTashkentMonth(now);
-        periodEnd = endOfTashkentMonth(now);
+        periodStart = startOfBusinessMonth(now);
+        periodEnd = endOfBusinessMonth(now);
       }
 
       qb.andWhere('batch.createdAt BETWEEN :periodStart AND :periodEnd', {

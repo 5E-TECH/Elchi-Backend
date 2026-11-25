@@ -27,6 +27,7 @@ import {
 } from './ai/district-llm-fallback';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   RmqModule,
   DatabaseModule,
   orderValidationSchema,
@@ -65,6 +66,8 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
       validationSchema: orderValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'order-service' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), daqiqada bir.
+    BusinessDayModule.forRoot(),
     RmqModule,
     RmqModule.register({ name: 'SEARCH' }),
     RmqModule.register({ name: 'IDENTITY' }),
