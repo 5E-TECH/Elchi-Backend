@@ -252,42 +252,114 @@ describe('T6 — qaytarilgan to`lovlar smena hisobotida', () => {
     const xlsx = await buildXlsx(reversedSnapshot);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(xlsx as never);
-    const couriers = workbook.getWorksheet('Kuryerlar');
-    const header = (couriers?.getRow(1).values as unknown[]).filter(Boolean);
-    expect(header).toEqual(
-      expect.arrayContaining(['Topshirgan', 'Qaytarilgan', 'Sof']),
-    );
-    const col = (name: string) => header.indexOf(name) + 1;
-    const row = couriers!.getRow(2);
-    expect(row.getCell(col('Topshirgan')).value).toBe(700_000);
-    expect(row.getCell(col('Qaytarilgan')).value).toBe(500_000);
-    expect(row.getCell(col('Sof')).value).toBe(200_000);
-    const markets = workbook.getWorksheet('Marketlar');
-    const mHeader = (markets?.getRow(1).values as unknown[]).filter(Boolean);
-    const izoh = mHeader.indexOf('Izoh') + 1;
+    /** Sarlavha (`label`) katagi bor qator. */
+    const find = (sheet: ExcelJS.Worksheet, label: string) => {
+      let found: ExcelJS.Row | undefined;
+      sheet.eachRow((row) => {
+        const values = row.values as unknown[];
+        if (!found && values.includes(label)) found = row;
+      });
+      return found!;
+    };
+    const columnOf = (row: ExcelJS.Row, label: string) =>
+      (row.values as unknown[]).indexOf(label);
+    const result = (cell: ExcelJS.Cell) =>
+      cell.formula ? cell.result : cell.value;
+
+    const couriers = workbook.getWorksheet('Kuryerlar')!;
+    const header = find(couriers, "Topshirgan, so'm");
+    const row = couriers.getRow(header.number + 1);
+    const at = (label: string) => result(row.getCell(columnOf(header, label)));
+    expect(at('Kuryer')).toBe('Ali');
+    expect(at("Topshirgan, so'm")).toBe(700_000);
+    expect(at("Qaytarilgan, so'm")).toBe(500_000);
+    expect(at("Sof, so'm")).toBe(200_000);
+    expect(at("Qolgan qarz, so'm")).toBe(500_000);
+
+    const markets = workbook.getWorksheet('Marketlar')!;
+    const list = find(markets, 'Market / vaqt');
+    const izoh = columnOf(list, 'Izoh');
+    const sum = columnOf(list, "Summa, so'm");
     expect(izoh).toBeGreaterThan(0);
-    expect(markets!.getRow(2).getCell(izoh).value ?? '').toBe('');
-    expect(markets!.getRow(3).getCell(izoh).value).toBe('qaytarildi');
+    // Guruh qatori (market, sof jami), keyin uning to'lovlari.
+    const line = (offset: number) => markets.getRow(list.number + offset);
+    expect(line(1).getCell(columnOf(list, 'Market / vaqt')).value).toBe(
+      'Market A',
+    );
+    expect(result(line(1).getCell(sum))).toBe(0);
+    expect(line(2).getCell(sum).value).toBe(300_000);
+    expect(line(2).getCell(izoh).value ?? '').toBe('');
+    expect(line(3).getCell(sum).value).toBe(-300_000);
+    expect(line(3).getCell(izoh).value).toBe('Qaytarildi');
 
     // PDF shriftli (glif kodlari) — matn `doc.text` chaqiruvlaridan olinadi.
-    const texts: string[] = [];
-    const spy = jest
-      .spyOn(PDFDocument.prototype, 'text')
-      .mockImplementation(function (
-        this: PDFKit.PDFDocument,
-        ...args: unknown[]
-      ) {
-        if (typeof args[0] === 'string') texts.push(args[0]);
-        return this;
-      });
+    const spy = jest.spyOn(PDFDocument.prototype, 'text');
     const pdf = await buildPdf(reversedSnapshot);
+    const texts = spy.mock.calls.map((call) =>
+      String(call[0]).replace(/\u00a0/g, ' '),
+    );
     spy.mockRestore();
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
-    const all = texts.join('\n');
-    expect(all).toContain("qaytarilgan 500 000 so'm");
-    // DejaVu shrifti bo'lmasa (masalan macOS) PDF Helvetica'ga tushadi va
-    // `latin1` «—» ni «-» ga almashtiradi — test shriftdan qat'i nazar o'tsin.
-    expect(all).toMatch(/[—-] qaytarildi/);
+    expect(texts).toContain("Qaytarilgan, so'm");
+    // Kuryer: topshirgan 700 000, qaytarilgan 500 000, sof 200 000.
+    const ali = texts.indexOf('Ali');
+    expect(texts.slice(ali, ali + 5)).toEqual([
+      'Ali',
+      '1',
+      '700 000',
+      '500 000',
+      '200 000',
+    ]);
+    const reversal = texts.indexOf('Qaytarildi');
+    expect(texts[reversal + 1]).toBe('−300 000');
+  });
+});
+
+describe('filial smenasi — HQ’ga topshirilgan pul', () => {
+  const branch: ShiftReportSnapshot = {
+    ...snapshot,
+    cashbox_type: 'branch',
+    cashbox_user_id: '16',
+  };
+
+  it('filial xabarida alohida qator (sof, soni; qaytarilgani bilan)', () => {
+    expect(
+      buildBranchMessage(
+        {
+          ...branch,
+          hq_transfers: { count: 3, total: 21_834_000, reversed: 0 },
+        },
+        'Andijon',
+      ).body.split('\n'),
+    ).toContain("⬆️ HQ'ga topshirilgan: 21 834 000 so'm (3 ta)");
+    const reversed = buildBranchMessage(
+      {
+        ...branch,
+        hq_transfers: { count: 3, total: 21_834_000, reversed: 500_000 },
+      },
+      'Andijon',
+    );
+    expect(reversed.body.split('\n')).toContain(
+      "⬆️ HQ'ga topshirilgan: 21 834 000 so'm (3 ta) · qaytarilgan 500 000 so'm",
+    );
+  });
+
+  it('topshirilmagan / noma’lum / asosiy kassa — qator yo‘q', () => {
+    for (const hq_transfers of [
+      undefined,
+      null,
+      { count: 0, total: 0, reversed: 0 },
+    ]) {
+      expect(
+        buildBranchMessage({ ...branch, hq_transfers }, 'Andijon').body,
+      ).not.toContain("HQ'ga");
+    }
+    expect(
+      buildBranchMessage(
+        { ...snapshot, hq_transfers: { count: 1, total: 5, reversed: 0 } },
+        'HQ',
+      ).body,
+    ).not.toContain("HQ'ga");
   });
 });
 

@@ -1,4 +1,4 @@
-import { Workbook } from 'exceljs';
+import { Workbook, type Cell } from 'exceljs';
 import { of, throwError } from 'rxjs';
 import {
   buildBranchMessage,
@@ -119,16 +119,41 @@ const expectNoForeign = (value: unknown) => {
   for (const needle of FOREIGN) expect(flat).not.toContain(needle);
 };
 
+/** Formula — natijasi bilan (`cell.value` 0 natijani tashlab yuboradi). */
+const plain = (cell: Cell): unknown =>
+  cell.formula ? cell.result : cell.value;
+
+/**
+ * Hamma varaq qatorlari (birlashtirilgan kataklar bir marta, bo'shsiz);
+ * `all` — fayldagi hamma matn: formulalar, kolontitul, fayl nomi ham.
+ */
 const cellsOf = async (buffer: Buffer) => {
   const workbook = new Workbook();
   await workbook.xlsx.load(buffer as never);
   const rows: unknown[][] = [];
   for (const sheet of workbook.worksheets) {
     sheet.eachRow((row) => {
-      rows.push((row.values as unknown[]).slice(1));
+      const values: unknown[] = [];
+      row.eachCell((cell) => {
+        if (cell.isMerged && cell.master !== cell) return;
+        if (cell.value !== null && cell.value !== '') {
+          values.push(plain(cell));
+        }
+      });
+      if (values.length) rows.push(values);
     });
   }
-  return { rows, sheets: workbook.worksheets.map((sheet) => sheet.name) };
+  return {
+    rows,
+    sheets: workbook.worksheets.map((sheet) => sheet.name),
+    all: JSON.stringify([
+      workbook.title,
+      workbook.worksheets.map((sheet) => [
+        sheet.headerFooter,
+        sheet.getSheetValues(),
+      ]),
+    ]),
+  };
 };
 
 describe('buildBranchSliceMessage', () => {
@@ -230,12 +255,65 @@ describe('HQ (asosiy kassa) hisoboti — filiallardan qabul', () => {
   });
 
   it('⭐ filial Excel’i — faqat o‘z to‘lovlari', async () => {
-    const { rows } = await cellsOf(
+    const { rows, sheets, all } = await cellsOf(
       await buildBranchSliceXlsx(snapshot(), ANDIJON),
     );
-    expect(rows).toContainEqual(['Jami', 333_333]);
+    expect(sheets).toEqual(["HQ'ga topshirilgan"]);
+    expect(rows).toContainEqual(['Naqd', 111_111]);
+    expect(rows).toContainEqual(['Karta', 222_222]);
+    expect(rows).toContainEqual(['Jami topshirilgan', 333_333]);
     expect(rows).toContainEqual(['Filial kassasidagi qoldiq', 54_321]);
+    expect(rows).toContainEqual([
+      'Andijon filiali · Asosiy kassa smenasi #16',
+      'Smena yopilgan',
+    ]);
     expectNoForeign(rows);
+    // Formula, kolontitul va fayl nomida ham.
+    expectNoForeign(all);
+  });
+
+  it('filial Excel’i: avtomatik yopilgani lentada; qaytarilgan to‘lov; bo‘sh holat', async () => {
+    const auto = await cellsOf(
+      await buildBranchSliceXlsx(snapshot({ close_reason: 'auto' }), {
+        ...ANDIJON,
+        total: 222_222,
+        payments: [
+          ...ANDIJON.payments,
+          { ...ANDIJON.payments[0], amount: -111_111, reversed: true },
+        ],
+      }),
+    );
+    expect(auto.rows).toContainEqual([
+      'Andijon filiali · Asosiy kassa smenasi #16',
+      'Smena avtomatik yopilgan',
+    ]);
+    expect(auto.rows).toContainEqual(['Qaytarilgan', -111_111]);
+    expect(auto.rows).toContainEqual(['Jami topshirilgan', 222_222]);
+    expect(
+      auto.rows.some(
+        (row) => row.includes(-111_111) && row.includes('Qaytarildi'),
+      ),
+    ).toBe(true);
+    expectNoForeign(auto.all);
+
+    const empty = await cellsOf(
+      await buildBranchSliceXlsx(snapshot(), {
+        branch_id: '16',
+        name: null,
+        payments: [],
+        total: 0,
+        balance: null,
+      }),
+    );
+    expect(empty.rows).toContainEqual([
+      'Filial #16 · Asosiy kassa smenasi #16',
+      'Smena yopilgan',
+    ]);
+    expect(empty.rows).toContainEqual(["Bu smenada HQ'ga pul topshirilmagan"]);
+    expect(empty.rows).toContainEqual(['Jami topshirilgan', 0]);
+    expect(JSON.stringify(empty.rows)).not.toContain(
+      '"Filial kassasidagi qoldiq"',
+    );
   });
 });
 
@@ -495,7 +573,7 @@ describe('attachExcel — filial bo‘lagiga to‘liq hisobot HECH QACHON ketmay
     expect(slices[1].message.data.telegram_media).toBeUndefined();
     const own = fx.uploads.find((u) => u.file_name.includes('filial-16'))!;
     expectNoForeign(
-      (await cellsOf(Buffer.from(own.file_base64, 'base64'))).rows,
+      (await cellsOf(Buffer.from(own.file_base64, 'base64'))).all,
     );
   });
 
