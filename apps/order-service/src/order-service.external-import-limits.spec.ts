@@ -133,8 +133,9 @@ function makeService() {
         is_active: true,
         field_mapping: {},
       }),
-      getDefaultDistrictId: jest.fn().mockResolvedValue('1'),
-      resolveDistrictIdOrNull: jest.fn().mockResolvedValue('12'),
+      resolveExternalDistrict: jest
+        .fn()
+        .mockResolvedValue({ id: '12', sato_code: null }),
       resolveRegionIdForDistrict: jest.fn().mockResolvedValue('9'),
       getHqBranchId: jest.fn().mockResolvedValue('1'),
       getBranchAssignmentByUserStrict: jest.fn().mockResolvedValue(null),
