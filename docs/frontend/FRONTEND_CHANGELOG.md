@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — GET /orders/:id: filial kontakti va kuryer kontakti (0Rn5U6AD)
+
+Deploy: **branch-service, api-gateway** (migratsiya, env yo'q; tartib muhim emas — branch-service eski bo'lsa maydonlar
+shunchaki kelmaydi).
+
+- 🆕 [orders] `GET /orders/:id` → `branch` ga `phone_number: string | null` va
+  `manager: {id, name, phone_number} | null` (filialning faol menejeri) qo'shildi. Filial — **buyurtma filiali**
+  (`branch_id`), posilka hozir turgan joy emas. Kimga: SUPERADMIN, ADMIN, REGISTRATOR; MANAGER/BRANCH — faqat o'z
+  filiali. MARKET, COURIER, LOGIST va boshqalarda kalit yo'q. Kesh 60 s. Ro'yxat, QR va skan javoblari — o'zgarmagan.
+- 🟢 [orders] `courier: {id, name, phone_number} | null` shu javobda oldindan bor — registratorga alohida `GET users/:id`
+  kerak emas.
+  → **Frontendda:** 🔧 «Filial» qatori: nom, telefon (`tel:`), menejer; «Kuryer» — `courier` dan.
+
 ### 2026-11-25 — Barcha Excel / PDF hisobotlar yangi dizaynda (ega tasdiqladi)
 
 Deploy: **notification-service** (migratsiya 1716000000250), **finance-service**, **file-service**, **api-gateway**. Env yo'q.

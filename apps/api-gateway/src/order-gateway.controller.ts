@@ -206,6 +206,11 @@ import {
   qrOrderBranchScopeRpcDeps,
 } from './auth/order-qr-branch-scope';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import {
+  BranchContactLoader,
+  branchContactScope,
+  withBranchContact,
+} from './contacts/branch-contact';
 import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
   ProblemContactsService,
@@ -739,6 +744,31 @@ export class OrderGatewayController {
   }
 
   private hqBranchIdCache: { id: string; at: number } | null = null;
+
+  private branchContactLoader?: BranchContactLoader;
+
+  /**
+   * 0Rn5U6AD: buyurtma filiali kontakti (telefon, menejer) — superadmin, admin,
+   * registrator; menejer/filial — faqat o'z filiali. Boshqa rollar — null.
+   */
+  private async branchContactFor(
+    user: JwtUser | undefined,
+    row: Record<string, unknown> | null,
+  ) {
+    const scope = branchContactScope(user?.roles);
+    const branchId = this.asStr(row?.branch_id).trim();
+    if (scope === 'none' || !branchId) {
+      return null;
+    }
+    if (
+      scope === 'own' &&
+      (await this.resolveRequesterBranchId(user)) !== branchId
+    ) {
+      return null;
+    }
+    this.branchContactLoader ??= new BranchContactLoader(this.branchClient);
+    return this.branchContactLoader.find(branchId);
+  }
 
   private normalizeRoles(roles?: string[]) {
     const normalized = new Set<string>();
@@ -7936,7 +7966,7 @@ export class OrderGatewayController {
   @ApiOkResponse({
     type: OrderReceiptFieldsDto,
     description:
-      "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+      "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. 0Rn5U6AD: `courier: {id, name, phone_number} | null`; `branch.phone_number` va `branch.manager: {id, name, phone_number} | null` — SUPERADMIN/ADMIN/REGISTRATOR ga (MANAGER/BRANCH — faqat o'z filiali), boshqalarga kalit yo'q.",
   })
   async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
     const response = await this.sendOrderWithFallback(
@@ -7944,11 +7974,17 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrder(req?.user, this.unwrapOrderRow(response));
+    const row = this.unwrapOrderRow(response);
+    await this.assertCanViewOrder(req?.user, row);
     // kH2zZsz3: kuryer — market tarifi/filial ulushisiz, market — kuryer
     // tarifi/ulushi va filial ulushisiz (auth/order-role-projection).
     // T7: `problem_contacts` proyeksiyadan OLDIN.
-    return this.withContactsAndRollback(req?.user?.roles, response, req?.user);
+    const [projected, branchContact] = await Promise.all([
+      this.withContactsAndRollback(req?.user?.roles, response, req?.user),
+      this.branchContactFor(req?.user, row),
+    ]);
+    // 0Rn5U6AD: `branch.phone_number`, `branch.manager` (kuryer — `courier`).
+    return withBranchContact(projected, branchContact);
   }
 
   @Get('qr-code/:token')
