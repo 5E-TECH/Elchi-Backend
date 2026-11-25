@@ -153,6 +153,15 @@
       "compilerOptions": {
         "tsConfigPath": "libs/common/tsconfig.lib.json"
       }
+    },
+    "report-kit": {
+      "type": "library",
+      "root": "libs/report-kit",
+      "entryFile": "index",
+      "sourceRoot": "libs/report-kit/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/report-kit/tsconfig.lib.json"
+      }
     }
   }
 }
