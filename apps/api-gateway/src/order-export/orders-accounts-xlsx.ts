@@ -15,6 +15,7 @@ import {
   addSection,
   addTable,
   formula,
+  type ReportColumn,
 } from '@app/report-kit';
 import {
   LIST_ID_FMT,
@@ -187,6 +188,12 @@ export interface OrdersAccountsInput {
   total: number;
   maxRows: number;
   subtitle: string;
+  /**
+   * Marketga «to'langan / kerak / qoldi» (market tarifini ochadi) — faqat
+   * superadmin/admin. `false` (menejer, filial, registrator — D5NxxpJW):
+   * ustunlar, ko'rsatkichlar va «Marketlar bilan hisob» pulisiz.
+   */
+  marketMoney?: boolean;
   now?: Date;
   /** Sinov uchun: oqimli yozuvchiga o'tish chegarasi. */
   streamFrom?: number;
@@ -223,6 +230,36 @@ const marketAccounts = (rows: readonly OrdersAccountsRow[]) => {
   );
 };
 
+/** «Kerak / To'langan / Qoldi» — faqat superadmin/admin faylida (D5NxxpJW). */
+const marketMoneyColumns = (): ReportColumn<MarketAccount>[] => [
+  {
+    header: "Kerak, so'm",
+    value: (m) => m.due,
+    fmt: REPORT_FMT.somDash,
+    sum: true,
+  },
+  {
+    header: "To'langan, so'm",
+    value: (m) => m.paid,
+    fmt: REPORT_FMT.somDash,
+    sum: true,
+    color: REPORT_COLORS.success,
+  },
+  {
+    header: "Qoldi, so'm",
+    value: (m, k) => formula(`F${k}-G${k}`, m.due - m.paid),
+    fmt: REPORT_FMT.somDash,
+    bold: true,
+    sum: true,
+  },
+];
+
+/** Market tarifini ochadigan ustunlar (D5NxxpJW). */
+const MARKET_MONEY_KEYS: ReadonlySet<string> = new Set([
+  'paid_amount',
+  'to_be_paid',
+]);
+
 function writeSummary(
   book: ReportBook,
   rows: readonly OrdersAccountsRow[],
@@ -233,6 +270,7 @@ function writeSummary(
     price: number;
     due: number;
     paid: number;
+    marketMoney: boolean;
   },
 ): void {
   const count = formatCount(rows.length);
@@ -294,8 +332,8 @@ function writeSummary(
   r = addSection(
     sheet,
     r,
-    'Marketlar bilan hisob',
-    "to'lanishi kerak − to'langan = qoldi",
+    o.marketMoney ? 'Marketlar bilan hisob' : "Marketlar bo'yicha",
+    o.marketMoney ? "to'lanishi kerak − to'langan = qoldi" : undefined,
   );
   const table = addTable(sheet, r, {
     total: true,
@@ -314,26 +352,7 @@ function writeSummary(
         fmt: REPORT_FMT.som,
         sum: true,
       },
-      {
-        header: "Kerak, so'm",
-        value: (m) => m.due,
-        fmt: REPORT_FMT.somDash,
-        sum: true,
-      },
-      {
-        header: "To'langan, so'm",
-        value: (m) => m.paid,
-        fmt: REPORT_FMT.somDash,
-        sum: true,
-        color: REPORT_COLORS.success,
-      },
-      {
-        header: "Qoldi, so'm",
-        value: (m, k) => formula(`F${k}-G${k}`, m.due - m.paid),
-        fmt: REPORT_FMT.somDash,
-        bold: true,
-        sum: true,
-      },
+      ...(o.marketMoney ? marketMoneyColumns() : []),
     ],
   });
   addShareTable(sheet, table.next, {
@@ -351,6 +370,12 @@ export async function buildOrdersAccountsXlsx(
 ): Promise<Buffer> {
   const { rows, total, maxRows, subtitle } = input;
   const now = input.now ?? new Date();
+  const marketMoney = input.marketMoney ?? true;
+  const columns = marketMoney
+    ? ORDERS_ACCOUNTS_COLUMNS
+    : ORDERS_ACCOUNTS_COLUMNS.filter(
+        (column) => !MARKET_MONEY_KEYS.has(column.key),
+      );
   const count = rows.length;
   const truncated = total > maxRows;
   // Ilgari chegaradan oshgan qism JIMGINA qirqilardi.
@@ -376,7 +401,7 @@ export async function buildOrdersAccountsXlsx(
   const sheet = addReportSheet(
     book.workbook,
     'Buyurtmalar',
-    ORDERS_ACCOUNTS_COLUMNS.map((column) => column.width),
+    columns.map((column) => column.width),
     {
       orientation: 'landscape',
       freeze: headRow,
@@ -399,15 +424,19 @@ export async function buildOrdersAccountsXlsx(
   }
   r = addSlimKpis(sheet, r, [
     { label: "Jami narx, so'm", value: price },
-    { label: "Marketga to'lanishi kerak, so'm", value: due },
-    { label: "Marketga to'langan, so'm", value: paid, tone: 'success' },
-    {
-      label: "Qoldi, so'm",
-      value: due - paid,
-      tone: due - paid ? 'warning' : 'success',
-    },
+    ...(marketMoney
+      ? ([
+          { label: "Marketga to'lanishi kerak, so'm", value: due },
+          { label: "Marketga to'langan, so'm", value: paid, tone: 'success' },
+          {
+            label: "Qoldi, so'm",
+            value: due - paid,
+            tone: due - paid ? 'warning' : 'success',
+          },
+        ] as const)
+      : []),
   ]);
-  const list = new ReportList(sheet, ORDERS_ACCOUNTS_COLUMNS);
+  const list = new ReportList(sheet, columns);
   list.header(r, 28);
   book.commitRow(sheet, r);
   r += 1;
@@ -431,12 +460,16 @@ export async function buildOrdersAccountsXlsx(
     total_price: {
       value: list.subtotal('total_price', firstRow, lastRow, price),
     },
-    paid_amount: {
-      value: list.subtotal('paid_amount', firstRow, lastRow, paid),
-    },
-    to_be_paid: {
-      value: list.subtotal('to_be_paid', firstRow, lastRow, due),
-    },
+    ...(marketMoney
+      ? {
+          paid_amount: {
+            value: list.subtotal('paid_amount', firstRow, lastRow, paid),
+          },
+          to_be_paid: {
+            value: list.subtotal('to_be_paid', firstRow, lastRow, due),
+          },
+        }
+      : {}),
   });
   r += 1;
   for (const warning of warnings) {
@@ -446,6 +479,14 @@ export async function buildOrdersAccountsXlsx(
   list.finish(headRow, firstRow, lastRow);
   book.commitSheet(sheet);
 
-  writeSummary(book, rows, { subtitle, now, warnings, price, due, paid });
+  writeSummary(book, rows, {
+    subtitle,
+    now,
+    warnings,
+    price,
+    due,
+    paid,
+    marketMoney,
+  });
   return book.finish();
 }

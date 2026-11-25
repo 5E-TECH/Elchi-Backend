@@ -137,6 +137,28 @@ describe('export/orders.xlsx — qator', () => {
 });
 
 describe('export/orders.xlsx — fayl', () => {
+  it('⭐ D5NxxpJW: marketMoney=false (menejer, filial, registrator) — marketga to`langan/kerak/qoldi hech qayerda yo`q', async () => {
+    const wb = await load(await build({ marketMoney: false }));
+    const header = (
+      wb.getWorksheet('Buyurtmalar')!.getRow(9).values as unknown[]
+    ).slice(2);
+    expect(header).toEqual(
+      ORDERS_ACCOUNTS_COLUMNS.filter(
+        (c) => !['paid_amount', 'to_be_paid'].includes(c.key),
+      ).map((c) => c.header),
+    );
+    const cells = ['Buyurtmalar', 'Xulosa'].flatMap((name) =>
+      sheetRows(wb, name).flat(),
+    );
+    for (const value of [175_000, 515_000, 690_000]) {
+      expect(cells).not.toContain(value);
+    }
+    expect(cells.join(' | ')).not.toMatch(/Kerak|Qoldi|To'lan(gan, so'm|ishi)/);
+    // Jami narx va marketlar bo'yicha sonlar qoladi.
+    expect(cells).toContain(1_660_000);
+    expect(cells).toContain("Marketlar bo'yicha");
+  });
+
   it('logotip, hisob kartalari, ustunlar, JAMI (SUBTOTAL)', async () => {
     const wb = await load(await build());
     const ws = wb.getWorksheet('Buyurtmalar')!;

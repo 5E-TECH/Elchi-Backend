@@ -8,12 +8,16 @@ import { projectOrderContactsForRoles } from './order-contact-projection';
  * BIR XIL edi: kuryer (TEST Claude Kuryer, order 25) `market_tariff:20000`,
  * `branch_share`, `order.market.tariff_center` ni, market esa kuryer
  * tarifi/ulushi va filial ulushini ko'rardi. UI ularni yashirsa ham API'da
- * maxfiylik yo'q edi. Karta talabi: superadmin/menejer — hammasi; market —
- * faqat market tarifi; kuryer — faqat kuryer tarifi.
+ * maxfiylik yo'q edi. Karta talabi: superadmin — hammasi; market — faqat
+ * market tarifi; kuryer — faqat kuryer tarifi.
  *
  * Qoidalar:
- *   - SUPERADMIN/ADMIN va filial xodimlari (MANAGER/BRANCH/REGISTRATOR) —
- *     o'zgarishsiz (to'liq ko'rinish);
+ *   - SUPERADMIN/ADMIN — o'zgarishsiz (to'liq ko'rinish);
+ *   - MANAGER / BRANCH / REGISTRATOR (D5NxxpJW, ega 2026-11-20 va 2026-11-25;
+ *     kH2zZsz3 dagi «menejer — hammasi» o'rniga) — market tarifi va uni
+ *     hisoblab beradigan maydonlar YO'Q (`BRANCH_STAFF_HIDDEN_ORDER_FIELDS`),
+ *     `order.market` profilidagi tarif/komissiya ham. Filial ulushi, kuryer
+ *     tarifi va kuryer ulushi QOLADI. Mijoz obyekti qisqartirilmaydi;
  *   - MARKET / MARKET_OPERATOR — kuryer tarifi/ulushi va filial ulushi
  *     (`branch_share`, `branch_cashbox_amount`) YO'Q;
  *   - COURIER — market tarifi, filial ulushi va `order.market` profilidagi
@@ -53,11 +57,11 @@ import { projectOrderContactsForRoles } from './order-contact-projection';
  * kifoya.
  *
  * Maydon O'CHIRILADI (null qilinmaydi). Elchi-Frontend bilan moslik
- * (src/widgets/order-meta/model/orderMeta.ts, 373f07d): `readOrderMeta`
+ * (src/widgets/order-meta/model/orderMeta.ts): `readOrderMeta`
  * `market_tariff`/`courier_tariff`/`courier_share`/`branch_share` ni o'qiydi,
  * lekin `visibleTariffs(role)` faqat rolga ruxsat etilganini chizadi —
- * superadmin/admin/manager: hammasi, market: `marketTariff`, kuryer:
- * `courierTariff`, qolganlar: hech narsa. Backend aynan shu maydonlarni
+ * superadmin/admin: hammasi, menejer: filial ulushi va kuryer tarifi/ulushi,
+ * market: `marketTariff`, kuryer: `courierTariff`, qolganlar: hech narsa. Backend aynan shu maydonlarni
  * qoldiradi, demak FE sinmaydi (yo'q maydon `null` → "—", u ham chizilmaydi).
  */
 
@@ -120,6 +124,25 @@ export const RESTRICTED_HIDDEN_ORDER_FIELDS: readonly string[] = Array.from(
     'sale_market_paid_max',
   ]),
 );
+
+/**
+ * D5NxxpJW (ega 2026-11-20 / 2026-11-25) — filial xodimlari (MANAGER, BRANCH,
+ * REGISTRATOR) ko'rmaydigan buyurtma maydonlari: market tarifi va undan
+ * hisoblanadiganlar (`to_be_paid = total_price − market_tariff`;
+ * `sale_market_paid_max` = summa − onlayn − to'langan − market tarifi).
+ * `branch_share`, `branch_cashbox_amount`, `courier_tariff`, `courier_share`
+ * QOLADI. Menejerning marketga to'lovi (63HO6cBU, PR-C) shu maydonlarga
+ * tayanmaydi — u jami summalar bilan ishlaydi
+ * (`GET finance/cashbox/manager/markets`).
+ */
+export const BRANCH_STAFF_HIDDEN_ORDER_FIELDS: readonly string[] = [
+  'market_tariff',
+  'quoted_market_tariff',
+  'to_be_paid',
+  'paid_amount',
+  'sale_market_paid_amount',
+  'sale_market_paid_max',
+];
 
 /**
  * 4BftLLnc — logist ko'rmaydigan buyurtma maydonlari (karta 4-band):
@@ -206,6 +229,10 @@ export const CUSTOMER_VIEW_FIELDS: readonly string[] = [
 const FULL_VIEW_ROLES: readonly string[] = [
   RoleEnum.SUPERADMIN,
   RoleEnum.ADMIN,
+];
+
+/** D5NxxpJW: filial xodimlari — market tarifisiz ko'rinish. */
+const BRANCH_STAFF_ROLES: readonly string[] = [
   RoleEnum.MANAGER,
   RoleEnum.BRANCH,
   RoleEnum.REGISTRATOR,
@@ -219,9 +246,10 @@ export type OrderProjection = {
   marketProfileFields: ReadonlySet<string>;
   /**
    * vf4513Zn: `customer` obyektida QOLADIGAN maydonlar (allowlist,
-   * `CUSTOMER_VIEW_FIELDS` + camelCase). Barcha cheklangan rollarda bor.
+   * `CUSTOMER_VIEW_FIELDS` + camelCase). Barcha cheklangan rollarda bor;
+   * filial xodimlarida (D5NxxpJW) yo'q — mijoz obyekti avvalgidek to'liq.
    */
-  customerFields: ReadonlySet<string>;
+  customerFields?: ReadonlySet<string>;
   /** 4BftLLnc: LOGIST — nomi shu naqshga mos kalit ham olib tashlanadi. */
   keyPattern?: RegExp;
 };
@@ -250,7 +278,9 @@ const CUSTOMER_VIEW_KEYS: ReadonlySet<string> = new Set(
 /**
  * So'rovchi rollari uchun proyeksiya. `null` — to'liq ko'rinish
  * (proyeksiya yo'q). Bir nechta cheklangan rol bo'lsa (masalan kuryer va
- * market) — yashiriladigan maydonlar BIRLASHADI. Ro'yxatda yo'q rol yoki
+ * market) — yashiriladigan maydonlar BIRLASHADI; filial xodimi roli esa
+ * torroq roldan ustun (menejer + kuryer — menejer ko'rinishi, avvalgidek).
+ * Ro'yxatda yo'q rol yoki
  * rollar umuman bo'lmasa — FAIL-CLOSED: `RESTRICTED_HIDDEN_ORDER_FIELDS`
  * (kH2zZsz3 tekshiruvi #3; ilgari bunday rol to'liq ko'rinish olardi).
  */
@@ -267,6 +297,12 @@ export function resolveOrderProjection(
   let keyPattern: RegExp | undefined;
   const hide = (fields: readonly string[], target: Set<string>) =>
     withCamelVariants(fields).forEach((field) => target.add(field));
+
+  if (normalized.some((role) => BRANCH_STAFF_ROLES.includes(role))) {
+    hide(BRANCH_STAFF_HIDDEN_ORDER_FIELDS, orderFields);
+    hide(COURIER_HIDDEN_MARKET_PROFILE_FIELDS, marketProfileFields);
+    return { orderFields, marketProfileFields };
+  }
 
   // Bo'sh rollar ro'yxati ham noma'lum rol kabi — fail-closed.
   for (const role of normalized.length ? normalized : ['']) {
@@ -384,7 +420,9 @@ function projectValue(
       isPlainObject(nested) &&
       projection.marketProfileFields.size
         ? omitKeys(nested, projection.marketProfileFields)
-        : key === 'customer' && isPlainObject(nested)
+        : key === 'customer' &&
+            projection.customerFields &&
+            isPlainObject(nested)
           ? pickKeys(nested, projection.customerFields)
           : nested;
     const projected = projectValue(child, projection, depth + 1);
@@ -392,6 +430,31 @@ function projectValue(
     next[key] = projected;
   }
   return changed ? next : value;
+}
+
+/**
+ * D5NxxpJW — `GET /orders/:id/settlement` qatori: marketga tegadigan summa
+ * (`market_amount` = yig'ilgan − market tarifi − …) va shu yo'lda filial
+ * to'lagan qismi market tarifini ochadi. To'liq ko'rinishli roldan boshqa
+ * hech kimga qaytmaydi (`extra_rows` ichida ham); kuryer va filial oyoqlari
+ * (`courier_amount`, `branch_amount`) qoladi.
+ */
+const SETTLEMENT_MARKET_KEYS: ReadonlySet<string> = new Set(
+  withCamelVariants(['market_amount', 'market_paid_by_branch_amount']),
+);
+
+export function projectOrderSettlementForRoles<T>(
+  roles: string[] | undefined,
+  payload: T,
+): T {
+  if (normalizeRoles(roles).some((role) => FULL_VIEW_ROLES.includes(role))) {
+    return payload;
+  }
+  return projectValue(
+    payload,
+    { orderFields: SETTLEMENT_MARKET_KEYS, marketProfileFields: new Set() },
+    0,
+  ) as T;
 }
 
 /**
