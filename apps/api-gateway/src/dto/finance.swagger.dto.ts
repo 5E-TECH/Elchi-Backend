@@ -35,6 +35,32 @@ import {
 } from '@app/common';
 import { ExpenseCategory } from '@app/common/enums';
 
+/**
+ * KRN902pg — kassa tarixi «To'lov usuli» / «Karta» filtrlari (vergul bilan
+ * bir nechta qiymat; takrorlangan parametr — `?payment_method=cash&payment_method=click`
+ * — ham qabul qilinadi). Ma'no — finance `history-method-card.filter`.
+ */
+const PAYMENT_METHOD_FILTER_RE =
+  /^(cash|click|click_to_market|none)(,(cash|click|click_to_market|none))*$/;
+const CARD_FILTER_RE = /^(\d{1,18}|none)(,(\d{1,18}|none))*$/;
+const joinQueryList = ({ value }: { value: unknown }) =>
+  Array.isArray(value) ? value.join(',') : value;
+const PAYMENT_METHOD_FILTER_MESSAGE =
+  "payment_method noto'g'ri: cash, click, click_to_market yoki none (vergul bilan)";
+const CARD_FILTER_MESSAGE =
+  "card_id noto'g'ri: karta ID si yoki none (vergul bilan)";
+const PAYMENT_METHOD_FILTER_DESCRIPTION =
+  "(KRN902pg) To'lov usuli — vergul bilan bir nechta: `cash` (Naqd), `click` (O'tkazma / karta), " +
+  "`click_to_market` (Marketga o'tkazma), `none` (usuli bo'sh qator). Qiymatlar o'zaro YOKI, boshqa filtrlar bilan VA; " +
+  "`counts` / `pagination.total` filtrdan keyin. Noma'lum qiymat — 400. Faqat SA/admin/menejer/registrator " +
+  "(kuryer, market — 403: filial oyog'i qatorida usul kuryerdan yashirilgan, 63HO6cBU).";
+const CARD_FILTER_DESCRIPTION =
+  "(KRN902pg) Karta — vergul bilan karta ID'lari (`GET /finance/cashbox/cards`) va/yoki `none` (kartasiz). " +
+  'Qator kartasi tarix tafsilotidagi `card` bilan bir xil: asosiy kassa qatorining `card_id` si; `card_id` siz ' +
+  '`click` qatori — Asosiy karta (Asosiy karta ID si tanlansa ular ham chiqadi); kuryer / market kassasi qatori — ' +
+  "o'sha o'tkazmaning (`transfer_id`) asosiy kassa qatoridagi karta. Naqd, «Marketga o'tkazma» va filial kassasi — " +
+  "`none`. Raqam yoki `none` bo'lmagan qiymat — 400. Rol cheklovi — `payment_method` dagidek.";
+
 export class CreateCashboxRequestDto {
   @ApiProperty({ example: '12345' })
   @IsString()
@@ -62,6 +88,28 @@ export class CreateCashboxRequestDto {
 }
 
 export class FindCashboxByUserQueryDto {
+  /** KRN902pg — «To'lov usuli» filtri. */
+  @ApiPropertyOptional({
+    example: 'cash,click',
+    description: PAYMENT_METHOD_FILTER_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(joinQueryList)
+  @IsString({ message: PAYMENT_METHOD_FILTER_MESSAGE })
+  @Matches(PAYMENT_METHOD_FILTER_RE, { message: PAYMENT_METHOD_FILTER_MESSAGE })
+  payment_method?: string;
+
+  /** KRN902pg — «Karta» filtri. */
+  @ApiPropertyOptional({
+    example: '3,none',
+    description: CARD_FILTER_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(joinQueryList)
+  @IsString({ message: CARD_FILTER_MESSAGE })
+  @Matches(CARD_FILTER_RE, { message: CARD_FILTER_MESSAGE })
+  card_id?: string;
+
   @ApiPropertyOptional({ enum: Cashbox_type })
   @IsOptional()
   @IsEnum(Cashbox_type)
@@ -211,6 +259,28 @@ export class UpdateCashboxBalanceRequestDto {
 }
 
 export class FindHistoryQueryDto {
+  /** KRN902pg — «To'lov usuli» filtri. */
+  @ApiPropertyOptional({
+    example: 'cash,click',
+    description: PAYMENT_METHOD_FILTER_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(joinQueryList)
+  @IsString({ message: PAYMENT_METHOD_FILTER_MESSAGE })
+  @Matches(PAYMENT_METHOD_FILTER_RE, { message: PAYMENT_METHOD_FILTER_MESSAGE })
+  payment_method?: string;
+
+  /** KRN902pg — «Karta» filtri. */
+  @ApiPropertyOptional({
+    example: '3,none',
+    description: CARD_FILTER_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(joinQueryList)
+  @IsString({ message: CARD_FILTER_MESSAGE })
+  @Matches(CARD_FILTER_RE, { message: CARD_FILTER_MESSAGE })
+  card_id?: string;
+
   /** ljVOuNz4 — kassa xarajati kategoriyasi bo'yicha filtr. */
   @ApiPropertyOptional({
     example: '2',
@@ -1844,6 +1914,28 @@ export class HqCourierReceivablesResponseDto {
  * boshi / oxiri qoldig'i. Sana — faqat 'YYYY-MM-DD' (Toshkent kuni).
  */
 export class HistoryDailyQueryDto {
+  /** KRN902pg — «To'lov usuli» filtri. */
+  @ApiPropertyOptional({
+    example: 'cash,click',
+    description: PAYMENT_METHOD_FILTER_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(joinQueryList)
+  @IsString({ message: PAYMENT_METHOD_FILTER_MESSAGE })
+  @Matches(PAYMENT_METHOD_FILTER_RE, { message: PAYMENT_METHOD_FILTER_MESSAGE })
+  payment_method?: string;
+
+  /** KRN902pg — «Karta» filtri. */
+  @ApiPropertyOptional({
+    example: '3,none',
+    description: CARD_FILTER_DESCRIPTION,
+  })
+  @IsOptional()
+  @Transform(joinQueryList)
+  @IsString({ message: CARD_FILTER_MESSAGE })
+  @Matches(CARD_FILTER_RE, { message: CARD_FILTER_MESSAGE })
+  card_id?: string;
+
   @ApiPropertyOptional({
     example: '2026-10-01',
     description:

@@ -9128,6 +9128,26 @@
             }
           },
           {
+            "name": "payment_method",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) To'lov usuli — vergul bilan bir nechta: `cash` (Naqd), `click` (O'tkazma / karta), `click_to_market` (Marketga o'tkazma), `none` (usuli bo'sh qator). Qiymatlar o'zaro YOKI, boshqa filtrlar bilan VA; `counts` / `pagination.total` filtrdan keyin. Noma'lum qiymat — 400. Faqat SA/admin/menejer/registrator (kuryer, market — 403: filial oyog'i qatorida usul kuryerdan yashirilgan, 63HO6cBU).",
+            "schema": {
+              "example": "cash,click",
+              "type": "string"
+            }
+          },
+          {
+            "name": "card_id",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) Karta — vergul bilan karta ID'lari (`GET /finance/cashbox/cards`) va/yoki `none` (kartasiz). Qator kartasi tarix tafsilotidagi `card` bilan bir xil: asosiy kassa qatorining `card_id` si; `card_id` siz `click` qatori — Asosiy karta (Asosiy karta ID si tanlansa ular ham chiqadi); kuryer / market kassasi qatori — o'sha o'tkazmaning (`transfer_id`) asosiy kassa qatoridagi karta. Naqd, «Marketga o'tkazma» va filial kassasi — `none`. Raqam yoki `none` bo'lmagan qiymat — 400. Rol cheklovi — `payment_method` dagidek.",
+            "schema": {
+              "example": "3,none",
+              "type": "string"
+            }
+          },
+          {
             "name": "cashbox_type",
             "required": false,
             "in": "query",
@@ -10563,6 +10583,26 @@
         "operationId": "FinanceGatewayController_findHistory",
         "parameters": [
           {
+            "name": "payment_method",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) To'lov usuli — vergul bilan bir nechta: `cash` (Naqd), `click` (O'tkazma / karta), `click_to_market` (Marketga o'tkazma), `none` (usuli bo'sh qator). Qiymatlar o'zaro YOKI, boshqa filtrlar bilan VA; `counts` / `pagination.total` filtrdan keyin. Noma'lum qiymat — 400. Faqat SA/admin/menejer/registrator (kuryer, market — 403: filial oyog'i qatorida usul kuryerdan yashirilgan, 63HO6cBU).",
+            "schema": {
+              "example": "cash,click",
+              "type": "string"
+            }
+          },
+          {
+            "name": "card_id",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) Karta — vergul bilan karta ID'lari (`GET /finance/cashbox/cards`) va/yoki `none` (kartasiz). Qator kartasi tarix tafsilotidagi `card` bilan bir xil: asosiy kassa qatorining `card_id` si; `card_id` siz `click` qatori — Asosiy karta (Asosiy karta ID si tanlansa ular ham chiqadi); kuryer / market kassasi qatori — o'sha o'tkazmaning (`transfer_id`) asosiy kassa qatoridagi karta. Naqd, «Marketga o'tkazma» va filial kassasi — `none`. Raqam yoki `none` bo'lmagan qiymat — 400. Rol cheklovi — `payment_method` dagidek.",
+            "schema": {
+              "example": "3,none",
+              "type": "string"
+            }
+          },
+          {
             "name": "expense_category_id",
             "required": false,
             "in": "query",
@@ -10822,6 +10862,26 @@
         "description": "qzjTMWPb. Toshkent kunlari bo'yicha `days[]`: `income`, `expense`, `net`, `income_count`, `expense_count` (cashbox_history'dan jonli, filtrlar bilan — /finance/history bilan bir xil filtr ma'nosi) va `opening_balance` / `closing_balance` (kassa doirasining kun boshi/oxiri qoldig'i — manba/tur/yaratgan filtriga BOG'LIQ EMAS). `opening_balance` (davr boshi) = `from_date` dan oldingi kun oxiri; `closing_balance` = oxirgi o'tgan kun yoki bugun (jonli). Kelajak kunlari qoldig'i `null`. `balance_status`: `ok`; `pending` — kunlik snapshot hali qurilmagan (deploydan keyingi birinchi daqiqalar) — qoldiqlar `null`, oqimlar bor; `partial` — snapshot orqada (catch-up davom etyapti). «Kechaga nisbatan» = bugungi `closing_balance` − kechagi `closing_balance`. Sukut oraliq — oxirgi 14 kun; ko'pi bilan 366 kun.",
         "operationId": "FinanceGatewayController_historyDaily",
         "parameters": [
+          {
+            "name": "payment_method",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) To'lov usuli — vergul bilan bir nechta: `cash` (Naqd), `click` (O'tkazma / karta), `click_to_market` (Marketga o'tkazma), `none` (usuli bo'sh qator). Qiymatlar o'zaro YOKI, boshqa filtrlar bilan VA; `counts` / `pagination.total` filtrdan keyin. Noma'lum qiymat — 400. Faqat SA/admin/menejer/registrator (kuryer, market — 403: filial oyog'i qatorida usul kuryerdan yashirilgan, 63HO6cBU).",
+            "schema": {
+              "example": "cash,click",
+              "type": "string"
+            }
+          },
+          {
+            "name": "card_id",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) Karta — vergul bilan karta ID'lari (`GET /finance/cashbox/cards`) va/yoki `none` (kartasiz). Qator kartasi tarix tafsilotidagi `card` bilan bir xil: asosiy kassa qatorining `card_id` si; `card_id` siz `click` qatori — Asosiy karta (Asosiy karta ID si tanlansa ular ham chiqadi); kuryer / market kassasi qatori — o'sha o'tkazmaning (`transfer_id`) asosiy kassa qatoridagi karta. Naqd, «Marketga o'tkazma» va filial kassasi — `none`. Raqam yoki `none` bo'lmagan qiymat — 400. Rol cheklovi — `payment_method` dagidek.",
+            "schema": {
+              "example": "3,none",
+              "type": "string"
+            }
+          },
           {
             "name": "from_date",
             "required": false,

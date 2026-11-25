@@ -119,6 +119,7 @@ import {
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import {
   ReceiptProjectionInterceptor,
+  canSeeBranchLegMethod,
   canSeeReceipts,
   projectFullReceipt,
 } from './finance-receipt-projection';
@@ -1446,6 +1447,8 @@ export class FinanceGatewayController {
       source_types?: string;
       fromDate?: string;
       toDate?: string;
+      payment_method?: string;
+      card_id?: string;
     },
     /** T3 — `receipt` bloki (faqat SA/admin/menejer; finance sukut — yo'q). */
     includeReceipts = false,
@@ -1464,6 +1467,9 @@ export class FinanceGatewayController {
         // FE-PAY-04 / C2: sana filtri (Toshkent kuni — finance'da).
         from_date: query.fromDate,
         to_date: query.toDate,
+        // KRN902pg — «To'lov usuli» / «Karta».
+        payment_method: query.payment_method,
+        card_id: query.card_id,
         include_receipts: includeReceipts,
       },
     );
@@ -1856,6 +1862,7 @@ export class FinanceGatewayController {
     @Query() query: FindCashboxByUserQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    this.assertMethodCardFilterAllowed(req?.user, query);
     const managerBranchCashboxId =
       this.isManager(req?.user) && !this.isPrivileged(req?.user)
         ? await this.resolveManagerBranchCashboxId(req.user, user_id)
@@ -3718,6 +3725,26 @@ export class FinanceGatewayController {
     );
   }
 
+  /**
+   * KRN902pg — «To'lov usuli» / «Karta» filtri faqat usulni to'liq ko'radigan
+   * rollarga (SA/admin, menejer, registrator). Kuryer filial oyog'i qatorida
+   * usulni ko'rmaydi (63HO6cBU) — filtr natijasi uni oshkor qilardi; market
+   * kassasida bunday sahifa yo'q.
+   */
+  private assertMethodCardFilterAllowed(
+    user: JwtUser | undefined,
+    query: { payment_method?: string; card_id?: string } | undefined,
+  ) {
+    if (
+      (query?.payment_method || query?.card_id) &&
+      !canSeeBranchLegMethod(this.getUserRoles(user))
+    ) {
+      throw new ForbiddenException(
+        "To'lov usuli va karta filtri faqat SA/admin/menejer/registratorga",
+      );
+    }
+  }
+
   @Get('history')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -3784,6 +3811,7 @@ export class FinanceGatewayController {
         'Chek holati filtri faqat SA/admin/menejerga',
       );
     }
+    this.assertMethodCardFilterAllowed(req?.user, query);
     if (
       this.hasRole(req?.user, RoleEnum.MARKET) &&
       !this.isPrivileged(req?.user)
@@ -4021,6 +4049,7 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     const user = req?.user;
+    this.assertMethodCardFilterAllowed(user, query);
     const filters = {
       from_date: query?.from_date ?? query?.fromDate,
       to_date: query?.to_date ?? query?.toDate,
@@ -4029,6 +4058,9 @@ export class FinanceGatewayController {
       source_types: query?.source_types ?? query?.sourceTypes,
       source_user_id: query?.source_user_id,
       created_by: query?.created_by,
+      // KRN902pg — `GET /finance/history` bilan AYNI filtr.
+      payment_method: query?.payment_method,
+      card_id: query?.card_id,
     };
     const send = (scope: Record<string, unknown>) =>
       this.send({ cmd: 'finance.history.daily' }, { ...filters, ...scope });

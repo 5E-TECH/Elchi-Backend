@@ -11,6 +11,12 @@ import { CashboxHistory } from '../entities/cashbox-history.entity';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { FinanceDailySnapshot } from '../entities/finance-daily-snapshot.entity';
+import { CashboxCard } from '../entities/cashbox-card.entity';
+import {
+  historyMethodCardSql,
+  positionalSqlBinder,
+  resolveHistoryMethodCardFilter,
+} from '../history-filters/history-method-card.filter';
 import {
   addDays,
   dayKeysBetween,
@@ -66,6 +72,9 @@ export interface HistoryDailyInput {
   sourceTypes?: string;
   source_user_id?: string;
   created_by?: string;
+  /** KRN902pg — `GET /finance/history` bilan AYNI ma'no (vergul bilan). */
+  payment_method?: string;
+  card_id?: string;
 }
 
 export interface DailyFlowRow {
@@ -241,6 +250,21 @@ export class FinanceDailyService {
     return 'false';
   }
 
+  /** KRN902pg — berilgan karta ID'laridan Asosiy (`is_default`) bo'lganlari. */
+  private async defaultCardsAmong(
+    ids: string[],
+  ): Promise<Array<{ id: string; cashbox_id: string }>> {
+    // Faqat karta filtri bo'lganda (eski `history/daily` so'rovi va spec'lari karta jadvaliga bog'lanmaydi).
+    const cards = quote(this.dataSource.getMetadata(CashboxCard).tablePath);
+    const rows: Array<{ id: string; cashbox_id: string }> =
+      await this.dataSource.query(
+        `SELECT "id"::text AS id, "cashbox_id"::text AS cashbox_id FROM ${cards}
+          WHERE "id" = ANY($1::bigint[]) AND "is_default" = true AND "is_deleted" = false`,
+        [ids],
+      );
+    return rows;
+  }
+
   async lastSnapshotDate(): Promise<string | null> {
     const { snapshots } = this.tables();
     const rows: Array<{ day: string | null }> = await this.dataSource.query(
@@ -369,9 +393,13 @@ export class FinanceDailyService {
       'source_user_id',
     );
     const createdBy = this.optionalId(input?.created_by, 'created_by');
+    // KRN902pg — «To'lov usuli» / «Karta» (noma'lum qiymat — 400).
+    const methodCard = await resolveHistoryMethodCardFilter(input, (ids) =>
+      this.defaultCardsAmong(ids),
+    );
     const scope = await this.resolveScope(input ?? {});
     const filtered = Boolean(
-      operationType || sourceTypes || sourceUserId || createdBy,
+      operationType || sourceTypes || sourceUserId || createdBy || methodCard,
     );
 
     const t = this.tables();
@@ -398,6 +426,16 @@ export class FinanceDailyService {
     if (createdBy) {
       params.push(createdBy);
       where.push(`h."created_by" = $${params.length}`);
+    }
+    if (methodCard) {
+      where.push(
+        historyMethodCardSql(
+          'h',
+          methodCard,
+          { history: t.history, cashboxes: t.cashboxes },
+          positionalSqlBinder(params),
+        ),
+      );
     }
     const flowRows: Array<{
       day: string;
