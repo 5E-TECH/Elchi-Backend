@@ -44,7 +44,6 @@ import { RolesGuard } from './auth/roles.guard';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import { projectDistrictReviewFields } from './auth/district-review-projection';
-import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
   ProblemContactsService,
   attachProblemContacts,
@@ -1567,8 +1566,9 @@ export class LogisticsGatewayController {
         },
       },
     )) as ReturnRequestsResponse;
-    // T7 (B3): menejerga market va operator telefonlarisiz.
-    return projectOrderContactsForRoles(
+    // T7 (B3): menejerga market va operator telefonlarisiz; D5NxxpJW: market
+    // tarifisiz.
+    return projectOrderPayloadForRoles(
       req.user.roles,
       await this.enrichReturnRequestsResponse(response),
     );

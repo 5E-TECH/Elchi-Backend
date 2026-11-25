@@ -32,7 +32,7 @@ import {
   throwError,
   timeout,
 } from 'rxjs';
-import { projectOrderContactsForRoles } from './auth/order-contact-projection';
+import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   ProblemContactsService,
   attachProblemContacts,
@@ -1019,9 +1019,9 @@ export class BranchGatewayController {
           attachProblemContacts(this.problemContacts, response),
         ),
         // T7 (B3): `items[].order` — menejer/filialga market va operator
-        // telefonlarisiz.
+        // telefonlarisiz; D5NxxpJW: market tarifisiz.
         map((response: unknown) =>
-          projectOrderContactsForRoles(req?.user?.roles, response),
+          projectOrderPayloadForRoles(req?.user?.roles, response),
         ),
       );
   }
@@ -1105,9 +1105,10 @@ export class BranchGatewayController {
         switchMap((response: unknown) =>
           attachProblemContacts(this.problemContacts, response),
         ),
-        // T7 (B3): menejer/filialga market va operator telefonlarisiz.
+        // T7 (B3): menejer/filialga market va operator telefonlarisiz;
+        // D5NxxpJW: market tarifisiz.
         map((response: unknown) =>
-          projectOrderContactsForRoles(req?.user?.roles, response),
+          projectOrderPayloadForRoles(req?.user?.roles, response),
         ),
       );
   }

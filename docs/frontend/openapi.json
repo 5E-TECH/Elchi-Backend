@@ -1249,7 +1249,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: xuddi shu, lekin `phone_number` YO'Q (T7 B3 — market telefoni menejerga ko'rinmaydi). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
+            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: faqat {id, name, status, default_tariff, weight_volume_pricing} — `phone_number` (T7 B3) va narxlar `tariff_home` / `tariff_center` (D5NxxpJW, ega 2026-11-25) YO'Q. COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
           }
         },
         "security": [
@@ -5411,7 +5411,7 @@
         ],
         "responses": {
           "200": {
-            "description": "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+            "description": "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. 0Rn5U6AD: `courier: {id, name, phone_number} | null`; `branch.phone_number` va `branch.manager: {id, name, phone_number} | null` — SUPERADMIN/ADMIN/REGISTRATOR ga (MANAGER/BRANCH — faqat o'z filiali), boshqalarga kalit yo'q.",
             "content": {
               "application/json": {
                 "schema": {
@@ -20927,7 +20927,7 @@
     },
     "/export/orders.xlsx": {
       "get": {
-        "description": "Hisob bilan: jami narx, marketga to'lanishi kerak / to'langan / qoldi; holat o'zbekcha, kuryer ismi; 2-varaq — «Xulosa» (marketlar bilan hisob). 50 000 qatordan oshsa faylda DIQQAT.",
+        "description": "Hisob bilan: jami narx, marketga to'lanishi kerak / to'langan / qoldi (faqat SUPERADMIN/ADMIN — D5NxxpJW); holat o'zbekcha, kuryer ismi; 2-varaq — «Xulosa» (marketlar bilan hisob). 50 000 qatordan oshsa faylda DIQQAT.",
         "operationId": "ExcelGatewayController_exportOrders",
         "parameters": [
           {

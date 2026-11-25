@@ -9,16 +9,21 @@ import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import {
+  CONTACT_PATTERNS,
   Group_type,
   NotificationChannel,
   Order_status,
   OutboxService,
   escapeTelegramHtml,
   findNotificationType,
+  formatContactPhone,
+  isRetryableRmqError,
+  normalizeUzPhone,
   renderNotificationGroupKey,
   rmqSend,
   formatOrderNumber,
 } from '@app/common';
+import type { MyContacts } from '@app/common';
 import { Order } from '../entities/order.entity';
 import { CANCEL_REASON_UZ } from '../domain/cancel-reason';
 
@@ -52,8 +57,12 @@ import { CANCEL_REASON_UZ } from '../domain/cancel-reason';
  *   • xato/timeout → o'sha servis `NOTIFY_LOOKUP_BACKOFF_MS` davomida
  *     so'ralmaydi (har hodisa timeout kutib turmasin) va bildirishnoma
  *     logistsiz / to'liq bo'lmagan matn bilan ketadi (fail-open);
- *   • mijoz/kuryer/mahsulot faqat Telegram kanali bo'lgan turlar uchun
- *     so'raladi (hozir `order.cancelled`) — sotuvda umuman so'ralmaydi.
+ *   • mijoz/kuryer/mahsulot/market mas'uli faqat Telegram kanali bo'lgan
+ *     turlar uchun so'raladi (hozir `order.cancelled`, `order.sold_cheaper`)
+ *     — oddiy sotuvda umuman so'ralmaydi.
+ *
+ * (txZJQiCe) Market guruhiga kuryer TELEFONI chiqmaydi — «📞 Elchi
+ * mas'ulingiz» (market mas'uli → sukut → zaxira, `identity.contacts.for_user`).
  *
  * PII: in_app `body` — faqat buyurtma raqami + holat (telefon/manzil YO'Q).
  * Mijoz ismi/telefoni, manzil va izoh faqat market Telegram guruhiga
@@ -109,6 +118,15 @@ export const NOTIFY_LOOKUP_TIMEOUT_MS = 800;
 export const NOTIFY_LOOKUP_BACKOFF_MS = 30_000;
 /** (TC11) `regions.logist_id` xaritasi keshining yashash muddati. */
 export const REGION_DIRECTORY_TTL_MS = 5 * 60_000;
+/**
+ * (txZJQiCe) Market «Elchi mas'ulingiz» raqamlari keshi (market bo'yicha).
+ * Karta: mas'ul almashtirilgandan keyin yangi raqam ≤ 60 s ichida chiqadi.
+ */
+export const MARKET_CONTACTS_TTL_MS = 30_000;
+/** Kesh hajmi chegarasi — eng eski yozuv tashlanadi. */
+const MARKET_CONTACTS_CACHE_MAX = 1000;
+/** Matndagi «Elchi mas'ulingiz» qatorlari chegarasi (rezolver ≤ 2 beradi). */
+const TELEGRAM_MAX_CONTACT_LINES = 3;
 
 /** Telegram xabari chegarasi (API 4096; DTO ham 4096). */
 const TELEGRAM_TEXT_LIMIT = 4000;
@@ -325,7 +343,20 @@ const field = (value: unknown, max = 200) => {
 /** Telegram matni uchun boyitilgan ma'lumot (boshqa servislardan, fail-open). */
 export interface OrderTelegramDetails {
   customer?: { name?: string | null; phone_number?: string | null } | null;
-  courier?: { name?: string | null; phone_number?: string | null } | null;
+  /**
+   * (txZJQiCe) Faqat ism — kuryer telefoni market guruhiga HECH QACHON
+   * chiqmaydi (QPq2C1co 2-qaror: market ↔ kuryer aloqasi uzilgan).
+   */
+  courier?: { name?: string | null } | null;
+  /**
+   * (txZJQiCe) «📞 Elchi mas'ulingiz» qatorlari — `GET /users/me/contacts`
+   * bilan AYNI rezolver (`identity.contacts.for_user`, market user_id):
+   * biriktirilgan mas'ul → sukut mas'ul → zaxira raqamlar. Bo'sh — qator yo'q.
+   */
+  responsible_contacts?: ReadonlyArray<{
+    name?: string | null;
+    phone: string;
+  }> | null;
   region_name?: string | null;
   district_name?: string | null;
   items?: Array<{ name: string; quantity: number }>;
@@ -418,10 +449,25 @@ export function buildOrderTelegramText(
     lines.push(`🕒 <b>Yaratilgan vaqti:</b> ${escapeTelegramHtml(createdAt)}`);
   }
 
+  // (txZJQiCe) «Kuryer bilan aloqa» o'rniga marketning Elchi mas'uli: har
+  // raqam alohida qatorda; raqam yo'q — qator ham yo'q (kuryer raqami emas).
+  const contactLines = (details.responsible_contacts ?? [])
+    .map((contact) => ({
+      name: clip(contact?.name, 120),
+      phone: clip(formatContactPhone(contact?.phone), 40),
+    }))
+    .filter((contact) => contact.phone)
+    .slice(0, TELEGRAM_MAX_CONTACT_LINES)
+    .map(
+      (contact) =>
+        `📞 <b>Elchi mas'ulingiz:</b> ${
+          contact.name ? `${escapeTelegramHtml(contact.name)} — ` : ''
+        }${escapeTelegramHtml(contact.phone)}`,
+    );
   lines.push(
     '',
     `🚚 <b>Kuryer:</b> ${field(details.courier?.name, 120)}`,
-    `📞 <b>Kuryer bilan aloqa:</b> ${field(details.courier?.phone_number, 40)}`,
+    ...contactLines,
     `👨‍💼 <b>Operator:</b> ${field(order.operator, 120)}`,
     '',
   );
@@ -451,6 +497,64 @@ export function buildOrderTelegramText(
     text = next;
   }
   return text;
+}
+
+/** (txZJQiCe) Market guruhidagi «Elchi mas'ulingiz» qatori uchun aloqa. */
+export interface MarketTelegramContact {
+  name: string | null;
+  phone: string;
+}
+
+const phoneKey = (phone: unknown): string => {
+  const text =
+    typeof phone === 'string' || typeof phone === 'number'
+      ? String(phone).trim()
+      : '';
+  return normalizeUzPhone(text) ?? text;
+};
+
+/**
+ * (txZJQiCe) `identity.contacts.for_user` (market user_id) javobidan
+ * «Elchi mas'ulingiz» ro'yxati — `GET /users/me/contacts` bilan bir xil
+ * tartib (biriktirilgan → sukut → zaxira; buni identity hal qiladi). Faqat
+ * `kind: 'market_responsible'`; telefonsiz va takror raqam tashlanadi.
+ * Yaroqsiz / boshqa turdagi javob — `[]` (qator chiqmaydi).
+ */
+export function marketContactsFromResponse(
+  response: unknown,
+): MarketTelegramContact[] {
+  const data = (response as { data?: Partial<MyContacts> | null } | null)?.data;
+  if (
+    !data ||
+    data.kind !== 'market_responsible' ||
+    !Array.isArray(data.contacts)
+  ) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: MarketTelegramContact[] = [];
+  for (const contact of data.contacts) {
+    const phone =
+      typeof contact?.phone === 'string' ? contact.phone.trim() : '';
+    const key = phoneKey(phone);
+    if (!phone || seen.has(key)) continue;
+    seen.add(key);
+    const name = typeof contact.name === 'string' ? contact.name.trim() : '';
+    result.push({ name: name || null, phone });
+  }
+  return result.slice(0, TELEGRAM_MAX_CONTACT_LINES);
+}
+
+/**
+ * (txZJQiCe) Kuryer telefoni market guruhiga hech qanday holatda chiqmaydi —
+ * zaxira raqam sifatida xato kiritilgan bo'lsa ham shu yerda tashlanadi.
+ */
+export function withoutPhones(
+  contacts: readonly MarketTelegramContact[],
+  phones: ReadonlyArray<string | null | undefined>,
+): MarketTelegramContact[] {
+  const banned = new Set(phones.map(phoneKey).filter(Boolean));
+  return contacts.filter((contact) => !banned.has(phoneKey(contact.phone)));
 }
 
 export interface OrderNotificationPayload {
@@ -720,6 +824,11 @@ export class OrderNotificationService implements OnApplicationBootstrap {
   } | null = null;
   private regionDirectoryLoad: Promise<RegionDirectory | null> | null = null;
   private readonly lookupDownUntil = new Map<LookupTarget, number>();
+  /** (txZJQiCe) market_id → «Elchi mas'ulingiz» (`MARKET_CONTACTS_TTL_MS`). */
+  private readonly marketContacts = new Map<
+    string,
+    { value: MarketTelegramContact[]; expiresAt: number }
+  >();
 
   constructor(
     private readonly outbox: OutboxService,
@@ -1003,43 +1112,51 @@ export class OrderNotificationService implements OnApplicationBootstrap {
     ];
 
     const marketId = idOrNull(order.market_id);
-    const [directory, customerRes, courierRes, productsRes, marketRes] =
-      await Promise.all([
-        this.getRegionDirectory(),
-        wantsTelegram && customerId
-          ? this.lookup<unknown>(
-              'identity',
-              this.identityClient,
-              'identity.customer.find_by_ids',
-              { ids: [customerId] },
-            )
-          : null,
-        wantsTelegram && courierId
-          ? this.lookup<unknown>(
-              'identity',
-              this.identityClient,
-              'identity.courier.find_by_ids',
-              { ids: [courierId] },
-            )
-          : null,
-        wantsTelegram && missingProductIds.length
-          ? this.lookup<unknown>(
-              'catalog',
-              this.catalogClient,
-              'catalog.product.find_by_ids',
-              { ids: missingProductIds },
-            )
-          : null,
-        // (BOT-2 #1) guruhdagi mijoz PII sozlamasi — `telegramCardData` bilan bir xil.
-        wantsTelegram && marketId
-          ? this.lookup<{ data?: { tg_group_show_customer_pii?: unknown } }>(
-              'identity',
-              this.identityClient,
-              'identity.user.find_by_id',
-              { id: marketId },
-            )
-          : null,
-      ]);
+    const [
+      directory,
+      customerRes,
+      courierRes,
+      productsRes,
+      marketRes,
+      responsibleContacts,
+    ] = await Promise.all([
+      this.getRegionDirectory(),
+      wantsTelegram && customerId
+        ? this.lookup<unknown>(
+            'identity',
+            this.identityClient,
+            'identity.customer.find_by_ids',
+            { ids: [customerId] },
+          )
+        : null,
+      wantsTelegram && courierId
+        ? this.lookup<unknown>(
+            'identity',
+            this.identityClient,
+            'identity.courier.find_by_ids',
+            { ids: [courierId] },
+          )
+        : null,
+      wantsTelegram && missingProductIds.length
+        ? this.lookup<unknown>(
+            'catalog',
+            this.catalogClient,
+            'catalog.product.find_by_ids',
+            { ids: missingProductIds },
+          )
+        : null,
+      // (BOT-2 #1) guruhdagi mijoz PII sozlamasi — `telegramCardData` bilan bir xil.
+      wantsTelegram && marketId
+        ? this.lookup<{ data?: { tg_group_show_customer_pii?: unknown } }>(
+            'identity',
+            this.identityClient,
+            'identity.user.find_by_id',
+            { id: marketId },
+          )
+        : null,
+      // (txZJQiCe) «Kuryer bilan aloqa» o'rniga — market mas'uli.
+      wantsTelegram ? this.marketResponsibleContacts(marketId) : [],
+    ]);
 
     const regionId = directory ? regionOf(order, directory) : null;
     const logistId = regionId
@@ -1071,9 +1188,11 @@ export class OrderNotificationService implements OnApplicationBootstrap {
         customer: customer
           ? { name: customer.name, phone_number: customer.phone_number }
           : null,
-        courier: courier
-          ? { name: courier.name, phone_number: courier.phone_number }
-          : null,
+        // (txZJQiCe) Kuryerdan faqat ism — telefoni matnga uzatilmaydi.
+        courier: courier ? { name: courier.name } : null,
+        responsible_contacts: withoutPhones(responsibleContacts, [
+          courier?.phone_number,
+        ]),
         region_name: regionId
           ? (directory?.regionName.get(regionId) ?? null)
           : null,
@@ -1092,6 +1211,62 @@ export class OrderNotificationService implements OnApplicationBootstrap {
         }),
       },
     };
+  }
+
+  /**
+   * (txZJQiCe) Market «Elchi mas'ulingiz» raqamlari — `GET /users/me/contacts`
+   * bilan AYNI rezolver (`identity.contacts.for_user`, market user_id).
+   * Kesh — `MARKET_CONTACTS_TTL_MS`. Timeout `NOTIFY_LOOKUP_TIMEOUT_MS`
+   * (≤ 3 s), qayta urinishsiz. Javob yo'q → `[]`: qator chiqmaydi, xabar
+   * baribir ketadi. Transport xatosi (timeout/ulanish) — identity
+   * `NOTIFY_LOOKUP_BACKOFF_MS` so'ralmaydi (boshqa identity lookup'lari
+   * bilan bir xil); biznes xatosi (masalan, market o'chirilgan — 404) —
+   * backoff yo'q, boshqa marketlar uchun so'rayveradi.
+   */
+  private async marketResponsibleContacts(
+    marketId: string | null,
+  ): Promise<MarketTelegramContact[]> {
+    if (!marketId || !this.identityClient) return [];
+    const cached = this.marketContacts.get(marketId);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if ((this.lookupDownUntil.get('identity') ?? 0) > Date.now()) return [];
+    try {
+      const response = await rmqSend<unknown>(
+        this.identityClient,
+        { cmd: CONTACT_PATTERNS.MY_CONTACTS },
+        { user_id: marketId },
+        {
+          timeoutMs: NOTIFY_LOOKUP_TIMEOUT_MS,
+          retries: 0,
+          attachRequestId: false,
+        },
+      );
+      const value = marketContactsFromResponse(response);
+      this.marketContacts.delete(marketId);
+      if (this.marketContacts.size >= MARKET_CONTACTS_CACHE_MAX) {
+        const [oldest] = this.marketContacts.keys();
+        if (oldest !== undefined) this.marketContacts.delete(oldest);
+      }
+      this.marketContacts.set(marketId, {
+        value,
+        expiresAt: Date.now() + MARKET_CONTACTS_TTL_MS,
+      });
+      return value;
+    } catch (err) {
+      if (isRetryableRmqError(err)) {
+        this.lookupDownUntil.set(
+          'identity',
+          Date.now() + NOTIFY_LOOKUP_BACKOFF_MS,
+        );
+      }
+      const message = (err as { message?: unknown } | null)?.message;
+      this.logger.warn(
+        `${CONTACT_PATTERNS.MY_CONTACTS} (market=${marketId}, bildirishnoma uchun) javob bermadi — mas'ul qatorisiz: ${
+          typeof message === 'string' ? message : 'unknown'
+        }`,
+      );
+      return [];
+    }
   }
 
   /**

@@ -2114,7 +2114,7 @@ export class ApiGatewayController {
   })
   @ApiOkResponse({
     description:
-      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: xuddi shu, lekin `phone_number` YO'Q (T7 B3 — market telefoni menejerga ko'rinmaydi). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
+      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: faqat {id, name, status, default_tariff, weight_volume_pricing} — `phone_number` (T7 B3) va narxlar `tariff_home` / `tariff_center` (D5NxxpJW, ega 2026-11-25) YO'Q. COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
   })
   async getMarkets(
     @Req() req: { user: JwtUser },
@@ -2187,55 +2187,61 @@ export class ApiGatewayController {
   /**
    * GET /markets ko'rinishi (CODE-08 / C11):
    * - full: SUPERADMIN/ADMIN — to'liq qator + cashbox (o'zgarmagan);
-   * - branch_staff: MANAGER/REGISTRATOR/BRANCH — buyurtma yaratish, filtr va
-   *   mahsulot ekranlari market tanlashda id, nom, telefon va statusni
-   *   ishlatadi (orders/create Step1Market, orders, products); yiFTzkzH:
-   *   buyurtma yaratishda ikkala narxni (uyga/markazga) ko'rsatish uchun
-   *   `tariff_home`, `tariff_center`, `default_tariff` ham (login/kassa yo'q);
+   * - registrator: REGISTRATOR — buyurtma yaratish, filtr va mahsulot
+   *   ekranlari market tanlashda id, nom, telefon va statusni ishlatadi
+   *   (orders/create Step1Market, orders, products); yiFTzkzH: buyurtma
+   *   yaratishda ikkala narxni (uyga/markazga) ko'rsatish uchun `tariff_home`,
+   *   `tariff_center`, `default_tariff` ham (login/kassa yo'q);
+   * - branch_manager: MANAGER/BRANCH — xuddi shu, lekin NARXLARSIZ (D5NxxpJW,
+   *   ega 2026-11-25: menejer market tarifini yaratishda ham ko'rmaydi;
+   *   `default_tariff` — yetkazish TURI, summa emas, qoladi). Bir nechta rolda
+   *   (menejer + registrator) torroq ko'rinish ustun;
    * - minimal: COURIER, LOGIST (iFAkvaht — logist buyurtmalari «Market»
    *   filtri) va boshqa har qanday rol — faqat filtr: id, nom, status.
    *   Telefon, username, tariflar, kassa — yo'q.
    */
   private marketListView(
     user: JwtUser | undefined,
-  ): 'full' | 'branch_staff' | 'minimal' {
+  ): 'full' | 'registrator' | 'branch_manager' | 'minimal' {
     const roles = new Set(
       (user?.roles ?? []).map((role) => String(role).toLowerCase()),
     );
     if (roles.has(RoleEnum.SUPERADMIN) || roles.has(RoleEnum.ADMIN)) {
       return 'full';
     }
-    if (
-      roles.has(RoleEnum.MANAGER) ||
-      roles.has(RoleEnum.REGISTRATOR) ||
-      roles.has(RoleEnum.BRANCH)
-    ) {
-      return 'branch_staff';
+    if (roles.has(RoleEnum.MANAGER) || roles.has(RoleEnum.BRANCH)) {
+      return 'branch_manager';
     }
-    return 'minimal';
+    return roles.has(RoleEnum.REGISTRATOR) ? 'registrator' : 'minimal';
   }
 
   private projectMarketListItem(
     market: Record<string, unknown> | null | undefined,
-    view: 'branch_staff' | 'minimal',
+    view: 'registrator' | 'branch_manager' | 'minimal',
   ) {
     const base = {
       id: market?.id ?? null,
       name: market?.name ?? null,
       status: market?.status ?? null,
     };
-    return view === 'branch_staff'
-      ? {
-          ...base,
-          phone_number: market?.phone_number ?? null,
-          // yiFTzkzH: tarif tanlash (CS-E) — uyga/markazga narx + sukut.
-          tariff_home: market?.tariff_home ?? null,
-          tariff_center: market?.tariff_center ?? null,
-          default_tariff: market?.default_tariff ?? null,
-          // KmWO9gTA: FALSE — faqat standart narx (vazn/hajm qo'shimchasiz).
-          weight_volume_pricing: market?.weight_volume_pricing ?? true,
-        }
-      : base;
+    if (view === 'minimal') {
+      return base;
+    }
+    return {
+      ...base,
+      phone_number: market?.phone_number ?? null,
+      // yiFTzkzH: tarif tanlash (CS-E) — uyga/markazga narx. D5NxxpJW: menejer
+      // va filial hisobida narx yo'q.
+      ...(view === 'registrator'
+        ? {
+            tariff_home: market?.tariff_home ?? null,
+            tariff_center: market?.tariff_center ?? null,
+          }
+        : {}),
+      default_tariff: market?.default_tariff ?? null,
+      // KmWO9gTA: FALSE — faqat standart narx (vazn/hajm qo'shimchasiz).
+      weight_volume_pricing: market?.weight_volume_pricing ?? true,
+    };
   }
 
   // ==================== Market Telegram tokeni (GvL6ZFAd) ====================

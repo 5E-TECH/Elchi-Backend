@@ -106,6 +106,15 @@ export class BranchServiceController {
     );
   }
 
+  // 0Rn5U6AD: buyurtma tafsilotidagi filial kontakti (faqat telefon va menejer;
+  // doira — gateway'da, shu pattern tashqariga chiqmaydi).
+  @MessagePattern({ cmd: 'branch.contact' })
+  findContact(@Payload() data: { id?: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findBranchContact(String(data?.id ?? '')),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.tree' })
   findTree(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
