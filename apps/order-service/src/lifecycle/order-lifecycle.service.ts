@@ -2178,7 +2178,8 @@ export class OrderLifecycleService {
     });
     if (toTiyin(params.marketPaidAtSale) > toTiyin(limit)) {
       this.badRequest(
-        `paidAmount (${params.marketPaidAtSale}) marketga shu buyurtma bo'yicha to'lanadigan summadan (${limit}) oshmasligi kerak`,
+        // D5NxxpJW: chegara summasi aytilmaydi — undan market tarifi chiqadi.
+        `paidAmount (${params.marketPaidAtSale}) marketga shu buyurtma bo'yicha to'lanadigan summadan oshmasligi kerak`,
       );
     }
   }

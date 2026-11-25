@@ -219,7 +219,7 @@ export class ExcelGatewayController {
   @ApiOperation({
     summary: 'Buyurtmalarni Excel (.xlsx) ga eksport qilish',
     description:
-      "Hisob bilan: jami narx, marketga to'lanishi kerak / to'langan / qoldi; holat o'zbekcha, kuryer ismi; 2-varaq — «Xulosa» (marketlar bilan hisob). 50 000 qatordan oshsa faylda DIQQAT.",
+      "Hisob bilan: jami narx, marketga to'lanishi kerak / to'langan / qoldi (faqat SUPERADMIN/ADMIN — D5NxxpJW); holat o'zbekcha, kuryer ismi; 2-varaq — «Xulosa» (marketlar bilan hisob). 50 000 qatordan oshsa faylda DIQQAT.",
   })
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'market_id', required: false, type: String })
@@ -320,6 +320,8 @@ export class ExcelGatewayController {
       total,
       maxRows: MAX_ROWS,
       subtitle,
+      // D5NxxpJW: filial xodimiga market hisobi (market tarifini ochadi) yo'q.
+      marketMoney: isSystemPrivileged,
     });
     this.sendFile(res, 'orders.xlsx', buf);
   }

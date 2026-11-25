@@ -23,6 +23,30 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-25 — Menejer, filial va registrator market tarifini ko'rmaydi (D5NxxpJW)
+
+Deploy: **api-gateway, order-service** (migratsiya, env yo'q). ⚠️ Frontend shu PR bilan birga yoki OLDIN chiqsin:
+eski frontend menejer va registratorga «To'lanishi kerak / To'langan» ni «0 so'm» deb chizadi.
+
+- ⚠️ [orders] MANAGER, BRANCH, REGISTRATOR javoblaridan olib tashlandi (null emas, kalit yo'q): `market_tariff`,
+  `quoted_market_tariff`, `to_be_paid`, `paid_amount`, `sale_market_paid_amount`, `sale_market_paid_max`;
+  `order.market` profilida `tariff_home`, `tariff_center`, `commission_*` va boshqa pul maydonlari. Qoladi:
+  `branch_share`, `branch_cashbox_amount`, `courier_tariff`, `courier_share`, `total_price`. SUPERADMIN/ADMIN, MARKET,
+  COURIER, LOGIST — o'zgarmagan.
+  Yo'llar: GET /orders, /orders/:id, /orders/qr-code/:token, /scan/:token, kuryer ro'yxatlari, /orders/branch/cancelled,
+  /orders/markets/new|cancelled, /orders/external/sources, PATCH /orders/:id, POST /orders/sell/:id (javob: `id`,
+  `status`, …), initiate-return, mark-returned-to-market, /transfer-batches/:id(/remaining), /post/…,
+  /post/return-requests/list, /finance/history/:id (`data.order`).
+- ⚠️ [orders] `GET /orders/:id/settlement` — `market_amount` va `market_paid_by_branch_amount` (`extra_rows` ichida ham)
+  faqat SUPERADMIN/ADMIN ga.
+- ⚠️ [markets] `GET /markets` — MANAGER/BRANCH: `tariff_home`, `tariff_center` yo'q (`default_tariff` — tur — qoladi).
+  REGISTRATOR — o'zgarmagan (yaratish formasidagi narx).
+- ⚠️ [export] `GET /export/orders.xlsx` — MANAGER/BRANCH/REGISTRATOR faylida «To'langan», «To'lanishi kerak» ustunlari
+  va «Xulosa»dagi market hisobi yo'q.
+- ✏️ [orders] `POST /orders/sell/:id` 400 matni — `paidAmount` chegarasi summasi aytilmaydi.
+  → **Frontendda:** 🔧 menejer / registratorda «To'lanishi kerak», «To'langan», «Market tarifi» chizilmasin; menejer
+  yaratish formasida narx yo'q.
+
 ### 2026-11-25 — Barcha Excel / PDF hisobotlar yangi dizaynda (ega tasdiqladi)
 
 Deploy: **notification-service** (migratsiya 1716000000250), **finance-service**, **file-service**, **api-gateway**. Env yo'q.

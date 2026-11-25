@@ -591,11 +591,10 @@ describe('4BftLLnc — sale_market_paid_max boshqa rollarda (mavjud qoidalar bo`
     },
   );
 
-  it('menejer/superadmin: to`liq ko`rinish (o`zgarmagan)', () => {
-    // T7 (QPq2C1co, B3): menejerda faqat market telefoni yo'q, pul — to'liq.
+  it('superadmin: to`liq ko`rinish; menejer: chegara yo`q (D5NxxpJW)', () => {
     expect(
       JSON.stringify(projectOrderPayloadForRoles(['manager'], list)),
-    ).toContain('sale_market_paid_max');
+    ).not.toContain('sale_market_paid_max');
     expect(projectOrderPayloadForRoles(['superadmin'], list)).toBe(list);
   });
 });
