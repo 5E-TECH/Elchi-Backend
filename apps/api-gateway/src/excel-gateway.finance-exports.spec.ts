@@ -190,8 +190,18 @@ describe('Kassa va moliya eksportlari — gateway', () => {
     (target.send.mock.calls as Array<[{ cmd: string }, Payload]>)
       .filter(([pattern]) => pattern.cmd === cmd)
       .map(([, payload]) => payload);
+  /** Hisobot kassasi tarixi so'rovlari (filial → market bo'limi so'rovisiz). */
   const historyCall = (i = 0) =>
-    payloads(financeClient, 'finance.history.find_all')[i];
+    payloads(financeClient, 'finance.history.find_all').filter(
+      (payload) => !isBranchMarketQuery(payload),
+    )[i];
+  /** (2026-11-26) Asosiy kassa hisobotidagi «Filiallar orqali marketlarga» so'rovi. */
+  const isBranchMarketQuery = (payload: Payload) =>
+    payload?.cashbox_type === 'branch' && payload?.include_route === true;
+  const branchMarketCalls = () =>
+    payloads(financeClient, 'finance.history.find_all').filter(
+      isBranchMarketQuery,
+    );
 
   // ───────────────────────── B1–B3 ─────────────────────────
 
@@ -211,6 +221,8 @@ describe('Kassa va moliya eksportlari — gateway', () => {
         to_date: '2026-11-24',
         page: 0,
         limit: 0,
+        // (2026-11-26) «Yo'nalish» ustuni.
+        include_route: true,
       });
       // Filial kassasi yo'q — nomlar so'ralmaydi.
       expect(branchClient.send).not.toHaveBeenCalled();
@@ -540,6 +552,8 @@ describe('Kassa va moliya eksportlari — gateway', () => {
         expect(payloads(financeClient, 'finance.cashbox.find_by_user')).toEqual(
           [{ user_id: '13', cashbox_type: 'branch' }],
         );
+        // (2026-11-26) «Filiallar orqali marketlarga» — faqat asosiy kassa hisobotida.
+        expect(branchMarketCalls()).toEqual([]);
         const ws = (await load(res.body)).worksheets[0];
         const all = texts(ws);
         expect(ws.name).toBe('Filial kassasi');
@@ -671,6 +685,67 @@ describe('Kassa va moliya eksportlari — gateway', () => {
         );
       });
 
+      it('⭐ 2026-11-26: «Filiallar orqali marketlarga» — o`sha davr, filial kassalari, yo`nalish bilan; xato — bo`lim yo`q, fayl chiqadi', async () => {
+        const branchRow = historyRow(9, {
+          operation_type: 'expense',
+          source_type: 'market_payment',
+          payment_method: 'cash',
+          amount: 200,
+          cashbox_id: '21',
+          cashbox: { cashbox_type: 'branch', user_id: '5' },
+          source_user: { name: 'Baraka Shop' },
+          created_by_user: { name: 'Filial menejeri' },
+          route: {
+            variant: 'market_branch',
+            cashbox_type: 'branch',
+            branch_id: '5',
+            courier: null,
+            market: { id: '77', name: 'Baraka Shop' },
+          },
+        });
+        finance['finance.history.find_all'] = (p) =>
+          isBranchMarketQuery(p)
+            ? { data: { items: [branchRow, historyRow(10)] } }
+            : { data: { items: [historyRow(1)], pagination: { total: 1 } } };
+        const res = await get(
+          `${PATH}?from_date=2026-11-20&to_date=2026-11-24`,
+        );
+        expect(res.status).toBe(200);
+        expect(branchMarketCalls()).toEqual([
+          expect.objectContaining({
+            cashbox_type: 'branch',
+            source_type: 'market_payment',
+            operation_type: 'expense',
+            from_date: historyCall()?.from_date,
+            to_date: historyCall()?.to_date,
+            page: 0,
+            limit: 0,
+            include_route: true,
+          }),
+        ]);
+        const all = texts((await load(res.body)).worksheets[0]);
+        expect(all).toEqual(
+          expect.arrayContaining([
+            'Filiallar orqali marketlarga',
+            'Andijon filiali kassasi → Baraka Shop',
+            "Filial kassasidan to'lov",
+          ]),
+        );
+        // Asosiy kassa qatori (ikkinchi qavat filtri) bo'limga tushmaydi.
+        expect(all.filter((t) => t === "1 ta to'lov")).toHaveLength(1);
+
+        financeClient.send.mockClear();
+        finance['finance.history.find_all'] = (p) => {
+          if (isBranchMarketQuery(p)) throw new Error('timeout');
+          return { data: { items: [historyRow(1)], pagination: { total: 1 } } };
+        };
+        const failed = await get(PATH);
+        expect(failed.status).toBe(200);
+        expect(texts((await load(failed.body)).worksheets[0])).not.toContain(
+          'Filiallar orqali marketlarga',
+        );
+      });
+
       it('kassa hali ochilmagan (404) — 0 qoldiq, fayl chiqadi', async () => {
         finance['finance.cashbox.find_by_user'] = () => {
           throw rpcError(404, 'Kassa topilmadi');
@@ -683,7 +758,8 @@ describe('Kassa va moliya eksportlari — gateway', () => {
 
       it('ikki o`qish orasida amal tushsa — qayta o`qiladi, soxta «Mos kelmadi» chiqmaydi', async () => {
         let reads = 0;
-        finance['finance.history.find_all'] = () => {
+        finance['finance.history.find_all'] = (p) => {
+          if (isBranchMarketQuery(p)) return { data: { items: [] } };
           reads += 1;
           return {
             data: {

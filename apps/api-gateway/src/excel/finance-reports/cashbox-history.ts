@@ -39,10 +39,72 @@ export interface HistoryRow {
   category: string | null;
   createdBy: string;
   createdByName: string | null;
+  /** (2026-11-26) Yo'nalish — `include_route` bilan so'ralganda; aks holda `null`. */
+  route: HistoryRouteView | null;
+  /** T6 tuzatish holati (asl / teskari / yangi qator); tuzatilmagan — `null`. */
+  correction: HistoryCorrectionView | null;
+}
+
+export interface HistoryRouteParty {
+  id: string;
+  name: string | null;
+}
+
+/** finance `route` (kimdan → kimga). */
+export interface HistoryRouteView {
+  variant: string;
+  cashboxType: string;
+  branchId: string | null;
+  courier: HistoryRouteParty | null;
+  market: HistoryRouteParty | null;
+}
+
+/** finance `correction` (T6). */
+export interface HistoryCorrectionView {
+  role: string;
+  action: string;
+  relatedId: string | null;
+  reason: string | null;
 }
 
 const nameOf = (value: unknown): string | null =>
   textOrNull((value as { name?: unknown } | null | undefined)?.name);
+
+const recordOf = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+const partyOf = (value: unknown): HistoryRouteParty | null => {
+  const raw = recordOf(value);
+  const id = raw ? asText(raw.id).trim() : '';
+  return id ? { id, name: nameOf(raw) } : null;
+};
+
+const routeOf = (value: unknown): HistoryRouteView | null => {
+  const raw = recordOf(value);
+  const variant = raw ? asText(raw.variant).trim() : '';
+  if (!raw || !variant) return null;
+  return {
+    variant,
+    cashboxType: asText(raw.cashbox_type),
+    branchId: textOrNull(raw.branch_id),
+    courier: partyOf(raw.courier),
+    market: partyOf(raw.market),
+  };
+};
+
+const correctionOf = (value: unknown): HistoryCorrectionView | null => {
+  const raw = recordOf(value);
+  const role = raw ? asText(raw.role).trim() : '';
+  if (!raw || !role) return null;
+  return {
+    role,
+    action: asText(raw.action),
+    relatedId: textOrNull(raw.related_history_id),
+    reason: textOrNull(raw.reason),
+  };
+};
 
 export const toHistoryRow = (raw: Record<string, unknown>): HistoryRow => {
   const cashbox = (raw.cashbox ?? null) as Record<string, unknown> | null;
@@ -68,7 +130,68 @@ export const toHistoryRow = (raw: Record<string, unknown>): HistoryRow => {
     category: textOrNull(raw.expense_category_name),
     createdBy: asText(raw.created_by),
     createdByName: nameOf(raw.created_by_user) ?? nameOf(raw.createdByUser),
+    route: routeOf(raw.route),
+    correction: correctionOf(raw.correction),
   };
+};
+
+/**
+ * (2026-11-26, ega) «Yo'nalish» — kimdan → kimga (qator qaysi kassada
+ * bo'lmasin, butun to'lov): «Kuryer Ali → Urgut filiali kassasi», «Asosiy
+ * kassa → Baraka Shop», «Kuryer Ali → Baraka Shop (o'tkazma, Urgut filiali
+ * menejeri yozgan)». Yo'nalish noma'lum — `null`.
+ */
+export const routeText = (
+  row: Pick<HistoryRow, 'route'>,
+  branchNames: ReadonlyMap<string, string>,
+): string | null => {
+  const route = row.route;
+  if (!route) return null;
+  const branch = branchLabel(route.branchId, branchNames);
+  const courier = route.courier
+    ? `Kuryer ${route.courier.name ?? `#${route.courier.id}`}`
+    : 'Kuryer';
+  const market = route.market
+    ? (route.market.name ?? `Market #${route.market.id}`)
+    : 'Market';
+  switch (route.variant) {
+    case 'courier':
+      return `${courier} → ${route.cashboxType === 'branch' ? `${branch} kassasi` : MAIN_CASHBOX_NAME}`;
+    case 'courier_click':
+      return `${courier} → ${market} (o'tkazma, HQ yozgan)`;
+    case 'courier_click_branch':
+      return `${courier} → ${market} (o'tkazma, ${branch} menejeri yozgan)`;
+    case 'market':
+      return `${MAIN_CASHBOX_NAME} → ${market}`;
+    case 'market_branch':
+      return `${branch} kassasi → ${market}`;
+    case 'branch_click_market':
+      return `${branch} → ${market} (o'tkazma, HQ yozgan)`;
+    default:
+      return null;
+  }
+};
+
+/**
+ * (2026-11-26) T6 holati: asl to'lov — «Qaytarilgan» / «Tahrirlangan»;
+ * teskari qator — «Qaytarish (#asl)»; tahrirdagi yangi qator — «Tuzatilgan
+ * (#asl o'rniga)». Tuzatilmagan — `null`.
+ */
+export const correctionStatus = (
+  row: Pick<HistoryRow, 'correction'>,
+): string | null => {
+  const c = row.correction;
+  if (!c) return null;
+  if (c.role === 'reversal') {
+    return c.relatedId ? `Qaytarish (#${c.relatedId})` : 'Qaytarish';
+  }
+  if (c.role === 'replacement') {
+    return c.relatedId ? `Tuzatilgan (#${c.relatedId} o'rniga)` : 'Tuzatilgan';
+  }
+  if (c.role === 'original') {
+    return c.action === 'edit' ? 'Tahrirlangan' : 'Qaytarilgan';
+  }
+  return null;
 };
 
 const byId = (a: HistoryRow, b: HistoryRow) => Number(a.id) - Number(b.id);

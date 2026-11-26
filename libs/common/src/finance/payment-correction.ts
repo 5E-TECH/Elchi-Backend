@@ -52,6 +52,12 @@ export const PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS = {
   REVERSAL_ROW: 'reversal_row',
   /** Oyoq kassasi yoki to'lov kartasi o'chirilgan. */
   CASHBOX_DELETED: 'cashbox_deleted',
+  /**
+   * (2026-11-26, ega) Filial ishtirokidagi to'lov (menejer yozgan «Marketga
+   * o'tkazma», filial kassasidan marketga to'lov, filialdan marketga
+   * o'tkazma) — faqat QAYTARISH mumkin, summasini tahrirlab bo'lmaydi.
+   */
+  REVERSE_ONLY: 'reverse_only',
 } as const;
 
 export type PaymentCorrectionNotCorrectableReason =

@@ -101,7 +101,8 @@ export const PUBLIC_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
   [IDEMPOTENCY_ERROR_CODES.IN_PROGRESS]: [],
   // (T6) to'lovni qaytarish / summasini tuzatish — superadmin.
   [PC.NOT_FOUND]: [],
-  // `reason`: unsupported_type | reversal_row | cashbox_deleted (iPlY5yop).
+  // `reason`: unsupported_type | reversal_row | cashbox_deleted (iPlY5yop) |
+  // reverse_only (filial to'lovi — faqat qaytarish, 2026-11-26).
   [PC.NOT_CORRECTABLE]: ['reason'],
   [PC.LEGACY_UNLINKED]: [],
   [PC.ALREADY_CORRECTED]: [],
