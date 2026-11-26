@@ -1,4 +1,4 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Optional } from '@nestjs/common';
 import {
   Ctx,
   MessagePattern,
@@ -61,6 +61,7 @@ import type {
   UpdateMarketOperatorWarehouseAccessPayload,
 } from './contracts/market-operator.payloads';
 import type { CreatePasswordFields } from './temp-password/create-password';
+import { UserActivityService } from './activity/user-activity.service';
 
 @Controller()
 export class IdentityController {
@@ -69,6 +70,8 @@ export class IdentityController {
     private readonly userService: UserServiceService,
     private readonly authService: AuthService,
     private readonly otpService: OtpService,
+    /** (pe71yf8L) Ixtiyoriy — eski spec'lar controller'ni usiz quradi. */
+    @Optional() private readonly activity?: UserActivityService,
   ) {}
 
   private executeAndAck<T>(
@@ -235,6 +238,37 @@ export class IdentityController {
     return this.executeAndAck(context, () =>
       this.authService.sessionState(data ?? {}),
     );
+  }
+
+  /**
+   * (pe71yf8L) Ichki: gateway `GET /users` / `GET /users/:id` — market va
+   * market operatori qatorlarining «Oxirgi kirish» / «Oxirgi faollik»
+   * vaqti (`{ items: [{ user_id, last_login_at, last_seen_at }] }`).
+   * HTTP orqali to'g'ridan-to'g'ri ochilmaydi; ruxsat — gateway'da.
+   */
+  @MessagePattern({ cmd: 'identity.user.activity.find_by_ids' })
+  findUserActivity(
+    @Payload() data: { user_ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () => ({
+      items: (await this.activity?.findByUserIds(data?.user_ids)) ?? [],
+    }));
+  }
+
+  /**
+   * (pe71yf8L) Ichki: gateway `/realtime` — foydalanuvchi online bo'ldi yoki
+   * oxirgi socketi uzildi → `last_seen_at` (`{ recorded }`).
+   */
+  @MessagePattern({ cmd: 'identity.user.activity.seen' })
+  recordUserSeen(
+    @Payload() data: { user_id?: unknown; at?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () => ({
+      recorded:
+        (await this.activity?.recordSeen(data?.user_id, data?.at)) ?? false,
+    }));
   }
 
   @MessagePattern({ cmd: 'identity.validate' })

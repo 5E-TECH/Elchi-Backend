@@ -32,7 +32,7 @@ describe('oFfOWGuo — realtime gateway yuzasi', () => {
   });
 
   afterEach(() => {
-    gateway.onModuleDestroy();
+    void gateway.onModuleDestroy();
     jest.useRealTimers();
     jest.restoreAllMocks();
     process.env = { ...envBackup };

@@ -10,11 +10,12 @@ import {
 } from './payment-correction.rules';
 
 /**
- * AUDIT M4 (2026-11-11) — menejer orqali yangi to'lov shakllari T6 tuzatishiga
- * TUSHMAYDI: daftarni orqaga surish `branch_to_hq` ni qo'llamaydi
- * (`retreatSettlement`), shuning uchun ular tuzatib / qaytarib bo'lmaydi
- * (`correctable.allowed: false`, `unsupported_type`). HQ (MAIN) shakllari
- * avvalgidek tuzatiladi.
+ * AUDIT M4 (2026-11-11) menejer orqali to'lov shakllari. (2026-11-26, ega)
+ * Endi FAQAT QAYTARILADI (`reverseOnly`): A — «Marketga o'tkazma» filial
+ * kassasi orqali (`courier_click_branch`), B — filial kassasidan marketga
+ * (`market_branch`). Daftar orqaga: A — `hq_to_market` → `branch_to_hq` →
+ * `courier_to_branch`; B — `branch_to_market`. HQ (MAIN) shakllari
+ * avvalgidek tuzatiladi (tahrir ham).
  */
 
 const boxes = {
@@ -45,28 +46,56 @@ const I = Operation_type.INCOME;
 const CP = Source_type.COURIER_PAYMENT;
 const MP = Source_type.MARKET_PAYMENT;
 
-describe('M4 — menejer orqali to`lov shakllari tuzatilmaydi', () => {
+describe('M4 — menejer orqali to`lov shakllari faqat qaytariladi', () => {
   const ctm = PaymentMethod.CLICK_TO_MARKET;
 
-  it('«Marketga o`tkazma» filial kassasi orqali (4 oyoq, BRANCH) → null', () => {
+  it('⭐ A: «Marketga o`tkazma» filial kassasi orqali (4 oyoq, BRANCH) → `courier_click_branch`', () => {
+    const shape = classifyTransfer([
+      leg('courier', E, CP, ctm),
+      leg('branch', I, CP, ctm),
+      leg('branch', E, MP, ctm),
+      leg('market', E, MP, ctm),
+    ]);
+    expect(shape).toMatchObject({
+      kind: 'courier_payment',
+      variant: 'courier_click_branch',
+      clickToMarket: true,
+      reverseOnly: true,
+      counterpartyUserId: '209',
+    });
+    expect(shape?.receiverCashbox).toBe(boxes.branch);
+    expect(shape?.mainMarketLeg?.cashbox).toBe(boxes.branch);
+  });
+
+  it('A: filialning ikki oyog`i boshqa-boshqa kassada → null', () => {
+    const otherBranch = {
+      ...leg('branch', E, MP, ctm),
+      cashbox_id: '7',
+      cashbox: { ...boxes.branch, id: '7' },
+    } as unknown as HistoryWithCashbox;
     expect(
       classifyTransfer([
         leg('courier', E, CP, ctm),
         leg('branch', I, CP, ctm),
-        leg('branch', E, MP, ctm),
+        otherBranch,
         leg('market', E, MP, ctm),
       ]),
     ).toBeNull();
   });
 
-  it('«Marketga to`lov» filial kassasidan (BRANCH EXPENSE + market) → null', () => {
+  it('⭐ B: «Marketga to`lov» filial kassasidan (BRANCH EXPENSE + market) → `market_branch`', () => {
     for (const method of [PaymentMethod.CASH, PaymentMethod.CLICK]) {
-      expect(
-        classifyTransfer([
-          leg('branch', E, MP, method),
-          leg('market', E, MP, method),
-        ]),
-      ).toBeNull();
+      const shape = classifyTransfer([
+        leg('branch', E, MP, method),
+        leg('market', E, MP, method),
+      ]);
+      expect(shape).toMatchObject({
+        kind: 'market_payment',
+        variant: 'market_branch',
+        reverseOnly: true,
+        counterpartyUserId: '201',
+      });
+      expect(shape?.receiverCashbox).toBe(boxes.branch);
     }
   });
 
@@ -78,19 +107,33 @@ describe('M4 — menejer orqali to`lov shakllari tuzatilmaydi', () => {
         leg('main', E, MP, ctm),
         leg('market', E, MP, ctm),
       ]),
-    ).toMatchObject({ kind: 'courier_payment', clickToMarket: true });
+    ).toMatchObject({
+      kind: 'courier_payment',
+      variant: 'courier_click',
+      clickToMarket: true,
+      reverseOnly: false,
+    });
     expect(
       classifyTransfer([
         leg('main', E, MP, PaymentMethod.CASH),
         leg('market', E, MP, PaymentMethod.CASH),
       ]),
-    ).toMatchObject({ kind: 'market_payment' });
+    ).toMatchObject({
+      kind: 'market_payment',
+      variant: 'market',
+      reverseOnly: false,
+    });
     // Menejerning oddiy naqd qabuli (kuryer → filial) — avvalgidek tuzatiladi.
     expect(
       classifyTransfer([
         leg('courier', E, CP, PaymentMethod.CASH),
         leg('branch', I, CP, PaymentMethod.CASH),
       ]),
-    ).toMatchObject({ kind: 'courier_payment', clickToMarket: false });
+    ).toMatchObject({
+      kind: 'courier_payment',
+      variant: 'courier',
+      clickToMarket: false,
+      reverseOnly: false,
+    });
   });
 });

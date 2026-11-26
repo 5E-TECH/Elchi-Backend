@@ -64,6 +64,7 @@ import { ExcelGatewayController } from './excel-gateway.controller';
 import { OldMailsExportController } from './old-mails-export.controller';
 import { RealtimeGateway } from './realtime/realtime.gateway';
 import { RealtimeController } from './realtime/realtime.controller';
+import { PresenceActivityPublisher } from './realtime/presence-activity.publisher';
 import { AuditGatewayController } from './audit-gateway.controller';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import { AiGatewayController } from './ai-gateway.controller';
@@ -267,6 +268,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
       useFactory: (config: ConfigService) => AiImageStore.fromConfig(config),
     },
     RealtimeGateway,
+    // (pe71yf8L) socket online/offline → identity `user_activity.last_seen_at`.
+    PresenceActivityPublisher,
     AuditEnrichmentService,
     // 4BftLLnc — logistning o'z viloyatlari (regions.logist_id = me), qisqa
     // kesh: buyurtmalar, paketlar, kuryerlar va qidiruv doirasi.

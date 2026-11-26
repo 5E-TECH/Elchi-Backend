@@ -147,6 +147,88 @@ describe('B1 — Kassa tarixi', () => {
     expect(list.views[0]).toMatchObject({ state: 'frozen', ySplit: 6 });
   });
 
+  it("⭐ 2026-11-26: «Yo'nalish (kimdan → kimga)» va «Holat» (qaytarilgan / teskari qator) — oxirgi ustunlar", async () => {
+    const items = [
+      row(1, {
+        route: {
+          variant: 'courier',
+          cashbox_type: 'branch',
+          branch_id: '5',
+          courier: { id: '209', name: 'Ali Valiyev' },
+          market: null,
+        },
+      }),
+      row(2, {
+        operation_type: 'expense',
+        source_type: 'market_payment',
+        amount: 200,
+        balance_after: 900,
+        balance_cash_after: 900,
+        route: {
+          variant: 'market',
+          cashbox_type: 'main',
+          branch_id: null,
+          courier: null,
+          market: { id: '77', name: 'Baraka Shop' },
+        },
+        correction: {
+          role: 'original',
+          action: 'reverse',
+          related_history_id: '3',
+        },
+      }),
+      row(3, {
+        source_type: 'payment_reversal',
+        amount: 200,
+        balance_after: 1100,
+        balance_cash_after: 1100,
+        route: {
+          variant: 'market',
+          cashbox_type: 'main',
+          branch_id: null,
+          courier: null,
+          market: { id: '77', name: 'Baraka Shop' },
+        },
+        correction: {
+          role: 'reversal',
+          action: 'reverse',
+          related_history_id: '2',
+        },
+      }),
+      row(4, {
+        source_type: 'branch_to_main',
+        payment_method: 'click_to_market',
+        route: {
+          variant: 'branch_click_market',
+          cashbox_type: 'branch',
+          branch_id: '5',
+          courier: null,
+          market: { id: '77', name: null },
+        },
+      }),
+      row(5, { source_type: 'manual_income' }),
+    ];
+    const { list } = await build({ items });
+    expect(list.getRow(6).values).toEqual(
+      expect.arrayContaining(["Yo'nalish (kimdan → kimga)", 'Holat']),
+    );
+    expect(list.getCell('N7').value).toBe(
+      'Kuryer Ali Valiyev → Andijon filiali kassasi',
+    );
+    expect(list.getCell('N8').value).toBe('Asosiy kassa → Baraka Shop');
+    expect(list.getCell('O8').value).toBe('Qaytarilgan');
+    expect(list.getCell('N9').value).toBe('Asosiy kassa → Baraka Shop');
+    expect(list.getCell('O9').value).toBe('Qaytarish (#2)');
+    expect(list.getCell('N10').value).toBe(
+      "Andijon filiali → Market #77 (o'tkazma, HQ yozgan)",
+    );
+    // Yo'nalishsiz (qo'lda kirim) — bo'sh, holatsiz — bo'sh.
+    expect(list.getCell('N11').value).toBeNull();
+    expect(list.getCell('O11').value).toBeNull();
+    // Formulalar avvalgi ustunlarda (H, I) qoladi.
+    expect(list.getCell('H12').value).toMatchObject({ formula: 'SUM(H7:H11)' });
+  });
+
   it('bitta kassa, faqat davr filtri — qoldiq va «Mos keldi» nazorati', async () => {
     const { summary } = await build();
     expect(value(summary.getCell('B10'))).toBe(1500);

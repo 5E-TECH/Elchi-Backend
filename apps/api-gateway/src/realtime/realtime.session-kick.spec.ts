@@ -81,7 +81,7 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
   });
 
   afterEach(() => {
-    gateway.onModuleDestroy();
+    void gateway.onModuleDestroy();
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
@@ -433,7 +433,7 @@ describe('Elchi Pochta #3 (2026-10-24) — realtime: yopilgan sessiya socketdan 
     it('onModuleDestroy — kutilayotgan uzish bekor, keyingi kick socketga tegmaydi', () => {
       jest.useFakeTimers();
       revocation.kickSessions([SID_PHONE], 'logout');
-      gateway.onModuleDestroy();
+      void gateway.onModuleDestroy();
       jest.advanceTimersByTime(SESSION_KICK_DISCONNECT_DELAY_MS * 2);
       expect(timeline.map((entry) => entry.kind)).toEqual(['emit']);
       revocation.kickSessions([SID_TABLET], 'logout');
