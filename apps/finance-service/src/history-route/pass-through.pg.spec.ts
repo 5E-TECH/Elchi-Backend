@@ -43,19 +43,6 @@ const COURIER = '209';
 const MANAGER = '15001';
 const SA = { requester_id: '1', requester_roles: ['superadmin'] };
 
-const errorBody = async (promise: Promise<unknown>): Promise<unknown> => {
-  try {
-    await promise;
-  } catch (error: unknown) {
-    if (error instanceof RpcException) return error.getError();
-    const withBody = error as { getError?: () => unknown };
-    return typeof withBody?.getError === 'function'
-      ? withBody.getError()
-      : error;
-  }
-  throw new Error('xato kutilgan edi');
-};
-
 describePg(
   'O`tkazma izi — jamilarga kirmaydi, bitta qator (haqiqiy Postgres)',
   () => {
