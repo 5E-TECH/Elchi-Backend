@@ -17,7 +17,7 @@ import {
   WhereExpressionBuilder,
 } from 'typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { lastValueFrom, timeout } from 'rxjs';
+import { lastValueFrom, timeout, TimeoutError } from 'rxjs';
 import { randomBytes } from 'crypto';
 import {
   BcryptEncryption,
@@ -120,6 +120,21 @@ const COURIER_DELETE_BLOCKED_PREFIX = "Kuryerni o'chirib bo'lmaydi: ";
 const COURIER_DELETE_CHECK_UNAVAILABLE =
   "Kuryer kassasi va qo'lidagi buyurtmalarni tekshirib bo'lmadi — kuryer o'chirilmadi. Birozdan so'ng qayta urinib ko'ring.";
 const COURIER_DELETE_CHECK_TIMEOUT_MS = 12_000;
+
+/**
+ * (revMyIKg) deleteUser'ning umumiy vaqt byudjeti — gateway DELETE /users/:id
+ * 15 s dan 2 s kam (navbat, saqlash, sessiyalar va audit uchun zaxira).
+ * O'chirilgan xodimning filial qatorini yopish (`unassignDeletedStaffFromBranch`,
+ * 3 s + 5 s) shu byudjetdan QOLGAN vaqt bilan cheklanadi: kuryerda oldindan
+ * tekshiruv 12 s gacha cho'zilsa, 12 + 3 + 5 = 20 s gateway'ning 15 s idan
+ * oshardi — user o'chirilgan bo'lsa ham FE timeout xatosini ko'rardi.
+ * Menejer/registratorda yopishgacha RMQ chaqiruvi yo'q (faqat baza) — cheklov
+ * ularga amalda ta'sir qilmaydi (3 s + 5 s byudjet ichida). Gateway'ning
+ * 15 s i o'zgarmaydi: FE so'rov limiti 20 s, kuryer yo'li endi ≤ ~13 s.
+ */
+const DELETE_USER_BUDGET_MS = 13_000;
+/** Qolgan vaqt bundan kam bo'lsa, filial chaqiruvi yuborilmaydi (faqat WARN). */
+const BRANCH_UNASSIGN_MIN_BUDGET_MS = 500;
 
 /**
  * (dzyVftBx, TC4) Logistni o'chirish: avval uning viloyatlari bo'shatiladi
@@ -3094,6 +3109,8 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async deleteUser(id: string, requester?: RequesterContext) {
+    // (revMyIKg) Filial qatorini yopish shu muddatgacha (DELETE_USER_BUDGET_MS).
+    const deadlineAt = Date.now() + DELETE_USER_BUDGET_MS;
     const admin = await this.users.findOne({
       where: { id, isDeleted: false },
     });
@@ -3159,12 +3176,28 @@ export class UserServiceService implements OnModuleInit {
     await this.revokeSessionsAfterSecurityChange(saved);
     void this.removeUserFromSearch(saved);
 
-    // fix3b (CODE-07): o'chirilgan menejer/registratorning faol branch_users
-    // qatori ham olib tashlanadi (best-effort, user baribir o'chirilgan).
-    // Kuryer yo'li o'zgarmagan: uni yuqoridagi assertCourierCanBeDeleted
-    // qo'riqlaydi.
-    if (admin.role === Roles.MANAGER || admin.role === Roles.REGISTRATOR) {
-      await this.unassignDeletedStaffFromBranch(String(admin.id), requester);
+    // fix3b (CODE-07) + revMyIKg: o'chirilgan menejer, registrator va KURYERning
+    // faol branch_users qatori ham olib tashlanadi (best-effort, user baribir
+    // o'chirilgan). Ilgari kuryer qatori qolardi: filial xodimlarida
+    // «Noma'lum | Kuryer» ko'rinardi, filialni nofaol qilish / turini yoki
+    // viloyatini o'zgartirish 409 «Filialga N ta kuryer biriktirilgan»,
+    // o'chirish 409 «N ta faol xodim» berardi.
+    // Kuryerda branch-service removeUserFromBranch pul/buyurtma tekshiruvini
+    // (assertCourierHoldsNothing) QAYTA bajaradi — yuqorida
+    // assertCourierCanBeDeleted (branch.user.courier_transfer_check) saqlashdan
+    // OLDIN o'tgan, shuning uchun u o'tadi. O'tmasa (oraliqda pul/buyurtma
+    // paydo bo'lsa yoki manba javob bermasa) — qator qoladi, WARN sababini
+    // yozadi, user baribir o'chirilgan.
+    if (
+      admin.role === Roles.MANAGER ||
+      admin.role === Roles.REGISTRATOR ||
+      admin.role === Roles.COURIER
+    ) {
+      await this.unassignDeletedStaffFromBranch(
+        String(admin.id),
+        requester,
+        deadlineAt,
+      );
     }
 
     await this.activityLog.log({
@@ -3187,18 +3220,34 @@ export class UserServiceService implements OnModuleInit {
   }
 
   /**
-   * fix3b (CODE-07): o'chirilgan menejer/registratorning FAOL branch_users
-   * qatorini soft-delete qiladi (`branch.user.remove`, so'rovchi bilan).
-   * Ilgari qator qolardi: filial "menejeri bor" deb hisoblanib, unga pochta
-   * jo'natilardi. Branch-service o'qishlari o'chirilgan/bloklangan menejerni
-   * identity orqali allaqachon chetlab o'tadi — bu tozalash, shuning uchun
-   * BEST-EFFORT: xato yoki timeout faqat WARN log, o'chirish to'xtamaydi.
-   * Byudjet: 3 s + 5 s, gateway DELETE /users/:id (15 s) ichida.
+   * fix3b (CODE-07) + revMyIKg: o'chirilgan menejer, registrator yoki
+   * kuryerning FAOL branch_users qatorini soft-delete qiladi
+   * (`branch.user.remove`, so'rovchi bilan). Ilgari qator qolardi: menejer —
+   * filial "menejeri bor" deb hisoblanib, unga pochta jo'natilardi; kuryer —
+   * filialda «Noma'lum» xodim bo'lib qolib, filialni nofaol qilish/o'chirishni
+   * 409 bilan to'sardi. Kuryer uchun branch-service qatorni yopishdan oldin
+   * pul/buyurtma tekshiruvini qayta bajaradi (`assertCourierHoldsNothing`,
+   * manbalar parallel 5 s) — deleteUser uni saqlashdan oldin o'tkazgan.
+   * Bu tozalash, shuning uchun BEST-EFFORT: xato, rad (409/503) yoki timeout
+   * faqat WARN log, o'chirish to'xtamaydi.
+   * Byudjet: 3 s + 5 s, lekin `deadlineAt` dan oshmaydi (DELETE_USER_BUDGET_MS,
+   * gateway DELETE /users/:id 15 s ichida); vaqt qolmasa chaqiruv yuborilmaydi.
    */
   private async unassignDeletedStaffFromBranch(
     userId: string,
     requester?: RequesterContext,
+    deadlineAt: number = Number.POSITIVE_INFINITY,
   ): Promise<void> {
+    const budgetFor = (limitMs: number) =>
+      Math.min(limitMs, deadlineAt - Date.now());
+
+    const findTimeoutMs = budgetFor(3000);
+    if (findTimeoutMs < BRANCH_UNASSIGN_MIN_BUDGET_MS) {
+      this.logger.warn(
+        `deleteUser: no time left for branch.user.find_by_user (user ${userId}) — its branch_users row (if any) was NOT removed`,
+      );
+      return;
+    }
     let branchId = '';
     try {
       const response = await rmqSend<{
@@ -3211,7 +3260,7 @@ export class UserServiceService implements OnModuleInit {
           // Ichki o'qish — isUserAssignedToBranch bilan bir xil tizim requester'i.
           requester: { id: userId, roles: [Roles.SUPERADMIN] },
         },
-        { attachRequestId: false, retries: 0, timeoutMs: 3000 },
+        { attachRequestId: false, retries: 0, timeoutMs: findTimeoutMs },
       );
       branchId = String(response?.data?.branch_id ?? '').trim();
     } catch (error) {
@@ -3224,14 +3273,31 @@ export class UserServiceService implements OnModuleInit {
       return;
     }
 
+    const removeTimeoutMs = budgetFor(5000);
+    if (removeTimeoutMs < BRANCH_UNASSIGN_MIN_BUDGET_MS) {
+      this.logger.warn(
+        `deleteUser: no time left for branch.user.remove — branch_users row (branch ${branchId}, user ${userId}) was NOT removed — remove it manually`,
+      );
+      return;
+    }
     try {
       await rmqSend(
         this.branchClient,
         { cmd: 'branch.user.remove' },
         { requester, branch_id: branchId, user_id: userId },
-        { attachRequestId: false, retries: 0, timeoutMs: 5000 },
+        { attachRequestId: false, retries: 0, timeoutMs: removeTimeoutMs },
       );
     } catch (error) {
+      // (revMyIKg) Timeout — rad EMAS: xabar allaqachon yuborilgan, branch-service
+      // (kuryerda pul/buyurtma qayta tekshiruvidan keyin) qatorni baribir
+      // yopishi mumkin. «NOT removed» deyish noto'g'ri bo'lardi — qo'lda
+      // olib tashlashdan oldin filial xodimlarini tekshirish kerak.
+      if (error instanceof TimeoutError) {
+        this.logger.warn(
+          `deleteUser: branch.user.remove (branch ${branchId}, user ${userId}) got no reply in ${removeTimeoutMs} ms — branch-service may still close the branch_users row; check the branch staff list before removing it manually`,
+        );
+        return;
+      }
       this.logger.warn(
         `deleteUser: branch_users row (branch ${branchId}, user ${userId}) was NOT removed (${describeSagaError(error)}) — remove it manually`,
       );

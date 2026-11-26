@@ -325,8 +325,12 @@ describe("deleteUser — kuryer pul/buyurtma bilan o'chirilmaydi", () => {
         phone_number: expect.stringMatching(/^\+998900009911-d\d+$/),
       }),
     );
-    // branch_users qatori identity tomonidan o'zgartirilmaydi.
-    expect(sentCmds(h.branchClient)).toEqual([CHECK_CMD]);
+    // revMyIKg: saqlashdan keyin faol branch_users qatori qidiriladi (bu
+    // yerda yo'q — remove chaqirilmaydi; yopish fix3b-be2-identity.spec.ts da).
+    expect(sentCmds(h.branchClient)).toEqual([
+      CHECK_CMD,
+      'branch.user.find_by_user',
+    ]);
     expect(h.activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         entity_id: '263',
