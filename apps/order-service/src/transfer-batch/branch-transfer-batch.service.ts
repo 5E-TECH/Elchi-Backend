@@ -1,7 +1,13 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { RpcException } from '@nestjs/microservices';
-import { DataSource, In, IsNull, Repository } from 'typeorm';
+import {
+  DataSource,
+  In,
+  IsNull,
+  Repository,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { randomBytes } from 'node:crypto';
 import { Order, OrderHolderType } from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
@@ -1467,6 +1473,12 @@ export class BranchTransferBatchService {
      * HECH NARSA (fail-closed), `undefined` — filtr yo'q.
      */
     target_region_ids?: string[];
+    /**
+     * Registrator doirasi («Filial paketlari»): faqat shu manzil filiallarga
+     * kelgan paketlar. Bo'sh massiv — HECH NARSA (fail-closed), `undefined` —
+     * filtr yo'q.
+     */
+    destination_branch_ids?: string[];
   }) {
     const sourceBranchId = String(input?.source_branch_id ?? '').trim();
     const destinationBranchId = String(
@@ -1503,6 +1515,7 @@ export class BranchTransferBatchService {
         destinationBranchId,
       });
     }
+    this.applyDestinationScope(qb, input?.destination_branch_ids);
 
     /**
      * Paket viloyati: eski paket — `target_region_id`, umumiy filial paketi
@@ -1746,9 +1759,39 @@ export class BranchTransferBatchService {
     );
   }
 
+  /**
+   * Manzil filial doirasi (registrator «Filial paketlari»): `undefined` — filtr
+   * yo'q; massiv — faqat shu filiallarga kelgan paketlar, bo'sh/buzuq id'lar
+   * qolmasa — hech narsa (fail-closed).
+   */
+  private applyDestinationScope(
+    qb: SelectQueryBuilder<BranchTransferBatch>,
+    destinationBranchIds: string[] | undefined,
+  ) {
+    if (!Array.isArray(destinationBranchIds)) {
+      return;
+    }
+    const ids = Array.from(
+      new Set(
+        destinationBranchIds
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^[0-9]{1,19}$/.test(id)),
+      ),
+    );
+    if (ids.length) {
+      qb.andWhere('batch.destination_branch_id IN (:...scopedDestinationIds)', {
+        scopedDestinationIds: ids,
+      });
+    } else {
+      qb.andWhere('1 = 0');
+    }
+  }
+
   async findBranchesWithSentTransferBatches(input?: {
     direction?: string;
     side?: string;
+    /** Registrator doirasi — `applyDestinationScope` bilan bir xil qoida. */
+    destination_branch_ids?: string[];
   }) {
     const directionRaw = String(input?.direction ?? '')
       .trim()
@@ -1790,6 +1833,7 @@ export class BranchTransferBatchService {
     if (directionRaw) {
       qb.andWhere('batch.direction = :direction', { direction: directionRaw });
     }
+    this.applyDestinationScope(qb, input?.destination_branch_ids);
 
     const rows = await qb
       .groupBy(`batch.${column}`)

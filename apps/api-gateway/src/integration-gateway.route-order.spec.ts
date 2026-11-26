@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { ExecutionContext, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { of } from 'rxjs';
 import request from 'supertest';
@@ -18,6 +18,18 @@ import { IntegrationGatewayController } from './integration-gateway.controller';
  * Bu test grep bilan emas, HAQIQIY Nest routeri orqali tekshiradi: qaysi
  * `cmd` quyi servisga ketganiga qaraymiz.
  */
+/**
+ * So'rov ADMIN nomidan (9rzmWFVm dan beri `GET /integrations/:id` registratorga sayt ko'rinishini beradi — bu
+ * testlar esa faqat marshrut tanlovini tekshiradi, javob shakli to'liq qolsin).
+ */
+const asAdmin = (ctx: ExecutionContext) => {
+  ctx.switchToHttp().getRequest<{ user: unknown }>().user = {
+    sub: '1',
+    roles: ['admin'],
+  };
+  return true;
+};
+
 describe('IntegrationGatewayController — marshrut tartibi', () => {
   let app: INestApplication;
   const send = jest.fn();
@@ -29,7 +41,7 @@ describe('IntegrationGatewayController — marshrut tartibi', () => {
     })
       // Auth bu yerda sinalmaydi — tekshirilayotgani marshrut tanlovi.
       .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
+      .useValue({ canActivate: asAdmin })
       .overrideGuard(RolesGuard)
       .useValue({ canActivate: () => true })
       .compile();
@@ -112,7 +124,7 @@ describe('IntegrationGatewayController — id shakli', () => {
       providers: [{ provide: 'INTEGRATION', useValue: { send } }],
     })
       .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
+      .useValue({ canActivate: asAdmin })
       .overrideGuard(RolesGuard)
       .useValue({ canActivate: () => true })
       .compile();

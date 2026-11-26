@@ -15435,6 +15435,7 @@
     },
     "/integrations": {
       "get": {
+        "description": "REGISTRATOR: faqat «Tashqi saytlar» — faol, marketi bor, to'lov emas ulanishlar; maydonlar: id, name, slug, type, role, category, status, is_active, market_id, market {id,name}, base_url/api_url (login/parol va query'siz), field_mapping, status_sync_config.external_search.endpoint, imported_orders, last_sync_at. Filtrlar e'tiborga olinmaydi, bitta sahifa.",
         "operationId": "IntegrationGatewayController_findAll",
         "parameters": [
           {
@@ -15549,7 +15550,8 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "registrator"
         ]
       },
       "post": {
@@ -16026,6 +16028,7 @@
     },
     "/integrations/{id}": {
       "get": {
+        "description": "REGISTRATOR: faqat sayt ulanish (ro'yxatdagi kabi maydonlar), boshqasi — 404.",
         "operationId": "IntegrationGatewayController_findById",
         "parameters": [
           {
@@ -16053,7 +16056,8 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "registrator"
         ]
       },
       "patch": {

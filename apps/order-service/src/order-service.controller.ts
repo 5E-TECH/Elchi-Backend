@@ -2756,6 +2756,8 @@ export class OrderServiceController {
       target_region_id?: string;
       /** Z3pUOxou: logist doirasi; bo'sh massiv — hech narsa. */
       target_region_ids?: string[];
+      /** Registrator doirasi — manzil filiallar; bo'sh massiv — hech narsa. */
+      destination_branch_ids?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
@@ -2770,6 +2772,8 @@ export class OrderServiceController {
     data: {
       direction?: string;
       side?: string;
+      /** Registrator doirasi — manzil filiallar; bo'sh massiv — hech narsa. */
+      destination_branch_ids?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
