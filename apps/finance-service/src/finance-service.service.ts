@@ -166,6 +166,12 @@ import {
   type TransferShape,
 } from './payment-correction/payment-correction.rules';
 import { attachHistoryRoutes } from './history-route/history-route';
+import {
+  markPassThrough,
+  passThroughFilter,
+  passThroughPartners,
+  passThroughSql,
+} from './history-route/pass-through';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -741,8 +747,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * so'rov sahifasiz, SQL SUM bilan; oylar Toshkent vaqti bo'yicha.
    */
   private async sumHistoryTotals(qb: SelectQueryBuilder<CashboxHistory>) {
-    const income = `COALESCE(SUM(CASE WHEN h.operation_type = 'income' THEN h.amount ELSE 0 END), 0)`;
-    const outcome = `COALESCE(SUM(CASE WHEN h.operation_type = 'expense' THEN h.amount ELSE 0 END), 0)`;
+    // (2026-11-26) O'tkazma izi (sof 0) kirim / chiqimga kirmaydi.
+    const real = `NOT ${passThroughSql('h', this.historyTableSql())}`;
+    const income = `COALESCE(SUM(CASE WHEN h.operation_type = 'income' AND ${real} THEN h.amount ELSE 0 END), 0)`;
+    const outcome = `COALESCE(SUM(CASE WHEN h.operation_type = 'expense' AND ${real} THEN h.amount ELSE 0 END), 0)`;
     const unpaged = () => qb.clone().skip(undefined).take(undefined).orderBy();
 
     const totalsRow = await unpaged()
@@ -812,10 +820,91 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     return Number(row?.total ?? 0);
   }
 
-  private calcIncomeOutcome(histories: CashboxHistory[]) {
+  /**
+   * (2026-11-26) O'tkazma izi qatorlari → juft id si. Faqat ko'rsatish va
+   * jamilar uchun: xato bo'lsa (fail-open) — bo'sh, tarix baribir qaytadi.
+   */
+  private async passThroughOf(
+    rows: readonly CashboxHistory[],
+  ): Promise<Map<string, string>> {
+    try {
+      return await passThroughPartners(this.dataSource.manager, rows);
+    } catch (error) {
+      this.logger.warn(
+        `o'tkazma izi aniqlanmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return new Map();
+    }
+  }
+
+  /**
+   * (2026-11-26) «Barchasi» ro'yxatida juft bitta qator (`collapse`): sahifada
+   * yo'q juft oyoqlar (chiqim) — `qator id → juft qator` (foydalanuvchilar
+   * bilan, ro'yxat qatori shaklida). Fail-open: xato — bo'sh (qator baribir
+   * `pass_through` belgisi bilan qaytadi).
+   */
+  private async passThroughPartnerRows(
+    rows: readonly CashboxHistory[],
+    partners: ReadonlyMap<string, string>,
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const out = new Map<string, Record<string, unknown>>();
+    const onPage = new Set(rows.map((row) => String(row.id)));
+    const missing = [...new Set(partners.values())].filter(
+      (id) => !onPage.has(id),
+    );
+    if (!missing.length) return out;
+    try {
+      const legs = await this.historyRepo.find({
+        where: { id: In(missing) },
+        relations: ['cashbox'],
+      });
+      const enriched = await this.enrichHistoryWithUsers(legs, {
+        courierAck: false,
+      });
+      const byId = new Map(
+        enriched.map((leg) => [String(leg.id), leg] as const),
+      );
+      for (const [rowId, partnerId] of partners) {
+        const leg = byId.get(partnerId);
+        if (!leg) continue;
+        out.set(rowId, {
+          id: leg.id,
+          cashbox_id: leg.cashbox_id,
+          operation_type: leg.operation_type,
+          source_type: leg.source_type,
+          amount: leg.amount,
+          balance_after: leg.balance_after,
+          payment_method: leg.payment_method,
+          transfer_id: leg.transfer_id,
+          payment_date: leg.payment_date,
+          createdAt: leg.createdAt,
+          // `enrichHistoryWithUsers` qo'shadi (tipida yo'q).
+          source_user: (leg as { source_user?: unknown }).source_user ?? null,
+          pass_through: true,
+          pass_through_pair_id: rowId,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `o'tkazma izi jufti o'qilmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Kirim / chiqim jamilari. (2026-11-26) O'tkazma izi (`passThroughPartners`
+   * — bitta to'lovda o'sha kassada +X va −X) jamilarga KIRMAYDI: pul kassaga
+   * kirmagan, qoldiq o'zgarmagan.
+   */
+  private calcIncomeOutcome(
+    histories: CashboxHistory[],
+    passThrough: ReadonlyMap<string, string> = new Map(),
+  ) {
     let income = 0;
     let outcome = 0;
     for (const history of histories) {
+      if (passThrough.has(String(history.id))) continue;
       if (history.operation_type === Operation_type.INCOME) {
         income += Number(history.amount);
       } else {
@@ -3070,32 +3159,75 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      // (2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X) —
+      // «Kirim» / «Chiqim» tablarida yo'q (pul kassaga kirmagan); «Barchasi»
+      // da bor (frontend juftni bitta kulrang qator qiladi). Ekran
+      // (`collapse_pass_through`) — juftdan faqat kirim oyog'i, chiqim oyog'i
+      // unga `pass_through_partner` bo'lib biriktiriladi: sahifada juft
+      // bo'linmaydi, `total` = `counts.all`.
+      const historyTable = this.historyTableSql();
+      const collapse =
+        dto.collapse_pass_through === true && !dto.operation_type;
+      if (dto.operation_type) {
+        where.transfer_id = passThroughFilter(historyTable, 'exclude');
+      } else if (collapse) {
+        where.transfer_id = passThroughFilter(historyTable, 'collapse');
+      }
       // GaBIPi3Z (2-band): «Barchasi / Kirim / Chiqim» tab sonlari — AYNI
       // filtrlar, faqat `operation_type` siz (tanlangan tabdan qat'i nazar).
       const countWhere: FindOptionsWhere<CashboxHistory> = { ...where };
       delete countWhere.operation_type;
-      const [[items, total], income, expense] = await Promise.all([
-        this.historyRepo.findAndCount({
-          where,
-          relations: ['cashbox'],
-          order: { createdAt: 'DESC' },
-          ...(noPagination
-            ? {}
-            : {
-                skip: (page - 1) * limit,
-                take: limit,
-              }),
-        }),
-        this.historyRepo.count({
-          where: { ...countWhere, operation_type: Operation_type.INCOME },
-        }),
-        this.historyRepo.count({
-          where: { ...countWhere, operation_type: Operation_type.EXPENSE },
-        }),
-      ]);
-      const withCorrections = await this.withCorrections(
-        await this.enrichHistoryWithUsers(items),
-        dto.include_receipts === true ? 'brief' : 'none',
+      delete countWhere.transfer_id;
+      const [[items, total], income, expense, passThroughPairs] =
+        await Promise.all([
+          this.historyRepo.findAndCount({
+            where,
+            relations: ['cashbox'],
+            order: { createdAt: 'DESC' },
+            ...(noPagination
+              ? {}
+              : {
+                  skip: (page - 1) * limit,
+                  take: limit,
+                }),
+          }),
+          this.historyRepo.count({
+            where: {
+              ...countWhere,
+              operation_type: Operation_type.INCOME,
+              transfer_id: passThroughFilter(historyTable, 'exclude'),
+            },
+          }),
+          this.historyRepo.count({
+            where: {
+              ...countWhere,
+              operation_type: Operation_type.EXPENSE,
+              transfer_id: passThroughFilter(historyTable, 'exclude'),
+            },
+          }),
+          // Har juftda bitta kirim oyog'i — «Barchasi» da juft bitta qator.
+          this.historyRepo.count({
+            where: {
+              ...countWhere,
+              operation_type: Operation_type.INCOME,
+              transfer_id: passThroughFilter(historyTable, 'only'),
+            },
+          }),
+        ]);
+      const passThrough = await this.passThroughOf(items);
+      const partnerRows = collapse
+        ? await this.passThroughPartnerRows(items, passThrough)
+        : new Map<string, Record<string, unknown>>();
+      const withCorrections = markPassThrough(
+        await this.withCorrections(
+          await this.enrichHistoryWithUsers(items),
+          dto.include_receipts === true ? 'brief' : 'none',
+        ),
+        passThrough,
+      ).map((row) =>
+        partnerRows.has(String(row.id))
+          ? { ...row, pass_through_partner: partnerRows.get(String(row.id)) }
+          : row,
       );
       // (2026-11-26) Excel «Yo'nalish» — faqat gateway eksportlari so'raydi.
       const enrichedItems =
@@ -3115,8 +3247,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return this.successRes(
         {
           items: enrichedItems,
-          // operation_type majburiy (income | expense) — all = income + expense.
-          counts: { all: income + expense, income, expense },
+          // operation_type majburiy (income | expense) — all = income + expense
+          // + o'tkazma izi juftlari (har juft «Barchasi» da bitta qator).
+          counts: {
+            all: income + expense + passThroughPairs,
+            income,
+            expense,
+          },
           pagination: {
             total,
             page,
@@ -3174,22 +3311,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       // (mUhkJHmi) `correctableBlock` faqat xom `history` ni o'qiydi va xatoni
       // o'zi `null` ga aylantiradi — enrichment bilan PARALLEL: nom
       // so'rovlari (≤ 1500 ms) zanjir oxiriga qo'shilmaydi.
-      const [[enrichedHistory], correctable, parties] = await Promise.all([
-        this.enrichHistoryWithUsers([history]).then((rows) =>
-          this.withCorrections(
-            rows,
-            options.include_receipts === true ? 'full' : 'none',
+      const [[enrichedHistory], correctable, parties, passThrough] =
+        await Promise.all([
+          this.enrichHistoryWithUsers([history]).then((rows) =>
+            this.withCorrections(
+              rows,
+              options.include_receipts === true ? 'full' : 'none',
+            ),
           ),
-        ),
-        options.include_correctable
-          ? this.correctableBlock(history)
-          : Promise.resolve(undefined),
-        this.historyDetailParties(history),
-      ]);
+          options.include_correctable
+            ? this.correctableBlock(history)
+            : Promise.resolve(undefined),
+          this.historyDetailParties(history),
+          // (2026-11-26) O'tkazma izi — tafsilotda belgi va juft qator.
+          this.passThroughOf([history]),
+        ]);
 
       return this.successRes(
         {
-          ...enrichedHistory,
+          ...markPassThrough([enrichedHistory], passThrough)[0],
           ...parties,
           order,
           ...(options.include_correctable ? { correctable } : {}),
@@ -4881,10 +5021,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where,
         order: { createdAt: 'DESC' },
       });
-      const { income, outcome } = this.calcIncomeOutcome(rows);
-      const cashboxHistory = await this.withCorrections(
-        rows,
-        filters?.include_receipts === true ? 'brief' : 'none',
+      const passThrough = await this.passThroughOf(rows);
+      const { income, outcome } = this.calcIncomeOutcome(rows, passThrough);
+      const cashboxHistory = markPassThrough(
+        await this.withCorrections(
+          rows,
+          filters?.include_receipts === true ? 'brief' : 'none',
+        ),
+        passThrough,
       );
       return this.successRes(
         { cashbox: mainCashbox, cashboxHistory, income, outcome },
@@ -4951,7 +5095,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where: historyWhere,
         order: { createdAt: 'DESC' },
       });
-      const { income, outcome } = this.calcIncomeOutcome(rawHistory);
+      // (2026-11-26) O'tkazma izi — jamilarga kirmaydi, qatorda belgi.
+      const passThrough = await this.passThroughOf(rawHistory);
+      const { income, outcome } = this.calcIncomeOutcome(
+        rawHistory,
+        passThrough,
+      );
       // 63HO6cBU — qatorlarda `cashbox` relation yo'q: kassa turi bo'yicha.
       const ackedHistory = await this.withBranchLegs(
         cashbox.cashbox_type === Cashbox_type.FOR_COURIER
@@ -4993,7 +5142,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       };
 
       return this.successRes(
-        { cashbox: cashboxWithOwner, cashboxHistory, income, outcome },
+        {
+          cashbox: cashboxWithOwner,
+          cashboxHistory: markPassThrough(cashboxHistory, passThrough),
+          income,
+          outcome,
+        },
         200,
         'Cashbox details',
       );

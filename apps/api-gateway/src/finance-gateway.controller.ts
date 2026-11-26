@@ -3763,7 +3763,8 @@ export class FinanceGatewayController {
     description:
       'GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): ' +
       'AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — ' +
-      "tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami. " +
+      "tanlangan tabdan qat'i nazar. `all = income + expense + o'tkazma izi juftlari`. `pagination.total` — joriy (tabli) ro'yxat jami. " +
+      "(2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X): «Kirim» / «Chiqim» tablarida yo'q; «Barchasi» da juftdan faqat kirim oyog'i, chiqim oyog'i `pass_through_partner` da. " +
       "63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
   })
   @ApiOkResponse({
@@ -3805,6 +3806,9 @@ export class FinanceGatewayController {
     @Query() query: FindHistoryQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    // (2026-11-26, ega) Ekran ro'yxati: o'tkazma izi jufti «Barchasi» da
+    // BITTA qator (`collapse_pass_through` — kirim oyog'i + `pass_through_partner`).
+    // Excel va boshqa o'quvchilar bu bayroqsiz — ikkala qator.
     // T3 — «Chek holati» filtri faqat chekni ko'ra oladigan rollarga.
     if (query.receipt_status && !canSeeReceipts(this.getUserRoles(req?.user))) {
       throw new ForbiddenException(
@@ -3824,6 +3828,7 @@ export class FinanceGatewayController {
             user_id: String(req.user.sub),
             cashbox_type: Cashbox_type.FOR_MARKET,
             include_receipts: false,
+            collapse_pass_through: true,
           },
         ),
       );
@@ -3841,6 +3846,7 @@ export class FinanceGatewayController {
             user_id: String(req.user.sub),
             cashbox_type: Cashbox_type.FOR_COURIER,
             include_receipts: false,
+            collapse_pass_through: true,
           },
         ),
       );
@@ -3869,12 +3875,14 @@ export class FinanceGatewayController {
               source_type: Source_type.BRANCH_TO_MAIN,
               operation_type: Operation_type.EXPENSE,
               include_receipts: true,
+              collapse_pass_through: true,
             }
           : {
               ...query,
               user_id: branchId,
               cashbox_type: Cashbox_type.BRANCH,
               include_receipts: true,
+              collapse_pass_through: true,
             },
       );
 
@@ -3941,6 +3949,7 @@ export class FinanceGatewayController {
             user_id: branchId,
             cashbox_type: Cashbox_type.BRANCH,
             include_receipts: false,
+            collapse_pass_through: true,
           },
         ),
       );
@@ -3961,6 +3970,7 @@ export class FinanceGatewayController {
             ? query
             : { ...query, cashbox_type: Cashbox_type.MAIN }),
           include_receipts: this.canSeeReceiptsOf(req?.user),
+          collapse_pass_through: true,
         },
       ),
     );

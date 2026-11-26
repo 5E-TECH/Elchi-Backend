@@ -12,6 +12,7 @@ import { DataSource, EntityManager } from 'typeorm';
 import { rmqSend } from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
+import { passThroughSql } from '../history-route/pass-through';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { FinanceDailySnapshot } from '../entities/finance-daily-snapshot.entity';
@@ -325,7 +326,9 @@ export class FinanceDailySnapshotService
          day_hist AS (
            SELECT h."id", h."cashbox_id", h."operation_type", h."amount",
                   h."balance_after", h."balance_cash_after",
-                  h."balance_card_after", h."createdAt"
+                  h."balance_card_after", h."createdAt",
+                  -- (2026-11-26) o'tkazma izi — kirim / chiqimga kirmaydi.
+                  ${passThroughSql('h', t.history)} AS pass_through
              FROM ${t.history} h
             WHERE h."is_deleted" = false
               AND h."createdAt" >= $2 AND h."createdAt" < $3
@@ -338,10 +341,10 @@ export class FinanceDailySnapshotService
          ),
          flows AS (
            SELECT "cashbox_id",
-                  COALESCE(SUM("amount") FILTER (WHERE "operation_type" = 'income'), 0) AS income,
-                  COALESCE(SUM("amount") FILTER (WHERE "operation_type" = 'expense'), 0) AS expense,
-                  (COUNT(*) FILTER (WHERE "operation_type" = 'income'))::int AS income_count,
-                  (COUNT(*) FILTER (WHERE "operation_type" = 'expense'))::int AS expense_count
+                  COALESCE(SUM("amount") FILTER (WHERE "operation_type" = 'income' AND NOT pass_through), 0) AS income,
+                  COALESCE(SUM("amount") FILTER (WHERE "operation_type" = 'expense' AND NOT pass_through), 0) AS expense,
+                  (COUNT(*) FILTER (WHERE "operation_type" = 'income' AND NOT pass_through))::int AS income_count,
+                  (COUNT(*) FILTER (WHERE "operation_type" = 'expense' AND NOT pass_through))::int AS expense_count
              FROM day_hist
             GROUP BY "cashbox_id"
          ),
