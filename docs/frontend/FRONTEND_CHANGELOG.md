@@ -23,6 +23,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-26 — Kassa tarixi: «Marketga o'tkazma» izi kirim / chiqimga kirmaydi (ega)
+
+Deploy: **finance-service** (migratsiya, env yo'q). ⚠️ Frontend jufti bilan birga chiqsin (aks holda eski ekranda juft
+qatorlar avvalgidek ikkita, lekin jamilar endi to'g'ri).
+
+«Marketga o'tkazma» (kuryer → market, HQ yoki menejer yozgan) va «Filialdan marketga o'tkazma» da pul kassaga KIRMAYDI,
+lekin asosiy / filial kassasida bitta to'lov ichida ikki qator bor: «Kirim +X» va «Chiqim −X». Qoida (umumiy): bitta
+`transfer_id` ichida AYNI kassada teskari amalli, teng summali oyoq — «o'tkazma izi». Shunday to'lovning T6 teskari
+yozuvlari ham iz.
+
+- ✏️ [finance] Kirim / chiqim jamilari izni hisobga OLMAYDI: `GET /finance/cashbox/main` (`income`, `outcome`),
+  `GET /finance/cashbox/user/:id` va my-cashbox (`income`, `outcome`), `GET /finance/history/daily` (`totals`, kunlar,
+  `*_count`), moliyaviy hisobot `periodTotals` / `periodMonthly`, kunlik snapshot. Qoldiq o'zgarmaydi.
+- ✏️ [finance] `GET /finance/history?operation_type=income|expense` — iz qatorlari yo'q; `counts`: `income`, `expense`
+  izsiz, `all = income + expense + iz juftlari soni` («Barchasi» da juft bitta qator).
+- 🆕 [finance] Tarix qatorlarida (ro'yxat, asosiy kassa, kassa sahifasi, `/history/:id`): iz qatori
+  `pass_through: true` va `pass_through_pair_id` (o'sha kassadagi juft qator id si). Boshqa qatorlarda kalit yo'q.
+  → **Frontendda:** 🔧 juftni bitta kulrang qator qilish («Marketga o'tkazma · kuryer → market · kassaga kirmadi»),
+  qatorlardan hisoblanadigan jamilarda `pass_through` ni o'tkazib yuborish.
+
+
 ### 2026-11-26 — Kassa Excel'lari: «Yo'nalish», «Holat», «Filiallar orqali marketlarga» (ega)
 
 Deploy: **finance-service, api-gateway** (migratsiya, env yo'q). Frontend o'zgarishi shart emas.
