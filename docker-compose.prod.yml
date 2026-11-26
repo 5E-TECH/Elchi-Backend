@@ -753,9 +753,9 @@ services:
       start_period: 40s
 
   # AI buyurtma servisi: Anthropic'ni chaqiradigan YAGONA jarayon (port 3024,
-  # ai_queue, ai_schema). ANTHROPIC_API_KEY umumiy .env.production'da turadi,
-  # lekin faqat shu servis uni o'qiydi va tekshiradi — bo'sh bo'lsa servis AI
-  # o'chiq holda normal ko'tariladi.
+  # ai_queue, ai_schema). ANTHROPIC_API_KEY faqat shu servisning `.env.ai-secrets`
+  # faylida turadi va faqat shu servis uni o'qiydi va tekshiradi — bo'sh bo'lsa
+  # servis AI o'chiq holda normal ko'tariladi.
   # ⚠️ RMQ navbat TTL'i (rmq.service.ts) bu servis uchun ham O'ZGARTIRILMAYDI —
   # uzoq AI chaqiruvi AI_RPC_TIMEOUT_MS bilan boshqariladi, TTL bilan emas.
   # (AI ack B1) Ikkinchi iste'molchi — `ai_fast_queue` (RABBITMQ_AI_FAST_QUEUE,
@@ -767,8 +767,9 @@ services:
       context: .
       dockerfile: apps/ai-service/Dockerfile
     # «AI kalit va modellar» (be-brief §9): ANTHROPIC_API_KEY — FAQAT shu servis
-    # o'qiydigan `.env.ai-secrets` da (umumiy .env.production dan ko'chiriladi;
-    # o'tish davrida u yerda ham ishlaydi, preflight WARN beradi). Fayl ixtiyoriy.
+    # o'qiydigan `.env.ai-secrets` da. Umumiy .env.production da qiymati bo'lsa
+    # deploy rad etiladi (audit 2026-11-22 #15; ko'chirish — docs/ops/ai-config.md
+    # §6). Fayl ixtiyoriy.
     env_file:
       - .env.production
       - path: .env.ai-secrets
