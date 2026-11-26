@@ -275,6 +275,96 @@ describe('B5 — asosiy kassa hisoboti', () => {
     expect(texts(ws).some((t) => t.startsWith('«Boshqa»'))).toBe(true);
   });
 
+  it("⭐ 2026-11-26: «Filiallar orqali marketlarga» — menejer to'lovlari alohida (balansga kirmaydi); qaytarilgani belgilangan", async () => {
+    const branchRow = (id: number, extra: Record<string, unknown>) =>
+      row(id, {
+        operation_type: 'expense',
+        source_type: 'market_payment',
+        cashbox_id: '21',
+        cashbox: { cashbox_type: 'branch', user_id: '5' },
+        source_user: { name: 'Baraka Shop' },
+        created_by_user: { name: 'Filial menejeri' },
+        ...extra,
+      });
+    const ws = await build({
+      branchMarketItems: [
+        branchRow(11, {
+          payment_method: 'click_to_market',
+          amount: 300,
+          route: {
+            variant: 'courier_click_branch',
+            cashbox_type: 'branch',
+            branch_id: '5',
+            courier: { id: '209', name: 'Ali Valiyev' },
+            market: { id: '77', name: 'Baraka Shop' },
+          },
+        }),
+        branchRow(12, {
+          payment_method: 'cash',
+          amount: 200,
+          route: {
+            variant: 'market_branch',
+            cashbox_type: 'branch',
+            branch_id: '5',
+            courier: null,
+            market: { id: '77', name: 'Baraka Shop' },
+          },
+          correction: {
+            role: 'original',
+            action: 'reverse',
+            related_history_id: '13',
+          },
+        }),
+      ],
+    });
+    const all = texts(ws);
+    expect(all).toEqual(
+      expect.arrayContaining([
+        'Filiallar orqali marketlarga',
+        "2 ta to'lov",
+        "Kuryer Ali Valiyev → Baraka Shop (o'tkazma, Andijon filiali menejeri yozgan)",
+        "Kuryer Ali Valiyev o'tkazmasi",
+        'Andijon filiali kassasi → Baraka Shop',
+        "Filial kassasidan to'lov · Qaytarilgan",
+        'Filial menejeri',
+      ]),
+    );
+    expect(
+      all.some((t) =>
+        t.startsWith("Bu bo'lim asosiy kassa balansiga kirmaydi"),
+      ),
+    ).toBe(true);
+    // Bo'lim jami — 500, asosiy kassa kartalari (kirim / chiqim) o'zgarmaydi.
+    const section = rowOf(ws, 'Filiallar orqali marketlarga');
+    let total: unknown = null;
+    ws.eachRow((r, n) => {
+      if (n > section && value(r.getCell(3)) === "Jami (ma'lumot uchun)") {
+        total = value(r.getCell(7));
+        expect(r.getCell(7).formula).toMatch(/^SUM\(G\d+:G\d+\)$/);
+      }
+    });
+    expect(total).toBe(500);
+    expect(cells(ws, 15, 'DEFGH')).toEqual(cells(await build(), 15, 'DEFGH'));
+  });
+
+  it('2026-11-26: bo`lim berilmasa / bo`sh — chizilmaydi; teskari qator izohida «Qaytarish (#…)»', async () => {
+    expect(texts(await build())).not.toContain('Filiallar orqali marketlarga');
+    expect(texts(await build({ branchMarketItems: [] }))).not.toContain(
+      'Filiallar orqali marketlarga',
+    );
+    const rows: Array<Record<string, unknown>> = mainRows();
+    rows[2] = {
+      ...rows[2],
+      correction: {
+        role: 'original',
+        action: 'reverse',
+        related_history_id: '9',
+      },
+    };
+    const all = texts(await build({ items: rows }));
+    expect(all.some((t) => t.endsWith(' · Qaytarilgan'))).toBe(true);
+  });
+
   it('chegaradan ko`p — DIQQAT, balans nazorati chiqmaydi', async () => {
     const ws = await build({ limit: 2, total: 51_000 });
     const all = texts(ws);

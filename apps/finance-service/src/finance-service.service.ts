@@ -165,6 +165,7 @@ import {
   type HistoryWithCashbox,
   type TransferShape,
 } from './payment-correction/payment-correction.rules';
+import { attachHistoryRoutes } from './history-route/history-route';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -3092,10 +3093,24 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           where: { ...countWhere, operation_type: Operation_type.EXPENSE },
         }),
       ]);
-      const enrichedItems = await this.withCorrections(
+      const withCorrections = await this.withCorrections(
         await this.enrichHistoryWithUsers(items),
         dto.include_receipts === true ? 'brief' : 'none',
       );
+      // (2026-11-26) Excel «Yo'nalish» — faqat gateway eksportlari so'raydi.
+      const enrichedItems =
+        dto.include_route === true
+          ? await attachHistoryRoutes(
+              this.dataSource.manager,
+              withCorrections,
+              async (ids) =>
+                new Map(
+                  [...(await this.loadUsersByIds(ids)).entries()].map(
+                    ([id, user]) => [id, user?.name ?? null],
+                  ),
+                ),
+            )
+          : withCorrections;
 
       return this.successRes(
         {
