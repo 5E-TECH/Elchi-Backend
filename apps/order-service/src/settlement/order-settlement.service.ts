@@ -2754,7 +2754,12 @@ export class OrderSettlementService {
    * `branch_to_hq` qo'llanmaydi (alohida karta) — 400.
    */
   async retreatSettlement(data: {
-    level: 'courier_to_branch' | 'hq_to_market';
+    level:
+      | 'courier_to_branch'
+      | 'branch_to_hq'
+      | 'hq_to_market'
+      // (2026-11-26) B — filial kassasidan marketga to'lov, match "X:M".
+      | 'branch_to_market';
     match_value: string;
     amount: number;
     requester_id?: string;
@@ -2765,7 +2770,14 @@ export class OrderSettlementService {
     receiver_branch_id?: string | null;
   }) {
     const level = String(data?.level ?? '');
-    if (level !== 'courier_to_branch' && level !== 'hq_to_market') {
+    if (level === 'branch_to_market') {
+      return this.retreatBranchToMarket(data);
+    }
+    if (
+      level !== 'courier_to_branch' &&
+      level !== 'branch_to_hq' &&
+      level !== 'hq_to_market'
+    ) {
       this.badRequest(`Invalid settlement retreat level: ${level}`);
     }
     const matchValue = String(data?.match_value ?? '').trim();
@@ -2775,6 +2787,21 @@ export class OrderSettlementService {
         { reopened_order_ids: [], reopened: 0, carry_after: null },
         200,
         'No settlement to retreat',
+      );
+    }
+    /**
+     * (2026-11-26) `branch_to_hq` — A / C qaytarilganda. C10: tomoni HQ'ning
+     * o'zi bo'lgan filial → HQ siljishi qatorsiz va qoldiqsiz (advance'da
+     * ham) — orqaga surish ham hech narsa qilmaydi.
+     */
+    if (
+      level === 'branch_to_hq' &&
+      (await this.resolveHqBranchId()) === matchValue
+    ) {
+      return successRes(
+        { reopened_order_ids: [], reopened: 0, carry_after: null },
+        200,
+        'No settlement to retreat (HQ branch)',
       );
     }
     const requesterId = String(data?.requester_id ?? '').trim();
@@ -2873,19 +2900,38 @@ export class OrderSettlementService {
         const qb = repo
           .createQueryBuilder('s')
           .where('s.isDeleted = :deleted', { deleted: false })
-          // 63HO6cBU — market ulushini filial to'lagan qator qayta ochilmaydi
-          // (kuryer qaytarishi ham, HQ marketga to'lovi qaytarishi ham uni
-          // ololmaydi: market puli filialdan allaqachon ketgan).
-          .andWhere('s.market_paid_by_branch_at IS NULL')
-          .andWhere(
-            level === 'courier_to_branch'
-              ? 's.market_paid_by_branch_amount = 0'
-              : 's.market_paid_by_branch_amount < s.market_amount',
-          )
           .orderBy('s.createdAt', 'ASC')
           .addOrderBy('s.id', 'ASC')
           .setLock('pessimistic_write');
-        if (level === 'courier_to_branch') {
+        if (level !== 'branch_to_hq') {
+          // 63HO6cBU — market ulushini filial to'lagan qator qayta ochilmaydi
+          // (kuryer qaytarishi ham, HQ marketga to'lovi qaytarishi ham uni
+          // ololmaydi: market puli filialdan allaqachon ketgan).
+          qb.andWhere('s.market_paid_by_branch_at IS NULL').andWhere(
+            level === 'courier_to_branch'
+              ? 's.market_paid_by_branch_amount = 0'
+              : 's.market_paid_by_branch_amount < s.market_amount',
+          );
+        }
+        if (level === 'branch_to_hq') {
+          // Filial HQ'ga yopgan qatorlar: BRANCH_SETTLED, yoki `branch_to_hq`
+          // da to'g'ridan-to'g'ri MARKET_SETTLED bo'lganlari (market ulushini
+          // filial to'lagan / market ulushi 0). HQ marketga to'lab yopganlari
+          // (MARKET_SETTLED, `hq_to_market`) — tegilmaydi: ularning qismi
+          // manfiy qoldiqqa tushadi.
+          qb.andWhere('s.branch_id = :party', { party: matchValue })
+            .andWhere('s.branch_to_hq_at IS NOT NULL')
+            .andWhere(
+              new Brackets((w) => {
+                w.where('s.status = :branchSettled', {
+                  branchSettled: SettlementStatus.BRANCH_SETTLED,
+                }).orWhere(
+                  '(s.status = :marketSettled AND (s.market_paid_by_branch_at IS NOT NULL OR s.market_amount = 0))',
+                  { marketSettled: SettlementStatus.MARKET_SETTLED },
+                );
+              }),
+            );
+        } else if (level === 'courier_to_branch') {
           qb.andWhere('s.courier_id = :party', { party: matchValue });
           if (receiverType === 'branch' && receiverBranchId) {
             // Asl qabul qiluvchi — filial: faqat SHU filial qatorlari.
@@ -2926,7 +2972,9 @@ export class OrderSettlementService {
           const leg =
             level === 'courier_to_branch'
               ? Number(row.courier_amount ?? 0) || 0
-              : hqToMarketLeg(row);
+              : level === 'branch_to_hq'
+                ? branchToHqLeg(row)
+                : hqToMarketLeg(row);
           // Kredit / nol qator qarzni oshirmaydi — tegilmaydi.
           if (!(leg > 0)) continue;
           await repo.update(
@@ -2937,11 +2985,23 @@ export class OrderSettlementService {
                   courier_to_branch_at: null,
                   courier_to_branch_by: null,
                 }
-              : {
-                  status: SettlementStatus.BRANCH_SETTLED,
-                  hq_to_market_at: null,
-                  hq_to_market_by: null,
-                },
+              : level === 'branch_to_hq'
+                ? {
+                    status: SettlementStatus.COURIER_SETTLED,
+                    branch_to_hq_at: null,
+                    branch_to_hq_by: null,
+                    // X737-5 — market ulushi 0 qator `branch_to_hq` da HQ →
+                    // market bosqichi ham yopilgan deb belgilangan edi.
+                    ...(row.status === SettlementStatus.MARKET_SETTLED &&
+                    !isMarketPaidByBranch(row)
+                      ? { hq_to_market_at: null, hq_to_market_by: null }
+                      : {}),
+                  }
+                : {
+                    status: SettlementStatus.BRANCH_SETTLED,
+                    hq_to_market_at: null,
+                    hq_to_market_by: null,
+                  },
           );
           reopened = round2(reopened + leg);
           // (SPEC v2) sotuv va E qatori bitta buyurtmaniki bo'lishi mumkin — id bir marta.
@@ -3049,6 +3109,281 @@ export class OrderSettlementService {
     }
     return successRes(
       { reopened_order_ids: reopenedIds, reopened, carry_after: carryAfter },
+      200,
+      'Settlement retreated',
+    );
+  }
+
+  /**
+   * (2026-11-26, ega) B — filial kassasidan marketga to'lov (PR-C,
+   * `branch_to_market`) QAYTARILDI: shu to'lov qatorlarga yozgan «market
+   * ulushini filial to'lagan» qismi orqaga olinadi. Kassa allaqachon
+   * ko'chgan (finance: filial +X, market +X) — bu yerda faqat daftar.
+   *
+   * Tartib (bitta tranzaksiya, qulf: (X, M) qoldig'i → `branch_to_hq` (X) va
+   * `hq_to_market` (M) qoldiqlari → qatorlar — advance bilan bir xil yo'nalish):
+   *  1. Avval (X, M) MUSBAT qoldig'i (qatorga hali yozilmagan to'lov) kamayadi.
+   *  2. Qolgani — (X, M) qatorlarining eng yangisidan: `market_paid_by_branch_amount`
+   *     kamayadi, `market_paid_by_branch_at` tozalanadi. Qator holatiga ko'ra:
+   *     • COURIER_SETTLED — boshqa hech narsa: filialning HQ'ga va HQ'ning
+   *       marketga qarzi qatorning o'zida o'z-o'zidan ortadi;
+   *     • BRANCH_SETTLED — filial HQ'ga kamaytirilgan oyoqni topshirgan:
+   *       farq `branch_to_hq` (X) MANFIY qoldig'iga (keyingi topshiriq avval
+   *       uni yopadi); HQ marketga hali to'lamagan — qator o'zi ko'rsatadi;
+   *     • MARKET_SETTLED, `hq_to_market_at` yo'q (filial to'liq to'lagani uchun
+   *       to'g'ridan-to'g'ri yopilgan) — BRANCH_SETTLED ga qaytadi (HQ marketga
+   *       qolganini to'laydi) + filial farqi `branch_to_hq` ga;
+   *     • MARKET_SETTLED, HQ qolganini to'lagan — qatorga tegilmaydi (qayta
+   *       ochilsa HQ ikki marta to'lardi): farq `branch_to_hq` (X) va
+   *       `hq_to_market` (M) manfiy qoldiqlariga.
+   *  3. Qatorlarda topilmagan qism (kutilmagan) — ikkala manfiy qoldiqqa,
+   *     WARN bilan: pul hech qayerda yo'qolmaydi.
+   *
+   * Idempotent: `request_id` (retreat M8 belgisi). WX-1: konvertatsiya izi
+   * bo'lsa — 503 (outbox qayta urinadi).
+   */
+  private async retreatBranchToMarket(data: {
+    match_value: string;
+    amount: number;
+    requester_id?: string;
+    request_id?: string;
+  }) {
+    const party = parseBranchMarketParty(data?.match_value);
+    const amount = money2(Number(data?.amount ?? 0));
+    if (!party || !(amount > 0)) {
+      return successRes(
+        { reopened_order_ids: [], reopened: 0, carry_after: null },
+        200,
+        'No settlement to retreat',
+      );
+    }
+    const { branchId, marketId } = party;
+    const requesterId = String(data?.requester_id ?? '').trim();
+    const token = String(data?.request_id ?? '').trim();
+    const appliedKey = token
+      ? this.advanceAppliedKey(token, RETREAT_APPLIED_PATTERN)
+      : undefined;
+    if (appliedKey) {
+      const applied = await this.findAppliedAdvance(appliedKey);
+      if (applied) {
+        return applied;
+      }
+    }
+
+    const carryEnabled = await this.isCarryTableStrict();
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    const reopenedIds: string[] = [];
+    let unpaid = 0;
+    let fromCarry = 0;
+    let branchDebt = 0;
+    let hqDebt = 0;
+    let missing = 0;
+    try {
+      const tx = queryRunner.manager;
+      await this.assertNotConverted246(tx);
+      if (appliedKey) {
+        await this.claimAdvanceToken(tx, appliedKey, RETREAT_APPLIED_PATTERN);
+      }
+      const bmRepo = tx.getRepository(OrderSettlementBranchMarketCarry);
+      await bmRepo
+        .createQueryBuilder()
+        .insert()
+        .values({ branch_id: branchId, market_id: marketId, amount: 0 })
+        .orIgnore()
+        .execute();
+      const bmCarry = await bmRepo.findOne({
+        where: { branch_id: branchId, market_id: marketId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      const carryRepo = carryEnabled
+        ? tx.getRepository(OrderSettlementCarry)
+        : null;
+      const lockCarry = async (
+        level: 'branch_to_hq' | 'hq_to_market',
+        partyId: string,
+      ) => {
+        if (!carryRepo) return null;
+        await carryRepo
+          .createQueryBuilder()
+          .insert()
+          .values({ level, party_id: partyId, branch_id: null, amount: 0 })
+          .orIgnore()
+          .execute();
+        return carryRepo.findOne({
+          where: { level, party_id: partyId },
+          lock: { mode: 'pessimistic_write' },
+        });
+      };
+      const branchCarry = await lockCarry('branch_to_hq', branchId);
+      const hqCarry = await lockCarry('hq_to_market', marketId);
+
+      const carryBefore = Math.max(Number(bmCarry?.amount ?? 0) || 0, 0);
+      fromCarry = money2(Math.min(carryBefore, amount));
+      let rest = money2(amount - fromCarry);
+
+      const repo = tx.getRepository(OrderSettlement);
+      const rows =
+        rest > 0
+          ? (
+              await repo
+                .createQueryBuilder('s')
+                .innerJoin(Order, 'o', 'o.id = s.order_id')
+                .where('s.isDeleted = :deleted', { deleted: false })
+                .andWhere('s.branch_id = :branchId', { branchId })
+                .andWhere('s.market_id = :marketId', { marketId })
+                .andWhere('o.home_branch_id = :branchId', { branchId })
+                .andWhere('s.market_paid_by_branch_amount > 0')
+                .orderBy('s.createdAt', 'ASC')
+                .addOrderBy('s.id', 'ASC')
+                .setLock('pessimistic_write', undefined, ['s'])
+                .getMany()
+            ).reverse()
+          : [];
+      for (const row of rows) {
+        if (rest <= 0) break;
+        const paid = marketPaidByBranchAmount(row);
+        const part = money2(Math.min(paid, rest));
+        if (!(part > 0)) continue;
+        const patch: Partial<OrderSettlement> = {
+          market_paid_by_branch_amount: money2(paid - part),
+          market_paid_by_branch_at: null,
+          market_paid_by_branch_by: null,
+        };
+        if (row.status === SettlementStatus.BRANCH_SETTLED) {
+          branchDebt = money2(branchDebt + part);
+        } else if (row.status === SettlementStatus.MARKET_SETTLED) {
+          branchDebt = money2(branchDebt + part);
+          if (row.hq_to_market_at == null) {
+            patch.status = SettlementStatus.BRANCH_SETTLED;
+          } else {
+            hqDebt = money2(hqDebt + part);
+          }
+        }
+        await repo.update({ id: row.id }, patch);
+        rest = money2(rest - part);
+        unpaid = money2(unpaid + part);
+        if (!reopenedIds.includes(String(row.order_id))) {
+          reopenedIds.push(String(row.order_id));
+        }
+      }
+      if (rest > 0) {
+        missing = rest;
+        branchDebt = money2(branchDebt + rest);
+        hqDebt = money2(hqDebt + rest);
+      }
+
+      if (bmCarry && fromCarry > 0) {
+        await bmRepo.update(
+          { id: bmCarry.id },
+          { amount: money2((Number(bmCarry.amount) || 0) - fromCarry) },
+        );
+      }
+      if (branchCarry && branchDebt > 0) {
+        await carryRepo!.update(
+          { id: branchCarry.id },
+          { amount: money2((Number(branchCarry.amount) || 0) - branchDebt) },
+        );
+      }
+      if (hqCarry && hqDebt > 0) {
+        await carryRepo!.update(
+          { id: hqCarry.id },
+          { amount: money2((Number(hqCarry.amount) || 0) - hqDebt) },
+        );
+      }
+
+      if (appliedKey) {
+        await tx.getRepository(IdempotencyKey).update(
+          { key: appliedKey },
+          {
+            response: {
+              reopened_order_ids: reopenedIds,
+              reopened: unpaid,
+              from_carry: fromCarry,
+              branch_debt: branchDebt,
+              hq_debt: hqDebt,
+            },
+          },
+        );
+      }
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof AdvanceAlreadyAppliedError && appliedKey) {
+        return (
+          (await this.findAppliedAdvance(appliedKey)) ??
+          successRes(
+            { reopened_order_ids: [], reopened: 0, replayed: true },
+            200,
+            'Settlement already retreated',
+          )
+        );
+      }
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    if (missing > 0) {
+      this.logger.warn(
+        `Settlement retreat branch_to_market ${branchId}:${marketId}: ${missing} so'm qatorlarda topilmadi — filial → HQ va HQ → market manfiy qoldiqlariga yozildi`,
+      );
+    }
+    if (!carryEnabled && (branchDebt > 0 || hqDebt > 0)) {
+      this.logger.error(
+        `Settlement retreat branch_to_market ${branchId}:${marketId}: qoldiq jadvali yo'q — filial qarzi ${branchDebt}, HQ qarzi ${hqDebt} daftarga yozilmadi`,
+      );
+    }
+    const matchValue = `${branchId}:${marketId}`;
+    if (this.activityLog) {
+      await this.activityLog
+        .log({
+          entity_type: 'Settlement',
+          entity_id: matchValue,
+          action: ActivityAction.UPDATED,
+          user_id: /^\d+$/.test(requesterId) ? requesterId : null,
+          metadata: {
+            leg: 'branch_to_market',
+            kind: 'retreat',
+            amount,
+            reopened: unpaid,
+            from_carry: fromCarry,
+            branch_debt: branchDebt,
+            hq_debt: hqDebt,
+            reopened_count: reopenedIds.length,
+            reopened_order_ids: reopenedIds.slice(
+              0,
+              SETTLEMENT_AUDIT_ORDER_IDS_MAX,
+            ),
+            request_id: token || null,
+          },
+          description: `Hisob-kitob orqaga surildi (${SETTLEMENT_LEVEL_UZ.branch_to_market}) #${matchValue}: ${moneyUz(amount)}, ${reopenedIds.length} ta buyurtma qayta ochildi`,
+        })
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `settlement retreat audit failed (level=branch_to_market match=${matchValue}): ${(err as Error)?.message ?? String(err)}`,
+          ),
+        );
+    }
+    return successRes(
+      {
+        reopened_order_ids: reopenedIds,
+        reopened: unpaid,
+        carry_after: null,
+        from_carry: fromCarry,
+        branch_debt: branchDebt,
+        hq_debt: hqDebt,
+      },
       200,
       'Settlement retreated',
     );

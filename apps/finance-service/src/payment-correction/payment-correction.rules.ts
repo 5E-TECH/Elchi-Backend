@@ -58,10 +58,38 @@ export function correctionCardLeg(
 
 export type HistoryWithCashbox = CashboxHistory & { cashbox: Cashbox };
 
+/**
+ * To'lov yo'li (2026-11-26, ega: A / B / C — filial ishtirokidagi shakllar
+ * ham qaytariladi):
+ *  • `courier` — kuryer → MAIN / filial (naqd, click);
+ *  • `courier_click` — kuryer → MAIN → market («Marketga o'tkazma», HQ yozgan);
+ *  • `courier_click_branch` (A) — kuryer → filial → market («Marketga
+ *    o'tkazma», menejer yozgan; filial kassasi sof 0);
+ *  • `market` — MAIN → market;
+ *  • `market_branch` (B) — filial kassasi → market (PR-C, menejer);
+ *  • `branch_click_market` (C) — filial → MAIN (iz) → market («Filialdan
+ *    marketga o'tkazma», HQ yozgan).
+ */
+export type TransferVariant =
+  | 'courier'
+  | 'courier_click'
+  | 'courier_click_branch'
+  | 'market'
+  | 'market_branch'
+  | 'branch_click_market';
+
+/** Faqat qaytariladigan (summasi tahrirlanmaydigan) yo'llar — A, B, C. */
+const REVERSE_ONLY_VARIANTS: ReadonlySet<TransferVariant> = new Set([
+  'courier_click_branch',
+  'market_branch',
+  'branch_click_market',
+]);
+
 /** Bir to'lovning oyoqlari, vazifasi bo'yicha. */
 export interface TransferShape {
   kind: PaymentCorrectionKind;
-  /** click_to_market: kuryer → HQ → market (to'rt oyoq). */
+  variant: TransferVariant;
+  /** click_to_market: kuryer → MAIN / filial → market (to'rt oyoq). */
   clickToMarket: boolean;
   amount: number;
   payment_method: PaymentMethod;
@@ -69,14 +97,26 @@ export interface TransferShape {
   courierLeg: HistoryWithCashbox | null;
   /** Qabul qiluvchi MAIN/BRANCH INCOME (`courier_payment`). */
   receiverLeg: HistoryWithCashbox | null;
-  /** MAIN EXPENSE (`market_payment`) — marketga to'lov / click_to_market. */
+  /**
+   * To'lovchi kassa EXPENSE (`market_payment`): MAIN (marketga to'lov,
+   * HQ click_to_market, C) yoki FILIAL (B, A).
+   */
   mainMarketLeg: HistoryWithCashbox | null;
   /** Market kassasi EXPENSE (`market_payment`). */
   marketLeg: HistoryWithCashbox | null;
-  /** Pul qabul qilgan / bergan MAIN yoki BRANCH kassa. */
+  /** C: filial kassasi EXPENSE (`branch_to_main`, click_to_market). */
+  branchLeg: HistoryWithCashbox | null;
+  /** C: MAIN INCOME (`branch_to_main`, click_to_market) — iz. */
+  mainIncomeLeg: HistoryWithCashbox | null;
+  /**
+   * Pul qaytadigan MAIN yoki BRANCH kassa: kuryer to'lovida — qabul qilgan
+   * kassa, marketga to'lovda — to'lagan kassa, C da — filial kassasi.
+   */
   receiverCashbox: Cashbox;
   /** Kuryer (kuryer to'lovi) yoki market (marketga to'lov) user id si. */
   counterpartyUserId: string;
+  /** A / B / C — faqat qaytarish (tahrir yo'q). */
+  reverseOnly: boolean;
   legs: HistoryWithCashbox[];
 }
 
@@ -84,9 +124,11 @@ const isType = (leg: HistoryWithCashbox, type: Cashbox_type) =>
   leg.cashbox?.cashbox_type === type;
 
 /**
- * Oyoqlardan to'lov turini aniqlaydi. Qamrov: `courier_payment` (MAIN /
- * BRANCH; cash / click / click_to_market) va `market_payment` (MAIN →
- * market). Boshqa shakl (sotuv oyoqlari, qisman / buzilgan guruh) — `null`.
+ * Oyoqlardan to'lov turini aniqlaydi (`TransferVariant`). Qamrov:
+ * `courier_payment` (MAIN / BRANCH; cash / click / click_to_market) va
+ * `market_payment` (MAIN yoki filial → market; filial → MAIN → market
+ * o'tkazmasi). Boshqa shakl (sotuv oyoqlari, oddiy filial → HQ topshirig'i,
+ * qisman / buzilgan guruh) — `null`.
  */
 export function classifyTransfer(
   legs: HistoryWithCashbox[],
@@ -110,11 +152,25 @@ export function classifyTransfer(
       leg.operation_type === Operation_type.INCOME &&
       leg.source_type === Source_type.COURIER_PAYMENT,
   );
+  // To'lovchi: MAIN yoki filial (B, A) — bitta to'lovda ko'pi bilan bittasi.
   const mainMarketLeg = pick(
     (leg) =>
-      isType(leg, Cashbox_type.MAIN) &&
+      (isType(leg, Cashbox_type.MAIN) || isType(leg, Cashbox_type.BRANCH)) &&
       leg.operation_type === Operation_type.EXPENSE &&
       leg.source_type === Source_type.MARKET_PAYMENT,
+  );
+  // C — «Filialdan marketga o'tkazma»: filial −X va MAIN +X (`branch_to_main`).
+  const branchLeg = pick(
+    (leg) =>
+      isType(leg, Cashbox_type.BRANCH) &&
+      leg.operation_type === Operation_type.EXPENSE &&
+      leg.source_type === Source_type.BRANCH_TO_MAIN,
+  );
+  const mainIncomeLeg = pick(
+    (leg) =>
+      isType(leg, Cashbox_type.MAIN) &&
+      leg.operation_type === Operation_type.INCOME &&
+      leg.source_type === Source_type.BRANCH_TO_MAIN,
   );
   const marketLeg = pick(
     (leg) =>
@@ -132,14 +188,50 @@ export function classifyTransfer(
   }
   const method = legs[0].payment_method;
 
+  if (branchLeg || mainIncomeLeg) {
+    // C: aynan to'rt oyoq, hammasi click_to_market, MAIN ning ikki oyog'i
+    // bitta kassada (sof 0).
+    if (
+      !branchLeg ||
+      !mainIncomeLeg ||
+      !mainMarketLeg ||
+      !marketLeg ||
+      courierLeg ||
+      receiverLeg ||
+      legs.length !== 4 ||
+      method !== PaymentMethod.CLICK_TO_MARKET ||
+      !isType(mainMarketLeg, Cashbox_type.MAIN) ||
+      String(mainMarketLeg.cashbox_id) !== String(mainIncomeLeg.cashbox_id)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'market_payment',
+      variant: 'branch_click_market',
+      clickToMarket: true,
+      amount,
+      payment_method: method,
+      courierLeg: null,
+      receiverLeg: null,
+      mainMarketLeg,
+      marketLeg,
+      branchLeg,
+      mainIncomeLeg,
+      receiverCashbox: branchLeg.cashbox,
+      counterpartyUserId: String(marketLeg.cashbox.user_id),
+      reverseOnly: true,
+      legs,
+    };
+  }
+
   if (courierLeg && receiverLeg) {
     const click = method === PaymentMethod.CLICK_TO_MARKET;
     if (click) {
+      // A (2026-11-26): qabul qiluvchi filial bo'lsa ham — filial +X / −X.
       if (
         legs.length !== 4 ||
         !mainMarketLeg ||
         !marketLeg ||
-        !isType(receiverLeg, Cashbox_type.MAIN) ||
         String(mainMarketLeg.cashbox_id) !== String(receiverLeg.cashbox_id)
       ) {
         return null;
@@ -147,8 +239,14 @@ export function classifyTransfer(
     } else if (legs.length !== 2) {
       return null;
     }
+    const variant: TransferVariant = !click
+      ? 'courier'
+      : isType(receiverLeg, Cashbox_type.BRANCH)
+        ? 'courier_click_branch'
+        : 'courier_click';
     return {
       kind: 'courier_payment',
+      variant,
       clickToMarket: click,
       amount,
       payment_method: method,
@@ -156,8 +254,11 @@ export function classifyTransfer(
       receiverLeg,
       mainMarketLeg: click ? mainMarketLeg : null,
       marketLeg: click ? marketLeg : null,
+      branchLeg: null,
+      mainIncomeLeg: null,
       receiverCashbox: receiverLeg.cashbox,
       counterpartyUserId: String(courierLeg.cashbox.user_id),
+      reverseOnly: REVERSE_ONLY_VARIANTS.has(variant),
       legs,
     };
   }
@@ -169,8 +270,12 @@ export function classifyTransfer(
     legs.length === 2 &&
     method !== PaymentMethod.CLICK_TO_MARKET
   ) {
+    const variant: TransferVariant = isType(mainMarketLeg, Cashbox_type.BRANCH)
+      ? 'market_branch'
+      : 'market';
     return {
       kind: 'market_payment',
+      variant,
       clickToMarket: false,
       amount,
       payment_method: method,
@@ -178,8 +283,11 @@ export function classifyTransfer(
       receiverLeg: null,
       mainMarketLeg,
       marketLeg,
+      branchLeg: null,
+      mainIncomeLeg: null,
       receiverCashbox: mainMarketLeg.cashbox,
       counterpartyUserId: String(marketLeg.cashbox.user_id),
+      reverseOnly: REVERSE_ONLY_VARIANTS.has(variant),
       legs,
     };
   }
@@ -286,6 +394,15 @@ export function isCorrectableType(type: Source_type): boolean {
 }
 
 /**
+ * C — «Filialdan marketga o'tkazma» oyog'i (`branch_to_main`): faqat oyoqlar
+ * C shakliga tushsa tuzatiladi. Oddiy filial → HQ topshirig'i qamrovda EMAS
+ * (tafsilotda `correctable` bloki umuman chiqmaydi — `correctableBlock`).
+ */
+export function isBranchTransferType(type: Source_type): boolean {
+  return type === Source_type.BRANCH_TO_MAIN;
+}
+
+/**
  * Tarix qatori tuzatilishi mumkinmi (smena / balans / karta tekshiruvisiz —
  * ular amal paytida, qulf ostida). Tartib: tur → bog'lanish → shakl →
  * allaqachon tuzatilgan → kontragent kassasi → muddat.
@@ -308,10 +425,18 @@ export async function evaluateCorrectable(
   ) {
     return { ...base, ...notCorrectable, reason: R.REVERSAL_ROW };
   }
-  if (!isCorrectableType(history.source_type)) {
+  if (
+    !isCorrectableType(history.source_type) &&
+    !isBranchTransferType(history.source_type)
+  ) {
     return { ...base, ...notCorrectable, reason: R.UNSUPPORTED_TYPE };
   }
   if (!history.transfer_id) {
+    // Oddiy filial → HQ topshirig'i bog'lanmagan bo'lishi mumkin — u «eski
+    // yozuv» emas, umuman qamrovda emas.
+    if (isBranchTransferType(history.source_type)) {
+      return { ...base, ...notCorrectable, reason: R.UNSUPPORTED_TYPE };
+    }
     return { ...base, allowed: false, code: C.LEGACY_UNLINKED };
   }
   const legs = await loadTransferLegs(manager, history.transfer_id);
@@ -358,9 +483,14 @@ export interface CorrectableTransferParty {
 
 export interface CorrectableTransferView {
   kind: PaymentCorrectionKind;
+  /** (2026-11-26) To'lov yo'li — FE «Qayerdan → Qayerga» va matnlar uchun. */
+  variant: TransferVariant;
   payment_method: PaymentMethod;
   amount: number;
-  /** Kuryer to'lovi — pulni olgan kassa; marketga to'lov — MAIN. */
+  /**
+   * Pul qaytadigan kassa: kuryer to'lovi — pulni olgan kassa; marketga
+   * to'lov — to'lagan kassa (MAIN yoki filial); C — filial.
+   */
   receiver: {
     cashbox_type: Cashbox_type.MAIN | Cashbox_type.BRANCH;
     branch_id: string | null;
@@ -400,6 +530,7 @@ export function buildTransferView(
     id ? { id, name: names.users.get(id) ?? null } : null;
   return {
     kind: shape.kind,
+    variant: shape.variant,
     payment_method: shape.payment_method,
     amount: shape.amount,
     receiver: ids.branch_id

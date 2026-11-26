@@ -59,6 +59,39 @@ const R = PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS;
 const MAIN_CASHBOX_USER_ID = '0';
 const PG_UNIQUE_VIOLATION = '23505';
 
+/** A / B / C — summani tahrirlash so'ralganda (`reverse_only`). */
+const REVERSE_ONLY_MESSAGE =
+  "Bu to'lovni faqat qaytarish mumkin — summasini tahrirlab bo'lmaydi. Qaytaring va to'g'ri summani qayta kiriting";
+
+/**
+ * Qulf tartibi — oddiy to'lovlar bilan bir xil (deadlock yo'q): kuryer →
+ * filial → MAIN → market (`applyCourierPaymentInTx`,
+ * `paymentFromBranchToMarket`, `applyMarketPaymentInTx`).
+ */
+const LOCK_RANK: Partial<Record<Cashbox_type, number>> = {
+  [Cashbox_type.FOR_COURIER]: 0,
+  [Cashbox_type.BRANCH]: 1,
+  [Cashbox_type.MAIN]: 2,
+  [Cashbox_type.FOR_MARKET]: 3,
+};
+
+/** Tahrir so'ralgan, lekin to'lov faqat qaytariladi — 409 `reverse_only`. */
+function assertActionAllowed(
+  action: PaymentCorrectionAction,
+  shape: TransferShape,
+) {
+  if (action === 'edit' && shape.reverseOnly) {
+    fail(
+      409,
+      PAYMENT_CORRECTION_ERROR_CODES.NOT_CORRECTABLE,
+      REVERSE_ONLY_MESSAGE,
+      {
+        reason: PAYMENT_CORRECTION_NOT_CORRECTABLE_REASONS.REVERSE_ONLY,
+      },
+    );
+  }
+}
+
 /** Kirish (gateway → `finance.payment_correction.{reverse,correct_amount}`). */
 export interface PaymentCorrectionInput {
   history_id?: unknown;
@@ -364,6 +397,7 @@ export class PaymentCorrectionService {
       if (!pre.allowed || !pre.shape) {
         this.failVerdict(pre);
       }
+      assertActionAllowed(action, pre.shape);
       const languages = await this.resolveLanguages(
         this.recipientIds(pre.shape, input.managerIds),
       );
@@ -399,14 +433,21 @@ export class PaymentCorrectionService {
         this.failVerdict(verdictBefore);
       }
 
-      // Qulf: kuryer → MAIN/BRANCH → market (oddiy to'lov tartibi).
+      // Qulf: kuryer → filial → MAIN → market (oddiy to'lov tartibi). Har
+      // oyoq kassasi (C da filial ham, MAIN ham) — teskari qator yoziladi.
       const lockOrder = [
-        shapeBefore.courierLeg?.cashbox_id,
-        shapeBefore.receiverCashbox.id,
-        shapeBefore.marketLeg?.cashbox_id,
-      ].filter((id): id is string => Boolean(id));
+        ...new Map(
+          shapeBefore.legs.map((leg) => [String(leg.cashbox_id), leg.cashbox]),
+        ).entries(),
+      ]
+        .sort(
+          ([idA, a], [idB, b]) =>
+            (LOCK_RANK[a.cashbox_type] ?? 9) -
+              (LOCK_RANK[b.cashbox_type] ?? 9) || Number(idA) - Number(idB),
+        )
+        .map(([id]) => id);
       const locked = new Map<string, Cashbox>();
-      for (const id of [...new Set(lockOrder.map(String))]) {
+      for (const id of lockOrder) {
         const cashbox = await tx.findOne(Cashbox, {
           where: { id },
           lock: { mode: 'pessimistic_write' },
@@ -428,6 +469,7 @@ export class PaymentCorrectionService {
         this.failVerdict(verdict);
       }
       const shape = verdict.shape;
+      assertActionAllowed(input.action, shape);
       required = peakOutflow(shape, input.newAmount);
       const box = (id: string | undefined | null) =>
         id ? (locked.get(String(id)) ?? null) : null;
@@ -436,8 +478,15 @@ export class PaymentCorrectionService {
       const marketBox = box(shape.marketLeg?.cashbox_id);
       const X = shape.amount;
 
-      // Smena — qabul qiluvchi kassada (kod bilan).
+      // Smena — qabul qiluvchi kassada (kod bilan). C — MAIN da ham teskari
+      // qatorlar (iz) yoziladi: asosiy kassa smenasi ham ochiq bo'lsin.
       await this.requireShift(tx, receiverBox);
+      if (shape.mainIncomeLeg) {
+        await this.requireShift(
+          tx,
+          box(shape.mainIncomeLeg.cashbox_id) as Cashbox,
+        );
+      }
 
       // Tahrir chegaralari.
       if (input.action === 'edit') {
@@ -492,16 +541,24 @@ export class PaymentCorrectionService {
       );
 
       // Teskari qatorlar — kassa hech qachon oraliqda manfiyga tushmaydigan
-      // tartibda (click_to_market: MAIN avval +X, keyin −X).
+      // tartibda (click_to_market: MAIN / filial avval +X, keyin −X; C: MAIN
+      // +X → market → MAIN −X → filial +X).
       const order: Array<HistoryWithCashbox | null> =
-        shape.kind === 'market_payment'
-          ? [shape.mainMarketLeg, shape.marketLeg]
-          : [
-              shape.courierLeg,
-              shape.marketLeg,
+        shape.variant === 'branch_click_market'
+          ? [
               shape.mainMarketLeg,
-              shape.receiverLeg,
-            ];
+              shape.marketLeg,
+              shape.mainIncomeLeg,
+              shape.branchLeg,
+            ]
+          : shape.kind === 'market_payment'
+            ? [shape.mainMarketLeg, shape.marketLeg]
+            : [
+                shape.courierLeg,
+                shape.marketLeg,
+                shape.mainMarketLeg,
+                shape.receiverLeg,
+              ];
       for (const leg of order) {
         if (!leg) continue;
         await this.writeReversal(tx, leg, box(leg.cashbox_id) as Cashbox, {
@@ -526,11 +583,47 @@ export class PaymentCorrectionService {
             ? String(receiverBox.user_id)
             : null,
       };
-      if (shape.marketLeg) {
+      const marketId = shape.marketLeg
+        ? String(shape.marketLeg.cashbox.user_id)
+        : null;
+      const branchId =
+        receiverBox.cashbox_type === Cashbox_type.BRANCH
+          ? String(receiverBox.user_id)
+          : null;
+      if (shape.variant === 'market_branch' && marketId && branchId) {
+        // B (PR-C): filial ulushi qatorlaridagi «market ulushini filial
+        // to'lagan» belgisi orqaga (order-service `branch_to_market`).
+        await this.enqueueRetreat(
+          tx,
+          'branch_to_market',
+          `${branchId}:${marketId}`,
+          X,
+          epoch,
+          input.requesterId,
+          receiver,
+        );
+      } else if (marketId) {
         await this.enqueueRetreat(
           tx,
           'hq_to_market',
-          String(shape.marketLeg.cashbox.user_id),
+          marketId,
+          X,
+          epoch,
+          input.requesterId,
+          receiver,
+        );
+      }
+      // A / C: asl to'lov `branch_to_hq` ni ham X ga yopgan (filial puli HQ
+      // nomidan marketga ketdi) — market bo'g'inidan KEYIN, kuryerdan OLDIN.
+      if (
+        (shape.variant === 'courier_click_branch' ||
+          shape.variant === 'branch_click_market') &&
+        branchId
+      ) {
+        await this.enqueueRetreat(
+          tx,
+          'branch_to_hq',
+          branchId,
           X,
           epoch,
           input.requesterId,
@@ -754,7 +847,11 @@ export class PaymentCorrectionService {
 
   private async enqueueRetreat(
     tx: EntityManager,
-    level: 'courier_to_branch' | 'hq_to_market',
+    level:
+      | 'courier_to_branch'
+      | 'branch_to_hq'
+      | 'hq_to_market'
+      | 'branch_to_market',
     matchValue: string,
     amount: number,
     epoch: string,
@@ -932,12 +1029,15 @@ export class PaymentCorrectionService {
         leg: shape.courierLeg,
       });
     }
-    if (
-      shape.receiverLeg &&
+    // Filial kassasi oyog'i: A — qabul (kirim), B — to'lov (chiqim), C —
+    // filialning o'tkazmasi. Menejer(lar)ga o'z kassasi qoldig'i bilan.
+    const branchLeg =
       shape.receiverCashbox.cashbox_type === Cashbox_type.BRANCH
-    ) {
+        ? (shape.receiverLeg ?? shape.branchLeg ?? shape.mainMarketLeg)
+        : null;
+    if (branchLeg) {
       for (const managerId of input.managerIds) {
-        parties.push({ userId: managerId, leg: shape.receiverLeg });
+        parties.push({ userId: managerId, leg: branchLeg });
       }
     }
     if (shape.marketLeg) {
