@@ -42,6 +42,11 @@ yozuvlari ham iz.
   `pass_through: true` va `pass_through_pair_id` (o'sha kassadagi juft qator id si). Boshqa qatorlarda kalit yo'q.
   → **Frontendda:** 🔧 juftni bitta kulrang qator qilish («Marketga o'tkazma · kuryer → market · kassaga kirmadi»),
   qatorlardan hisoblanadigan jamilarda `pass_through` ni o'tkazib yuborish.
+- ✏️ [finance] `GET /finance/history` (operation_type siz, «Barchasi»): juftdan FAQAT kirim oyog'i qaytadi, chiqim oyog'i
+  unga `pass_through_partner` (`id`, `operation_type`, `source_type`, `amount`, `balance_after`, `payment_method`,
+  `source_user`, `pass_through: true` …) bo'lib biriktiriladi — sahifada juft bo'linmaydi, `pagination.total` =
+  `counts.all`. Excel eksportlari va boshqa ichki o'quvchilar — avvalgidek ikkala qator. ⚠️ Frontend PR bilan BIRGA
+  chiqsin: eski frontend kirim oyog'ini oddiy kirim deb ko'rsatadi.
 
 
 ### 2026-11-26 — Kassa Excel'lari: «Yo'nalish», «Holat», «Filiallar orqali marketlarga» (ega)

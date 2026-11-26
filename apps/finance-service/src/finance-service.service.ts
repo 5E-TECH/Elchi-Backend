@@ -821,11 +821,6 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Kirim / chiqim jamilari. (2026-11-26) O'tkazma izi (`passThroughPartners`
-   * — bitta to'lovda o'sha kassada +X va −X) jamilarga KIRMAYDI: pul kassaga
-   * kirmagan, qoldiq o'zgarmagan.
-   */
-  /**
    * (2026-11-26) O'tkazma izi qatorlari → juft id si. Faqat ko'rsatish va
    * jamilar uchun: xato bo'lsa (fail-open) — bo'sh, tarix baribir qaytadi.
    */
@@ -842,6 +837,66 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * (2026-11-26) «Barchasi» ro'yxatida juft bitta qator (`collapse`): sahifada
+   * yo'q juft oyoqlar (chiqim) — `qator id → juft qator` (foydalanuvchilar
+   * bilan, ro'yxat qatori shaklida). Fail-open: xato — bo'sh (qator baribir
+   * `pass_through` belgisi bilan qaytadi).
+   */
+  private async passThroughPartnerRows(
+    rows: readonly CashboxHistory[],
+    partners: ReadonlyMap<string, string>,
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const out = new Map<string, Record<string, unknown>>();
+    const onPage = new Set(rows.map((row) => String(row.id)));
+    const missing = [...new Set(partners.values())].filter(
+      (id) => !onPage.has(id),
+    );
+    if (!missing.length) return out;
+    try {
+      const legs = await this.historyRepo.find({
+        where: { id: In(missing) },
+        relations: ['cashbox'],
+      });
+      const enriched = await this.enrichHistoryWithUsers(legs, {
+        courierAck: false,
+      });
+      const byId = new Map(
+        enriched.map((leg) => [String(leg.id), leg] as const),
+      );
+      for (const [rowId, partnerId] of partners) {
+        const leg = byId.get(partnerId);
+        if (!leg) continue;
+        out.set(rowId, {
+          id: leg.id,
+          cashbox_id: leg.cashbox_id,
+          operation_type: leg.operation_type,
+          source_type: leg.source_type,
+          amount: leg.amount,
+          balance_after: leg.balance_after,
+          payment_method: leg.payment_method,
+          transfer_id: leg.transfer_id,
+          payment_date: leg.payment_date,
+          createdAt: leg.createdAt,
+          // `enrichHistoryWithUsers` qo'shadi (tipida yo'q).
+          source_user: (leg as { source_user?: unknown }).source_user ?? null,
+          pass_through: true,
+          pass_through_pair_id: rowId,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `o'tkazma izi jufti o'qilmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Kirim / chiqim jamilari. (2026-11-26) O'tkazma izi (`passThroughPartners`
+   * — bitta to'lovda o'sha kassada +X va −X) jamilarga KIRMAYDI: pul kassaga
+   * kirmagan, qoldiq o'zgarmagan.
+   */
   private calcIncomeOutcome(
     histories: CashboxHistory[],
     passThrough: ReadonlyMap<string, string> = new Map(),
@@ -3106,10 +3161,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
       // (2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X) —
       // «Kirim» / «Chiqim» tablarida yo'q (pul kassaga kirmagan); «Barchasi»
-      // da bor (frontend juftni bitta kulrang qator qiladi).
+      // da bor (frontend juftni bitta kulrang qator qiladi). Ekran
+      // (`collapse_pass_through`) — juftdan faqat kirim oyog'i, chiqim oyog'i
+      // unga `pass_through_partner` bo'lib biriktiriladi: sahifada juft
+      // bo'linmaydi, `total` = `counts.all`.
       const historyTable = this.historyTableSql();
+      const collapse =
+        dto.collapse_pass_through === true && !dto.operation_type;
       if (dto.operation_type) {
         where.transfer_id = passThroughFilter(historyTable, 'exclude');
+      } else if (collapse) {
+        where.transfer_id = passThroughFilter(historyTable, 'collapse');
       }
       // GaBIPi3Z (2-band): «Barchasi / Kirim / Chiqim» tab sonlari — AYNI
       // filtrlar, faqat `operation_type` siz (tanlangan tabdan qat'i nazar).
@@ -3153,12 +3215,19 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           }),
         ]);
       const passThrough = await this.passThroughOf(items);
+      const partnerRows = collapse
+        ? await this.passThroughPartnerRows(items, passThrough)
+        : new Map<string, Record<string, unknown>>();
       const withCorrections = markPassThrough(
         await this.withCorrections(
           await this.enrichHistoryWithUsers(items),
           dto.include_receipts === true ? 'brief' : 'none',
         ),
         passThrough,
+      ).map((row) =>
+        partnerRows.has(String(row.id))
+          ? { ...row, pass_through_partner: partnerRows.get(String(row.id)) }
+          : row,
       );
       // (2026-11-26) Excel «Yo'nalish» — faqat gateway eksportlari so'raydi.
       const enrichedItems =

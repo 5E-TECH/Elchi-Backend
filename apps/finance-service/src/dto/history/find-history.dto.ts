@@ -47,6 +47,17 @@ export class FindHistoryDto {
   @IsBoolean()
   include_route?: boolean;
 
+  /**
+   * (2026-11-26, ega) O'tkazma izi juftini «Barchasi» ro'yxatida BITTA qator
+   * qilish: chiqim oyog'i ro'yxatdan chiqadi va kirim oyog'iga
+   * `pass_through_partner` bo'lib biriktiriladi (sahifalash, `total` va
+   * `counts.all` bir xil). FAQAT gateway `GET finance/history` (ekran)
+   * yoqadi; Excel va boshqa o'quvchilar ikkala qatorni oladi.
+   */
+  @IsOptional()
+  @IsBoolean()
+  collapse_pass_through?: boolean;
+
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)

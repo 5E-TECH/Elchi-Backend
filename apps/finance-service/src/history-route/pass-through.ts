@@ -32,12 +32,14 @@ export const passThroughSql = (alias: string, historyTable: string) =>
 
 /**
  * TypeORM `find` uchun: `transfer_id` ustuniga qo'yiladi — iz qatorlari
- * CHIQARILADI (`exclude`) yoki FAQAT ular qoladi (`only`). Asosiy jadval
- * taxallusi Raw bergan ustun ifodasidan olinadi.
+ * CHIQARILADI (`exclude`), FAQAT ular qoladi (`only`) yoki juftdan faqat
+ * KIRIM oyog'i qoladi (`collapse` — «Barchasi» ro'yxatida juft bitta qator,
+ * sahifalash va `total` shunga mos). Asosiy jadval taxallusi Raw bergan ustun
+ * ifodasidan olinadi.
  */
 export const passThroughFilter = (
   historyTable: string,
-  mode: 'exclude' | 'only',
+  mode: 'exclude' | 'only' | 'collapse',
 ): FindOperator<string> =>
   Raw((column) => {
     const dot = column.lastIndexOf('.');
@@ -46,6 +48,9 @@ export const passThroughFilter = (
     // harfga o'girardi («missing FROM-clause entry»).
     const alias = raw.startsWith('"') ? raw : `"${raw}"`;
     const predicate = passThroughSql(alias, historyTable);
+    if (mode === 'collapse') {
+      return `NOT (${alias}."operation_type" = 'expense' AND ${predicate})`;
+    }
     return mode === 'exclude' ? `NOT ${predicate}` : predicate;
   });
 

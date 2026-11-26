@@ -305,6 +305,46 @@ describePg(
       });
     });
 
+    it('⭐ ekran ro`yxati (`collapse_pass_through`): juftdan kirim oyog`i + `pass_through_partner`; total = counts.all', async () => {
+      await hqPayments();
+      const res: any = await finance.findAllHistory({
+        cashbox_type: Cashbox_type.MAIN,
+        page: 1,
+        limit: 20,
+        collapse_pass_through: true,
+      });
+      const items = res.data.items as Array<Record<string, any>>;
+      expect(items).toHaveLength(2);
+      expect(res.data.pagination.total).toBe(2);
+      expect(res.data.counts).toEqual({ all: 2, income: 1, expense: 0 });
+      const trace = items.find((row) => row.pass_through)!;
+      expect(trace.operation_type).toBe(Operation_type.INCOME);
+      expect(trace.pass_through_partner).toMatchObject({
+        id: trace.pass_through_pair_id,
+        operation_type: Operation_type.EXPENSE,
+        source_type: 'market_payment',
+        pass_through: true,
+        pass_through_pair_id: String(trace.id),
+      });
+      expect(Number(trace.pass_through_partner.amount)).toBe(300_000);
+      // «Kirim» tabi bayroqdan qat'i nazar izsiz; bayroqsiz «Barchasi» — ikkala oyoq (Excel).
+      const income: any = await finance.findAllHistory({
+        cashbox_type: Cashbox_type.MAIN,
+        operation_type: Operation_type.INCOME,
+        collapse_pass_through: true,
+      });
+      expect(income.data.items).toHaveLength(1);
+      const raw: any = await finance.findAllHistory({
+        cashbox_type: Cashbox_type.MAIN,
+      });
+      expect(raw.data.items).toHaveLength(3);
+      expect(
+        (raw.data.items as Array<Record<string, any>>).some(
+          (row) => row.pass_through_partner,
+        ),
+      ).toBe(false);
+    });
+
     it('⭐ kunlik agregat («Balans harakati»): iz kirim / chiqimga kirmaydi', async () => {
       await hqPayments();
       const res: any = await daily().historyDaily({ cashbox_type: 'main' });
