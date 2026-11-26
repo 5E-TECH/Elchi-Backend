@@ -26,6 +26,7 @@ import {
 } from '@app/common';
 import type { ProblemContact } from '@app/common';
 import { ELCHI_LOGO_PATHS, ELCHI_LOGO_VIEWBOX } from './elchi-logo';
+import { postRecipientBranchPhone } from '../contacts/post-recipient-branch';
 import {
   formatTashkentDateTime,
   orderExportStatusLabel,
@@ -697,6 +698,15 @@ export interface PostReceiptPost {
   region?: { name?: string | null } | null;
   /** «Qayerdan» — pochtani jo'natgan filial. */
   branch?: { name?: string | null } | null;
+  /**
+   * sZxxo98G — filial o'tkazmasining qabul qiluvchi filiali (gateway
+   * `withPostRecipientBranch`): «Qabul qiluvchi: Filial · telefon».
+   */
+  recipient_branch?: {
+    name?: string | null;
+    phone_number?: string | null;
+    manager?: { phone_number?: string | null } | null;
+  } | null;
   createdAt?: string | number | Date | null;
 }
 
@@ -774,6 +784,19 @@ export async function renderPostReceiptHtml(
     receiptText(receiptObj(post?.region).name),
   );
   const branchName = receiptText(receiptObj(post?.branch).name);
+  // sZxxo98G: filial o'tkazmasi — qabul qiluvchi filial nomi va raqami
+  // (filialniki, bo'sh bo'lsa faol menejerniki). Kuryer pochtasida — yo'q.
+  const recipientBranch = post?.recipient_branch ?? null;
+  const recipientLine = recipientBranch
+    ? [
+        receiptText(recipientBranch.name),
+        formatPhoneNumber(
+          receiptText(postRecipientBranchPhone(recipientBranch)),
+        ),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
   const postDate = formatTashkentDateTime(post?.createdAt);
   const statusRaw = receiptText(post?.status).toLowerCase();
   const statusLabel = POST_RECEIPT_STATUS_LABELS[statusRaw] ?? statusRaw;
@@ -813,6 +836,9 @@ export async function renderPostReceiptHtml(
 
   const metaRows: Array<[string, string]> = [
     ['Kuryer', [courierName, courierPhone].filter(Boolean).join(' · ') || '-'],
+    ...(recipientLine
+      ? [['Qabul qiluvchi', recipientLine] as [string, string]]
+      : []),
     ['Viloyat', regionName || '-'],
     ['Qayerdan', branchName || '-'],
     ['Sana', postDate || '-'],
