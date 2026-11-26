@@ -1,11 +1,23 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { Cashbox_type, Operation_type, Source_type } from '@app/common';
+import {
+  Cashbox_type,
+  Operation_type,
+  Source_type,
+  businessDayKeySql,
+} from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
+import { passThroughSql } from '../history-route/pass-through';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { FinanceDailySnapshot } from '../entities/finance-daily-snapshot.entity';
+import { CashboxCard } from '../entities/cashbox-card.entity';
+import {
+  historyMethodCardSql,
+  positionalSqlBinder,
+  resolveHistoryMethodCardFilter,
+} from '../history-filters/history-method-card.filter';
 import {
   addDays,
   dayKeysBetween,
@@ -61,6 +73,9 @@ export interface HistoryDailyInput {
   sourceTypes?: string;
   source_user_id?: string;
   created_by?: string;
+  /** KRN902pg — `GET /finance/history` bilan AYNI ma'no (vergul bilan). */
+  payment_method?: string;
+  card_id?: string;
 }
 
 export interface DailyFlowRow {
@@ -236,6 +251,21 @@ export class FinanceDailyService {
     return 'false';
   }
 
+  /** KRN902pg — berilgan karta ID'laridan Asosiy (`is_default`) bo'lganlari. */
+  private async defaultCardsAmong(
+    ids: string[],
+  ): Promise<Array<{ id: string; cashbox_id: string }>> {
+    // Faqat karta filtri bo'lganda (eski `history/daily` so'rovi va spec'lari karta jadvaliga bog'lanmaydi).
+    const cards = quote(this.dataSource.getMetadata(CashboxCard).tablePath);
+    const rows: Array<{ id: string; cashbox_id: string }> =
+      await this.dataSource.query(
+        `SELECT "id"::text AS id, "cashbox_id"::text AS cashbox_id FROM ${cards}
+          WHERE "id" = ANY($1::bigint[]) AND "is_default" = true AND "is_deleted" = false`,
+        [ids],
+      );
+    return rows;
+  }
+
   async lastSnapshotDate(): Promise<string | null> {
     const { snapshots } = this.tables();
     const rows: Array<{ day: string | null }> = await this.dataSource.query(
@@ -364,9 +394,13 @@ export class FinanceDailyService {
       'source_user_id',
     );
     const createdBy = this.optionalId(input?.created_by, 'created_by');
+    // KRN902pg — «To'lov usuli» / «Karta» (noma'lum qiymat — 400).
+    const methodCard = await resolveHistoryMethodCardFilter(input, (ids) =>
+      this.defaultCardsAmong(ids),
+    );
     const scope = await this.resolveScope(input ?? {});
     const filtered = Boolean(
-      operationType || sourceTypes || sourceUserId || createdBy,
+      operationType || sourceTypes || sourceUserId || createdBy || methodCard,
     );
 
     const t = this.tables();
@@ -394,6 +428,16 @@ export class FinanceDailyService {
       params.push(createdBy);
       where.push(`h."created_by" = $${params.length}`);
     }
+    if (methodCard) {
+      where.push(
+        historyMethodCardSql(
+          'h',
+          methodCard,
+          { history: t.history, cashboxes: t.cashboxes },
+          positionalSqlBinder(params),
+        ),
+      );
+    }
     const flowRows: Array<{
       day: string;
       income: string | null;
@@ -401,11 +445,13 @@ export class FinanceDailyService {
       income_count: string | number;
       expense_count: string | number;
     }> = await this.dataSource.query(
-      `SELECT to_char(h."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day,
-              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'income'), 0) AS income,
-              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'expense'), 0) AS expense,
-              COUNT(*) FILTER (WHERE h."operation_type" = 'income') AS income_count,
-              COUNT(*) FILTER (WHERE h."operation_type" = 'expense') AS expense_count
+      // (2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X) —
+      // kirim / chiqimga kirmaydi (qoldiq o'zgarmaydi, juft bitta kunda).
+      `SELECT ${businessDayKeySql('h."createdAt"')} AS day,
+              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'income' AND NOT ${passThroughSql('h', t.history)}), 0) AS income,
+              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'expense' AND NOT ${passThroughSql('h', t.history)}), 0) AS expense,
+              COUNT(*) FILTER (WHERE h."operation_type" = 'income' AND NOT ${passThroughSql('h', t.history)}) AS income_count,
+              COUNT(*) FILTER (WHERE h."operation_type" = 'expense' AND NOT ${passThroughSql('h', t.history)}) AS expense_count
          FROM ${t.history} h
         WHERE ${where.join(' AND ')}
         GROUP BY 1`,
@@ -565,7 +611,7 @@ export class FinanceDailyService {
       cnt: string | number;
       closing: string | null;
     }> = await this.dataSource.query(
-      `SELECT to_char("createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD') AS day,
+      `SELECT ${businessDayKeySql('"createdAt"')} AS day,
               COALESCE(SUM("amount") FILTER (WHERE "amount" > 0), 0) AS income,
               COALESCE(SUM(-"amount") FILTER (WHERE "amount" < 0), 0) AS expense,
               COUNT(*) AS cnt,

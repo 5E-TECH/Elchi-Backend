@@ -11,10 +11,12 @@ import {
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
+  And,
   Between,
   DataSource,
   EntityManager,
   EntityMetadataNotFoundError,
+  FindOperator,
   FindOptionsOrder,
   FindOptionsWhere,
   In,
@@ -35,6 +37,13 @@ import {
   DEFAULT_CARD_NAME,
 } from './cashbox-card/cashbox-card.service';
 import { CashboxCard } from './entities/cashbox-card.entity';
+import {
+  historyMethodCardSql,
+  namedSqlBinder,
+  quoteTablePath,
+  resolveHistoryMethodCardFilter,
+  type HistoryMethodCardInput,
+} from './history-filters/history-method-card.filter';
 import { resolveSpendExpenseCategory } from './expense-category/expense-category.service';
 import {
   aggregateExpenseReport,
@@ -79,7 +88,8 @@ import {
   rmqSend,
   OutboxService,
   OutboxEvent,
-  tashkentDayRange,
+  businessDayLocalSql,
+  businessDayRange,
   toPublicUserSummary,
   type PublicUserSummary,
 } from '@app/common';
@@ -146,6 +156,7 @@ import {
   attachCorrectionViews,
   buildTransferView,
   evaluateCorrectable,
+  isBranchTransferType,
   isCorrectableType,
   readWindowSetting,
   resolveRootHistoryId,
@@ -154,6 +165,13 @@ import {
   type HistoryWithCashbox,
   type TransferShape,
 } from './payment-correction/payment-correction.rules';
+import { attachHistoryRoutes } from './history-route/history-route';
+import {
+  markPassThrough,
+  passThroughFilter,
+  passThroughPartners,
+  passThroughSql,
+} from './history-route/pass-through';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -729,8 +747,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * so'rov sahifasiz, SQL SUM bilan; oylar Toshkent vaqti bo'yicha.
    */
   private async sumHistoryTotals(qb: SelectQueryBuilder<CashboxHistory>) {
-    const income = `COALESCE(SUM(CASE WHEN h.operation_type = 'income' THEN h.amount ELSE 0 END), 0)`;
-    const outcome = `COALESCE(SUM(CASE WHEN h.operation_type = 'expense' THEN h.amount ELSE 0 END), 0)`;
+    // (2026-11-26) O'tkazma izi (sof 0) kirim / chiqimga kirmaydi.
+    const real = `NOT ${passThroughSql('h', this.historyTableSql())}`;
+    const income = `COALESCE(SUM(CASE WHEN h.operation_type = 'income' AND ${real} THEN h.amount ELSE 0 END), 0)`;
+    const outcome = `COALESCE(SUM(CASE WHEN h.operation_type = 'expense' AND ${real} THEN h.amount ELSE 0 END), 0)`;
     const unpaged = () => qb.clone().skip(undefined).take(undefined).orderBy();
 
     const totalsRow = await unpaged()
@@ -739,7 +759,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       .getRawOne<{ income: string; outcome: string }>();
     const monthlyRows = await unpaged()
       .select(
-        `to_char(h."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM')`,
+        // xhiXv3w3 — oy ISH KUNI sanasi bo'yicha (sukut — Toshkent oyi).
+        `to_char(${businessDayLocalSql('h."createdAt"')}, 'YYYY-MM')`,
         'month',
       )
       .addSelect(income, 'income')
@@ -799,10 +820,91 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     return Number(row?.total ?? 0);
   }
 
-  private calcIncomeOutcome(histories: CashboxHistory[]) {
+  /**
+   * (2026-11-26) O'tkazma izi qatorlari → juft id si. Faqat ko'rsatish va
+   * jamilar uchun: xato bo'lsa (fail-open) — bo'sh, tarix baribir qaytadi.
+   */
+  private async passThroughOf(
+    rows: readonly CashboxHistory[],
+  ): Promise<Map<string, string>> {
+    try {
+      return await passThroughPartners(this.dataSource.manager, rows);
+    } catch (error) {
+      this.logger.warn(
+        `o'tkazma izi aniqlanmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return new Map();
+    }
+  }
+
+  /**
+   * (2026-11-26) «Barchasi» ro'yxatida juft bitta qator (`collapse`): sahifada
+   * yo'q juft oyoqlar (chiqim) — `qator id → juft qator` (foydalanuvchilar
+   * bilan, ro'yxat qatori shaklida). Fail-open: xato — bo'sh (qator baribir
+   * `pass_through` belgisi bilan qaytadi).
+   */
+  private async passThroughPartnerRows(
+    rows: readonly CashboxHistory[],
+    partners: ReadonlyMap<string, string>,
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const out = new Map<string, Record<string, unknown>>();
+    const onPage = new Set(rows.map((row) => String(row.id)));
+    const missing = [...new Set(partners.values())].filter(
+      (id) => !onPage.has(id),
+    );
+    if (!missing.length) return out;
+    try {
+      const legs = await this.historyRepo.find({
+        where: { id: In(missing) },
+        relations: ['cashbox'],
+      });
+      const enriched = await this.enrichHistoryWithUsers(legs, {
+        courierAck: false,
+      });
+      const byId = new Map(
+        enriched.map((leg) => [String(leg.id), leg] as const),
+      );
+      for (const [rowId, partnerId] of partners) {
+        const leg = byId.get(partnerId);
+        if (!leg) continue;
+        out.set(rowId, {
+          id: leg.id,
+          cashbox_id: leg.cashbox_id,
+          operation_type: leg.operation_type,
+          source_type: leg.source_type,
+          amount: leg.amount,
+          balance_after: leg.balance_after,
+          payment_method: leg.payment_method,
+          transfer_id: leg.transfer_id,
+          payment_date: leg.payment_date,
+          createdAt: leg.createdAt,
+          // `enrichHistoryWithUsers` qo'shadi (tipida yo'q).
+          source_user: (leg as { source_user?: unknown }).source_user ?? null,
+          pass_through: true,
+          pass_through_pair_id: rowId,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `o'tkazma izi jufti o'qilmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Kirim / chiqim jamilari. (2026-11-26) O'tkazma izi (`passThroughPartners`
+   * — bitta to'lovda o'sha kassada +X va −X) jamilarga KIRMAYDI: pul kassaga
+   * kirmagan, qoldiq o'zgarmagan.
+   */
+  private calcIncomeOutcome(
+    histories: CashboxHistory[],
+    passThrough: ReadonlyMap<string, string> = new Map(),
+  ) {
     let income = 0;
     let outcome = 0;
     for (const history of histories) {
+      if (passThrough.has(String(history.id))) continue;
       if (history.operation_type === Operation_type.INCOME) {
         income += Number(history.amount);
       } else {
@@ -813,8 +915,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Kassa tarixi sana filtri — Toshkent kuni, dashboard va GET /orders bilan
-   * AYNI qoida (SqVMuhKo). Ilgari 'YYYY-MM-DD' UTC yarim tuni, oxiri esa
+   * Kassa tarixi sana filtri — ISH KUNI (xhiXv3w3), dashboard va GET /orders
+   * bilan AYNI qoida (SqVMuhKo). Ilgari 'YYYY-MM-DD' UTC yarim tuni, oxiri esa
    * server TZ'idagi setHours edi (prod UTC → kun Toshkentda 05:00-04:59).
    * To'liq ISO qiymat o'zgarishsiz ishlatiladi. Yaroqsiz qiymat avvalgidek
    * 400 'Invalid date format: <v>'.
@@ -822,7 +924,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private parseDateRange(fromDate?: string, toDate?: string) {
     this.parseDate(fromDate ?? null);
     this.parseDate(toDate ?? null);
-    return tashkentDayRange(fromDate, toDate);
+    return businessDayRange(fromDate, toDate);
   }
 
   /** `order.find_all` sahifasi — order-service `MAX_LIMIT` (100) bilan bir xil. */
@@ -2131,6 +2233,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         if (start && end) historyWhere.createdAt = Between(start, end);
         else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
         else if (end) historyWhere.createdAt = LessThanOrEqual(end);
+        // KRN902pg — «To'lov usuli» / «Karta» (`pagination.total` ham shu filtr bilan).
+        const methodCardId = await this.historyMethodCardIdCondition(dto);
+        if (methodCardId) historyWhere.id = methodCardId;
 
         const [rows, total] = await this.historyRepo.findAndCount({
           where: historyWhere,
@@ -2217,6 +2322,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         historyQuery.andWhere('history.createdAt <= :historyTo', {
           historyTo,
         });
+      }
+      // KRN902pg — «To'lov usuli» / «Karta».
+      const methodCard = await this.historyMethodCardIdSql(dto);
+      if (methodCard) {
+        historyQuery.andWhere(methodCard.sql('history.id'), methodCard.params);
       }
 
       const [rows, total] = await historyQuery.getManyAndCount();
@@ -2682,6 +2792,60 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       .join('.');
   }
 
+  /**
+   * KRN902pg — `payment_method` / `card_id` filtri `id` ustuniga shart
+   * (`id IN (SELECT …)`, chek holati filtri bilan `And`). Filtr yo'q — `null`.
+   * Noma'lum qiymat — 400 (`history-method-card.filter`).
+   */
+  private async historyMethodCardIdCondition(
+    input: HistoryMethodCardInput,
+  ): Promise<FindOperator<string> | null> {
+    const condition = await this.historyMethodCardIdSql(input);
+    return condition ? Raw(condition.sql, condition.params) : null;
+  }
+
+  /** `historyMethodCardIdCondition` ning SQL ko'rinishi (QueryBuilder uchun). */
+  private async historyMethodCardIdSql(input: HistoryMethodCardInput): Promise<{
+    sql: (idColumn: string) => string;
+    params: Record<string, unknown>;
+  } | null> {
+    const filter = await resolveHistoryMethodCardFilter(input, (ids) =>
+      this.defaultCardsAmong(ids),
+    );
+    if (!filter) return null;
+    const history = this.historyTableSql();
+    const cashboxes = quoteTablePath(
+      this.dataSource.getMetadata(Cashbox).tablePath,
+    );
+    const { bind, params } = namedSqlBinder('hmc_');
+    const condition = historyMethodCardSql(
+      'hf',
+      filter,
+      { history, cashboxes },
+      bind,
+    );
+    return {
+      sql: (idColumn) =>
+        `${idColumn} IN (SELECT hf."id" FROM ${history} hf WHERE hf."is_deleted" = false AND ${condition})`,
+      params,
+    };
+  }
+
+  /** KRN902pg — berilgan karta ID'laridan Asosiy (`is_default`) bo'lganlari. */
+  private async defaultCardsAmong(
+    ids: string[],
+  ): Promise<Array<{ id: string; cashbox_id: string }>> {
+    if (!ids.length) return [];
+    const cards = await this.dataSource.manager.find(CashboxCard, {
+      where: { id: In(ids), is_default: true, isDeleted: false },
+      select: ['id', 'cashbox_id'],
+    });
+    return cards.map((card) => ({
+      id: String(card.id),
+      cashbox_id: String(card.cashbox_id),
+    }));
+  }
+
   private emptyHistoryPage(page: number, limit: number) {
     return this.successRes(
       {
@@ -2874,6 +3038,13 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           where.expense_category_id = dto.expense_category_id;
         }
       }
+      // KRN902pg — «To'lov usuli» / «Karta» filtrlari (`counts` ham shu filtr bilan).
+      const methodCardId = await this.historyMethodCardIdCondition(dto);
+      if (methodCardId) {
+        where.id = where.id
+          ? And(where.id as FindOperator<string>, methodCardId)
+          : methodCardId;
+      }
       if (historyCashboxType) {
         const cashboxesByType = await this.cashboxRepo.find({
           where: {
@@ -2988,39 +3159,101 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      // (2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X) —
+      // «Kirim» / «Chiqim» tablarida yo'q (pul kassaga kirmagan); «Barchasi»
+      // da bor (frontend juftni bitta kulrang qator qiladi). Ekran
+      // (`collapse_pass_through`) — juftdan faqat kirim oyog'i, chiqim oyog'i
+      // unga `pass_through_partner` bo'lib biriktiriladi: sahifada juft
+      // bo'linmaydi, `total` = `counts.all`.
+      const historyTable = this.historyTableSql();
+      const collapse =
+        dto.collapse_pass_through === true && !dto.operation_type;
+      if (dto.operation_type) {
+        where.transfer_id = passThroughFilter(historyTable, 'exclude');
+      } else if (collapse) {
+        where.transfer_id = passThroughFilter(historyTable, 'collapse');
+      }
       // GaBIPi3Z (2-band): «Barchasi / Kirim / Chiqim» tab sonlari — AYNI
       // filtrlar, faqat `operation_type` siz (tanlangan tabdan qat'i nazar).
       const countWhere: FindOptionsWhere<CashboxHistory> = { ...where };
       delete countWhere.operation_type;
-      const [[items, total], income, expense] = await Promise.all([
-        this.historyRepo.findAndCount({
-          where,
-          relations: ['cashbox'],
-          order: { createdAt: 'DESC' },
-          ...(noPagination
-            ? {}
-            : {
-                skip: (page - 1) * limit,
-                take: limit,
-              }),
-        }),
-        this.historyRepo.count({
-          where: { ...countWhere, operation_type: Operation_type.INCOME },
-        }),
-        this.historyRepo.count({
-          where: { ...countWhere, operation_type: Operation_type.EXPENSE },
-        }),
-      ]);
-      const enrichedItems = await this.withCorrections(
-        await this.enrichHistoryWithUsers(items),
-        dto.include_receipts === true ? 'brief' : 'none',
+      delete countWhere.transfer_id;
+      const [[items, total], income, expense, passThroughPairs] =
+        await Promise.all([
+          this.historyRepo.findAndCount({
+            where,
+            relations: ['cashbox'],
+            order: { createdAt: 'DESC' },
+            ...(noPagination
+              ? {}
+              : {
+                  skip: (page - 1) * limit,
+                  take: limit,
+                }),
+          }),
+          this.historyRepo.count({
+            where: {
+              ...countWhere,
+              operation_type: Operation_type.INCOME,
+              transfer_id: passThroughFilter(historyTable, 'exclude'),
+            },
+          }),
+          this.historyRepo.count({
+            where: {
+              ...countWhere,
+              operation_type: Operation_type.EXPENSE,
+              transfer_id: passThroughFilter(historyTable, 'exclude'),
+            },
+          }),
+          // Har juftda bitta kirim oyog'i — «Barchasi» da juft bitta qator.
+          this.historyRepo.count({
+            where: {
+              ...countWhere,
+              operation_type: Operation_type.INCOME,
+              transfer_id: passThroughFilter(historyTable, 'only'),
+            },
+          }),
+        ]);
+      const passThrough = await this.passThroughOf(items);
+      const partnerRows = collapse
+        ? await this.passThroughPartnerRows(items, passThrough)
+        : new Map<string, Record<string, unknown>>();
+      const withCorrections = markPassThrough(
+        await this.withCorrections(
+          await this.enrichHistoryWithUsers(items),
+          dto.include_receipts === true ? 'brief' : 'none',
+        ),
+        passThrough,
+      ).map((row) =>
+        partnerRows.has(String(row.id))
+          ? { ...row, pass_through_partner: partnerRows.get(String(row.id)) }
+          : row,
       );
+      // (2026-11-26) Excel «Yo'nalish» — faqat gateway eksportlari so'raydi.
+      const enrichedItems =
+        dto.include_route === true
+          ? await attachHistoryRoutes(
+              this.dataSource.manager,
+              withCorrections,
+              async (ids) =>
+                new Map(
+                  [...(await this.loadUsersByIds(ids)).entries()].map(
+                    ([id, user]) => [id, user?.name ?? null],
+                  ),
+                ),
+            )
+          : withCorrections;
 
       return this.successRes(
         {
           items: enrichedItems,
-          // operation_type majburiy (income | expense) — all = income + expense.
-          counts: { all: income + expense, income, expense },
+          // operation_type majburiy (income | expense) — all = income + expense
+          // + o'tkazma izi juftlari (har juft «Barchasi» da bitta qator).
+          counts: {
+            all: income + expense + passThroughPairs,
+            income,
+            expense,
+          },
           pagination: {
             total,
             page,
@@ -3078,22 +3311,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       // (mUhkJHmi) `correctableBlock` faqat xom `history` ni o'qiydi va xatoni
       // o'zi `null` ga aylantiradi — enrichment bilan PARALLEL: nom
       // so'rovlari (≤ 1500 ms) zanjir oxiriga qo'shilmaydi.
-      const [[enrichedHistory], correctable, parties] = await Promise.all([
-        this.enrichHistoryWithUsers([history]).then((rows) =>
-          this.withCorrections(
-            rows,
-            options.include_receipts === true ? 'full' : 'none',
+      const [[enrichedHistory], correctable, parties, passThrough] =
+        await Promise.all([
+          this.enrichHistoryWithUsers([history]).then((rows) =>
+            this.withCorrections(
+              rows,
+              options.include_receipts === true ? 'full' : 'none',
+            ),
           ),
-        ),
-        options.include_correctable
-          ? this.correctableBlock(history)
-          : Promise.resolve(undefined),
-        this.historyDetailParties(history),
-      ]);
+          options.include_correctable
+            ? this.correctableBlock(history)
+            : Promise.resolve(undefined),
+          this.historyDetailParties(history),
+          // (2026-11-26) O'tkazma izi — tafsilotda belgi va juft qator.
+          this.passThroughOf([history]),
+        ]);
 
       return this.successRes(
         {
-          ...enrichedHistory,
+          ...markPassThrough([enrichedHistory], passThrough)[0],
           ...parties,
           order,
           ...(options.include_correctable ? { correctable } : {}),
@@ -3211,15 +3447,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * T6 — `/history/:id` dagi `correctable: { allowed, code?, reason?,
-   * deadline, window_days, root_history_id, transfer }`. Smena / balans /
+   * deadline, window_days, edit_allowed, root_history_id, transfer }`. Smena / balans /
    * karta amal paytida tekshiriladi. Qamrovdan tashqari tur — `null`
    * (iPlY5yop). `transfer` (mUhkJHmi) — to'lov shakli topilganda tomonlar,
    * aks holda `null`; nom so'rovlari fail-open (blokni `null` qilmaydi).
    */
   private async correctableBlock(history: HistoryWithCashbox) {
     try {
+      const branchTransfer = isBranchTransferType(history.source_type);
       if (
         !isCorrectableType(history.source_type) &&
+        !branchTransfer &&
         history.source_type !== Source_type.PAYMENT_REVERSAL
       ) {
         return null;
@@ -3230,6 +3468,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         history,
         { windowDays: window_days },
       );
+      // (2026-11-26) `branch_to_main` — faqat C («Filialdan marketga
+      // o'tkazma») shakli; oddiy filial → HQ topshirig'ida blok yo'q (avvalgidek).
+      if (branchTransfer && !verdict.shape) {
+        return null;
+      }
       const [rootHistoryId, transfer] = await Promise.all([
         resolveRootHistoryId(this.dataSource.manager, history, verdict.root),
         this.correctableTransfer(verdict.shape),
@@ -3240,6 +3483,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         ...(verdict.reason ? { reason: verdict.reason } : {}),
         deadline: verdict.deadline,
         window_days: verdict.window_days,
+        // (2026-11-26) A / B / C — faqat «Qaytarish» (summa tahriri yo'q).
+        edit_allowed: verdict.shape ? !verdict.shape.reverseOnly : false,
         root_history_id: rootHistoryId,
         transfer,
       };
@@ -4776,10 +5021,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where,
         order: { createdAt: 'DESC' },
       });
-      const { income, outcome } = this.calcIncomeOutcome(rows);
-      const cashboxHistory = await this.withCorrections(
-        rows,
-        filters?.include_receipts === true ? 'brief' : 'none',
+      const passThrough = await this.passThroughOf(rows);
+      const { income, outcome } = this.calcIncomeOutcome(rows, passThrough);
+      const cashboxHistory = markPassThrough(
+        await this.withCorrections(
+          rows,
+          filters?.include_receipts === true ? 'brief' : 'none',
+        ),
+        passThrough,
       );
       return this.successRes(
         { cashbox: mainCashbox, cashboxHistory, income, outcome },
@@ -4846,7 +5095,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         where: historyWhere,
         order: { createdAt: 'DESC' },
       });
-      const { income, outcome } = this.calcIncomeOutcome(rawHistory);
+      // (2026-11-26) O'tkazma izi — jamilarga kirmaydi, qatorda belgi.
+      const passThrough = await this.passThroughOf(rawHistory);
+      const { income, outcome } = this.calcIncomeOutcome(
+        rawHistory,
+        passThrough,
+      );
       // 63HO6cBU — qatorlarda `cashbox` relation yo'q: kassa turi bo'yicha.
       const ackedHistory = await this.withBranchLegs(
         cashbox.cashbox_type === Cashbox_type.FOR_COURIER
@@ -4888,7 +5142,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       };
 
       return this.successRes(
-        { cashbox: cashboxWithOwner, cashboxHistory, income, outcome },
+        {
+          cashbox: cashboxWithOwner,
+          cashboxHistory: markPassThrough(cashboxHistory, passThrough),
+          income,
+          outcome,
+        },
         200,
         'Cashbox details',
       );
@@ -6585,10 +6844,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * Chek (2026-11-12, Dilshod) — «O'tkazma» (`click`) bilan bir xil:
    * `branch_to_hq` turi, `hq_transfer` sozlamasi (rasm majburiy bo'lsa
    * `receipt_id` siz → 400 `RECEIPT_REQUIRED`); `history_id` — MAIN INCOME,
-   * `counter` — filial EXPENSE; takrorda asl chek qaytadi. T6 tuzatish bu
-   * shaklni QO'LLAMAYDI: `classifyTransfer` filial → MAIN → market guruhini
-   * tanimaydi → 409 `NOT_CORRECTABLE` / `unsupported_type` (daftarni orqaga
-   * surish `branch_to_hq` ni bilmaydi — pul yarim teskarilanib qolmasin).
+   * `counter` — filial EXPENSE; takrorda asl chek qaytadi. T6 tuzatish
+   * (2026-11-26, ega): bu shakl (`branch_click_market`) faqat QAYTARILADI —
+   * to'rt oyoqqa teskari qator, daftar `hq_to_market` → `branch_to_hq`
+   * orqaga; summa tahriri — 409 `NOT_CORRECTABLE` / `reverse_only`.
    */
   private async paymentFromBranchToMarket(
     data: Parameters<FinanceServiceService['paymentFromBranchToMain']>[0],
@@ -8177,10 +8436,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           })),
         )
         .orIgnore()
-        .returning(['id', 'amount'])
+        .returning(['id', 'amount', 'order_id'])
         .execute();
       const insertedRows = Array.isArray(inserted.raw)
-        ? (inserted.raw as Array<{ id?: unknown; amount?: unknown }>)
+        ? (inserted.raw as Array<{
+            id?: unknown;
+            amount?: unknown;
+            order_id?: unknown;
+          }>)
         : [];
       const createdCents = insertedRows.reduce(
         (sum, row) => sum + Math.round(Number(row.amount ?? 0) * 100),
@@ -8205,6 +8468,18 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           ...summary,
           created: insertedRows.length,
           created_amount: createdCents / 100,
+          // Audit 2026-11-22 #8: gateway yozilganlarni order-service'da qayta
+          // tekshiradi — ro'yxat olingandan keyin sotuvdan chiqqan buyurtma
+          // (rollback'i yozuvdan OLDIN kelib, «o'chiradigan qator yo'q» bo'lgan)
+          // ulushi shu ro'yxat bo'yicha olib tashlanadi.
+          created_order_ids: insertedRows
+            .map((row) =>
+              typeof row.order_id === 'string' ||
+              typeof row.order_id === 'number'
+                ? String(row.order_id)
+                : '',
+            )
+            .filter((id) => id !== ''),
           dry_run: false,
         },
         200,
@@ -8300,7 +8575,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const skip = Math.max(Number(input.offset ?? 0), 0);
       const [rows, total] = await this.earningRepo.findAndCount({
         where: { operator_id: String(input.operator_id), isDeleted: false },
-        order: { createdAt: 'DESC' },
+        // Audit 2026-11-22 #23: backfill bitta INSERT bilan yozadi — hamma
+        // qatorda createdAt bir xil; `id` siz LIMIT/OFFSET sahifalari bir-
+        // biriga kirib ketadi (takror / yo'qolgan qatorlar).
+        order: { createdAt: 'DESC', id: 'DESC' },
         take,
         skip,
       });

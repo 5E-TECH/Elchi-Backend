@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Workbook } from 'exceljs';
 import { DataSource } from 'typeorm';
 import { of, throwError } from 'rxjs';
 import {
@@ -692,6 +693,339 @@ describePg(
         });
         expect(shift.report_status).toBe('sent');
         expect(shift.report_file_format).toBe('pdf');
+      });
+
+      it("asosiy kassa: filiallardan kelgan pul (qaytarilgani bilan) — har ulangan filialga faqat o'zi", async () => {
+        await db.query(
+          `DELETE FROM "${schema}".finance_settings WHERE key = 'shift.report.recipients'`,
+        );
+        await seedOperations();
+        const repo = db.getRepository(CashboxHistory);
+        const row = (patch: Partial<CashboxHistory>) =>
+          repo.create({
+            cashbox_id: mainCashboxId,
+            balance_after: 0,
+            payment_method: PaymentMethod.CASH,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.BRANCH_TO_MAIN,
+            ...patch,
+          } as Partial<CashboxHistory>);
+        const [wrong] = await repo.save([
+          row({ source_user_id: '16', amount: 111_111 }),
+          row({
+            source_user_id: '16',
+            amount: 222_222,
+            payment_method: PaymentMethod.CLICK,
+          }),
+          row({ source_user_id: '37', amount: 777_777 }),
+        ]);
+        // 111 111 qaytarildi; kuryer to'lovining teskarisi (source_user_id
+        // ham 16) filialga aralashmasin.
+        const courier = await repo.save(
+          row({
+            source_type: Source_type.COURIER_PAYMENT,
+            source_user_id: '16',
+            amount: 5_005,
+          }),
+        );
+        await repo.save([
+          row({
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.PAYMENT_REVERSAL,
+            source_user_id: '16',
+            amount: 111_111,
+            reverses_history_id: String(wrong.id),
+          }),
+          row({
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.PAYMENT_REVERSAL,
+            source_user_id: '16',
+            amount: 5_005,
+            reverses_history_id: String(courier.id),
+          }),
+        ]);
+        await closeManually();
+        const group = { active: true, inactive_reason: null };
+        const withBranches = new ShiftReportService(
+          db,
+          activityLog as never,
+          checks,
+          new FinanceNotificationService(outbox as never),
+          identity as never,
+          file as never,
+          {
+            send: jest.fn((pattern: { cmd: string }) =>
+              of({
+                data:
+                  pattern.cmd === 'notification.telegram.branch_routes'
+                    ? ['1', '16', '37'].map((branch_id) => ({
+                        branch_id,
+                        report_target: 'group',
+                        group,
+                      }))
+                    : { report_target: 'group', group },
+              }),
+            ),
+          } as never,
+          {
+            send: jest.fn((pattern: { cmd: string }) =>
+              of({
+                data:
+                  pattern.cmd === 'branch.find_hq'
+                    ? { id: '1' }
+                    : pattern.cmd === 'branch.find_all'
+                      ? {
+                          items: [
+                            { id: '1', name: 'HQ' },
+                            { id: '16', name: 'Andijon' },
+                            { id: '37', name: 'Samarqand' },
+                          ],
+                        }
+                      : [],
+              }),
+            ),
+          } as never,
+        );
+        expect(await withBranches.deliver(mainShiftId)).toMatchObject({
+          status: 'sent',
+          recipients: 3,
+        });
+        const byBranch = new Map(
+          dispatches('finance.shift_closed').map((payload) => [
+            payload.telegram.branch_id,
+            payload,
+          ]),
+        );
+        expect([...byBranch.keys()].sort()).toEqual(['1', '16', '37']);
+        expect(byBranch.get('1').body).toContain(
+          "Filiallardan qabul: 999 999 so'm (2 ta filial)",
+        );
+        const andijon = JSON.stringify(byBranch.get('16'));
+        expect(andijon).toContain("topshirilgan: 222 222 so'm (2 ta)");
+        expect(andijon).toContain('qaytarildi');
+        expect(andijon).not.toContain('777 777');
+        expect(andijon).not.toContain('5 005');
+        expect(JSON.stringify(byBranch.get('37'))).not.toContain('222 222');
+        const deliveries = await db.getRepository(ShiftReportDelivery).find();
+        expect(
+          deliveries
+            .map((d) => [d.recipient_kind, d.recipient_id, d.channel, d.status])
+            .sort(),
+        ).toEqual([
+          ['branch', '1', 'telegram_group', 'queued'],
+          ['branch', '16', 'telegram_group', 'queued'],
+          ['branch', '37', 'telegram_group', 'queued'],
+        ]);
+      });
+
+      it("filial smenasi: HQ'ga topshirilgani (sof, qaytarilgani) va filial nomi — xabar va Excel'da; tizim ochgan", async () => {
+        await db.query(
+          `DELETE FROM "${schema}".finance_settings WHERE key = 'shift.report.recipients'`,
+        );
+        const cashboxes = db.getRepository(Cashbox);
+        const cashbox = async (user_id: string, cashbox_type: Cashbox_type) =>
+          String(
+            (
+              await cashboxes.save(
+                cashboxes.create({
+                  user_id,
+                  cashbox_type,
+                  balance: 1_000_000,
+                } as Partial<Cashbox>),
+              )
+            ).id,
+          );
+        const own = await cashbox('16', Cashbox_type.BRANCH);
+        const other = await cashbox('37', Cashbox_type.BRANCH);
+        // Id to'qnashuvi: kuryer foydalanuvchi ham 16.
+        const courier = await cashbox('16', Cashbox_type.FOR_COURIER);
+        const shifts = db.getRepository(Shift);
+        const openedAt = new Date(Date.now() - 2 * 3_600_000);
+        const shift = await shifts.save(
+          shifts.create({
+            opened_by: null,
+            opened_by_system: true,
+            cashbox_user_id: '16',
+            status: ShiftStatus.OPEN,
+            opened_at: openedAt,
+            opening_balance_cash: 500_000,
+            opening_balance_card: 0,
+          }),
+        );
+        const repo = db.getRepository(CashboxHistory);
+        const row = (patch: Partial<CashboxHistory>) =>
+          repo.create({
+            cashbox_id: own,
+            balance_after: 0,
+            payment_method: PaymentMethod.CASH,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.BRANCH_TO_MAIN,
+            source_user_id: '16',
+            ...patch,
+          } as Partial<CashboxHistory>);
+        const [, wrong] = await repo.save([
+          row({ amount: 111_111 }),
+          row({ amount: 222_222, payment_method: PaymentMethod.CLICK }),
+          // Boshqa filial, kuryer kassasi va asosiy kassa oyog'i — sanalmaydi.
+          row({ cashbox_id: other, source_user_id: '37', amount: 777_777 }),
+          row({ cashbox_id: courier, amount: 888_888 }),
+          row({
+            cashbox_id: mainCashboxId,
+            operation_type: Operation_type.INCOME,
+            amount: 333_333,
+          }),
+          // O'chirilgan qator.
+          row({ amount: 444_444, isDeleted: true }),
+        ]);
+        // Smena ochilishidan oldingi topshiriq (smenasiz) — sanalmaydi.
+        const early = await repo.save(row({ amount: 666_666 }));
+        await db.query(
+          `UPDATE "${schema}".cashbox_history SET "createdAt" = $1 WHERE id = $2`,
+          [new Date(openedAt.getTime() - 3_600_000), early.id],
+        );
+        // Kuryer topshirig'i va uning qaytarilishi — HQ'ga aralashmaydi.
+        const [courierPaid, courierWrong] = await repo.save([
+          row({
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.COURIER_PAYMENT,
+            source_user_id: '501',
+            amount: 400_000,
+          }),
+          row({
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.COURIER_PAYMENT,
+            source_user_id: '501',
+            amount: 5_005,
+          }),
+        ]);
+        expect(courierPaid.id).toBeTruthy();
+        await repo.save([
+          row({
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.PAYMENT_REVERSAL,
+            amount: 222_222,
+            payment_method: PaymentMethod.CLICK,
+            reverses_history_id: String(wrong.id),
+          }),
+          row({
+            source_type: Source_type.PAYMENT_REVERSAL,
+            source_user_id: '501',
+            amount: 5_005,
+            reverses_history_id: String(courierWrong.id),
+          }),
+          // Boshqa xarajat.
+          row({ source_type: Source_type.MANUAL_EXPENSE, amount: 20_000 }),
+        ]);
+        expect(
+          await service.autoCloseShift({
+            shift_id: String(shift.id),
+            slot_key: '2026-11-24T23:00',
+            slot_at: new Date(),
+          }),
+        ).toMatchObject({ closed: true });
+
+        const group = { active: true, inactive_reason: null };
+        const branchClient = {
+          send: jest.fn((pattern: { cmd: string }) =>
+            of({
+              data:
+                pattern.cmd === 'branch.find_by_id'
+                  ? { id: '16', name: 'Andijon' }
+                  : [],
+            }),
+          ),
+        };
+        const withBranches = new ShiftReportService(
+          db,
+          activityLog as never,
+          checks,
+          new FinanceNotificationService(outbox as never),
+          identity as never,
+          file as never,
+          {
+            send: jest.fn(() =>
+              of({ data: { report_target: 'group', group } }),
+            ),
+          } as never,
+          branchClient as never,
+        );
+        const closed = await shifts.findOneByOrFail({ id: String(shift.id) });
+        const snapshot = await withBranches.buildSnapshot(closed, 1);
+        expect(snapshot).toMatchObject({
+          cashbox_type: 'branch',
+          branch_name: 'Andijon',
+          opened_by_system: true,
+          opened_by: null,
+          hq_transfers: { count: 2, total: 111_111, reversed: 222_222 },
+        });
+        expect(snapshot.branches).toBeUndefined();
+        expect(snapshot.cash).toMatchObject({
+          total_income: 627_227,
+          total_expense: 358_338,
+        });
+        // Asosiy kassa snapshot'ida bu maydonlar yo'q.
+        const mainSnapshot = await withBranches.buildSnapshot(
+          await shifts.findOneByOrFail({ id: mainShiftId }),
+          1,
+        );
+        expect(mainSnapshot.hq_transfers).toBeUndefined();
+        expect(mainSnapshot.branch_name).toBeUndefined();
+
+        branchClient.send.mockClear();
+        expect(await withBranches.deliver(String(shift.id))).toMatchObject({
+          status: 'sent',
+          recipients: 1,
+        });
+        // Filial nomi bir marta so'raladi (snapshot'dagisi qayta ishlatiladi).
+        expect(
+          branchClient.send.mock.calls.filter(
+            ([pattern]) => pattern.cmd === 'branch.find_by_id',
+          ),
+        ).toHaveLength(1);
+        const [sent] = dispatches('finance.shift_auto_closed');
+        expect(sent.title).toBe(
+          '⏰ «Andijon» filiali — kassa avtomatik yopildi',
+        );
+        expect(sent.body).toContain(
+          "⬆️ HQ'ga topshirilgan: 111 111 so'm (2 ta) · qaytarilgan 222 222 so'm",
+        );
+        expect(sent.data.telegram_media).toHaveLength(1);
+
+        const upload = file.send.mock.calls
+          .map(([, payload]) => payload)
+          .find((payload) => payload.file_name.endsWith('.xlsx'));
+        const workbook = new Workbook();
+        await workbook.xlsx.load(
+          Buffer.from(upload.file_base64, 'base64') as never,
+        );
+        const rows = new Map<string, unknown>();
+        workbook.getWorksheet('Xulosa')!.eachRow((item) => {
+          const label = item.getCell(2).value;
+          const sum = item.getCell(5);
+          if (typeof label === 'string') {
+            rows.set(label, sum.formula ? sum.result : sum.value);
+          }
+        });
+        expect(workbook.getWorksheet('Xulosa')!.getCell('C6').value).toBe(
+          'Tizim (avtomatik)',
+        );
+        // Kirim: kuryer 405 005 + HQ'dan qaytgan 222 222 = smena kirimi.
+        expect(rows.get('Kuryerlardan qabul')).toBe(405_005);
+        expect(rows.get("HQ'dan qaytgan (bekor qilingan)")).toBe(222_222);
+        // Chiqim: HQ 333 333 + kuryerga qaytgan 5 005 + boshqa 20 000.
+        expect(rows.get("HQ'ga topshirilgan (2 ta)")).toBe(333_333);
+        expect(rows.get('Kuryerga qaytarilgan')).toBe(5_005);
+        expect(rows.get('Boshqa chiqim')).toBe(20_000);
+        expect(rows.get('JAMI')).toBe(358_338);
+        // Boshqa filial / kuryer kassasi summalari hech qayerda yo'q.
+        const all = JSON.stringify([
+          sent,
+          workbook.worksheets.map((sheet) => sheet.getSheetValues()),
+        ]);
+        for (const n of ['777', '888', '666', '444']) {
+          expect(all).not.toContain(`${n} ${n}`);
+          expect(all).not.toContain(`${n}${n}`);
+        }
       });
 
       it('takroriy deliver / scheduler — yangi outbox yo‘q (idempotent)', async () => {

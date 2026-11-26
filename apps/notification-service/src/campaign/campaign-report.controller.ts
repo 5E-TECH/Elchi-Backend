@@ -43,7 +43,7 @@ export class CampaignReportController {
     return this.run(context, () => this.reports.undelivered(data ?? {}));
   }
 
-  /** CSV — faqat superadmin; >10 000 qator — fon vazifasi (202). */
+  /** Excel — faqat superadmin; >10 000 qator — fon vazifasi (202). */
   @MessagePattern({ cmd: 'notification.campaign.export' })
   exportUndelivered(
     @Payload() data: CampaignReportInput,
@@ -62,7 +62,8 @@ export class CampaignReportController {
 
   @MessagePattern({ cmd: 'notification.campaign.export.download' })
   downloadExport(
-    @Payload() data: { export_id?: string; requester?: Requester },
+    @Payload()
+    data: { export_id?: string; requester?: Requester; accept?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.run(context, () => this.reports.downloadExport(data ?? {}));

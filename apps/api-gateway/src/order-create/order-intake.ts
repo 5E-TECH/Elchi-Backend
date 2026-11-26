@@ -55,8 +55,10 @@ export class UpdateOrderIntakeSettingsRequestDto {
     example: '00:00',
     description:
       'Kun almashish soati (Toshkent, `HH:MM`, sukut `00:00`) — ish kuni shu soatdan keyingi kun ' +
-      'shu soatgacha. `null` — sukutga qaytarish. Faqat buyurtma yaratish / qabul qilish oynasini ' +
-      'belgilaydi (hisobot / pochta / smena kunlari 00:00 bo`yicha qoladi).',
+      'shu soatgacha. `null` — sukutga qaytarish. xhiXv3w3: butun tizimning ish kuni — yaratish / qabul ' +
+      'oynasi, dashboard, buyurtmalar sana filtri, moliya kunlik hisoboti, Excel, kunlik pochtalar, smena ' +
+      'ro`yxati va kuryer hisoboti. Yangi soat KEYINGI kun almashishidan amal qiladi (kamida 5 daqiqa ' +
+      'keyin), o`tgan kunlar qayta hisoblanmaydi; servislar ≤ 1 daqiqada oladi.',
   })
   @IsOptional()
   @Matches(CLOCK_PATTERN, {
@@ -72,4 +74,7 @@ export const ORDER_INTAKE_STATE_DESCRIPTION =
   'is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, ' +
   "receive_cutoff_time: '16:00' | null, receive_is_open: boolean, receive_closes_at: ISO | null, " +
   'receive_reopens_at: ISO | null, day_change_time: "HH:MM", day_started_at: ISO, ' +
-  'next_day_change_at: ISO } }';
+  'next_day_change_at: ISO, current_day_change_time: "HH:MM", ' +
+  "day_change_effective_from: 'YYYY-MM-DD' | null, day_change_schedule: [{ from: 'YYYY-MM-DD', time: 'HH:MM' }] } }. " +
+  '`date` — joriy ISH KUNI (xhiXv3w3); `day_change_time` — oxirgi o`rnatilgan soat, ' +
+  '`current_day_change_time` — joriy ish kuni boshlangan soat (yangi soat keyingi kun almashishidan amal qiladi).';

@@ -228,8 +228,9 @@ describe('GET export/financial-balance.xlsx', () => {
           }),
       ),
     };
+    // B3 — ismlar bitta bulk so'rovda (`identity.user.find_by_ids`).
     const identityClient: Client = {
-      send: jest.fn(() => of({ data: fullUser })),
+      send: jest.fn(() => of({ data: [fullUser] })),
     };
     const controller = new ExcelGatewayController(
       { send: jest.fn() } as any,
@@ -246,7 +247,11 @@ describe('GET export/financial-balance.xlsx', () => {
       res.send.mock.calls[0]?.[0]) as Buffer;
     const wb = new Workbook();
     await wb.xlsx.load(buf as any);
-    return wb.worksheets[0];
+    expect(wb.worksheets.map((sheet) => sheet.name)).toEqual([
+      'Xulosa',
+      'Daftar',
+    ]);
+    return wb.worksheets[1];
   };
 
   it('sahifalab o‘qiydi: qator soni jadvaldagi total ga teng (250)', async () => {
@@ -270,15 +275,32 @@ describe('GET export/financial-balance.xlsx', () => {
     expect(payloads[1]).toMatchObject({ offset: 200 });
 
     const sheet = await sheetOf(fx.res);
-    expect(sheet.rowCount).toBe(251); // sarlavha + 250
-    const header = sheet.getRow(1).values as unknown[];
+    // 6-qator — sarlavha, 7…256 — 250 yozuv, 257 — JAMI.
+    expect(sheet.getCell('B256').value).toBe(250);
+    expect(sheet.getCell('B257').value).toBe('JAMI');
+    const header = sheet.getRow(6).values as unknown[];
     expect(header).toEqual(
-      expect.arrayContaining(['Izoh', 'Kim kiritgan', 'Buyurtma ID']),
+      expect.arrayContaining([
+        'ID',
+        'Sana',
+        'Manba',
+        'Kategoriya',
+        "O'zgarish, so'm",
+        "Oldingi balans, so'm",
+        "Keyingi balans, so'm",
+        'Izoh',
+        'Kim kiritgan',
+        'Buyurtma ID',
+      ]),
     );
-    const first = sheet.getRow(2);
-    expect(first.getCell(7).value).toBe('Ofis ijarasi 1'); // Izoh
-    expect(first.getCell(8).value).toBe('Dilshod'); // Kim kiritgan
+    expect(sheet.getCell('I7').value).toBe('Ofis ijarasi 1'); // Izoh
+    expect(sheet.getCell('J7').value).toBe('Dilshod'); // Kim kiritgan
     expect(fx.identityClient.send).toHaveBeenCalledTimes(1);
+    expect(fx.identityClient.send).toHaveBeenCalledWith(
+      { cmd: 'identity.user.find_by_ids' },
+      { ids: ['1'] },
+    );
+    expect(JSON.stringify(sheet.getSheetValues())).not.toMatch(/MAXFIY|\+998/);
     expect(fx.res.set).toHaveBeenCalledWith(
       expect.objectContaining({
         'Content-Disposition': 'attachment; filename="financial-balance.xlsx"',
@@ -290,7 +312,9 @@ describe('GET export/financial-balance.xlsx', () => {
     const fx = setup(3);
     await fx.controller.exportFinancialBalance(fx.res as any, 'sell');
     expect(fx.financeClient.send.mock.calls[0][1].source_type).toBeUndefined();
-    expect((await sheetOf(fx.res)).rowCount).toBe(4);
+    const sheet = await sheetOf(fx.res);
+    expect(sheet.getCell('B9').value).toBe(3);
+    expect(sheet.getCell('B10').value).toBe('JAMI');
   });
 });
 

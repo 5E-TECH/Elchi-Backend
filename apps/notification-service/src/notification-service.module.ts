@@ -6,6 +6,7 @@ import { NotificationServiceController } from './notification-service.controller
 import { NotificationServiceService } from './notification-service.service';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   RmqModule,
   DatabaseModule,
   notificationValidationSchema,
@@ -24,6 +25,7 @@ import { BotActionsService } from './bot/bot-actions.service';
 import { BotRateLimiterService } from './bot/bot-rate-limiter.service';
 import { BotChannelService } from './bot/bot-channel.service';
 import { BotOutboxService } from './bot/bot-outbox.service';
+import { GroupLinkHintService } from './bot/group-link-hint.service';
 import { BotActorService } from './bot/bot-actor.service';
 import { BotRouterService } from './bot/bot-router.service';
 import { BotRuntimeService } from './bot/bot-runtime.service';
@@ -130,6 +132,8 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
       validationSchema: notificationValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'notification-service' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), daqiqada bir.
+    BusinessDayModule.forRoot(),
     RmqModule,
     RmqModule.register({ name: 'IDENTITY' }),
     RmqModule.register({ name: 'ORDER' }),
@@ -218,6 +222,7 @@ import { RecipientDirectoryService } from './recipients/recipient-directory.serv
     StartHandler,
     GroupHandler,
     MarketHandler,
+    GroupLinkHintService,
     MembershipHandler,
     CommandGateHandler,
     TelegramLinkService,

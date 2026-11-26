@@ -13,6 +13,11 @@ import { projectOrderPayloadForRoles } from './auth/order-role-projection';
  * ro'yxatining sotish oynasi (`pages/orders/index.tsx`
  * `selectedActionModalOrder`) maydonni `ActionOrder` ga ko'chirmaydi va
  * `readMarketPaidBase` `to_be_paid` (sotuvgacha 0) ga tushadi.
+ *
+ * ⚠️ D5NxxpJW (ega 2026-11-20 / 2026-11-25) menejer qismini BEKOR QILDI:
+ * chegara market tarifini ochadi. Sotish oynasidan «Marketga to'langan summa»
+ * maydoni olib tashlangan (Elchi-Frontend fdbb86d8), shuning uchun menejer,
+ * filial va registratorga u endi kelmaydi; kuryer va market — avvalgidek.
  */
 const waitingOrder133 = () => ({
   id: '133',
@@ -33,7 +38,7 @@ const listPayload = () => ({
 });
 
 describe('vbu7Wr3o #3 — sale_market_paid_max rol proyeksiyasida', () => {
-  it.each([['manager'], ['branch'], ['registrator'], ['superadmin']])(
+  it.each([['superadmin'], ['admin']])(
     '⭐ %s: ro`yxat va detalda 25 000 qoladi',
     (role) => {
       const list = projectOrderPayloadForRoles([role], listPayload());
@@ -42,6 +47,19 @@ describe('vbu7Wr3o #3 — sale_market_paid_max rol proyeksiyasida', () => {
         data: waitingOrder133(),
       });
       expect(detail.data.sale_market_paid_max).toBe(25000);
+    },
+  );
+
+  it.each([['manager'], ['branch'], ['registrator']])(
+    '⭐ D5NxxpJW — %s: ro`yxat va detalda chegara YO`Q (market tarifini ochadi)',
+    (role) => {
+      const list = projectOrderPayloadForRoles([role], listPayload());
+      expect(list.data[0]).not.toHaveProperty('sale_market_paid_max');
+      const detail = projectOrderPayloadForRoles([role], {
+        data: waitingOrder133(),
+      });
+      expect(detail.data).not.toHaveProperty('sale_market_paid_max');
+      expect(detail.data.market).not.toHaveProperty('tariff_center');
     },
   );
 

@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
 import {
   BadRequestException,
   Body,
@@ -30,7 +32,7 @@ import {
   throwError,
   timeout,
 } from 'rxjs';
-import { projectOrderContactsForRoles } from './auth/order-contact-projection';
+import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   ProblemContactsService,
   attachProblemContacts,
@@ -773,6 +775,8 @@ export class BranchGatewayController {
   }
 
   @Post('branches/transfer-batches')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,
@@ -1015,9 +1019,9 @@ export class BranchGatewayController {
           attachProblemContacts(this.problemContacts, response),
         ),
         // T7 (B3): `items[].order` — menejer/filialga market va operator
-        // telefonlarisiz.
+        // telefonlarisiz; D5NxxpJW: market tarifisiz.
         map((response: unknown) =>
-          projectOrderContactsForRoles(req?.user?.roles, response),
+          projectOrderPayloadForRoles(req?.user?.roles, response),
         ),
       );
   }
@@ -1101,9 +1105,10 @@ export class BranchGatewayController {
         switchMap((response: unknown) =>
           attachProblemContacts(this.problemContacts, response),
         ),
-        // T7 (B3): menejer/filialga market va operator telefonlarisiz.
+        // T7 (B3): menejer/filialga market va operator telefonlarisiz;
+        // D5NxxpJW: market tarifisiz.
         map((response: unknown) =>
-          projectOrderContactsForRoles(req?.user?.roles, response),
+          projectOrderPayloadForRoles(req?.user?.roles, response),
         ),
       );
   }
@@ -1133,6 +1138,8 @@ export class BranchGatewayController {
   }
 
   @Post('transfer-batches/:id/receive-orders')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,

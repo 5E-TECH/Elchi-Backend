@@ -14,8 +14,8 @@ import {
   NotificationCategory,
   NotificationChannel,
   NotificationPriority,
+  businessDayKey,
   deterministicUuid,
-  endOfTashkentDay,
   rmqSend,
 } from '@app/common';
 import { NotificationInboxService } from '../../notification-inbox.service';
@@ -96,7 +96,9 @@ export class CourierReportScheduler implements OnModuleInit, OnModuleDestroy {
     if (this.running) return result;
     this.running = true;
     try {
-      const day = endOfTashkentDay(now).toISOString().slice(0, 10);
+      // xhiXv3w3 — kuniga bitta xabar ISH KUNI bo'yicha (hisobot raqamlari
+      // ham analytics `period=today` — joriy ish kuni).
+      const day = businessDayKey(now);
       const response = await rmqSend<{
         data?: Array<{ user_id: string; telegram_id: string }>;
       }>(

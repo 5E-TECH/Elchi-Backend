@@ -54,10 +54,9 @@ import type {
  * ⚠️ BATCHING: partiyaga CATALOG 1 marta, LOGISTICS 1 marta (≤50 buyurtma),
  * IDENTITY 1 marta — hammasi PARALLEL. Buyurtmalar sikli ichida RPC YO'Q.
  *
- * ⚠️ `OrderLookupService` ATAYLAB inject qilinmaydi: uning
- * `resolveDistrictId` zaxirasi (`getDefaultDistrictId`) jadvaldagi BIRINCHI
- * tumanni `ORDER BY`siz oladi — mos kelmagan buyurtma jimgina boshqa
- * viloyatga ketardi. Tuman faqat `logistics.district.resolve_by_text` dan.
+ * ⚠️ `OrderLookupService` ATAYLAB inject qilinmaydi: uning tuman qidiruvi
+ * (`resolveExternalDistrict`) sayt/CRM KODI uchun, matn uchun emas. Tuman
+ * faqat `logistics.district.resolve_by_text` dan.
  *
  * ⚠️ MAXFIYLIK: preview (ism, telefon, manzil) faqat `runIdempotent` keshida
  * (`order_schema.idempotency_keys`) yashaydi va 1 soatdan keyin tozalanadi

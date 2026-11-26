@@ -63,7 +63,7 @@ import type {
  * spec'dagi o'lchangan juftliklar (Koson ↔ Kogon 0.80 ...) siljiydi.
  *
  * ⚠️ `order-service/src/lookup/order-lookup.service.ts`
- * (`resolveDistrictIdOrNull`) bu yerga ULANMAYDI: hamkor importining qat'iy
+ * (`resolveExternalDistrict`) bu yerga ULANMAYDI: hamkor importining qat'iy
  * rejimi fuzzy bilan jimgina zaiflashib qolardi.
  */
 

@@ -1,4 +1,5 @@
-import { Workbook } from 'exceljs';
+import { Workbook, type Cell } from 'exceljs';
+import { sheetOrderProblems } from '@app/report-kit/testing/sheet-order';
 import { of } from 'rxjs';
 import {
   buildBranchMessage,
@@ -80,12 +81,30 @@ const snapshot: ShiftReportSnapshot = {
   ],
 };
 
-const rowsOf = async (buffer: Buffer) => {
+/** Formula — natijasi bilan (`cell.value` 0 natijani tashlab yuboradi). */
+const plain = (cell: Cell): unknown =>
+  cell.formula ? cell.result : cell.value;
+
+const load = async (buffer: Buffer) => {
   const workbook = new Workbook();
+  // Excel «Repaired» qilmasin (exceljs o'qiganda sezmaydi).
+  expect(sheetOrderProblems(buffer)).toEqual([]);
   await workbook.xlsx.load(buffer as never);
+  return workbook;
+};
+
+/** Birinchi varaq qatorlari (birlashtirilgan kataklar bir marta, bo'shsiz). */
+const rowsOf = async (buffer: Buffer) => {
   const rows: unknown[][] = [];
-  workbook.worksheets[0].eachRow((row) => {
-    rows.push((row.values as unknown[]).slice(1));
+  (await load(buffer)).worksheets[0].eachRow((row) => {
+    const values: unknown[] = [];
+    row.eachCell((cell) => {
+      if (cell.isMerged && cell.master !== cell) return;
+      if (cell.value !== null && cell.value !== '') {
+        values.push(plain(cell));
+      }
+    });
+    if (values.length) rows.push(values);
   });
   return rows;
 };
@@ -100,8 +119,68 @@ describe('buildMarketXlsx', () => {
     expect(flat).toContain('150000');
     expect(flat).not.toContain('Market B');
     expect(flat).not.toContain('100000');
-    expect(rows).toContainEqual(['Jami', 150_000]);
+    expect(rows).toContainEqual(["Jami to'langan", 150_000]);
     expect(rows).toContainEqual(['Hisobingizdagi qoldiq', 20_000]);
+    expect(rows).toContainEqual([
+      1,
+      // 10:00 UTC → Toshkent 15:00 (Excel sanasi).
+      new Date('2026-11-20T15:00:00Z'),
+      150_000,
+      'Naqd',
+    ]);
+  });
+
+  it('⭐ fayl ichida (formula, kolontitul, nom) ham begona market / kassa yo‘q', async () => {
+    const workbook = await load(
+      await buildMarketXlsx(snapshot, snapshot.markets[1]),
+    );
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+      "To'lovlar",
+    ]);
+    const all = JSON.stringify([
+      workbook.title,
+      workbook.worksheets.map((sheet) => [
+        sheet.headerFooter,
+        sheet.getSheetValues(),
+      ]),
+    ]);
+    expect(all).toContain('Market B');
+    expect(all).toContain('Asosiy');
+    // Boshqa market va smena kassasi raqamlari.
+    for (const foreign of [
+      'Market A',
+      '150000',
+      '20000',
+      '300000',
+      '250000',
+      '50000',
+      'Ali',
+    ]) {
+      expect(all).not.toContain(foreign);
+    }
+  });
+
+  it('qaytarilgan to‘lov: manfiy qator, sof jami (formula natijasi bilan)', async () => {
+    const [paid] = snapshot.markets[0].payments;
+    const rows = await rowsOf(
+      await buildMarketXlsx(
+        { ...snapshot, close_reason: 'auto' },
+        {
+          ...snapshot.markets[0],
+          total: 100_000,
+          payments: [
+            paid,
+            { ...paid, history_id: '8', amount: -50_000, reversed: true },
+          ],
+        },
+      ),
+    );
+    expect(rows).toContainEqual(['Naqd', 150_000]);
+    expect(rows).toContainEqual(['Qaytarilgan', -50_000]);
+    expect(rows).toContainEqual(["Jami to'langan", 100_000]);
+    expect(
+      rows.some((row) => row.includes(-50_000) && row.includes('Qaytarildi')),
+    ).toBe(true);
   });
 });
 

@@ -16,7 +16,7 @@ import { SmsGatewayController } from './sms-gateway.controller';
 
 /**
  * WIsb9Ytq (rejalashtirish qoidasi, ro'yxat holati, zonali vaqt) va
- * H7kpCman (kampaniya hisoboti, yetkazilmaganlar, CSV eksport — faqat
+ * H7kpCman (kampaniya hisoboti, yetkazilmaganlar, Excel eksport — faqat
  * superadmin, ≤10 000 fayl / kattasi 202) — gateway marshrutlari.
  */
 describe('Kampaniya rejalashtirish / hisobot gateway — WIsb9Ytq, H7kpCman', () => {
@@ -172,7 +172,7 @@ describe('Kampaniya rejalashtirish / hisobot gateway — WIsb9Ytq, H7kpCman', ()
         .expect(400);
     });
 
-    it('TC7: CSV eksport — admin 403 (RPC yo‘q)', async () => {
+    it('TC7: eksport — admin 403 (RPC yo‘q)', async () => {
       await request(http())
         .get('/notifications/campaigns/7/undelivered/export')
         .expect(403);
@@ -182,7 +182,68 @@ describe('Kampaniya rejalashtirish / hisobot gateway — WIsb9Ytq, H7kpCman', ()
       expect(send).not.toHaveBeenCalled();
     });
 
-    it('TC8: superadmin, ≤10 000 — 200 text/csv fayl (Content-Disposition, X-Export-Total)', async () => {
+    const XLSX =
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    /** UTF-8 sifatida buziladigan baytlar — binar holicha o'tishi shart. */
+    const BYTES = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0xfe, 0x80]);
+
+    it('TC8: superadmin, ≤10 000 — 200 .xlsx fayl (Content-Disposition, X-Export-Total), baytlar aynan', async () => {
+      superadmin();
+      send.mockReturnValueOnce(
+        of({
+          statusCode: 200,
+          data: {
+            mode: 'sync',
+            rows: 2,
+            filename: 'kampaniya-notification-7-yetkazilmaganlar.xlsx',
+            content_type: XLSX,
+            file_base64: BYTES.toString('base64'),
+          },
+        }),
+      );
+      const res = await request(http())
+        .get('/notifications/campaigns/7/undelivered/export')
+        .buffer(true)
+        .parse((incoming, done) => {
+          const chunks: Buffer[] = [];
+          incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
+          incoming.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(res.headers['content-type']).toBe(XLSX);
+      expect(res.headers['content-disposition']).toBe(
+        'attachment; filename="kampaniya-notification-7-yetkazilmaganlar.xlsx"',
+      );
+      expect(res.headers['x-export-total']).toBe('2');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['content-length']).toBe(String(BYTES.length));
+      expect(BYTES.equals(res.body as Buffer)).toBe(true);
+      expect(lastCall()).toEqual([
+        { cmd: 'notification.campaign.export' },
+        {
+          kind: 'notification',
+          id: '7',
+          requester: { id: '26', roles: ['superadmin'] },
+          accept: 'xlsx',
+        },
+      ]);
+    });
+
+    it('fayl nomi va turi kelmasa — .xlsx sukut', async () => {
+      superadmin();
+      send.mockReturnValueOnce(
+        of({ data: { rows: 1, file_base64: BYTES.toString('base64') } }),
+      );
+      const res = await request(http())
+        .get('/notifications/campaigns/7/undelivered/export')
+        .expect(200);
+      expect(res.headers['content-type']).toBe(XLSX);
+      expect(res.headers['content-disposition']).toBe(
+        'attachment; filename="export.xlsx"',
+      );
+    });
+
+    it('aralash versiya: eski notification-service (`csv`) — 200 text/csv, avvalgidek', async () => {
       superadmin();
       send.mockReturnValueOnce(
         of({
@@ -211,6 +272,7 @@ describe('Kampaniya rejalashtirish / hisobot gateway — WIsb9Ytq, H7kpCman', ()
           kind: 'notification',
           id: '7',
           requester: { id: '26', roles: ['superadmin'] },
+          accept: 'xlsx',
         },
       ]);
     });
@@ -250,9 +312,14 @@ describe('Kampaniya rejalashtirish / hisobot gateway — WIsb9Ytq, H7kpCman', ()
       expect(file.headers['content-disposition']).toBe(
         'attachment; filename="k.csv"',
       );
-      expect(lastCall()?.[0]).toEqual({
-        cmd: 'notification.campaign.export.download',
-      });
+      expect(lastCall()).toEqual([
+        { cmd: 'notification.campaign.export.download' },
+        {
+          export_id: '5',
+          requester: { id: '26', roles: ['superadmin'] },
+          accept: 'xlsx',
+        },
+      ]);
     });
   });
 
@@ -278,7 +345,7 @@ describe('Kampaniya rejalashtirish / hisobot gateway — WIsb9Ytq, H7kpCman', ()
       ]);
     });
 
-    it('CSV — faqat superadmin', async () => {
+    it('Excel — faqat superadmin', async () => {
       await request(http())
         .get('/notifications/sms/campaigns/9/undelivered/export')
         .expect(403);
@@ -286,14 +353,22 @@ describe('Kampaniya rejalashtirish / hisobot gateway — WIsb9Ytq, H7kpCman', ()
       send.mockReturnValueOnce(
         of({
           statusCode: 200,
-          data: { mode: 'sync', rows: 1, filename: 's.csv', csv: 'a' },
+          data: {
+            mode: 'sync',
+            rows: 1,
+            filename: 's.xlsx',
+            file_base64: Buffer.from('PK').toString('base64'),
+          },
         }),
       );
-      await request(http())
+      const res = await request(http())
         .get('/notifications/sms/campaigns/9/undelivered/export')
         .expect(200);
+      expect(res.headers['content-disposition']).toBe(
+        'attachment; filename="s.xlsx"',
+      );
       expect(lastCall()?.[1]).toEqual(
-        expect.objectContaining({ kind: 'sms', id: '9' }),
+        expect.objectContaining({ kind: 'sms', id: '9', accept: 'xlsx' }),
       );
     });
   });

@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
 import {
   BadRequestException,
   Body,
@@ -9,6 +11,7 @@ import {
   HttpCode,
   Inject,
   Injectable,
+  NotFoundException,
   Param,
   Patch,
   PipeTransform,
@@ -20,7 +23,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom, timeout } from 'rxjs';
+import { firstValueFrom, map, timeout } from 'rxjs';
 import { Roles as RoleEnum, STATUS_CATALOG } from '@app/common';
 import {
   ApiBearerAuth,
@@ -35,6 +38,11 @@ import {
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import {
+  canSeeIntegrationConfig,
+  toSiteDetailResponse,
+  toSiteListResponse,
+} from './integration-site-view';
 import {
   CancelRemittanceRequestDto,
   CreateSyncQueueRequestDto,
@@ -147,9 +155,21 @@ export class IntegrationGatewayController {
     return { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] };
   }
 
+  /**
+   * Ulanishlar ro'yxati. REGISTRATOR — faqat «Tashqi saytlar» tabi uchun: javob OQ RO'YXAT
+   * (`integration-site-view.ts`: faqat faol sayt ulanishlar, sozlamasiz; filtrlar e'tiborga olinmaydi, bitta
+   * sahifa). Superadmin/admin javobi o'zgarmagan.
+   */
   @Get()
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiOperation({ summary: 'List integrations' })
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({
+    summary: 'List integrations',
+    description:
+      "REGISTRATOR: faqat «Tashqi saytlar» — faol, marketi bor, to'lov emas ulanishlar; maydonlar: id, name, slug, " +
+      'type, role, category, status, is_active, market_id, market {id,name}, base_url/api_url (login/parol va ' +
+      "query'siz), field_mapping, status_sync_config.external_search.endpoint, imported_orders, last_sync_at. " +
+      "Filtrlar e'tiborga olinmaydi, bitta sahifa.",
+  })
   @ApiQuery({ name: 'is_active', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
   @ApiQuery({
@@ -189,7 +209,17 @@ export class IntegrationGatewayController {
     @Query('to_date') to_date?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user?: { sub?: string; roles?: string[] } },
   ) {
+    if (!canSeeIntegrationConfig(req?.user?.roles)) {
+      return this.integrationClient
+        .send<Record<string, unknown>>(
+          { cmd: 'integration.find_all' },
+          { query: { is_active: true, page: 1, limit: 200 } },
+        )
+        .pipe(timeout(8000), map(toSiteListResponse));
+    }
+
     const normalizedStatus =
       typeof status === 'string' ? status.toLowerCase() : undefined;
     const statusToIsActive =
@@ -523,13 +553,32 @@ export class IntegrationGatewayController {
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * Bitta ulanish. REGISTRATOR — faqat sayt ulanish (sayt skani sahifasi), OQ RO'YXAT bilan; sayt bo'lmagan
+   * ulanish — 404 (borligi ham ochilmaydi).
+   */
   @Get(':id')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiOperation({ summary: 'Get integration by id' })
-  findById(@Param('id', ParseIntegrationIdPipe) id: string) {
-    return this.integrationClient
-      .send({ cmd: 'integration.find_by_id' }, { id })
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({
+    summary: 'Get integration by id',
+    description:
+      "REGISTRATOR: faqat sayt ulanish (ro'yxatdagi kabi maydonlar), boshqasi — 404.",
+  })
+  async findById(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Req() req?: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    const response$ = this.integrationClient
+      .send<Record<string, unknown>>({ cmd: 'integration.find_by_id' }, { id })
       .pipe(timeout(8000));
+    if (canSeeIntegrationConfig(req?.user?.roles)) {
+      return response$;
+    }
+    const site = toSiteDetailResponse(await firstValueFrom(response$));
+    if (!site) {
+      throw new NotFoundException('integration not found');
+    }
+    return site;
   }
 
   @Patch(':id')
@@ -696,6 +745,8 @@ export class IntegrationGatewayController {
    * ⚠️ MANAGER ham kiradi: posilkalarni HQ menejeri qabul qiladi.
    */
   @Post(':slug/scan-intake')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,

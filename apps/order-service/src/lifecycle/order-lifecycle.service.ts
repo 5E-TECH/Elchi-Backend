@@ -5,6 +5,7 @@ import {
   DataSource,
   In,
   IsNull,
+  MoreThan,
   Not,
   QueryFailedError,
   Repository,
@@ -134,11 +135,24 @@ import {
 import {
   OrderLookupService,
   rpcErrorStatusOf,
+  siteRegionConflicts,
 } from '../lookup/order-lookup.service';
 import {
   isIntegrationOrderCreate,
   resolveOrderCreateContent,
 } from './order-create-content';
+import {
+  fitCustomerAddress,
+  fitCustomerName,
+  fitExtraNumber,
+} from './external-customer-limits';
+import {
+  fitProductName,
+  fitQuantity,
+  fitTotalQuantity,
+} from './external-item-limits';
+import { readExternalItemsText } from './external-items-text';
+import { fitsOrderPrice, ungroupThousands } from './external-price';
 import { OrderCustodyService } from '../custody/order-custody.service';
 import {
   OrderNotificationService,
@@ -709,27 +723,6 @@ export class OrderLifecycleService {
 
   private notFound(message: string): never {
     throw new RpcException({ statusCode: 404, message });
-  }
-
-  /**
-   * Tashqi manbadan kelgan `region` qiymatini XAVFSIZ o'qish.
-   *
-   * `region_id` — bigint FK. Sayt u yerga matn yuborsa Postgres tip xatosi
-   * beradi va import partiyasi yarim yo'lda uziladi. Shu bois faqat butun
-   * son qabul qilinadi.
-   */
-  private numericRegionId(value: unknown): string | null {
-    if (
-      typeof value !== 'string' &&
-      typeof value !== 'number' &&
-      typeof value !== 'bigint' &&
-      typeof value !== 'boolean'
-    ) {
-      return null;
-    }
-    const raw = String(value).trim();
-    if (!raw) return null;
-    return /^\d+$/.test(raw) ? raw : null;
   }
 
   private badRequest(message: string): never {
@@ -1312,6 +1305,36 @@ export class OrderLifecycleService {
       expires_at: authorizationExpiresAt.toISOString(),
       remaining_seconds: MARKET_HANDOVER_AUTH_TTL_SECONDS,
       method: via,
+    };
+  }
+
+  /**
+   * Skan auditi #40 — o'sha xodimga amaldagi ruxsatni QAYTA berish (javob
+   * yo'qolgan/kechikkan QR yoki kod). Yangi token (eskisi bekor), muddat
+   * o'zgarmaydi. Sessiya qulflangan tranzaksiya ichida chaqiriladi.
+   */
+  private async reissueMarketHandoverAuthorization(
+    sessionRepo: Repository<MarketCancelledHandoverSession>,
+    session: MarketCancelledHandoverSession,
+    expiresAt: Date,
+    now: Date,
+  ) {
+    const authorizationToken = this.generateHandoverToken('MHA');
+    session.authorization_token_hash =
+      this.hashHandoverToken(authorizationToken);
+    await sessionRepo.save(session);
+    return {
+      market_id: String(session.market_id),
+      authorized: true,
+      authorization_token: authorizationToken,
+      authorized_at: (session.scanned_at ?? now).toISOString(),
+      expires_at: expiresAt.toISOString(),
+      remaining_seconds: Math.max(
+        0,
+        Math.ceil((expiresAt.getTime() - now.getTime()) / 1000),
+      ),
+      method: marketHandoverMethodOf(session),
+      reissued: true,
     };
   }
 
@@ -2155,7 +2178,8 @@ export class OrderLifecycleService {
     });
     if (toTiyin(params.marketPaidAtSale) > toTiyin(limit)) {
       this.badRequest(
-        `paidAmount (${params.marketPaidAtSale}) marketga shu buyurtma bo'yicha to'lanadigan summadan (${limit}) oshmasligi kerak`,
+        // D5NxxpJW: chegara summasi aytilmaydi — undan market tarifi chiqadi.
+        `paidAmount (${params.marketPaidAtSale}) marketga shu buyurtma bo'yicha to'lanadigan summadan oshmasligi kerak`,
       );
     }
   }
@@ -8784,9 +8808,7 @@ export class OrderLifecycleService {
       this.badRequest('order_ids majburiy');
     }
     if (ids.length > UNLINKED_GROUP_ID_LIMIT) {
-      this.badRequest(
-        `order_ids ko'pi bilan ${UNLINKED_GROUP_ID_LIMIT} ta`,
-      );
+      this.badRequest(`order_ids ko'pi bilan ${UNLINKED_GROUP_ID_LIMIT} ta`);
     }
     const results: Array<{
       id: string;
@@ -8991,11 +9013,17 @@ export class OrderLifecycleService {
     // bo'lmaydi. (Shikastlangan posilka yorlig'i bu yerda muammo emas: buyurtma
     // id bo'yicha tanlanadi, parcel-QR skan qilinmaydi.)
     const handoverCtx = await this.resolveMarketHandoverRequester(requester);
+    // Skan auditi #43: QR sukut bo'yicha majburiy; superadmin/admin market
+    // uchun o'chirib qo'ygan bo'lsa — tokensiz (usul `no_qr`).
+    const [orderMarket] = await this.lookup.getMarketsByIds([
+      String(order.market_id ?? ''),
+    ]);
+    const isQrRequired = orderMarket?.cancelled_handover_qr_required !== false;
     const handoverToken = String(authorizationToken ?? '').trim();
-    if (!handoverToken) {
+    if (isQrRequired && !handoverToken) {
       this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
     }
-    if (!handoverToken.startsWith('MHA-')) {
+    if (isQrRequired && !handoverToken.startsWith('MHA-')) {
       this.badRequest('authorization_token noto‘g‘ri');
     }
     // F3 — filial xodimi FAQAT o'z filialidagi bekor buyurtmani topshira oladi.
@@ -9114,24 +9142,28 @@ export class OrderLifecycleService {
       // biri alohida markReturnedToMarket) ishlatilishi mumkin; bulk `complete`
       // ham ko'p martalik (skan = topshirish), `consumed_at` u yerda partiya vaqti.
       const marketId = String(order.market_id ?? '').trim();
-      const session = await sessionRepo.findOne({
-        where: {
-          authorization_token_hash: this.hashHandoverToken(handoverToken),
-          isDeleted: false,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!session || !session.authorization_expires_at) {
-        this.forbidden('Topshirish ruxsati topilmadi');
-      }
-      if (String(session.market_id) !== marketId) {
-        this.forbidden('Ruxsat bu buyurtma marketiga tegishli emas');
-      }
-      if (String(session.scanned_by_user_id ?? '') !== String(requester.id)) {
-        this.forbidden('Ruxsat boshqa xodimga tegishli');
-      }
-      if (session.authorization_expires_at.getTime() <= Date.now()) {
-        this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+      const session = isQrRequired
+        ? await sessionRepo.findOne({
+            where: {
+              authorization_token_hash: this.hashHandoverToken(handoverToken),
+              isDeleted: false,
+            },
+            lock: { mode: 'pessimistic_write' },
+          })
+        : null;
+      if (isQrRequired) {
+        if (!session || !session.authorization_expires_at) {
+          this.forbidden('Topshirish ruxsati topilmadi');
+        }
+        if (String(session.market_id) !== marketId) {
+          this.forbidden('Ruxsat bu buyurtma marketiga tegishli emas');
+        }
+        if (String(session.scanned_by_user_id ?? '') !== String(requester.id)) {
+          this.forbidden('Ruxsat boshqa xodimga tegishli');
+        }
+        if (session.authorization_expires_at.getTime() <= Date.now()) {
+          this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+        }
       }
 
       // Capture the prior custody holder before closing the chain.
@@ -9153,7 +9185,9 @@ export class OrderLifecycleService {
       order.last_handover_at = handoverAt;
       order.last_handover_by = handoverBy;
       // zkRab9M2 (BG6): ruxsat market kodi bilan ochilgan bo'lsa — `pin`.
-      const handoverMethod = marketHandoverMethodOf(session);
+      const handoverMethod: CancelHandoverMethod = session
+        ? marketHandoverMethodOf(session)
+        : 'no_qr';
       order.market_handover_at = handoverAt;
       order.market_handover_by = handoverBy;
       order.market_handover_method = handoverMethod;
@@ -9180,7 +9214,7 @@ export class OrderLifecycleService {
             branch_id: handoverBranchId,
             branch_name: handoverBranchName,
             from_holder_type: priorHolderType,
-            handover_session_id: session.id ? String(session.id) : null,
+            handover_session_id: session?.id ? String(session.id) : null,
           },
         },
         trackingRepo,
@@ -9373,6 +9407,30 @@ export class OrderLifecycleService {
       }
 
       const now = new Date();
+      /**
+       * ⚠️ O'SHA XODIMNING QAYTA SKANI — RUXSAT QAYTA BERILADI (skan auditi
+       * 2026-11-23, #40). Javob yo'qolsa yoki kechiksa (gateway 8 s) sessiya
+       * serverda ochilgan, lekin token frontendga yetmagan bo'lardi; qayta
+       * skan «QR allaqachon ishlatilgan» olardi va market yangi QR chiqarishi
+       * kerak edi. Endi ruxsat hali amal qilsa va skanerlagan AYNAN shu xodim
+       * bo'lsa — yangi token (eskisi bekor), muddat O'ZGARMAYDI.
+       */
+      const authExpiresAt = session.authorization_expires_at;
+      if (
+        session.authorization_token_hash &&
+        authExpiresAt &&
+        authExpiresAt.getTime() > now.getTime() &&
+        String(session.scanned_by_user_id ?? '') === requesterId
+      ) {
+        const reissued = await this.reissueMarketHandoverAuthorization(
+          sessionRepo,
+          session,
+          authExpiresAt,
+          now,
+        );
+        await queryRunner.commitTransaction();
+        return successRes(reissued, 200, 'Topshirish ruxsati qayta berildi');
+      }
       if (session.qr_expires_at.getTime() <= now.getTime()) {
         this.badRequest('QR muddati tugagan');
       }
@@ -9465,6 +9523,40 @@ export class OrderLifecycleService {
         lock: { mode: 'pessimistic_write' },
       });
 
+      if (!session) {
+        /**
+         * Skan auditi #40: kod bilan ochilgan ruxsat javobi yo'qolsa, sessiya
+         * endi «skanerlangan» — qayta urinish uni topmasdi. O'sha xodim va
+         * o'sha kod, ruxsat hali amal qilsa — qayta beriladi.
+         */
+        const retryNow = new Date();
+        const authorized = await sessionRepo.findOne({
+          where: {
+            market_id: marketId,
+            scanned_by_user_id: requesterId,
+            isDeleted: false,
+          },
+          order: { scanned_at: 'DESC', id: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const authExpiresAt = authorized?.authorization_expires_at;
+        if (
+          authorized?.pin_hash &&
+          authorized.authorization_token_hash &&
+          authExpiresAt &&
+          authExpiresAt.getTime() > retryNow.getTime() &&
+          this.handoverPinMatches(authorized, pin)
+        ) {
+          const reissued = await this.reissueMarketHandoverAuthorization(
+            sessionRepo,
+            authorized,
+            authExpiresAt,
+            retryNow,
+          );
+          await queryRunner.commitTransaction();
+          return successRes(reissued, 200, 'Topshirish ruxsati qayta berildi');
+        }
+      }
       if (!session || !session.pin_hash) {
         throw this.pinError(
           'Faol QR topilmadi — market yangi QR chiqarsin',
@@ -9546,6 +9638,62 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * QR talab qilinmaydigan market (skan auditi #43): topshirishlar baribir
+   * «sessiya»ga yig'iladi — «Topshirilgan» partiyalari (`handover-batches.ts`)
+   * sessiyaning `consumed_at` vaqti bo'yicha tuziladi; sessiyasiz har skan
+   * alohida «partiya» bo'lib, ro'yxatda umuman ko'rinmasdi.
+   *
+   * Bitta xodim + market uchun 5 daqiqalik ichki sessiya (QR ruxsati bilan bir
+   * xil muddat): QR/kod/ruxsat tokeni YO'Q (`authorization_token_hash` NULL —
+   * QR talab qilinadigan yo'lda token bilan topilmaydi, `scanned_at` bor — kod
+   * yo'li ham topmaydi). Parallel skanlar advisory qulf bilan bitta sessiyaga.
+   */
+  private async openNoQrHandoverSession(
+    manager: EntityManager,
+    marketId: string,
+    requesterId: string,
+    now: Date,
+  ): Promise<MarketCancelledHandoverSession> {
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `no_qr_handover:${marketId}:${requesterId}`,
+    ]);
+    const sessionRepo = manager.getRepository(MarketCancelledHandoverSession);
+    const live = await sessionRepo.findOne({
+      where: {
+        market_id: marketId,
+        scanned_by_user_id: requesterId,
+        authorized_via: 'no_qr',
+        authorization_expires_at: MoreThan(now),
+        isDeleted: false,
+      },
+      order: { createdAt: 'DESC' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (live) return live;
+    return sessionRepo.save(
+      sessionRepo.create({
+        market_id: marketId,
+        // Noyob (indeks talab qiladi), lekin hech qachon skanerlanmaydi.
+        qr_token_hash: this.hashHandoverToken(
+          this.generateHandoverToken('MCR'),
+        ),
+        qr_expires_at: now,
+        scanned_at: now,
+        scanned_by_user_id: requesterId,
+        authorization_token_hash: null,
+        authorization_expires_at: new Date(
+          now.getTime() + MARKET_HANDOVER_AUTH_TTL_SECONDS * 1000,
+        ),
+        authorized_via: 'no_qr',
+        consumed_at: null,
+        pin_hash: null,
+        pin_failed_attempts: 0,
+        pin_blocked_at: null,
+      }),
+    );
+  }
+
   async completeMarketCancelledHandover(input: {
     market_id: string;
     order_ids: string[];
@@ -9605,18 +9753,26 @@ export class OrderLifecycleService {
     if (!market) {
       this.badRequest('Market topilmadi');
     }
-    // ⚠️ MARKET QR MAJBURIY (return-market-qr-majburiy). Ilgari
-    // `cancelled_handover_qr_required=false` bilan QR'ni butunlay o'chirib
-    // qo'yish mumkin edi — ya'ni marketning roziligisiz (QR'isiz) bekor
-    // buyurtmani unga «topshirilgan» deb belgilash mumkin edi. Endi QR har doim
-    // talab qilinadi; faqat alohida posilkaning YORLIG'I shikastlangan bo'lsa,
-    // market QR bilan ochilgan sessiya ICHIDA `manual_overrides` orqali qo'lda
-    // tasdiqlanadi (bu market QR'ni emas, parcel-yorliqni chetlab o'tadi).
-    const isQrRequired = true;
-    if (!authorizationToken) {
+    /**
+     * ⚠️ MARKET QR — SUKUT BO'YICHA MAJBURIY, ADMIN O'CHIRA OLADI (ega qarori
+     * 2026-11-23, skan auditi #43).
+     *
+     * Har market uchun `cancelled_handover_qr_required` sukut bo'yicha `true`:
+     * bekor buyurtma marketga faqat uning QR'i (yoki kodi) bilan ochilgan
+     * ruxsat ichida topshiriladi. Superadmin/admin aniq bir market uchun
+     * o'chirib qo'ygan bo'lsa (`false`) — QR so'ralmaydi, oqim o'sha: skan
+     * yoki «QR buzilgan» bilan qo'lda topshirish (usul `no_qr` / `manual`).
+     * Bayroqni faqat superadmin/admin o'zgartiradi (gateway).
+     *
+     * Tarix: 2026-10-02 (9f735161) bayroqqa qaramay QR har doim talab
+     * qilinardi, frontend esa bayroq `false` bo'lsa tokensiz yuborardi — bunday
+     * marketga topshirish butunlay to'xtab qolardi.
+     */
+    const isQrRequired = market.cancelled_handover_qr_required !== false;
+    if (isQrRequired && !authorizationToken) {
       this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
     }
-    if (!authorizationToken.startsWith('MHA-')) {
+    if (isQrRequired && !authorizationToken.startsWith('MHA-')) {
       this.badRequest('authorization_token noto‘g‘ri');
     }
 
@@ -9633,6 +9789,8 @@ export class OrderLifecycleService {
     await queryRunner.startTransaction();
 
     let handedOverOrders: Order[] = [];
+    /** Shu marketga avvalroq topshirilganlar (qayta skan — idempotent javob). */
+    let alreadyHandedIds: string[] = [];
     // zkRab9M2 (BG6): ruxsat usuli (`qr` | `pin`) — jurnal uchun tranzaksiyadan keyin ham.
     let authorizedVia: Extract<CancelHandoverMethod, 'qr' | 'pin'> | null =
       null;
@@ -9673,9 +9831,18 @@ export class OrderLifecycleService {
         if (session.authorization_expires_at.getTime() <= now.getTime()) {
           this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
         }
+      } else {
+        session = await this.openNoQrHandoverSession(
+          queryRunner.manager,
+          marketId,
+          requesterId,
+          now,
+        );
       }
 
-      authorizedVia = session ? marketHandoverMethodOf(session) : null;
+      // QR'siz marketning ichki sessiyasi (`no_qr`) — «qr/pin» ruxsati emas.
+      authorizedVia =
+        isQrRequired && session ? marketHandoverMethodOf(session) : null;
       // «Topshirilgan» partiyasi = market + `market_handover_at` + xodim (`handover-batches.ts`), sessiya esa
       // `consumed_at` bilan tanib olinadi. Shuning uchun bitta sessiyadagi HAR skan sessiyaning birinchi
       // topshirish vaqti bilan yoziladi — partiya bitta bo'lib qoladi. Haqiqiy vaqt — `last_handover_at` va tracking.
@@ -9702,9 +9869,31 @@ export class OrderLifecycleService {
       });
 
       if (handedOverOrders.length !== orderIds.length) {
-        this.badRequest(
-          'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas, yoki sizning filialingizda/HQda turmagan',
-        );
+        /**
+         * ⚠️ QAYTA SKAN — «ALLAQACHON TOPSHIRILGAN», 400 EMAS (skan auditi
+         * 2026-11-23, #38/#87). Gateway 8 s da voz kechsa ham tranzaksiya
+         * commit bo'ladi; operator qayta skanerlasa buyurtma endi
+         * `returned_to_market` va ilgari umumiy 400 olardi — ekran topshirilgan
+         * posilkani «xato» deb ko'rsatardi. Shu marketga topshirilganlar
+         * `already_handed_order_ids` da qaytadi, qolganlari avvalgidek 400.
+         */
+        const pickedIds = new Set(handedOverOrders.map((o) => String(o.id)));
+        const missingIds = orderIds.filter((id) => !pickedIds.has(id));
+        const alreadyHanded = await orderRepo.find({
+          where: {
+            id: In(missingIds),
+            market_id: marketId,
+            status: Order_status.RETURNED_TO_MARKET,
+            isDeleted: false,
+          },
+          select: ['id'],
+        });
+        alreadyHandedIds = alreadyHanded.map((order) => String(order.id));
+        if (alreadyHandedIds.length !== missingIds.length) {
+          this.badRequest(
+            'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas, yoki sizning filialingizda/HQda turmagan',
+          );
+        }
       }
       // VkKDSNNn: Markaziy ombor buyurtmasi marketga topshirilmaydi — 409
       // (hammasi-yoki-hech biri; HQ id noma'lum — 503). HQ id filial xodimi
@@ -9801,7 +9990,7 @@ export class OrderLifecycleService {
       }
 
       // Partiya vaqti faqat BIRINCHI topshirishda yoziladi (keyingi skanlar uni o'zgartirmaydi — `batchAt`).
-      if (session && !session.consumed_at) {
+      if (session && !session.consumed_at && handedOverOrders.length) {
         session.consumed_at = now;
         await sessionRepo.save(session);
       }
@@ -9862,9 +10051,12 @@ export class OrderLifecycleService {
         market_id: marketId,
         closed_count: handedOverOrders.length,
         order_ids: handedOverOrders.map((order) => String(order.id)),
+        already_handed_order_ids: alreadyHandedIds,
       },
       200,
-      'Bekor qilingan buyurtmalar marketga topshirildi va yopildi',
+      handedOverOrders.length
+        ? 'Bekor qilingan buyurtmalar marketga topshirildi va yopildi'
+        : 'Buyurtmalar allaqachon marketga topshirilgan',
     );
   }
 
@@ -11028,6 +11220,17 @@ export class OrderLifecycleService {
     return null;
   }
 
+  /**
+   * Hozir qabul qilinayotgan buyurtmalar: `order_id → shu qabulning tugash
+   * va'dasi`. Lazy, chunki testlar xizmatni `Object.create` bilan
+   * konstruktorsiz quradi.
+   */
+  private receiveInFlightMap?: Map<string, Promise<void>>;
+
+  private get receiveInFlight(): Map<string, Promise<void>> {
+    return (this.receiveInFlightMap ??= new Map());
+  }
+
   async receiveNewOrders(
     orderIds: string[],
     search?: string,
@@ -11041,12 +11244,70 @@ export class OrderLifecycleService {
     internal?: { scanVerified?: boolean },
   ) {
     const uniqueOrderIds = Array.from(
-      new Set((orderIds ?? []).filter(Boolean)),
+      new Set((orderIds ?? []).filter(Boolean).map(String)),
     );
     if (!uniqueOrderIds.length) {
       this.badRequest('order_ids majburiy');
     }
 
+    /**
+     * ⚠️ BITTA BUYURTMA BIR VAQTDA IKKI MARTA QABUL QILINMAYDI (skan auditi
+     * 2026-11-23).
+     *
+     * MUAMMO. Gateway 8 s da timeout beradi, order-service esa ishni davom
+     * ettirib keyinroq commit qiladi. Operator xatoni ko'rib qayta
+     * skanerlaydi — ikkinchi so'rov birinchisi hali commit qilmagan paytda
+     * kelib, buyurtmani yana `new` holatida ko'rardi. Natija: pochta
+     * hisoblagichi (`order_quantity`, `post_total_price`) IKKI MARTA
+     * oshardi, javobgarlik yozuvlari ikkilanardi.
+     *
+     * Endi ikkinchi so'rov birinchisi tugashini kutadi, keyin buyurtmani
+     * qayta o'qiydi — u allaqachon `received`, ya'ni «allaqachon qabul
+     * qilingan» deb muvaffaqiyat qaytadi. order-service bitta nusxada
+     * ishlaydi (docker-compose.prod.yml); bir nechta nusxa bo'lsa ham
+     * pastdagi `status = 'new'` shartli UPDATE ikkinchi yozuvni to'sadi.
+     */
+    const inFlight = this.receiveInFlight;
+    for (let round = 0; round < 3; round += 1) {
+      const pending = Array.from(
+        new Set(
+          uniqueOrderIds
+            .map((id) => inFlight.get(id))
+            .filter((task): task is Promise<void> => Boolean(task)),
+        ),
+      );
+      if (!pending.length) break;
+      await Promise.allSettled(pending);
+    }
+    // `run` birinchi `await` gacha sinxron ishlaydi, ro'yxatga olish esa
+    // undan keyin darhol, oraliqda `await` yo'q — boshqa so'rov kirib
+    // qololmaydi.
+    const run = this.receiveNewOrdersExclusive(
+      uniqueOrderIds,
+      search,
+      requester,
+      internal,
+    );
+    const marker = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    for (const id of uniqueOrderIds) inFlight.set(id, marker);
+    try {
+      return await run;
+    } finally {
+      for (const id of uniqueOrderIds) {
+        if (inFlight.get(id) === marker) inFlight.delete(id);
+      }
+    }
+  }
+
+  private async receiveNewOrdersExclusive(
+    uniqueOrderIds: string[],
+    search: string | undefined,
+    requester: { id?: string; roles?: string[] } | null | undefined,
+    internal: { scanVerified?: boolean } | undefined,
+  ) {
     // 0. Filial doirasi — menejer/registrator faqat o'z filialida ishlaydi.
     const scopeBranchId = await this.resolveReceiveBranchScope(requester);
 
@@ -11059,9 +11320,52 @@ export class OrderLifecycleService {
       },
     });
 
-    if (!orders.length) {
+    /**
+     * ⚠️ QAYTA QABUL — 404 EMAS, «ALLAQACHON QABUL QILINGAN» (skan auditi
+     * 2026-11-23).
+     *
+     * MUAMMO. Skaner ekrani javobni kutmasdan qayta skanerlaganda yoki
+     * timeout'dan keyin operator qayta urinsa, buyurtma allaqachon
+     * `received` bo'lardi va server 404 «Buyurtmalar topilmadi» qaytarardi.
+     * Operator real bor posilka uchun «topilmadi» ko'rardi, keyingi skan esa
+     * «allaqachon» derdi — ishonch yo'qolardi.
+     *
+     * Endi `received` holatidagi buyurtma QABUL MAQSADIGA ERISHGAN deb
+     * hisoblanadi: u qayta yozilmaydi (pochta, javobgarlik, webhook yo'q),
+     * javobda `already_received_ids` da qaytadi. Boshqa holatlar
+     * (`on_the_road`, `sold`...) avvalgidek topilmadi/xato — ular qabul
+     * bosqichidan o'tib ketgan, «qabul qilindi» deyish noto'g'ri bo'lardi.
+     */
+    const newIds = new Set(orders.map((order) => String(order.id)));
+    const missingIds = uniqueOrderIds.filter((id) => !newIds.has(id));
+    let alreadyReceived: Order[] = [];
+    if (missingIds.length) {
+      const missingSet = new Set(missingIds);
+      alreadyReceived = (
+        await this.orderRepo.find({
+          where: {
+            id: In(missingIds),
+            isDeleted: false,
+            status: Order_status.RECEIVED,
+          },
+        })
+      ).filter(
+        (order) =>
+          missingSet.has(String(order.id)) &&
+          order.status === Order_status.RECEIVED,
+      );
+    }
+
+    if (!orders.length && !alreadyReceived.length) {
       this.notFound('Buyurtmalar topilmadi');
     }
+    const alreadyReceivedIds = alreadyReceived.map((order) => String(order.id));
+    const alreadyReceivedResult = () =>
+      successRes(
+        { received_ids: [], already_received_ids: alreadyReceivedIds },
+        200,
+        'Buyurtmalar allaqachon qabul qilingan',
+      );
 
     /**
      * ⚠️ TASHQI POSILKA FAQAT SKANERLAB QABUL QILINADI (audit K2).
@@ -11150,7 +11454,9 @@ export class OrderLifecycleService {
      * farqni hech kim sezmasdi.
      */
     if (scopeBranchId) {
-      const foreign = orders.filter(
+      // Allaqachon qabul qilinganlar ham tekshiriladi — begona filial
+      // buyurtmasi haqida «qabul qilingan» deb javob berilmaydi.
+      const foreign = [...orders, ...alreadyReceived].filter(
         (order) => String(order.branch_id ?? '') !== scopeBranchId,
       );
       if (foreign.length) {
@@ -11161,10 +11467,40 @@ export class OrderLifecycleService {
       }
     }
 
+    // Hammasi allaqachon qabul qilingan — yozadigan narsa yo'q.
+    if (!orders.length) {
+      return alreadyReceivedResult();
+    }
+
     // 2. Validate customers via RMQ (batch)
+    /**
+     * Skan auditi 2026-11-23 (#104): mijozlar (identity) va tumanlar
+     * (logistics) bir-biriga bog'liq emas — PARALLEL so'raladi. Ilgari ketma-
+     * ket edi va har skan-qabulga bitta RPC aylanishi qo'shilardi. Tumanlar
+     * qidiruv filtridan OLDINGI ro'yxat bo'yicha (ustki to'plam — ortiqcha
+     * tuman zarar qilmaydi).
+     */
     const customerIds = [
       ...new Set(orders.map((o) => o.customer_id).filter(Boolean)),
     ];
+    const districtIds = [
+      ...new Set(orders.map((o) => o.district_id).filter(Boolean) as string[]),
+    ];
+    const districtsPromise = rmqSend<{
+      data: Array<{
+        id: string;
+        assigned_region?: string | number | null;
+        assignedToRegion?: { id?: string | number | null } | null;
+        region_id?: string | number | null;
+        region?: { id?: string | number | null } | null;
+      }>;
+    }>(
+      this.logisticsClient,
+      { cmd: 'logistics.district.find_by_ids' },
+      { ids: districtIds },
+    );
+    // Mijoz so'rovi yiqilsa tuman va'dasi «ushlanmagan rad» bo'lib qolmasin.
+    districtsPromise.catch(() => undefined);
     const customersRes = await rmqSend<{
       data: Array<{ id: string; name?: string; phone_number?: string }>;
     }>(
@@ -11188,11 +11524,17 @@ export class OrderLifecycleService {
       );
       orders = orders.filter((o) => matchingIds.has(o.customer_id));
       if (!orders.length) {
+        if (alreadyReceived.length) {
+          return alreadyReceivedResult();
+        }
         this.notFound("Qidiruv bo'yicha buyurtma topilmadi");
       }
     }
 
-    if (orders.length !== uniqueOrderIds.length && !search?.trim()) {
+    if (
+      orders.length + alreadyReceived.length !== uniqueOrderIds.length &&
+      !search?.trim()
+    ) {
       this.badRequest(
         'Buyurtmalarning bir qismi topilmadi yoki yangi (NEW) holatda emas',
       );
@@ -11208,22 +11550,7 @@ export class OrderLifecycleService {
     // 5. Fetch district data via RMQ (batch) — xizmat hududi
     // `assigned_region ?? region_id` (LC-13): biriktirilmagan (NULL) eski
     // tuman o'z viloyatiga xizmat qiladi, 404 emas.
-    const districtIds = [
-      ...new Set(orders.map((o) => o.district_id).filter(Boolean) as string[]),
-    ];
-    const districtsRes = await rmqSend<{
-      data: Array<{
-        id: string;
-        assigned_region?: string | number | null;
-        assignedToRegion?: { id?: string | number | null } | null;
-        region_id?: string | number | null;
-        region?: { id?: string | number | null } | null;
-      }>;
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_by_ids' },
-      { ids: districtIds },
-    );
+    const districtsRes = await districtsPromise;
     const districtMap = new Map(
       (districtsRes?.data ?? []).map((d) => [String(d.id), d]),
     );
@@ -11303,6 +11630,8 @@ export class OrderLifecycleService {
       : 'system';
 
     // 8. Update order statuses + enqueue search sync (single TX)
+    /** Parallel so'rov oldinroq yozib ulgurgan buyurtmalar (pastga qarang). */
+    const racedIds = new Set<string>();
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -11332,7 +11661,14 @@ export class OrderLifecycleService {
         const regionFill = String(order.region_id ?? '').trim()
           ? null
           : (regionByOrderId.get(String(order.id)) ?? null);
-        await queryRunner.manager
+        /**
+         * ⚠️ `status = 'new'` SHARTI — qabulni faqat bitta so'rov yozadi.
+         * UPDATE qatorni qulflaydi; parallel so'rov kutadi, keyin shartni
+         * qayta tekshiradi va 0 qator oladi. Bunday buyurtma bu so'rovda
+         * QAYTA yozilmaydi (javobgarlik/webhook ikkilanmaydi) va javobda
+         * «allaqachon qabul qilingan» bo'lib qaytadi.
+         */
+        const updateResult = await queryRunner.manager
           .createQueryBuilder()
           .update(Order)
           .set({
@@ -11345,8 +11681,21 @@ export class OrderLifecycleService {
             last_handover_at: receivedAt,
             last_handover_by: receivedBy,
           })
-          .where('id = :id', { id: order.id })
+          .where('id = :id AND "status" = :expectedStatus', {
+            id: order.id,
+            expectedStatus: Order_status.NEW,
+          })
           .execute();
+        if (updateResult?.affected === 0) {
+          racedIds.add(String(order.id));
+          // Pochta hisoblagichiga bu buyurtma ikkinchi marta qo'shildi
+          // (logistics chaqiruvi tranzaksiyadan tashqarida) — kuzatish uchun.
+          this.logger.warn(
+            `receive: #${order.id} parallel so'rovda allaqachon qabul ` +
+              `qilingan; pochta #${postId ?? '-'} hisoblagichini tekshiring`,
+          );
+          continue;
+        }
 
         if (previousStatus !== nextStatus) {
           await this.custody.createTrackingEvent(
@@ -11420,7 +11769,12 @@ export class OrderLifecycleService {
       await queryRunner.release();
     }
 
-    for (const order of orders) {
+    // Faqat SHU so'rov yozgan buyurtmalar — parallel so'rovniki o'zida.
+    const receivedOrders = orders.filter(
+      (order) => !racedIds.has(String(order.id)),
+    );
+
+    for (const order of receivedOrders) {
       await this.activityLog.log({
         entity_type: 'Order',
         entity_id: String(order.id),
@@ -11443,7 +11797,7 @@ export class OrderLifecycleService {
      * yopilgandan KEYIN va kutilmaydi: integration-service ishlamasa ham
      * qabul javobi 200 (signal yo'qolsa — faqat log).
      */
-    for (const order of orders) {
+    for (const order of receivedOrders) {
       if (!order.external_id) continue;
       void this.queueExternalStatusSync(
         order,
@@ -11458,7 +11812,14 @@ export class OrderLifecycleService {
       );
     }
 
-    return successRes({}, 200, 'Orders received');
+    return successRes(
+      {
+        received_ids: receivedOrders.map((order) => String(order.id)),
+        already_received_ids: [...alreadyReceivedIds, ...racedIds],
+      },
+      200,
+      'Orders received',
+    );
   }
 
   /**
@@ -11556,6 +11917,15 @@ export class OrderLifecycleService {
      */
     const matched = new Map(orders.map((o) => [String(o.qr_code_token), o]));
     const unmatched: Array<{ token: string; reason: string }> = [];
+    /**
+     * Skan auditi 2026-11-23 (#22/#89): allaqachon `received` posilka —
+     * «qabul qilinmadi» emas. Gateway timeout'idan keyin (order-service ishni
+     * tugatgan) qayta bosilsa ilgari HAR token «allaqachon 'received'
+     * holatida» bo'lib `unmatched` ga tushar va ekran «0 qabul qilindi»
+     * derdi. Endi ular alohida ro'yxatda — operator ularni qabul qilingan deb
+     * ko'radi.
+     */
+    const alreadyReceived: Array<{ token: string; order_id: string }> = [];
     for (const token of tokens) {
       if (matched.has(token)) continue;
       /**
@@ -11572,6 +11942,8 @@ export class OrderLifecycleService {
         unmatched.push({ token, reason: 'tizimda topilmadi' });
       } else if (anyOrder.source !== Order_source.EXTERNAL) {
         unmatched.push({ token, reason: 'tashqi posilka emas' });
+      } else if (anyOrder.status === Order_status.RECEIVED) {
+        alreadyReceived.push({ token, order_id: String(anyOrder.id) });
       } else if (anyOrder.status !== Order_status.NEW) {
         unmatched.push({
           token,
@@ -11601,8 +11973,27 @@ export class OrderLifecycleService {
           `tokens=${tokens.length}, requester=${input.requester?.id ?? '-'}, ` +
           `reasons=${JSON.stringify(reasons)}`,
       );
+      if (alreadyReceived.length) {
+        return successRes(
+          {
+            ok: true,
+            partial: unmatched.length > 0,
+            received: 0,
+            already_received: alreadyReceived,
+            unmatched,
+          },
+          200,
+          'Scanned parcels already received',
+        );
+      }
       return successRes(
-        { ok: false, partial: false, received: 0, unmatched },
+        {
+          ok: false,
+          partial: false,
+          received: 0,
+          already_received: alreadyReceived,
+          unmatched,
+        },
         200,
         'No scannable parcels matched',
       );
@@ -11629,11 +12020,29 @@ export class OrderLifecycleService {
       input.requester,
     );
 
+    // Qabul ichida parallel so'rov ulgurgan buyurtmalar — «allaqachon» (idempotent).
+    const receivedDetail = (result as { data?: unknown } | null)?.data as
+      { received_ids?: unknown; already_received_ids?: unknown } | undefined;
+    const racedIds = new Set(
+      Array.isArray(receivedDetail?.already_received_ids)
+        ? receivedDetail.already_received_ids.map(String)
+        : [],
+    );
+    for (const order of orders) {
+      if (racedIds.has(String(order.id))) {
+        alreadyReceived.push({
+          token: String(order.qr_code_token),
+          order_id: String(order.id),
+        });
+      }
+    }
+
     return successRes(
       {
         ok: true,
         partial: unmatched.length > 0,
-        received: orders.length,
+        received: orders.length - racedIds.size,
+        already_received: alreadyReceived,
         unmatched,
         /**
          * Qaysi skan QOP bo'lib chiqdi — operator "bitta skanerlaganimda
@@ -12217,7 +12626,6 @@ export class OrderLifecycleService {
       this.badRequest('orders is required');
     }
 
-    const fallbackDistrictId = await this.lookup.getDefaultDistrictId();
     const created: Array<{
       id: string;
       external_id: string | null;
@@ -12281,13 +12689,30 @@ export class OrderLifecycleService {
        * `item_qty_field` — massiv ichidagi element maydonlari. Uchalasi ham
        * sozlanadi, chunki har sayt boshqacha nomlaydi.
        *
-       * Massiv bo'lmasa yoki nom bo'sh bo'lsa qator TASHLANADI — yarim
-       * to'ldirilgan qator buyurtmani buzardi.
+       * Nomi bo'sh element TASHLANADI — yarim to'ldirilgan qator buyurtmani
+       * buzardi. Nom va son ustunga SIG'DIRILADI (`external-item-limits.ts`):
+       * 1.5 yoki 255 belgidan uzun nom `create()` ni yiqitib, partiyani yarim
+       * yo'lda uzardi va mijoz buyurtmasiz qolardi.
+       *
+       * Ba'zi saytlar (Lidershop, Alion) massiv o'rniga MATN yuboradi —
+       * "Diskali soat x 1 = 99 000 so'm" (`readExternalItemsText`; ajralmasa
+       * butun matn bitta qator, soni `total_count_field` dan). Massiv ham matn
+       * ham bo'lmasa — bo'sh ro'yxat.
        */
       const rawItems = this.getFieldValue(
         ext,
         fieldMapping.items_field ?? 'items',
       );
+      const textItems =
+        typeof rawItems === 'string'
+          ? readExternalItemsText(
+              rawItems,
+              this.getFieldValue(
+                ext,
+                fieldMapping.total_count_field ?? 'total_count',
+              ),
+            ).map((item) => ({ product_id: null, ...item }))
+          : [];
       const mappedItems = (Array.isArray(rawItems) ? rawItems : [])
         .map((row: unknown) => {
           const name = String(
@@ -12302,8 +12727,8 @@ export class OrderLifecycleService {
           );
           return {
             product_id: null,
-            product_name: name,
-            quantity: Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1,
+            product_name: fitProductName(name),
+            quantity: fitQuantity(qtyRaw),
           };
         })
         .filter((item) => item.product_name.length > 0);
@@ -12313,76 +12738,54 @@ export class OrderLifecycleService {
         fieldMapping.district_code_field ?? 'district',
       );
       /**
-       * ⚠️ Qat'iy rejimda ANIQLANGAN tuman talab qilinadi. Moslik faqat
-       * SOATO kodi yoki ichki ID bo'yicha izlanadi — NOM bo'yicha emas,
-       * ya'ni "Chilonzor" deb yuborgan tizim hech qachon mos kelmaydi va
-       * zaxira tuman ishlatilardi.
+       * ⚠️ TUMAN ANIQLANMASA BUYURTMA YARATILMAYDI — har qanday rejimda
+       * (ega 2026-11-25). Ilgari oddiy rejimda zaxira tuman qo'yilardi va
+       * posilka jimgina begona viloyatga ketardi; endi qator `skipped` da,
+       * operator tumanni o'zi tanlaydi («Tashqi saytlar» → «Tuzatish»).
        */
-      const resolvedDistrict =
-        await this.lookup.resolveDistrictIdOrNull(districtExternal);
-      if (strict && !resolvedDistrict) {
+      const district =
+        await this.lookup.resolveExternalDistrict(districtExternal);
+      if (!district) {
         skipped.push({
           external_id: externalId,
           reason: 'district_unresolved',
         });
         continue;
       }
-      const districtId = resolvedDistrict ?? fallbackDistrictId;
-      const regionExternal = this.getFieldValue(
-        ext,
-        fieldMapping.region_code_field ?? 'region',
-      );
       /**
-       * ⚠️ fix3b (LC-13) — `region_id` BO'SH QOLMAYDI. Sayt viloyatni
-       * yubormasa (yoki matn yuborsa) u ilgari NULL yozilardi; filial
-       * dispatch esa buyurtmaning `region_id` siga tayanadi va NULL da
-       * Postgres 22P02 bilan yarim yo'lda yiqilardi. Endi tumandan olinadi
-       * (`assigned_region`, bo'lmasa tumanning o'z viloyati). Baribir
-       * aniqlanmasa — qator yaratilMAYDI va `skipped` da aniq sabab bilan
-       * qaytadi (partiya yarim yo'lda uzilmasin: 400 butun importni
-       * to'xtatardi). Mijoz yaratilishidan OLDIN — yetim mijoz qolmasin.
+       * ⚠️ SAYTNING VILOYATI TUMANGA ZID — YARATILMAYDI. 2026-11-24 da sayt
+       * 12 xil viloyat (1703, 1706, …) yuborgan, hammasi Bektemir (1726283)
+       * deb yozilgan edi: bu solishtirish birinchi buyurtmadayoq to'xtatardi.
        */
-      const regionId =
-        this.numericRegionId(regionExternal) ??
-        (await this.lookup.resolveRegionIdForDistrict(districtId));
+      if (
+        siteRegionConflicts(
+          this.getFieldValue(ext, fieldMapping.region_code_field ?? 'region'),
+          district,
+        )
+      ) {
+        skipped.push({ external_id: externalId, reason: 'region_mismatch' });
+        continue;
+      }
+      const districtId = district.id;
+      /**
+       * ⚠️ VILOYAT FAQAT TUMANDAN (prod 2026-11-24). Saytning `region` i
+       * Elchi viloyat id'si EMAS: saytlar SOATO viloyat kodini (masalan 1703
+       * — Andijon) yuboradi. Ilgari son bo'lsa xom yozilardi — buyurtma yo'q
+       * viloyatga bog'lanib, hudud filtrlari va filial dispatch'idan tushib
+       * qolardi; `newPosts` o'zini tiklashi esa pochta FK'sida yiqilardi.
+       * BeePost ham sayt viloyatini o'qimaydi.
+       *
+       * fix3b (LC-13) — `region_id` BO'SH QOLMAYDI: tumanning xizmat
+       * viloyati (`assigned_region`, bo'lmasa o'z viloyati). Aniqlanmasa —
+       * qator yaratilMAYDI va `skipped` da aniq sabab bilan qaytadi (partiya
+       * yarim yo'lda uzilmasin: 400 butun importni to'xtatardi). Mijoz
+       * yaratilishidan OLDIN — yetim mijoz qolmasin.
+       */
+      const regionId = await this.lookup.resolveRegionIdForDistrict(districtId);
       if (!regionId) {
         skipped.push({
           external_id: externalId,
           reason: 'region_unresolved',
-        });
-        continue;
-      }
-
-      const customerResponse = await rmqSend<{ data?: { id?: string } }>(
-        this.identityClient,
-        { cmd: 'identity.customer.create' },
-        {
-          dto: {
-            market_id: marketId,
-            name: customerName,
-            phone_number: phone,
-            district_id: districtId,
-            extra_number:
-              this.getFieldValue(
-                ext,
-                fieldMapping.extra_phone_field ?? 'additional_phone',
-              ) ?? undefined,
-            address:
-              this.getFieldValue(
-                ext,
-                fieldMapping.address_field ?? 'address',
-              ) ?? undefined,
-          },
-        },
-      );
-
-      const customerId = customerResponse?.data?.id
-        ? String(customerResponse.data.id)
-        : '';
-      if (!customerId) {
-        skipped.push({
-          external_id: externalId,
-          reason: 'customer_create_failed',
         });
         continue;
       }
@@ -12408,9 +12811,16 @@ export class OrderLifecycleService {
         ext,
         fieldMapping.delivery_price_field ?? 'delivery_price',
       );
-      const totalPrice = this.safeExternalAmount(priceRaw);
-      const deliveryPrice = this.safeExternalAmount(deliveryRaw);
-      if (totalPrice === null || deliveryPrice === null) {
+      // Minglik bo'shlig'i («150 000») — faqat import narxida (`external-price.ts`).
+      const totalPrice = this.safeExternalAmount(ungroupThousands(priceRaw));
+      const deliveryPrice = this.safeExternalAmount(
+        ungroupThousands(deliveryRaw),
+      );
+      const finalPrice =
+        totalPrice === null || deliveryPrice === null
+          ? null
+          : Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
+      if (finalPrice === null || !fitsOrderPrice(finalPrice)) {
         skipped.push({ external_id: externalId, reason: 'price_invalid' });
         continue;
       }
@@ -12423,7 +12833,6 @@ export class OrderLifecycleService {
         skipped.push({ external_id: externalId, reason: 'price_missing' });
         continue;
       }
-      const finalPrice = Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
 
       /**
        * SKAN TOKENI — TO'QNASHUV TEKSHIRUVI (adversarial tekshiruv).
@@ -12451,6 +12860,66 @@ export class OrderLifecycleService {
       }
       const qrCode = providedQr || this.generateCustomToken();
 
+      /**
+       * Mijoz — HAMMA TEKSHIRUVDAN KEYIN: narx yoki QR sababli rad etilgan
+       * buyurtma mijoz yaratmaydi va mavjudining ism / manzilini almashtirmaydi.
+       */
+      let customerResponse: { data?: { id?: string } };
+      try {
+        customerResponse = await rmqSend<{ data?: { id?: string } }>(
+          this.identityClient,
+          { cmd: 'identity.customer.create' },
+          {
+            dto: {
+              market_id: marketId,
+              name: fitCustomerName(customerName),
+              phone_number: phone,
+              district_id: districtId,
+              extra_number: fitExtraNumber(
+                this.getFieldValue(
+                  ext,
+                  fieldMapping.extra_phone_field ?? 'additional_phone',
+                ),
+              ),
+              address: fitCustomerAddress(
+                this.getFieldValue(
+                  ext,
+                  fieldMapping.address_field ?? 'address',
+                ),
+              ),
+            },
+          },
+        );
+      } catch (error) {
+        /**
+         * Identity SHU QATORNI rad etdi (409 — telefon xodim / marketniki,
+         * 400): faqat qator tashlanadi. Identity nosozligi (timeout, 5xx)
+         * yuqoriga: hammasini «yaratilmadi» deb 201 qaytarib bo'lmaydi.
+         */
+        const status = rpcErrorStatusOf(error);
+        if (status !== 400 && status !== 409) throw error;
+        this.logger.warn(
+          `receiveExternalOrders: mijoz yaratilmadi (${operator}, ` +
+            `external_id=${externalId ?? '-'}): identity ${status}`,
+        );
+        skipped.push({
+          external_id: externalId,
+          reason: 'customer_create_failed',
+        });
+        continue;
+      }
+
+      const customerId = customerResponse?.data?.id
+        ? String(customerResponse.data.id)
+        : '';
+      if (!customerId) {
+        skipped.push({
+          external_id: externalId,
+          reason: 'customer_create_failed',
+        });
+        continue;
+      }
+
       const createdOrder = await this.create({
         market_id: marketId,
         customer_id: customerId,
@@ -12474,18 +12943,9 @@ export class OrderLifecycleService {
           null,
         operator,
         district_id: districtId,
-        /**
-         * ⚠️ ILGARI TASHQI QIYMAT XOM YOZILARDI va bu 500 berardi (audit
-         * EI-06): `region_id` — bigint FK, sayt esa u yerga "Toshkent" yoki
-         * "TSH" kabi matn yuborishi mumkin. Postgres tip xatosi
-         * (`22P02`) chiqarardi va import BITTALAB ketgani uchun partiya
-         * YARIM YO'LDA uzilardi — bir qismi yaratilib, qolgani yo'q.
-         *
-         * Endi faqat SON qabul qilinadi. Matn yoki bo'sh bo'lsa (fix3b,
-         * LC-13) tumandan aniqlangan viloyat yoziladi — yuqoridagi izoh:
-         * HQ qabuli `assigned_region` bo'yicha ishlasa ham, filial dispatch
-         * buyurtmaning `region_id` siga tayanadi.
-         */
+        // Tumandan aniqlangan viloyat (yuqoridagi izoh); sayt qiymati xom
+        // yozilmaydi — matn 22P02 berardi (EI-06), SOATO kodi esa yo'q
+        // viloyatga bog'lardi.
         region_id: regionId,
         address:
           this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ??
@@ -12506,7 +12966,7 @@ export class OrderLifecycleService {
          * katalogimizga mos kelmaydi va har nomni katalogda yaratish
          * katalogni axlatga to'ldirardi. Nom va soni yetarli.
          */
-        items: mappedItems,
+        items: fitTotalQuantity([...mappedItems, ...textItems]),
       });
 
       created.push({

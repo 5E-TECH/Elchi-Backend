@@ -1,14 +1,19 @@
 import { Logger } from '@nestjs/common';
 import { NEVER, Subject, of, throwError } from 'rxjs';
 import { Order_status } from '@app/common';
+import { validateTelegramHtml } from '@app/common/notification/telegram-html-kit-spec';
 import {
+  MARKET_CONTACTS_TTL_MS,
   NOTIFY_LOOKUP_TIMEOUT_MS,
+  ORDER_PILOT_NOTIFICATION_TYPES,
   OrderNotificationService,
   REGION_DIRECTORY_TTL_MS,
   buildOrderNotificationPayload,
   buildOrderTelegramText,
   buildRegionDirectory,
   formatTashkentDateTime,
+  marketContactsFromResponse,
+  withoutPhones,
 } from './order-notification.service';
 
 /**
@@ -91,6 +96,37 @@ const cancelledOrder = (overrides: Record<string, unknown> = {}) =>
     ...overrides,
   });
 
+/**
+ * (txZJQiCe) `identity.contacts.for_user` javobi (`GET /users/me/contacts`
+ * bilan AYNI) — market mas'uli logist.
+ */
+const contactsReply = (
+  contacts: Array<{ name: string | null; phone: string }>,
+  source: string | null = 'assigned',
+  kind = 'market_responsible',
+) => ({
+  statusCode: 200,
+  message: 'success',
+  data: {
+    kind,
+    source: contacts.length ? source : null,
+    regions: [],
+    contacts: contacts.map((contact, index) => ({
+      user_id: contact.name ? String(900 + index) : null,
+      name: contact.name,
+      phone: contact.phone,
+      role: contact.name ? 'logist' : null,
+    })),
+  },
+});
+const LOGIST_CONTACTS = contactsReply([
+  { name: 'Laylo Logist', phone: '+998901234567' },
+]);
+const LOGIST_LINE =
+  "📞 <b>Elchi mas'ulingiz:</b> Laylo Logist — +998 90 123 45 67";
+/** Kuryer (55) telefoni — matnda HECH QANDAY ko'rinishda bo'lmasligi kerak. */
+const COURIER_PHONE_FORMS = ['+998907778899', '907778899', '90 777 88 99'];
+
 type Responder = (cmd: string, data: any) => any;
 
 const client = (responder: Responder) => ({
@@ -117,23 +153,25 @@ function makeService(
     options.identity ??
       ((cmd) =>
         of(
-          cmd === 'identity.customer.find_by_ids'
-            ? {
-                success: true,
-                data: [
-                  {
-                    id: '2',
-                    name: 'Ali <VIP> & *Co*',
-                    phone_number: '+998901112233',
-                  },
-                ],
-              }
-            : {
-                success: true,
-                data: [
-                  { id: '55', name: 'Vali', phone_number: '+998907778899' },
-                ],
-              },
+          cmd === 'identity.contacts.for_user'
+            ? LOGIST_CONTACTS
+            : cmd === 'identity.customer.find_by_ids'
+              ? {
+                  success: true,
+                  data: [
+                    {
+                      id: '2',
+                      name: 'Ali <VIP> & *Co*',
+                      phone_number: '+998901112233',
+                    },
+                  ],
+                }
+              : {
+                  success: true,
+                  data: [
+                    { id: '55', name: 'Vali', phone_number: '+998907778899' },
+                  ],
+                },
         )),
   );
   const catalogClient = client(
@@ -401,7 +439,16 @@ describe('OA16fdSq 6-band: Telegram matni BeePost mazmunida (faqat market guruhi
     expect(text).toContain("💰 <b>Narxi:</b> 150 000 so'm");
     expect(text).toContain('🕒 <b>Yaratilgan vaqti:</b> 09.10.2026 14:05');
     expect(text).toContain('🚚 <b>Kuryer:</b> Vali');
-    expect(text).toContain('📞 <b>Kuryer bilan aloqa:</b> +998907778899');
+    // (txZJQiCe) kuryer telefoni o'rniga market mas'uli (logist)
+    expect(text).toContain(LOGIST_LINE);
+    expect(text).not.toContain('Kuryer bilan aloqa');
+    for (const phone of COURIER_PHONE_FORMS) {
+      expect(text).not.toContain(phone);
+    }
+    expect(identityClient.send).toHaveBeenCalledWith(
+      { cmd: 'identity.contacts.for_user' },
+      { user_id: '5' },
+    );
     expect(text).toContain('👨‍💼 <b>Operator:</b> Operator Ali');
     expect(text).toContain('↩️ <b>Sabab:</b> Mijoz rad etdi');
     expect(text).toContain('📝 <b>Izoh:</b> Eshik oldida');
@@ -448,6 +495,9 @@ describe('OA16fdSq 6-band: Telegram matni BeePost mazmunida (faqat market guruhi
     expect(text).not.toContain('👤 <b>Mijoz:</b>');
     expect(text).toContain('📞 <b>Telefon:</b> -');
     expect(text).toContain('🚚 <b>Kuryer:</b> -');
+    // (txZJQiCe) identity yo'q — mas'ul qatori ham, kuryer raqami ham yo'q
+    expect(text).not.toContain("Elchi mas'ulingiz");
+    expect(text).not.toContain('Kuryer bilan aloqa');
     expect(text).toContain('1. Mahsulot #700 — 2 dona');
     expect(text).toContain('2. Hamkor kitobi — 1 dona');
   });
@@ -487,5 +537,340 @@ describe('OA16fdSq 6-band: Telegram matni BeePost mazmunida (faqat market guruhi
     );
     expect(formatTashkentDateTime(null)).toBe('');
     expect(formatTashkentDateTime('yaroqsiz')).toBe('');
+  });
+});
+
+describe("txZJQiCe: market guruhida «Kuryer bilan aloqa» o'rniga Elchi mas'uli", () => {
+  const CONTACT_PREFIX = "📞 <b>Elchi mas'ulingiz:</b>";
+  const contactLines = (text: string) =>
+    text.split('\n').filter((line) => line.startsWith(CONTACT_PREFIX));
+  const expectNoCourierPhone = (text: string) => {
+    expect(text).not.toContain('Kuryer bilan aloqa');
+    for (const phone of COURIER_PHONE_FORMS) {
+      expect(text).not.toContain(phone);
+    }
+  };
+  /** Telegram ketadigan sotuv: narx tushirib sotildi (`order.sold_cheaper`). */
+  const soldCheaperOrder = (overrides: Record<string, unknown> = {}) =>
+    baseOrder({
+      total_price: 120000,
+      partly_sell_original_total_price: 150000,
+      ...overrides,
+    });
+  /** identity: mas'ul javobi `contacts` dan, qolganlari odatdagidek. */
+  const identityWith =
+    (
+      contacts: (data: any) => any,
+      options: { pii?: boolean } = {},
+    ): Responder =>
+    (cmd, data) => {
+      if (cmd === 'identity.contacts.for_user') return contacts(data);
+      if (cmd === 'identity.customer.find_by_ids') {
+        return of({
+          data: [
+            { id: '2', name: 'Ali Valiyev', phone_number: '+998901112233' },
+          ],
+        });
+      }
+      if (cmd === 'identity.user.find_by_id') {
+        return of({
+          data: { id: data.id, tg_group_show_customer_pii: options.pii },
+        });
+      }
+      return of({
+        data: [{ id: '55', name: 'Vali', phone_number: '+998907778899' }],
+      });
+    };
+  const telegramText = (payload: any): string => payload.telegram.text;
+
+  it('TC1: mas`uli logist market — «Sotildi» (arzonroq) xabarida «Elchi mas`ulingiz: <logist> — +998 …», «Kuryer bilan aloqa» yo`q', async () => {
+    const { service, lastPayload, identityClient } = makeService({
+      order: soldCheaperOrder(),
+    });
+    await service.onStatusChange(sold);
+
+    const payload = lastPayload();
+    expect(payload.type).toBe('order.sold_cheaper');
+    expect(payload.channels).toContain('telegram');
+    const text = telegramText(payload);
+    expect(contactLines(text)).toEqual([LOGIST_LINE]);
+    expectNoCourierPhone(text);
+    // rezolver — `GET /users/me/contacts` bilan AYNI pattern, market user_id bilan
+    expect(identityClient.send).toHaveBeenCalledWith(
+      { cmd: 'identity.contacts.for_user' },
+      { user_id: '5' },
+    );
+    // in_app (logistga ham boradi) — telefonlar yo'q
+    expect(payload.body).not.toContain('+998');
+  });
+
+  it('TC2: «Bekor qilindi», «Arzonroq sotildi», «Qisman sotildi» va boshqa barcha turlar — bir xil qoida', async () => {
+    // xizmat orqali: Telegram ketadigan ikkala tur
+    for (const [order, transition] of [
+      [cancelledOrder(), cancelled],
+      [soldCheaperOrder(), sold],
+    ] as const) {
+      const { service, lastPayload } = makeService({ order });
+      await service.onStatusChange(transition);
+      const text = telegramText(lastPayload());
+      expect(contactLines(text)).toEqual([LOGIST_LINE]);
+      expectNoCourierPhone(text);
+    }
+    // matn quruvchi: HAR tur (qisman sotilgan buyurtma ham) — kuryer
+    // telefoni berilsa ham chiqmaydi, HTML yaroqli
+    for (const type of ORDER_PILOT_NOTIFICATION_TYPES) {
+      const text = buildOrderTelegramText(
+        type,
+        soldCheaperOrder({ status: Order_status.PARTLY_PAID }),
+        {
+          courier: { name: 'Vali', phone_number: '+998907778899' } as never,
+          responsible_contacts: [
+            { name: 'Laylo Logist', phone: '+998901234567' },
+          ],
+        },
+      );
+      expect(contactLines(text)).toEqual([LOGIST_LINE]);
+      expectNoCourierPhone(text);
+      expect(validateTelegramHtml(text)).toEqual(
+        expect.objectContaining({ ok: true }),
+      );
+    }
+  });
+
+  it('TC3: mas`ulsiz market → sukut mas`ul; sukut ham yo`q → zaxira raqamlar, har biri alohida qatorda', async () => {
+    const byDefault = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() =>
+        of(
+          contactsReply(
+            [{ name: 'Sukut Registrator', phone: '+998935556677' }],
+            'default',
+          ),
+        ),
+      ),
+    });
+    await byDefault.service.onStatusChange(cancelled);
+    expect(contactLines(telegramText(byDefault.lastPayload()))).toEqual([
+      `${CONTACT_PREFIX} Sukut Registrator — +998 93 555 66 77`,
+    ]);
+
+    const support = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() =>
+        of(
+          contactsReply(
+            [
+              { name: null, phone: '+998712001122' },
+              { name: null, phone: '+998712003344' },
+            ],
+            'support',
+          ),
+        ),
+      ),
+    });
+    await support.service.onStatusChange(cancelled);
+    const text = telegramText(support.lastPayload());
+    expect(contactLines(text)).toEqual([
+      `${CONTACT_PREFIX} +998 71 200 11 22`,
+      `${CONTACT_PREFIX} +998 71 200 33 44`,
+    ]);
+    expectNoCourierPhone(text);
+    // ikkala holatda ham so'rov — market user_id bilan (tartibni identity hal qiladi)
+    for (const { identityClient } of [byDefault, support]) {
+      expect(identityClient.send).toHaveBeenCalledWith(
+        { cmd: 'identity.contacts.for_user' },
+        { user_id: '5' },
+      );
+    }
+  });
+
+  it('TC4: hech qanday raqam yo`q → mas`ul qatori chiqmaydi; kuryer telefoni hech qanday holatda chiqmaydi', async () => {
+    const empty = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() => of(contactsReply([], null))),
+    });
+    await empty.service.onStatusChange(cancelled);
+    const text = telegramText(empty.lastPayload());
+    expect(contactLines(text)).toEqual([]);
+    expectNoCourierPhone(text);
+    // «Kuryer» qatoridan keyin darhol «Operator» (bo'sh qator ham yo'q)
+    expect(text).toContain(
+      '🚚 <b>Kuryer:</b> Vali\n👨‍💼 <b>Operator:</b> Operator Ali',
+    );
+
+    // zaxira raqam sifatida kuryer raqami kiritilgan bo'lsa ham — tashlanadi
+    const courierAsSupport = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() =>
+        of(
+          contactsReply(
+            [
+              { name: null, phone: '+998 90 777 88 99' },
+              { name: null, phone: '+998712001122' },
+            ],
+            'support',
+          ),
+        ),
+      ),
+    });
+    await courierAsSupport.service.onStatusChange(cancelled);
+    const text2 = telegramText(courierAsSupport.lastPayload());
+    expect(contactLines(text2)).toEqual([
+      `${CONTACT_PREFIX} +998 71 200 11 22`,
+    ]);
+    expectNoCourierPhone(text2);
+
+    // market bo'lmagan / tanilmagan javob — qator yo'q
+    for (const reply of [
+      contactsReply(
+        [{ name: 'Viloyat logisti', phone: '+998901234567' }],
+        'assigned',
+        'region_logist',
+      ),
+      contactsReply([], null, 'none'),
+      { data: [{ id: '55', name: 'Vali', phone_number: '+998907778899' }] },
+      null,
+      'x',
+    ]) {
+      expect(marketContactsFromResponse(reply)).toEqual([]);
+    }
+  });
+
+  it('TC5: mas`ul almashtirilgandan keyin (PATCH /markets/:id/responsible) keyingi xabarda yangi raqam — kesh ≤ 60 s', async () => {
+    expect(MARKET_CONTACTS_TTL_MS).toBeLessThanOrEqual(60_000);
+    let current = [{ name: 'Eski Logist', phone: '+998901000001' }];
+    const { service, lastPayload, identityClient } = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() => of(contactsReply(current))),
+    });
+    const contactCalls = () =>
+      identityClient.send.mock.calls.filter(
+        (call: unknown[]) =>
+          (call[0] as { cmd: string }).cmd === 'identity.contacts.for_user',
+      ).length;
+    const now = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+
+    await service.onStatusChange(cancelled);
+    expect(contactLines(telegramText(lastPayload()))).toEqual([
+      `${CONTACT_PREFIX} Eski Logist — +998 90 100 00 01`,
+    ]);
+
+    // mas'ul almashtirildi
+    current = [{ name: 'Yangi Logist', phone: '+998901000002' }];
+    clock.mockReturnValue(now + MARKET_CONTACTS_TTL_MS - 1);
+    await service.onStatusChange(cancelled);
+    expect(contactCalls()).toBe(1); // kesh ichida — RPC yo'q
+
+    clock.mockReturnValue(now + MARKET_CONTACTS_TTL_MS + 1);
+    await service.onStatusChange(cancelled);
+    expect(contactCalls()).toBe(2);
+    expect(contactLines(telegramText(lastPayload()))).toEqual([
+      `${CONTACT_PREFIX} Yangi Logist — +998 90 100 00 02`,
+    ]);
+
+    // boshqa market — o'z keshi (birinchi marketniki unga o'tmaydi)
+    (service as any).orderRepo.findOne.mockResolvedValue(
+      cancelledOrder({ market_id: '6' }),
+    );
+    await service.onStatusChange(cancelled);
+    expect(identityClient.send).toHaveBeenCalledWith(
+      { cmd: 'identity.contacts.for_user' },
+      { user_id: '6' },
+    );
+  });
+
+  it('TC6: identity javob bermasa (timeout ≤ 3 s) — xabar baribir ketadi, mas`ul qatorisiz va kuryer raqamisiz', async () => {
+    expect(NOTIFY_LOOKUP_TIMEOUT_MS).toBeLessThanOrEqual(3000);
+    const { service, outbox, lastPayload } = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() => NEVER),
+    });
+    const started = Date.now();
+    await expect(service.onStatusChange(cancelled)).resolves.toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(outbox.enqueue).toHaveBeenCalledTimes(1);
+    const text = telegramText(lastPayload());
+    expect(contactLines(text)).toEqual([]);
+    expectNoCourierPhone(text);
+    expect(text).toContain('🚚 <b>Kuryer:</b> Vali');
+
+    // biznes xatosi (market topilmadi — 404) — qatorsiz, lekin backoff YO'Q:
+    // keyingi xabar yana so'raydi va mas'ulni oladi
+    let calls = 0;
+    const flaky = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() =>
+        ++calls === 1
+          ? throwError(() => ({ statusCode: 404, message: 'User topilmadi' }))
+          : of(LOGIST_CONTACTS),
+      ),
+    });
+    await flaky.service.onStatusChange(cancelled);
+    expect(contactLines(telegramText(flaky.lastPayload()))).toEqual([]);
+    await flaky.service.onStatusChange(cancelled);
+    expect(contactLines(telegramText(flaky.lastPayload()))).toEqual([
+      LOGIST_LINE,
+    ]);
+  });
+
+  it('TC7: «🚚 Kuryer: <ism>» qoladi; show_customer_pii o`chiq marketda mijoz PII qoidasi o`zgarmaydi', async () => {
+    const hidden = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() => of(LOGIST_CONTACTS), { pii: false }),
+    });
+    await hidden.service.onStatusChange(cancelled);
+    const text = telegramText(hidden.lastPayload());
+    expect(text).toContain('🚚 <b>Kuryer:</b> Vali');
+    expect(contactLines(text)).toEqual([LOGIST_LINE]);
+    expect(text).not.toContain('👤 <b>Mijoz:</b>');
+    expect(text).not.toContain('Ali Valiyev');
+    expect(text).toContain('📞 <b>Telefon:</b> +998 90 *** ** 33');
+    expect(text).toContain('📍 <b>Manzil:</b> Chilonzor');
+    expect(text).not.toContain("Ko'cha 5-uy");
+    expect(text).not.toContain('📝 <b>Izoh:</b>');
+    expectNoCourierPhone(text);
+
+    const shown = makeService({
+      order: cancelledOrder(),
+      identity: identityWith(() => of(LOGIST_CONTACTS), { pii: true }),
+    });
+    await shown.service.onStatusChange(cancelled);
+    const full = telegramText(shown.lastPayload());
+    expect(full).toContain('👤 <b>Mijoz:</b> Ali Valiyev');
+    expect(full).toContain('📞 <b>Telefon:</b> +998901112233');
+    expect(full).toContain('🚚 <b>Kuryer:</b> Vali');
+    expect(contactLines(full)).toEqual([LOGIST_LINE]);
+  });
+
+  it('ism/telefon HTML-escape qilinadi, takror raqam bitta, telefonsiz element tashlanadi, ≤ 3 qator', () => {
+    const contacts = marketContactsFromResponse(
+      contactsReply([
+        { name: 'Ali <b>&</b>', phone: '+998901234567' },
+        { name: 'Takror', phone: '+998 90 123 45 67' },
+        { name: 'Telefonsiz', phone: '' },
+        { name: null, phone: '+998712001122' },
+        { name: null, phone: '+998712003344' },
+        { name: null, phone: '+998712005566' },
+      ]),
+    );
+    expect(contacts).toEqual([
+      { name: 'Ali <b>&</b>', phone: '+998901234567' },
+      { name: null, phone: '+998712001122' },
+      { name: null, phone: '+998712003344' },
+    ]);
+    expect(withoutPhones(contacts, ['998712001122', null])).toEqual([
+      contacts[0],
+      contacts[2],
+    ]);
+    const text = buildOrderTelegramText('order.cancelled', cancelledOrder(), {
+      responsible_contacts: contacts,
+    });
+    expect(contactLines(text)[0]).toBe(
+      `${CONTACT_PREFIX} Ali &lt;b&gt;&amp;&lt;/b&gt; — +998 90 123 45 67`,
+    );
+    expect(validateTelegramHtml(text)).toEqual(
+      expect.objectContaining({ ok: true }),
+    );
   });
 });

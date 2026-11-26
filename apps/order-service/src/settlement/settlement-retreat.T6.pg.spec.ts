@@ -240,7 +240,7 @@ describePg('T6-BE-3 settlement retreat — haqiqiy Postgres', () => {
     expect(await debt('9')).toBe(0);
   });
 
-  it('market: MARKET_SETTLED → BRANCH_SETTLED (eng yangisi); branch_to_hq — 400', async () => {
+  it('market: MARKET_SETTLED → BRANCH_SETTLED (eng yangisi); noma`lum bo`g`in — 400', async () => {
     const m1 = await row({
       market_id: '501',
       market_amount: 200_000,
@@ -261,9 +261,11 @@ describePg('T6-BE-3 settlement retreat — haqiqiy Postgres', () => {
     expect(await statusOf(m1.id)).toBe(SettlementStatus.MARKET_SETTLED);
     expect(await carry('hq_to_market', '501')).toBe(0);
 
+    // (2026-11-26) `branch_to_hq` va `branch_to_market` endi qo'llanadi
+    // (`settlement-retreat-branch.pg.spec.ts`); noma'lum bo'g'in — 400.
     await expect(
       service.retreatSettlement({
-        level: 'branch_to_hq' as never,
+        level: 'market_to_moon' as never,
         match_value: '15',
         amount: 1,
       }),

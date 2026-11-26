@@ -109,6 +109,7 @@ describe('OrderServiceService market cancelled handover', () => {
       rollbackTransaction: jest.fn(),
       release: jest.fn(),
       manager: {
+        query: jest.fn(),
         getRepository: jest.fn((entity: { name: string }) => {
           if (entity.name === MarketCancelledHandoverSession.name) {
             return sessionRepo;
@@ -330,6 +331,83 @@ describe('OrderServiceService market cancelled handover', () => {
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
   });
 
+  it('⭐ skan auditi #40: o`sha xodimning qayta QR skani — ruxsat qayta beriladi (yangi token, muddat o`zgarmaydi)', async () => {
+    const { service, session, sessionRepo, queryRunner } = setup();
+    const expiresAt = new Date(Date.now() + 200_000);
+    Object.assign(session, {
+      scanned_at: new Date(Date.now() - 100_000),
+      scanned_by_user_id: '9',
+      authorization_token_hash: 'b'.repeat(64),
+      authorization_expires_at: expiresAt,
+      authorized_via: 'qr',
+    });
+
+    const response: any = await service.scanMarketCancelledHandoverQr({
+      qr_token: 'MCR-valid-token',
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    expect(response.data).toMatchObject({
+      authorized: true,
+      reissued: true,
+      expires_at: expiresAt.toISOString(),
+      method: 'qr',
+    });
+    expect(response.data.authorization_token).toMatch(/^MHA-/);
+    expect(response.data.remaining_seconds).toBeLessThanOrEqual(200);
+    expect(sessionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization_token_hash: expect.not.stringMatching(/^b{64}$/),
+      }),
+    );
+    expect(queryRunner.commitTransaction).toHaveBeenCalled();
+  });
+
+  it('boshqa xodim skanerlasa — avvalgidek «QR allaqachon ishlatilgan» (400)', async () => {
+    const { service, session } = setup();
+    Object.assign(session, {
+      scanned_at: new Date(),
+      scanned_by_user_id: '9',
+      authorization_token_hash: 'b'.repeat(64),
+      authorization_expires_at: new Date(Date.now() + 200_000),
+    });
+
+    await expectRpc(
+      service.scanMarketCancelledHandoverQr({
+        qr_token: 'MCR-valid-token',
+        requester: { id: '10', roles: ['admin'] },
+      }),
+      400,
+    );
+  });
+
+  it('⭐ skan auditi #40: kod bilan ochilgan ruxsat javobi yo`qolsa — o`sha xodim, o`sha kod bilan qayta beriladi', async () => {
+    const { service, session, sessionRepo } = setup();
+    const expiresAt = new Date(Date.now() + 150_000);
+    Object.assign(session, {
+      scanned_at: new Date(Date.now() - 150_000),
+      scanned_by_user_id: '9',
+      authorization_token_hash: 'c'.repeat(64),
+      authorization_expires_at: expiresAt,
+      authorized_via: 'pin',
+    });
+    sessionRepo.findOne.mockImplementation(({ where }: any) =>
+      Promise.resolve(where?.scanned_by_user_id === '9' ? session : null),
+    );
+
+    const response: any = await service.verifyMarketCancelledHandoverPin({
+      market_id: '16',
+      pin: PIN,
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    expect(response.data).toMatchObject({
+      reissued: true,
+      method: 'pin',
+      expires_at: expiresAt.toISOString(),
+    });
+  });
+
   it('rejects a QR after its two-minute lifetime', async () => {
     const { service, queryRunner } = setup({ qrExpired: true });
 
@@ -379,6 +457,55 @@ describe('OrderServiceService market cancelled handover', () => {
     );
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
     expect(response.data.closed_count).toBe(1);
+  });
+
+  it('⭐ skan auditi #38: qayta skan — allaqachon topshirilgan buyurtma 400 emas, `already_handed_order_ids`', async () => {
+    const { service, orderRepo, sessionRepo, queryRunner } = setup();
+    orderRepo.find
+      .mockResolvedValueOnce([]) // CANCELLED sifatida topilmadi
+      .mockResolvedValueOnce([{ id: '101' }]); // shu marketga topshirilgan
+
+    const response: any = await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      authorization_token: 'MHA-valid-token',
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    expect(response.data).toMatchObject({
+      closed_count: 0,
+      order_ids: [],
+      already_handed_order_ids: ['101'],
+    });
+    expect(orderRepo.find).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          market_id: '16',
+          status: Order_status.RETURNED_TO_MARKET,
+        }),
+      }),
+    );
+    expect(orderRepo.save).not.toHaveBeenCalled();
+    // Hech narsa topshirilmagan — partiya vaqti yozilmaydi.
+    expect(sessionRepo.save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ consumed_at: expect.any(Date) }),
+    );
+    expect(queryRunner.commitTransaction).toHaveBeenCalled();
+  });
+
+  it('topshirilmagan va bekor ham emas — avvalgidek 400', async () => {
+    const { service, orderRepo } = setup();
+    orderRepo.find.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    await expectRpc(
+      service.completeMarketCancelledHandover({
+        market_id: '16',
+        order_ids: ['101'],
+        authorization_token: 'MHA-valid-token',
+        requester: { id: '9', roles: ['admin'] },
+      }),
+      400,
+    );
   });
 
   it('fL79tFbs (BG2): QR yo`li — usul/joy/vaqt buyurtmada, tracking action + metadata bilan', async () => {
@@ -481,10 +608,8 @@ describe('OrderServiceService market cancelled handover', () => {
     );
   });
 
-  it('⭐ market QR MAJBURIY — konfig o`chirilgan bo`lsa ham QR`siz topshirib bo`lmaydi (F1)', async () => {
-    // Ilgari `cancelled_handover_qr_required=false` bilan QR'ni butunlay
-    // chetlab o'tish mumkin edi. Endi konfig E'TIBORSIZ — QR har doim majburiy.
-    const { service, sessionRepo } = setup({ marketQrRequired: false });
+  it('⭐ skan auditi #43: QR sukut bo`yicha MAJBURIY — sozlama yoqiq bo`lsa tokensiz 400', async () => {
+    const { service, sessionRepo } = setup();
 
     await expectRpc(
       service.completeMarketCancelledHandover({
@@ -497,6 +622,45 @@ describe('OrderServiceService market cancelled handover', () => {
     );
     // Token yo'q — sessiya umuman qidirilmaydi, topshirish bo'lmaydi.
     expect(sessionRepo.findOne).not.toHaveBeenCalled();
+  });
+
+  it('⭐ skan auditi #43: admin market QR talabini o`chirgan bo`lsa — tokensiz topshiriladi (no_qr), ichki sessiyaga yig`iladi', async () => {
+    // Ega qarori 2026-11-23: sukut — QR majburiy, superadmin/admin aniq market
+    // uchun o'chirsa — QR so'ralmaydi, oqim o'sha (skan / qo'lda topshirish).
+    const { service, sessionRepo, orderRepo, queryRunner } = setup({
+      marketQrRequired: false,
+    });
+    sessionRepo.findOne.mockResolvedValue(null);
+
+    const response: any = await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    expect(response.data.closed_count).toBe(1);
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: Order_status.RETURNED_TO_MARKET,
+        market_handover_method: 'no_qr',
+      }),
+    );
+    // «Topshirilgan» partiyasi uchun ichki sessiya: tokensiz, shu xodim.
+    expect(sessionRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        market_id: '16',
+        scanned_by_user_id: '9',
+        authorized_via: 'no_qr',
+        authorization_token_hash: null,
+      }),
+    );
+    expect(sessionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ consumed_at: expect.any(Date) }),
+    );
+    expect(queryRunner.manager.query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      ['no_qr_handover:16:9'],
+    );
   });
 
   it('emits a returned_to_market partner signal after closing cancelled orders', async () => {

@@ -5,12 +5,18 @@ import {
   ActivityLogService,
   ORDER_INTAKE_DEFAULT_DAY_CHANGE_TIME,
   ORDER_INTAKE_SETTING_KEYS,
+  businessDayStart,
   formatClockTime,
   orderIntakeClosedError,
   orderReceiveClosedError,
   parseClockTime,
+  parseStoredBusinessDay,
+  planBusinessDayChange,
   resolveOrderIntakeState,
+  setBusinessDaySchedule,
+  type BusinessDayRule,
   type OrderIntakeState,
+  type StoredBusinessDaySetting,
   type StoredOrderIntakeCutoff,
 } from '@app/common';
 import { OrderSetting } from '../entities/order-setting.entity';
@@ -19,7 +25,8 @@ import { OrderSetting } from '../entities/order-setting.entity';
 const INTAKE_SETTINGS_LOCK = 'order.intake.settings';
 
 interface IntakeSettingsRow {
-  dayChangeTime: unknown;
+  /** Ish kuni qoidalari (`intake.day_change_time.schedule`). */
+  schedule: BusinessDayRule[];
   cutoff: unknown;
   receiveCutoff: unknown;
 }
@@ -103,8 +110,10 @@ export class OrderIntakeService {
    * - `cutoff_time` / `receive_cutoff_time` — DOIMIY (har ish kuni), boshqa
    *   vaqtga o'zgartirilmaguncha yoki `null` bilan olib tashlanmaguncha.
    *   Bugun o'tgan vaqt qo'yilsa — shu ish kuni darhol yopiladi.
-   * - `day_change_time` — doimiy. O'zgarsa joriy ish kuni oynasi siljiydi,
-   *   chegaralar yangi oynada o'z soatida amal qiladi.
+   * - `day_change_time` — doimiy, butun tizimning ish kuni (xhiXv3w3). FAQAT
+   *   OLDINGA: yangi soat keyingi kun almashishidan (kamida 5 daqiqa keyin)
+   *   amal qiladi — joriy ish kuni yangi chegarada tugaydi, o'tgan kunlar
+   *   (dashboard, moliya snapshot'lari) qayta hisoblanmaydi.
    */
   async update(
     input: OrderIntakeUpdateInput,
@@ -166,12 +175,22 @@ export class OrderIntakeService {
         });
         if (
           dayChangeTime !== undefined &&
+          dayChangeTime !== null &&
           dayChangeTime !== beforeState.day_change_time
         ) {
+          const plan = planBusinessDayChange(
+            beforeState.day_change_schedule,
+            dayChangeTime,
+            now,
+          );
+          const value: StoredBusinessDaySetting = {
+            time: dayChangeTime,
+            schedule: plan.schedule,
+          };
           await this.writeSetting(
             manager,
             ORDER_INTAKE_SETTING_KEYS.dayChangeTime,
-            { time: dayChangeTime },
+            value,
             requesterId,
           );
         }
@@ -210,6 +229,10 @@ export class OrderIntakeService {
         };
       },
     );
+
+    // Shu jarayon darhol yangi jadvalda (boshqa servislar ≤ 1 daqiqada,
+    // `BusinessDayModule`; qoida kamida 5 daqiqa keyin kuchga kiradi).
+    setBusinessDaySchedule(after.day_change_schedule);
 
     // Jurnal — tranzaksiyadan keyin (fail-safe; yozilmasa ham sozlama turadi).
     // Faqat haqiqatan o'zgargan qiymat yoziladi.
@@ -254,6 +277,15 @@ export class OrderIntakeService {
         new_value: { day_change_time: after.day_change_time },
         user_id: requesterId,
         metadata: {
+          // Yangi soat shu ish kunidan / lahzadan amal qiladi (faqat oldinga).
+          effective_from: after.day_change_effective_from,
+          effective_at: after.day_change_effective_from
+            ? businessDayStart(
+                after.day_change_effective_from,
+                after.day_change_schedule,
+              ).toISOString()
+            : null,
+          current_day_change_time: after.current_day_change_time,
           day_started_at: after.day_started_at,
           next_day_change_at: after.next_day_change_at,
           cutoff_time: after.cutoff_time,
@@ -315,12 +347,10 @@ export class OrderIntakeService {
         },
       });
     const map = new Map(rows.map((row) => [row.key, row.value]));
-    const dayChange = map.get(ORDER_INTAKE_SETTING_KEYS.dayChangeTime);
     return {
-      dayChangeTime:
-        dayChange && typeof dayChange === 'object'
-          ? (dayChange as { time?: unknown }).time
-          : null,
+      schedule: parseStoredBusinessDay(
+        map.get(ORDER_INTAKE_SETTING_KEYS.dayChangeTime),
+      ),
       cutoff: map.get(ORDER_INTAKE_SETTING_KEYS.cutoff) ?? null,
       receiveCutoff: map.get(ORDER_INTAKE_SETTING_KEYS.receiveCutoff) ?? null,
     };

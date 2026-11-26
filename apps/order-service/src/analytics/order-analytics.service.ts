@@ -7,6 +7,12 @@ import {
   CancelReason,
   Order_status,
   Roles,
+  addDayKey,
+  businessDayEnd,
+  businessDayKey,
+  businessDayLocalSql,
+  businessDayStart,
+  isDayKey,
   rmqSend,
 } from '@app/common';
 import { Order } from '../entities/order.entity';
@@ -20,16 +26,15 @@ import {
 } from '../domain/cancel-reason';
 
 /**
- * PUvKXWVw — hisobot sanasi TOSHKENT kuni chegarasida (`analyticsDateRange`
+ * PUvKXWVw — hisobot sanasi ISH KUNI chegarasida (xhiXv3w3; `analyticsDateRange`
  * dagi `parseUzDate` bilan bir xil qoida, oyna qisqartirilmaydi):
  *   • bo'sh — `null` (chegara yo'q);
  *   • faqat raqam — epoch ms;
  *   • `T` bor (vaqt/zonasi aniq) — o'zicha;
- *   • `YYYY-MM-DD` — Toshkent kunining boshi (00:00:00.000) yoki oxiri
- *     (23:59:59.999), ya'ni UTC'da −5 soat.
+ *   • `YYYY-MM-DD` — ish kunining boshi yoki oxiri (`business-day.ts`; sukut
+ *     00:00 da Toshkent 00:00:00.000 / 23:59:59.999).
  * Yaroqsiz qiymat — 400.
  */
-const TASHKENT_OFFSET_MS = 5 * 60 * 60 * 1000;
 export function parseTashkentBoundary(
   value: string | undefined | null,
   endOfDay: boolean,
@@ -45,22 +50,12 @@ export function parseTashkentBoundary(
   } else if (raw.includes('T')) {
     date = new Date(raw);
   } else if (day) {
-    const [, year, month, dayOfMonth] = day.map(Number);
-    const utcMs = Date.UTC(
-      year,
-      month - 1,
-      dayOfMonth,
-      endOfDay ? 23 : 0,
-      endOfDay ? 59 : 0,
-      endOfDay ? 59 : 0,
-      endOfDay ? 999 : 0,
-    );
-    date = new Date(utcMs - TASHKENT_OFFSET_MS);
-    // 2026-02-30 kabi yo'q kun — Date.UTC uni keyingi oyga suradi.
-    const wall = new Date(date.getTime() + TASHKENT_OFFSET_MS);
-    if (wall.getUTCMonth() !== month - 1 || wall.getUTCDate() !== dayOfMonth) {
-      date = new Date(Number.NaN);
-    }
+    // 2026-02-30 kabi yo'q kun — 400 (jim surilmaydi).
+    date = !isDayKey(raw)
+      ? new Date(Number.NaN)
+      : endOfDay
+        ? businessDayEnd(raw)
+        : businessDayStart(raw);
   } else {
     date = new Date(raw);
   }
@@ -154,8 +149,8 @@ export class OrderAnalyticsService {
   private tashkentPeriodKeySql(
     period: 'daily' | 'weekly' | 'monthly' | 'yearly',
   ): string {
-    const local =
-      "(to_timestamp(o.sold_at::bigint / 1000) AT TIME ZONE 'Asia/Tashkent')";
+    // xhiXv3w3 — sana qismi ISH KUNI (sukut 00:00 da eski Toshkent ifodasi).
+    const local = businessDayLocalSql('to_timestamp(o.sold_at::bigint / 1000)');
     if (period === 'daily') {
       return `to_char(date_trunc('day', ${local}), 'YYYY-MM-DD')`;
     }
@@ -172,7 +167,7 @@ export class OrderAnalyticsService {
     const dayStart = this.periodStart(date, 'daily');
     return dayStart.getTime() === date.getTime()
       ? dayStart
-      : new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      : businessDayStart(addDayKey(businessDayKey(date), 1));
   }
 
   /**
@@ -201,24 +196,19 @@ export class OrderAnalyticsService {
           ? endDate
           : new Date().toISOString();
     }
-    const UZB_OFFSET_MS = 5 * 60 * 60 * 1000;
-
+    // xhiXv3w3 — `YYYY-MM-DD` ISH KUNI chegarasida (sukut 00:00 da Toshkent
+    // 00:00:00.000 / 23:59:59.999 — avvalgidek). Oydan oshgan kun oldinga
+    // suriladi (eski qoida).
     const parseUzDate = (value: string, endOfDay: boolean): Date | null => {
       const parts = value.split('-').map(Number);
       if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
         return null;
       }
       const [year, month, day] = parts;
-      const utcMs = Date.UTC(
-        year,
-        month - 1,
-        day,
-        endOfDay ? 23 : 0,
-        endOfDay ? 59 : 0,
-        endOfDay ? 59 : 0,
-        endOfDay ? 999 : 0,
-      );
-      return new Date(utcMs - UZB_OFFSET_MS);
+      const calendar = new Date(Date.UTC(year, month - 1, day));
+      if (Number.isNaN(calendar.getTime())) return calendar;
+      const key = calendar.toISOString().slice(0, 10);
+      return endOfDay ? businessDayEnd(key) : businessDayStart(key);
     };
 
     const parseDateInput = (value: string, endOfDay: boolean) => {
@@ -239,13 +229,10 @@ export class OrderAnalyticsService {
     let end: Date;
 
     if (!hasStart || !hasEnd) {
-      const uzNow = new Date(Date.now() + UZB_OFFSET_MS);
-      const year = uzNow.getUTCFullYear();
-      const month = String(uzNow.getUTCMonth() + 1).padStart(2, '0');
-      const day = String(uzNow.getUTCDate()).padStart(2, '0');
-      const dateKey = `${year}-${month}-${day}`;
-      start = parseUzDate(dateKey, false)!;
-      end = parseUzDate(dateKey, true)!;
+      // «Bugun» — joriy ISH KUNI (05:00 da almashsa, 01:30 hali kecha).
+      const dateKey = businessDayKey(new Date());
+      start = businessDayStart(dateKey);
+      end = businessDayEnd(dateKey);
     } else {
       start = parseDateInput(String(startDate), false);
       end = parseDateInput(String(endDate), true);
@@ -569,24 +556,15 @@ export class OrderAnalyticsService {
     );
   }
 
+  /** Lahza tushgan ISH KUNI sanasi (`YYYY-MM-DD`, xhiXv3w3). */
   private dateKey(date: Date) {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Tashkent',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(date);
+    return businessDayKey(date);
   }
 
+  /** Ish kuni sanasi → `DD.MM`. */
   private dateLabel(date: Date) {
-    return new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Tashkent',
-      day: '2-digit',
-      month: '2-digit',
-    })
-      .format(date)
-      .replace('/', '.')
-      .replace('/', '.');
+    const key = businessDayKey(date);
+    return `${key.slice(8, 10)}.${key.slice(5, 7)}`;
   }
 
   private normalizeRevenuePeriod(
@@ -609,48 +587,35 @@ export class OrderAnalyticsService {
   }
 
   /**
-   * Toshkent vaqti UTC+5, yozgi vaqt YO'Q — shuning uchun "Toshkent devor
-   * soati" oddiy siljitish bilan olinadi: lahzaga +5 soat qo'shilgan Date ning
-   * UTC maydonlari aynan Toshkentdagi yil/oy/kun/soat.
-   */
-  private static readonly TASHKENT_OFFSET_MS = 5 * 60 * 60 * 1000;
-
-  private toTashkentWall(date: Date): Date {
-    return new Date(date.getTime() + OrderAnalyticsService.TASHKENT_OFFSET_MS);
-  }
-
-  private fromTashkentWall(wall: Date): Date {
-    return new Date(wall.getTime() - OrderAnalyticsService.TASHKENT_OFFSET_MS);
-  }
-
-  /**
-   * Band boshi — TOSHKENT kuni/haftasi/oyi/yilining boshlanish LAHZASI.
+   * Band boshi — ISH kuni/haftasi/oyi/yilining boshlanish LAHZASI (xhiXv3w3;
+   * sukut 00:00 da Toshkent yarim tuni).
    *
    * ⚠️ CODE-22: ilgari kun `setHours` bilan SERVER vaqtida (konteynerda UTC)
-   * kesilardi, kalit esa Toshkentda formatlanardi. Toshkent oynasi UTC'da
-   * oldingi kunning 19:00 ida boshlangani uchun skelet BITTA ORTIQCHA bo'sh
-   * bandni (oynadan oldingi kun/hafta/oy) qo'shardi va `avgRevenue` jami /
-   * (n + 1) bo'lib chiqardi. Endi skelet SQL kalitlari
-   * (`tashkentPeriodKeySql`) bilan bir xil mintaqada quriladi.
+   * kesilardi, kalit esa Toshkentda formatlanardi — skelet BITTA ORTIQCHA bo'sh
+   * band qo'shardi. Skelet SQL kalitlari (`tashkentPeriodKeySql`) bilan bir
+   * xil qoidada — ish kuni sanasi bo'yicha — quriladi. Kun o'rniga SANA
+   * qadamlanadi: soat o'zgargan o'tish kuni 24 soat emas.
    */
+  private periodStartKey(
+    date: Date,
+    period: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  ): string {
+    const key = businessDayKey(date);
+    if (period === 'monthly') return `${key.slice(0, 7)}-01`;
+    if (period === 'yearly') return `${key.slice(0, 4)}-01-01`;
+    if (period === 'weekly') {
+      // Hafta dushanbadan boshlanadi (Postgres `date_trunc('week')` kabi).
+      const weekday = new Date(`${key}T00:00:00.000Z`).getUTCDay();
+      return addDayKey(key, -((weekday + 6) % 7));
+    }
+    return key;
+  }
+
   private periodStart(
     date: Date,
     period: 'daily' | 'weekly' | 'monthly' | 'yearly',
   ): Date {
-    const d = this.toTashkentWall(date);
-    d.setUTCHours(0, 0, 0, 0);
-
-    if (period === 'monthly') {
-      d.setUTCDate(1);
-    } else if (period === 'yearly') {
-      d.setUTCMonth(0, 1);
-    } else if (period === 'weekly') {
-      // Hafta dushanbadan boshlanadi (Postgres `date_trunc('week')` kabi).
-      const day = d.getUTCDay(); // 0=Sun..6=Sat
-      const diffToMonday = day === 0 ? -6 : 1 - day;
-      d.setUTCDate(d.getUTCDate() + diffToMonday);
-    }
-    return this.fromTashkentWall(d);
+    return businessDayStart(this.periodStartKey(date, period));
   }
 
   /** Keyingi band boshi (`date` — `periodStart` natijasi). */
@@ -658,52 +623,39 @@ export class OrderAnalyticsService {
     date: Date,
     period: 'daily' | 'weekly' | 'monthly' | 'yearly',
   ): Date {
-    const d = this.toTashkentWall(date);
-    if (period === 'daily') d.setUTCDate(d.getUTCDate() + 1);
-    else if (period === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
-    else if (period === 'monthly') d.setUTCMonth(d.getUTCMonth() + 1);
-    else d.setUTCFullYear(d.getUTCFullYear() + 1);
-    return this.fromTashkentWall(d);
+    const key = this.periodStartKey(date, period);
+    if (period === 'daily') return businessDayStart(addDayKey(key, 1));
+    if (period === 'weekly') return businessDayStart(addDayKey(key, 7));
+    const year = Number(key.slice(0, 4));
+    const month = Number(key.slice(5, 7));
+    const next =
+      period === 'monthly'
+        ? new Date(Date.UTC(year, month, 1))
+        : new Date(Date.UTC(year + 1, 0, 1));
+    return businessDayStart(next.toISOString().slice(0, 10));
   }
 
   private periodKey(
     date: Date,
     period: 'daily' | 'weekly' | 'monthly' | 'yearly',
   ): string {
-    const d = this.periodStart(date, period);
-    if (period === 'daily') {
-      return this.dateKey(d);
-    }
-    if (period === 'weekly') {
-      return `W:${this.dateKey(d)}`;
-    }
-    const wall = this.toTashkentWall(d);
-    if (period === 'monthly') {
-      const y = wall.getUTCFullYear();
-      const m = String(wall.getUTCMonth() + 1).padStart(2, '0');
-      return `M:${y}-${m}`;
-    }
-    return `Y:${wall.getUTCFullYear()}`;
+    const key = this.periodStartKey(date, period);
+    if (period === 'daily') return key;
+    if (period === 'weekly') return `W:${key}`;
+    if (period === 'monthly') return `M:${key.slice(0, 7)}`;
+    return `Y:${key.slice(0, 4)}`;
   }
 
   private periodLabel(
     date: Date,
     period: 'daily' | 'weekly' | 'monthly' | 'yearly',
   ): string {
-    const d = this.periodStart(date, period);
-    if (period === 'daily') {
-      return this.dateLabel(d);
-    }
-    if (period === 'weekly') {
-      const end = new Date(d.getTime() + 6 * 24 * 60 * 60 * 1000);
-      return `${this.dateLabel(d)}-${this.dateLabel(end)}`;
-    }
-    const wall = this.toTashkentWall(d);
-    if (period === 'monthly') {
-      const m = String(wall.getUTCMonth() + 1).padStart(2, '0');
-      return `${m}.${wall.getUTCFullYear()}`;
-    }
-    return String(wall.getUTCFullYear());
+    const key = this.periodStartKey(date, period);
+    const label = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}`;
+    if (period === 'daily') return label(key);
+    if (period === 'weekly') return `${label(key)}-${label(addDayKey(key, 6))}`;
+    if (period === 'monthly') return `${key.slice(5, 7)}.${key.slice(0, 4)}`;
+    return key.slice(0, 4);
   }
 
   private async getPostsByIds(ids: string[]) {
@@ -2352,47 +2304,110 @@ export class OrderAnalyticsService {
    * `order.operator.sold_orders` (2026-11-20) — komissiya «o'tgan sotuvlarga
    * hisoblash» uchun: shu marketda shu operatorga bog'langan, HOZIR sotilgan
    * (sold / paid / partly_paid) buyurtmalar — id, narx, market. Finance
-   * ulardan daftarda qatori yo'qlarini joriy stavka bilan yozadi. Ko'pi bilan
-   * 5000 (eng yangisi birinchi), `truncated` — undan ko'p bo'lsa.
+   * ulardan daftarda qatori yo'qlarini joriy stavka bilan yozadi.
+   *
+   * Audit 2026-11-22 #9: sahifa ko'pi bilan 5000, id O'SISH tartibida;
+   * `truncated` bo'lsa `next_after_id` — keyingi sahifa `after_id` bilan
+   * so'raladi. Avval har chaqiruv eng yangi 5000 tani qaytarardi va undan
+   * eskilari hech qachon hisoblanmasdi. `cursor: 'id_asc'` — gateway shu
+   * versiya bilan gaplashayotganini biladi (eski servis bu maydonni bermaydi).
+   *
+   * Audit #8: `order_ids` (≤ 5000) — faqat shu buyurtmalardan hozir
+   * sotilganlari (backfill yozganidan keyin qayta tekshirish uchun);
+   * javobda `filtered_by_ids: true`.
    */
   async getOperatorSoldOrders(
     marketId: unknown,
     operatorId: unknown,
+    options: { afterId?: unknown; orderIds?: unknown; pageSize?: number } = {},
   ): Promise<{
     items: Array<{ order_id: string; total_price: number; market_id: string }>;
     truncated: boolean;
+    next_after_id: string | null;
+    cursor: 'id_asc';
+    filtered_by_ids?: true;
   }> {
+    const ID_RE = /^[1-9]\d{0,18}$/;
     const asText = (value: unknown) =>
       typeof value === 'string' || typeof value === 'number'
         ? String(value).trim()
         : '';
     const market = asText(marketId);
     const operator = asText(operatorId);
-    if (!/^[1-9]\d{0,18}$/.test(market) || !/^[1-9]\d{0,18}$/.test(operator)) {
+    if (!ID_RE.test(market) || !ID_RE.test(operator)) {
       throw new RpcException({
         statusCode: 400,
         message: "market_id va operator_id noto'g'ri",
       });
     }
-    const LIMIT = 5000;
-    const rows = await this.orderRepo
+    const MAX_PAGE = 5000;
+    const afterId =
+      options.afterId === undefined || options.afterId === null
+        ? ''
+        : asText(options.afterId);
+    if (afterId && !ID_RE.test(afterId)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: "after_id noto'g'ri",
+      });
+    }
+    let orderIds: string[] | null = null;
+    if (options.orderIds !== undefined && options.orderIds !== null) {
+      if (!Array.isArray(options.orderIds)) {
+        throw new RpcException({
+          statusCode: 400,
+          message: "order_ids ro'yxat bo'lishi kerak",
+        });
+      }
+      orderIds = [...new Set(options.orderIds.map((id) => asText(id)))].filter(
+        (id) => ID_RE.test(id),
+      );
+      if (orderIds.length > MAX_PAGE) {
+        throw new RpcException({
+          statusCode: 400,
+          message: `order_ids ko'pi bilan ${MAX_PAGE} ta`,
+        });
+      }
+    }
+    const limit = Math.min(
+      Math.max(Math.trunc(options.pageSize ?? MAX_PAGE), 1),
+      MAX_PAGE,
+    );
+    if (orderIds && orderIds.length === 0) {
+      return {
+        items: [],
+        truncated: false,
+        next_after_id: null,
+        cursor: 'id_asc',
+        filtered_by_ids: true,
+      };
+    }
+    const query = this.orderRepo
       .createQueryBuilder('o')
       .select('o.id::text', 'order_id')
       .addSelect('o.total_price', 'total_price')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('o.market_id = :market', { market })
       .andWhere('o.operator_id = :operator', { operator })
-      .andWhere('o.status IN (:...sold)', { sold: this.soldStatuses() })
-      .orderBy('o.id', 'DESC')
-      .limit(LIMIT + 1)
+      .andWhere('o.status IN (:...sold)', { sold: this.soldStatuses() });
+    if (afterId) query.andWhere('o.id > :afterId', { afterId });
+    if (orderIds) query.andWhere('o.id IN (:...orderIds)', { orderIds });
+    const rows = await query
+      .orderBy('o.id', 'ASC')
+      .limit(limit + 1)
       .getRawMany<{ order_id: string; total_price: string | number | null }>();
+    const items = rows.slice(0, limit).map((row) => ({
+      order_id: String(row.order_id),
+      total_price: Number(row.total_price ?? 0) || 0,
+      market_id: market,
+    }));
+    const truncated = rows.length > limit;
     return {
-      items: rows.slice(0, LIMIT).map((row) => ({
-        order_id: String(row.order_id),
-        total_price: Number(row.total_price ?? 0) || 0,
-        market_id: market,
-      })),
-      truncated: rows.length > LIMIT,
+      items,
+      truncated,
+      next_after_id: truncated ? items[items.length - 1].order_id : null,
+      cursor: 'id_asc',
+      ...(orderIds ? { filtered_by_ids: true as const } : {}),
     };
   }
 
@@ -3062,11 +3077,10 @@ export class OrderAnalyticsService {
       input.endDate,
       all,
     );
-    const DAY = 24 * 60 * 60 * 1000;
     const days = OrderAnalyticsService.TREND_SERIES_DAYS;
-    const seriesStart = new Date(
-      this.periodStart(current.end, 'daily').getTime() - (days - 1) * DAY,
-    );
+    // xhiXv3w3 — ish kuni sanalari bo'yicha (o'tish kuni 24 soat emas).
+    const seriesFirstKey = addDayKey(businessDayKey(current.end), -(days - 1));
+    const seriesStart = businessDayStart(seriesFirstKey);
     const seriesRange = { start: seriesStart, end: current.end };
 
     const previousRange = all
@@ -3079,7 +3093,7 @@ export class OrderAnalyticsService {
         })();
 
     const dayKey = (column: string) =>
-      `to_char(date_trunc('day', ${column} AT TIME ZONE 'Asia/Tashkent'), 'YYYY-MM-DD')`;
+      `to_char(${businessDayLocalSql(column)}, 'YYYY-MM-DD')`;
     const soldKey = this.tashkentPeriodKeySql('daily');
     const deliveryMs = OrderAnalyticsService.FULFILLMENT_DELIVERY_MS_SQL;
 
@@ -3178,7 +3192,7 @@ export class OrderAnalyticsService {
     const fulfillment = byDay(fulfillmentRows);
 
     const series = Array.from({ length: days }, (_, index) => {
-      const date = this.dateKey(new Date(seriesStart.getTime() + index * DAY));
+      const date = addDayKey(seriesFirstKey, index);
       const s = sold.get(date);
       const c = cancelled.get(date);
       const f = fulfillment.get(date);

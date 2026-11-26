@@ -8,6 +8,9 @@ import {
 } from '@nestjs/throttler';
 import { OrderGatewayController } from '../order-gateway.controller';
 import { ScanGatewayController } from '../scan-gateway.controller';
+import { LogisticsGatewayController } from '../logistics-gateway.controller';
+import { BranchGatewayController } from '../branch-gateway.controller';
+import { IntegrationGatewayController } from '../integration-gateway.controller';
 import { gatewayValidationSchema } from '@app/common';
 import { ClientIpThrottlerGuard } from './client-ip-throttler.guard';
 import {
@@ -110,6 +113,43 @@ describe('skaner route’lari metama’lumoti (R6R8BLGA)', () => {
       'POST /orders/markets/:marketId/cancelled/handover',
       handlerOf(OrderGatewayController, 'handoverCancelledOrdersToMarket'),
     ],
+    // Skan auditi 2026-11-23 (#67/#82/#99): har skan chaqiradigan qolgan route'lar.
+    [
+      'GET /orders/qr-code/:token',
+      handlerOf(OrderGatewayController, 'findByQrCode'),
+    ],
+    [
+      'POST /orders/external/receive-by-scan',
+      handlerOf(OrderGatewayController, 'receiveExternalByScan'),
+    ],
+    [
+      'POST /scan/market-cancelled',
+      handlerOf(ScanGatewayController, 'scanMarketCancelledHandover'),
+    ],
+    [
+      'PATCH /post/receive/:id',
+      handlerOf(LogisticsGatewayController, 'receivePost'),
+    ],
+    [
+      'PATCH /post/receive/scan/:id',
+      handlerOf(LogisticsGatewayController, 'receivePostWithScan'),
+    ],
+    [
+      'PATCH /post/receive/order/:id',
+      handlerOf(LogisticsGatewayController, 'receiveOrder'),
+    ],
+    [
+      'POST /branches/transfer-batches',
+      handlerOf(BranchGatewayController, 'createTransferBatches'),
+    ],
+    [
+      'POST /transfer-batches/:id/receive-orders',
+      handlerOf(BranchGatewayController, 'receiveTransferBatchOrders'),
+    ],
+    [
+      'POST /integrations/:slug/scan-intake',
+      handlerOf(IntegrationGatewayController, 'scanIntake'),
+    ],
   ];
 
   it.each(routes)(
@@ -131,7 +171,12 @@ describe('skaner route’lari metama’lumoti (R6R8BLGA)', () => {
     const unrelated = Object.getOwnPropertyNames(
       ScanGatewayController.prototype,
     )
-      .filter((name) => name !== 'scan' && name !== 'constructor')
+      .filter(
+        (name) =>
+          !['scan', 'scanMarketCancelledHandover', 'constructor'].includes(
+            name,
+          ),
+      )
       .map(
         (name) =>
           Object.getOwnPropertyDescriptor(ScanGatewayController.prototype, name)
@@ -184,10 +229,9 @@ describe('global ClientIpThrottlerGuard bilan (haqiqiy hisoblagich)', () => {
 
   it('skaner bo‘lmagan route — global 60/IP o‘zgarmagan', async () => {
     const guard = await makeGuard();
-    const other = handlerOf(
-      ScanGatewayController,
-      'scanMarketCancelledHandover',
-    );
+    // `scanMarketCancelledHandover` ham endi skaner limitida (skan auditi
+    // 2026-11-23) — oddiy route misoli: qabul sozlamalarini o'qish.
+    const other = handlerOf(OrderGatewayController, 'getIntakeSettings');
     for (let i = 0; i < 60; i++) {
       await expect(guard.canActivate(ctx(other, '203.0.113.7'))).resolves.toBe(
         true,

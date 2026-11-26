@@ -205,8 +205,15 @@ import {
   createQrOrderBranchScope,
   qrOrderBranchScopeRpcDeps,
 } from './auth/order-qr-branch-scope';
-import { projectOrderPayloadForRoles } from './auth/order-role-projection';
-import { projectOrderContactsForRoles } from './auth/order-contact-projection';
+import {
+  projectOrderPayloadForRoles,
+  projectOrderSettlementForRoles,
+} from './auth/order-role-projection';
+import {
+  BranchContactLoader,
+  branchContactScope,
+  withBranchContact,
+} from './contacts/branch-contact';
 import {
   ProblemContactsService,
   attachProblemContacts,
@@ -246,6 +253,7 @@ import {
   streamOrdersXlsx,
   type OrderExportPage,
 } from './order-export/orders-xlsx.export';
+import { orderExportSubtitle } from './order-export/order-export-subtitle';
 
 /**
  * (BOT-3d) Kuryer amali so'rovi. `Idempotency-Key` `req.headers` dan o'qiladi
@@ -683,6 +691,9 @@ export function isNoMessageHandlerError(error: unknown): boolean {
   return text.toLowerCase().includes('no matching message handler');
 }
 
+/** Skan-biriktirish javobiga qo'shiladigan ixtiyoriy xulosa uchun muddat (#59). */
+const SCAN_ORDER_SUMMARY_TIMEOUT_MS = 1_500;
+
 @ApiTags('Orders')
 @Controller('orders')
 // Javob tanasidagi statusCode (masalan 202 — market tasdig'i kutilmoqda) HTTP
@@ -735,6 +746,31 @@ export class OrderGatewayController {
   }
 
   private hqBranchIdCache: { id: string; at: number } | null = null;
+
+  private branchContactLoader?: BranchContactLoader;
+
+  /**
+   * 0Rn5U6AD: buyurtma filiali kontakti (telefon, menejer) — superadmin, admin,
+   * registrator; menejer/filial — faqat o'z filiali. Boshqa rollar — null.
+   */
+  private async branchContactFor(
+    user: JwtUser | undefined,
+    row: Record<string, unknown> | null,
+  ) {
+    const scope = branchContactScope(user?.roles);
+    const branchId = this.asStr(row?.branch_id).trim();
+    if (scope === 'none' || !branchId) {
+      return null;
+    }
+    if (
+      scope === 'own' &&
+      (await this.resolveRequesterBranchId(user)) !== branchId
+    ) {
+      return null;
+    }
+    this.branchContactLoader ??= new BranchContactLoader(this.branchClient);
+    return this.branchContactLoader.find(branchId);
+  }
 
   private normalizeRoles(roles?: string[]) {
     const normalized = new Set<string>();
@@ -4089,7 +4125,9 @@ export class OrderGatewayController {
       '(`reopens_at`, `cutoff_time`). Qabul qilish chegarasi (`receive_cutoff_time`): `receive_closes_at` dan ' +
       'kun almashguncha POST /orders/receive va /orders/external/receive-by-scan → 409 `ORDER_RECEIVE_CLOSED` ' +
       '(`reopens_at`, `receive_cutoff_time`). `receive_cutoff_time` kaliti har doim bor (`null` — cheklovsiz). ' +
-      'Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.',
+      'Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha. xhiXv3w3: bu soat BUTUN ' +
+      'tizimning ish kuni (dashboard, buyurtmalar sana filtri, moliya kunlik hisoboti, Excel, kunlik pochtalar); ' +
+      'o`zgarsa keyingi kun almashishidan amal qiladi (`day_change_schedule`), o`tgan kunlar qayta hisoblanmaydi.',
   })
   @ApiOkResponse({ description: ORDER_INTAKE_STATE_DESCRIPTION })
   getIntakeSettings() {
@@ -4612,6 +4650,8 @@ export class OrderGatewayController {
    * market posilka qabul qilmaydi.
    */
   @Post('external/receive-by-scan')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   // Yangi resurs yaratilmaydi — 201 emas, 200. Tana ichidagi `statusCode` ham
   // 200, ya'ni HTTP va tana bir xil signal beradi; natija `data.ok` da
   // (n9o0KYd5).
@@ -4748,11 +4788,11 @@ export class OrderGatewayController {
 
     // Order service nomni o'zi qo'shadi; qo'shmagan bo'lsa (eski versiya)
     // gateway to'ldiradi — ekran nomsiz qolmasin.
-    // T7 (B3): menejerga `market` obyekti telefon/loginsiz.
+    // T7 (B3): menejerga `market` obyekti telefon/loginsiz; D5NxxpJW: tarifsiz.
     if (!Array.isArray(result)) {
-      return projectOrderContactsForRoles(roles, result);
+      return projectOrderPayloadForRoles(roles, result);
     }
-    return projectOrderContactsForRoles(
+    return projectOrderPayloadForRoles(
       roles,
       await this.enrichMarketRows(result),
     );
@@ -5342,7 +5382,7 @@ export class OrderGatewayController {
       'Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. ' +
       "Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, " +
       'X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). ' +
-      "Oxirgi qatorlar: «Jami» (soni va narx yig'indisi).",
+      "Oxirgi qator: «JAMI» (soni va narx yig'indisi, filtrga moslashadi); 2-varaq — «Xulosa» (holat, viloyat, firma, kuryer bo'yicha).",
   })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
@@ -5506,7 +5546,24 @@ export class OrderGatewayController {
       };
     };
 
-    const result = await streamOrdersXlsx(res, fetchPage);
+    const result = await streamOrdersXlsx(res, fetchPage, {
+      // Banner: davr / holat matni; nomlar — birinchi sahifa qatorlaridan.
+      subtitle: (rows) =>
+        orderExportSubtitle(
+          {
+            start_day,
+            end_day,
+            status,
+            cancel_stage,
+            market_id,
+            region_id,
+            district_id,
+            courier_id,
+            search,
+          },
+          rows,
+        ),
+    });
     if (result.status === 'aborted') {
       this.logger.error(
         `Buyurtmalar eksporti uzildi: ${result.written}/${result.total} qator yozilgan`,
@@ -6683,12 +6740,13 @@ export class OrderGatewayController {
         ? rawResult
         : this.filterRowsByMarket(rawResult, ownMarketId);
 
-    // T7 (B3): menejer / filial — market telefonlarisiz.
+    // T7 (B3): menejer / filial — market telefonlarisiz; D5NxxpJW: `market`
+    // profili tarif/komissiyasiz.
     if (!Array.isArray(result)) {
-      return projectOrderContactsForRoles(roles, result);
+      return projectOrderPayloadForRoles(roles, result);
     }
 
-    return projectOrderContactsForRoles(
+    return projectOrderPayloadForRoles(
       roles,
       await this.enrichMarketRows(result as Array<Record<string, any>>),
     );
@@ -6860,8 +6918,9 @@ export class OrderGatewayController {
       excludeBranchSource = false;
     }
 
-    // T7 (B3): menejer / filial — market telefonlarisiz.
-    return projectOrderContactsForRoles(
+    // T7 (B3): menejer / filial — market telefonlarisiz; D5NxxpJW: `market`
+    // profili tarif/komissiyasiz.
+    return projectOrderPayloadForRoles(
       roles,
       await this.sendOrderWithTimeout(
         { cmd: 'order.find_cancelled_markets_enriched' },
@@ -7072,8 +7131,9 @@ export class OrderGatewayController {
       { cmd: 'order.find_all' },
       payload,
     ).then((response) =>
-      // T7 (B3): menejer / filial — market va operator telefonlarisiz.
-      projectOrderContactsForRoles(
+      // T7 (B3): menejer / filial — market va operator telefonlarisiz;
+      // D5NxxpJW: market tarifisiz (GET /orders bilan bir xil).
+      projectOrderPayloadForRoles(
         req.user.roles,
         this.toManagerCancelledTabResponse(
           this.withPaginationMeta(response, pagination),
@@ -7913,7 +7973,7 @@ export class OrderGatewayController {
   @ApiOkResponse({
     type: OrderReceiptFieldsDto,
     description:
-      "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+      "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. 0Rn5U6AD: `courier: {id, name, phone_number} | null`; `branch.phone_number` va `branch.manager: {id, name, phone_number} | null` — SUPERADMIN/ADMIN/REGISTRATOR ga (MANAGER/BRANCH — faqat o'z filiali), boshqalarga kalit yo'q.",
   })
   async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
     const response = await this.sendOrderWithFallback(
@@ -7921,14 +7981,22 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrder(req?.user, this.unwrapOrderRow(response));
+    const row = this.unwrapOrderRow(response);
+    await this.assertCanViewOrder(req?.user, row);
     // kH2zZsz3: kuryer — market tarifi/filial ulushisiz, market — kuryer
     // tarifi/ulushi va filial ulushisiz (auth/order-role-projection).
     // T7: `problem_contacts` proyeksiyadan OLDIN.
-    return this.withContactsAndRollback(req?.user?.roles, response, req?.user);
+    const [projected, branchContact] = await Promise.all([
+      this.withContactsAndRollback(req?.user?.roles, response, req?.user),
+      this.branchContactFor(req?.user, row),
+    ]);
+    // 0Rn5U6AD: `branch.phone_number`, `branch.manager` (kuryer — `courier`).
+    return withBranchContact(projected, branchContact);
   }
 
   @Get('qr-code/:token')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...ORDER_QR_LOOKUP_ROLES)
   @ApiBearerAuth()
@@ -8065,8 +8133,19 @@ export class OrderGatewayController {
       return response;
     }
     try {
+      /**
+       * ⚠️ QISQA MUDDAT (skan auditi 2026-11-23, #59/#85). Ilgari xulosa ham
+       * 8 s kutardi (light yiqilsa enriched yana 8 s) — biriktirish allaqachon
+       * bo'lgan, lekin javob 16+ s kechikib FE chegarasidan oshardi va qayta
+       * skan «Allaqachon sizda» berardi. Xulosa ixtiyoriy: kechiksa — usiz.
+       */
       const light = await sendOrderQrLight(
-        (pattern) => this.sendOrderWithTimeout(pattern, { token }),
+        (pattern) =>
+          this.sendOrderWithTimeout(
+            pattern,
+            { token },
+            SCAN_ORDER_SUMMARY_TIMEOUT_MS,
+          ),
         { cmd: 'order.find_by_qr_enriched' },
       );
       const order = scanOrderSummary(light);
@@ -8264,35 +8343,42 @@ export class OrderGatewayController {
     // JWT'da filial bo'lmasa (login paytida branch-service javob bermagan) —
     // menejer filiali biriktirishdan: ro'yxat ham shu yo'l bilan o'qiladi.
     const requesterBranchId = await this.resolveRequesterBranchId(req.user);
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.sell' },
-          {
-            id,
-            dto: dtoWithProof,
-            requester: {
-              id: req.user.sub,
-              roles: this.normalizeRoles(req.user.roles),
-              branch_id: requesterBranchId,
+    return (
+      firstValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.sell' },
+            {
+              id,
+              dto: dtoWithProof,
+              requester: {
+                id: req.user.sub,
+                roles: this.normalizeRoles(req.user.roles),
+                branch_id: requesterBranchId,
+              },
+              // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
+              // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
+              request_id: resolveOrderCreateRequestId(
+                req.user.sub,
+                req.headers?.['idempotency-key'],
+              ),
             },
-            // (BOT-3d) Idempotency-Key → barqaror request_id (bot qayta
-            // urinishi / ikki bosish — amal bir marta); kalitsiz — UUID.
-            request_id: resolveOrderCreateRequestId(
-              req.user.sub,
-              req.headers?.['idempotency-key'],
-            ),
-          },
+          )
+          .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
+      )
+        // D5NxxpJW: menejer / registrator — market tarifisiz (GET /orders/:id bilan bir xil).
+        .then((response: unknown) =>
+          projectOrderPayloadForRoles(req.user.roles, response),
         )
-        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException(
-          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
-        );
-      }
-      throw error;
-    });
+        .catch((error: unknown) => {
+          if (error instanceof TimeoutError) {
+            throw new GatewayTimeoutException(
+              'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+            );
+          }
+          throw error;
+        })
+    );
   }
 
   @Post('cancel/:id')
@@ -8562,18 +8648,25 @@ export class OrderGatewayController {
         "Bu buyurtma sizning filialingizga tegishli emas — hisob-kitobini ko'ra olmaysiz",
       );
     }
-    return firstValueFrom(
-      this.orderClient
-        .send({ cmd: 'order.settlement.find_by_order' }, { id })
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException(
-          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
-        );
-      }
-      throw error;
-    });
+    return (
+      firstValueFrom(
+        this.orderClient
+          .send({ cmd: 'order.settlement.find_by_order' }, { id })
+          .pipe(timeout(8000)),
+      )
+        // D5NxxpJW: `market_amount` = yig'ilgan − market tarifi — filial xodimiga yo'q.
+        .then((response: unknown) =>
+          projectOrderSettlementForRoles(roles, response),
+        )
+        .catch((error: unknown) => {
+          if (error instanceof TimeoutError) {
+            throw new GatewayTimeoutException(
+              'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+            );
+          }
+          throw error;
+        })
+    );
   }
 
   @Post(':id/could-not-deliver')
@@ -8765,28 +8858,35 @@ export class OrderGatewayController {
     @Body() dto: InitiateOrderReturnRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.initiate_return' },
-          {
-            id,
-            dto,
-            requester: {
-              id: req.user.sub,
-              roles: this.normalizeRoles(req.user.roles),
+    return (
+      firstValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.initiate_return' },
+            {
+              id,
+              dto,
+              requester: {
+                id: req.user.sub,
+                roles: this.normalizeRoles(req.user.roles),
+              },
             },
-          },
+          )
+          .pipe(timeout(8000)),
+      )
+        // D5NxxpJW: menejer / registrator — market tarifisiz (GET /orders/:id bilan bir xil).
+        .then((response: unknown) =>
+          projectOrderPayloadForRoles(req.user.roles, response),
         )
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException(
-          'Buyurtma xizmati vaqtida javob bermadi (timeout)',
-        );
-      }
-      throw error;
-    });
+        .catch((error: unknown) => {
+          if (error instanceof TimeoutError) {
+            throw new GatewayTimeoutException(
+              'Buyurtma xizmati vaqtida javob bermadi (timeout)',
+            );
+          }
+          throw error;
+        })
+    );
   }
 
   @Post(':id/mark-returned-to-market')
@@ -8841,8 +8941,10 @@ export class OrderGatewayController {
         );
       }
       throw error;
-    }); // T7 (B3): javobdagi to'liq buyurtma — menejerga operator telefonlarisiz.
-    return projectOrderContactsForRoles(req.user.roles, response);
+    });
+    // T7 (B3): javobdagi to'liq buyurtma — menejerga operator telefonlarisiz;
+    // D5NxxpJW: market tarifisiz.
+    return projectOrderPayloadForRoles(req.user.roles, response);
   }
 
   /**
@@ -9172,8 +9274,8 @@ export class OrderGatewayController {
       throw error;
     });
     // T7 (B3): javobdagi operator/market telefonlari menejer/filialga
-    // qaytmaydi (GET /orders/:id bilan bir xil).
-    return projectOrderContactsForRoles(roles, response);
+    // qaytmaydi; D5NxxpJW: pul maydonlari ham GET /orders/:id bilan bir xil.
+    return projectOrderPayloadForRoles(roles, response);
   }
 
   @Delete(':id')

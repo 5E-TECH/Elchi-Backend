@@ -14,6 +14,8 @@ import {
  * uchun matn FAQAT o'sha qabul qiluvchining bo'lagidan quriladi:
  *  - kuryer — faqat o'zi topshirgan to'lovlar (summa, soni, qolgan qarzi);
  *  - market — faqat o'ziga qilingan to'lovlar (summa, usul, karta) va qoldiq;
+ *  - filial (asosiy kassa smenasida) — faqat o'zi HQ'ga topshirgan pul va o'z
+ *    kassasi qoldig'i (`buildBranchSliceMessage`);
  *  - superadmin — to'liq xulosa (+ PDF/XLSX ilova).
  * Boshqa kuryer / market ma'lumoti builder'ga UMUMAN berilmaydi (IDOR).
  */
@@ -88,6 +90,19 @@ export interface MarketSlice {
   balance: number | null;
 }
 
+export type BranchPaymentLine = Omit<MarketPaymentLine, 'card_name'>;
+
+/** Asosiy kassa smenasida BITTA filial HQ'ga topshirgan pul. */
+export interface BranchSlice {
+  branch_id: string;
+  name: string | null;
+  payments: BranchPaymentLine[];
+  /** SOF: topshirilgan − shu smenada qaytarilgan. */
+  total: number;
+  /** Filial kassasidagi joriy qoldiq — hisobot paytida. */
+  balance: number | null;
+}
+
 export interface ShiftReportSnapshot {
   shift_id: string;
   round: number;
@@ -105,6 +120,14 @@ export interface ShiftReportSnapshot {
   accounts: ShiftAccountLine[];
   couriers: CourierSlice[];
   markets: MarketSlice[];
+  /** Faqat asosiy kassa: filiallardan HQ'ga kelgan pul (filial smenasida yo'q). */
+  branches?: BranchSlice[];
+  /** Filial kassasi: filial nomi (olinmasa — null, «Filial kassasi #id»). */
+  branch_name?: string | null;
+  /** Filial kassasi: shu smenada HQ'ga topshirilgan pul (sof, qaytarilgani alohida). */
+  hq_transfers?: { count: number; total: number; reversed: number } | null;
+  /** Smenani tizim ochgan («Kun tartibi»). */
+  opened_by_system?: boolean;
   /**
    * Oldingi smena yopilgandan shu smena ochilguncha (SMENASIZ) shu kassadagi
    * harakat — hech qaysi smena kirim/chiqimiga kirmagan, faqat ochilish
@@ -204,6 +227,8 @@ export function buildSuperadminMessage(
     : null;
   const courierTotal = snapshot.couriers.reduce((s, c) => s + c.total, 0);
   const marketTotal = snapshot.markets.reduce((s, m) => s + m.total, 0);
+  const branches = snapshot.branches ?? [];
+  const branchTotal = branches.reduce((s, b) => s + b.total, 0);
   const lines = [
     `${cashboxLabel(snapshot)} · ${tashkentDateTime(snapshot.opened_at)} → ${tashkentDateTime(snapshot.closed_at)}`,
     ...(auto ? [`⏰ ${autoClosedLabel(snapshot.closed_at)}`] : []),
@@ -216,6 +241,9 @@ export function buildSuperadminMessage(
         ]),
     ...(accountsText && !isBranch ? [accountsText] : []),
     ...(betweenShiftsLine(snapshot) ? [betweenShiftsLine(snapshot)!] : []),
+    ...(branches.length
+      ? [`Filiallar: ${branches.length} ta, ${formatSom(branchTotal)}`]
+      : []),
     `Kuryerlar: ${snapshot.couriers.length} ta, ${formatSom(courierTotal)} · Marketlar: ${snapshot.markets.length} ta, ${formatSom(marketTotal)}`,
     ...(fileKey ? ["📎 To'liq hisobot ilovada."] : []),
   ];
@@ -366,6 +394,18 @@ const moneyLine = (label: string, block: ShiftMoneyBlock): string =>
     ? `\n   Sanalgan: ${formatSom(block.closing_balance)} · farq: ${discrepancyText(block.discrepancy)}`
     : `\n   Farq: ${discrepancyText(block.discrepancy)}`);
 
+/** Filial smenasi: HQ'ga topshirilgan pul (sof) — bo'lmasa qator yo'q. */
+const hqTransferLines = (snapshot: ShiftReportSnapshot): string[] => {
+  const hq = snapshot.hq_transfers;
+  if (snapshot.cashbox_type !== 'branch' || !hq) return [];
+  if (!hq.count && !hq.reversed) return [];
+  return [
+    `⬆️ HQ'ga topshirilgan: ${formatSom(hq.total)} (${hq.count} ta)${
+      hq.reversed ? ` · qaytarilgan ${formatSom(hq.reversed)}` : ''
+    }`,
+  ];
+};
+
 /**
  * Filial kassasi hisoboti — filial GURUHIGA yoki (filial `private`)
  * menejerlarning SHAXSIY chatiga. To'liq kassa xulosasi: qoldiq, kirim /
@@ -409,6 +449,18 @@ export function buildBranchMessage(
       `   … yana ${snapshot.markets.length - BRANCH_LIST_LIMIT} ta`,
     );
   }
+  const branches = snapshot.branches ?? [];
+  const branchTotal = branches.reduce((sum, b) => sum + b.total, 0);
+  const branchLines = [...branches]
+    .sort((a, b) => b.total - a.total)
+    .slice(0, BRANCH_LIST_LIMIT)
+    .map(
+      (b) =>
+        `   • ${b.name ?? `Filial #${b.branch_id}`} — ${formatSom(b.total)} (${paymentCount(b.payments)} ta)`,
+    );
+  if (branches.length > BRANCH_LIST_LIMIT) {
+    branchLines.push(`   … yana ${branches.length - BRANCH_LIST_LIMIT} ta`);
+  }
   const lines = [
     `Smena #${snapshot.shift_id} · ${tashkentDateTime(snapshot.opened_at)} → ${tashkentDateTime(snapshot.closed_at)}`,
     auto
@@ -423,8 +475,15 @@ export function buildBranchMessage(
       : [moneyLine('💰 Kassa', snapshot.cash)]),
     ...(betweenShiftsLine(snapshot) ? [betweenShiftsLine(snapshot)!] : []),
     '',
+    ...(branches.length
+      ? [
+          `⬇️ Filiallardan qabul: ${formatSom(branchTotal)} (${branches.length} ta filial)`,
+          ...branchLines,
+        ]
+      : []),
     `⬇️ Kuryerlardan qabul: ${formatSom(courierTotal)} (${snapshot.couriers.length} ta kuryer)`,
     ...courierLines,
+    ...hqTransferLines(snapshot),
     `⬆️ Marketlarga to'lov: ${formatSom(marketTotal)} (${snapshot.markets.length} ta market)`,
     ...marketLines,
   ];
@@ -454,6 +513,76 @@ export function buildBranchMessage(
   };
 }
 
+/** Topshirilgan (qaytarish qatorlarisiz) to'lovlar soni. */
+const paymentCount = (payments: BranchPaymentLine[]): number =>
+  payments.filter((line) => !line.reversed).length;
+
+/**
+ * ASOSIY kassa smenasi yopildi — filial guruhiga (yoki `private` — filial
+ * menejerlariga) FAQAT shu filialning bo'lagi: HQ'ga topshirgan puli va o'z
+ * kassasi qoldig'i. Boshqa filial, kuryer, market va asosiy kassa summalari
+ * builder'ga UMUMAN berilmaydi.
+ */
+export function buildBranchSliceMessage(
+  snapshot: Pick<
+    ShiftReportSnapshot,
+    'shift_id' | 'round' | 'close_reason' | 'opened_at' | 'closed_at'
+  >,
+  slice: BranchSlice,
+  cabinetUrl = DEFAULT_CABINET_URL,
+): ShiftReportMessage & { telegram_text: string } {
+  const label = branchLabel(
+    { cashbox_type: 'branch', cashbox_user_id: slice.branch_id },
+    slice.name,
+  );
+  const count = paymentCount(slice.payments);
+  const paymentLines = slice.payments
+    .slice(0, BRANCH_LIST_LIMIT)
+    .map(
+      (line) =>
+        `   • ${formatSom(line.amount)} — ${methodLabel(line.payment_method)} · ${tashkentDateTime(line.at)}${line.reversed ? ' — qaytarildi' : ''}`,
+    );
+  if (slice.payments.length > BRANCH_LIST_LIMIT) {
+    paymentLines.push(
+      `   … yana ${slice.payments.length - BRANCH_LIST_LIMIT} ta`,
+    );
+  }
+  const body = [
+    `Asosiy kassa smenasi #${snapshot.shift_id} · ${tashkentDateTime(snapshot.opened_at)} → ${tashkentDateTime(snapshot.closed_at)}`,
+    '',
+    ...(slice.payments.length
+      ? [
+          `⬆️ HQ'ga topshirilgan: ${formatSom(slice.total)} (${count} ta)`,
+          ...paymentLines,
+        ]
+      : ["⬆️ Bu smenada HQ'ga pul topshirilmagan"]),
+    ...(slice.balance != null
+      ? [`💰 Filial kassasidagi qoldiq: ${formatSom(slice.balance)}`]
+      : []),
+  ]
+    .join('\n')
+    .slice(0, 3000);
+  const title =
+    snapshot.close_reason === 'auto'
+      ? `⏰ ${label} — asosiy kassa smenasi avtomatik yopildi`
+      : `🧾 ${label} — asosiy kassa smenasi yopildi`;
+  return {
+    title,
+    body,
+    data: {
+      ...baseData(snapshot as ShiftReportSnapshot),
+      kind: 'branch_slice',
+      branch_id: slice.branch_id,
+      total: slice.total,
+      count,
+      balance: slice.balance,
+      telegram_cabinet_link: true,
+    },
+    link: SELF_CASHBOX_LINK,
+    telegram_text: `<b>${escapeTelegramHtml(title)}</b>\n\n${escapeTelegramHtml(body)}${cabinetLink(cabinetUrl)}`,
+  };
+}
+
 /** Telegram `delivery` sababi → «Hisobot kimlarga yuborildi» blokidagi matn. */
 export function deliveryReasonText(reason: string | null | undefined): string {
   const value = String(reason ?? '').trim();
@@ -471,6 +600,9 @@ export function deliveryReasonText(reason: string | null | undefined): string {
   if (value === 'no_provider') return 'Telegram bot sozlanmagan';
   if (value === 'branch_group_inactive') {
     return 'Filial guruhi nofaol (bot chiqarilgan yoki huquqi olingan)';
+  }
+  if (value === 'branch_group_not_linked') {
+    return 'Filial guruhi ulanmagan — filial sahifasida «Kassa hisoboti · Telegram» → «Ulash» orqali ulang';
   }
   if (value === 'disabled_by_settings') return "Sozlamada o'chirilgan";
   if (value === 'branch_no_managers') {

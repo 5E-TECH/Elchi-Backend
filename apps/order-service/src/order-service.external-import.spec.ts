@@ -44,14 +44,10 @@ function svc() {
         is_active: true,
         field_mapping: {},
       }),
-      getDefaultDistrictId: jest.fn().mockResolvedValue('1'),
-      /**
-       * ⚠️ `resolveDistrictIdOrNull` — mos kelmasa `null`. Zaxira tuman
-       * (jadvaldagi birinchi) ni chaqiruvchi o'zi qo'yadi, shu bois
-       * "aniqlandimi" degan savolga javob shu metoddan keladi.
-       */
-      resolveDistrictIdOrNull: jest.fn().mockResolvedValue('12'),
-      resolveDistrictId: jest.fn().mockResolvedValue('12'),
+      // Mos kelmasa `null` — zaxira tuman YO'Q (2026-11-25).
+      resolveExternalDistrict: jest
+        .fn()
+        .mockResolvedValue({ id: '12', sato_code: null }),
       /**
        * fix3b (LC-13): `region` son bo'lmasa (yoki yo'q bo'lsa) viloyat
        * tumandan olinadi (`logistics.district.find_by_id`).
@@ -112,14 +108,20 @@ describe("EI-06 — `region` matn bo'lsa 500 bermaydi", () => {
     expect(dto.region_id).toBe('9');
   });
 
-  it('SON region saqlanadi — tumandan so`ralmaydi', async () => {
+  /**
+   * Prod 2026-11-24: ilgari SON xom saqlanardi. Saytlar esa SOATO viloyat
+   * kodini (1703) yuboradi — u Elchi viloyat id'si emas.
+   */
+  it('⭐ SON region ham xom YOZILMAYDI — viloyat tumandan olinadi', async () => {
     const { s, created } = svc();
     await (s as any).receiveExternalOrders({
       integration_id: '5',
-      orders: [{ id: 'X2', phone: '+998901112233', region: '14' }],
+      orders: [{ id: 'X2', phone: '+998901112233', region: 1703 }],
     });
-    expect(created[0].region_id).toBe('14');
-    expect((s as any).lookup.resolveRegionIdForDistrict).not.toHaveBeenCalled();
+    expect(created[0].region_id).toBe('9');
+    expect((s as any).lookup.resolveRegionIdForDistrict).toHaveBeenCalledWith(
+      '12',
+    );
   });
 
   it("bo'sh va yo'q qiymat — tumandan olinadi (endi NULL emas)", async () => {
@@ -239,13 +241,95 @@ describe('EI-12 — mahsulot qatorlari', () => {
     expect(dto.items.map((i: any) => i.quantity)).toEqual([1, 1]);
   });
 
-  it("`items` massiv bo'lmasa bo'sh ro'yxat — yiqilmaydi", async () => {
+  it.each([undefined, null, 5, true, { name: 'Telefon' }, '', '  '])(
+    "`items` massiv ham, matn ham bo'lmasa bo'sh ro'yxat — yiqilmaydi (%p)",
+    async (items) => {
+      const dto = await run({ id: 'Y5', phone: '+998901112233', items });
+      expect(dto.items).toEqual([]);
+    },
+  );
+});
+
+/**
+ * Prod 2026-11-25: Lidershop va Alion `items` ni MATN qilib yuboradi. Ilgari
+ * matn tashlanardi — buyurtma mahsulotsiz (`product_quantity = 0`) tushardi.
+ * Ajratish qoidasi — `lifecycle/external-items-text.spec.ts`.
+ */
+describe("⭐ `items` matn bo'lib kelganda mahsulot qatori yoziladi", () => {
+  it('⭐ prod holati: nom va son matndan, katalogga bog`lanmaydi', async () => {
     const dto = await run({
-      id: 'Y5',
-      phone: '+998901112233',
-      items: 'salom',
+      ...VALID,
+      items: "Diskali soat x 1 = 99 000 so'm",
+      total_count: 1,
     });
-    expect(dto.items).toEqual([]);
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'Diskali soat', quantity: 1 },
+    ]);
+  });
+
+  it('bir nechta qator — har biri alohida', async () => {
+    const dto = await run({
+      ...VALID,
+      items: "Soat x 1 = 99 000 so'm, Kamar x 2 = 50 000 so'm",
+      total_count: 3,
+    });
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'Soat', quantity: 1 },
+      { product_id: null, product_name: 'Kamar', quantity: 2 },
+    ]);
+  });
+
+  it('⭐ ajralmaydigan matn — bitta qator, soni `total_count`', async () => {
+    const dto = await run({ ...VALID, items: 'salom', total_count: '3' });
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'salom', quantity: 3 },
+    ]);
+  });
+
+  it('`total_count` yo`q — soni 1', async () => {
+    const dto = await run({ ...VALID, items: 'salom' });
+    expect(dto.items).toEqual([
+      { product_id: null, product_name: 'salom', quantity: 1 },
+    ]);
+  });
+
+  it('⭐ SUMMA matndan olinmaydi — narx avvalgidek maydonlardan', async () => {
+    const dto = await run({
+      ...VALID,
+      total_price: 150000,
+      delivery_price: 30000,
+      items: "Diskali soat x 1 = 99 000 so'm",
+    });
+    expect(dto.total_price).toBe(180000);
+
+    const noPrice = await run({
+      id: 'X1',
+      phone: '+998901112233',
+      items: "Diskali soat x 1 = 99 000 so'm",
+    });
+    expect(noPrice.total_price).toBe(0);
+  });
+
+  it('maydon nomlari ulanish xaritasidan (`items_field`, `total_count_field`)', async () => {
+    const { created } = await runFull(
+      { ...VALID, order: { goods: 'salom', count: 4 }, items: 'boshqa' },
+      undefined,
+      (svcObj) => {
+        svcObj.lookup.getIntegrationById.mockResolvedValue({
+          id: '5',
+          slug: 'lidershop',
+          market_id: '500',
+          is_active: true,
+          field_mapping: {
+            items_field: 'order.goods',
+            total_count_field: 'order.count',
+          },
+        });
+      },
+    );
+    expect(created[0].items).toEqual([
+      { product_id: null, product_name: 'salom', quantity: 4 },
+    ]);
   });
 });
 
@@ -257,14 +341,61 @@ describe('⭐ NARX — `NaN` moliyani zaharlaydi', () => {
    * market hisobi, kassa yig'indisi, dashboard — hammasi `NaN` bo'lib
    * qoladi. Eng yomon turdagi xato: jimgina va butun moliyani buzadi.
    */
-  it("son bo'lmagan narx qatorni TASHLAYDI", async () => {
-    const { res, created } = await runFull({
-      ...VALID,
-      total_price: '250 000',
-    });
+  it.each([
+    'tekin',
+    "150 000 so'm",
+    // Vergul va nuqta — bir ma'noli emas (99 ming yoki 99), taxmin QILINMAYDI.
+    '99,000',
+    '1,500,000',
+    '150,5',
+    '150 000,50',
+    '150 000.50',
+    // Minglik bo'linishi emas.
+    '15 0',
+    '1500 000',
+    '150 00',
+    '150  000',
+    '0 150',
+    '-150 000',
+    '1 000 000 000 000',
+    ['150 000'],
+    true,
+    NaN,
+  ])("son bo'lmagan narx qatorni TASHLAYDI (%p)", async (total_price) => {
+    const { res, created } = await runFull({ ...VALID, total_price });
 
     expect(created).toHaveLength(0);
     expect(res.data.skipped[0]).toMatchObject({ reason: 'price_invalid' });
+  });
+
+  /**
+   * Ega qarori 2026-11-25: sayt narxni minglik bo'shlig'i bilan yuborsa
+   * («150 000») — 150000 deb o'qiladi. FAQAT shu yozuv; vergul, nuqta va
+   * valyuta avvalgidek rad etiladi (yuqoridagi jadval).
+   */
+  it.each([
+    ['150 000', 150000],
+    ['99 000', 99000],
+    ['1 500 000', 1500000],
+    [' 150 000 ', 150000],
+    ['150\u00a0000', 150000],
+    ['150\u202f000', 150000],
+    ['150\u2009000', 150000],
+    ['999 999 999 999', 999999999999],
+  ])('⭐ minglik bo`shlig`i bilan yozilgan narx: %p → %p', async (raw, sum) => {
+    const { res, created } = await runFull({ ...VALID, total_price: raw });
+
+    expect(res.data.skipped).toEqual([]);
+    expect(created[0].total_price).toBe(sum);
+  });
+
+  it('⭐ yetkazish narxi ham shunday o`qiladi; qat`iy (CRM) rejimda ham', async () => {
+    const { created } = await runFull(
+      { ...VALID, total_price: '150 000', delivery_price: '30 000' },
+      { strict: true },
+    );
+
+    expect(created[0].total_price).toBe(180000);
   });
 
   it('yetkazish narxi ham tekshiriladi', async () => {
@@ -299,34 +430,38 @@ describe('⭐ NARX — `NaN` moliyani zaharlaydi', () => {
   });
 });
 
-describe('⭐ TUMAN — zaxira jimgina boshqa viloyatga yuborardi', () => {
+describe("⭐ TUMAN — aniqlanmasa buyurtma YARATILMAYDI (zaxira yo'q)", () => {
   /**
-   * ADVERSARIAL TOPILMA. `resolveDistrictId` mos kelmasa zaxira qiymatni
-   * qaytaradi, zaxira esa `getDefaultDistrictId()` — JADVALDAGI BIRINCHI
-   * tuman. Tuman viloyat va pochta marshrutini, tarifni ham belgilaydi.
-   *
-   * Ustiga moslik faqat SOATO kodi yoki ichki ID bo'yicha izlanadi —
-   * NOM bo'yicha EMAS. Ya'ni "Chilonzor" deb yuborgan CRM'ning HAR BIR
-   * buyurtmasi birinchi tumanga tushardi.
+   * Ega 2026-11-25: «bundan keyin bunday muammo kelib chiqmasin». Ilgari oddiy
+   * rejimda zaxira tuman qo'yilardi — posilka jimgina begona viloyat
+   * pochtasiga ketardi.
    */
-  const unresolved = (svcObj: any) => {
-    svcObj.lookup.resolveDistrictIdOrNull = jest.fn().mockResolvedValue(null);
-  };
-
-  it('oddiy rejimda zaxira ISHLATILADI (xatti-harakat o`zgarmadi)', async () => {
-    const { res, created } = await runFull(VALID, undefined, unresolved);
-
-    expect(res.data.skipped).toHaveLength(0);
-    expect(created[0].district_id).toBe('1'); // getDefaultDistrictId
-  });
-
-  it('⭐ QAT`IY rejimda buyurtma YARATILMAYDI', async () => {
-    const { res, created } = await runFull(VALID, { strict: true }, unresolved);
-
+  it.each([undefined, { strict: true }])('rejim: %p', async (options) => {
+    rmqSend.mockClear();
+    const { res, created } = await runFull(VALID, options, (svcObj) => {
+      svcObj.lookup.resolveExternalDistrict = jest.fn().mockResolvedValue(null);
+    });
     expect(created).toHaveLength(0);
     expect(res.data.skipped[0]).toMatchObject({
+      external_id: 'X1',
       reason: 'district_unresolved',
     });
+    // Yetim mijoz qolmaydi.
+    expect(rmqSend).not.toHaveBeenCalled();
+  });
+
+  it("bitta yaroqsiz qator partiyani to'xtatmaydi", async () => {
+    const { s, created } = svc();
+    s.lookup.resolveExternalDistrict = jest
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: '12', sato_code: null });
+    const res = await (s as any).receiveExternalOrders({
+      integration_id: '5',
+      orders: [VALID, { ...VALID, id: 'X2' }],
+    });
+    expect(created).toHaveLength(1);
+    expect(res.data.skipped).toHaveLength(1);
   });
 });
 

@@ -75,6 +75,8 @@ import {
   projectUserRowContactsForRoles,
 } from './auth/order-contact-projection';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
+import { RealtimeGateway } from './realtime/realtime.gateway';
+import { attachUserActivity } from './user-activity-view';
 import {
   LOGIST_REGIONS_UNAVAILABLE_MESSAGE,
   LogistRegionScopeService,
@@ -154,7 +156,26 @@ export class ApiGatewayController {
     private readonly investorClient?: ClientProxy,
     // (2026-11-12) Market «Qo'shimcha raqam» o'zgarsa — chek keshi tozalanadi.
     @Optional() private readonly problemContacts?: ProblemContactsService,
+    // (pe71yf8L) market / operator qatorlari — «Online» (socket holati).
+    // Yo'q bo'lsa (spec'lar) hamma «Offline».
+    @Optional() private readonly realtime?: RealtimeGateway,
   ) {}
+
+  /**
+   * (pe71yf8L) `GET /users` / `GET /users/:id`: market va market operatori
+   * qatorlariga `is_online`, `last_login_at`, `last_seen_at`. Xato — faqat
+   * log (ro'yxat ochilaveradi).
+   */
+  private attachActivity(rows: readonly unknown[]): Promise<void> {
+    return attachUserActivity(rows, {
+      identity: this.identityClient,
+      isPresent: (userId) => this.realtime?.isPresent(userId) ?? false,
+      onError: (error) =>
+        this.logger.warn(
+          `user activity olinmadi: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
+  }
 
   private toRequester(req: { user: JwtUser }) {
     return {
@@ -1372,7 +1393,7 @@ export class ApiGatewayController {
       "SUPERADMIN/ADMIN — barcha foydalanuvchilar (superadmin va mijozsiz). MANAGER — o'z filialining faol a'zolari " +
       "(`branch_users`: menejer, registrator, kuryer) VA o'zi yaratgan marketlar (`role = market`, `created_by` = menejer, 2026-11-12); " +
       'admin, logist, investor, boshqa filial xodimlari va boshqalar yaratgan marketlar chiqmaydi. ' +
-      "`meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. " +
+      '`meta.total`, `totalUsers`, `totalMarket`, `totalEmployees` va `countsByRole` ham shu doirada. ' +
       "Filialga biriktirilmagan menejer — bo'sh sahifa (meta shakli o'zgarmaydi, sonlar 0).",
   })
   @ApiQuery({ name: 'search', required: false, type: String })
@@ -1414,7 +1435,11 @@ export class ApiGatewayController {
       'boshqara oladimi (superadmin — hammasi; admin — o`zi va ' +
       'admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi ' +
       'kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa ' +
-      'menejer va o`zi yaratgan market — false).',
+      'menejer va o`zi yaratgan market — false). pe71yf8L: `role = market` ' +
+      'va `market_operator` qatorlarida `is_online: boolean` (kamida bitta ' +
+      '`/realtime` socket ulangan yoki oxirgisi 45 s dan kam oldin uzilgan), ' +
+      '`last_login_at` va `last_seen_at`: ISO | null (hech kirmagan — null; ' +
+      'faollik xizmati javob bermasa kalitlar yo`q). Boshqa rollarda kalit yo`q.',
   })
   async getUsers(
     @Query('search') search?: string,
@@ -1558,6 +1583,10 @@ export class ApiGatewayController {
       (response as { data: { items: unknown[] } }).data.items = pageItems.map(
         (item) => projectUserRowContactsForRoles(req?.user?.roles, item),
       );
+      // pe71yf8L — market / operator: oxirgi kirish va Online / Offline.
+      await this.attachActivity(
+        (response as { data: { items: unknown[] } }).data.items,
+      );
     }
 
     return response;
@@ -1675,7 +1704,8 @@ export class ApiGatewayController {
       'boshqa rollar — null). x6IO746K: market operatorida `market: { id, ' +
       'name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu ' +
       'foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users ' +
-      'qatoridagi bilan bir xil qoida).',
+      'qatoridagi bilan bir xil qoida). pe71yf8L: market / market operatorida ' +
+      '`is_online`, `last_login_at`, `last_seen_at` (GET /users dagidek).',
   })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
@@ -1753,6 +1783,10 @@ export class ApiGatewayController {
             ),
           }
         : projected;
+    // pe71yf8L — market / operator: oxirgi kirish va Online / Offline.
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      await this.attachActivity([row]);
+    }
     return row === data ? response : { ...response, data: row };
   }
 
@@ -2002,8 +2036,8 @@ export class ApiGatewayController {
   @ApiOperation({
     summary: 'Create market',
     description:
-      "SUPERADMIN/ADMIN — cheklovsiz. MANAGER — faqat «Qabul punkti» (PICKUP) yoki «Aralash» (HYBRID) filial menejeri " +
-      "(2026-11-12; ilgari faqat HYBRID), boshqa filial turi yoki biriktirilmagan — 403. `created_by` = yaratgan foydalanuvchi; " +
+      'SUPERADMIN/ADMIN — cheklovsiz. MANAGER — faqat «Qabul punkti» (PICKUP) yoki «Aralash» (HYBRID) filial menejeri ' +
+      '(2026-11-12; ilgari faqat HYBRID), boshqa filial turi yoki biriktirilmagan — 403. `created_by` = yaratgan foydalanuvchi; ' +
       "menejer o'zi yaratgan marketni GET /users ro'yxatida va GET /users/:id da ko'radi.",
   })
   @ApiBody({ type: CreateMarketRequestDto })
@@ -2036,7 +2070,7 @@ export class ApiGatewayController {
       // olsin» — PICKUP («Qabul punkti») va HYBRID («Aralash») filial menejeri.
       if (!UserGatewayMarketCreatorBranchTypes.has(branchType)) {
         throw new ForbiddenException(
-          "Faqat «Qabul punkti» yoki «Aralash» filial menejeri market yarata oladi",
+          'Faqat «Qabul punkti» yoki «Aralash» filial menejeri market yarata oladi',
         );
       }
     }
@@ -2061,7 +2095,12 @@ export class ApiGatewayController {
             weight_volume_pricing: dto.weight_volume_pricing,
             default_tariff: dto.default_tariff,
             add_order: dto.add_order,
-            cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
+            // Skan auditi #43 (ega 2026-11-23): QR talabini faqat
+            // superadmin/admin o'chiradi — menejer yaratgan market sukut
+            // bo'yicha QR bilan (identity `?? true`).
+            cancelled_handover_qr_required: isManager
+              ? undefined
+              : dto.cancelled_handover_qr_required,
             expense_proof_conditions: dto.expense_proof_conditions,
             // w2bDrE3i (faqat admin/superadmin — identity tekshiradi).
             extra_cost_enabled: dto.extra_cost_enabled,
@@ -2109,7 +2148,7 @@ export class ApiGatewayController {
   })
   @ApiOkResponse({
     description:
-      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: xuddi shu, lekin `phone_number` YO'Q (T7 B3 — market telefoni menejerga ko'rinmaydi). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
+      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: faqat {id, name, status, default_tariff, weight_volume_pricing} — `phone_number` (T7 B3) va narxlar `tariff_home` / `tariff_center` (D5NxxpJW, ega 2026-11-25) YO'Q. COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}.",
   })
   async getMarkets(
     @Req() req: { user: JwtUser },
@@ -2182,55 +2221,61 @@ export class ApiGatewayController {
   /**
    * GET /markets ko'rinishi (CODE-08 / C11):
    * - full: SUPERADMIN/ADMIN — to'liq qator + cashbox (o'zgarmagan);
-   * - branch_staff: MANAGER/REGISTRATOR/BRANCH — buyurtma yaratish, filtr va
-   *   mahsulot ekranlari market tanlashda id, nom, telefon va statusni
-   *   ishlatadi (orders/create Step1Market, orders, products); yiFTzkzH:
-   *   buyurtma yaratishda ikkala narxni (uyga/markazga) ko'rsatish uchun
-   *   `tariff_home`, `tariff_center`, `default_tariff` ham (login/kassa yo'q);
+   * - registrator: REGISTRATOR — buyurtma yaratish, filtr va mahsulot
+   *   ekranlari market tanlashda id, nom, telefon va statusni ishlatadi
+   *   (orders/create Step1Market, orders, products); yiFTzkzH: buyurtma
+   *   yaratishda ikkala narxni (uyga/markazga) ko'rsatish uchun `tariff_home`,
+   *   `tariff_center`, `default_tariff` ham (login/kassa yo'q);
+   * - branch_manager: MANAGER/BRANCH — xuddi shu, lekin NARXLARSIZ (D5NxxpJW,
+   *   ega 2026-11-25: menejer market tarifini yaratishda ham ko'rmaydi;
+   *   `default_tariff` — yetkazish TURI, summa emas, qoladi). Bir nechta rolda
+   *   (menejer + registrator) torroq ko'rinish ustun;
    * - minimal: COURIER, LOGIST (iFAkvaht — logist buyurtmalari «Market»
    *   filtri) va boshqa har qanday rol — faqat filtr: id, nom, status.
    *   Telefon, username, tariflar, kassa — yo'q.
    */
   private marketListView(
     user: JwtUser | undefined,
-  ): 'full' | 'branch_staff' | 'minimal' {
+  ): 'full' | 'registrator' | 'branch_manager' | 'minimal' {
     const roles = new Set(
       (user?.roles ?? []).map((role) => String(role).toLowerCase()),
     );
     if (roles.has(RoleEnum.SUPERADMIN) || roles.has(RoleEnum.ADMIN)) {
       return 'full';
     }
-    if (
-      roles.has(RoleEnum.MANAGER) ||
-      roles.has(RoleEnum.REGISTRATOR) ||
-      roles.has(RoleEnum.BRANCH)
-    ) {
-      return 'branch_staff';
+    if (roles.has(RoleEnum.MANAGER) || roles.has(RoleEnum.BRANCH)) {
+      return 'branch_manager';
     }
-    return 'minimal';
+    return roles.has(RoleEnum.REGISTRATOR) ? 'registrator' : 'minimal';
   }
 
   private projectMarketListItem(
     market: Record<string, unknown> | null | undefined,
-    view: 'branch_staff' | 'minimal',
+    view: 'registrator' | 'branch_manager' | 'minimal',
   ) {
     const base = {
       id: market?.id ?? null,
       name: market?.name ?? null,
       status: market?.status ?? null,
     };
-    return view === 'branch_staff'
-      ? {
-          ...base,
-          phone_number: market?.phone_number ?? null,
-          // yiFTzkzH: tarif tanlash (CS-E) — uyga/markazga narx + sukut.
-          tariff_home: market?.tariff_home ?? null,
-          tariff_center: market?.tariff_center ?? null,
-          default_tariff: market?.default_tariff ?? null,
-          // KmWO9gTA: FALSE — faqat standart narx (vazn/hajm qo'shimchasiz).
-          weight_volume_pricing: market?.weight_volume_pricing ?? true,
-        }
-      : base;
+    if (view === 'minimal') {
+      return base;
+    }
+    return {
+      ...base,
+      phone_number: market?.phone_number ?? null,
+      // yiFTzkzH: tarif tanlash (CS-E) — uyga/markazga narx. D5NxxpJW: menejer
+      // va filial hisobida narx yo'q.
+      ...(view === 'registrator'
+        ? {
+            tariff_home: market?.tariff_home ?? null,
+            tariff_center: market?.tariff_center ?? null,
+          }
+        : {}),
+      default_tariff: market?.default_tariff ?? null,
+      // KmWO9gTA: FALSE — faqat standart narx (vazn/hajm qo'shimchasiz).
+      weight_volume_pricing: market?.weight_volume_pricing ?? true,
+    };
   }
 
   // ==================== Market Telegram tokeni (GvL6ZFAd) ====================
@@ -2357,11 +2402,17 @@ export class ApiGatewayController {
 
   @Patch('markets/:id/cancelled-handover-qr')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  // Skan auditi #43 (ega 2026-11-23): QR talabi endi haqiqatan ishlaydi
+  // (o'chirilsa topshirish QR'siz) — uni faqat superadmin/admin o'zgartiradi.
+  // Ilgari market o'zinikini ham o'zgartira olardi.
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
       'Update whether market cancelled-order handover requires market QR scan',
+    description:
+      'Sukut — `true` (bekor buyurtma marketga faqat market QR / kodi bilan). `false` — QR so‘ralmaydi ' +
+      '(skan yoki qo‘lda topshirish, usul `no_qr`). Faqat SUPERADMIN/ADMIN.',
   })
   @ApiParam({ name: 'id', description: 'Market user ID' })
   @ApiBody({ type: UpdateMarketCancelledHandoverQrRequestDto })
@@ -2372,20 +2423,7 @@ export class ApiGatewayController {
   updateMarketCancelledHandoverQr(
     @Param('id') id: string,
     @Body() dto: UpdateMarketCancelledHandoverQrRequestDto,
-    @Req() req: { user: JwtUser },
   ) {
-    const requesterRoles = (req.user.roles ?? []).map((role) =>
-      String(role).toLowerCase(),
-    );
-    if (
-      requesterRoles.includes(RoleEnum.MARKET) &&
-      String(req.user.sub) !== id
-    ) {
-      throw new ForbiddenException(
-        'Market faqat o‘z QR topshirish sozlamasini o‘zgartira oladi',
-      );
-    }
-
     return this.identityClient
       .send(
         { cmd: 'identity.market.update' },

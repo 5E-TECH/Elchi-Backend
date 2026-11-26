@@ -23,6 +23,333 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-26 — Kassa tarixi: «Marketga o'tkazma» izi kirim / chiqimga kirmaydi (ega)
+
+Deploy: **finance-service** (migratsiya, env yo'q). ⚠️ Frontend jufti bilan birga chiqsin (aks holda eski ekranda juft
+qatorlar avvalgidek ikkita, lekin jamilar endi to'g'ri).
+
+«Marketga o'tkazma» (kuryer → market, HQ yoki menejer yozgan) va «Filialdan marketga o'tkazma» da pul kassaga KIRMAYDI,
+lekin asosiy / filial kassasida bitta to'lov ichida ikki qator bor: «Kirim +X» va «Chiqim −X». Qoida (umumiy): bitta
+`transfer_id` ichida AYNI kassada teskari amalli, teng summali oyoq — «o'tkazma izi». Shunday to'lovning T6 teskari
+yozuvlari ham iz.
+
+- ✏️ [finance] Kirim / chiqim jamilari izni hisobga OLMAYDI: `GET /finance/cashbox/main` (`income`, `outcome`),
+  `GET /finance/cashbox/user/:id` va my-cashbox (`income`, `outcome`), `GET /finance/history/daily` (`totals`, kunlar,
+  `*_count`), moliyaviy hisobot `periodTotals` / `periodMonthly`, kunlik snapshot. Qoldiq o'zgarmaydi.
+- ✏️ [finance] `GET /finance/history?operation_type=income|expense` — iz qatorlari yo'q; `counts`: `income`, `expense`
+  izsiz, `all = income + expense + iz juftlari soni` («Barchasi» da juft bitta qator).
+- 🆕 [finance] Tarix qatorlarida (ro'yxat, asosiy kassa, kassa sahifasi, `/history/:id`): iz qatori
+  `pass_through: true` va `pass_through_pair_id` (o'sha kassadagi juft qator id si). Boshqa qatorlarda kalit yo'q.
+  → **Frontendda:** 🔧 juftni bitta kulrang qator qilish («Marketga o'tkazma · kuryer → market · kassaga kirmadi»),
+  qatorlardan hisoblanadigan jamilarda `pass_through` ni o'tkazib yuborish.
+- ✏️ [finance] `GET /finance/history` (operation_type siz, «Barchasi»): juftdan FAQAT kirim oyog'i qaytadi, chiqim oyog'i
+  unga `pass_through_partner` (`id`, `operation_type`, `source_type`, `amount`, `balance_after`, `payment_method`,
+  `source_user`, `pass_through: true` …) bo'lib biriktiriladi — sahifada juft bo'linmaydi, `pagination.total` =
+  `counts.all`. Excel eksportlari va boshqa ichki o'quvchilar — avvalgidek ikkala qator. ⚠️ Frontend PR bilan BIRGA
+  chiqsin: eski frontend kirim oyog'ini oddiy kirim deb ko'rsatadi.
+
+
+### 2026-11-26 — Kassa Excel'lari: «Yo'nalish», «Holat», «Filiallar orqali marketlarga» (ega)
+
+Deploy: **finance-service, api-gateway** (migratsiya, env yo'q). Frontend o'zgarishi shart emas.
+
+- ✏️ [export] `GET /export/cashbox-history.xlsx` («Kassa tarixi», kuryer / market / asosiy kassa sahifasi) — oxirida ikki
+  ustun: «Yo'nalish (kimdan → kimga)» (masalan «Kuryer Ali → Baraka Shop (o'tkazma, Urgut filiali menejeri yozgan)»,
+  «Urgut filiali kassasi → Baraka Shop») va «Holat» («Qaytarilgan», «Qaytarish (#id)», «Tahrirlangan», «Tuzatilgan»).
+- ✏️ [export] `GET /export/cashbox-report.xlsx` (asosiy kassa) — yangi bo'lim «Filiallar orqali marketlarga»: davrda
+  menejerlar filial kassasi orqali marketlarga bergan pul (filial kassasidan to'lov, kuryer «Marketga o'tkazma»si);
+  asosiy kassa balansiga KIRMAYDI. Kirim / chiqim izohida qaytarilgan to'lov belgisi. Filial hisoboti — o'zgarmagan.
+- 🟢 [finance] ichki: `finance.history.find_all` → `include_route` (faqat gateway Excel'i; ommaviy API'da yo'q).
+
+
+### 2026-11-26 — To'lovni qaytarish: filial ishtirokidagi to'lovlar ham (ega)
+
+Deploy: **order-service** (avval yoki birga), **finance-service**, api-gateway (faqat hujjat). Migratsiya, env yo'q.
+⚠️ Frontend shu PR bilan birga yoki OLDIN chiqsin: eski frontend B uchun «Asosiy kassa → Market» deb noto'g'ri yozadi
+va «Summani tahrirlash» tugmasini ko'rsatadi (bossa 409 `reverse_only`).
+
+- ✏️ [finance] `POST /finance/cashbox/history/:id/reverse` endi uch yangi yo'lni ham QAYTARADI (oldin 409
+  `unsupported_type`):
+  - **A** `courier_click_branch` — «Marketga o'tkazma», menejer yozgan (kuryer → filial → market): kuryer +X, market
+    +X, filial sof 0;
+  - **B** `market_branch` — filial kassasidan marketga to'lov: filial +X, market +X;
+  - **C** `branch_click_market` — «Filialdan marketga o'tkazma» (HQ yozgan): filial +X, MAIN sof 0, market +X.
+  Har birida buyurtmalar daftari ham orqaga (A: market → filial → kuryer; B: filial → market; C: market → filial → HQ).
+- ⚠️ [finance] A / B / C da `POST …/correct-amount` — 409 `NOT_CORRECTABLE` + `reason: 'reverse_only'` (yangi sabab;
+  «faqat qaytarish mumkin»).
+- 🆕 [finance] `GET /finance/cashbox/history/:id` → `correctable.edit_allowed: boolean` va `correctable.transfer.variant`
+  (`courier` | `courier_click` | `courier_click_branch` | `market` | `market_branch` | `branch_click_market`).
+  `transfer.receiver` — pul QAYTADIGAN kassa (B va C da filial).
+- 🟢 [finance] Oddiy filial → HQ topshirig'i (`branch_to_main`, naqd / o'tkazma) — avvalgidek `correctable: null`.
+  → **Frontendda:** 🔧 «Qayerdan → Qayerga» `variant` bo'yicha (filial kassasi → market va h.k.); `edit_allowed: false`
+  — «Summani tahrirlash» yo'q, izoh; `reverse_only` xato matni; «yozuvlari to'liq emas» o'rniga tushunarli matn.
+
+
+### 2026-11-25 — GET /orders/:id: filial kontakti va kuryer kontakti (0Rn5U6AD)
+
+Deploy: **branch-service, api-gateway** (migratsiya, env yo'q; tartib muhim emas — branch-service eski bo'lsa maydonlar
+shunchaki kelmaydi).
+
+- 🆕 [orders] `GET /orders/:id` → `branch` ga `phone_number: string | null` va
+  `manager: {id, name, phone_number} | null` (filialning faol menejeri) qo'shildi. Filial — **buyurtma filiali**
+  (`branch_id`), posilka hozir turgan joy emas. Kimga: SUPERADMIN, ADMIN, REGISTRATOR; MANAGER/BRANCH — faqat o'z
+  filiali. MARKET, COURIER, LOGIST va boshqalarda kalit yo'q. Kesh 60 s. Ro'yxat, QR va skan javoblari — o'zgarmagan.
+- 🟢 [orders] `courier: {id, name, phone_number} | null` shu javobda oldindan bor — registratorga alohida `GET users/:id`
+  kerak emas.
+  → **Frontendda:** 🔧 «Filial» qatori: nom, telefon (`tel:`), menejer; «Kuryer» — `courier` dan.
+
+### 2026-11-25 — Menejer, filial va registrator market tarifini ko'rmaydi (D5NxxpJW)
+
+Deploy: **api-gateway, order-service** (migratsiya, env yo'q). ⚠️ Frontend shu PR bilan birga yoki OLDIN chiqsin:
+eski frontend menejer va registratorga «To'lanishi kerak / To'langan» ni «0 so'm» deb chizadi.
+
+- ⚠️ [orders] MANAGER, BRANCH, REGISTRATOR javoblaridan olib tashlandi (null emas, kalit yo'q): `market_tariff`,
+  `quoted_market_tariff`, `to_be_paid`, `paid_amount`, `sale_market_paid_amount`, `sale_market_paid_max`;
+  `order.market` profilida `tariff_home`, `tariff_center`, `commission_*` va boshqa pul maydonlari. Qoladi:
+  `branch_share`, `branch_cashbox_amount`, `courier_tariff`, `courier_share`, `total_price`. SUPERADMIN/ADMIN, MARKET,
+  COURIER, LOGIST — o'zgarmagan.
+  Yo'llar: GET /orders, /orders/:id, /orders/qr-code/:token, /scan/:token, kuryer ro'yxatlari, /orders/branch/cancelled,
+  /orders/markets/new|cancelled, /orders/external/sources, PATCH /orders/:id, POST /orders/sell/:id (javob: `id`,
+  `status`, …), initiate-return, mark-returned-to-market, /transfer-batches/:id(/remaining), /post/…,
+  /post/return-requests/list, /finance/history/:id (`data.order`).
+- ⚠️ [orders] `GET /orders/:id/settlement` — `market_amount` va `market_paid_by_branch_amount` (`extra_rows` ichida ham)
+  faqat SUPERADMIN/ADMIN ga.
+- ⚠️ [markets] `GET /markets` — MANAGER/BRANCH: `tariff_home`, `tariff_center` yo'q (`default_tariff` — tur — qoladi).
+  REGISTRATOR — o'zgarmagan (yaratish formasidagi narx).
+- ⚠️ [export] `GET /export/orders.xlsx` — MANAGER/BRANCH/REGISTRATOR faylida «To'langan», «To'lanishi kerak» ustunlari
+  va «Xulosa»dagi market hisobi yo'q.
+- ✏️ [orders] `POST /orders/sell/:id` 400 matni — `paidAmount` chegarasi summasi aytilmaydi.
+  → **Frontendda:** 🔧 menejer / registratorda «To'lanishi kerak», «To'langan», «Market tarifi» chizilmasin; menejer
+  yaratish formasida narx yo'q.
+
+### 2026-11-25 — Barcha Excel / PDF hisobotlar yangi dizaynda (ega tasdiqladi)
+
+Deploy: **notification-service** (migratsiya 1716000000250), **finance-service**, **file-service**, **api-gateway**. Env yo'q.
+Yorliq / chek stikerlari o'zgarmadi.
+
+- 🆕 [gateway] `GET /export/cashbox-report.xlsx` — SUPERADMIN / ADMIN: asosiy kassa; MANAGER: faqat o'z filiali. `shift_id`
+  (davr — shu smena; boshqa kassaniki — 404) YOKI `from_date` / `to_date` (YYYY-MM-DD, Toshkent); hech biri — BUGUN.
+  → **Frontendda:** 🔧 brauzerdagi `.xls` (`exportMainCashboxReport`) o'rniga; smena yopilganda `?shift_id=`.
+- 🆕 [gateway] `POST /export/old-mails.xlsx` — sof render: `{ title, subtitle?, capped?, hide_courier?, labels?, rows[≤10 000] }`.
+  → **Frontendda:** 🔧 `exportOldMailsToExcel` o'rniga.
+- ✏️ [gateway] `GET /export/shifts.xlsx` — «Kassa», «Ochgan», «Yopgan» ustunlari; sanalmagan smenada soxta kamomad yo'q.
+- ✏️ [gateway] `export/*.xlsx`, `orders/export/excel`, `post/:id/orders.xlsx`, `warehouses/:id/export`, karta ko'chirmasi —
+  yo'l, parametr va ruxsatlar o'zgarmagan; 50 000 dan oshsa faylda DIQQAT (ilgari jim qirqilardi).
+- ✏️ [notification] kampaniya «Yetkazilmaganlar» eksporti — `.xlsx` (200 content-type va fayl nomi); eski tugagan fon
+  fayllari 7 kungacha `.csv`. → **Frontendda:** 🔧 «CSV» matnlari, zaxira fayl nomi.
+- ✏️ [finance] smena hisoboti Excel / PDF; filial smenasida «HQ'ga topshirilgan» alohida qator (Telegram matnida ham).
+- ✏️ [file] `POST /files/pdf` — rasmiy blank, shrift hujjat ichida (o'zbek belgilari buzilmaydi).
+
+### 2026-11-25 — Sayt buyurtmasi noto'g'ri tumanga jimgina tushmaydi (himoya)
+
+Deploy: **order-service** (migratsiya yo'q).
+
+- ⚠️ [order] `POST /orders/external/receive` — tuman aniqlanmasa buyurtma YARATILMAYDI:
+  `skipped[].reason = 'district_unresolved'` (ilgari zaxira tuman qo'yilardi, faqat CRM rad etardi).
+- 🆕 `skipped[].reason = 'region_mismatch'` — saytning SOATO viloyati (`region`, masalan 1703) tumanning SOATO
+  kodiga zid. `region` yuborilmasa yoki SOATO bo'lmasa tekshirilmaydi.
+  → **Frontendda:** 🔧 matn va «Tuzatish»: tuman qo'lda tanlansa `region` maydoni bo'shatilsin (aks holda zid qoladi).
+
+### 2026-11-25 — Asosiy kassa smenasi yopilganda har ulangan filialga O'Z hisoboti
+
+Deploy: **notification-service**, **finance-service** (migratsiya / env yo'q; yangi ichki RMQ
+`notification.telegram.branch_routes`, HTTP kontrakt o'zgarmadi).
+
+- ✏️ [finance] ASOSIY kassa smenasi yopilganda (qo'lda / avtomatik / qayta yuborish) hisobot manzili sozlangan HAR
+  filialga (HQ'dan tashqari) faqat o'z bo'lagi ketadi: shu smenada HQ'ga topshirgan puli (to'lovlar, jami, o'z Excel'i)
+  va kassasidagi qoldiq. Manzil — filial sozlamasi (guruh yoki menejerlar). Boshqa filial / kuryer / market / asosiy
+  kassa summasi yo'q. `report.recipients.branches.telegram` o'chirilsa — ketmaydi.
+- ✏️ [finance] HQ (asosiy kassa) xabari, superadmin xabari, XLSX «Filiallar» varag'i va PDF — filiallardan qabul.
+- ✏️ [finance] `GET /finance/shift/:id/report` → `deliveries[]`: `recipient_kind: 'branch'` qatorlari endi bir nechta
+  (HQ + filiallar; `recipient_name` — filial nomi).
+  → **Frontendda:** 🔧 qayta yuborish tasdig'ida «barcha ulangan filial guruhlari»; filial kartasi izohi.
+
+### 2026-11-25 — Smena hisoboti: «Filial guruhi ulanmagan» sababi ko'rinadi, bot ulanmagan guruhda ogohlantiradi
+
+Deploy: **finance-service**, **notification-service** (migratsiya / env yo'q).
+
+- ✏️ [finance] `GET /finance/shift/:id/report` → `data.deliveries[]`: filial kassasi (asosiy kassa — HQ filiali)
+  hisoboti Telegram guruhga sozlangan, guruh esa ULANMAGAN bo'lsa — `recipient_kind: 'branch'`,
+  `channel: 'telegram_group'`, `status: 'failed'`, `failed_reason: 'Filial guruhi ulanmagan — …'`. Boshqa qabul
+  qiluvchi bo'lmasa `data.report.status` avvalgidek `skipped` (qayta urinilmaydi). Ilgari `deliveries` bo'sh edi.
+- ✏️ [finance] `POST /finance/shift/:id/report/resend` — shu holatda `data.status: 'skipped'` + sababli `deliveries`.
+  → **Frontendda:** 🔧 `status: 'skipped'` javobida «Hisobot qayta yuborildi» deyilmasin; `skipped` bo'sh holat matni.
+- 🟢 [notification] Bot guruhga qo'shilib 20 soniyada hech narsaga ulanmasa — guruhga ulash yo'li yoziladi (bir marta).
+
+### 2026-11-25 — «Tashqi saytlar»: bitta nosoz mijoz yoki narx importni to'xtatmaydi
+
+Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi, yangi sabab yo'q.
+
+- ✏️ [order] `POST /orders/external/receive` — telefon xodim / marketniki bo'lsa (identity 409) butun so'rov yiqilmaydi:
+  faqat shu qator `skipped[].reason = 'customer_create_failed'`. Identity nosozligi (timeout, 5xx) avvalgidek xato.
+- ✏️ [order] Jami narx (yetkazish bilan) 999 999 999 999.99 dan katta bo'lsa — `price_invalid` (ilgari 500).
+- 🟢 [order] Narx va QR mijozdan OLDIN tekshiriladi: rad etilgan buyurtma mijoz yaratmaydi, mavjudini yangilamaydi.
+- 🟢 [order] Mijoz kartasida uzun ism (100) va manzil (255) kesiladi, buyurtmada manzil to'liq qoladi. 20 belgidan uzun
+  qo'shimcha raqam kesilmaydi: bitta raqam bo'lsa kanonik shakli, aks holda yozilmaydi.
+  → **Frontendda:** shart emas (`customer_create_failed` va `price_invalid` matnlari bor).
+
+### 2026-11-25 — «Tashqi saytlar»: minglik bo'shlig'i bilan yozilgan narx («150 000») o'qiladi
+
+Deploy: **order-service** (migratsiya yo'q). Ega qarori 2026-11-25.
+
+- ✏️ [order] `POST /orders/external/receive` — `total_price` / `delivery_price` satri minglik bo'shlig'i bilan yozilgan
+  bo'lsa (`"150 000"`, `"1 500 000"`; oddiy, NBSP, tor va ingichka bo'shliq) son deb o'qiladi. Ilgari `price_invalid`
+  bilan tashlanardi. CRM (qat'iy) importida ham shunday.
+- 🟢 [order] Vergul, nuqta, valyuta va noto'g'ri guruh (`"99,000"`, `"150,5"`, `"150 000 so'm"`, `"15 0"`) avvalgidek
+  `price_invalid`. Onlayn to'lov summasi (webhook) avvalgidek qat'iy — bo'shliqli matn rad etiladi.
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readAmount` — aynan shu qoida
+  (`apps/order-service/src/lifecycle/external-price.ts`). Hozir u `"99,000"` ni 99, `"15 0"` ni 150 deb ko'rsatadi,
+  backend esa rad etadi.
+
+### 2026-11-25 — «Tashqi saytlar»: massiv `items` dagi kasr son va uzun nom importni to'xtatmaydi
+
+Deploy: **order-service** (migratsiya yo'q). Kontrakt shakli o'zgarmadi.
+
+- ✏️ [order] `POST /orders/external/receive` — `items` massiv bo'lganda qator ustunga sig'diriladi: son musbat butun
+  bo'lmasa (`1.5`) yoki int4 ga sig'masa — 1; nom 255 belgiga kesiladi; buyurtma bo'yicha sonlar yig'indisini int4 dan
+  oshiradigan qator — 1. Ilgari bunday qator 400/500 berib, bo'lakni yarim yo'lda uzardi (oldingilari yaratilgan,
+  keyingilari yo'q), mijoz esa buyurtmasiz yaratilib qolardi. Matn yo'lidagi chegara bilan bir xil
+  (`apps/order-service/src/lifecycle/external-item-limits.ts`).
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readItems` massiv shoxi — shu chegaralar, aks holda
+  ro'yxatda `1.5 dona` ko'rinib, buyurtmaga 1 yoziladi.
+
+### 2026-11-25 — «Tashqi saytlar»: `items` matn bo'lib kelganda ham mahsulot qatori yoziladi
+
+Deploy: **order-service** (migratsiya yo'q). Eski buyurtmalar orqaga to'ldirilmaydi.
+
+- ✏️ [order] `POST /orders/external/receive` — `items_field` qiymati MATN bo'lsa (Lidershop, Alion:
+  `"Diskali soat x 1 = 99 000 so'm"`) undan mahsulot nomi va soni olinadi; qatorlar vergul / `;` / yangi qator
+  bilan ajraladi. Ilgari matn tashlanardi: `items = []`, `product_quantity = 0`.
+- ✏️ [order] Matn TO'LIQ ajralmasa — butun matn (255 belgigacha) bitta qator nomi, soni `total_count_field`
+  (sukut `total_count`, musbat butun son) yoki 1. Harf ham raqam ham yo'q matn — bo'sh ro'yxat.
+- 🟢 Summa matndan OLINMAYDI (avvalgidek `total_price` / `delivery_price`); `product_id` — `null`; massiv yo'li o'zgarmadi.
+  → **Frontendda:** 🔧 `pages/new_orders/sites/model/siteOrder.ts` `readItems` — aynan shu qoida
+  (`apps/order-service/src/lifecycle/external-items-text.ts`), aks holda ro'yxatda mahsulot ko'rinmaydi.
+
+### 2026-11-25 — «Aloqani sinash» va saytdan olingan buyurtmalar soni
+
+Deploy: **integration-service, order-service** (migratsiya yo'q).
+
+- ✏️ [integration] `POST /integrations/:id/healthcheck` (va `/test`) — `endpoint` berilmasa bosh manzildagi
+  404 / 405 / 403 (login o'tgan bo'lsa) xato EMAS: server javob berdi va login o'tdi. Yiqilish: login o'tmadi,
+  401, 5xx, javob yo'q. `endpoint` berilsa avvalgidek faqat 2xx.
+- ✏️ Javob `data`: `ok`, yangi `reason` (`auth_failed` · `auth_rejected` · `timeout` · `unreachable` ·
+  `server_error` · `endpoint_failed` yoki `null`), yangi `auth_verified`, `status` (javob bo'lmasa `null`).
+  Yiqilganda `message` — o'zbekcha sabab; «integration healthcheck completed» endi hech qachon kelmaydi.
+  → **Frontendda:** 🔧 `reason` bo'yicha matn (uz/ru/en); `ctlDone` o'rniga «Aloqa bor».
+- 🆕 [integration] `GET /integrations` va `GET /integrations/:id` — har qatorda `imported_orders`:
+  `{ total, today, last_at }` (shu saytdan olingan buyurtmalar, buyurtmalarning o'zidan sanaladi; `today` —
+  Toshkent kuni). `null` — noma'lum (order-service javob bermadi), 0 EMAS. `total_synced_orders` / `last_sync_at`
+  bu emas — ular chiquvchi holat sinxroni.
+  → **Frontendda:** 🔧 «Tashqi saytlar» va konsolda shu maydon ko'rsatilsin.
+
+### 2026-11-25 — «Tashqi saytlar»: buyurtma saytdagi tuman va viloyat pochtasiga tushadi (prod hodisasi)
+
+Deploy: **order-service, logistics-service** (migratsiya yo'q).
+
+- ✏️ [order] `POST /orders/external/receive` — tuman SOATO kodi bo'yicha HAQIQATAN topiladi (ilgari kod
+  logistics'ga yetmasdi va har buyurtma jadvaldagi birinchi tumanga, ya'ni bitta pochtaga tushardi).
+- ✏️ [order] Buyurtma viloyati FAQAT tumandan olinadi; saytning `region` i (SOATO kodi) `region_id` ga
+  yozilmaydi. Tuman viloyatga biriktirilmagan bo'lsa — `skipped[].reason = 'region_unresolved'` (avvalgidek).
+- 🟢 Ulanish sozlamasidagi «Viloyat» maydoni (`region_code_field`) endi o'qilmaydi — kontrakt o'zgarmadi.
+
+### 2026-11-23 — Bekorlarni marketga topshirish: market QR sukut bo'yicha majburiy, admin o'chira oladi (skan auditi #43)
+
+Deploy: **order-service, api-gateway** (migratsiya yo'q). Ega qarori 2026-11-23.
+
+- ✏️ [order] `POST /orders/markets/:id/cancelled/handover` va `POST /orders/:id/mark-returned-to-market` —
+  market `cancelled_handover_qr_required !== false` (sukut) bo'lsa avvalgidek `authorization_token` (MHA-…)
+  majburiy. `false` bo'lsa token SO'RALMAYDI: topshirish QR'siz, usul `market_handover_method = 'no_qr'`
+  (qo'lda — `manual`). 2026-10-02 dan beri bayroqqa qaramay QR talab qilinardi — bayroq `false` marketga
+  topshirish to'xtab qolardi.
+- 🟢 [order] QR'siz ommaviy topshirishlar ham «Topshirilgan» partiyasiga yig'iladi (xodim + market uchun 5
+  daqiqalik ichki sessiya, `authorized_via = 'no_qr'`, tokensiz).
+- ⚠️ [gateway] `PATCH markets/:id/cancelled-handover-qr` — endi FAQAT SUPERADMIN/ADMIN (market roli — 403).
+  `POST markets` da menejer `cancelled_handover_qr_required` yubora olmaydi (e'tiborsiz — sukut `true`).
+  → **Frontendda:** 🔧 «Marketga qaytarish» oynasi (`MarkReturnedModal`) bayroq `false` bo'lsa QR so'ramasin.
+
+### 2026-11-23 — Operator hisobi faqat superadmin va admin uchun (B1te60bD)
+
+Deploy: **api-gateway** (migratsiya yo'q).
+
+- ⚠️ [finance] `GET /finance/operators/:operator_id/{balance,earnings,payments}` — rollardan
+  `manager` olib tashlandi, endi faqat `superadmin`, `admin`. Menejer filial cheklovisiz
+  istalgan market operatorining hisobini o'qiy olardi. Menejer va boshqa rollar → **403**.
+  `x-roles` `openapi.json` da yangilangan.
+  → Frontend: o'zgarish shart emas — «Hisob» bo'limi (`OperatorAccountSection`) faqat
+  superadmin/admin uchun chiziladi. `useOperatorPayments.ts` dagi «SUPERADMIN, ADMIN, MANAGER»
+  izohi eskirgan (🟢).
+
+### 2026-11-23 — Skan auditi: idempotent topshirish/QR, filial paketi sabablari, skan limiti
+
+Deploy: **order-service, logistics-service, branch-service, api-gateway** (migratsiya yo'q).
+
+- ✏️ [order] `POST /orders/markets/:id/cancelled/handover` — allaqachon shu marketga topshirilgan
+  (`returned_to_market`) buyurtma qayta yuborilsa **200**, `data.already_handed_order_ids` da (ilgari umumiy 400).
+  Hech narsa topshirilmasa `closed_count: 0`, `message: "Buyurtmalar allaqachon marketga topshirilgan"`.
+  → **Frontendda:** 🔧 `already_handed_order_ids` — «Allaqachon topshirilgan», qator topshirilganlarga o'tadi.
+- ✏️ [order] `POST /scan/market-cancelled` (QR va kod) — ruxsat hali amal qilsa va skanerlagan AYNAN shu xodim
+  bo'lsa, qayta skan/kod **200** (yangi `authorization_token`, `expires_at` o'zgarmaydi, `reissued: true`).
+  Ilgari «QR allaqachon ishlatilgan». Boshqa xodim — avvalgidek 400.
+- ✏️ [order] `POST /branches/transfer-batches` xatosi endi sababi bilan: `code` =
+  `ORDER_NOT_FOUND` | `ORDER_OTHER_BRANCH` | `ORDER_ALREADY_IN_BATCH` (`details.batch_id`) | `ORDER_NOT_NEW`
+  (`details.status`) | `ORDER_NOT_ASSIGNABLE`. «allaqachon» so'zi faqat `ORDER_ALREADY_IN_BATCH` matnida.
+  → **Frontendda:** 🔧 «allaqachon» substringi o'rniga `code` ga tayaning.
+- ✏️ [order] transfer batch tafsiloti va qolganlari (`GET transfer-batches/:id`, `/remaining`) — har `items[]` da
+  `qr_code_token` (boyitish yiqilsa ham bor). `order.transfer_batch.create` javobida `created_batch_ids`.
+- ✏️ [order] `POST /orders/external/receive-by-scan` — allaqachon `received` posilka `unmatched` emas,
+  `data.already_received: [{ token, order_id }]` da; hammasi qabul qilingan bo'lsa `ok: true, received: 0`.
+  → **Frontendda:** 🔧 `already_received` — qabul qilingan deb ko'rsating («0 qabul qilindi» emas).
+- 🟢 [gateway] skan route'lari global 60/daq emas, `SCAN_THROTTLE` (sukut 300/daq): `GET orders/qr-code/:token`,
+  receive-by-scan, `PATCH post/receive/:id`, `post/receive/scan/:id`, `post/receive/order/:id`,
+  `POST branches/transfer-batches`, `transfer-batches/:id/receive-orders`, `POST scan/market-cancelled`,
+  `POST integrations/:slug/scan-intake`.
+- 🟢 [logistics] pochta hisoblagichi parallel qabulda yo'qolmaydi (atomik); skan-biriktirish xulosasi 1,5 s.
+
+### 2026-11-23 — Operator komissiyasi va to'lovlari (audit 2026-11-22 #8, #9, #10, #23)
+
+Deploy: **api-gateway**, **finance-service**, **order-service** (migratsiya yo'q).
+
+- ✏️ [finance] — `GET/POST /finance/operator-payments/missing-earnings`: endi operatorning
+  BARCHA sotuvlari ko'riladi (5000 talik sahifalar, ichkarida). Avval faqat eng yangi 5000 ta
+  olinardi va eskilari hech qachon hisoblanmasdi. `truncated: true` endi faqat 100 000 dan
+  ortiq sotuvda (yoki deploy oynasida eski order-service bilan) — «qolgani keyingi bosishda»
+  degan va'da noto'g'ri bo'lardi.
+  → **Frontendda:** 🔧 `MissingEarningsDialog`: `truncated: true` bo'lsa «barcha sotuvlarga
+  komissiya yozilgan» / «Hisoblanadigan buyurtma yo'q» matnini ko'rsatmang — «Sotuvlar juda
+  ko'p, hammasi ko'rilmadi» deng.
+- 🆕 [finance] — `POST …/missing-earnings` javobida `revoked` — yozish paytida sotuvdan
+  chiqqan (rollback) buyurtmalar soni; ularning ulushi darhol olib tashlanadi. Odatda 0.
+  → 🟢 ko'rsatish shart emas.
+- ✏️ [finance] — `POST /finance/operator-payments`: **o'chirilgan** o'z operatoriga ham to'lov
+  yoziladi (avval 404 «Operator topilmadi» — qoldig'i «Qoldiq»da abadiy qolardi), lekin faqat
+  to'lanmagan qoldiqni yopish uchun: summa qoldiqdan oshsa yoki qoldiq yo'q bo'lsa — **409**
+  (`message` da ko'pi bilan qancha yozish mumkinligi). O'chirilmagan operatorga avvalgidek
+  avans ham yoziladi.
+  → **Frontendda:** 🔧 «Operatorlar → To'lovlar» da `status: 'deleted'` va `balance > 0`
+  operatorga «To'lov yozish» tugmasini yoqing (summa sukut — qoldiq), 409 xabarini ko'rsating.
+- 🟢 [finance] — `GET /finance/operator-payments/earnings` va `/finance/operators/me/earnings`
+  sahifalari barqaror (`createdAt`, keyin `id`): backfill qatorlari endi sahifalarda
+  takrorlanmaydi va yo'qolmaydi.
+
+### 2026-11-23 — `POST /orders/receive` qayta qabulda idempotent (skan auditi)
+
+Deploy: **order-service** (migratsiya yo'q).
+
+- ✏️ [order] — `POST /orders/receive` javobi `data: {}` o'rniga
+  `data: { received_ids: string[], already_received_ids: string[] }`.
+- ✏️ [order] — allaqachon `received` holatidagi buyurtma qayta yuborilsa **200**
+  (`already_received_ids` da, `message: "Buyurtmalar allaqachon qabul qilingan"`). Ilgari
+  404 «Buyurtmalar topilmadi» edi — skaner real posilka uchun «Topilmadi» ko'rsatardi.
+  Bunday buyurtma qayta yozilmaydi (pochta, javobgarlik, webhook yo'q). Aralash so'rovda
+  (`new` + `received`) faqat `new` lari yoziladi. Boshqa holatlar (`on_the_road`, `sold` …)
+  avvalgidek 404/400; begona filialning qabul qilingan buyurtmasi — 403.
+- 🟢 [order] — bir buyurtma bir vaqtda ikki so'rovda kelsa (timeout'dan keyin qayta skan),
+  ikkinchisi birinchisini kutadi va `already_received_ids` bilan qaytadi — pochta
+  hisoblagichi ikki marta oshmaydi.
+  → **Frontendda:** 🔧 skan-qabulda `already_received_ids` ichidagi id — «Allaqachon qabul
+  qilingan» (shu sahifadan avval yuborilgan bo'lsa — o'zimizning qabul, «Qabul qilindi»).
+
 ### 2026-11-22 — Kargo to'lovi takrorida `cashbox_posted: null` bo'lishi mumkin (ZE5zqXxu)
 
 Deploy: **integration-service** (migratsiya yo'q).

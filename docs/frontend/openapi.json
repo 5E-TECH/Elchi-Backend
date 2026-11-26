@@ -810,7 +810,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q). KQINMdeQ: har qatorda `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (superadmin — hammasi; admin — o`zi va admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa menejer va o`zi yaratgan market — false)."
+            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q). KQINMdeQ: har qatorda `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (superadmin — hammasi; admin — o`zi va admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa menejer va o`zi yaratgan market — false). pe71yf8L: `role = market` va `market_operator` qatorlarida `is_online: boolean` (kamida bitta `/realtime` socket ulangan yoki oxirgisi 45 s dan kam oldin uzilgan), `last_login_at` va `last_seen_at`: ISO | null (hech kirmagan — null; faollik xizmati javob bermasa kalitlar yo`q). Boshqa rollarda kalit yo`q."
           }
         },
         "security": [
@@ -846,7 +846,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users qatoridagi bilan bir xil qoida)."
+            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users qatoridagi bilan bir xil qoida). pe71yf8L: market / market operatorida `is_online`, `last_login_at`, `last_seen_at` (GET /users dagidek)."
           },
           "404": {
             "description": "Not found"
@@ -1249,7 +1249,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: xuddi shu, lekin `phone_number` YO'Q (T7 B3 — market telefoni menejerga ko'rinmaydi). COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
+            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox + T7 `responsible: {id, name, phone_number, role} | null` va `responsible_source: 'assigned' | 'default' | 'none'`. REGISTRATOR: faqat {id, name, phone_number, status, tariff_home, tariff_center, default_tariff, weight_volume_pricing} (yiFTzkzH; tarif maydoni yo'q bo'lsa null). MANAGER/BRANCH: faqat {id, name, status, default_tariff, weight_volume_pricing} — `phone_number` (T7 B3) va narxlar `tariff_home` / `tariff_center` (D5NxxpJW, ega 2026-11-25) YO'Q. COURIER va LOGIST (iFAkvaht — buyurtmalar «Market» filtri): faqat {id, name, status}."
           }
         },
         "security": [
@@ -1462,6 +1462,7 @@
     },
     "/markets/{id}/cancelled-handover-qr": {
       "patch": {
+        "description": "Sukut — `true` (bekor buyurtma marketga faqat market QR / kodi bilan). `false` — QR so‘ralmaydi (skan yoki qo‘lda topshirish, usul `no_qr`). Faqat SUPERADMIN/ADMIN.",
         "operationId": "ApiGatewayController_updateMarketCancelledHandoverQr",
         "parameters": [
           {
@@ -1503,8 +1504,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "market"
+          "admin"
         ]
       }
     },
@@ -3368,12 +3368,12 @@
     },
     "/orders/intake-settings": {
       "get": {
-        "description": "Ikkala chegara ham HAR ISH KUNI takrorlanadi. Yaratish chegarasi (`cutoff_time`): `closes_at` dan kun almashguncha (`reopens_at`) hech qanday yangi buyurtma yaratilmaydi — POST /orders, /orders/external, /orders/telegram/bot/create, ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` (`reopens_at`, `cutoff_time`). Qabul qilish chegarasi (`receive_cutoff_time`): `receive_closes_at` dan kun almashguncha POST /orders/receive va /orders/external/receive-by-scan → 409 `ORDER_RECEIVE_CLOSED` (`reopens_at`, `receive_cutoff_time`). `receive_cutoff_time` kaliti har doim bor (`null` — cheklovsiz). Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha.",
+        "description": "Ikkala chegara ham HAR ISH KUNI takrorlanadi. Yaratish chegarasi (`cutoff_time`): `closes_at` dan kun almashguncha (`reopens_at`) hech qanday yangi buyurtma yaratilmaydi — POST /orders, /orders/external, /orders/telegram/bot/create, ai-confirm, tashqi import va hamkor API → 409 `ORDER_INTAKE_CLOSED` (`reopens_at`, `cutoff_time`). Qabul qilish chegarasi (`receive_cutoff_time`): `receive_closes_at` dan kun almashguncha POST /orders/receive va /orders/external/receive-by-scan → 409 `ORDER_RECEIVE_CLOSED` (`reopens_at`, `receive_cutoff_time`). `receive_cutoff_time` kaliti har doim bor (`null` — cheklovsiz). Ish kuni — `day_change_time` (Toshkent, sukut 00:00) dan keyingi shu soatgacha. xhiXv3w3: bu soat BUTUN tizimning ish kuni (dashboard, buyurtmalar sana filtri, moliya kunlik hisoboti, Excel, kunlik pochtalar); o`zgarsa keyingi kun almashishidan amal qiladi (`day_change_schedule`), o`tgan kunlar qayta hisoblanmaydi.",
         "operationId": "OrderGatewayController_getIntakeSettings",
         "parameters": [],
         "responses": {
           "200": {
-            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, receive_cutoff_time: '16:00' | null, receive_is_open: boolean, receive_closes_at: ISO | null, receive_reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
+            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, receive_cutoff_time: '16:00' | null, receive_is_open: boolean, receive_closes_at: ISO | null, receive_reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO, current_day_change_time: \"HH:MM\", day_change_effective_from: 'YYYY-MM-DD' | null, day_change_schedule: [{ from: 'YYYY-MM-DD', time: 'HH:MM' }] } }. `date` — joriy ISH KUNI (xhiXv3w3); `day_change_time` — oxirgi o`rnatilgan soat, `current_day_change_time` — joriy ish kuni boshlangan soat (yangi soat keyingi kun almashishidan amal qiladi)."
           }
         },
         "security": [
@@ -3403,7 +3403,7 @@
         },
         "responses": {
           "200": {
-            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, receive_cutoff_time: '16:00' | null, receive_is_open: boolean, receive_closes_at: ISO | null, receive_reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO } }"
+            "description": "{ statusCode: 200, message: 'success', data: { cutoff_time: '10:00' | null, date: 'YYYY-MM-DD', is_open: boolean, closes_at: ISO | null, reopens_at: ISO | null, receive_cutoff_time: '16:00' | null, receive_is_open: boolean, receive_closes_at: ISO | null, receive_reopens_at: ISO | null, day_change_time: \"HH:MM\", day_started_at: ISO, next_day_change_at: ISO, current_day_change_time: \"HH:MM\", day_change_effective_from: 'YYYY-MM-DD' | null, day_change_schedule: [{ from: 'YYYY-MM-DD', time: 'HH:MM' }] } }. `date` — joriy ISH KUNI (xhiXv3w3); `day_change_time` — oxirgi o`rnatilgan soat, `current_day_change_time` — joriy ish kuni boshlangan soat (yangi soat keyingi kun almashishidan amal qiladi)."
           }
         },
         "security": [
@@ -3801,7 +3801,7 @@
     },
     "/orders/export/excel": {
       "get": {
-        "description": "Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). Oxirgi qatorlar: «Jami» (soni va narx yig'indisi).",
+        "description": "Javob: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. Sarlavhalar: X-Export-Total (filtr bo'yicha jami), X-Export-Limit, X-Export-Truncated (true — fayl chegaraga yetib kesilgan, faylda DIQQAT qatori bor). Oxirgi qator: «JAMI» (soni va narx yig'indisi, filtrga moslashadi); 2-varaq — «Xulosa» (holat, viloyat, firma, kuryer bo'yicha).",
         "operationId": "OrderGatewayController_exportOrdersExcel",
         "parameters": [
           {
@@ -5411,7 +5411,7 @@
         ],
         "responses": {
           "200": {
-            "description": "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q.",
+            "description": "1mOjtOVC: qisman sxema — chek maydonlari; javobda boshqa maydonlar ham bor. T7: `problem_contacts` («Muammo bo'lsa»); `operator_phone`, `secondary_operator_phone`, `market.phone_number` menejer/filial/kuryerga YO'Q. 0Rn5U6AD: `courier: {id, name, phone_number} | null`; `branch.phone_number` va `branch.manager: {id, name, phone_number} | null` — SUPERADMIN/ADMIN/REGISTRATOR ga (MANAGER/BRANCH — faqat o'z filiali), boshqalarga kalit yo'q.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7167,7 +7167,7 @@
         ],
         "responses": {
           "200": {
-            "description": "`data.allOrdersByPostId[]` — buyurtma qatorlari (`market`, `customer`, `district` oq ro'yxat bilan). T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q). `data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (pochtani JO'NATGAN filial; `branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi)."
+            "description": "`data.allOrdersByPostId[]` — buyurtma qatorlari (`market`, `customer`, `district` oq ro'yxat bilan). T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q). `data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (pochtani JO'NATGAN filial; `branch_id` emas — u ko'pincha manzil). Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi). sZxxo98G: `data.post.recipient_branch: {id, name, phone_number, manager: {id, name, phone_number} | null} | null` — chekdagi QABUL QILUVCHI filial: faqat filial o'tkazmasida (kuryersiz, `sent`/`received`, `branch_id` — manzil filial), boshqa pochtada null. Chekdagi raqam — `phone_number`, bo'sh bo'lsa `manager.phone_number`. Doira 0Rn5U6AD bilan bir xil: SUPERADMIN/ADMIN/REGISTRATOR — har filial, MANAGER/BRANCH — faqat o'z filiali, boshqalarga (kuryer, logist) null. Filial xizmati javob bermasa — null, javob 200."
           }
         },
         "security": [
@@ -7192,7 +7192,7 @@
     },
     "/post/{id}/orders.xlsx": {
       "get": {
-        "description": "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «Jami» qatori. LOGIST — «Narxi» ustuni va jami summa yo'q. Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa faylda DIQQAT qatori.",
+        "description": "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «JAMI» qatori (filtrga moslashadi), 2-varaq — «Xulosa» (holat, joy, tuman, firma bo'yicha). LOGIST — narx ustuni va hech qanday summa yo'q («Xulosa» da ham). Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa DIQQAT — tepada va «Xulosa» da.",
         "operationId": "LogisticsGatewayController_exportPostOrdersXlsx",
         "parameters": [
           {
@@ -7232,7 +7232,7 @@
     },
     "/post/{id}/receipt": {
       "get": {
-        "description": "Ega qarori 2: «Yorliq» — POCHTA CHEKI (bitta buyurtma yorlig'i emas): pochta QR'i (`qr_code_token`), kuryer (ism, telefon), viloyat, «Qayerdan» filial, sana, soni, jami summa va buyurtmalar ro'yxati (EL raqam, mijoz, telefon, manzil/tuman, summa, holat, hozir pochtada). Ro'yxat va doira `GET /post/orders/:id?view=all` bilan bir xil. LOGIST — summa ustuni va jami summa yo'q. `format`: `80mm` (sukut, termal lenta) yoki `a4`; boshqa qiymat — 400.",
+        "description": "Ega qarori 2: «Yorliq» — POCHTA CHEKI (bitta buyurtma yorlig'i emas): pochta QR'i (`qr_code_token`), kuryer (ism, telefon), viloyat, «Qayerdan» filial, sana, soni, jami summa va buyurtmalar ro'yxati (EL raqam, mijoz, telefon, manzil/tuman, summa, holat, hozir pochtada). Ro'yxat va doira `GET /post/orders/:id?view=all` bilan bir xil. LOGIST — summa ustuni va jami summa yo'q. `format`: `80mm` (sukut, termal lenta) yoki `a4`; boshqa qiymat — 400. sZxxo98G: filial o'tkazmasida «Qabul qiluvchi: Filial · telefon» qatori (`post.recipient_branch`: filial raqami, bo'sh bo'lsa faol menejeri raqami; doira `GET /post/orders/:id` dagidek).",
         "operationId": "LogisticsGatewayController_getPostReceipt",
         "parameters": [
           {
@@ -9128,6 +9128,26 @@
             }
           },
           {
+            "name": "payment_method",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) To'lov usuli — vergul bilan bir nechta: `cash` (Naqd), `click` (O'tkazma / karta), `click_to_market` (Marketga o'tkazma), `none` (usuli bo'sh qator). Qiymatlar o'zaro YOKI, boshqa filtrlar bilan VA; `counts` / `pagination.total` filtrdan keyin. Noma'lum qiymat — 400. Faqat SA/admin/menejer/registrator (kuryer, market — 403: filial oyog'i qatorida usul kuryerdan yashirilgan, 63HO6cBU).",
+            "schema": {
+              "example": "cash,click",
+              "type": "string"
+            }
+          },
+          {
+            "name": "card_id",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) Karta — vergul bilan karta ID'lari (`GET /finance/cashbox/cards`) va/yoki `none` (kartasiz). Qator kartasi tarix tafsilotidagi `card` bilan bir xil: asosiy kassa qatorining `card_id` si; `card_id` siz `click` qatori — Asosiy karta (Asosiy karta ID si tanlansa ular ham chiqadi); kuryer / market kassasi qatori — o'sha o'tkazmaning (`transfer_id`) asosiy kassa qatoridagi karta. Naqd, «Marketga o'tkazma» va filial kassasi — `none`. Raqam yoki `none` bo'lmagan qiymat — 400. Rol cheklovi — `payment_method` dagidek.",
+            "schema": {
+              "example": "3,none",
+              "type": "string"
+            }
+          },
+          {
             "name": "cashbox_type",
             "required": false,
             "in": "query",
@@ -10559,9 +10579,29 @@
     },
     "/finance/history": {
       "get": {
-        "description": "GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami. 63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
+        "description": "GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — tanlangan tabdan qat'i nazar. `all = income + expense + o'tkazma izi juftlari`. `pagination.total` — joriy (tabli) ro'yxat jami. (2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X): «Kirim» / «Chiqim» tablarida yo'q; «Barchasi» da juftdan faqat kirim oyog'i, chiqim oyog'i `pass_through_partner` da. 63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
         "operationId": "FinanceGatewayController_findHistory",
         "parameters": [
+          {
+            "name": "payment_method",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) To'lov usuli — vergul bilan bir nechta: `cash` (Naqd), `click` (O'tkazma / karta), `click_to_market` (Marketga o'tkazma), `none` (usuli bo'sh qator). Qiymatlar o'zaro YOKI, boshqa filtrlar bilan VA; `counts` / `pagination.total` filtrdan keyin. Noma'lum qiymat — 400. Faqat SA/admin/menejer/registrator (kuryer, market — 403: filial oyog'i qatorida usul kuryerdan yashirilgan, 63HO6cBU).",
+            "schema": {
+              "example": "cash,click",
+              "type": "string"
+            }
+          },
+          {
+            "name": "card_id",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) Karta — vergul bilan karta ID'lari (`GET /finance/cashbox/cards`) va/yoki `none` (kartasiz). Qator kartasi tarix tafsilotidagi `card` bilan bir xil: asosiy kassa qatorining `card_id` si; `card_id` siz `click` qatori — Asosiy karta (Asosiy karta ID si tanlansa ular ham chiqadi); kuryer / market kassasi qatori — o'sha o'tkazmaning (`transfer_id`) asosiy kassa qatoridagi karta. Naqd, «Marketga o'tkazma» va filial kassasi — `none`. Raqam yoki `none` bo'lmagan qiymat — 400. Rol cheklovi — `payment_method` dagidek.",
+            "schema": {
+              "example": "3,none",
+              "type": "string"
+            }
+          },
           {
             "name": "expense_category_id",
             "required": false,
@@ -10823,6 +10863,26 @@
         "operationId": "FinanceGatewayController_historyDaily",
         "parameters": [
           {
+            "name": "payment_method",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) To'lov usuli — vergul bilan bir nechta: `cash` (Naqd), `click` (O'tkazma / karta), `click_to_market` (Marketga o'tkazma), `none` (usuli bo'sh qator). Qiymatlar o'zaro YOKI, boshqa filtrlar bilan VA; `counts` / `pagination.total` filtrdan keyin. Noma'lum qiymat — 400. Faqat SA/admin/menejer/registrator (kuryer, market — 403: filial oyog'i qatorida usul kuryerdan yashirilgan, 63HO6cBU).",
+            "schema": {
+              "example": "cash,click",
+              "type": "string"
+            }
+          },
+          {
+            "name": "card_id",
+            "required": false,
+            "in": "query",
+            "description": "(KRN902pg) Karta — vergul bilan karta ID'lari (`GET /finance/cashbox/cards`) va/yoki `none` (kartasiz). Qator kartasi tarix tafsilotidagi `card` bilan bir xil: asosiy kassa qatorining `card_id` si; `card_id` siz `click` qatori — Asosiy karta (Asosiy karta ID si tanlansa ular ham chiqadi); kuryer / market kassasi qatori — o'sha o'tkazmaning (`transfer_id`) asosiy kassa qatoridagi karta. Naqd, «Marketga o'tkazma» va filial kassasi — `none`. Raqam yoki `none` bo'lmagan qiymat — 400. Rol cheklovi — `payment_method` dagidek.",
+            "schema": {
+              "example": "3,none",
+              "type": "string"
+            }
+          },
+          {
             "name": "from_date",
             "required": false,
             "in": "query",
@@ -11050,7 +11110,7 @@
     },
     "/finance/history/{id}": {
       "get": {
-        "description": "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id, transfer }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q. mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; `receiver` — kuryer to'lovida pulni olgan kassa, marketga to'lovda MAIN (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`. (2026-11-14) Barcha rollarga: `source_branch` — `branch_to_main` qatorida pulni topshirgan filial `{ id, name }`, boshqa turda `null`; `transfer_source_user` — o'tkazma manbasi `{ id, name, role, phone_number }` yoki `null`; `card` — `click` to'lovida MAIN / BRANCH kassaning qaysi kartasiga tushgan / qaysi kartasidan chiqqan `{ id, name, is_default, kind, bank_name, card_network, last4, holder_name }` (`card_id` siz — Asosiy karta; yozuvi yo'q bo'lsa `id: null`), naqd, «Marketga o'tkazma» va kuryer/market kassasida `null`. Fail-open — `null`. 63HO6cBU: FILIAL kassasi qatorida `card` doim `null` (filialda karta yo'q). `branch_leg: true` qatorda (filial oyog'i, kuryer → filial to'lovi) KURYER uchun `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; SA/admin, menejer, registrator — saqlanadi (ega qarori Q2).",
+        "description": "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, edit_allowed, root_history_id, transfer }`, qamrovdan tashqari turda (oddiy filial → HQ topshirig'i ham) `correctable: null`; boshqa rollarda kalit yo'q. (2026-11-26) `edit_allowed: false` — filial ishtirokidagi to'lov (`transfer.variant`: `courier_click_branch`, `market_branch`, `branch_click_market`) faqat QAYTARILADI; tahrir so'ralsa 409 `NOT_CORRECTABLE` / `reason: 'reverse_only'`. mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', variant: 'courier'|'courier_click'|'courier_click_branch'|'market'|'market_branch'|'branch_click_market', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; `receiver` — pul qaytadigan kassa: kuryer to'lovida pulni olgan kassa, marketga to'lovda to'lagan kassa (MAIN yoki filial), `branch_click_market` da filial (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`. (2026-11-14) Barcha rollarga: `source_branch` — `branch_to_main` qatorida pulni topshirgan filial `{ id, name }`, boshqa turda `null`; `transfer_source_user` — o'tkazma manbasi `{ id, name, role, phone_number }` yoki `null`; `card` — `click` to'lovida MAIN / BRANCH kassaning qaysi kartasiga tushgan / qaysi kartasidan chiqqan `{ id, name, is_default, kind, bank_name, card_network, last4, holder_name }` (`card_id` siz — Asosiy karta; yozuvi yo'q bo'lsa `id: null`), naqd, «Marketga o'tkazma» va kuryer/market kassasida `null`. Fail-open — `null`. 63HO6cBU: FILIAL kassasi qatorida `card` doim `null` (filialda karta yo'q). `branch_leg: true` qatorda (filial oyog'i, kuryer → filial to'lovi) KURYER uchun `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; SA/admin, menejer, registrator — saqlanadi (ega qarori Q2).",
         "operationId": "FinanceGatewayController_findHistoryById",
         "parameters": [
           {
@@ -11160,7 +11220,7 @@
     },
     "/finance/history/{id}/reverse": {
       "post": {
-        "description": "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN sof 0, market +X. Marketga to'lov: MAIN +X, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi. 201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` / `IDEMPOTENCY_KEY_REQUIRED`.",
+        "description": "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN (yoki menejer yozganda filial) sof 0, market +X. Marketga to'lov: to'lagan kassa (MAIN yoki filial) +X, market +X. Filialdan marketga o'tkazma: filial +X, MAIN sof 0, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi; buyurtmalar daftari orqaga (outbox). 201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` / `IDEMPOTENCY_KEY_REQUIRED`.",
         "operationId": "FinanceGatewayController_reversePayment",
         "parameters": [
           {
@@ -12951,8 +13011,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -13002,8 +13061,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -13053,8 +13111,7 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin",
-          "manager"
+          "admin"
         ]
       }
     },
@@ -13525,7 +13582,7 @@
             "bearer": []
           }
         ],
-        "summary": "Yetkazilmaganlar CSV (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi",
+        "summary": "Yetkazilmaganlar Excel (superadmin): ≤10 000 — fayl, kattasi — 202 fon vazifasi",
         "tags": [
           "Notification campaigns"
         ],
@@ -13591,7 +13648,7 @@
             "bearer": []
           }
         ],
-        "summary": "Tayyor CSV (superadmin) — har yuklash jurnalga `export`",
+        "summary": "Tayyor eksport fayli (superadmin) — har yuklash jurnalga `export`",
         "tags": [
           "Notification campaigns"
         ],
@@ -15249,7 +15306,7 @@
             "bearer": []
           }
         ],
-        "summary": "Yetkazilmagan SMS CSV (superadmin, telefon maskalangan)",
+        "summary": "Yetkazilmagan SMS Excel (superadmin, telefon maskalangan)",
         "tags": [
           "SMS"
         ],
@@ -15378,6 +15435,7 @@
     },
     "/integrations": {
       "get": {
+        "description": "REGISTRATOR: faqat «Tashqi saytlar» — faol, marketi bor, to'lov emas ulanishlar; maydonlar: id, name, slug, type, role, category, status, is_active, market_id, market {id,name}, base_url/api_url (login/parol va query'siz), field_mapping, status_sync_config.external_search.endpoint, imported_orders, last_sync_at. Filtrlar e'tiborga olinmaydi, bitta sahifa.",
         "operationId": "IntegrationGatewayController_findAll",
         "parameters": [
           {
@@ -15492,7 +15550,8 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "registrator"
         ]
       },
       "post": {
@@ -15969,6 +16028,7 @@
     },
     "/integrations/{id}": {
       "get": {
+        "description": "REGISTRATOR: faqat sayt ulanish (ro'yxatdagi kabi maydonlar), boshqasi — 404.",
         "operationId": "IntegrationGatewayController_findById",
         "parameters": [
           {
@@ -15996,7 +16056,8 @@
         ],
         "x-roles": [
           "superadmin",
-          "admin"
+          "admin",
+          "registrator"
         ]
       },
       "patch": {
@@ -20930,6 +20991,7 @@
     },
     "/export/orders.xlsx": {
       "get": {
+        "description": "Hisob bilan: jami narx, marketga to'lanishi kerak / to'langan / qoldi (faqat SUPERADMIN/ADMIN — D5NxxpJW); holat o'zbekcha, kuryer ismi; 2-varaq — «Xulosa» (marketlar bilan hisob). 50 000 qatordan oshsa faylda DIQQAT.",
         "operationId": "ExcelGatewayController_exportOrders",
         "parameters": [
           {
@@ -21239,6 +21301,117 @@
         "x-roles": [
           "admin",
           "superadmin"
+        ]
+      }
+    },
+    "/export/cashbox-report.xlsx": {
+      "get": {
+        "description": "SUPERADMIN / ADMIN — asosiy kassa; MANAGER — FAQAT o'z filiali kassasi (bitta jami, naqd/karta qoldig'i yo'q). Boshqa kassa so'ralsa (`branch_id`, `cashbox_user_id`, `user_id`, `cashbox_type`, `cashbox_id`) — 403. Davr: `shift_id` (smena oynasi, ochiq smena — hozirgacha; berilsa `from_date`/`to_date` e'tiborga olinmaydi) YOKI `from_date`/`to_date`. Faqat `from_date` — hozirgacha, faqat `to_date` — o'sha kun, hech biri — BUGUN (Toshkent). Fayl nomi: `kassa-hisobot-<YYYY-MM-DD>.xlsx`, bir necha kunda `kassa-hisobot-<dan>_<gacha>.xlsx` (Content-Disposition). Balans nazorati («Kassa balansiga teng» / «Mos kelmadi: farq …») davr hozirgacha bo'lganda.",
+        "operationId": "ExcelGatewayController_exportCashboxReport",
+        "parameters": [
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "description": "'YYYY-MM-DD' — Toshkent kunining oxirigacha (kun kiradi)",
+            "schema": {
+              "example": "2026-11-24",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "description": "'YYYY-MM-DD' — Toshkent kunining boshidan (kun kiradi)",
+            "schema": {
+              "example": "2026-11-18",
+              "type": "string"
+            }
+          },
+          {
+            "name": "shift_id",
+            "required": false,
+            "in": "query",
+            "description": "Smena ID si (raqam). Shu kassaniki bo'lishi shart, aks holda 404",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Excel fayl",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sana yoki shift_id noto'g'ri"
+          },
+          "403": {
+            "description": "Rol yoki boshqa kassa so'ralgan; menejer filiali topilmadi"
+          },
+          "404": {
+            "description": "Smena topilmadi yoki boshqa kassaniki"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kassa hisoboti (.xlsx): kirim, chiqim va kassa balansi",
+        "tags": [
+          "Excel Export"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager"
+        ]
+      }
+    },
+    "/export/old-mails.xlsx": {
+      "post": {
+        "description": "Qatorlarni sahifa o'zi yuboradi (`GET /post` / `post/courier/old-posts` / `transfer-batches` dan yig'ilgan), server faqat Excel qiladi — bazadan o'qimaydi. Chegara: 10 000 qator, tana ≤ 4 MB (katta bo‘lsa 413). Ortig‘i bo‘lsa — birinchi 10 000 qator va `capped: true`. `hide_courier: true` — «Filial paketlari» rejimi. Fayl: `old-mails-<YYYY-MM-DD>.xlsx` (Toshkent kuni).",
+        "operationId": "OldMailsExportController_exportOldMails",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OldMailsExportRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Eski pochtalar hisoboti — .xlsx (sof render)",
+        "tags": [
+          "Excel Export"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "registrator",
+          "manager",
+          "courier"
         ]
       }
     },
@@ -26789,7 +26962,7 @@
         ]
       },
       "post": {
-        "description": "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
+        "description": "F2qp6FtE. Faqat hisob yozuvi: summa, sana (`paid_at`, sukut — bugun, kelajak — 400), izoh, kim yozdi (market). Asosiy kassa, kassa tarixi, «Maosh» xarajati, P&L daftari va smenaga TEGMAYDI. Qoldiqdan oshsa ham yoziladi (avans). O'chirilgan operatorga (audit 2026-11-22 #10) — faqat to'lanmagan qoldiqni yopish uchun: summa qoldiqdan oshsa yoki qoldiq yo'q bo'lsa — 409. `Idempotency-Key` MAJBURIY: ayni kalit bilan takror — 200 va o'sha yozuv (`idempotent: true`), ayni kalit boshqa to'lov bilan — 409. Jurnal: `finance.operator_payment_recorded`.",
         "operationId": "OperatorPaymentGatewayController_record",
         "parameters": [
           {
@@ -26975,7 +27148,7 @@
     },
     "/finance/operator-payments/missing-earnings": {
       "get": {
-        "description": "2026-11-20. Hech narsa yozilmaydi. `{ sold_orders, already_recorded, missing, to_record, amount, commission_type, commission_value, operator_name, truncated }` — `to_record` / `amount`: joriy stavka bo'yicha yoziladigan qatorlar va summa (stavka yo'q — 0).",
+        "description": "2026-11-20. Hech narsa yozilmaydi. `{ sold_orders, already_recorded, missing, to_record, amount, commission_type, commission_value, operator_name, truncated }` — `to_record` / `amount`: joriy stavka bo'yicha yoziladigan qatorlar va summa (stavka yo'q — 0). Barcha sotuvlar 5000 talik sahifalarda ko'riladi (audit 2026-11-22 #9); `truncated: true` — faqat 100 000 dan ortiq sotuvda (ko'rilmagan qismi qoldi).",
         "operationId": "OperatorEarningBackfillGatewayController_preview",
         "parameters": [
           {
@@ -27014,7 +27187,7 @@
         ]
       },
       "post": {
-        "description": "2026-11-20. Faqat daftarda qatori umuman yo'q (rollback qilinmagan) hozir sotilgan buyurtmalar; mavjud qatorlar o'zgarmaydi. Takror — ikkinchi qator yo'q (`created: 0`). Javob: oldindan ko'rish maydonlari + `created`, `created_amount`. Elchi kassasiga ta'sir yo'q.",
+        "description": "2026-11-20. Faqat daftarda qatori umuman yo'q (rollback qilinmagan) hozir sotilgan buyurtmalar; mavjud qatorlar o'zgarmaydi. Takror — ikkinchi qator yo'q (`created: 0`). Javob: oldindan ko'rish maydonlari + `created`, `created_amount`, `revoked` — yozish paytida sotuvdan chiqqan buyurtmalar soni (ulushi darhol olib tashlandi, audit 2026-11-22 #8). Barcha sotuvlar sahifalab yoziladi (#9). Elchi kassasiga ta'sir yo'q.",
         "operationId": "OperatorEarningBackfillGatewayController_record",
         "parameters": [],
         "requestBody": {
@@ -28201,7 +28374,7 @@
     },
     "/warehouses/{id}/export": {
       "get": {
-        "description": "«Excelga yuklash»: shu ombor qoldig'i (filtrlar `stock` bilan bir xil, sahifasiz, ≤10 000 qator).",
+        "description": "«Excelga yuklash»: shu ombor qoldig'i (filtrlar `stock` bilan bir xil, sahifasiz, ≤10 000 qator; ortig'i bo'lsa faylda DIQQAT). 1-varaq «Xulosa» — tugagan / kam qolganlar va marketlar; 2-varaq «Qoldiq» — to'liq ro'yxat (Tugagan → Kam qoldi → Yetarli).",
         "operationId": "WarehouseGatewayController_exportStock",
         "parameters": [
           {
@@ -30854,7 +31027,7 @@
             "type": "string",
             "nullable": true,
             "example": "00:00",
-            "description": "Kun almashish soati (Toshkent, `HH:MM`, sukut `00:00`) — ish kuni shu soatdan keyingi kun shu soatgacha. `null` — sukutga qaytarish. Faqat buyurtma yaratish / qabul qilish oynasini belgilaydi (hisobot / pochta / smena kunlari 00:00 bo`yicha qoladi)."
+            "description": "Kun almashish soati (Toshkent, `HH:MM`, sukut `00:00`) — ish kuni shu soatdan keyingi kun shu soatgacha. `null` — sukutga qaytarish. xhiXv3w3: butun tizimning ish kuni — yaratish / qabul oynasi, dashboard, buyurtmalar sana filtri, moliya kunlik hisoboti, Excel, kunlik pochtalar, smena ro`yxati va kuryer hisoboti. Yangi soat KEYINGI kun almashishidan amal qiladi (kamida 5 daqiqa keyin), o`tgan kunlar qayta hisoblanmaydi; servislar ≤ 1 daqiqada oladi."
           }
         }
       },
@@ -31015,7 +31188,7 @@
           "operator_id": {
             "type": "string",
             "example": "26",
-            "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan) — POST /orders `operator_id` bilan AYNI qoida. Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART (superadmin/admin ham tekshiriladi); market operatori faqat o'zini tanlay oladi. Aks holda SHU buyurtma yaratilmaydi: natijada `ok: false, code: \"create_failed\"`, `reason` — POST /orders 400 matni («Tanlangan operator bu marketga tegishli emas yoki faol emas» yoki «Market operatori faqat o‘zini operator qilib tanlay oladi»); partiyadagi boshqa buyurtmalar yaratiladi. Operatorni tekshirib bo‘lmasa (identity javob bermadi) — `code: \"validation_unavailable\"`, buyurtma ANIQ yaratilmagan, qayta yuboring. To‘g‘ri bo‘lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e’tiborsiz; AI auditida ham shu ism). Musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa) — aks holda 400 (DTO). Bo‘sh satr — tanlanmagan. Berilmasa — avvalgi xulq (`operator` matni; market operatori — o‘zi; qolganlar — operatorsiz). ⚠️ Faqat odam select’da tanlaydi: AI `operator` matnidan operator_id ni AVTOMATIK tanlamang; market operatori roli uni yubormasin (u baribir o‘zi)."
+            "description": "Tanlangan market operatori ID si (GET /market-operators/selectable ro`yxatidan) — POST /orders `operator_id` bilan AYNI qoida. Buyurtma marketining faol, o'chirilmagan operatori bo'lishi SHART (superadmin/admin ham tekshiriladi); market operatori faqat o'zini tanlay oladi. Aks holda SHU buyurtma yaratilmaydi: natijada `ok: false, code: \"create_failed\"`, `reason` — POST /orders 400 matni («Tanlangan operator bu marketga tegishli emas yoki faol emas» yoki «Market operatori faqat o‘zini operator qilib tanlay oladi»); partiyadagi boshqa buyurtmalar yaratiladi. Operatorni tekshirib bo‘lmasa (identity javob bermadi) — `code: \"validation_unavailable\"`, buyurtma ANIQ yaratilmagan, qayta yuboring. To‘g‘ri bo‘lsa buyurtmaga `operator_id` va `operator` = operator ismi yoziladi (`operator` matni e’tiborsiz; AI auditida ham shu ism). Musbat int8 satr (boshida nolsiz, ≤ 9223372036854775807; JSON son faqat xavfsiz butun bo‘lsa) — aks holda 400 (DTO). Bo‘sh satr — tanlanmagan. Berilmasa — avvalgi xulq (`operator` matni; market operatori — o‘zi; qolganlar — operatorsiz). Frontend AI kartasi: `operator` matni ro‘yxatdagi YAGONA operatorga mos kelsa, uni o‘zi tanlab yuboradi (ega, 2026-11-23; odam yaratishdan oldin ko‘radi va o‘zgartira oladi), bir nechta mos yoki mos kelmasa — odam tanlaydi. Backend matndan operator_id ni o‘zi aniqlamaydi. Market operatori roli uni yubormasin (u baribir o‘zi)."
           },
           "operator_phone": {
             "type": "string",
@@ -38072,6 +38245,240 @@
       "PrintOrdersDto": {
         "type": "object",
         "properties": {}
+      },
+      "OldMailsExportLabelsDto": {
+        "type": "object",
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "default": "Yaratilgan vaqt",
+            "maxLength": 80
+          },
+          "no": {
+            "type": "string",
+            "default": "T/r",
+            "maxLength": 80
+          },
+          "mail_id": {
+            "type": "string",
+            "default": "Pochta raqami",
+            "maxLength": 80
+          },
+          "region": {
+            "type": "string",
+            "default": "Viloyat",
+            "maxLength": 80
+          },
+          "courier": {
+            "type": "string",
+            "default": "Kuryer",
+            "maxLength": 80
+          },
+          "status": {
+            "type": "string",
+            "default": "Holati",
+            "maxLength": 80
+          },
+          "orders": {
+            "type": "string",
+            "default": "Buyurtmalar",
+            "maxLength": 80
+          },
+          "amount": {
+            "type": "string",
+            "default": "Summa",
+            "maxLength": 80
+          },
+          "date": {
+            "type": "string",
+            "default": "Pochta sanasi",
+            "maxLength": 80
+          },
+          "total_mails": {
+            "type": "string",
+            "default": "Jami pochtalar",
+            "maxLength": 80
+          },
+          "total_orders": {
+            "type": "string",
+            "default": "Jami buyurtmalar",
+            "maxLength": 80
+          },
+          "total_amount": {
+            "type": "string",
+            "default": "Jami summa",
+            "maxLength": 80
+          },
+          "currency": {
+            "type": "string",
+            "default": "so'm",
+            "maxLength": 20
+          },
+          "summary_title": {
+            "type": "string",
+            "default": "Eski pochtalar xulosasi",
+            "maxLength": 120
+          },
+          "by_status": {
+            "type": "string",
+            "default": "Holatlar bo'yicha",
+            "maxLength": 80
+          },
+          "by_region": {
+            "type": "string",
+            "default": "Viloyatlar bo'yicha",
+            "maxLength": 80
+          },
+          "by_courier": {
+            "type": "string",
+            "default": "Kuryerlar bo'yicha",
+            "maxLength": 80
+          },
+          "mails": {
+            "type": "string",
+            "default": "Pochtalar",
+            "maxLength": 80
+          },
+          "share": {
+            "type": "string",
+            "default": "Ulushi",
+            "maxLength": 80
+          },
+          "total": {
+            "type": "string",
+            "default": "JAMI",
+            "maxLength": 20
+          },
+          "others": {
+            "type": "string",
+            "default": "Boshqalar",
+            "maxLength": 80
+          },
+          "unassigned": {
+            "type": "string",
+            "default": "Biriktirilmagan",
+            "maxLength": 80
+          },
+          "mails_unit": {
+            "type": "string",
+            "default": "ta pochta",
+            "maxLength": 20
+          },
+          "orders_unit": {
+            "type": "string",
+            "default": "ta buyurtma",
+            "maxLength": 20
+          },
+          "capped_note": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "`capped: true` dagi DIQQAT matni (sukut — o'zbekcha, qatorlar soni bilan)"
+          }
+        }
+      },
+      "OldMailsExportRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "2417",
+            "maxLength": 40
+          },
+          "region": {
+            "type": "string",
+            "example": "Andijon viloyati",
+            "maxLength": 120
+          },
+          "courier": {
+            "type": "string",
+            "nullable": true,
+            "example": "Jasur Tursunov",
+            "maxLength": 120,
+            "description": "Bo'sh / null — «—». `hide_courier` da e'tiborsiz."
+          },
+          "status": {
+            "type": "string",
+            "example": "Jo'natilgan",
+            "maxLength": 60,
+            "description": "Tayyor yorliq (foydalanuvchi tilida)"
+          },
+          "status_tone": {
+            "type": "string",
+            "enum": [
+              "success",
+              "warning",
+              "danger",
+              "neutral",
+              "info"
+            ],
+            "description": "Holat rangi; yo'q — rangsiz"
+          },
+          "orders": {
+            "type": "number",
+            "example": 24,
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "amount": {
+            "type": "number",
+            "example": 11310000,
+            "minimum": -100000000000,
+            "maximum": 100000000000,
+            "description": "Summa, so'm (son)"
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2026-11-21T12:32:00.000Z",
+            "maxLength": 40,
+            "description": "Pochta sanasi (ISO). Faylda Toshkent vaqti; o'qilmasa — matn, bo'sh — «—»."
+          }
+        },
+        "required": [
+          "id",
+          "region",
+          "status",
+          "orders",
+          "amount",
+          "created_at"
+        ]
+      },
+      "OldMailsExportRequestDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "example": "Eski pochtalar hisoboti",
+            "maxLength": 120
+          },
+          "subtitle": {
+            "type": "string",
+            "example": "Davr: 14.11.2026 – 21.11.2026 · Holat: barchasi",
+            "maxLength": 300,
+            "description": "Banner osti matni (filtrlar)"
+          },
+          "capped": {
+            "type": "boolean",
+            "description": "Ro'yxat chegaraga yetib kesilgan — faylda DIQQAT (tepada, oxirida va «Xulosa» da)"
+          },
+          "hide_courier": {
+            "type": "boolean",
+            "description": "«Filial paketlari» rejimi: kuryer ustuni va jadvali yo'q"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/OldMailsExportLabelsDto"
+          },
+          "rows": {
+            "maxItems": 10000,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OldMailsExportRowDto"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "rows"
+        ]
       },
       "CreatePartnerMarketRequestDto": {
         "type": "object",

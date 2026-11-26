@@ -62,7 +62,7 @@ describe('x6IO746K — GET /users operator marketi gateway`da', () => {
       undefined,
       '1',
       '10',
-      { user: { sub: '1', username: 'sa', roles: ['superadmin'] } } as never,
+      { user: { sub: '1', username: 'sa', roles: ['superadmin'] } },
     )) as { data: { items: Row[] } };
 
     expect(res.data.items.map((row) => [row.id, row.market])).toEqual([
@@ -70,7 +70,16 @@ describe('x6IO746K — GET /users operator marketi gateway`da', () => {
       ['203', null],
       ['26', undefined],
     ]);
-    expect(identityClient.send).toHaveBeenCalledTimes(1);
+    // pe71yf8L: market tomoni qatorlari uchun BITTA faollik so'rovi
+    // (`identity.user.activity.find_by_ids`) — marketni qidirish emas.
+    const identityCmds = (
+      identityClient.send.mock.calls as Array<[Pattern]>
+    ).map(([p]) => p.cmd);
+    expect(
+      identityCmds.filter(
+        (cmd) => cmd !== 'identity.user.activity.find_by_ids',
+      ),
+    ).toHaveLength(1);
     const calls = (identityClient.send.mock.calls as Array<[Pattern]>).concat(
       branchClient.send.mock.calls as Array<[Pattern]>,
     );

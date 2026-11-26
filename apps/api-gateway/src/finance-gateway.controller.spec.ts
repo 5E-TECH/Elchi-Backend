@@ -148,6 +148,28 @@ describe('FinanceGatewayController', () => {
     );
   });
 
+  it('asks finance to collapse pass-through pairs for the screen list (2026-11-26)', async () => {
+    const { controller, financeClient } = setup();
+    financeClient.send.mockReturnValue(of({ data: { items: [] } }));
+    const roles: Array<Record<string, unknown>> = [
+      { sub: 'sa-1', roles: ['superadmin'] },
+      { sub: 'manager-1', roles: ['manager'], branch_id: '16' },
+    ];
+    for (const user of roles) {
+      financeClient.send.mockClear();
+      await controller.findHistory(
+        { cashbox_type: 'main' } as any,
+        {
+          user,
+        } as any,
+      );
+      expect(financeClient.send).toHaveBeenCalledWith(
+        { cmd: 'finance.history.find_all' },
+        expect.objectContaining({ collapse_pass_through: true }),
+      );
+    }
+  });
+
   it('shows manager branch-to-HQ history from the branch cashbox', async () => {
     const { controller, financeClient } = setup();
     const req = {

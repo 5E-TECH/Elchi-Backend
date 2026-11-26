@@ -658,6 +658,66 @@ export class BranchServiceService implements OnModuleInit {
     return new Set<string>(rows.map((row) => String(row.id)));
   }
 
+  /**
+   * Registrator «Filial paketlari» doirasi («Qabul va yaratish» tabi): HQ ga
+   * (umuman — ota filialga) kelgan FORWARD paketlarni o'sha manzil filial
+   * registratori ham ko'radi va qabul qiladi. Qabul qoidasi o'zgarmaydi —
+   * `assertRequesterWorksInBranch` (manzil filialda ishlaydi); bu doira faqat
+   * O'QISHNI unga tenglashtiradi: manba filial registratorniki bo'lmasa ham,
+   * paket manzili uning (REGISTRATOR qatori bor) filiali bo'lsa ko'rinadi.
+   *
+   * `null` — doira qo'llanmaydi: superadmin/admin (hammasini ko'radi), boshqa
+   * rollar, FORWARD bo'lmagan yo'nalish yoki `side=destination` (u yerda o'z
+   * filiali baribir o'qiladi). Massiv — registratorning filiallari (bo'sh —
+   * hech narsa, fail-closed).
+   */
+  private async registratorPackageScope(
+    query: { direction?: string; side?: string },
+    requester?: RequesterContext,
+  ): Promise<string[] | null> {
+    if (this.isSystemPrivileged(requester)) {
+      return null;
+    }
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    if (!roles.includes(Roles.REGISTRATOR)) {
+      return null;
+    }
+    const direction = String(query?.direction ?? '')
+      .trim()
+      .toUpperCase();
+    const side = String(query?.side ?? 'source')
+      .trim()
+      .toLowerCase();
+    if (
+      direction !== (BranchTransferDirection.FORWARD as string) ||
+      side === 'destination'
+    ) {
+      return null;
+    }
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      return [];
+    }
+    const assignments = await this.branchUserRepo.find({
+      where: { user_id: requesterId, isDeleted: false },
+      select: ['branch_id', 'role'],
+    });
+    return Array.from(
+      new Set(
+        assignments
+          .filter((item) =>
+            this.isBranchUserRoleOneOf(item.role, [BranchUserRole.REGISTRATOR]),
+          )
+          .map((item) => String(item.branch_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+
   private async resolveAccessScope(
     requester?: RequesterContext,
   ): Promise<BranchAccessScope> {
@@ -2701,7 +2761,11 @@ export class BranchServiceService implements OnModuleInit {
 
     const createRes = await this.sendOrderCommand<{
       statusCode?: number;
-      data?: { idempotent?: boolean; batches?: Array<Record<string, any>> };
+      data?: {
+        idempotent?: boolean;
+        batches?: Array<Record<string, any>>;
+        created_batch_ids?: unknown;
+      };
       message?: string;
     }>('order.transfer_batch.create', {
       source_branch_id: sourceBranchId,
@@ -2730,8 +2794,19 @@ export class BranchServiceService implements OnModuleInit {
 
     const qrFiles: Array<{ batch_id: string; key: string; url: string }> = [];
     const qrErrors: Array<{ batch_id: string; message: string }> = [];
+    /**
+     * Skan auditi #99: filial skanerida har skan shu yerga keladi va mavjud
+     * PENDING paketga qo'shiladi. QR rasmi (PNG chizish + yuklash) va tarix
+     * yozuvi faqat YANGI paket uchun — token o'zgarmaydi. Eski order-service
+     * maydonni bermasa — avvalgidek hammasi uchun.
+     */
+    const createdBatchIds = createRes?.data?.created_batch_ids;
+    const newlyCreatedIds = Array.isArray(createdBatchIds)
+      ? new Set(createdBatchIds.map((id) => String(id)))
+      : null;
     for (const batch of createdBatches) {
       const batchId = String(batch.id);
+      if (newlyCreatedIds && !newlyCreatedIds.has(batchId)) continue;
       const token = String(batch?.qr_code_token ?? '').trim();
       if (!token) {
         qrErrors.push({
@@ -3190,8 +3265,22 @@ export class BranchServiceService implements OnModuleInit {
     const targetRegionId =
       String(query?.target_region_id ?? '').trim() || undefined;
 
+    // Registrator — manba filialini o'qiy olmasa ham, o'z filialiga kelgan
+    // paketlari (`registratorPackageScope`, «Filial paketlari» tabi).
+    let scopedDestinationIds: string[] | undefined;
     if (sourceBranchId) {
-      await this.assertCanReadBranch(sourceBranchId, requester);
+      try {
+        await this.assertCanReadBranch(sourceBranchId, requester);
+      } catch (error) {
+        const scope = await this.registratorPackageScope(
+          { direction: query?.direction, side: 'source' },
+          requester,
+        );
+        if (!scope?.length) {
+          throw error;
+        }
+        scopedDestinationIds = scope;
+      }
     }
     if (destinationBranchId) {
       await this.assertCanReadBranch(destinationBranchId, requester);
@@ -3251,6 +3340,7 @@ export class BranchServiceService implements OnModuleInit {
       {
         source_branch_id: sourceBranchId || undefined,
         destination_branch_id: destinationBranchId || undefined,
+        destination_branch_ids: scopedDestinationIds,
         status: query?.status,
         direction: query?.direction,
         period: query?.period,
@@ -3344,7 +3434,7 @@ export class BranchServiceService implements OnModuleInit {
     },
     requester?: RequesterContext,
   ) {
-    const response = await this.sendOrderCommand<{
+    type SentBranchesResponse = {
       data?: {
         side?: 'source' | 'destination';
         direction?: string;
@@ -3354,23 +3444,48 @@ export class BranchServiceService implements OnModuleInit {
           sent_total_price?: number | string;
         }>;
       };
-    }>('order.transfer_batch.find_branches_with_sent', {
-      direction: query?.direction,
-      side: query?.side,
-    });
+    };
+    const toAggregates = (res?: SentBranchesResponse | null) =>
+      (res?.data?.items ?? [])
+        .map((row) => ({
+          branch_id: String(row?.branch_id ?? '').trim(),
+          sent_batches_count: Number(row?.sent_batches_count ?? 0),
+          sent_total_price: Number(row?.sent_total_price ?? 0),
+        }))
+        .filter((row) => Boolean(row.branch_id));
+
+    const response = await this.sendOrderCommand<SentBranchesResponse>(
+      'order.transfer_batch.find_branches_with_sent',
+      {
+        direction: query?.direction,
+        side: query?.side,
+      },
+    );
+
+    // Registrator: o'qiy oladigan manba filiallaridan tashqari — o'z filialiga
+    // paket yuborgan filiallar, sonlari faqat o'ziga kelganlar bo'yicha.
+    const registratorScope = await this.registratorPackageScope(
+      query,
+      requester,
+    );
+    const scopedResponse = registratorScope?.length
+      ? await this.sendOrderCommand<SentBranchesResponse>(
+          'order.transfer_batch.find_branches_with_sent',
+          {
+            direction: query?.direction,
+            side: query?.side,
+            destination_branch_ids: registratorScope,
+          },
+        )
+      : null;
 
     const sideRaw = String(response?.data?.side ?? 'source').toLowerCase();
     const side: 'source' | 'destination' =
       sideRaw === 'destination' ? 'destination' : 'source';
-    const aggregates = (response?.data?.items ?? [])
-      .map((row) => ({
-        branch_id: String(row?.branch_id ?? '').trim(),
-        sent_batches_count: Number(row?.sent_batches_count ?? 0),
-        sent_total_price: Number(row?.sent_total_price ?? 0),
-      }))
-      .filter((row) => Boolean(row.branch_id));
+    const aggregates = toAggregates(response);
+    const scopedAggregates = toAggregates(scopedResponse);
     const branchIds = Array.from(
-      new Set(aggregates.map((row) => row.branch_id)),
+      new Set([...aggregates, ...scopedAggregates].map((row) => row.branch_id)),
     );
 
     if (!branchIds.length) {
@@ -3387,6 +3502,9 @@ export class BranchServiceService implements OnModuleInit {
     });
     const aggregateByBranchId = new Map(
       aggregates.map((row) => [row.branch_id, row]),
+    );
+    const scopedAggregateByBranchId = new Map(
+      scopedAggregates.map((row) => [row.branch_id, row]),
     );
 
     const canRead = async (branchId: string) => {
@@ -3406,14 +3524,18 @@ export class BranchServiceService implements OnModuleInit {
       sent_total_price: number;
     }> = [];
     for (const row of rows) {
-      if (await canRead(String(row.id))) {
-        const aggregate = aggregateByBranchId.get(String(row.id));
+      const branchId = String(row.id);
+      const aggregate =
+        aggregateByBranchId.has(branchId) && (await canRead(branchId))
+          ? aggregateByBranchId.get(branchId)
+          : scopedAggregateByBranchId.get(branchId);
+      if (aggregate) {
         visible.push({
-          id: String(row.id),
+          id: branchId,
           name: row.name,
           phone_number: row.phone_number ?? null,
-          sent_batches_count: Number(aggregate?.sent_batches_count ?? 0),
-          sent_total_price: Number(aggregate?.sent_total_price ?? 0),
+          sent_batches_count: Number(aggregate.sent_batches_count ?? 0),
+          sent_total_price: Number(aggregate.sent_total_price ?? 0),
         });
       }
     }
@@ -5658,6 +5780,51 @@ export class BranchServiceService implements OnModuleInit {
       this.notFound('Bu kodli filial topilmadi');
     }
     return successRes(branch, 200, 'Branch found');
+  }
+
+  /**
+   * 0Rn5U6AD — filial aloqa kontakti: nomi, telefoni va FAOL menejeri. Bir
+   * nechta menejer bo'lsa `branches.manager_id` dagisi, u faol emas/bo'sh —
+   * eng kichik id (natija barqaror). Identity javob bermasa — menejersiz.
+   */
+  async findBranchContact(id: string) {
+    const branchId = String(id ?? '').trim();
+    if (!/^\d{1,19}$/.test(branchId)) {
+      this.badRequest("Filial id noto'g'ri");
+    }
+    const branch = await this.getBranchOrThrow(branchId);
+    const managerIds = await this.findBranchManagerUserIds(branchId);
+    const usersById = managerIds.length
+      ? await this.getUsersByIdsBatch(managerIds)
+      : null;
+    const headId = String(branch.manager_id ?? '');
+    const rank = (userId: string) => (userId === headId ? 0 : 1);
+    const manager = managerIds
+      .filter((userId) => this.isActiveManagerUser(usersById?.get(userId)))
+      .sort(
+        (a, b) =>
+          rank(a) - rank(b) || a.length - b.length || a.localeCompare(b),
+      )
+      .map((userId) => {
+        const user = usersById?.get(userId) ?? {};
+        return {
+          id: userId,
+          name: typeof user.name === 'string' ? user.name : null,
+          phone_number:
+            typeof user.phone_number === 'string' ? user.phone_number : null,
+        };
+      })[0];
+
+    return successRes(
+      {
+        id: String(branch.id),
+        name: branch.name,
+        phone_number: branch.phone_number ?? null,
+        manager: manager ?? null,
+      },
+      200,
+      'Branch contact',
+    );
   }
 
   async findHqBranch() {

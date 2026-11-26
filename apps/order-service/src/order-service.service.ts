@@ -47,7 +47,9 @@ import {
   Where_deliver,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
-  tashkentDayRange,
+  businessDayKeySql,
+  businessDayRange,
+  startOfBusinessDay,
 } from '@app/common';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import {
@@ -111,6 +113,9 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
 const CUSTOMER_SEARCH_LIMIT = 1000;
 const MAX_FETCH_ALL = 5000;
+
+/** Sayt importi buyurtmasining `operator` i: `external_<slug>` (`receiveExternalOrders`). */
+const EXTERNAL_OPERATOR_PREFIX = 'external_';
 
 /**
  * Qidiruv matni buyurtma raqamimi (Elchida buyurtma raqami = `id`)? Faqat
@@ -898,7 +903,7 @@ export class OrderServiceService {
     stages: CancelReturnStage[],
     handoverDays: { start_day?: string; end_day?: string },
   ) {
-    const range = tashkentDayRange(
+    const range = businessDayRange(
       handoverDays.start_day,
       handoverDays.end_day,
     );
@@ -1639,12 +1644,12 @@ export class OrderServiceService {
         });
       }
     }
-    // Sana filtri — Toshkent kuni, dashboard bilan AYNI qoida (SqVMuhKo).
+    // Sana filtri — ISH KUNI (xhiXv3w3), dashboard bilan AYNI qoida (SqVMuhKo).
     // Ilgari 'YYYY-MM-DD' UTC yarim tuni + server TZ'idagi setHours edi: prod
     // konteyner UTC'da, ya'ni "1-oktabr" Toshkentda 05:00 dan ertasi 04:59
     // gacha bo'lardi. To'liq ISO qiymat (analytics shunday yuboradi)
     // o'zgarishsiz ishlatiladi.
-    const dayRange = tashkentDayRange(start_day, end_day);
+    const dayRange = businessDayRange(start_day, end_day);
     if (dayRange.start) {
       const startDate = dayRange.start;
       if (Number.isNaN(startDate.getTime())) {
@@ -1671,14 +1676,14 @@ export class OrderServiceService {
 
   /**
    * CU4zfcds — market ro'yxatlari (yangi/bekor) uchun yaratilgan sana oralig'i:
-   * GET /orders bilan AYNI Toshkent kuni qoidasi (`tashkentDayRange`).
+   * GET /orders bilan AYNI ish kuni qoidasi (`businessDayRange`, xhiXv3w3).
    */
   private applyCreatedDayRange(
     qb: { andWhere: (sql: string, params: Record<string, unknown>) => unknown },
     start_day?: string,
     end_day?: string,
   ) {
-    const dayRange = tashkentDayRange(start_day, end_day);
+    const dayRange = businessDayRange(start_day, end_day);
     if (dayRange.start) {
       if (Number.isNaN(dayRange.start.getTime())) {
         throw new RpcException({
@@ -3786,6 +3791,66 @@ export class OrderServiceService {
     }));
   }
 
+  /**
+   * Saytlardan olingan buyurtmalar (2026-11-25): «Integratsiyalar» va «Tashqi
+   * saytlar» da «nechta buyurtma olindi, oxirgisi qachon».
+   *
+   * ⚠️ Buyurtmalarning O'ZIDAN sanaladi (`operator = external_<slug>`).
+   * `external_integrations.total_synced_orders` buni bildirmaydi: u chiquvchi
+   * HOLAT sinxronini sanaydi va importda o'zgarmaydi — 49 ta buyurtma olingan
+   * sayt «0 ta · Sinxronlanmagan» bo'lib turardi.
+   */
+  async findExternalImportStats(
+    slugs: unknown,
+  ): Promise<
+    Array<{
+      slug: string;
+      total: number;
+      today: number;
+      last_at: string | null;
+    }>
+  > {
+    const operators = (Array.isArray(slugs) ? slugs : [])
+      .filter((slug): slug is string => typeof slug === 'string')
+      .map((slug) => slug.trim())
+      .filter(Boolean)
+      .slice(0, 200)
+      .map((slug) => `${EXTERNAL_OPERATOR_PREFIX}${slug}`);
+    if (!operators.length) return [];
+
+    let rows: Array<{
+      operator: string;
+      total: string;
+      today: string;
+      last_at: Date | null;
+    }> = [];
+    try {
+      rows = await this.orderRepo
+        .createQueryBuilder('order')
+        .select('order.operator', 'operator')
+        .addSelect('COUNT(order.id)', 'total')
+        .addSelect(
+          'COUNT(order.id) FILTER (WHERE order.createdAt >= :dayStart)',
+          'today',
+        )
+        .addSelect('MAX(order.createdAt)', 'last_at')
+        .where('order.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('order.source = :source', { source: Order_source.EXTERNAL })
+        .andWhere('order.operator IN (:...operators)', { operators })
+        .setParameter('dayStart', startOfBusinessDay(new Date()))
+        .groupBy('order.operator')
+        .getRawMany();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    return rows.map((row) => ({
+      slug: row.operator.slice(EXTERNAL_OPERATOR_PREFIX.length),
+      total: Number(row.total),
+      today: Number(row.today),
+      last_at: row.last_at ? new Date(row.last_at).toISOString() : null,
+    }));
+  }
+
   /** Yuqoridagi ro'yxat + market nomlari (ekranda nom ko'rsatiladi). */
   async findExternalSourcesEnriched(branch_id?: string) {
     const rows = await this.findExternalSources(branch_id);
@@ -3949,7 +4014,7 @@ export class OrderServiceService {
       totals: { batches: 0, orders: 0, amount: 0 },
     };
 
-    const range = tashkentDayRange(options.start_day, options.end_day);
+    const range = businessDayRange(options.start_day, options.end_day);
     if (
       (range.start && Number.isNaN(range.start.getTime())) ||
       (range.end && Number.isNaN(range.end.getTime()))
@@ -4006,10 +4071,7 @@ export class OrderServiceService {
         'handed_at_us',
       )
       .addSelect('o.market_handover_by', 'handed_by')
-      .addSelect(
-        "to_char(o.market_handover_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')",
-        'day',
-      )
+      .addSelect(businessDayKeySql('o.market_handover_at'), 'day')
       .addSelect('COUNT(o.id)', 'orders_count')
       .addSelect('COALESCE(SUM(o.total_price), 0)', 'total_price_sum')
       .addSelect(
@@ -4104,10 +4166,7 @@ export class OrderServiceService {
           'handed_at_us',
         )
         .addSelect('o.market_handover_by', 'handed_by')
-        .addSelect(
-          "to_char(o.market_handover_at AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')",
-          'day',
-        )
+        .addSelect(businessDayKeySql('o.market_handover_at'), 'day')
         .addSelect('COUNT(o.id)', 'orders_count')
         .addSelect('COALESCE(SUM(o.total_price), 0)', 'total_price_sum')
         .addSelect(

@@ -1,7 +1,13 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { RpcException } from '@nestjs/microservices';
-import { DataSource, In, IsNull, Repository } from 'typeorm';
+import {
+  DataSource,
+  In,
+  IsNull,
+  Repository,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { randomBytes } from 'node:crypto';
 import { Order, OrderHolderType } from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
@@ -18,12 +24,16 @@ import {
   BranchTransferBatchStatus,
   BranchTransferDirection,
   Order_status,
-  endOfTashkentDay,
-  endOfTashkentMonth,
+  businessDayEnd,
+  businessDayKey,
+  businessDayStart,
+  endOfBusinessDay,
+  endOfBusinessMonth,
+  isDayKey,
   isHqBranch,
-  startOfTashkentDay,
-  startOfTashkentMonth,
-  startOfTashkentWeek,
+  startOfBusinessDay,
+  startOfBusinessMonth,
+  startOfBusinessWeek,
   transferBatchCancelBlock,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
@@ -82,6 +92,74 @@ export class BranchTransferBatchService {
 
   private badRequest(message: string): never {
     throw new RpcException({ statusCode: 400, message });
+  }
+
+  /**
+   * ⚠️ PAKETGA QO'SHIB BO'LMAGAN BUYURTMA — SABABI BILAN (skan auditi
+   * 2026-11-23, #88).
+   *
+   * MUAMMO. Ilgari har qanday sabab bitta matn edi: «…topilmadi, yangi
+   * (NEW) holatda emas yoki allaqachon boshqa paketga biriktirilgan». Filial
+   * xodimi skanerlaganda frontend «allaqachon» so'zini ko'rib buyurtmani
+   * «allaqachon qabul qilingan» deb ro'yxatdan yashirardi — aslida u
+   * topilmagan yoki begona filialniki bo'lishi mumkin edi.
+   *
+   * Endi birinchi sabab aniq `code` va alohida matn bilan: faqat haqiqatan
+   * paketda turgan buyurtma matnida «allaqachon» bor (takror skan — to'g'ri
+   * «allaqachon» javobi).
+   */
+  private async rejectUnassignableOrders(
+    sourceBranchId: string,
+    selectedOrderIds: string[],
+    assignableIds: string[],
+  ): Promise<never> {
+    const assignable = new Set(assignableIds);
+    const missingIds = selectedOrderIds.filter((id) => !assignable.has(id));
+    const rows = await this.orderRepo.find({
+      where: { id: In(missingIds), isDeleted: false },
+      select: ['id', 'branch_id', 'status', 'current_batch_id'],
+    });
+    const byId = new Map(rows.map((row) => [String(row.id), row]));
+    const rejection = (
+      code: string,
+      message: string,
+      details: Record<string, unknown>,
+    ) => new RpcException({ statusCode: 400, code, message, details });
+    for (const id of missingIds) {
+      const row = byId.get(id);
+      if (!row) {
+        throw rejection('ORDER_NOT_FOUND', `Buyurtma #${id} topilmadi`, {
+          order_id: id,
+        });
+      }
+      if (String(row.branch_id ?? '') !== String(sourceBranchId)) {
+        throw rejection(
+          'ORDER_OTHER_BRANCH',
+          `Buyurtma #${id} boshqa filialga tegishli — paketga qo'shilmadi`,
+          { order_id: id },
+        );
+      }
+      if (row.current_batch_id) {
+        throw rejection(
+          'ORDER_ALREADY_IN_BATCH',
+          `Buyurtma #${id} allaqachon paketga qo'shilgan`,
+          { order_id: id, batch_id: String(row.current_batch_id) },
+        );
+      }
+      if (row.status !== Order_status.NEW) {
+        throw rejection(
+          'ORDER_NOT_NEW',
+          `Buyurtma #${id} yangi holatda emas (${row.status}) — paketga qo'shilmadi`,
+          { order_id: id, status: row.status },
+        );
+      }
+    }
+    // Poyga: so'rovlar orasida holat o'zgargan — umumiy, lekin «allaqachon»siz.
+    throw rejection(
+      'ORDER_NOT_ASSIGNABLE',
+      "Buyurtmalarning bir qismini paketga qo'shib bo'lmadi — ro'yxatni yangilang",
+      { order_ids: missingIds },
+    );
   }
 
   private transferTokenPrefix(
@@ -346,8 +424,10 @@ export class BranchTransferBatchService {
       selectedOrderIds.length &&
       unassignedOrders.length !== selectedOrderIds.length
     ) {
-      this.badRequest(
-        'Buyurtmalarning bir qismi topilmadi, yangi (NEW) holatda emas yoki allaqachon boshqa paketga biriktirilgan',
+      await this.rejectUnassignableOrders(
+        sourceBranchId,
+        selectedOrderIds,
+        unassignedOrders.map((order) => String(order.id)),
       );
     }
 
@@ -501,6 +581,13 @@ export class BranchTransferBatchService {
         {
           idempotent: false,
           batches,
+          /**
+           * Shu so'rovda YANGI ochilgan paketlar (skan auditi #99). Mavjud
+           * PENDING paketga qo'shilganda bo'sh — branch-service QR rasmini va
+           * «QR_GENERATED» tarixini faqat yangi paket uchun yaratadi (token
+           * o'zgarmaydi; ilgari har skanda PNG qayta chizilib yuklanardi).
+           */
+          created_batch_ids: pendingBatch ? [] : [String(batch.id)],
         },
         201,
         'Branch transfer batches created',
@@ -1306,6 +1393,28 @@ export class BranchTransferBatchService {
     );
   }
 
+  /**
+   * Skan auditi 2026-11-23 (#15/#49): paket qatorida QR token — O'Z
+   * bazamizdan, bitta so'rov bilan. Ilgari token faqat branch-service'ning
+   * har-buyurtma boyitishidan kelardi; yuk ostida boyitish yiqilsa qator
+   * tokensiz qolar va skaner haqiqiy posilkani «Bu paketda yo'q» derdi.
+   */
+  private async qrTokensByOrderId(
+    orderIds: string[],
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(orderIds.filter(Boolean))];
+    if (!ids.length) return new Map();
+    const rows = await this.orderRepo.find({
+      where: { id: In(ids) },
+      select: ['id', 'qr_code_token'],
+    });
+    return new Map(
+      rows
+        .filter((row) => Boolean(row.qr_code_token))
+        .map((row) => [String(row.id), String(row.qr_code_token)]),
+    );
+  }
+
   async findBranchTransferBatchById(batchId: string) {
     const id = String(batchId ?? '').trim();
     if (!id) {
@@ -1324,6 +1433,9 @@ export class BranchTransferBatchService {
       order: { createdAt: 'ASC' },
     });
     const regionIds = await this.regionIdsByBatch([String(batch.id)]);
+    const qrTokens = await this.qrTokensByOrderId(
+      items.map((item) => String(item.order_id)),
+    );
 
     return successRes(
       {
@@ -1332,6 +1444,7 @@ export class BranchTransferBatchService {
         items: items.map((item) => ({
           id: item.id,
           order_id: item.order_id,
+          qr_code_token: qrTokens.get(String(item.order_id)) ?? null,
           snapshot_price: item.snapshot_price,
           snapshot_market_id: item.snapshot_market_id,
           sent_at: item.sent_at,
@@ -1360,6 +1473,12 @@ export class BranchTransferBatchService {
      * HECH NARSA (fail-closed), `undefined` — filtr yo'q.
      */
     target_region_ids?: string[];
+    /**
+     * Registrator doirasi («Filial paketlari»): faqat shu manzil filiallarga
+     * kelgan paketlar. Bo'sh massiv — HECH NARSA (fail-closed), `undefined` —
+     * filtr yo'q.
+     */
+    destination_branch_ids?: string[];
   }) {
     const sourceBranchId = String(input?.source_branch_id ?? '').trim();
     const destinationBranchId = String(
@@ -1396,6 +1515,7 @@ export class BranchTransferBatchService {
         destinationBranchId,
       });
     }
+    this.applyDestinationScope(qb, input?.destination_branch_ids);
 
     /**
      * Paket viloyati: eski paket — `target_region_id`, umumiy filial paketi
@@ -1478,16 +1598,20 @@ export class BranchTransferBatchService {
       return parsed;
     };
 
-    // Kun/davr chegaralari — Toshkent vaqti, libs/common'dagi yagona helper
-    // (SqVMuhKo). Ilgari server TZ'idagi setHours va qo'lda +5/-5 soat edi:
-    // natija faqat konteyner UTC'da bo'lganda to'g'ri chiqardi.
+    // Kun/davr chegaralari — ISH KUNI (xhiXv3w3, `business-day.ts`; sukut
+    // Toshkent 00:00, SqVMuhKo). Ilgari server TZ'idagi setHours va qo'lda
+    // +5/-5 soat edi: natija faqat konteyner UTC'da bo'lganda to'g'ri chiqardi.
     // (15N7AHkp) PENDING yig'ishdagi "yangiroq partiya" ham AYNI vaqt
     // oynasidan bo'lishi kerak (sahifa ichidagi eski xulq bilan bir xil).
     let collapseWindowSql: string | null = null;
     if (dateRaw) {
       const parsedDate = parseDate(dateRaw, 'date');
-      const dayStart = startOfTashkentDay(parsedDate);
-      const dayEnd = endOfTashkentDay(parsedDate);
+      // `YYYY-MM-DD` — o'sha ish kuni; to'liq ISO — lahza tushgan ish kuni.
+      const dayKey = isDayKey(dateRaw.trim())
+        ? dateRaw.trim()
+        : businessDayKey(parsedDate);
+      const dayStart = businessDayStart(dayKey);
+      const dayEnd = businessDayEnd(dayKey);
       qb.andWhere('batch.createdAt BETWEEN :dayStart AND :dayEnd', {
         dayStart,
         dayEnd,
@@ -1502,16 +1626,16 @@ export class BranchTransferBatchService {
       }
 
       const now = new Date();
-      let periodStart = startOfTashkentDay(now);
-      let periodEnd = endOfTashkentDay(now);
+      let periodStart = startOfBusinessDay(now);
+      let periodEnd = endOfBusinessDay(now);
 
       if (periodRaw === 'week') {
-        periodStart = startOfTashkentWeek(now);
+        periodStart = startOfBusinessWeek(now);
       }
 
       if (periodRaw === 'month') {
-        periodStart = startOfTashkentMonth(now);
-        periodEnd = endOfTashkentMonth(now);
+        periodStart = startOfBusinessMonth(now);
+        periodEnd = endOfBusinessMonth(now);
       }
 
       qb.andWhere('batch.createdAt BETWEEN :periodStart AND :periodEnd', {
@@ -1635,9 +1759,39 @@ export class BranchTransferBatchService {
     );
   }
 
+  /**
+   * Manzil filial doirasi (registrator «Filial paketlari»): `undefined` — filtr
+   * yo'q; massiv — faqat shu filiallarga kelgan paketlar, bo'sh/buzuq id'lar
+   * qolmasa — hech narsa (fail-closed).
+   */
+  private applyDestinationScope(
+    qb: SelectQueryBuilder<BranchTransferBatch>,
+    destinationBranchIds: string[] | undefined,
+  ) {
+    if (!Array.isArray(destinationBranchIds)) {
+      return;
+    }
+    const ids = Array.from(
+      new Set(
+        destinationBranchIds
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^[0-9]{1,19}$/.test(id)),
+      ),
+    );
+    if (ids.length) {
+      qb.andWhere('batch.destination_branch_id IN (:...scopedDestinationIds)', {
+        scopedDestinationIds: ids,
+      });
+    } else {
+      qb.andWhere('1 = 0');
+    }
+  }
+
   async findBranchesWithSentTransferBatches(input?: {
     direction?: string;
     side?: string;
+    /** Registrator doirasi — `applyDestinationScope` bilan bir xil qoida. */
+    destination_branch_ids?: string[];
   }) {
     const directionRaw = String(input?.direction ?? '')
       .trim()
@@ -1679,6 +1833,7 @@ export class BranchTransferBatchService {
     if (directionRaw) {
       qb.andWhere('batch.direction = :direction', { direction: directionRaw });
     }
+    this.applyDestinationScope(qb, input?.destination_branch_ids);
 
     const rows = await qb
       .groupBy(`batch.${column}`)
@@ -1728,6 +1883,9 @@ export class BranchTransferBatchService {
 
     const remainingItems = items.filter((item) => !item.sent_at);
     const regionIds = await this.regionIdsByBatch([id]);
+    const qrTokens = await this.qrTokensByOrderId(
+      remainingItems.map((item) => String(item.order_id)),
+    );
     return successRes(
       {
         ...batch,
@@ -1735,6 +1893,7 @@ export class BranchTransferBatchService {
         items: remainingItems.map((item) => ({
           id: item.id,
           order_id: item.order_id,
+          qr_code_token: qrTokens.get(String(item.order_id)) ?? null,
           snapshot_price: item.snapshot_price,
           snapshot_market_id: item.snapshot_market_id,
           sent_at: item.sent_at,

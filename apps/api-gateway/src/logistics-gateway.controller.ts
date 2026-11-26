@@ -1,3 +1,5 @@
+import { Throttle } from '@nestjs/throttler';
+import { SCAN_THROTTLE } from './auth/scan-throttle';
 import {
   BadRequestException,
   Body,
@@ -42,11 +44,12 @@ import { RolesGuard } from './auth/roles.guard';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import { projectDistrictReviewFields } from './auth/district-review-projection';
-import { projectOrderContactsForRoles } from './auth/order-contact-projection';
 import {
   ProblemContactsService,
   attachProblemContacts,
 } from './contacts/problem-contacts.service';
+import { BranchContactLoader } from './contacts/branch-contact';
+import { withPostRecipientBranch } from './contacts/post-recipient-branch';
 import { isLogistRequester, projectLogistPayload } from './auth/logist-scope';
 import { writePostOrdersXlsx } from './order-export/post-orders-xlsx.export';
 import {
@@ -301,7 +304,30 @@ export class LogisticsGatewayController {
     @Optional()
     @Inject('CATALOG')
     private readonly catalogClient?: ClientProxy,
+    // sZxxo98G: pochta chekidagi qabul qiluvchi filial (`branch.contact`).
+    // Yo'q (eski spec'lar) — `post.recipient_branch` qo'shilmaydi.
+    @Optional()
+    @Inject('BRANCH')
+    private readonly branchClient?: ClientProxy,
   ) {}
+
+  private recipientBranchLoader?: BranchContactLoader;
+
+  /**
+   * sZxxo98G — filial o'tkazmasi pochtasida `data.post.recipient_branch`
+   * (manzil filial nomi, raqami, faol menejeri; 0Rn5U6AD doirasi). Rol
+   * proyeksiyasidan KEYIN qo'shiladi — doirani shu yerning o'zi belgilaydi.
+   */
+  private async attachPostRecipientBranch<T>(
+    user: JwtUser | undefined,
+    payload: T,
+  ): Promise<T> {
+    if (!this.branchClient) {
+      return payload;
+    }
+    this.recipientBranchLoader ??= new BranchContactLoader(this.branchClient);
+    return withPostRecipientBranch(payload, user, this.recipientBranchLoader);
+  }
 
   /**
    * T9 (BE-1) — sahifadagi mahsulotlar: BITTA `catalog.product.find_by_ids`
@@ -1020,7 +1046,8 @@ export class LogisticsGatewayController {
     description:
       "`data.allOrdersByPostId[]` — buyurtma qatorlari (`market`, `customer`, `district` oq ro'yxat bilan). T9 (HJ5sLHiz): har buyurtma qatorida `order_number` («EL-…», ro'yxat va skan bilan bir xil) va `items[].product: {id, name} | null` (katalogda yo'q / javob bermasa — null; narx, market, rasm yo'q). " +
       "`data.post` — pochta meta'si: `id`, `status`, `courier_id`, `courier`, `qr_code_token`, `order_quantity`, `branch_id`, `region_id`, `region`, `createdAt` va T9 `branch: {id, name} | null` — «Qayerdan» (pochtani JO'NATGAN filial; `branch_id` emas — u ko'pincha manzil). " +
-      "Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi).",
+      "Kuryerli pochta (bekorlarni HQ'ga yuborgan menejer pochtasi ham) — shu foydalanuvchining filiali; kuryersiz yig'ilayotgan (new) — `branch_id` filiali, bo'lmasa HQ; kuryersiz o'tkazma (sent/received) — HQ; boshqa hollar yoki filial xizmati javob bermasa — null (chekda qator chiqmaydi). " +
+      "sZxxo98G: `data.post.recipient_branch: {id, name, phone_number, manager: {id, name, phone_number} | null} | null` — chekdagi QABUL QILUVCHI filial: faqat filial o'tkazmasida (kuryersiz, `sent`/`received`, `branch_id` — manzil filial), boshqa pochtada null. Chekdagi raqam — `phone_number`, bo'sh bo'lsa `manager.phone_number`. Doira 0Rn5U6AD bilan bir xil: SUPERADMIN/ADMIN/REGISTRATOR — har filial, MANAGER/BRANCH — faqat o'z filiali, boshqalarga (kuryer, logist) null. Filial xizmati javob bermasa — null, javob 200.",
   })
   @ApiQuery({
     name: 'view',
@@ -1058,12 +1085,15 @@ export class LogisticsGatewayController {
     ).then(async (response) =>
       // kH2zZsz3: kuryer pochta buyurtmalari — market tarifi/filial ulushisiz
       // (GET /orders/:id bilan AYNI rol proyeksiyasi). T7: `problem_contacts`
-      // proyeksiyadan OLDIN.
-      projectOrderPayloadForRoles(
-        req.user.roles,
-        await attachProblemContacts(
-          this.problemContacts,
-          await this.enrichOrdersByPostResponse(response),
+      // proyeksiyadan OLDIN. sZxxo98G: qabul qiluvchi filial — KEYIN.
+      this.attachPostRecipientBranch(
+        req.user,
+        projectOrderPayloadForRoles(
+          req.user.roles,
+          await attachProblemContacts(
+            this.problemContacts,
+            await this.enrichOrdersByPostResponse(response),
+          ),
         ),
       ),
     );
@@ -1117,9 +1147,13 @@ export class LogisticsGatewayController {
         );
       }
     }
-    const projected = projectOrderPayloadForRoles(
-      user.roles,
-      await this.enrichOrdersByPostResponse(response ?? {}),
+    // sZxxo98G: chekdagi «Qabul qiluvchi» filial — rol proyeksiyasidan KEYIN.
+    const projected = await this.attachPostRecipientBranch(
+      user,
+      projectOrderPayloadForRoles(
+        user.roles,
+        await this.enrichOrdersByPostResponse(response ?? {}),
+      ),
     );
     const data: NonNullable<PostOrdersExportResponse['data']> = projected.data;
     const rawPost =
@@ -1164,8 +1198,8 @@ export class LogisticsGatewayController {
       'Pochta buyurtmalari Excel (.xlsx) — pochtaga har qachon kirganlar',
     description:
       "Eski pochtalar: ro'yxat `GET /post/orders/:id?view=all` bilan bir xil (doira ham: filial xodimi — o'z filiali pochtasi yoki o'zi yuborgan pochta, kuryer — faqat o'z pochtasi, logist — o'z viloyati; boshqasi 403). " +
-      "Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «Jami» qatori. " +
-      "LOGIST — «Narxi» ustuni va jami summa yo'q. Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa faylda DIQQAT qatori.",
+      "Ustunlar `GET /orders/export/excel` bilan bir xil + «Pochtaga kirgan», «Pochtadan chiqqan», «Hozir pochtada» (ha/yo'q), «Hozirgi holat». Oxirida «JAMI» qatori (filtrga moslashadi), 2-varaq — «Xulosa» (holat, joy, tuman, firma bo'yicha). " +
+      "LOGIST — narx ustuni va hech qanday summa yo'q («Xulosa» da ham). Fayl: `pochta-<id>-<YYYY-MM-DD>.xlsx`. Tarix olinmasa DIQQAT — tepada va «Xulosa» da.",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiOkResponse({
@@ -1207,7 +1241,8 @@ export class LogisticsGatewayController {
     summary: 'Pochta cheki (HTML, chop etish uchun)',
     description:
       "Ega qarori 2: «Yorliq» — POCHTA CHEKI (bitta buyurtma yorlig'i emas): pochta QR'i (`qr_code_token`), kuryer (ism, telefon), viloyat, «Qayerdan» filial, sana, soni, jami summa va buyurtmalar ro'yxati (EL raqam, mijoz, telefon, manzil/tuman, summa, holat, hozir pochtada). " +
-      "Ro'yxat va doira `GET /post/orders/:id?view=all` bilan bir xil. LOGIST — summa ustuni va jami summa yo'q. `format`: `80mm` (sukut, termal lenta) yoki `a4`; boshqa qiymat — 400.",
+      "Ro'yxat va doira `GET /post/orders/:id?view=all` bilan bir xil. LOGIST — summa ustuni va jami summa yo'q. `format`: `80mm` (sukut, termal lenta) yoki `a4`; boshqa qiymat — 400. " +
+      "sZxxo98G: filial o'tkazmasida «Qabul qiluvchi: Filial · telefon» qatori (`post.recipient_branch`: filial raqami, bo'sh bo'lsa faol menejeri raqami; doira `GET /post/orders/:id` dagidek).",
   })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiQuery({ name: 'format', required: false, enum: POST_RECEIPT_FORMATS })
@@ -1315,6 +1350,8 @@ export class LogisticsGatewayController {
   }
 
   @Patch('post/receive/:id')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     RoleEnum.SUPERADMIN,
@@ -1365,6 +1402,8 @@ export class LogisticsGatewayController {
   }
 
   @Patch('post/receive/scan/:id')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
@@ -1380,6 +1419,8 @@ export class LogisticsGatewayController {
   }
 
   @Patch('post/receive/order/:id')
+  // Skan auditi 2026-11-23: har skan shu route'ga — global 60/daq emas, skaner limiti.
+  @Throttle(SCAN_THROTTLE)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
@@ -1559,8 +1600,9 @@ export class LogisticsGatewayController {
         },
       },
     )) as ReturnRequestsResponse;
-    // T7 (B3): menejerga market va operator telefonlarisiz.
-    return projectOrderContactsForRoles(
+    // T7 (B3): menejerga market va operator telefonlarisiz; D5NxxpJW: market
+    // tarifisiz.
+    return projectOrderPayloadForRoles(
       req.user.roles,
       await this.enrichReturnRequestsResponse(response),
     );

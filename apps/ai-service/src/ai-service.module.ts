@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   ClaudeModule,
   DatabaseModule,
   RmqModule,
@@ -53,6 +54,8 @@ import { AiRuntimeProvider } from './ai-config/ai-runtime.provider';
       validationSchema: aiValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'ai-service' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), daqiqada bir.
+    BusinessDayModule.forRoot(),
     RmqModule,
     DatabaseModule,
     AiUsageModule,

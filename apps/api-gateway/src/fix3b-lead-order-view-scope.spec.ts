@@ -144,7 +144,12 @@ describe("fix3b lead — GET /orders/:id o'ramsiz qator bilan tekshiriladi", () 
     await expect(
       controller.findById('10', user('1', ['superadmin'])),
     ).resolves.toEqual({ ...row, rollback: null });
-    expect(branch.send).not.toHaveBeenCalled();
+    // Doira uchun filial so'ralmaydi; 0Rn5U6AD — faqat filial kontakti.
+    expect(
+      branch.send.mock.calls.map(
+        (call: unknown[]) => (call[0] as { cmd: string }).cmd,
+      ),
+    ).toEqual(['branch.contact']);
   });
 
   it("eski { statusCode, data } o'rami ham tekshiriladi", async () => {

@@ -275,7 +275,7 @@ describe('OrderIntakeService', () => {
     });
   });
 
-  it('kun almashish soati 06:00 — chegara yangi oynada o`z soatida', async () => {
+  it('xhiXv3w3: kun almashish soati 06:00 — FAQAT keyingi kundan (bugun o`zgarmaydi), chegara yangi oynada o`z soatida', async () => {
     const now = tashkent('2026-11-09T08:00:00');
     const { service, store, activityLog } = makeService({
       [ORDER_INTAKE_SETTING_KEYS.cutoff]: stored('10:00'),
@@ -286,29 +286,60 @@ describe('OrderIntakeService', () => {
       now,
     );
 
+    // Bugungi ish kuni (00:00 da boshlangan) 10.11 06:00 gacha cho'ziladi.
     expect(store.get(ORDER_INTAKE_SETTING_KEYS.dayChangeTime)).toEqual({
       time: '06:00',
+      schedule: [{ from: '2026-11-10', time: '06:00' }],
     });
     expect(state).toMatchObject({
       day_change_time: '06:00',
+      current_day_change_time: '00:00',
+      day_change_effective_from: '2026-11-10',
+      date: '2026-11-09',
       cutoff_time: '10:00',
       is_open: true,
       closes_at: tashkent('2026-11-09T10:00:00').toISOString(),
       reopens_at: tashkent('2026-11-10T06:00:00').toISOString(),
-      day_started_at: tashkent('2026-11-09T06:00:00').toISOString(),
+      day_started_at: tashkent('2026-11-09T00:00:00').toISOString(),
+      next_day_change_at: tashkent('2026-11-10T06:00:00').toISOString(),
     });
     expect(activityLog.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'order.day_change_time_changed',
         old_value: { day_change_time: '00:00' },
         new_value: { day_change_time: '06:00' },
+        metadata: expect.objectContaining({
+          effective_from: '2026-11-10',
+          effective_at: tashkent('2026-11-10T06:00:00').toISOString(),
+          current_day_change_time: '00:00',
+        }),
       }),
     );
     // Faqat kun almashish soati berildi — cheklov jurnali yozilmaydi.
     expect(activityLog.log).toHaveBeenCalledTimes(1);
+
+    // 10.11 03:00 — hali 9-noyabr ish kuni (chegara o'tgan — yopiq).
+    expect(
+      await service.getState(tashkent('2026-11-10T03:00:00')),
+    ).toMatchObject({
+      date: '2026-11-09',
+      is_open: false,
+      reopens_at: tashkent('2026-11-10T06:00:00').toISOString(),
+    });
+    // 10.11 07:00 — yangi ish kuni 06:00 da boshlangan.
+    expect(
+      await service.getState(tashkent('2026-11-10T07:00:00')),
+    ).toMatchObject({
+      date: '2026-11-10',
+      current_day_change_time: '06:00',
+      day_started_at: tashkent('2026-11-10T06:00:00').toISOString(),
+      is_open: true,
+      closes_at: tashkent('2026-11-10T10:00:00').toISOString(),
+      reopens_at: tashkent('2026-11-11T06:00:00').toISOString(),
+    });
   });
 
-  it('kun almashish 18:00 ga 19:00 da o`tdi — yangi kun ochiq, chegara saqlanadi', async () => {
+  it('xhiXv3w3: 19:00 da 18:00 qo`yildi — bugun yopiqligicha, 18:00 qoidasi 11-noyabr ish kunidan', async () => {
     const now = tashkent('2026-11-09T19:00:00');
     const { service } = makeService({
       [ORDER_INTAKE_SETTING_KEYS.cutoff]: stored('10:00'),
@@ -319,12 +350,32 @@ describe('OrderIntakeService', () => {
       { day_change_time: '18:00', requester: SUPERADMIN },
       now,
     );
+    // 10-noyabr 18:00 rejasi o'tib ketgan — eng yaqin kelajakdagi chegara 10.11 18:00.
     expect(state).toMatchObject({
       day_change_time: '18:00',
+      current_day_change_time: '00:00',
+      day_change_effective_from: '2026-11-11',
+      date: '2026-11-09',
+      is_open: false,
+      next_day_change_at: tashkent('2026-11-10T00:00:00').toISOString(),
+    });
+    // 10-noyabr — o'tish kuni: 00:00 → 18:00 (18 soat).
+    expect(
+      await service.getState(tashkent('2026-11-10T12:00:00')),
+    ).toMatchObject({
       date: '2026-11-10',
+      is_open: false,
+      reopens_at: tashkent('2026-11-10T18:00:00').toISOString(),
+    });
+    // 10.11 19:00 — 11-noyabr ish kuni, ochiq, chegara saqlanadi.
+    expect(
+      await service.getState(tashkent('2026-11-10T19:00:00')),
+    ).toMatchObject({
+      date: '2026-11-11',
+      day_started_at: tashkent('2026-11-10T18:00:00').toISOString(),
       is_open: true,
       cutoff_time: '10:00',
-      closes_at: tashkent('2026-11-10T10:00:00').toISOString(),
+      closes_at: tashkent('2026-11-11T10:00:00').toISOString(),
     });
   });
 

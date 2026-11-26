@@ -14,10 +14,9 @@ const stub = <T>(value: unknown): T => value as T;
 /**
  * fPre2MRr — `order.ai_resolve_preview` RMQ handleri.
  *
- * #10: preview oqimi `OrderLookupService.resolveDistrictId` (zaxira bilan) va
- *      `getDefaultDistrictId` ni HECH QACHON chaqirmaydi — zaxira jadvaldagi
- *      birinchi tuman (`ORDER BY`siz `limit: 1`), ya'ni mos kelmagan buyurtma
- *      jimgina boshqa viloyatga ketardi.
+ * #10: preview oqimi `OrderLookupService` ning tuman qidiruvini
+ *      (`resolveExternalDistrict` — sayt/CRM kodi) HECH QACHON chaqirmaydi:
+ *      matn faqat `logistics.district.resolve_by_text` dan o'tadi.
  * #12: bir xil `request_id` bilan ikki marta — executeIdempotent bitta natija
  *      qaytaradi, `resolve` ikkinchi marta chaqirilmaydi.
  */
@@ -142,7 +141,7 @@ describe('order.ai_resolve_preview handler', () => {
   });
 });
 
-describe('#10 zaxirali resolveDistrictId bu oqimdan CHAQIRILMAYDI', () => {
+describe('#10 sayt/CRM tuman qidiruvi bu oqimdan CHAQIRILMAYDI', () => {
   let warn: jest.SpyInstance;
 
   beforeEach(() => {
@@ -162,18 +161,10 @@ describe('#10 zaxirali resolveDistrictId bu oqimdan CHAQIRILMAYDI', () => {
     expect(deps).not.toContain(OrderLookupService);
   });
 
-  it('tuman aniqlanmagan partiyada ham resolveDistrictId/getDefaultDistrictId 0 marta', async () => {
-    const resolveDistrictId = jest.spyOn(
+  it('tuman aniqlanmagan partiyada ham resolveExternalDistrict 0 marta', async () => {
+    const resolveExternalDistrict = jest.spyOn(
       OrderLookupService.prototype,
-      'resolveDistrictId',
-    );
-    const resolveDistrictIdOrNull = jest.spyOn(
-      OrderLookupService.prototype,
-      'resolveDistrictIdOrNull',
-    );
-    const getDefaultDistrictId = jest.spyOn(
-      OrderLookupService.prototype,
-      'getDefaultDistrictId',
+      'resolveExternalDistrict',
     );
     try {
       const catalogClient = {
@@ -215,13 +206,9 @@ describe('#10 zaxirali resolveDistrictId bu oqimdan CHAQIRILMAYDI', () => {
       expect(previews).toHaveLength(1);
       expect(previews[0].district_id).toBeNull();
       expect(previews[0].issues).toContain('district_missing');
-      expect(resolveDistrictId).toHaveBeenCalledTimes(0);
-      expect(resolveDistrictIdOrNull).toHaveBeenCalledTimes(0);
-      expect(getDefaultDistrictId).toHaveBeenCalledTimes(0);
+      expect(resolveExternalDistrict).toHaveBeenCalledTimes(0);
     } finally {
-      resolveDistrictId.mockRestore();
-      resolveDistrictIdOrNull.mockRestore();
-      getDefaultDistrictId.mockRestore();
+      resolveExternalDistrict.mockRestore();
     }
   });
 });

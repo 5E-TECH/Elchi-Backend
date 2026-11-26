@@ -119,6 +119,7 @@ import {
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import {
   ReceiptProjectionInterceptor,
+  canSeeBranchLegMethod,
   canSeeReceipts,
   projectFullReceipt,
 } from './finance-receipt-projection';
@@ -143,12 +144,12 @@ import {
   type OriginRequest,
 } from './file-link';
 import { fileOwnerOf } from './file-ownership';
+import { buildCardLedgerReport } from './excel/finance-reports/card-ledger.report';
 import {
-  buildXlsx,
-  excelDate,
-  excelNumber,
-  type ExcelColumn,
-} from './excel/excel.util';
+  fetchBranchNames,
+  fetchCardNames,
+  fetchUserNames,
+} from './excel/finance-reports/report-names';
 
 /** (kiZgTybn) Smena yopish: karta qoldig'i rasmi chegaralari. */
 const SHIFT_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
@@ -307,29 +308,6 @@ export const CARD_OTHER_BRANCH_MESSAGE =
 /** Zv3MLn0a — smena sozlamalari faqat superadmin. */
 export const CARD_SHIFT_SETTINGS_SUPERADMIN_MESSAGE =
   "Smena sozlamalarini (rasm / AI tekshiruvi) faqat superadmin o'zgartiradi";
-
-/** Zv3MLn0a — karta ko'chirmasi Excel ustunlari. */
-const CARD_LEDGER_EXCEL_COLUMNS: ExcelColumn[] = [
-  { header: 'Sana', key: 'date', width: 20 },
-  { header: 'Amal', key: 'kind', width: 22 },
-  { header: 'Summa', key: 'amount', width: 14 },
-  { header: "O'zgarish", key: 'delta', width: 14 },
-  { header: 'Qoldiq', key: 'balance_after', width: 14 },
-  { header: "To'lov usuli", key: 'payment_method', width: 14 },
-  { header: 'Manba', key: 'source_type', width: 18 },
-  { header: 'Qarshi karta ID', key: 'counterparty_card_id', width: 14 },
-  { header: 'Izoh', key: 'comment', width: 30 },
-  { header: 'Kiritgan (ID)', key: 'created_by', width: 14 },
-];
-
-const CARD_LEDGER_KIND_LABEL: Record<string, string> = {
-  income: 'Kirim',
-  expense: 'Chiqim',
-  transfer_in: "Kartaga o'tkazma",
-  transfer_out: "Kartadan o'tkazma",
-  cash_to_card: 'Naqddan kartaga',
-  card_to_cash: 'Kartadan naqdga',
-};
 
 export const BRANCH_TO_MAIN_HQ_ONLY_MESSAGE =
   "Filial pulini HQ (superadmin yoki admin) o'zi qabul qiladi — menejer HQ'ga pul o'tkazmaydi";
@@ -1469,6 +1447,8 @@ export class FinanceGatewayController {
       source_types?: string;
       fromDate?: string;
       toDate?: string;
+      payment_method?: string;
+      card_id?: string;
     },
     /** T3 — `receipt` bloki (faqat SA/admin/menejer; finance sukut — yo'q). */
     includeReceipts = false,
@@ -1487,6 +1467,9 @@ export class FinanceGatewayController {
         // FE-PAY-04 / C2: sana filtri (Toshkent kuni — finance'da).
         from_date: query.fromDate,
         to_date: query.toDate,
+        // KRN902pg — «To'lov usuli» / «Karta».
+        payment_method: query.payment_method,
+        card_id: query.card_id,
         include_receipts: includeReceipts,
       },
     );
@@ -1879,6 +1862,7 @@ export class FinanceGatewayController {
     @Query() query: FindCashboxByUserQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    this.assertMethodCardFilterAllowed(req?.user, query);
     const managerBranchCashboxId =
       this.isManager(req?.user) && !this.isPrivileged(req?.user)
         ? await this.resolveManagerBranchCashboxId(req.user, user_id)
@@ -3741,6 +3725,26 @@ export class FinanceGatewayController {
     );
   }
 
+  /**
+   * KRN902pg — «To'lov usuli» / «Karta» filtri faqat usulni to'liq ko'radigan
+   * rollarga (SA/admin, menejer, registrator). Kuryer filial oyog'i qatorida
+   * usulni ko'rmaydi (63HO6cBU) — filtr natijasi uni oshkor qilardi; market
+   * kassasida bunday sahifa yo'q.
+   */
+  private assertMethodCardFilterAllowed(
+    user: JwtUser | undefined,
+    query: { payment_method?: string; card_id?: string } | undefined,
+  ) {
+    if (
+      (query?.payment_method || query?.card_id) &&
+      !canSeeBranchLegMethod(this.getUserRoles(user))
+    ) {
+      throw new ForbiddenException(
+        "To'lov usuli va karta filtri faqat SA/admin/menejer/registratorga",
+      );
+    }
+  }
+
   @Get('history')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -3759,7 +3763,8 @@ export class FinanceGatewayController {
     description:
       'GaBIPi3Z (2-band): `data.counts` — `{ all, income, expense }` tab sonlari («Barchasi / Kirim / Chiqim»): ' +
       'AYNI filtrlar va rol doirasi (kassa, kassa turi, manba, sana, foydalanuvchi), faqat `operation_type` SIZ — ' +
-      "tanlangan tabdan qat'i nazar. `all = income + expense`. `pagination.total` — joriy (tabli) ro'yxat jami. " +
+      "tanlangan tabdan qat'i nazar. `all = income + expense + o'tkazma izi juftlari`. `pagination.total` — joriy (tabli) ro'yxat jami. " +
+      "(2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X): «Kirim» / «Chiqim» tablarida yo'q; «Barchasi» da juftdan faqat kirim oyog'i, chiqim oyog'i `pass_through_partner` da. " +
       "63HO6cBU: qatorlarda ixtiyoriy `branch_leg: true` — filial kassasi qatori, kuryer → filial to'lovining kuryer qatori va bog'lanmagan eski kuryer to'lovi (`transfer_id` yo'q, manba — kuryerning o'zi); KURYER ko'rinishida shu qatorlarda `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; menejer va registrator usulni ko'radi (ega qarori Q2). FILIAL kassasida `balance_card` doim 0.",
   })
   @ApiOkResponse({
@@ -3801,12 +3806,16 @@ export class FinanceGatewayController {
     @Query() query: FindHistoryQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    // (2026-11-26, ega) Ekran ro'yxati: o'tkazma izi jufti «Barchasi» da
+    // BITTA qator (`collapse_pass_through` — kirim oyog'i + `pass_through_partner`).
+    // Excel va boshqa o'quvchilar bu bayroqsiz — ikkala qator.
     // T3 — «Chek holati» filtri faqat chekni ko'ra oladigan rollarga.
     if (query.receipt_status && !canSeeReceipts(this.getUserRoles(req?.user))) {
       throw new ForbiddenException(
         'Chek holati filtri faqat SA/admin/menejerga',
       );
     }
+    this.assertMethodCardFilterAllowed(req?.user, query);
     if (
       this.hasRole(req?.user, RoleEnum.MARKET) &&
       !this.isPrivileged(req?.user)
@@ -3819,6 +3828,7 @@ export class FinanceGatewayController {
             user_id: String(req.user.sub),
             cashbox_type: Cashbox_type.FOR_MARKET,
             include_receipts: false,
+            collapse_pass_through: true,
           },
         ),
       );
@@ -3836,6 +3846,7 @@ export class FinanceGatewayController {
             user_id: String(req.user.sub),
             cashbox_type: Cashbox_type.FOR_COURIER,
             include_receipts: false,
+            collapse_pass_through: true,
           },
         ),
       );
@@ -3864,12 +3875,14 @@ export class FinanceGatewayController {
               source_type: Source_type.BRANCH_TO_MAIN,
               operation_type: Operation_type.EXPENSE,
               include_receipts: true,
+              collapse_pass_through: true,
             }
           : {
               ...query,
               user_id: branchId,
               cashbox_type: Cashbox_type.BRANCH,
               include_receipts: true,
+              collapse_pass_through: true,
             },
       );
 
@@ -3936,6 +3949,7 @@ export class FinanceGatewayController {
             user_id: branchId,
             cashbox_type: Cashbox_type.BRANCH,
             include_receipts: false,
+            collapse_pass_through: true,
           },
         ),
       );
@@ -3956,6 +3970,7 @@ export class FinanceGatewayController {
             ? query
             : { ...query, cashbox_type: Cashbox_type.MAIN }),
           include_receipts: this.canSeeReceiptsOf(req?.user),
+          collapse_pass_through: true,
         },
       ),
     );
@@ -4044,6 +4059,7 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     const user = req?.user;
+    this.assertMethodCardFilterAllowed(user, query);
     const filters = {
       from_date: query?.from_date ?? query?.fromDate,
       to_date: query?.to_date ?? query?.toDate,
@@ -4052,6 +4068,9 @@ export class FinanceGatewayController {
       source_types: query?.source_types ?? query?.sourceTypes,
       source_user_id: query?.source_user_id,
       created_by: query?.created_by,
+      // KRN902pg — `GET /finance/history` bilan AYNI filtr.
+      payment_method: query?.payment_method,
+      card_id: query?.card_id,
     };
     const send = (scope: Record<string, unknown>) =>
       this.send({ cmd: 'finance.history.daily' }, { ...filters, ...scope });
@@ -4136,9 +4155,10 @@ export class FinanceGatewayController {
     summary: 'Find cashbox history detail by id',
     description:
       "T6 (iPlY5yop): `correction` — `null` yoki `{ id, action, payment_kind, role, reason, created_by_name, created_at, original_amount, new_amount, related_history_id, related }`; `related` — o'sha kassadagi juft oyoq `{ id, source_type, role, operation_type, amount, created_at }` (asl → yangi/teskari; teskari/yangi → asl). " +
-      "Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, root_history_id, transfer }`, qamrovdan tashqari turda `correctable: null`; boshqa rollarda kalit yo'q. " +
-      "mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; " +
-      "`receiver` — kuryer to'lovida pulni olgan kassa, marketga to'lovda MAIN (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`. " +
+      "Superadminga `correctable: { allowed, code?, reason?, deadline, window_days, edit_allowed, root_history_id, transfer }`, qamrovdan tashqari turda (oddiy filial → HQ topshirig'i ham) `correctable: null`; boshqa rollarda kalit yo'q. " +
+      "(2026-11-26) `edit_allowed: false` — filial ishtirokidagi to'lov (`transfer.variant`: `courier_click_branch`, `market_branch`, `branch_click_market`) faqat QAYTARILADI; tahrir so'ralsa 409 `NOT_CORRECTABLE` / `reason: 'reverse_only'`. " +
+      "mUhkJHmi (N2 «Qayerdan → Qayerga»): `transfer` — `null` (to'lov shakli aniqlanmadi: LEGACY_UNLINKED, unsupported_type, reversal_row) yoki `{ kind: 'courier_payment'|'market_payment', variant: 'courier'|'courier_click'|'courier_click_branch'|'market'|'market_branch'|'branch_click_market', payment_method: 'cash'|'click'|'click_to_market', amount, receiver: { cashbox_type: 'main'|'branch', branch_id, name }, courier: { id, name } | null, market: { id, name } | null }`; " +
+      "`receiver` — pul qaytadigan kassa: kuryer to'lovida pulni olgan kassa, marketga to'lovda to'lagan kassa (MAIN yoki filial), `branch_click_market` da filial (MAIN da `branch_id` va `name` — `null`); `courier` — faqat kuryer to'lovida; `market` — marketga to'lov va click_to_market. Shakl bo'lsa har hukmda bor (ALREADY_CORRECTED, WINDOW_EXPIRED, COURIER_MOVED ham). Nomlar fail-open — topilmasa `null`. " +
       "(2026-11-14) Barcha rollarga: `source_branch` — `branch_to_main` qatorida pulni topshirgan filial `{ id, name }`, boshqa turda `null`; `transfer_source_user` — o'tkazma manbasi `{ id, name, role, phone_number }` yoki `null`; `card` — `click` to'lovida MAIN / BRANCH kassaning qaysi kartasiga tushgan / qaysi kartasidan chiqqan `{ id, name, is_default, kind, bank_name, card_network, last4, holder_name }` (`card_id` siz — Asosiy karta; yozuvi yo'q bo'lsa `id: null`), naqd, «Marketga o'tkazma» va kuryer/market kassasida `null`. Fail-open — `null`. " +
       "63HO6cBU: FILIAL kassasi qatorida `card` doim `null` (filialda karta yo'q). `branch_leg: true` qatorda (filial oyog'i, kuryer → filial to'lovi) KURYER uchun `payment_method`, `card_id`, `card`, `transfer_source_user_id`, `transfer_source_user` — `null`; SA/admin, menejer, registrator — saqlanadi (ega qarori Q2).",
   })
@@ -4329,7 +4349,7 @@ export class FinanceGatewayController {
     summary:
       "(T6) Kuryerdan qabul / marketga to'lovni TO'LIQ qaytarish — FAQAT superadmin",
     description:
-      "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN sof 0, market +X. Marketga to'lov: MAIN +X, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi. " +
+      "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN (yoki menejer yozganda filial) sof 0, market +X. Marketga to'lov: to'lagan kassa (MAIN yoki filial) +X, market +X. Filialdan marketga o'tkazma: filial +X, MAIN sof 0, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi; buyurtmalar daftari orqaga (outbox). " +
       "201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. " +
       'Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` / `IDEMPOTENCY_KEY_REQUIRED`.',
   })
@@ -5972,12 +5992,7 @@ export class FinanceGatewayController {
   ): Promise<void> {
     const cardId = this.assertCardId(id);
     const scope = await this.resolveCardScope(req?.user);
-    const result = await this.send<{
-      data?: {
-        card?: Record<string, unknown>;
-        items?: Array<Record<string, unknown>>;
-      };
-    }>(
+    const result = await this.send<{ data?: Record<string, unknown> }>(
       { cmd: 'finance.cashbox.cards.ledger' },
       {
         id: cardId,
@@ -5987,23 +6002,33 @@ export class FinanceGatewayController {
         ...scope,
       },
     );
-    const items = result?.data?.items ?? [];
-    const buffer = await buildXlsx(
-      "Karta ko'chirmasi",
-      CARD_LEDGER_EXCEL_COLUMNS,
-      items.map((row) => ({
-        date: excelDate(row.created_at),
-        kind: CARD_LEDGER_KIND_LABEL[toText(row.kind)] ?? toText(row.kind),
-        amount: excelNumber(row.amount),
-        delta: excelNumber(row.delta),
-        balance_after: excelNumber(row.balance_after),
-        payment_method: toText(row.payment_method),
-        source_type: toText(row.source_type),
-        counterparty_card_id: toText(row.counterparty_card_id),
-        comment: toText(row.comment),
-        created_by: toText(row.created_by),
-      })),
-    );
+    const data = result?.data ?? {};
+    const items = Array.isArray(data.items)
+      ? (data.items as Array<Record<string, unknown>>)
+      : [];
+    const branchId =
+      data.cashbox_type === 'branch' ? toText(data.branch_id) || null : null;
+    // Nomlar — bulk va fail-open (xato bo'lsa `#id` bilan fayl baribir chiqadi).
+    const [userNames, cardNames, branchNames] = await Promise.all([
+      fetchUserNames(
+        this.identityClient,
+        items.map((row) => row.created_by),
+      ),
+      items.some((row) => toText(row.counterparty_card_id))
+        ? fetchCardNames(this.financeClient, branchId)
+        : new Map<string, string>(),
+      branchId
+        ? fetchBranchNames(this.branchClient, this.toRequester(req?.user))
+        : new Map<string, string>(),
+    ]);
+    const buffer = await buildCardLedgerReport({
+      data,
+      from_date: fromDate,
+      to_date: toDate,
+      cardNames,
+      userNames,
+      branchNames,
+    });
     res.set({
       'Content-Type':
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -6454,9 +6479,14 @@ export class FinanceGatewayController {
     );
   }
 
+  // B1te60bD — operator hisobi (balans, daromad, to'lovlar) FAQAT superadmin va
+  // admin uchun, faqat o'qish. Menejer olib tashlandi: filial bo'yicha cheklov
+  // yo'q edi — istalgan market operatorining hisobini o'qiy olardi (FE bu
+  // yo'llarni faqat superadmin/admin uchun chaqiradi). Market — o'z
+  // operatorlari `operator-payments/*`, operator o'zi — `operators/me/*`.
   @Get('operators/:operator_id/balance')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Operator earned/paid/balance summary' })
   @ApiParam({
@@ -6469,7 +6499,7 @@ export class FinanceGatewayController {
 
   @Get('operators/:operator_id/earnings')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN) // B1te60bD — menejer yo'q
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List an operator earnings' })
   @ApiParam({
@@ -6495,7 +6525,7 @@ export class FinanceGatewayController {
 
   @Get('operators/:operator_id/payments')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN) // B1te60bD — menejer yo'q
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List an operator payouts' })
   @ApiParam({

@@ -67,7 +67,12 @@ const isPrivileged = (roles: string[]) =>
   roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
 
 /** 63HO6cBU (ega qarori, Q2) — filial oyog'ida usulni ko'radiganlar. */
-const canSeeBranchLegMethod = (roles: string[]) =>
+/**
+ * 63HO6cBU — filial oyog'i qatorida usul va kartani ko'radigan rollar. KRN902pg:
+ * «To'lov usuli» / «Karta» tarix filtrlari ham faqat shularga (aks holda kuryer
+ * yashirilgan usulni filtr orqali bilib olardi).
+ */
+export const canSeeBranchLegMethod = (roles: string[]) =>
   isPrivileged(roles) ||
   roles.includes(RoleEnum.MANAGER) ||
   roles.includes(RoleEnum.REGISTRATOR);

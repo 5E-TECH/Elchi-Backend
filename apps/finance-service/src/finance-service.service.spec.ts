@@ -20,6 +20,8 @@ jest.mock('@app/common', () => ({
   // Haqiqiy Toshkent kun helperlari (SqVMuhKo) — servis ularni barrel'dan
   // oladi, sana filtri chegaralari haqiqiy kod bilan hisoblanishi kerak.
   ...jest.requireActual('@app/common/time/tashkent-time'),
+  // xhiXv3w3 — ish kuni helperlari (servis barrel'dan oladi).
+  ...jest.requireActual('@app/common/time/business-day'),
   // 2WRzdWpZ — jurnal gaplari quruvchisi (sof funksiyalar).
   ...jest.requireActual('@app/common/activity-log/describe-uz'),
   Cashbox_type: {
@@ -1950,16 +1952,17 @@ describe('Toshkent kun chegarasi (SqVMuhKo)', () => {
   });
 
   describe('GaBIPi3Z (2-band) — GET /finance/history tab sonlari {all, income, expense}', () => {
-    it('⭐ AYNI filtrlar (kassa turi, sana, manba), operation_type SIZ; all = income + expense', async () => {
+    it('⭐ AYNI filtrlar (kassa turi, sana, manba), operation_type SIZ; all = income + expense + o`tkazma izi juftlari', async () => {
       const { service, historyRepo, cashboxRepo } = setup();
       (cashboxRepo as { find?: jest.Mock }).find = jest
         .fn()
         .mockResolvedValue([{ id: '1' }, { id: '2' }]);
       historyRepo.findAndCount.mockResolvedValue([[], 2]);
-      historyRepo.count.mockImplementation(
-        ({ where }: { where: { operation_type?: string } }) =>
-          Promise.resolve(where.operation_type === 'income' ? 9 : 2),
-      );
+      // Tartib: kirim (izsiz), chiqim (izsiz), iz juftlari (har juftda bitta kirim).
+      historyRepo.count
+        .mockResolvedValueOnce(9)
+        .mockResolvedValueOnce(2)
+        .mockResolvedValueOnce(1);
 
       const res = (await service.findAllHistory({
         cashbox_type: 'main' as never,
@@ -1971,18 +1974,24 @@ describe('Toshkent kun chegarasi (SqVMuhKo)', () => {
         limit: 20,
       })) as { data: { counts: unknown; pagination: { total: number } } };
 
-      expect(res.data.counts).toEqual({ all: 11, income: 9, expense: 2 });
+      expect(res.data.counts).toEqual({ all: 12, income: 9, expense: 2 });
       // Ro'yxat — tanlangan tab (chiqim) bo'yicha, sonlar — tabsiz.
       expect(res.data.pagination.total).toBe(2);
       expect(whereOf(historyRepo.findAndCount).operation_type).toBe('expense');
+      // (2026-11-26) «Chiqim» tabida o'tkazma izi yo'q (Raw filtr).
+      expect(whereOf(historyRepo.findAndCount).transfer_id).toMatchObject({
+        type: 'raw',
+      });
       const countWheres = (historyRepo.count.mock.calls as unknown[][]).map(
         (args) => (args[0] as { where: Record<string, unknown> }).where,
       );
       expect(countWheres.map((w) => w.operation_type).sort()).toEqual([
         'expense',
         'income',
+        'income',
       ]);
       for (const where of countWheres) {
+        expect(where.transfer_id).toMatchObject({ type: 'raw' });
         expect(where.createdAt).toEqual(Between(OCT_1_START, OCT_1_END));
         expect(where.source_type).toBe('manual_expense');
         expect(where.cashbox_id).toEqual(

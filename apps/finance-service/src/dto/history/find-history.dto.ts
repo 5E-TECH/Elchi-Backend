@@ -20,10 +20,43 @@ export class FindHistoryDto {
   @IsString()
   expense_category_id?: string;
 
+  /**
+   * KRN902pg — to'lov usuli: vergul bilan `cash`, `click`, `click_to_market`,
+   * `none` (servis tekshiradi, noma'lum → 400).
+   */
+  @IsOptional()
+  @IsString()
+  payment_method?: string;
+
+  /** KRN902pg — karta: vergul bilan karta ID'lari va/yoki `none`. */
+  @IsOptional()
+  @IsString()
+  card_id?: string;
+
   /** T3 — `receipt` blokini qo'shish (FAQAT gateway, SA/admin/menejer). */
   @IsOptional()
   @IsBoolean()
   include_receipts?: boolean;
+
+  /**
+   * (2026-11-26, ega) Excel «Yo'nalish» — har to'lov qatoriga `route`
+   * (kimdan → kimga: kuryer, filial, asosiy kassa, market). FAQAT gateway
+   * Excel eksportlari yoqadi (ommaviy `GET finance/history` DTO sida yo'q).
+   */
+  @IsOptional()
+  @IsBoolean()
+  include_route?: boolean;
+
+  /**
+   * (2026-11-26, ega) O'tkazma izi juftini «Barchasi» ro'yxatida BITTA qator
+   * qilish: chiqim oyog'i ro'yxatdan chiqadi va kirim oyog'iga
+   * `pass_through_partner` bo'lib biriktiriladi (sahifalash, `total` va
+   * `counts.all` bir xil). FAQAT gateway `GET finance/history` (ekran)
+   * yoqadi; Excel va boshqa o'quvchilar ikkala qatorni oladi.
+   */
+  @IsOptional()
+  @IsBoolean()
+  collapse_pass_through?: boolean;
 
   @IsOptional()
   @IsString()

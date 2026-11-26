@@ -1302,7 +1302,12 @@ export class OrderServiceController {
   settlementRetreat(
     @Payload()
     data: {
-      level: 'courier_to_branch' | 'hq_to_market';
+      level:
+        | 'courier_to_branch'
+        | 'branch_to_hq'
+        | 'hq_to_market'
+        // (2026-11-26) B — filial kassasidan marketga to'lov, match "X:M".
+        | 'branch_to_market';
       match_value: string;
       amount: number;
       requester_id?: string;
@@ -1912,6 +1917,17 @@ export class OrderServiceController {
    * Kiruvchi posilkalarning manbalari — "Kiruvchi posilkalar" ekrani avval
    * manba so'raydi, keyin o'sha manbaning posilkalarini skanerlaydi.
    */
+  /** Saytlardan olingan buyurtmalar soni (integration-service ro'yxati uchun). */
+  @MessagePattern({ cmd: 'order.external.import_stats' })
+  findExternalImportStats(
+    @Payload() data: { slugs?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () =>
+      successRes(await this.orderService.findExternalImportStats(data?.slugs)),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.find_external_sources' })
   findExternalSources(
     @Payload() data: { branch_id?: string } | undefined,
@@ -2400,16 +2416,25 @@ export class OrderServiceController {
   /**
    * 2026-11-20: komissiya «o'tgan sotuvlarga hisoblash» — shu market, shu
    * operator, hozir sotilgan buyurtmalar (id, narx). Gateway (market) beradi.
+   * Audit 2026-11-22: `after_id` — keyingi sahifa (#9), `order_ids` — faqat
+   * shu buyurtmalardan hozir sotilganlari (#8).
    */
   @MessagePattern({ cmd: 'order.operator.sold_orders' })
   operatorSoldOrders(
-    @Payload() data: { market_id: string; operator_id: string },
+    @Payload()
+    data: {
+      market_id: string;
+      operator_id: string;
+      after_id?: string;
+      order_ids?: string[];
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderAnalyticsService.getOperatorSoldOrders(
         data?.market_id,
         data?.operator_id,
+        { afterId: data?.after_id, orderIds: data?.order_ids },
       ),
     );
   }
@@ -2736,6 +2761,8 @@ export class OrderServiceController {
       target_region_id?: string;
       /** Z3pUOxou: logist doirasi; bo'sh massiv — hech narsa. */
       target_region_ids?: string[];
+      /** Registrator doirasi — manzil filiallar; bo'sh massiv — hech narsa. */
+      destination_branch_ids?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
@@ -2750,6 +2777,8 @@ export class OrderServiceController {
     data: {
       direction?: string;
       side?: string;
+      /** Registrator doirasi — manzil filiallar; bo'sh massiv — hech narsa. */
+      destination_branch_ids?: string[];
     },
     @Ctx() context: RmqContext,
   ) {

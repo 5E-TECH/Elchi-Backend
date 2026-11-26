@@ -173,9 +173,12 @@ describe('MWYaqprw — scan-assign javobida buyurtma xulosasi', () => {
       { qr_token: 'tok-53' },
       req,
     )) as { data: Record<string, unknown> };
+    // Skan auditi #59/#85: xulosa ixtiyoriy — qisqa (1,5 s) muddat bilan so'raladi, biriktirish javobini
+    // 8 s+ kutdirmaydi.
     expect(sendOrder).toHaveBeenCalledWith(
       { cmd: 'order.find_by_qr_light' },
       { token: 'tok-53' },
+      1_500,
     );
     expect(res.data).toEqual(
       expect.objectContaining({

@@ -11,7 +11,7 @@ import {
   Cashbox_type,
   computePickupFee,
   DeliveryPricingInputError,
-  tashkentDayRange,
+  businessDayRange,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
 import { Cashbox } from '../entities/cashbox.entity';
@@ -298,8 +298,8 @@ export class PickupVisitService {
     } else if (input?.is_free === false || input?.is_free === 'false') {
       qb.andWhere('v.is_free = false');
     }
-    // Toshkent kuni (kassa ro'yxatlari bilan bir xil), tashrif sanasi bo'yicha.
-    const { start, end } = tashkentDayRange(input?.from_date, input?.to_date);
+    // Ish kuni (xhiXv3w3; kassa ro'yxatlari bilan bir xil), tashrif sanasi bo'yicha.
+    const { start, end } = businessDayRange(input?.from_date, input?.to_date);
     if (start) qb.andWhere('v.occurred_at >= :start', { start });
     if (end) qb.andWhere('v.occurred_at <= :end', { end });
     return qb;

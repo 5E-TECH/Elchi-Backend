@@ -397,7 +397,9 @@ describe('T0UGh8bL — sellOrder {paidAmount}', () => {
     const over = makeService({ marketBalance: -50000 });
     const error = await rpcError(over.sell(COURIER, { paidAmount: 155001 }));
     expect(error.statusCode).toBe(400);
-    expect(error.message).toContain('(155000)');
+    // D5NxxpJW: matnda chegara summasi yo'q — undan market tarifi chiqadi.
+    expect(error.message).toContain('summadan oshmasligi kerak');
+    expect(error.message).not.toContain('155000');
     expect(over.outboxed).toHaveLength(0);
 
     const h = makeService({ marketBalance: -50000 });
@@ -411,7 +413,11 @@ describe('T0UGh8bL — sellOrder {paidAmount}', () => {
   });
 
   it.each([
-    ['chegaradan oshgan', { paidAmount: 205001 }, '(205000)'],
+    [
+      'chegaradan oshgan (D5NxxpJW: chegara summasi aytilmaydi)',
+      { paidAmount: 205001 },
+      'summadan oshmasligi kerak',
+    ],
     ['kasr', { paidAmount: 1500.5 }, 'butun'],
     ['manfiy', { paidAmount: -1 }, 'manfiy'],
     ['son emas', { paidAmount: 'abc' }, 'butun'],
@@ -423,6 +429,7 @@ describe('T0UGh8bL — sellOrder {paidAmount}', () => {
       expect(error.statusCode).toBe(400);
       expect(error.message).toContain('paidAmount');
       expect(error.message).toContain(fragment);
+      expect(error.message).not.toContain('205000');
       expect(h.mocks.createQueryRunner).not.toHaveBeenCalled();
       expect(h.mocks.requestApproval).not.toHaveBeenCalled();
       expect(h.outboxed).toHaveLength(0);

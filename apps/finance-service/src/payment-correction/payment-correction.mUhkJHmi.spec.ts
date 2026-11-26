@@ -227,9 +227,11 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
       allowed: true,
       deadline: ANY_DEADLINE,
       window_days: 30,
+      edit_allowed: true,
       root_history_id: '1',
       transfer: {
         kind: 'courier_payment',
+        variant: 'courier',
         payment_method: 'cash',
         amount: 500_000,
         receiver: { cashbox_type: 'main', branch_id: null, name: null },
@@ -248,6 +250,7 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
     const res = await detail(legs[1]);
     expect(res.data.correctable?.transfer).toEqual({
       kind: 'courier_payment',
+      variant: 'courier',
       payment_method: 'click',
       amount: 500_000,
       receiver: { cashbox_type: 'main', branch_id: null, name: null },
@@ -262,6 +265,7 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
     expect(res.data.correctable).toMatchObject({ allowed: true });
     expect(res.data.correctable?.transfer).toEqual({
       kind: 'courier_payment',
+      variant: 'courier_click',
       payment_method: 'click_to_market',
       amount: 500_000,
       receiver: { cashbox_type: 'main', branch_id: null, name: null },
@@ -279,6 +283,7 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
     const res = await detail(legs[1]);
     expect(res.data.correctable?.transfer).toEqual({
       kind: 'market_payment',
+      variant: 'market',
       payment_method: 'cash',
       amount: 500_000,
       receiver: { cashbox_type: 'main', branch_id: null, name: null },
@@ -296,6 +301,7 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
     const res = await detail(legs[0]);
     expect(res.data.correctable?.transfer).toEqual({
       kind: 'courier_payment',
+      variant: 'courier',
       payment_method: 'cash',
       amount: 500_000,
       receiver: {
@@ -353,9 +359,11 @@ describe('mUhkJHmi — correctable.transfer (Qayerdan → Qayerga)', () => {
       allowed: true,
       deadline: ANY_DEADLINE,
       window_days: 30,
+      edit_allowed: true,
       root_history_id: '1',
       transfer: {
         kind: 'courier_payment',
+        variant: 'courier',
         payment_method: 'cash',
         amount: 500_000,
         receiver: { cashbox_type: 'branch', branch_id: '15', name: null },

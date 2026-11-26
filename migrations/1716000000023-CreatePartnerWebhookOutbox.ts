@@ -7,7 +7,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * scheduler HMAC-imzoli POST qiladi, xatoda backoff bilan qayta uriniladi,
  * muvaffaqiyatda `completed` (dedup). ExternalIntegration `sync_queue`'dan
  * ataylab ajratilgan (u `integration_id` FK'ga bog'langan). Kontrakt:
- * docs/PARTNER_API.md §4.
+ * docs/public/MARKETPLACE_API.md §6.
  */
 export class CreatePartnerWebhookOutbox1716000000023 implements MigrationInterface {
   name = 'CreatePartnerWebhookOutbox1716000000023';

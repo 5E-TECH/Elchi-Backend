@@ -4,6 +4,7 @@ import { ApiGatewayService } from './api-gateway.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import {
   AppLoggerModule,
+  BusinessDayModule,
   RmqModule,
   gatewayValidationSchema,
 } from '@app/common';
@@ -60,8 +61,10 @@ import { FileGatewayController } from './file-gateway.controller';
 import { ScanGatewayController } from './scan-gateway.controller';
 import { PrinterGatewayController } from './printer-gateway.controller';
 import { ExcelGatewayController } from './excel-gateway.controller';
+import { OldMailsExportController } from './old-mails-export.controller';
 import { RealtimeGateway } from './realtime/realtime.gateway';
 import { RealtimeController } from './realtime/realtime.controller';
+import { PresenceActivityPublisher } from './realtime/presence-activity.publisher';
 import { AuditGatewayController } from './audit-gateway.controller';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import { AiGatewayController } from './ai-gateway.controller';
@@ -97,6 +100,9 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
       validationSchema: gatewayValidationSchema,
     }),
     AppLoggerModule.forRoot({ serviceName: 'api-gateway' }),
+    // xhiXv3w3 — ish kuni jadvali (kun almashish soati), bazasiz: order-service
+    // `order.intake.state` orqali daqiqada bir.
+    BusinessDayModule.forRoot({ source: { rmqClient: 'ORDER' } }),
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -182,6 +188,7 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     AnalyticsGatewayController,
     PrinterGatewayController,
     ExcelGatewayController,
+    OldMailsExportController,
     RealtimeController,
     AuditGatewayController,
     PartnerGatewayController,
@@ -261,6 +268,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
       useFactory: (config: ConfigService) => AiImageStore.fromConfig(config),
     },
     RealtimeGateway,
+    // (pe71yf8L) socket online/offline → identity `user_activity.last_seen_at`.
+    PresenceActivityPublisher,
     AuditEnrichmentService,
     // 4BftLLnc — logistning o'z viloyatlari (regions.logist_id = me), qisqa
     // kesh: buyurtmalar, paketlar, kuryerlar va qidiruv doirasi.
