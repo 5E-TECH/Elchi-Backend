@@ -8,6 +8,7 @@ import {
 } from '@app/common';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
+import { passThroughSql } from '../history-route/pass-through';
 import { FinancialBalanceHistory } from '../entities/financial-balance-history.entity';
 import { FinanceCashboxDaily } from '../entities/finance-cashbox-daily.entity';
 import { FinanceDailySnapshot } from '../entities/finance-daily-snapshot.entity';
@@ -444,11 +445,13 @@ export class FinanceDailyService {
       income_count: string | number;
       expense_count: string | number;
     }> = await this.dataSource.query(
+      // (2026-11-26) O'tkazma izi (bitta to'lovda o'sha kassada +X / −X) —
+      // kirim / chiqimga kirmaydi (qoldiq o'zgarmaydi, juft bitta kunda).
       `SELECT ${businessDayKeySql('h."createdAt"')} AS day,
-              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'income'), 0) AS income,
-              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'expense'), 0) AS expense,
-              COUNT(*) FILTER (WHERE h."operation_type" = 'income') AS income_count,
-              COUNT(*) FILTER (WHERE h."operation_type" = 'expense') AS expense_count
+              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'income' AND NOT ${passThroughSql('h', t.history)}), 0) AS income,
+              COALESCE(SUM(h."amount") FILTER (WHERE h."operation_type" = 'expense' AND NOT ${passThroughSql('h', t.history)}), 0) AS expense,
+              COUNT(*) FILTER (WHERE h."operation_type" = 'income' AND NOT ${passThroughSql('h', t.history)}) AS income_count,
+              COUNT(*) FILTER (WHERE h."operation_type" = 'expense' AND NOT ${passThroughSql('h', t.history)}) AS expense_count
          FROM ${t.history} h
         WHERE ${where.join(' AND ')}
         GROUP BY 1`,
