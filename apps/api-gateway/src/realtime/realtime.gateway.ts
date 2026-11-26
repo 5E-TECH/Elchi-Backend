@@ -16,6 +16,10 @@ import {
 } from '../auth/session-revocation.service';
 import type { IncomingMessage } from 'http';
 import { corsOriginCallback, isAllowedCorsOrigin } from '../gateway-http.setup';
+import {
+  PRESENCE_GRACE_MS,
+  PresenceActivityPublisher,
+} from './presence-activity.publisher';
 
 interface SocketUser {
   sub: string;
@@ -142,6 +146,17 @@ export class RealtimeGateway
   // userId -> set of live socket ids (a user may have several tabs/devices).
   private readonly online = new Map<string, Set<string>>();
 
+  /**
+   * (pe71yf8L) userId → oxirgi socket uzilgandan keyingi kutish taymeri
+   * (`PRESENCE_GRACE_MS`). Taymer bor — foydalanuvchi hali «Online»
+   * ko'rsatiladi (`isPresent`); shu orada qayta ulansa taymer bekor va
+   * identity'ga yozuv ketmaydi; tugasa — `last_seen_at` = uzilish vaqti.
+   */
+  private readonly offlineTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+
   /** Kutilayotgan (emit'dan keyingi) uzishlar — modul yopilganda tozalanadi. */
   private readonly pendingKicks = new Set<ReturnType<typeof setTimeout>>();
   /** (2026-10-26) socket id → sessiyani qayta tekshirish taymeri. */
@@ -163,6 +178,11 @@ export class RealtimeGateway
      * sessiya tekshiruvi va chiqarish yo'q (avvalgidek faqat imzo/muddat).
      */
     @Optional() private readonly revocation?: SessionRevocationService,
+    /**
+     * (pe71yf8L) «Oxirgi faollik» — identity `user_activity`. Ixtiyoriy —
+     * spec'lar gateway'ni usiz quradi (u holda faqat xotiradagi holat).
+     */
+    @Optional() private readonly activity?: PresenceActivityPublisher,
   ) {
     this.unsubscribeKicks = revocation?.onKick((ids, reason) =>
       this.disconnectSessions(ids, reason),
@@ -177,6 +197,8 @@ export class RealtimeGateway
     this.sessionRechecks.clear();
     for (const timer of this.tokenExpiryTimers.values()) clearTimeout(timer);
     this.tokenExpiryTimers.clear();
+    for (const timer of this.offlineTimers.values()) clearTimeout(timer);
+    this.offlineTimers.clear();
   }
 
   private getUser(client: Socket): SocketUser | undefined {
@@ -238,8 +260,10 @@ export class RealtimeGateway
     }
 
     const set = this.online.get(user.sub) ?? new Set<string>();
+    const wasOnline = set.size > 0;
     set.add(client.id);
     this.online.set(user.sub, set);
+    this.markPresent(user.sub, wasOnline);
 
     client.emit('connected', {
       user_id: user.sub,
@@ -411,8 +435,39 @@ export class RealtimeGateway
       set.delete(client.id);
       if (!set.size) {
         this.online.delete(user.sub);
+        this.scheduleOffline(user.sub);
       }
     }
+  }
+
+  /**
+   * (pe71yf8L) Socket ulandi: kutish taymeri bo'lsa — bekor (uzilish
+   * qisqa edi, foydalanuvchi uzluksiz online); haqiqiy offline → online
+   * o'tishda — `last_seen_at` = hozir.
+   */
+  private markPresent(userId: string, wasOnline: boolean): void {
+    const pending = this.offlineTimers.get(userId);
+    if (pending) {
+      clearTimeout(pending);
+      this.offlineTimers.delete(userId);
+      return;
+    }
+    if (!wasOnline) this.activity?.seen(userId, new Date());
+  }
+
+  /** (pe71yf8L) Oxirgi socket uzildi — `PRESENCE_GRACE_MS` dan keyin offline. */
+  private scheduleOffline(userId: string): void {
+    const previous = this.offlineTimers.get(userId);
+    if (previous) clearTimeout(previous);
+    const disconnectedAt = new Date();
+    const timer = setTimeout(() => {
+      if (this.offlineTimers.get(userId) !== timer) return;
+      this.offlineTimers.delete(userId);
+      if (this.online.has(userId)) return;
+      this.activity?.seen(userId, disconnectedAt);
+    }, PRESENCE_GRACE_MS);
+    timer.unref?.();
+    this.offlineTimers.set(userId, timer);
   }
 
   private authenticate(client: Socket): SocketUser | null {
@@ -483,5 +538,15 @@ export class RealtimeGateway
 
   isOnline(userId: string): boolean {
     return this.online.has(String(userId));
+  }
+
+  /**
+   * (pe71yf8L) KO'RSATISH uchun «Online»: kamida bitta socket ulangan YOKI
+   * oxirgi socket `PRESENCE_GRACE_MS` dan kam vaqt oldin uzilgan. Push
+   * qarori uchun `isOnline` (kutishsiz) ishlatiladi.
+   */
+  isPresent(userId: string | number): boolean {
+    const id = String(userId);
+    return this.online.has(id) || this.offlineTimers.has(id);
   }
 }

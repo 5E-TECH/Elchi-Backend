@@ -26,6 +26,7 @@ import {
   passwordFingerprint,
 } from './session-security';
 import { SessionKickPublisher } from './session-kick.publisher';
+import { UserActivityService } from '../activity/user-activity.service';
 
 export {
   hashRefreshToken,
@@ -143,6 +144,11 @@ export class AuthSessionService {
      * (socketlari darhol uziladi). Ixtiyoriy — spec'lar servisni usiz quradi.
      */
     @Optional() private readonly kicks?: SessionKickPublisher,
+    /**
+     * (pe71yf8L) «Oxirgi kirish» / «Oxirgi faollik» (`user_activity`).
+     * Ixtiyoriy — spec'lar servisni usiz quradi; yozish best-effort.
+     */
+    @Optional() private readonly activity?: UserActivityService,
   ) {}
 
   /** `security_reset` bilan yopilganlar — gateway socketlarini uzadi. */
@@ -210,6 +216,21 @@ export class AuthSessionService {
     now?: Date;
   }): Promise<UserSession> {
     const now = input.now ?? new Date();
+    const session = await this.openRow(input, now);
+    // (pe71yf8L) Oxirgi kirish — yangi qator ham, qayta ishlatilgan ham.
+    await this.activity?.recordLogin(session.user_id, now);
+    return session;
+  }
+
+  private async openRow(
+    input: {
+      user: User;
+      refreshToken: string;
+      expiresAt: Date;
+      method: Exclude<UserSessionMethod, 'legacy'>;
+    },
+    now: Date,
+  ): Promise<UserSession> {
     const row = this.build({ ...input, now });
     if (!row.device_id) {
       await this.sessions.insert(row);
@@ -418,7 +439,10 @@ export class AuthSessionService {
       { id: sessionId, revoked_at: IsNull() },
       { last_seen_at: now },
     );
-    return (result.affected ?? 0) > 0;
+    const touched = (result.affected ?? 0) > 0;
+    // (pe71yf8L) Oxirgi faollik — sessiya egasi.
+    if (touched) await this.activity?.recordSeenBySession(sessionId, now);
+    return touched;
   }
 
   /**

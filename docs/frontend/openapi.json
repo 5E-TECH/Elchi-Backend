@@ -810,7 +810,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q). KQINMdeQ: har qatorda `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (superadmin — hammasi; admin — o`zi va admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa menejer va o`zi yaratgan market — false)."
+            "description": "User list. YEThmZBn / kGIjOciz: har qatorda `branch_id: string | null` va `branch: { id, name } | null` — kuryer / menejer / registrator / filial xodimining filiali (boshqa rollar va filial xizmati javob bermasa — null). x6IO746K: `role = market_operator` qatorlarida `market: { id, name } | null` (market o`chirilgan / topilmagan — null; boshqa rollarda kalit yo`q). KQINMdeQ: har qatorda `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (superadmin — hammasi; admin — o`zi va admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa menejer va o`zi yaratgan market — false). pe71yf8L: `role = market` va `market_operator` qatorlarida `is_online: boolean` (kamida bitta `/realtime` socket ulangan yoki oxirgisi 45 s dan kam oldin uzilgan), `last_login_at` va `last_seen_at`: ISO | null (hech kirmagan — null; faollik xizmati javob bermasa kalitlar yo`q). Boshqa rollarda kalit yo`q."
           }
         },
         "security": [
@@ -846,7 +846,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users qatoridagi bilan bir xil qoida)."
+            "description": "User by id. kGIjOciz: `branch_id: string | null` va `branch: { id, name } | null` (kuryer / menejer / registrator / filial xodimi; boshqa rollar — null). x6IO746K: market operatorida `market: { id, name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users qatoridagi bilan bir xil qoida). pe71yf8L: market / market operatorida `is_online`, `last_login_at`, `last_seen_at` (GET /users dagidek)."
           },
           "404": {
             "description": "Not found"

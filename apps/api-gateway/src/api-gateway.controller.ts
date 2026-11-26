@@ -75,6 +75,8 @@ import {
   projectUserRowContactsForRoles,
 } from './auth/order-contact-projection';
 import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
+import { RealtimeGateway } from './realtime/realtime.gateway';
+import { attachUserActivity } from './user-activity-view';
 import {
   LOGIST_REGIONS_UNAVAILABLE_MESSAGE,
   LogistRegionScopeService,
@@ -154,7 +156,26 @@ export class ApiGatewayController {
     private readonly investorClient?: ClientProxy,
     // (2026-11-12) Market «Qo'shimcha raqam» o'zgarsa — chek keshi tozalanadi.
     @Optional() private readonly problemContacts?: ProblemContactsService,
+    // (pe71yf8L) market / operator qatorlari — «Online» (socket holati).
+    // Yo'q bo'lsa (spec'lar) hamma «Offline».
+    @Optional() private readonly realtime?: RealtimeGateway,
   ) {}
+
+  /**
+   * (pe71yf8L) `GET /users` / `GET /users/:id`: market va market operatori
+   * qatorlariga `is_online`, `last_login_at`, `last_seen_at`. Xato — faqat
+   * log (ro'yxat ochilaveradi).
+   */
+  private attachActivity(rows: readonly unknown[]): Promise<void> {
+    return attachUserActivity(rows, {
+      identity: this.identityClient,
+      isPresent: (userId) => this.realtime?.isPresent(userId) ?? false,
+      onError: (error) =>
+        this.logger.warn(
+          `user activity olinmadi: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
+  }
 
   private toRequester(req: { user: JwtUser }) {
     return {
@@ -1414,7 +1435,11 @@ export class ApiGatewayController {
       'boshqara oladimi (superadmin — hammasi; admin — o`zi va ' +
       'admin/superadmin bo`lmaganlar; menejer — o`zi va HOZIR o`z filialidagi ' +
       'kuryer/ro`yxatchi, `created_by` dan qat`i nazar; filialdagi boshqa ' +
-      'menejer va o`zi yaratgan market — false).',
+      'menejer va o`zi yaratgan market — false). pe71yf8L: `role = market` ' +
+      'va `market_operator` qatorlarida `is_online: boolean` (kamida bitta ' +
+      '`/realtime` socket ulangan yoki oxirgisi 45 s dan kam oldin uzilgan), ' +
+      '`last_login_at` va `last_seen_at`: ISO | null (hech kirmagan — null; ' +
+      'faollik xizmati javob bermasa kalitlar yo`q). Boshqa rollarda kalit yo`q.',
   })
   async getUsers(
     @Query('search') search?: string,
@@ -1558,6 +1583,10 @@ export class ApiGatewayController {
       (response as { data: { items: unknown[] } }).data.items = pageItems.map(
         (item) => projectUserRowContactsForRoles(req?.user?.roles, item),
       );
+      // pe71yf8L — market / operator: oxirgi kirish va Online / Offline.
+      await this.attachActivity(
+        (response as { data: { items: unknown[] } }).data.items,
+      );
     }
 
     return response;
@@ -1675,7 +1704,8 @@ export class ApiGatewayController {
       'boshqa rollar — null). x6IO746K: market operatorida `market: { id, ' +
       'name } | null`. KQINMdeQ: `can_manage: boolean` — so`rovchi shu ' +
       'foydalanuvchini PATCH /users/:id orqali boshqara oladimi (GET /users ' +
-      'qatoridagi bilan bir xil qoida).',
+      'qatoridagi bilan bir xil qoida). pe71yf8L: market / market operatorida ' +
+      '`is_online`, `last_login_at`, `last_seen_at` (GET /users dagidek).',
   })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
@@ -1753,6 +1783,10 @@ export class ApiGatewayController {
             ),
           }
         : projected;
+    // pe71yf8L — market / operator: oxirgi kirish va Online / Offline.
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      await this.attachActivity([row]);
+    }
     return row === data ? response : { ...response, data: row };
   }
 

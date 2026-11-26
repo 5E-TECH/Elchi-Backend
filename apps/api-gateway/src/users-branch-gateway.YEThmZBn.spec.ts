@@ -154,6 +154,10 @@ describe('YEThmZBn — GET /users filial bilan boyitiladi', () => {
         branch_id: null,
         branch: null,
         can_manage: true,
+        // pe71yf8L: market qatori — faollik (mock'da yozuv yo'q → null).
+        is_online: false,
+        last_login_at: null,
+        last_seen_at: null,
       },
       {
         id: '40',
@@ -170,7 +174,13 @@ describe('YEThmZBn — GET /users filial bilan boyitiladi', () => {
 
     await listUsers();
 
-    expect(identityClient.send).toHaveBeenCalledTimes(1);
+    // pe71yf8L: market qatorlari bo'lsa — qo'shimcha faqat faollik so'rovi.
+    const cmds = (identityClient.send.mock.calls as Array<[Pattern]>).map(
+      ([p]) => p.cmd,
+    );
+    expect(
+      cmds.filter((cmd) => cmd !== 'identity.user.activity.find_by_ids'),
+    ).toEqual(['identity.user.find_all']);
     const [pattern, payload] = identityClient.send.mock.calls[0] as [
       Pattern,
       { query: Row },
