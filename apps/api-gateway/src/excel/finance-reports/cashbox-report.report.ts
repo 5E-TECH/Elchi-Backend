@@ -9,12 +9,15 @@ import {
   formula,
   reportFont,
   reportToBuffer,
+  toExcelDate,
   type ReportTableResult,
 } from '@app/report-kit';
 import type { CellValue, Worksheet } from 'exceljs';
 import {
   balanceChain,
+  correctionStatus,
   historyLabel,
+  routeText,
   isCashMethod,
   sortHistory,
   toHistoryRow,
@@ -22,6 +25,7 @@ import {
 } from './cashbox-history';
 import {
   MAIN_CASHBOX_NAME,
+  branchLabel,
   dateTimeText,
   moneyText,
   orderNumberOf,
@@ -73,6 +77,13 @@ export interface CashboxReportInput {
   /** Smena bo'yicha: «Smena №16 · 08:02 — 20:14». */
   shiftLabel?: string | null;
   branchNames: ReadonlyMap<string, string>;
+  /**
+   * (2026-11-26, ega) Faqat asosiy kassa: davrda menejerlar FILIAL kassasi
+   * orqali marketlarga bergan pul (filial kassasidan to'lov va kuryerning
+   * «Marketga o'tkazma»si) — `include_route` bilan. Asosiy kassa balansiga
+   * kirmaydi, alohida bo'lim. Yo'q / olinmadi — bo'lim chizilmaydi.
+   */
+  branchMarketItems?: ReadonlyArray<Record<string, unknown>> | null;
   now?: Date;
 }
 
@@ -120,11 +131,16 @@ const toOps = (
       card: bucket === 'card' ? row.amount : null,
       other: bucket === 'other' ? row.amount : null,
       amount: row.amount,
-      comment:
+      // (2026-11-26) T6: «Qaytarilgan» / «Qaytarish (#asl)» izohga qo'shiladi.
+      comment: [
         row.comment ??
-        row.category ??
-        orderNumberOf(row.source, row.sourceId) ??
-        historyLabel(row),
+          row.category ??
+          orderNumberOf(row.source, row.sourceId) ??
+          historyLabel(row),
+        correctionStatus(row),
+      ]
+        .filter(Boolean)
+        .join(' · '),
       by: row.createdByName ?? (row.createdBy ? `#${row.createdBy}` : '—'),
     };
   });
@@ -415,6 +431,14 @@ export function buildCashboxReport(input: CashboxReportInput): Promise<Buffer> {
     tone: 'danger',
   });
   r = te.next;
+  if (isMain && input.branchMarketItems?.length) {
+    r = addBranchMarketSection(
+      ws,
+      r,
+      input.branchMarketItems,
+      input.branchNames,
+    );
+  }
 
   ws.getCell(valueRow, isMain ? 8 : 6).value = totalRef(ti, 'G', inc.amount);
   ws.getCell(valueRow, isMain ? 9 : 8).value = totalRef(te, 'G', exp.amount);
@@ -456,6 +480,96 @@ export function buildCashboxReport(input: CashboxReportInput): Promise<Buffer> {
     { from: 8, to: 8, label: 'Sana' },
   ]);
   return reportToBuffer(workbook);
+}
+
+/** Filial orqali marketga to'lov turi (yo'nalish noma'lum — usuldan). */
+const branchMarketKind = (row: HistoryRow): string => {
+  const variant = row.route?.variant;
+  if (variant === 'courier_click_branch' || row.method === 'click_to_market') {
+    const courier = row.route?.courier;
+    return courier
+      ? `Kuryer ${courier.name ?? `#${courier.id}`} o'tkazmasi`
+      : "Kuryer o'tkazmasi";
+  }
+  return "Filial kassasidan to'lov";
+};
+
+/**
+ * (2026-11-26, ega) «Filiallar orqali marketlarga» — davrda menejerlar filial
+ * kassasi orqali marketlarga bergan pul (asosiy kassa balansiga kirmaydi):
+ * sana, yo'nalish (filial → market), turi, summa, holat (qaytarilgan), kim
+ * yozgan. Eskidan yangiga.
+ */
+function addBranchMarketSection(
+  ws: Worksheet,
+  row: number,
+  items: ReadonlyArray<Record<string, unknown>>,
+  branchNames: ReadonlyMap<string, string>,
+): number {
+  const rows = sortHistory(items.map(toHistoryRow));
+  const r = addSection(
+    ws,
+    row,
+    'Filiallar orqali marketlarga',
+    `${rows.length} ta to'lov`,
+  );
+  const first = r + 1;
+  const last = r + rows.length;
+  const table = addTable(ws, r, {
+    total: true,
+    totalLabel: '',
+    empty: "To'lov yo'q",
+    rows,
+    columns: [
+      { header: '№', align: 'center', value: (_x, k) => k - first + 1 },
+      {
+        header: 'Sana',
+        fmt: F.dateTime,
+        value: (x) => toExcelDate(x.date),
+        totalValue: "Jami (ma'lumot uchun)",
+      },
+      {
+        header: "Yo'nalish (filial → market)",
+        span: 3,
+        value: (x) =>
+          routeText(x, branchNames) ??
+          `${branchLabel(x.cashboxOwnerId, branchNames)} kassasi → ${x.sourceUserName ?? 'market'}`,
+      },
+      {
+        header: "Summa, so'm",
+        fmt: F.som,
+        bold: true,
+        value: (x) => x.amount,
+        // Jadval B dan: №=B, Sana=C, Yo'nalish=D:F, Summa=G.
+        totalValue: formula(
+          `SUM(G${first}:G${last})`,
+          sumBy(rows, (x) => x.amount),
+        ),
+      },
+      {
+        header: 'Turi · holat',
+        value: (x) =>
+          [branchMarketKind(x), correctionStatus(x)]
+            .filter(Boolean)
+            .join(' · '),
+      },
+      {
+        header: 'Kiritgan',
+        value: (x) =>
+          x.createdByName ?? (x.createdBy ? `#${x.createdBy}` : '—'),
+      },
+    ],
+  });
+  if (rows.length) {
+    wrapColumn(ws, table, 2);
+    wrapColumn(ws, table, 4);
+  }
+  return addNote(
+    ws,
+    table.next,
+    "Bu bo'lim asosiy kassa balansiga kirmaydi: pul filial kassasidan yoki kuryerdan to'g'ridan-to'g'ri marketga o'tgan. Qaytarilgan to'lov ham ro'yxatda qoladi («Qaytarilgan»).",
+    'info',
+  );
 }
 
 /** «Kassa harakati» — davr boshi, kirim, chiqim, davr oxiri (asosiy kassa). */

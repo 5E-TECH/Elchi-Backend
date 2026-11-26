@@ -23,6 +23,19 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-26 — Kassa Excel'lari: «Yo'nalish», «Holat», «Filiallar orqali marketlarga» (ega)
+
+Deploy: **finance-service, api-gateway** (migratsiya, env yo'q). Frontend o'zgarishi shart emas.
+
+- ✏️ [export] `GET /export/cashbox-history.xlsx` («Kassa tarixi», kuryer / market / asosiy kassa sahifasi) — oxirida ikki
+  ustun: «Yo'nalish (kimdan → kimga)» (masalan «Kuryer Ali → Baraka Shop (o'tkazma, Urgut filiali menejeri yozgan)»,
+  «Urgut filiali kassasi → Baraka Shop») va «Holat» («Qaytarilgan», «Qaytarish (#id)», «Tahrirlangan», «Tuzatilgan»).
+- ✏️ [export] `GET /export/cashbox-report.xlsx` (asosiy kassa) — yangi bo'lim «Filiallar orqali marketlarga»: davrda
+  menejerlar filial kassasi orqali marketlarga bergan pul (filial kassasidan to'lov, kuryer «Marketga o'tkazma»si);
+  asosiy kassa balansiga KIRMAYDI. Kirim / chiqim izohida qaytarilgan to'lov belgisi. Filial hisoboti — o'zgarmagan.
+- 🟢 [finance] ichki: `finance.history.find_all` → `include_route` (faqat gateway Excel'i; ommaviy API'da yo'q).
+
+
 ### 2026-11-26 — To'lovni qaytarish: filial ishtirokidagi to'lovlar ham (ega)
 
 Deploy: **order-service** (avval yoki birga), **finance-service**, api-gateway (faqat hujjat). Migratsiya, env yo'q.

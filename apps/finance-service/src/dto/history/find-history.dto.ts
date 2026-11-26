@@ -38,6 +38,15 @@ export class FindHistoryDto {
   @IsBoolean()
   include_receipts?: boolean;
 
+  /**
+   * (2026-11-26, ega) Excel «Yo'nalish» — har to'lov qatoriga `route`
+   * (kimdan → kimga: kuryer, filial, asosiy kassa, market). FAQAT gateway
+   * Excel eksportlari yoqadi (ommaviy `GET finance/history` DTO sida yo'q).
+   */
+  @IsOptional()
+  @IsBoolean()
+  include_route?: boolean;
+
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)

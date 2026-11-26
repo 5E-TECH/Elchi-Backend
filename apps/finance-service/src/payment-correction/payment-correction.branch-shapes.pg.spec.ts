@@ -116,7 +116,14 @@ describePg(
           });
         }
         if (pattern.cmd === 'identity.user.find_by_id') {
-          return of({ data: { role: 'market', cashbox_debt_enabled: false } });
+          return of({
+            data: {
+              id: payload?.id,
+              name: `Foydalanuvchi ${String(payload?.id)}`,
+              role: 'market',
+              cashbox_debt_enabled: false,
+            },
+          });
         }
         return of({ data: [] });
       }),
@@ -515,6 +522,136 @@ describePg(
           action: 'edit',
           new_amount: 100_000,
         });
+      });
+    });
+
+    describe('(2026-11-26) Excel «Yo`nalish» — `include_route`', () => {
+      beforeEach(async () => {
+        await seed('0', Cashbox_type.MAIN, 1_000_000, 0);
+        await seed(BRANCH, Cashbox_type.BRANCH, 500_000, 0);
+        await seed(COURIER, Cashbox_type.FOR_COURIER, 900_000);
+        await seed(MARKET, Cashbox_type.FOR_MARKET, 900_000);
+      });
+
+      const routeOf = async (
+        cashbox_type: Cashbox_type,
+        source_type: Source_type,
+      ) => {
+        const res: any = await finance.findAllHistory({
+          cashbox_type,
+          source_type,
+          page: 0,
+          limit: 0,
+          include_route: true,
+        });
+        return (res.data.items as Array<Record<string, any>>).map(
+          (row) => row.route,
+        );
+      };
+
+      it('⭐ A, B, HQ to`lovi — har kassada butun to`lov yo`nalishi (kuryer, filial, market, nomlar); teskari qator — asl yo`nalish', async () => {
+        await finance.paymentsFromCourier({
+          courier_id: COURIER,
+          amount: 300_000,
+          payment_method: PaymentMethod.CLICK_TO_MARKET,
+          market_id: MARKET,
+          receiver_user_id: BRANCH,
+          receiver_cashbox_type: Cashbox_type.BRANCH,
+          created_by: MANAGER,
+          dedup_epoch: 'gw:r-a',
+        });
+        await finance.paymentsToMarket({
+          market_id: MARKET,
+          amount: 200_000,
+          payment_method: PaymentMethod.CASH,
+          payer_cashbox_type: Cashbox_type.BRANCH,
+          payer_user_id: BRANCH,
+          created_by: MANAGER,
+          dedup_epoch: 'gw:r-b',
+          branch_share: 1_000_000,
+        });
+        await finance.paymentsToMarket({
+          market_id: MARKET,
+          amount: 100_000,
+          payment_method: PaymentMethod.CASH,
+          created_by: '1',
+          dedup_epoch: 'gw:r-hq',
+        });
+
+        const market = await routeOf(
+          Cashbox_type.FOR_MARKET,
+          Source_type.MARKET_PAYMENT,
+        );
+        expect(market.map((route) => route?.variant).sort()).toEqual(
+          ['courier_click_branch', 'market', 'market_branch'].sort(),
+        );
+        const viaBranch = market.find(
+          (route) => route?.variant === 'courier_click_branch',
+        );
+        expect(viaBranch).toEqual({
+          variant: 'courier_click_branch',
+          cashbox_type: 'branch',
+          branch_id: BRANCH,
+          courier: { id: COURIER, name: `Foydalanuvchi ${COURIER}` },
+          market: { id: MARKET, name: `Foydalanuvchi ${MARKET}` },
+        });
+        expect(
+          market.find((route) => route?.variant === 'market_branch'),
+        ).toMatchObject({
+          cashbox_type: 'branch',
+          branch_id: BRANCH,
+          courier: null,
+        });
+        expect(
+          market.find((route) => route?.variant === 'market'),
+        ).toMatchObject({ cashbox_type: 'main', branch_id: null });
+
+        // Kuryer kassasidan ham — o'sha yo'nalish.
+        expect(
+          await routeOf(Cashbox_type.FOR_COURIER, Source_type.COURIER_PAYMENT),
+        ).toEqual([
+          expect.objectContaining({ variant: 'courier_click_branch' }),
+        ]);
+
+        // B qaytarildi — teskari qatorlar asl yo'nalish bilan.
+        const bLeg = (
+          await db.getRepository(CashboxHistory).find({
+            where: { source_type: Source_type.MARKET_PAYMENT },
+            relations: ['cashbox'],
+          })
+        ).find(
+          (leg) =>
+            leg.cashbox.cashbox_type === Cashbox_type.BRANCH &&
+            leg.payment_method === PaymentMethod.CASH,
+        )!;
+        await reverse(String(bLeg.id));
+        const reversals = await routeOf(
+          Cashbox_type.FOR_MARKET,
+          Source_type.PAYMENT_REVERSAL,
+        );
+        expect(reversals).toEqual([
+          expect.objectContaining({
+            variant: 'market_branch',
+            branch_id: BRANCH,
+          }),
+        ]);
+      });
+
+      it('`include_route` siz — `route` kaliti yo`q (oddiy ro`yxat avvalgidek)', async () => {
+        await finance.paymentsToMarket({
+          market_id: MARKET,
+          amount: 100_000,
+          payment_method: PaymentMethod.CASH,
+          created_by: '1',
+          dedup_epoch: 'gw:r-plain',
+        });
+        const res: any = await finance.findAllHistory({
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          page: 0,
+          limit: 0,
+        });
+        expect(res.data.items).toHaveLength(1);
+        expect(res.data.items[0]).not.toHaveProperty('route');
       });
     });
   },

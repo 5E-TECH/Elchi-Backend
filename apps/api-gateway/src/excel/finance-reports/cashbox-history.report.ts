@@ -17,6 +17,8 @@ import {
 import type { Worksheet } from 'exceljs';
 import {
   balanceChain,
+  correctionStatus,
+  routeText,
   cashboxName,
   historyLabel,
   isCashMethod,
@@ -296,7 +298,9 @@ export function buildCashboxHistoryReport(
   const list = addReportSheet(
     workbook,
     SHEET,
-    [5, 16, sameCashbox ? 18 : 26, 10, 27, 18, 14, 14, 14, 14, 14, 36],
+    // (2026-11-26) oxirida «Yo'nalish» va «Holat» — oldingi ustun harflari
+    // (formulalar: H, I, J …) o'zgarmaydi.
+    [5, 16, sameCashbox ? 18 : 26, 10, 27, 18, 14, 14, 14, 14, 14, 36, 40, 20],
     {
       orientation: 'landscape',
       freeze: HEADER_ROW,
@@ -371,10 +375,18 @@ export function buildCashboxHistoryReport(
         value: (row) => row.balanceCard,
       },
       { header: 'Izoh', value: (row) => row.comment ?? row.category },
+      // (2026-11-26, ega) kimdan → kimga: kuryer, filial, asosiy kassa, market.
+      {
+        header: "Yo'nalish (kimdan → kimga)",
+        value: (row) => routeText(row, input.branchNames),
+      },
+      // T6: qaytarilgan / tahrirlangan to'lov va uning teskari qatori.
+      { header: 'Holat', value: correctionStatus },
     ],
   });
   if (n > 0) {
     wrapColumn(list, table, 11);
+    wrapColumn(list, table, 12);
     addDivider(list, table, 9);
   }
   printTitles(list, table.header);

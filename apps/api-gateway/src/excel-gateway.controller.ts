@@ -367,12 +367,17 @@ export class ExcelGatewayController {
       to_date,
       page: 0,
       limit: 0,
+      // (2026-11-26) «Yo'nalish» ustuni — kimdan → kimga.
+      include_route: true,
     });
     const items = result?.data?.items ?? [];
     const hasBranch = items.some(
       (row) =>
         (row.cashbox as { cashbox_type?: unknown } | null | undefined)
-          ?.cashbox_type === Cashbox_type.BRANCH,
+          ?.cashbox_type === Cashbox_type.BRANCH ||
+        Boolean(
+          (row.route as { branch_id?: unknown } | null | undefined)?.branch_id,
+        ),
     );
     const buf = await buildCashboxHistoryReport({
       items,
@@ -839,9 +844,16 @@ export class ExcelGatewayController {
         ? await this.readPreviousBalance(scope, period.to)
         : undefined;
     const requester = this.requesterOf(user);
+    // (2026-11-26, ega) Asosiy kassa: menejerlar filial kassasi orqali
+    // marketlarga bergan pul — alohida bo'lim (balansga kirmaydi).
+    const branchMarketItems =
+      scope.kind === 'main'
+        ? await this.readBranchMarketPayments(window)
+        : null;
     const [branchNames, branchName] = await Promise.all([
       scope.kind === 'main' &&
-      history.items.some((row) => row.source_type === 'branch_to_main')
+      (history.items.some((row) => row.source_type === 'branch_to_main') ||
+        Boolean(branchMarketItems?.length))
         ? fetchBranchNames(this.branchClient, requester)
         : new Map<string, string>(),
       scope.kind === 'branch'
@@ -863,9 +875,46 @@ export class ExcelGatewayController {
         ? `Smena №${shift.id} · ${clock(shift.openedAt)} — ${shift.closedAt ? clock(shift.closedAt) : 'hozirgacha'}`
         : null,
       branchNames,
+      branchMarketItems,
       now,
     });
     this.sendFile(res, `kassa-hisobot-${period.fileDate}.xlsx`, buf);
+  }
+
+  /**
+   * (2026-11-26, ega) Davrda FILIAL kassalaridan marketlarga chiqqan pul
+   * (`market_payment` chiqimi): filial kassasidan to'lov va menejer yozgan
+   * kuryer «Marketga o'tkazma»si, yo'nalishi bilan. Fail-open: xato — `null`
+   * (bo'lim chizilmaydi, hisobotning o'zi chiqadi).
+   */
+  private async readBranchMarketPayments(period: {
+    from_date?: string;
+    to_date?: string;
+  }): Promise<RawRow[] | null> {
+    try {
+      const result = await this.send<{ data?: { items?: RawRow[] } }>(
+        this.financeClient,
+        'finance.history.find_all',
+        {
+          cashbox_type: Cashbox_type.BRANCH,
+          source_type: 'market_payment',
+          operation_type: 'expense',
+          ...period,
+          page: 0,
+          limit: 0,
+          include_route: true,
+        },
+      );
+      const items = result?.data?.items ?? [];
+      // Ikkinchi qavat: faqat filial kassasi qatorlari.
+      return items.filter(
+        (row) =>
+          asText((row.cashbox as RawRow | null | undefined)?.cashbox_type) ===
+          String(Cashbox_type.BRANCH),
+      );
+    } catch {
+      return null;
+    }
   }
 
   /** Eng oxirgi qatordan keyingi qoldiq kassa qoldig'idan farq qiladimi. */
