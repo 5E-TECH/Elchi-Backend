@@ -1,8 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { of, throwError } from 'rxjs';
+import { NEVER, of, throwError } from 'rxjs';
 import { RealtimeGateway } from './realtime.gateway';
 import {
+  PRESENCE_FLUSH_TIMEOUT_MS,
   PRESENCE_GRACE_MS,
   PresenceActivityPublisher,
 } from './presence-activity.publisher';
@@ -21,6 +22,7 @@ describe('pe71yf8L — realtime presence (Online / Offline)', () => {
   const jwt = new JwtService({ secret: 'pe71yf8L-presence-secret' });
   let gateway: RealtimeGateway;
   let seen: jest.Mock;
+  let flush: jest.Mock;
 
   const socket = (sub: string, id: string) => {
     const client = {
@@ -52,13 +54,15 @@ describe('pe71yf8L — realtime presence (Online / Offline)', () => {
     jest.setSystemTime(new Date('2026-11-27T09:00:00.000Z'));
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     seen = jest.fn();
+    flush = jest.fn().mockResolvedValue(undefined);
     gateway = new RealtimeGateway(jwt, undefined, {
       seen,
+      flush,
     } as unknown as PresenceActivityPublisher);
   });
 
-  afterEach(() => {
-    gateway.onModuleDestroy();
+  afterEach(async () => {
+    await gateway.onModuleDestroy();
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
@@ -144,14 +148,42 @@ describe('pe71yf8L — realtime presence (Online / Offline)', () => {
     expect(seen).not.toHaveBeenCalled();
   });
 
-  it('modul yopilganda kutish taymerlari tozalanadi (yozuv ketmaydi)', async () => {
-    const tab = socket('26', 's1');
-    await connect(tab);
+  it('⭐ modul yopilganda (deploy): kutilayotgan uzilish — uzilish vaqti bilan, hali ulangan — hozir; yozuvlar kutiladi, keyingi uzilishlar taymer qo`ymaydi', async () => {
+    const left = socket('26', 's1');
+    const stays = socket('27', 's2');
+    await connect(left);
+    await connect(stays);
     seen.mockClear();
-    drop(tab);
-    gateway.onModuleDestroy();
+
+    const droppedAt = new Date();
+    drop(left);
+    await jest.advanceTimersByTimeAsync(10_000);
+    const closedAt = new Date();
+    let flushed = false;
+    flush.mockImplementation(async () => {
+      await Promise.resolve();
+      flushed = true;
+    });
+    await gateway.onModuleDestroy();
+    expect(flushed).toBe(true);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledWith([
+      { userId: '26', at: droppedAt },
+      { userId: '27', at: closedAt },
+    ]);
+
+    // Server socketlarni yopadi — yangi kutish taymeri yo'q, takroriy yozuv yo'q.
+    drop(stays);
     await jest.advanceTimersByTimeAsync(PRESENCE_GRACE_MS * 2);
     expect(seen).not.toHaveBeenCalled();
+    expect(gateway.isPresent('26')).toBe(false);
+    expect(gateway.isPresent('27')).toBe(false);
+    flush.mockClear();
+  });
+
+  it('modul yopilganda hech kim yo`q — flush chaqirilmaydi', async () => {
+    await gateway.onModuleDestroy();
+    expect(flush).not.toHaveBeenCalled();
   });
 
   it('publisher yo`q (eski spec`lar kabi) — faqat xotiradagi holat, xato yo`q', async () => {
@@ -163,7 +195,7 @@ describe('pe71yf8L — realtime presence (Online / Offline)', () => {
     plain.handleDisconnect(tab as never);
     await jest.advanceTimersByTimeAsync(PRESENCE_GRACE_MS);
     expect(plain.isPresent('26')).toBe(false);
-    plain.onModuleDestroy();
+    await expect(plain.onModuleDestroy()).resolves.toBeUndefined();
   });
 });
 
@@ -178,14 +210,52 @@ describe('pe71yf8L — PresenceActivityPublisher', () => {
     );
   });
 
-  it('identity xatosi — faqat ogohlantirish logi, otilmaydi', () => {
+  it('identity xatosi — faqat ogohlantirish logi, otilmaydi', async () => {
     const warn = jest
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
     const send = jest.fn(() => throwError(() => new Error('rmq down')));
     const publisher = new PresenceActivityPublisher({ send } as never);
     expect(() => publisher.seen('26', new Date())).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('rmq down'));
     warn.mockRestore();
+  });
+
+  it('flush — hammasini yuboradi va javobni kutadi; xato yoki javobsizlik (3 s) yopilishni to`xtatmaydi', async () => {
+    jest.useFakeTimers();
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const send = jest
+      .fn()
+      .mockReturnValueOnce(of({ recorded: true }))
+      .mockReturnValueOnce(throwError(() => new Error('rmq down')))
+      .mockReturnValueOnce(NEVER);
+    const publisher = new PresenceActivityPublisher({ send } as never);
+    let done = false;
+    const flushing = publisher
+      .flush([
+        { userId: '26', at: new Date('2026-11-27T09:00:00.000Z') },
+        { userId: '27', at: new Date('2026-11-27T09:01:00.000Z') },
+        { userId: '28', at: new Date('2026-11-27T09:02:00.000Z') },
+      ])
+      .then(() => {
+        done = true;
+      });
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenNthCalledWith(
+      3,
+      { cmd: 'identity.user.activity.seen' },
+      { user_id: '28', at: '2026-11-27T09:02:00.000Z' },
+    );
+    await jest.advanceTimersByTimeAsync(PRESENCE_FLUSH_TIMEOUT_MS - 1);
+    expect(done).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    await flushing;
+    expect(done).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+    jest.useRealTimers();
   });
 });

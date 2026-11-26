@@ -29,6 +29,17 @@ export interface UserActivityDeps {
 const isoOrNull = (value: unknown): string | null =>
   typeof value === 'string' && value ? value : null;
 
+/** Qator / javob id'si kalit sifatida (faqat matn yoki son). */
+const idKey = (value: unknown): string | null =>
+  typeof value === 'string' ||
+  typeof value === 'number' ||
+  typeof value === 'bigint'
+    ? String(value)
+    : null;
+
+const roleOf = (row: Record<string, unknown>): string =>
+  typeof row.role === 'string' ? row.role.toLowerCase() : '';
+
 /**
  * `GET /users` / `GET /users/:id` qatorlariga (joyida) qo'shadi:
  * `is_online` (gateway xotirasi), `last_login_at`, `last_seen_at`
@@ -43,20 +54,18 @@ export async function attachUserActivity(
   rows: readonly unknown[],
   deps: UserActivityDeps,
 ): Promise<void> {
-  const targets = rows.filter(
-    (row): row is Record<string, unknown> =>
-      Boolean(row) &&
-      typeof row === 'object' &&
-      !Array.isArray(row) &&
-      USER_ACTIVITY_ROLES.has(
-        String((row as { role?: unknown }).role ?? '').toLowerCase(),
-      ) &&
-      (row as { id?: unknown }).id != null,
-  );
+  const targets: Array<{ row: Record<string, unknown>; id: string }> = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const record = row as Record<string, unknown>;
+    const id = idKey(record.id);
+    if (id && USER_ACTIVITY_ROLES.has(roleOf(record)))
+      targets.push({ row: record, id });
+  }
   if (!targets.length) return;
 
-  for (const row of targets) {
-    row.is_online = deps.isPresent(String(row.id));
+  for (const { row, id } of targets) {
+    row.is_online = deps.isPresent(id);
   }
 
   let items: ActivityItem[];
@@ -65,7 +74,7 @@ export async function attachUserActivity(
       deps.identity
         .send(
           { cmd: 'identity.user.activity.find_by_ids' },
-          { user_ids: targets.map((row) => String(row.id)) },
+          { user_ids: targets.map((target) => target.id) },
         )
         .pipe(timeout(ACTIVITY_TIMEOUT_MS)),
     )) as { items?: unknown } | undefined;
@@ -79,10 +88,11 @@ export async function attachUserActivity(
 
   const byId = new Map<string, ActivityItem>();
   for (const item of items) {
-    if (item && item.user_id != null) byId.set(String(item.user_id), item);
+    const key = item ? idKey(item.user_id) : null;
+    if (key) byId.set(key, item);
   }
-  for (const row of targets) {
-    const item = byId.get(String(row.id));
+  for (const { row, id } of targets) {
+    const item = byId.get(id);
     row.last_login_at = isoOrNull(item?.last_login_at);
     row.last_seen_at = isoOrNull(item?.last_seen_at);
   }

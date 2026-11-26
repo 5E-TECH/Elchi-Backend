@@ -212,7 +212,7 @@ describe('pe71yf8L — TC6: ruxsat o`zgarmagan', () => {
     (method) => {
       const roles = Reflect.getMetadata(
         ROLES_KEY,
-        ApiGatewayController.prototype[method],
+        Reflect.get(ApiGatewayController.prototype, method) as object,
       ) as string[];
       expect([...roles].sort()).toEqual(['admin', 'manager', 'superadmin']);
     },

@@ -182,6 +182,84 @@ describePg('pe71yf8L — user_activity (pg)', () => {
     expect(await activityRows()).toEqual(expected);
   });
 
+  it('⭐ TC5: to`ldirish activity_logs (+ arxiv) login yozuvlaridan ham — sessiyalardan oldingi kirish, birlashtirilgan `last_at`; telegram / logout / noto`g`ri id hisoblanmaydi', async () => {
+    for (const table of ['activity_logs', 'activity_logs_archive']) {
+      await db.query(
+        `CREATE TABLE identity_schema.${table} (
+           id bigserial PRIMARY KEY, entity_type varchar(64) NOT NULL,
+           entity_id varchar(100) NOT NULL, action varchar(64) NOT NULL,
+           user_id varchar(100), metadata jsonb, created_at timestamptz NOT NULL)`,
+      );
+    }
+    const log = (
+      table: string,
+      userId: string | null,
+      at: string,
+      metadata: Row | null = null,
+      action = 'login',
+      entityType = 'Auth',
+    ) =>
+      db.query(
+        `INSERT INTO identity_schema.${table}
+           (entity_type, entity_id, action, user_id, metadata, created_at)
+         VALUES ($1, COALESCE($2, '0'), $3, $2, $4, $5)`,
+        [entityType, userId, action, metadata, at],
+      );
+    // 26: sessiya 11-25 — eski log uni kamaytirmaydi.
+    await insertSession(
+      '26',
+      'a',
+      '2026-11-25T08:00:00Z',
+      '2026-11-25T10:00:00Z',
+      false,
+    );
+    await log('activity_logs', '26', '2026-10-01T08:00:00Z');
+    // 27: sessiyasi yo'q (10-21 dan oldin kirgan) — log + birlashtirilgan last_at + arxiv.
+    await log('activity_logs', '27', '2026-10-02T08:00:00Z', {
+      count: 3,
+      last_at: '2026-10-05T09:30:00.000Z',
+    });
+    await log('activity_logs_archive', '27', '2026-09-01T08:00:00Z');
+    await log('activity_logs', '27', '2026-10-20T08:00:00Z', null, 'logout');
+    await log(
+      'activity_logs',
+      '27',
+      '2026-10-21T08:00:00Z',
+      null,
+      'login',
+      'User',
+    );
+    await log('activity_logs', '27', '2026-10-03T08:00:00Z', {
+      last_at: 'not-a-date',
+    });
+    // 25: faqat telegram Mini App kirishi — hisoblanmaydi.
+    await log('activity_logs', '25', '2026-11-26T08:00:00Z', {
+      method: 'telegram',
+    });
+    // Noto'g'ri / admins da yo'q id — xato bermaydi, o'tkaziladi.
+    await log('activity_logs', 'abc', '2026-11-26T08:00:00Z');
+    await log('activity_logs', '99999999999999999999', '2026-11-26T08:00:00Z');
+    await log('activity_logs', '999', '2026-11-26T08:00:00Z');
+    await log('activity_logs', null, '2026-11-26T08:00:00Z');
+
+    await runMigration(migration);
+    const expected = [
+      {
+        user_id: '26',
+        last_login_at: new Date('2026-11-25T08:00:00Z'),
+        last_seen_at: new Date('2026-11-25T10:00:00Z'),
+      },
+      {
+        user_id: '27',
+        last_login_at: new Date('2026-10-05T09:30:00Z'),
+        last_seen_at: new Date('2026-10-05T09:30:00Z'),
+      },
+    ];
+    expect(await activityRows()).toEqual(expected);
+    await runMigration(migration);
+    expect(await activityRows()).toEqual(expected);
+  });
+
   it('⭐ TC1: login (AuthSessionService.open) → last_login_at va last_seen_at = login vaqti; refresh (touch) → faqat last_seen_at', async () => {
     await runMigration(migration);
     const loginAt = new Date('2026-11-27T08:00:00.000Z');

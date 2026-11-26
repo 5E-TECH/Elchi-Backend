@@ -154,8 +154,10 @@ export class RealtimeGateway
    */
   private readonly offlineTimers = new Map<
     string,
-    ReturnType<typeof setTimeout>
+    { timer: ReturnType<typeof setTimeout>; at: Date }
   >();
+  /** Modul yopildi — yangi kutish taymeri qo'yilmaydi (yozuvlar flush'da). */
+  private destroyed = false;
 
   /** Kutilayotgan (emit'dan keyingi) uzishlar — modul yopilganda tozalanadi. */
   private readonly pendingKicks = new Set<ReturnType<typeof setTimeout>>();
@@ -189,7 +191,8 @@ export class RealtimeGateway
     );
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
+    this.destroyed = true;
     this.unsubscribeKicks?.();
     for (const timer of this.pendingKicks) clearTimeout(timer);
     this.pendingKicks.clear();
@@ -197,8 +200,17 @@ export class RealtimeGateway
     this.sessionRechecks.clear();
     for (const timer of this.tokenExpiryTimers.values()) clearTimeout(timer);
     this.tokenExpiryTimers.clear();
-    for (const timer of this.offlineTimers.values()) clearTimeout(timer);
+    // (pe71yf8L) Kutilayotgan uzilishlar — uzilish vaqti bilan; hali
+    // ulanganlar — hozir (socketlari shu yopilish bilan uziladi).
+    const now = new Date();
+    const flush: Array<{ userId: string; at: Date }> = [];
+    for (const [userId, pending] of this.offlineTimers) {
+      clearTimeout(pending.timer);
+      flush.push({ userId, at: pending.at });
+    }
     this.offlineTimers.clear();
+    for (const userId of this.online.keys()) flush.push({ userId, at: now });
+    if (flush.length) await this.activity?.flush(flush);
   }
 
   private getUser(client: Socket): SocketUser | undefined {
@@ -448,7 +460,7 @@ export class RealtimeGateway
   private markPresent(userId: string, wasOnline: boolean): void {
     const pending = this.offlineTimers.get(userId);
     if (pending) {
-      clearTimeout(pending);
+      clearTimeout(pending.timer);
       this.offlineTimers.delete(userId);
       return;
     }
@@ -457,17 +469,19 @@ export class RealtimeGateway
 
   /** (pe71yf8L) Oxirgi socket uzildi — `PRESENCE_GRACE_MS` dan keyin offline. */
   private scheduleOffline(userId: string): void {
+    // Yopilish paytidagi uzilishlar — `onModuleDestroy` allaqachon yozgan.
+    if (this.destroyed) return;
     const previous = this.offlineTimers.get(userId);
-    if (previous) clearTimeout(previous);
+    if (previous) clearTimeout(previous.timer);
     const disconnectedAt = new Date();
     const timer = setTimeout(() => {
-      if (this.offlineTimers.get(userId) !== timer) return;
+      if (this.offlineTimers.get(userId)?.timer !== timer) return;
       this.offlineTimers.delete(userId);
       if (this.online.has(userId)) return;
       this.activity?.seen(userId, disconnectedAt);
     }, PRESENCE_GRACE_MS);
     timer.unref?.();
-    this.offlineTimers.set(userId, timer);
+    this.offlineTimers.set(userId, { timer, at: disconnectedAt });
   }
 
   private authenticate(client: Socket): SocketUser | null {
