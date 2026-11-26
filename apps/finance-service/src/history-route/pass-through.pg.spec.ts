@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { of } from 'rxjs';
-import { DataSource, IsNull } from 'typeorm';
-import { RpcException } from '@nestjs/microservices';
+import { DataSource } from 'typeorm';
 import {
   Cashbox_type,
   Operation_type,
   OutboxEvent,
   PaymentMethod,
-  Source_type,
 } from '@app/common';
 import { FinanceServiceService } from '../finance-service.service';
 import { Cashbox } from '../entities/cashbox.entity';
@@ -221,45 +219,6 @@ describePg(
         }),
       );
 
-    const box = async (user_id: string, cashbox_type: Cashbox_type) => {
-      const row = await db
-        .getRepository(Cashbox)
-        .findOneByOrFail({ user_id, cashbox_type });
-      return {
-        balance: Number(row.balance),
-        cash: Number(row.balance_cash),
-        card: Number(row.balance_card),
-      };
-    };
-
-    const snapshot = async () => {
-      const all = await db
-        .getRepository(Cashbox)
-        .find({ order: { id: 'ASC' } });
-      return all.map((row) => ({
-        user_id: String(row.user_id),
-        type: row.cashbox_type,
-        balance: Number(row.balance),
-        cash: Number(row.balance_cash),
-        card: Number(row.balance_card),
-      }));
-    };
-
-    const originalLegs = () =>
-      db.getRepository(CashboxHistory).find({
-        where: { reverses_history_id: IsNull() },
-        relations: ['cashbox'],
-        order: { id: 'ASC' },
-      });
-
-    const retreats = () =>
-      outbox.enqueue.mock.calls
-        .filter((call) => call[1] === 'order.settlement.retreat')
-        .map((call) => {
-          const payload = call[2] as Record<string, unknown>;
-          return [payload.level, payload.match_value, payload.amount];
-        });
-
     const reverse = (history_id: string, extra: Record<string, unknown> = {}) =>
       corrections.reverse({
         history_id,
@@ -268,33 +227,6 @@ describePg(
         ...SA,
         ...extra,
       }) as Promise<any>;
-
-    const correct = (history_id: string) =>
-      corrections.correctAmount({
-        history_id,
-        new_amount: 100_000,
-        reason: "Summa noto'g'ri yozilgan",
-        idempotency_key: randomUUID(),
-        ...SA,
-      });
-
-    /** Teskari qatorlar: har asl oyoqqa bittadan, amali teskari, summa / usul asl. */
-    const expectMirrored = async (original: CashboxHistory[]) => {
-      const reversals = await db.getRepository(CashboxHistory).find({
-        where: { source_type: Source_type.PAYMENT_REVERSAL },
-      });
-      expect(reversals).toHaveLength(original.length);
-      for (const leg of original) {
-        const mirror = reversals.find(
-          (row) => String(row.reverses_history_id) === String(leg.id),
-        );
-        expect(mirror).toBeDefined();
-        expect(mirror!.operation_type).not.toBe(leg.operation_type);
-        expect(Number(mirror!.amount)).toBe(Number(leg.amount));
-        expect(mirror!.payment_method).toBe(leg.payment_method);
-        expect(String(mirror!.cashbox_id)).toBe(String(leg.cashbox_id));
-      }
-    };
 
     const daily = () => new FinanceDailyService(db);
 
