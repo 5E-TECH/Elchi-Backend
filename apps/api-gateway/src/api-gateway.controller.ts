@@ -22,6 +22,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Cashbox_type, Roles as RoleEnum } from '@app/common';
+import { clampListLimit } from '@app/common/pagination/list-limit';
 import { firstValueFrom, tap, timeout } from 'rxjs';
 import { ProblemContactsService } from './contacts/problem-contacts.service';
 import {
@@ -379,6 +380,52 @@ export class ApiGatewayController {
     }
     const memberRole = managerMembers?.get(targetId);
     return memberRole !== undefined && memberRole !== 'MANAGER';
+  }
+
+  /**
+   * Ro'yxat qatorlarining kassalari bitta so'rovda (`finance.cashbox.find_by_users`): id → kassa (yo'q — `null`).
+   * Tanlash ro'yxatlari endi 100 dan ortiq (`LOOKUP_LIST_MAX_LIMIT`), har qatorga alohida RPC (N+1) og'ir bo'lardi.
+   * Batch javobi noto'g'ri yoki xato bo'lsa — eski yo'l: har qator uchun `findUserCashbox` (xatoda `null`).
+   */
+  private async findUserCashboxes(
+    userIds: string[],
+    cashboxType: Cashbox_type,
+  ): Promise<Map<string, unknown>> {
+    const ids = [
+      ...new Set(userIds.map((id) => String(id ?? '').trim())),
+    ].filter(Boolean);
+    const result = new Map<string, unknown>();
+    if (!ids.length) return result;
+    try {
+      const response = await firstValueFrom(
+        this.financeClient
+          .send(
+            { cmd: 'finance.cashbox.find_by_users' },
+            { user_ids: ids, cashbox_type: cashboxType },
+          )
+          .pipe(timeout(8000)),
+      );
+      const rows = response?.data?.items;
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          const owner = String(row?.user_id ?? '').trim();
+          if (owner && row?.cashbox_type === cashboxType) {
+            result.set(owner, row);
+          }
+        }
+        for (const id of ids) {
+          if (!result.has(id)) result.set(id, null);
+        }
+        return result;
+      }
+    } catch {
+      // eski yo'lga tushamiz
+    }
+    const single = await Promise.all(
+      ids.map((id) => this.findUserCashbox(id, cashboxType)),
+    );
+    ids.forEach((id, index) => result.set(id, single[index] ?? null));
+    return result;
   }
 
   private async findUserCashbox(userId: string, cashboxType: Cashbox_type) {
@@ -1024,7 +1071,7 @@ export class ApiGatewayController {
         items: [],
         meta: {
           page: Number(page) > 0 ? Number(page) : 1,
-          limit: Number(limit) > 0 ? Math.min(Number(limit), 100) : 10,
+          limit: clampListLimit(limit, 10),
           total: 0,
           totalPages: 1,
         },
@@ -1116,15 +1163,14 @@ export class ApiGatewayController {
       return response;
     }
 
-    response.data.items = await Promise.all(
-      items.map(async (courier: any) => ({
-        ...courier,
-        cashbox: await this.findUserCashbox(
-          String(courier?.id ?? ''),
-          Cashbox_type.FOR_COURIER,
-        ),
-      })),
+    const courierCashboxes = await this.findUserCashboxes(
+      items.map((courier: any) => String(courier?.id ?? '')),
+      Cashbox_type.FOR_COURIER,
     );
+    response.data.items = items.map((courier: any) => ({
+      ...courier,
+      cashbox: courierCashboxes.get(String(courier?.id ?? '').trim()) ?? null,
+    }));
 
     return response;
   }
@@ -1154,8 +1200,7 @@ export class ApiGatewayController {
       regionIds,
     );
     const page = Number(filters.page) > 0 ? Number(filters.page) : 1;
-    const limit =
-      Number(filters.limit) > 0 ? Math.min(Number(filters.limit), 100) : 10;
+    const limit = clampListLimit(filters.limit, 10);
     if (!regionIds.length) {
       return successRes({
         items: [],
@@ -1279,7 +1324,7 @@ export class ApiGatewayController {
       }
     }
 
-    response.data.items = await Promise.all(
+    const resolved = await Promise.all(
       items.map(async (manager: any) => {
         const managerId = String(manager?.id ?? '').trim();
         let branch = branchByManagerId.get(managerId) ?? null;
@@ -1300,26 +1345,33 @@ export class ApiGatewayController {
             branchById.get(String(assigned?.id ?? '').trim()) ?? assigned;
         }
 
-        const branchId = String(branch?.id ?? '').trim();
-        const cashbox = branchId
-          ? await this.findUserCashbox(branchId, Cashbox_type.BRANCH)
-          : null;
-        const payableToHq = Math.max(Number(branch?.berilishi_kerak ?? 0), 0);
-        // (2026-11-11) HQ'ning shu filialga qarzi («Kassa qarzga ishlaydi»).
-        const hqQarzi = Math.max(Number(branch?.hq_qarzi ?? 0), 0);
-
-        return {
-          ...manager,
-          branch,
-          branch_id: branchId || (manager?.branch_id ?? null),
-          cashbox,
-          payable_to_hq: payableToHq,
-          berilishi_kerak: payableToHq,
-          olinishi_kerak: payableToHq,
-          hq_qarzi: hqQarzi,
-        };
+        return { manager, branch };
       }),
     );
+    // Filial kassalari bitta so'rovda (ro'yxat endi 100 dan ortiq bo'lishi mumkin — N+1 yo'q).
+    const branchCashboxes = await this.findUserCashboxes(
+      resolved.map(({ branch }) => String(branch?.id ?? '').trim()),
+      Cashbox_type.BRANCH,
+    );
+
+    response.data.items = resolved.map(({ manager, branch }) => {
+      const branchId = String(branch?.id ?? '').trim();
+      const cashbox = branchId ? (branchCashboxes.get(branchId) ?? null) : null;
+      const payableToHq = Math.max(Number(branch?.berilishi_kerak ?? 0), 0);
+      // (2026-11-11) HQ'ning shu filialga qarzi («Kassa qarzga ishlaydi»).
+      const hqQarzi = Math.max(Number(branch?.hq_qarzi ?? 0), 0);
+
+      return {
+        ...manager,
+        branch,
+        branch_id: branchId || (manager?.branch_id ?? null),
+        cashbox,
+        payable_to_hq: payableToHq,
+        berilishi_kerak: payableToHq,
+        olinishi_kerak: payableToHq,
+        hq_qarzi: hqQarzi,
+      };
+    });
 
     return response;
   }
@@ -2205,15 +2257,14 @@ export class ApiGatewayController {
       return response;
     }
 
-    response.data.items = await Promise.all(
-      items.map(async (market: any) => ({
-        ...market,
-        cashbox: await this.findUserCashbox(
-          String(market?.id ?? ''),
-          Cashbox_type.FOR_MARKET,
-        ),
-      })),
+    const marketCashboxes = await this.findUserCashboxes(
+      items.map((market: any) => String(market?.id ?? '')),
+      Cashbox_type.FOR_MARKET,
     );
+    response.data.items = items.map((market: any) => ({
+      ...market,
+      cashbox: marketCashboxes.get(String(market?.id ?? '').trim()) ?? null,
+    }));
 
     return response;
   }

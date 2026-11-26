@@ -3,6 +3,7 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Between,
+  ILike,
   In,
   IsNull,
   LessThanOrEqual,
@@ -331,6 +332,8 @@ type FindAllIntegrationsQuery = {
   to_date?: string;
   page?: number;
   limit?: number;
+  /** Qidiruv (2026-11-27): integratsiya nomi yoki slug'i (ILIKE) — sahifalashdan OLDIN. */
+  search?: string;
 };
 
 type SyncHistoryQuery = {
@@ -6025,6 +6028,17 @@ export class IntegrationServiceService {
       where.createdAt = Between(new Date(0), toDate);
     }
 
+    // Qidiruv limitlari (2026-11-27): ilgari «Integratsiya nomi bo'yicha qidirish» faqat yuklangan sahifa ichida
+    // edi (sukut 10 ta) — 11-integratsiya topilmasdi. Endi nomi yoki slug'i bo'yicha serverda, sahifalashdan oldin.
+    const search = String(query?.search ?? '').trim();
+    const pattern = `%${search.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    const whereClause = search
+      ? [
+          { ...where, name: ILike(pattern) },
+          { ...where, slug: ILike(pattern) },
+        ]
+      : where;
+
     const hasPagination =
       typeof query?.page !== 'undefined' || typeof query?.limit !== 'undefined';
     const page = Math.max(1, Number(query?.page ?? 1));
@@ -6035,7 +6049,7 @@ export class IntegrationServiceService {
 
     if (!hasPagination) {
       const rows = await this.integrationRepo.find({
-        where,
+        where: whereClause,
         order: { createdAt: 'DESC' },
       });
       const enriched = await this.attachMarketsAndImports(rows as any);
@@ -6043,7 +6057,7 @@ export class IntegrationServiceService {
     }
 
     const [items, total] = await this.integrationRepo.findAndCount({
-      where,
+      where: whereClause,
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,

@@ -86,6 +86,7 @@ import {
   uzPhoneDigitsLikeSql,
 } from '@app/common';
 import type { ActivityLogQuery, UzPhoneSearch } from '@app/common';
+import { clampListLimit } from '@app/common/pagination/list-limit';
 import {
   catchError,
   errorRes,
@@ -1292,8 +1293,9 @@ export class UserServiceService implements OnModuleInit {
 
   private normalizeQuery(query: UserFilterQuery = {}) {
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
-    const limit =
-      Number(query.limit) > 0 ? Math.min(Number(query.limit), 100) : 10;
+    // Tanlash ro'yxatlari (marketlar, kuryerlar, xodimlar): ilgari 100 bilan kesilardi — 101-qator tanlash
+    // oynalarida (qidiruvda ham) chiqmasdi. Endi `LOOKUP_LIST_MAX_LIMIT` (10 000) gacha; sukut — 10.
+    const limit = clampListLimit(query.limit, 10);
 
     return {
       search: query.search?.trim(),
@@ -1326,7 +1328,9 @@ export class UserServiceService implements OnModuleInit {
       branch_scope_market_owner_id:
         query.branch_scope &&
         typeof query.branch_scope === 'object' &&
-        /^\d{1,19}$/.test(primitiveText(query.branch_scope.market_owner_id).trim())
+        /^\d{1,19}$/.test(
+          primitiveText(query.branch_scope.market_owner_id).trim(),
+        )
           ? primitiveText(query.branch_scope.market_owner_id).trim()
           : null,
       telegram_linked: this.normalizeTelegramLinkedFilter(

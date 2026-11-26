@@ -69,6 +69,17 @@ export class FinanceServiceController {
     );
   }
 
+  /** Ko'p foydalanuvchining bitta turdagi kassasi (gateway markets/couriers ro'yxati, N+1 o'rniga). */
+  @MessagePattern({ cmd: 'finance.cashbox.find_by_users' })
+  findCashboxesByUsers(
+    @Payload() data: { user_ids?: unknown; cashbox_type?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.findCashboxesByUsers(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.cashbox.find_by_user' })
   findCashboxByUser(
     @Payload() data: FindCashboxByUserDto,
