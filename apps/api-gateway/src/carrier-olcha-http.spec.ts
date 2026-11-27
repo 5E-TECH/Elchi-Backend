@@ -1,6 +1,14 @@
 import 'reflect-metadata';
-import { INestApplication } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  INestApplication,
+  Req,
+  VERSION_NEUTRAL,
+  VersioningType,
+} from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -10,8 +18,14 @@ import { AllExceptionsFilter } from '@app/common';
 import { CarrierApiKeyGuard } from './auth/carrier-api-key.guard';
 import { CarrierThrottlerGuard } from './auth/carrier-throttler.guard';
 import { CarrierTokenService } from './auth/carrier-token.service';
+import { GlobalThrottlerGuard } from './auth/global-throttler.guard';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { JwtStrategy } from './auth/jwt.strategy';
+import { PasswordChangeGuard } from './auth/password-change.guard';
+import { TelegramScanScopeGuard } from './auth/telegram-scan-scope.guard';
 import { CarrierAuthGatewayController } from './carrier-auth-gateway.controller';
 import { CarrierGatewayController } from './carrier-gateway.controller';
+import { CarrierOlchaRootGatewayController } from './carrier-olcha-root-gateway.controller';
 import { UzValidationPipe } from './validation/uz-validation.pipe';
 
 /**
@@ -20,7 +34,23 @@ import { UzValidationPipe } from './validation/uz-validation.pipe';
  * `POST /carrier/qrorder/find`. Kutilgan shakllar —
  * https://api.olchamarket.uz/swagger.json (2026-11-27) va jonli Olcha
  * javoblari (401 `{name, message, code: 0, status}`).
+ *
+ * Ikki manzil (ega 2026-11-27): `/carrier/...` va Olcha'dagi kabi
+ * prefikssiz `/auth/token`, `/qrorder/find` — bir xil testlar ikkalasida.
+ * `api-gateway.module.ts` dagi global guardlar (IP limiti, xodim JWT,
+ * parol, Telegram scope) va `main.ts` URI versiyalash ham shu yerda.
  */
+const BASES = ['/carrier', ''] as const;
+
+/** Xodimlar API'si o'rnida: global `JwtAuthGuard` ostidagi oddiy `/auth/*` yo'l. */
+@Controller('auth')
+class StaffAuthProbeController {
+  @Get('validate')
+  validate(@Req() req: { user?: { sub?: unknown } }) {
+    return { sub: req.user?.sub ?? null };
+  }
+}
+
 const ACCESS_TOKEN_KEY =
   'f1e2d3c4b5a6978869504132a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4';
 const GOOD_KEY = 'elc_good';
@@ -75,6 +105,11 @@ const order = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const restoreEnv = (name: string, value: string | undefined): void => {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+};
+
 describe('Carrier API — Olcha uslubi (HTTP)', () => {
   let app: INestApplication;
   let jwt: JwtService;
@@ -117,7 +152,12 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
     },
   });
 
+  const savedAuthLimit = process.env.CARRIER_AUTH_THROTTLE_LIMIT;
+  const savedCarrierLimit = process.env.CARRIER_THROTTLE_LIMIT;
+
   beforeAll(async () => {
+    // Token IP limiti (20/min) testlar soniga yetmasin — limit testi o'zi pasaytiradi.
+    process.env.CARRIER_AUTH_THROTTLE_LIMIT = '1000';
     const moduleRef = await Test.createTestingModule({
       imports: [
         ConfigModule.forRoot({
@@ -132,8 +172,19 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
           { name: 'default', ttl: 60_000, limit: 1000 },
         ]),
       ],
-      controllers: [CarrierAuthGatewayController, CarrierGatewayController],
+      controllers: [
+        StaffAuthProbeController,
+        CarrierGatewayController,
+        CarrierAuthGatewayController,
+        CarrierOlchaRootGatewayController,
+      ],
       providers: [
+        JwtStrategy,
+        // api-gateway.module.ts dagi tartib bilan.
+        { provide: APP_GUARD, useClass: GlobalThrottlerGuard },
+        { provide: APP_GUARD, useClass: JwtAuthGuard },
+        { provide: APP_GUARD, useClass: PasswordChangeGuard },
+        { provide: APP_GUARD, useClass: TelegramScanScopeGuard },
         CarrierApiKeyGuard,
         CarrierThrottlerGuard,
         CarrierTokenService,
@@ -144,6 +195,11 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
       ],
     }).compile();
     app = moduleRef.createNestApplication();
+    // main.ts bilan bir xil: `/x` va `/v1/x`.
+    app.enableVersioning({
+      type: VersioningType.URI,
+      defaultVersion: [VERSION_NEUTRAL, '1'],
+    });
     app.useGlobalFilters(new AllExceptionsFilter());
     // main.ts dagi global pipe — Olcha tanasi undan o'tmasligi (xato shakli bizniki) tekshiriladi.
     app.useGlobalPipes(
@@ -159,6 +215,8 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
 
   afterAll(async () => {
     if (app) await app.close();
+    restoreEnv('CARRIER_AUTH_THROTTLE_LIMIT', savedAuthLimit);
+    restoreEnv('CARRIER_THROTTLE_LIMIT', savedCarrierLimit);
   });
 
   beforeEach(() => {
@@ -177,18 +235,18 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
   });
 
   const http = () => app.getHttpServer() as Parameters<typeof request>[0];
-  const getToken = async (): Promise<string> => {
+  const getToken = async (base: string = '/carrier'): Promise<string> => {
     const res = await request(http())
-      .post('/carrier/auth/token')
+      .post(`${base}/auth/token`)
       .send({ username: '3', password: GOOD_KEY })
       .expect(200);
     return (res.body as { access_token: string }).access_token;
   };
 
-  describe('POST /carrier/auth/token', () => {
+  describe.each(BASES)('POST %s/auth/token', (base) => {
     it('⭐ JSON → Olcha AuthTokenResponse: access_token, token_type Bearer, expires_in 3600', async () => {
       const res = await request(http())
-        .post('/carrier/auth/token')
+        .post(`${base}/auth/token`)
         .send({ username: '3', password: GOOD_KEY })
         .expect(200);
       expect(Object.keys(res.body as object).sort()).toEqual([
@@ -204,14 +262,14 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
 
     it('ortiqcha maydon (masalan grant_type) — global pipe 400 bermaydi', async () => {
       await request(http())
-        .post('/carrier/auth/token')
+        .post(`${base}/auth/token`)
         .send({ username: '3', password: GOOD_KEY, grant_type: 'password' })
         .expect(200);
     });
 
     it('⭐ application/x-www-form-urlencoded ham qabul qilinadi (Olcha kabi)', async () => {
       await request(http())
-        .post('/carrier/auth/token')
+        .post(`${base}/auth/token`)
         .type('form')
         .send(`username=3&password=${GOOD_KEY}`)
         .expect(200);
@@ -223,7 +281,7 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
         { username: '4', password: GOOD_KEY },
       ]) {
         const res = await request(http())
-          .post('/carrier/auth/token')
+          .post(`${base}/auth/token`)
           .send(body)
           .expect(401);
         expect(res.body).toMatchObject({
@@ -237,7 +295,7 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
 
     it('username/password yo‘q — 400, Yii2 shakli', async () => {
       const res = await request(http())
-        .post('/carrier/auth/token')
+        .post(`${base}/auth/token`)
         .send({ username: '3' })
         .expect(400);
       expect(res.body).toMatchObject({
@@ -245,17 +303,19 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
         code: 0,
         status: 400,
       });
+      // Xodimlar `/auth/*` shakli (`statusCode`) EMAS.
+      expect(res.body).not.toHaveProperty('statusCode');
     });
 
     it('faol emas akkaunt / kurier — token berilmaydi (403)', async () => {
       account = validation({ is_active: false });
       await request(http())
-        .post('/carrier/auth/token')
+        .post(`${base}/auth/token`)
         .send({ username: '3', password: GOOD_KEY })
         .expect(403);
       account = validation({ courier_active: false });
       const res = await request(http())
-        .post('/carrier/auth/token')
+        .post(`${base}/auth/token`)
         .send({ username: '3', password: GOOD_KEY })
         .expect(403);
       expect(res.body).toMatchObject({
@@ -269,17 +329,17 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
       account = validation({ token_fp: undefined });
       currentFp = undefined as unknown as string;
       await request(http())
-        .post('/carrier/auth/token')
+        .post(`${base}/auth/token`)
         .send({ username: '3', password: GOOD_KEY })
         .expect(503);
     });
   });
 
-  describe('POST /carrier/qrorder/find', () => {
+  describe.each(BASES)('POST %s/qrorder/find', (base) => {
     it('⭐ Bearer bilan: Olcha QrOrderResponse, posilka qabul qilinadi (waiting)', async () => {
-      const token = await getToken();
+      const token = await getToken(base);
       const res = await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('Authorization', `Bearer ${token}`)
         .send({ qr_code: 'qr-900' })
         .expect(200);
@@ -305,7 +365,7 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
 
       // Takroriy chaqiruv xavfsiz: qayta qabul qilinmaydi.
       const again = await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('Authorization', `Bearer ${token}`)
         .send({ qr_code: 'qr-900' })
         .expect(200);
@@ -318,17 +378,17 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
 
     it('X-Api-Key bilan ham ishlaydi', async () => {
       await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('X-Api-Key', GOOD_KEY)
         .send({ qr_code: 'qr-900' })
         .expect(200);
     });
 
     it('⭐ topilmadi / boshqa kurierniki — HTTP 200, `{success:false, msg, status:404}`', async () => {
-      const token = await getToken();
+      const token = await getToken(base);
       for (const qr of ['qr-missing', 'qr-other']) {
         const res = await request(http())
-          .post('/carrier/qrorder/find')
+          .post(`${base}/qrorder/find`)
           .set('Authorization', `Bearer ${token}`)
           .send({ qr_code: qr })
           .expect(200);
@@ -341,9 +401,9 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
     });
 
     it('⭐ yetkazilmoqda holatida emas (sold) — `{success:false, status:400}`', async () => {
-      const token = await getToken();
+      const token = await getToken(base);
       const res = await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('Authorization', `Bearer ${token}`)
         .send({ qr_code: 'qr-sold' })
         .expect(200);
@@ -352,9 +412,9 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
     });
 
     it('qr_code yo‘q — `{success:false, msg, status:400}`', async () => {
-      const token = await getToken();
+      const token = await getToken(base);
       const res = await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('Authorization', `Bearer ${token}`)
         .send({})
         .expect(200);
@@ -367,7 +427,7 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
 
     it('⭐ token yo‘q / soxta — 401 Yii2 shakli (Olcha kabi)', async () => {
       const none = await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .send({ qr_code: 'qr-900' })
         .expect(401);
       expect(none.body).toMatchObject({
@@ -376,26 +436,32 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
         status: 401,
       });
       await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('Authorization', 'Bearer x.y.z')
         .send({ qr_code: 'qr-900' })
         .expect(401);
     });
 
-    it('⭐ xodim (kurier) JWT — carrier yo‘liga KIRMAYDI', async () => {
+    it('⭐ xodim (kurier) JWT — carrier yo‘liga KIRMAYDI (401, Olcha shakli)', async () => {
       const staff = jwt.sign({ sub: '55', roles: ['courier'] });
-      await request(http())
-        .post('/carrier/qrorder/find')
+      const res = await request(http())
+        .post(`${base}/qrorder/find`)
         .set('Authorization', `Bearer ${staff}`)
         .send({ qr_code: 'qr-900' })
         .expect(401);
+      expect(res.body).toMatchObject({
+        name: 'Unauthorized',
+        code: 0,
+        status: 401,
+      });
+      expect(logistics.send).not.toHaveBeenCalled();
     });
 
     it('⭐ kalit almashtirilsa (rotate) — eski token darhol 401', async () => {
-      const token = await getToken();
+      const token = await getToken(base);
       currentFp = 'b'.repeat(32);
       const res = await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('Authorization', `Bearer ${token}`)
         .send({ qr_code: 'qr-900' })
         .expect(401);
@@ -403,13 +469,140 @@ describe('Carrier API — Olcha uslubi (HTTP)', () => {
     });
 
     it('akkaunt to‘xtatilsa — token bilan ham 403', async () => {
-      const token = await getToken();
+      const token = await getToken(base);
       account = validation({ is_active: false });
       await request(http())
-        .post('/carrier/qrorder/find')
+        .post(`${base}/qrorder/find`)
         .set('Authorization', `Bearer ${token}`)
         .send({ qr_code: 'qr-900' })
         .expect(403);
+    });
+  });
+
+  describe('Olcha manzili (prefikssiz) — faqat domen almashadi', () => {
+    const post = (path: string, token: string) =>
+      request(http())
+        .post(path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ qr_code: 'qr-900' });
+
+    it('⭐ token bir manzildan, so‘rov boshqasidan — ikkalasi bir xil ishlaydi', async () => {
+      const rootToken = await getToken('');
+      await post('/carrier/qrorder/find', rootToken).expect(200);
+      await request(http())
+        .get('/carrier/ping')
+        .set('Authorization', `Bearer ${rootToken}`)
+        .expect(200);
+
+      const carrierToken = await getToken('/carrier');
+      const res = await post('/qrorder/find', carrierToken).expect(200);
+      expect(res.body).toMatchObject({
+        success: true,
+        msg: 'Buyurtma topildi',
+        data: { id: 900, status: 'waiting' },
+      });
+    });
+
+    it('⭐ ikki manzil javobi AYNAN bir xil', async () => {
+      const token = await getToken('');
+      await post('/qrorder/find', token).expect(200); // qabul (waiting)
+      const viaCarrier = await post('/carrier/qrorder/find', token).expect(200);
+      const viaRoot = await post('/qrorder/find', token).expect(200);
+      expect(viaRoot.body).toEqual(viaCarrier.body);
+
+      const bad = { username: '3', password: 'elc_wrong' };
+      const authCarrier = await request(http())
+        .post('/carrier/auth/token')
+        .send(bad)
+        .expect(401);
+      const authRoot = await request(http())
+        .post('/auth/token')
+        .send(bad)
+        .expect(401);
+      expect(authRoot.body).toEqual(authCarrier.body);
+    });
+
+    it('/v1/auth/token va /v1/qrorder/find ham ochiq (main.ts URI versiyalash)', async () => {
+      const res = await request(http())
+        .post('/v1/auth/token')
+        .send({ username: '3', password: GOOD_KEY })
+        .expect(200);
+      const token = (res.body as { access_token: string }).access_token;
+      await post('/v1/qrorder/find', token).expect(200);
+    });
+
+    it('⭐ carrier tokeni xodimlar API’siga KIRMAYDI (401); xodim tokeni o‘z yo‘lida ishlaydi', async () => {
+      const carrierToken = await getToken('');
+      await request(http())
+        .get('/auth/validate')
+        .set('Authorization', `Bearer ${carrierToken}`)
+        .expect(401);
+
+      const staff = jwt.sign({ sub: '55', roles: ['courier'] });
+      const ok = await request(http())
+        .get('/auth/validate')
+        .set('Authorization', `Bearer ${staff}`)
+        .expect(200);
+      expect(ok.body).toEqual({ sub: '55' });
+    });
+
+    it('⭐ /auth/token limiti — carrier limiti (IP bo‘yicha), 429 Olcha (Yii2) shaklida', async () => {
+      process.env.CARRIER_AUTH_THROTTLE_LIMIT = '2';
+      try {
+        const send = () =>
+          request(http())
+            .post('/auth/token')
+            .set('CF-Connecting-IP', '203.0.113.77')
+            .send({ username: '3', password: GOOD_KEY });
+        await send().expect(200);
+        await send().expect(200);
+        const res = await send().expect(429);
+        expect(res.body).toMatchObject({
+          name: 'Too Many Requests',
+          code: 0,
+          status: 429,
+        });
+        expect(res.body).not.toHaveProperty('statusCode');
+      } finally {
+        process.env.CARRIER_AUTH_THROTTLE_LIMIT = '1000';
+      }
+    });
+
+    it('⭐ qrorder/find: ikki manzil BITTA akkaunt limitida (ikki baravar emas)', async () => {
+      account = validation({ id: '8' }); // yangi akkaunt — toza hisob
+      process.env.CARRIER_THROTTLE_LIMIT = '2';
+      try {
+        // Har so'rov boshqa IP'dan: global IP limiti emas, akkaunt limiti sanaladi.
+        const send = (path: string, ip: string) =>
+          request(http())
+            .post(path)
+            .set('X-Api-Key', GOOD_KEY)
+            .set('CF-Connecting-IP', ip)
+            .send({ qr_code: 'qr-900' });
+        await send('/carrier/qrorder/find', '198.51.100.1').expect(200);
+        await send('/qrorder/find', '198.51.100.2').expect(200);
+        const res = await send('/qrorder/find', '198.51.100.3').expect(429);
+        expect(res.body).toMatchObject({
+          name: 'Too Many Requests',
+          code: 0,
+          status: 429,
+        });
+      } finally {
+        restoreEnv('CARRIER_THROTTLE_LIMIT', savedCarrierLimit);
+      }
+    });
+
+    it('boshqa /carrier/* endpointlar prefikssiz OCHILMAYDI', async () => {
+      await request(http()).get('/ping').set('X-Api-Key', GOOD_KEY).expect(404);
+      await request(http())
+        .post('/scan')
+        .set('X-Api-Key', GOOD_KEY)
+        .send({ qr_token: 'qr-900' })
+        .expect(404);
+      await request(http())
+        .get('/orders')
+        .set('X-Api-Key', GOOD_KEY)
+        .expect(404);
     });
   });
 

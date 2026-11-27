@@ -32,6 +32,7 @@ import { CarrierThrottlerGuard } from './auth/carrier-throttler.guard';
 import { CarrierGatewayController } from './carrier-gateway.controller';
 import { CarrierAdminGatewayController } from './carrier-admin-gateway.controller';
 import { CarrierAuthGatewayController } from './carrier-auth-gateway.controller';
+import { CarrierOlchaRootGatewayController } from './carrier-olcha-root-gateway.controller';
 import { CarrierTokenService } from './auth/carrier-token.service';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
@@ -200,6 +201,9 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     CarrierAdminGatewayController,
     // Olcha uslubidagi kirish: POST /carrier/auth/token (JWT, ega 2026-11-27).
     CarrierAuthGatewayController,
+    // Olcha'dagi kabi prefikssiz: POST /auth/token, POST /qrorder/find — ayni
+    // handlerlar (faqat domenni almashtirish kifoya; ega 2026-11-27).
+    CarrierOlchaRootGatewayController,
     AiGatewayController,
     // «AI kalit va modellar» — /ai/config* (faqat superadmin).
     AiConfigGatewayController,

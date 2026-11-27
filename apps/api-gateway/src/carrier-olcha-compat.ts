@@ -57,6 +57,13 @@ export type CarrierQrOrderData = {
   paid_online_amount: number;
 };
 
+/** `POST qrorder/find` muvaffaqiyatli javobi (Olcha `QrOrderResponse`). */
+export type CarrierQrOrderResult = {
+  success: true;
+  msg: string;
+  data: CarrierQrOrderData;
+};
+
 /** Olcha `qrorder/find` muvaffaqiyat matni. */
 export const QR_ORDER_FOUND_MSG = 'Buyurtma topildi';
 /** Elchi: shu so'rovda posilka sizga qabul qilindi (`waiting`). */

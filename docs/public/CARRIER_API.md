@@ -1,6 +1,6 @@
 # Elchi Pochta — Carrier API (tashqi yetkazuvchi)
 
-**Dasturchilar uchun qo'llanma** · Versiya 1.1 · Oxirgi yangilanish: 2026-11-27
+**Dasturchilar uchun qo'llanma** · Versiya 1.2 · Oxirgi yangilanish: 2026-11-27
 
 > Qisqa variant: [`CARRIER_API_QUICKSTART.md`](./CARRIER_API_QUICKSTART.md).
 > Interaktiv hujjat (Swagger, faqat Carrier API): test —
@@ -16,11 +16,12 @@ ma'lumotini olish, yetkazish natijasini (sotildi, qisman sotildi, bekor
 qilindi) Elchi'ga yuborish, bekor qilingan posilkani qaytarish va
 hisob-kitobni kuzatish.
 
-> **Olcha API'ga moslashgan tizim uchun:** `POST /carrier/auth/token` va
-> `POST /carrier/qrorder/find` — [Olcha API](https://api.olchamarket.uz/swagger)
-> dagi `POST /auth/token` va `POST /qrorder/find` bilan **bir xil** (yo'l,
-> metod, maydonlar, javob va xato shakli). Baza manzili sifatida
-> `BASE_URL/carrier` ni oling — §10.
+> **Olcha API'ga moslashgan tizim uchun:** `POST /auth/token` va
+> `POST /qrorder/find` — [Olcha API](https://api.olchamarket.uz/swagger)
+> dagi endpointlar bilan **bir xil** (yo'l, metod, maydonlar, javob va xato
+> shakli). Faqat domenni almashtiring: `https://api.olchamarket.uz` →
+> `https://api.elchipochta.uz`. Baza manzili domen **yoki** `BASE_URL/carrier`
+> — ikkalasi ishlaydi (`/carrier/auth/token`, `/carrier/qrorder/find`) — §10.
 
 > **Marketplace API bilan adashtirmang.** `/partner/*` (Marketplace API,
 > [`MARKETPLACE_API.md`](./MARKETPLACE_API.md)) Elchi'ga buyurtma
@@ -91,9 +92,10 @@ X-Api-Key: elc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 - Kalit `elc_` bilan boshlanadi. **Muqobil (Olcha uslubi):** kalit o'rniga
-  `POST /carrier/auth/token` bergan `Authorization: Bearer <access_token>`
-  ham qabul qilinadi (barcha `/carrier/*` da) — §10. Ikkalasi kelsa
-  `X-Api-Key` ishlatiladi.
+  `POST /auth/token` (yoki `POST /carrier/auth/token`) bergan
+  `Authorization: Bearer <access_token>` ham qabul qilinadi (barcha
+  `/carrier/*` va `/qrorder/find` da) — §10. Ikkalasi kelsa `X-Api-Key`
+  ishlatiladi.
 - Kalit **bir marta** ko'rsatiladi (yaratilganda). Bazada faqat uning
   SHA-256 hash'i saqlanadi, shuning uchun biz uni tiklab bera olmaymiz.
   Yo'qotsangiz, yangisi beriladi.
@@ -506,21 +508,29 @@ emas, "boshqa" deb qabul qilsin.
 
 Tizimingiz [Olcha API](https://api.olchamarket.uz/swagger) bilan ishlasa
 (`POST /auth/token` → JWT, so'ng `POST /qrorder/find`), Elchi bilan **o'sha
-kod** ishlaydi — baza manzilini almashtirish kifoya:
+kod** ishlaydi — **faqat domenni almashtirish kifoya**. Baza manzili domen
+yoki domen/carrier — ikkalasi ishlaydi:
 
-| | Olcha | Elchi |
-|---|---|---|
-| Baza manzili | `https://api.olchamarket.uz` | `BASE_URL/carrier` (masalan `https://api.elchipochta.uz/carrier`) |
-| Token | `POST /auth/token` | `POST /carrier/auth/token` |
-| QR bo'yicha buyurtma | `POST /qrorder/find` | `POST /carrier/qrorder/find` |
+| | Olcha | Elchi (domen — Olcha bilan bir xil) | Elchi (domen/carrier) |
+|---|---|---|---|
+| Baza manzili | `https://api.olchamarket.uz` | `https://api.elchipochta.uz` | `https://api.elchipochta.uz/carrier` |
+| Token | `POST /auth/token` | `POST /auth/token` | `POST /carrier/auth/token` |
+| QR bo'yicha buyurtma | `POST /qrorder/find` | `POST /qrorder/find` | `POST /carrier/qrorder/find` |
+
+Test muhitida domen — `https://test-api.elchipochta.uz` (§1).
+
+Ikki manzil **bitta endpoint**: so'rov, javob, xato shakli va limitlar bir
+xil; token birida olinib, ikkinchisida ishlatilishi mumkin. Akkaunt limiti
+(daqiqada 120) ikkala manzil uchun **umumiy**. Prefikssiz faqat shu ikki
+endpoint ochiq — Elchi'ning qolgan yo'llari faqat `/carrier/` ostida.
 
 Natijani yuborish, qaytarish, ro'yxat va kassa uchun Olcha'da endpoint yo'q —
 ular Elchi'ning §5 dagi yo'llari bilan (o'sha Bearer token bilan ham ishlaydi).
 
 ### 10.1 Token olish
 
-`POST /carrier/auth/token` — kirishsiz. Tana JSON yoki
-`application/x-www-form-urlencoded`:
+`POST /auth/token` (yoki `POST /carrier/auth/token`) — kirishsiz. Tana JSON
+yoki `application/x-www-form-urlencoded`:
 
 | Maydon | Turi | Majburiy | Izoh |
 |---|---|---|---|
@@ -528,7 +538,7 @@ ular Elchi'ning §5 dagi yo'llari bilan (o'sha Bearer token bilan ham ishlaydi).
 | `password` | string | ✅ | Sizning API kalitingiz (`elc_…`) |
 
 ```bash
-curl -X POST "$BASE_URL/carrier/auth/token" \
+curl -X POST "$BASE_URL/auth/token" \
   -H "Content-Type: application/json" \
   -d '{"username":"3","password":"elc_..."}'
 ```
@@ -550,8 +560,8 @@ Javob (`200`):
 
 ### 10.2 QR bo'yicha buyurtma
 
-`POST /carrier/qrorder/find`, sarlavha `Authorization: Bearer <access_token>`
-(yoki `X-Api-Key`). Tana:
+`POST /qrorder/find` (yoki `POST /carrier/qrorder/find`), sarlavha
+`Authorization: Bearer <access_token>` (yoki `X-Api-Key`). Tana:
 
 | Maydon | Turi | Majburiy | Izoh |
 |---|---|---|---|
@@ -614,6 +624,7 @@ Xatolar — Olcha'dagidek:
 | Yetkazilmoqda holatida emas (sotilgan, bekor qilingan…), `qr_code` yo'q | `200` | `{"success":false,"msg":"…","status":400}` |
 | Token yo'q, yaroqsiz yoki muddati o'tgan | `401` | `{"name":"Unauthorized","message":"…","code":0,"status":401}` |
 | Ruxsat yo'q (akkaunt/kurier faol emas, IP) | `403` | `{"name":"Forbidden",…,"status":403}` |
+| Limit oshdi | `429` | `{"name":"Too Many Requests",…,"status":429}` — `Retry-After` dan keyin |
 | Vaqtinchalik xato | `503` / `504` | `{"success":false,"msg":"…","status":503}` — qayta urining |
 
 Elchi qo'shimchasi: xato tanasida (bo'lsa) `error_code` — mashina kodi
