@@ -176,7 +176,7 @@
   <div class="kicker">Dasturchilar uchun texnik hujjat</div>
   <h1>Carrier API — tashqi yetkazuvchi uchun&nbsp;<wbr>integratsiya qo'llanmasi</h1>
   <div class="sub">Elchi Pochta</div>
-  <div class="meta"><span>Versiya: <b>1.2</b></span><span>Sana: <b>2026-11-27</b></span><span>Til: o'zbek (lotin)</span></div>
+  <div class="meta"><span>Versiya: <b>1.3</b></span><span>Sana: <b>2026-11-27</b></span><span>Til: o'zbek (lotin)</span></div>
 
   <p class="summary">Bu qo'llanma Elchi Pochta tizimida <strong>bitta kurier akkaunti</strong> sifatida ishlaydigan yetkazib berish kompaniyasining backend va mobil dasturchilari uchun. Sizning tizimingiz bizning API'ga <code>X-Api-Key</code> kaliti bilan murojaat qiladi: posilka QR kodini skanerlab uni qabul qiladi, yetkazish natijasini yuboradi (<code>sold</code>, <code>partly_sold</code> yoki <code>cancelled</code>), o'zidagi buyurtmalar ro'yxatini va kurier kassasini o'qiydi, bekor qilingan posilkalarni qaytarishga rasmiylashtiradi. Avval test muhitida Swagger orqali sinab ko'ring, so'ng <span class="nowrap">11-bo'limdagi</span> test ssenariylarini bajaring — shundan keyin production kaliti beriladi. Tizimingiz Olcha API bilan ishlasa, o'sha kod Elchi bilan ham ishlaydi (<code>auth/token</code> → <code>qrorder/find</code>) — <span class="nowrap">12-bo'lim</span>.</p>
 
@@ -278,7 +278,7 @@
   </tbody>
 </table>
 <ul>
-  <li><strong>Yo'l prefiksi yo'q.</strong> Yo'llar to'g'ridan-to'g'ri hostdan boshlanadi (<code>/api/v1</code> yo'q): <span class="url">https://api.elchipochta.uz/carrier/ping</span>. Konfiguratsiyada <code>BASE_URL</code> ni saqlang va yo'llarni <code>$BASE_URL/carrier/...</code> ko'rinishida quring. Buyurtma id'larini shaffof satr deb biling.</li>
+  <li><strong>Yo'l prefiksi yo'q.</strong> Yo'llar to'g'ridan-to'g'ri hostdan boshlanadi (<code>/api/v1</code> yo'q): <span class="url">https://api.elchipochta.uz/carrier/ping</span>. Konfiguratsiyada <code>BASE_URL</code> ni saqlang va yo'llarni <code>$BASE_URL/carrier/...</code> ko'rinishida quring (Olcha uslubidagi ikki yo'l prefikssiz ham ochiq — <span class="nowrap">12-bo'lim</span>). Buyurtma id'larini shaffof satr deb biling.</li>
   <li><strong>OpenAPI JSON</strong> Swagger manzili + <code>-json</code>: masalan <a class="url" href="https://test-api.elchipochta.uz/carrier-docs-json">https://test-api.elchipochta.uz/carrier-docs-json</a>. Uni Postman yoki kod generatoriga import qilish mumkin. Swagger va JSON login/parol (HTTP Basic Auth) bilan himoyalangan; login/parol alohida beriladi. Production Swagger sahifalari kerak bo'lganda ochiladi.</li>
   <li>Har bir muhit uchun <strong>alohida kalit</strong> beriladi: test kaliti production'da ishlamaydi.</li>
   <li>Swagger sahifasining kirish matnida test va production <code>BASE_URL</code> qiymatlari ikkalasi ham ko'rsatilgan. "Try it out" har doim sahifa ochilgan serverga yuboradi.</li>
@@ -691,18 +691,19 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
 
 <!-- ============ 12 ============ -->
 <h2 id="s12"><span class="num">12.</span> Ilova: Olcha uslubidagi kirish</h2>
-<p>Tizimingiz <a href="https://api.olchamarket.uz/swagger">Olcha API</a> bilan ishlasa (<code>POST /auth/token</code> → JWT, so'ng <code>POST /qrorder/find</code>), Elchi bilan <strong>o'sha kod</strong> ishlaydi — baza manzilini almashtirish kifoya. Yo'l, metod, maydonlar, javob va xato shakli Olcha'dagi bilan bir xil. Bu yo'l ixtiyoriy: <code>X-Api-Key</code> bilan ishlash (5–6-bo'limlar) avvalgidek qoladi.</p>
+<p>Tizimingiz <a href="https://api.olchamarket.uz/swagger">Olcha API</a> bilan ishlasa (<code>POST /auth/token</code> → JWT, so'ng <code>POST /qrorder/find</code>), Elchi bilan <strong>o'sha kod</strong> ishlaydi — <strong>faqat domenni almashtirish kifoya</strong>: <span class="url">https://api.olchamarket.uz</span> o'rniga <span class="url">https://api.elchipochta.uz</span>. Yo'l, metod, maydonlar, javob va xato shakli Olcha'dagi bilan bir xil. Bu yo'l ixtiyoriy: <code>X-Api-Key</code> bilan ishlash (5–6-bo'limlar) avvalgidek qoladi.</p>
 <table class="keep">
   <thead><tr><th style="width:24%"></th><th style="width:32%">Olcha</th><th>Elchi</th></tr></thead>
   <tbody>
-    <tr><td>Baza manzili</td><td><span class="url">https://api.olchamarket.uz</span></td><td><code>BASE_URL/carrier</code>, masalan <span class="url">https://api.elchipochta.uz/carrier</span></td></tr>
-    <tr><td>Token</td><td><code>POST /auth/token</code></td><td><code>POST /carrier/auth/token</code></td></tr>
-    <tr><td>QR bo'yicha buyurtma</td><td><code>POST /qrorder/find</code></td><td><code>POST /carrier/qrorder/find</code></td></tr>
+    <tr><td>Baza manzili</td><td><span class="url">https://api.olchamarket.uz</span></td><td><span class="url">https://api.elchipochta.uz</span> (faqat domen) yoki <span class="url">https://api.elchipochta.uz/carrier</span> — ikkalasi ishlaydi</td></tr>
+    <tr><td>Token</td><td><code>POST /auth/token</code></td><td><code>POST /auth/token</code> yoki <code>POST /carrier/auth/token</code></td></tr>
+    <tr><td>QR bo'yicha buyurtma</td><td><code>POST /qrorder/find</code></td><td><code>POST /qrorder/find</code> yoki <code>POST /carrier/qrorder/find</code></td></tr>
   </tbody>
 </table>
+<p>Ikki manzil <strong>aynan bir xil</strong> ishlaydi: o'sha login/parol, token, javob, xato shakli va limit (limit ikkalasiga umumiy). Quyidagi misollarda <code>$BASE_URL/carrier/...</code> ko'rinishi berilgan — prefikssiz (<code>$BASE_URL/auth/token</code>, <code>$BASE_URL/qrorder/find</code>) ham xuddi shunday. Prefikssiz faqat shu ikki yo'l ochiq; qolgan endpointlar (<span class="nowrap">6-bo'lim</span>) faqat <code>/carrier/...</code> ostida.</p>
 <p>Natija yuborish, qaytarish, ro'yxat va kassa uchun Olcha'da endpoint yo'q — ular uchun <span class="nowrap">6-bo'limdagi</span> yo'llardan foydalaning. Ular ham shu token bilan ishlaydi: <code>X-Api-Key</code> o'rniga <code>Authorization: Bearer &lt;access_token&gt;</code>. Swagger'da (<span class="nowrap">4-bo'lim</span>) <strong>Authorize</strong> oynasidagi <code>carrier-bearer</code> maydoniga tokenning o'zini qo'ying.</p>
 
-<h3>12.1 <span class="method">POST</span>&nbsp;<code>/carrier/auth/token</code></h3>
+<h3>12.1 <span class="method">POST</span>&nbsp;<code>/auth/token</code> yoki <code>/carrier/auth/token</code></h3>
 <p>Kirishsiz (kalit sarlavhasi kerak emas). Tana — JSON yoki <code>application/x-www-form-urlencoded</code>:</p>
 <table class="small keep">
   <thead><tr><th style="width:18%">Maydon</th><th style="width:12%">Tur</th><th>Qoida</th></tr></thead>
@@ -724,7 +725,7 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   <li>Token ham kalit kabi maxfiy: faqat serveringizda saqlang (<span class="nowrap">5.1-bo'lim</span>).</li>
 </ul>
 
-<h3>12.2 <span class="method">POST</span>&nbsp;<code>/carrier/qrorder/find</code></h3>
+<h3>12.2 <span class="method">POST</span>&nbsp;<code>/qrorder/find</code> yoki <code>/carrier/qrorder/find</code></h3>
 <p>Sarlavha <code>Authorization: Bearer &lt;access_token&gt;</code> (yoki <code>X-Api-Key</code>). Tana: <code>qr_code</code> — satr, majburiy: posilka yorlig'idagi QR qiymati (<code>/carrier/scan</code> dagi <code>qr_token</code> bilan bir xil).</p>
 <ul>
   <li>Faqat <strong>yetkazilmoqda</strong> holatidagi (<code>on the road</code>, <code>waiting_customer</code>, <code>waiting</code>) va sizga biriktirilgan buyurtma qaytadi.</li>
@@ -773,7 +774,7 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
 curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   -H "Authorization: Bearer $TOKEN" -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" -d '{"status":"sold"}'</code></pre>
-<p style="color:var(--muted);font-size:9pt;margin-top:8pt">Savollar va kirish ma'lumotlari bo'yicha: ushbu hujjatni sizga yuborgan mas'ul xodim (yoki shartnomadagi texnik aloqa) orqali murojaat qiling. Hujjat versiyasi 1.2, 2026-11-27.</p>
+<p style="color:var(--muted);font-size:9pt;margin-top:8pt">Savollar va kirish ma'lumotlari bo'yicha: ushbu hujjatni sizga yuborgan mas'ul xodim (yoki shartnomadagi texnik aloqa) orqali murojaat qiling. Hujjat versiyasi 1.3, 2026-11-27.</p>
 </section>
 
 </main>
