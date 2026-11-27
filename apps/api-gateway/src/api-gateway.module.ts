@@ -31,6 +31,8 @@ import { CarrierApiKeyGuard } from './auth/carrier-api-key.guard';
 import { CarrierThrottlerGuard } from './auth/carrier-throttler.guard';
 import { CarrierGatewayController } from './carrier-gateway.controller';
 import { CarrierAdminGatewayController } from './carrier-admin-gateway.controller';
+import { CarrierAuthGatewayController } from './carrier-auth-gateway.controller';
+import { CarrierTokenService } from './auth/carrier-token.service';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
@@ -196,6 +198,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     // Carrier API — tashqi yetkazuvchi = bitta kurier (X-Api-Key, /carrier/*).
     CarrierGatewayController,
     CarrierAdminGatewayController,
+    // Olcha uslubidagi kirish: POST /carrier/auth/token (JWT, ega 2026-11-27).
+    CarrierAuthGatewayController,
     AiGatewayController,
     // «AI kalit va modellar» — /ai/config* (faqat superadmin).
     AiConfigGatewayController,
@@ -253,6 +257,8 @@ import { AI_IMAGE_STORE, AiImageStore } from '@app/common/ai/ai-image-store';
     PartnerThrottlerGuard,
     CarrierApiKeyGuard,
     CarrierThrottlerGuard,
+    // Carrier JWT (`/carrier/auth/token`) — alohida kalit bilan imzolanadi.
+    CarrierTokenService,
     // ai-parse: foydalanuvchi (JWT sub) bo'yicha alohida 'ai-user' limiti —
     // faqat @UseGuards orqali, global APP_GUARD EMAS.
     UserThrottlerGuard,

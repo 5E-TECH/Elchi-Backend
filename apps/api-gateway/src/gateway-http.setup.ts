@@ -7,7 +7,10 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import basicAuth from 'express-basic-auth';
 import type { Server } from 'http';
-import { CARRIER_API_KEY_SCHEME } from './carrier-swagger';
+import {
+  CARRIER_API_KEY_SCHEME,
+  CARRIER_BEARER_SCHEME,
+} from './carrier-swagger';
 
 /**
  * (oFfOWGuo) Gateway HTTP sozlamalari — main.ts dan ajratildi, spec'lar
@@ -243,6 +246,11 @@ export function setupGatewaySwagger(
     .addApiKey(
       { type: 'apiKey', name: 'X-Api-Key', in: 'header' },
       CARRIER_API_KEY_SCHEME,
+    )
+    // Olcha uslubidagi carrier tokeni (`/carrier/auth/token`).
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      CARRIER_BEARER_SCHEME,
     )
     .build();
   const document = SwaggerModule.createDocument(app, swaggerConfig);

@@ -23,6 +23,14 @@ import basicAuth from 'express-basic-auth';
 
 export const CARRIER_SWAGGER_PATH = 'carrier-docs';
 export const CARRIER_API_KEY_SCHEME = 'carrier-api-key';
+/** Olcha uslubidagi `Authorization: Bearer` (`POST /carrier/auth/token` tokeni). */
+export const CARRIER_BEARER_SCHEME = 'carrier-bearer';
+/** Kirishsiz yo'l — token shu yerda olinadi (Swagger'da qulf ko'rsatilmaydi). */
+const CARRIER_AUTH_TOKEN_PATH = '/carrier/auth/token';
+const CARRIER_SCHEMES: ReadonlySet<string> = new Set([
+  CARRIER_API_KEY_SCHEME,
+  CARRIER_BEARER_SCHEME,
+]);
 
 /** Hujjatga faqat shu prefiksli yo'llar kiradi. */
 const CARRIER_PATH_PREFIX = '/carrier/';
@@ -105,7 +113,16 @@ curl -X POST "$BASE_URL/carrier/orders/900/status" \\
 
 ## 4. Pul
 
-Sotuvda kassangizga **(mijozdan olingan naqd − yetkazish haqingiz)** yoziladi — bu Elchi'ga topshiriladigan summa. Naqdni topshirganingizda Elchi xodimi qabul qiladi va kassada chiqim paydo bo'ladi (eng eski sotuvlardan boshlab yopiladi). Bekor qilishda pul harakati yo'q. Kassa yozuvi holat yuborilgandan keyin **bir necha soniyada** paydo bo'ladi. Yo'nalish — \`type\` (income/expense), \`amount\` doim musbat.`;
+Sotuvda kassangizga **(mijozdan olingan naqd − yetkazish haqingiz)** yoziladi — bu Elchi'ga topshiriladigan summa. Naqdni topshirganingizda Elchi xodimi qabul qiladi va kassada chiqim paydo bo'ladi (eng eski sotuvlardan boshlab yopiladi). Bekor qilishda pul harakati yo'q. Kassa yozuvi holat yuborilgandan keyin **bir necha soniyada** paydo bo'ladi. Yo'nalish — \`type\` (income/expense), \`amount\` doim musbat.
+
+## 5. Olcha uslubi (ixtiyoriy)
+
+Tizimingiz Olcha API bilan ishlasa (\`POST /auth/token\` → JWT, \`POST /qrorder/find\`), o'sha kod Elchi bilan ham ishlaydi — baza manzili \`BASE_URL/carrier\`:
+
+- \`POST /carrier/auth/token\` \`{"username":"<akkaunt ID>","password":"elc_..."}\` → \`{access_token, token_type: "Bearer", expires_in: 3600}\`.
+- \`POST /carrier/qrorder/find\` \`{"qr_code":"..."}\` (\`Authorization: Bearer <access_token>\`) → \`{success, msg, data}\`; posilka shu chaqiruvda sizga qabul qilinadi. Xato: \`{success: false, msg, status: 400|404}\`.
+
+Bearer token barcha \`/carrier/*\` endpointlarda \`X-Api-Key\` o'rniga ishlaydi. Batafsil: \`CARRIER_API.md\` §10.`;
 
 export type CarrierSwaggerSetupResult =
   'mounted' | 'disabled' | 'disabled_no_password';
@@ -153,17 +170,31 @@ export function filterCarrierDocument(full: OpenAPIObject): OpenAPIObject {
   );
 
   const securitySchemes = Object.fromEntries(
-    Object.entries(full.components?.securitySchemes ?? {}).filter(
-      ([name]) => name === CARRIER_API_KEY_SCHEME,
+    Object.entries(full.components?.securitySchemes ?? {}).filter(([name]) =>
+      CARRIER_SCHEMES.has(name),
     ),
   );
+
+  /**
+   * Token olish yo'li kirishsiz (Olcha `/auth/token` kabi) — umumiy
+   * `security` unga tushmasin, aks holda Swagger UI qulf ko'rsatib, kalit
+   * so'rardi.
+   */
+  const tokenPost = (
+    paths[CARRIER_AUTH_TOKEN_PATH] as
+      { post?: { security?: unknown } } | undefined
+  )?.post;
+  if (tokenPost) tokenPost.security = [];
 
   return {
     ...full,
     paths,
     tags: (full.tags ?? []).filter((tag) => tag.name === 'Carrier'),
     components: { schemas, securitySchemes },
-    security: [{ [CARRIER_API_KEY_SCHEME]: [] }],
+    security: [
+      { [CARRIER_API_KEY_SCHEME]: [] },
+      { [CARRIER_BEARER_SCHEME]: [] },
+    ],
   };
 }
 
@@ -235,6 +266,16 @@ export function buildCarrierSwaggerDocument(
     .addApiKey(
       { type: 'apiKey', name: 'X-Api-Key', in: 'header' },
       CARRIER_API_KEY_SCHEME,
+    )
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description:
+          'Olcha uslubi: `POST /carrier/auth/token` bergan `access_token` (1 soat).',
+      },
+      CARRIER_BEARER_SCHEME,
     )
     .addTag('Carrier', 'Tashqi yetkazuvchi endpointlari');
   for (const server of options.servers ?? []) {

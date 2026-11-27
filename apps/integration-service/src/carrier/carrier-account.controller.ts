@@ -40,6 +40,20 @@ export class CarrierAccountController {
     );
   }
 
+  /**
+   * Olcha uslubidagi Bearer token egasi (`POST /carrier/auth/token` bergan
+   * JWT; imzo/muddatni gateway tekshirgan). Javob `validate_key` bilan bir xil.
+   */
+  @MessagePattern({ cmd: 'integration.carrier.validate_token' })
+  validateToken(
+    @Payload() data: { id?: string; token_fp?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.carrierService.validateToken(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.carrier.create' })
   create(
     @Payload()

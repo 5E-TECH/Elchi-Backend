@@ -54,6 +54,7 @@ import {
 } from '../apps/api-gateway/src/auth/route-roles';
 import {
   CARRIER_API_KEY_SCHEME,
+  CARRIER_BEARER_SCHEME,
   CARRIER_API_SERVERS,
   buildCarrierSwaggerDocument,
 } from '../apps/api-gateway/src/carrier-swagger';
@@ -73,6 +74,11 @@ async function main() {
     .addApiKey(
       { type: 'apiKey', name: 'X-Api-Key', in: 'header' },
       CARRIER_API_KEY_SCHEME,
+    )
+    // Olcha uslubidagi carrier tokeni (`/carrier/auth/token`).
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      CARRIER_BEARER_SCHEME,
     )
     .build();
 
