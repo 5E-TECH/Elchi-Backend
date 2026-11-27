@@ -348,6 +348,7 @@ jobs:
           apps/branch-service/src/close-deleted-users-branch-rows.migration.pg.spec.ts
           apps/finance-service/src/user-cashboxes-restore.pg.spec.ts
           apps/logistics-service/src/delivery-pricing/delivery-pricing.pg.spec.ts
+          apps/identity-service/src/market-operator/market-operator-membership.pg.spec.ts
         env:
           NODE_ENV: test
           CATALOG_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
@@ -393,6 +394,10 @@ jobs:
           # COURIER-SCAN: migratsiya 240 (skan bilan olingan qatorlar WAITING ga) —
           # o'z vaqtinchalik bazasi, elchi_e_test faqat ulanish uchun.
           COURIER_SCAN_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
+          # Bitta operator — bir nechta market (migratsiya 255): a'zolik jadvali,
+          # seed va `admins` triggeri — o'z vaqtinchalik bazasi, elchi_e_test faqat
+          # ulanish uchun.
+          IDENTITY_MEMBERSHIP_PG_TEST_URI: postgres://postgres@127.0.0.1:5432/elchi_e_test
           # Migratsiya 233 (HQ filiali viloyati) — o'z vaqtinchalik bazasi,
           # elchi_e_test faqat ulanish uchun. Migratsiya 234 (kuryer / market /
           # filial kassalari) — yuqoridagi FINANCE_PG_TEST_URI bilan.

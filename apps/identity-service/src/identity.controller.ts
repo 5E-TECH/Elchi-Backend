@@ -62,6 +62,7 @@ import type {
 } from './contracts/market-operator.payloads';
 import type { CreatePasswordFields } from './temp-password/create-password';
 import { UserActivityService } from './activity/user-activity.service';
+import { MarketOperatorMembershipService } from './market-operator/market-operator-membership.service';
 
 @Controller()
 export class IdentityController {
@@ -72,6 +73,9 @@ export class IdentityController {
     private readonly otpService: OtpService,
     /** (pe71yf8L) Ixtiyoriy — eski spec'lar controller'ni usiz quradi. */
     @Optional() private readonly activity?: UserActivityService,
+    /** Bitta operator — bir nechta market. Ixtiyoriy — eski spec'lar usiz quradi. */
+    @Optional()
+    private readonly memberships?: MarketOperatorMembershipService,
   ) {}
 
   private executeAndAck<T>(
@@ -910,6 +914,31 @@ export class IdentityController {
         payload?.requester,
       ),
     );
+  }
+
+  /**
+   * Bitta operator — bir nechta market (1-bosqich): operator qaysi
+   * marketlarda ishlaydi (`{ operator_id, items }`, asosiy market birinchi).
+   * Ichki RPC — HTTP'da ochilmaydi; marketga ko'rsatish gateway'da cheklanadi
+   * (market operatorning boshqa marketlarini ko'rmaydi, D8).
+   * `include_removed: true` — chiqarilgan a'zoliklar ham (arxiv).
+   */
+  @MessagePattern({ cmd: 'identity.market_operator.memberships' })
+  findMarketOperatorMemberships(
+    @Payload() data: { operator_id?: unknown; include_removed?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () => ({
+      operator_id:
+        typeof data?.operator_id === 'string' ||
+        typeof data?.operator_id === 'number'
+          ? String(data.operator_id).trim()
+          : null,
+      items:
+        (await this.memberships?.listForOperator(data?.operator_id, {
+          include_removed: data?.include_removed,
+        })) ?? [],
+    }));
   }
 
   @MessagePattern({ cmd: 'identity.market_operator.set_status' })
