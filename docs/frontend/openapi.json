@@ -4355,6 +4355,113 @@
         ]
       }
     },
+    "/orders/courier-hold/summary": {
+      "get": {
+        "description": "Orders held by a courier (holder COURIER, status on the road / waiting / waiting_customer), hours since `last_handover_at` (handed to the courier: post sent, scan take, courier transfer; NOT reset when the courier accepts the post). Buckets: under_36, near_48 (36–48 h), over_48 (48–72 h), over_72 (≥ 72 h); `cancelled_held` — cancelled parcels still with the courier. Scope from the token: superadmin/admin — all (optional market_id, branch_id, region_id, courier_id); manager — own branch (branch_id / holder_branch_id / home_branch_id, same as GET /orders; optional market_id, courier_id); courier — own; market — own (courier phone hidden). Other roles — 403. Order rows: GET /orders?courier_hold=any|near_48|over_48|over_72.",
+        "operationId": "OrderGatewayController_courierHoldSummary",
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "courier_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "Courier hold summary",
+                    "data": {
+                      "couriers": [
+                        {
+                          "courier_id": "209",
+                          "courier": {
+                            "id": "209",
+                            "name": "Aziz",
+                            "phone_number": "+998901234567"
+                          },
+                          "total": 12,
+                          "under_36": 7,
+                          "near_48": 2,
+                          "over_48": 1,
+                          "over_72": 2,
+                          "oldest_since": "2026-11-23T08:00:00.000Z",
+                          "oldest_hours": 98,
+                          "cancelled_held": 1
+                        }
+                      ],
+                      "totals": {
+                        "couriers": 1,
+                        "total": 12,
+                        "under_36": 7,
+                        "near_48": 2,
+                        "over_48": 1,
+                        "over_72": 2,
+                        "oldest_hours": 98,
+                        "cancelled_held": 1
+                      },
+                      "now": "2026-11-27T10:00:00.000Z",
+                      "thresholds": {
+                        "near_from": 36,
+                        "deadline": 48,
+                        "over": 72
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Couriers holding orders — per-courier hour buckets (onXzDc5n)",
+        "tags": [
+          "Orders"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin",
+          "manager",
+          "courier",
+          "market"
+        ]
+      }
+    },
     "/orders/courier/orders/counts": {
       "get": {
         "operationId": "OrderGatewayController_courierOrderCounts",

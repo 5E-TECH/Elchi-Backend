@@ -272,6 +272,25 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
     }),
+    // (onXzDc5n) Buyurtma kuryerda 36 soatga yetdi («48 soatga yaqinlashdi»)
+    // — kuryerga (ilova + Telegram shaxsiy chat) va marketga (ilova + market
+    // guruhi). Har dispatch yangi qator (bir tikdagi yangi buyurtmalar
+    // ro'yxati); har buyurtmaga har kuryer topshirishida BIR marta
+    // (`orders.courier_hold_warned_at`).
+    def({
+      key: 'order.courier_hold_warning',
+      category: NotificationCategory.ORDER,
+      priority: NotificationPriority.HIGH,
+      group_key_pattern: null,
+      label_uz: 'Buyurtma kuryerda 48 soatga yaqinlashdi',
+      default_audience: [Roles.COURIER, Roles.MARKET],
+      user_can_mute: true,
+      default_channels: [
+        NotificationChannel.IN_APP,
+        NotificationChannel.REALTIME,
+        NotificationChannel.TELEGRAM,
+      ],
+    }),
 
     // ---- Moliya ----
     // (VICfJuoi / 2crjWf7v) HQ → market to'lovi (marketga) va kuryerdan pul

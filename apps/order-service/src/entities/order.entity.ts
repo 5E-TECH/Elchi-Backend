@@ -106,6 +106,15 @@ export enum OrderHolderType {
   where:
     '"status" = \'cancelled\' AND "holder_type" IN (\'HQ\', \'BRANCH\') AND "handover_escalated_at" IS NULL',
 })
+/**
+ * onXzDc5n — kuryerdagi buyurtmalar (72 / 48 soat ro'yxatlari, kuryer
+ * jamlamasi, 36 soatlik ogohlantirish cron'i): faqat kuryer qo'lidagi faol
+ * buyurtmalar, custody vaqti bo'yicha. Migratsiya 1716000000254.
+ */
+@Index('IDX_orders_courier_hold', ['last_handover_at'], {
+  where:
+    "\"holder_type\" = 'COURIER' AND \"status\" IN ('on the road', 'waiting', 'waiting_customer') AND \"is_deleted\" = false",
+})
 export class Order extends BaseEntity {
   @Column({ type: 'bigint' })
   market_id!: string;
@@ -481,6 +490,16 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   handover_escalated_at!: Date | null;
+
+  /**
+   * onXzDc5n — buyurtma kuryerda 36 soatga yetganda («48 soatga
+   * yaqinlashdi») kuryer va marketga ogohlantirish ketgan payt. Takror
+   * yubormaslik belgisi: `>= last_handover_at` — shu kuryerga topshirishda
+   * xabar ketgan (`CourierHoldWarningService` shartli UPDATE bilan qo'yadi).
+   * Holat o'zgarmaydi. Migratsiya 1716000000254.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  courier_hold_warned_at!: Date | null;
 
   @Column({ type: 'text', nullable: true })
   return_reason!: string | null;

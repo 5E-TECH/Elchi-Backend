@@ -11,6 +11,8 @@ import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { ExtraCostAutoApproveScheduler } from './lifecycle/extra-cost-auto-approve.scheduler';
 import { CancelReturnReminderService } from './cancel-return/cancel-return-reminder.service';
 import { CancelReturnReminderScheduler } from './cancel-return/cancel-return-reminder.scheduler';
+import { CourierHoldService } from './courier-hold/courier-hold.service';
+import { CourierHoldWarningScheduler } from './courier-hold/courier-hold.scheduler';
 import { OrderCustodyService } from './custody/order-custody.service';
 import { OrderTelegramCardPublisher } from './notification/order-telegram-card.publisher';
 import { OrderNotificationService } from './notification/order-notification.service';
@@ -149,6 +151,8 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     // eslatma, 7 kun — admin navbatiga (CANCEL_RETURN_REMINDER_ENABLED).
     CancelReturnReminderService,
     CancelReturnReminderScheduler,
+    CourierHoldService,
+    CourierHoldWarningScheduler,
     OrderCustodyService,
     OrderNotificationService,
     OrderTelegramCardPublisher,
