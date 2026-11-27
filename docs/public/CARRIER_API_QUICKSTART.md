@@ -74,9 +74,14 @@ Sotuvda kassangizga **(mijozdan olingan naqd − yetkazish haqingiz)** yoziladi 
 
 ## 5. Olcha uslubi (ixtiyoriy)
 
-Tizimingiz Olcha API bilan ishlasa (`POST /auth/token` → JWT, `POST /qrorder/find`), o'sha kod Elchi bilan ham ishlaydi — baza manzili `BASE_URL/carrier`:
+Tizimingiz Olcha API bilan ishlasa (`POST /auth/token` → JWT, `POST /qrorder/find`), o'sha kod Elchi bilan ham ishlaydi. Baza manzili — domen **yoki** domen/carrier, ikkalasi ishlaydi: faqat domenni almashtirish kifoya (`https://api.olchamarket.uz` → `https://api.elchipochta.uz`).
 
-- `POST /carrier/auth/token` `{"username":"<akkaunt ID>","password":"elc_..."}` → `{access_token, token_type: "Bearer", expires_in: 3600}`.
-- `POST /carrier/qrorder/find` `{"qr_code":"..."}` (`Authorization: Bearer <access_token>`) → `{success, msg, data}`; posilka shu chaqiruvda sizga qabul qilinadi. Xato: `{success: false, msg, status: 400|404}`.
+| Olcha bilan bir xil (`BASE_URL`) | Elchi Carrier API (`BASE_URL/carrier`) |
+|---|---|
+| `POST /auth/token` | `POST /carrier/auth/token` |
+| `POST /qrorder/find` | `POST /carrier/qrorder/find` |
 
-Bearer token barcha `/carrier/*` endpointlarda `X-Api-Key` o'rniga ishlaydi. Batafsil: `CARRIER_API.md` §10.
+- `auth/token` `{"username":"<akkaunt ID>","password":"elc_..."}` → `{access_token, token_type: "Bearer", expires_in: 3600}`.
+- `qrorder/find` `{"qr_code":"..."}` (`Authorization: Bearer <access_token>`) → `{success, msg, data}`; posilka shu chaqiruvda sizga qabul qilinadi. Xato: `{success: false, msg, status: 400|404}`.
+
+Bearer token barcha `/carrier/*` endpointlarda `X-Api-Key` o'rniga ishlaydi. Elchi'ning boshqa endpointlari faqat `/carrier/` ostida. Batafsil: `CARRIER_API.md` §10.

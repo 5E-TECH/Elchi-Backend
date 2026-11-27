@@ -2069,8 +2069,22 @@ settlement FIFO and tracking are unchanged (no `markByProvider`, no
   HTTP 200 `{success:false, msg, status}` (`CarrierOlchaExceptionFilter`,
   wraps `AllExceptionsFilter`; Elchi code → `error_code`). Contract:
   `docs/public/CARRIER_API.md` §10.
+- **Olcha root aliases (2026-11-27, owner «Ha, qo'sh»):** `POST /auth/token`
+  and `POST /qrorder/find` (also `/v1/...`) — a carrier built for Olcha only
+  swaps the domain. `CarrierOlchaRootGatewayController` (`@Controller()`) has
+  NO logic: it delegates via `ModuleRef` to the same `/carrier/*` handlers,
+  and both paths take guards/throttle/filter/Swagger from the shared
+  decorators in `carrier-olcha-routes.ts` (`CarrierApiAccess`,
+  `CarrierAuthTokenRoute`, `CarrierQrOrderFindRoute`; parity spec
+  `carrier-olcha-root.spec.ts`). `CarrierThrottlerGuard` key is
+  endpoint-agnostic → one 120/min bucket per account across both paths.
+  Staff `AuthGatewayController` (`/auth/login` …) has no `auth/token`; its
+  filters/throttles don't apply. Other `/carrier/*` routes are NOT exposed at
+  the root. Carrier Swagger includes the two root paths
+  (`CARRIER_ROOT_ALIAS_PATHS`).
 - Separate Swagger for carriers: `/carrier-docs` (+ `-json`), built by
-  `carrier-swagger.ts` from the gateway doc filtered to `/carrier/*` (unused
+  `carrier-swagger.ts` from the gateway doc filtered to `/carrier/*` + the two
+  Olcha root aliases (unused
   schemas and other security schemes pruned; `X-Api-Key` = `carrier-api-key`
   scheme). Independent of `/api`: in production (staging image too) mounted
   ONLY with `CARRIER_SWAGGER_ENABLED=true` + `CARRIER_SWAGGER_PASSWORD`

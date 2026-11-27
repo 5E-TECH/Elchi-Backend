@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   Get,
   INestApplication,
+  Post,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -15,6 +16,7 @@ import { CarrierThrottlerGuard } from './auth/carrier-throttler.guard';
 import { CarrierTokenService } from './auth/carrier-token.service';
 import { CarrierAuthGatewayController } from './carrier-auth-gateway.controller';
 import { CarrierGatewayController } from './carrier-gateway.controller';
+import { CarrierOlchaRootGatewayController } from './carrier-olcha-root-gateway.controller';
 import {
   CARRIER_API_KEY_SCHEME,
   CARRIER_BEARER_SCHEME,
@@ -37,6 +39,15 @@ class InternalProbeController {
   }
 }
 
+/** Xodimlar `/auth/*` — prefikssiz `/auth/token` bilan yonma-yon, hujjatga TUSHMAYDI. */
+@Controller('auth')
+class StaffAuthProbeController {
+  @Post('login')
+  login() {
+    return { ok: true };
+  }
+}
+
 async function buildApp(
   env: NodeJS.ProcessEnv,
 ): Promise<{ app: INestApplication; result: string }> {
@@ -49,7 +60,9 @@ async function buildApp(
     controllers: [
       CarrierGatewayController,
       CarrierAuthGatewayController,
+      CarrierOlchaRootGatewayController,
       InternalProbeController,
+      StaffAuthProbeController,
     ],
     providers: [
       CarrierThrottlerGuard,
@@ -101,8 +114,10 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
       await built.app.close();
     });
 
-    it('faqat /carrier/* marshrutlari — ichki marshrut yo‘q', () => {
+    it('faqat /carrier/* (+ Olcha manzillari) — ichki marshrut yo‘q', () => {
       expect(Object.keys(doc.paths).sort()).toEqual([
+        // Olcha'dagi kabi prefikssiz (ega 2026-11-27: «Ha, qo'sh»).
+        '/auth/token',
         // Olcha uslubi (ega 2026-11-27).
         '/carrier/auth/token',
         '/carrier/cashbox',
@@ -112,8 +127,11 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
         '/carrier/qrorder/find',
         '/carrier/returns',
         '/carrier/scan',
+        '/qrorder/find',
       ]);
       expect(JSON.stringify(doc)).not.toContain('/orders/secret');
+      // Xodimlar `/auth/*` chiqmaydi — faqat `/auth/token`.
+      expect(JSON.stringify(doc)).not.toContain('/auth/login');
     });
 
     it('X-Api-Key va Olcha uslubidagi Bearer — Authorize tugmasi; boshqa sxemalar yo‘q', () => {
@@ -142,8 +160,10 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
         Record<string, { security?: unknown }>
       >;
       expect(ops['/carrier/auth/token'].post.security).toEqual([]);
+      expect(ops['/auth/token'].post.security).toEqual([]);
       for (const [path, method] of [
         ['/carrier/qrorder/find', 'post'],
+        ['/qrorder/find', 'post'],
         ['/carrier/scan', 'post'],
         ['/carrier/ping', 'get'],
       ]) {
@@ -153,6 +173,43 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
             { [CARRIER_BEARER_SCHEME]: [] },
           ]),
         );
+      }
+    });
+
+    it('⭐ Olcha manzili (`/auth/token`, `/qrorder/find`) = `/carrier/...` hujjati (faqat nom/izoh farq)', () => {
+      type Op = Record<string, unknown>;
+      const ops = doc.paths as Record<string, Record<string, Op>>;
+      const strip = (op: Op): Op => {
+        const rest = { ...op };
+        delete rest.operationId;
+        delete rest.summary;
+        delete rest.description;
+        return rest;
+      };
+      for (const [root, carrier] of [
+        ['/auth/token', '/carrier/auth/token'],
+        ['/qrorder/find', '/carrier/qrorder/find'],
+      ]) {
+        expect(Object.keys(ops[root])).toEqual(['post']);
+        expect(strip(ops[root].post)).toEqual(strip(ops[carrier].post));
+        expect(ops[root].post.operationId).not.toBe(
+          ops[carrier].post.operationId,
+        );
+        expect(ops[root].post.summary).toContain('Olcha manzili');
+        expect(ops[root].post.description).toContain('api.elchipochta.uz');
+      }
+      // qrorder/find xatolari — Olcha shaklida (401/403/429 Yii2, 5xx `{success:false}`).
+      const responses = ops['/qrorder/find'].post.responses as Record<
+        string,
+        { content?: Record<string, { schema?: { $ref?: string } }> }
+      >;
+      const ref = (code: string) =>
+        responses[code]?.content?.['application/json']?.schema?.$ref ?? '';
+      for (const code of ['401', '403', '429']) {
+        expect(ref(code)).toMatch(/CarrierOlchaErrorDto$/);
+      }
+      for (const code of ['503', '504']) {
+        expect(ref(code)).toMatch(/CarrierQrOrderFailDto$/);
       }
     });
 
