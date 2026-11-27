@@ -153,6 +153,11 @@ import {
   AI_RPC_TIMEOUT_MS,
   AI_TEXT_MAX_CHARS,
   CANCEL_RETURN_STAGES,
+  COURIER_HOLD_FILTERS,
+  COURIER_HOLD_FORBIDDEN_MESSAGE,
+  COURIER_HOLD_ROLES,
+  canViewCourierHold,
+  parseCourierHoldFilter,
   courierPostOrdersQuery,
   FULFILLMENT_SOURCES,
   WAREHOUSE_KINDS,
@@ -308,6 +313,12 @@ type OrderListFilters = {
    * (vergul yoki massiv, OR). Ta'rif BG1 `return_stage` bilan AYNAN bir xil.
    */
   cancel_stage?: string | string[];
+  /**
+   * onXzDc5n: kuryerdagi buyurtmalar — `any` | `near_48` (36–48 soat) |
+   * `over_48` (48–72) | `over_72` (≥ 72). Faqat SA/admin, menejer, kuryer,
+   * market — boshqa rol 403; noto'g'ri qiymat 400.
+   */
+  courier_hold?: string | string[];
 };
 
 type OrderListRequest =
@@ -4841,13 +4852,13 @@ export class OrderGatewayController {
     required: false,
     type: Number,
     example: 1,
-    schema: { default: 1, minimum: 1 } as any,
+    schema: { default: 1, minimum: 1 },
   })
   @ApiQuery({
     name: 'limit',
     required: false,
     enum: [10, 25, 50, 100, 200],
-    schema: { default: 10 } as any,
+    schema: { default: 10 },
   })
   @ApiQuery({ name: 'fetch_all', required: false, type: Boolean })
   async findAllExternal(
@@ -5157,13 +5168,13 @@ export class OrderGatewayController {
     required: false,
     type: Number,
     example: 1,
-    schema: { default: 1, minimum: 1 } as any,
+    schema: { default: 1, minimum: 1 },
   })
   @ApiQuery({
     name: 'limit',
     required: false,
     enum: [10, 25, 50, 100],
-    schema: { default: 10 } as any,
+    schema: { default: 10 },
   })
   @ApiQuery({
     name: 'fulfillment_source',
@@ -5225,6 +5236,7 @@ export class OrderGatewayController {
     // VkKDSNNn: oxirida — mavjud pozitsion parametrlar siljimaydi.
     @Query('warehouse_id') warehouse_id?: string,
     @Query('warehouse_kind') warehouse_kind?: string,
+    @Query('courier_hold') courier_hold?: string | string[],
   ) {
     const request = await this.resolveOrderListRequest(
       {
@@ -5250,6 +5262,7 @@ export class OrderGatewayController {
         cancel_stage,
         warehouse_id,
         warehouse_kind,
+        courier_hold,
       },
       req?.user,
       page,
@@ -5463,6 +5476,7 @@ export class OrderGatewayController {
     // VkKDSNNn: oxirida — mavjud pozitsion parametrlar siljimaydi.
     @Query('warehouse_id') warehouse_id?: string,
     @Query('warehouse_kind') warehouse_kind?: string,
+    @Query('courier_hold') courier_hold?: string | string[],
   ): Promise<void> {
     const request = await this.resolveOrderListRequest(
       {
@@ -5487,6 +5501,7 @@ export class OrderGatewayController {
         cancel_stage,
         warehouse_id,
         warehouse_kind,
+        courier_hold,
       },
       req?.user,
     );
@@ -5706,6 +5721,7 @@ export class OrderGatewayController {
     // VkKDSNNn: oxirida — mavjud pozitsion parametrlar siljimaydi.
     @Query('warehouse_id') warehouse_id?: string,
     @Query('warehouse_kind') warehouse_kind?: string,
+    @Query('courier_hold') courier_hold?: string | string[],
   ) {
     const filters: OrderListFilters = {
       market_id,
@@ -5726,6 +5742,7 @@ export class OrderGatewayController {
       cancel_stage,
       warehouse_id,
       warehouse_kind,
+      courier_hold,
     };
     const user = req?.user;
     // Ikkala doira ham GET /orders'ning o'zi: «Barchasi» (holatsiz) va
@@ -5944,7 +5961,16 @@ export class OrderGatewayController {
       cancel_stage,
       warehouse_id,
       warehouse_kind,
+      courier_hold,
     } = filters;
+    // onXzDc5n: kuryerdagi buyurtmalar filtri — noto'g'ri qiymat 400.
+    const parsedCourierHold = parseCourierHoldFilter(courier_hold);
+    if (parsedCourierHold.invalid) {
+      throw new BadRequestException(
+        `courier_hold noto'g'ri: ${String(courier_hold)} (ruxsat: ${COURIER_HOLD_FILTERS.join(', ')})`,
+      );
+    }
+    const courierHold = parsedCourierHold.filter;
     // VkKDSNNn: ombor filtrlari — noto'g'ri qiymat 400 (order-service'ga yetmaydi).
     const normalizedWarehouseId = warehouse_id
       ? String(warehouse_id).trim()
@@ -6025,6 +6051,11 @@ export class OrderGatewayController {
       throw new ForbiddenException(
         "Buyurtmalar ro'yxatini ko'rishga ruxsat yo'q",
       );
+    }
+    // onXzDc5n: «Kuryerdagi buyurtmalar» — faqat SA/admin, menejer, kuryer,
+    // market (o'z doirasida). Registrator, operatorlar, logist — 403.
+    if (courierHold && !canViewCourierHold(normalizedRoles)) {
+      throw new ForbiddenException(COURIER_HOLD_FORBIDDEN_MESSAGE);
     }
 
     // 4BftLLnc: doira SERVERDA — `region_id` filtri faqat o'z to'plami ichida
@@ -6210,7 +6241,7 @@ export class OrderGatewayController {
         market_id: resolvedMarketId,
         customer_id: resolvedCustomerId,
         status: resolvedStatuses,
-        where_deliver: normalizedWhereDeliver as Where_deliver | undefined,
+        where_deliver: normalizedWhereDeliver,
         search,
         start_day,
         end_day,
@@ -6244,6 +6275,8 @@ export class OrderGatewayController {
           : {}),
         // LFNLeSpu (BG4): order-service `findAll` — `cancelReturnStageSql` (OR).
         ...(cancelStages ? { cancel_stages: cancelStages } : {}),
+        // onXzDc5n: order-service `courierHoldSql` + soat oralig'i.
+        ...(courierHold ? { courier_hold: courierHold } : {}),
       },
       ...(logistRegionIds ? { logistRegionIds } : {}),
     };
@@ -6276,13 +6309,13 @@ export class OrderGatewayController {
     required: false,
     type: Number,
     example: 1,
-    schema: { default: 1, minimum: 1 } as any,
+    schema: { default: 1, minimum: 1 },
   })
   @ApiQuery({
     name: 'limit',
     required: false,
     enum: [10, 25, 50, 100],
-    schema: { default: 10 } as any,
+    schema: { default: 10 },
   })
   findAllByMarket(
     @Param('marketId') marketId: string,
@@ -6338,6 +6371,213 @@ export class OrderGatewayController {
    * so'rovlari bilan — badge va ro'yxat `total`i bir-biridan farq qilmaydi.
    * Faqat COURIER: doira — JWT `sub`, query'dan id olinmaydi.
    */
+  /**
+   * onXzDc5n — «Kuryerda qolgan jo'natmalar»: kuryer bo'yicha jamlama (faol
+   * buyurtmalar soat oraliqlari bilan + kuryerda turgan bekorlar). Ro'yxatning
+   * o'zi — `GET /orders?courier_hold=…&courier_id=…`.
+   *
+   * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan (2 segment — to'qnashmaydi ham).
+   */
+  @Get('courier-hold/summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...COURIER_HOLD_ROLES)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Couriers holding orders — per-courier hour buckets (onXzDc5n)',
+    description:
+      'Orders held by a courier (holder COURIER, status on the road / waiting / waiting_customer), hours since ' +
+      '`last_handover_at` (handed to the courier: post sent, scan take, courier transfer; NOT reset when the courier ' +
+      'accepts the post). Buckets: under_36, near_48 (36–48 h), over_48 (48–72 h), over_72 (≥ 72 h); ' +
+      '`cancelled_held` — cancelled parcels still with the courier. Scope from the token: superadmin/admin — all ' +
+      '(optional market_id, branch_id, region_id, courier_id); manager — own branch (branch_id / holder_branch_id / ' +
+      'home_branch_id, same as GET /orders; optional market_id, courier_id); courier — own; market — own ' +
+      '(courier phone hidden). Other roles — 403. Order rows: GET /orders?courier_hold=any|near_48|over_48|over_72.',
+  })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'courier_id', required: false, type: String })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'Courier hold summary',
+        data: {
+          couriers: [
+            {
+              courier_id: '209',
+              courier: {
+                id: '209',
+                name: 'Aziz',
+                phone_number: '+998901234567',
+              },
+              total: 12,
+              under_36: 7,
+              near_48: 2,
+              over_48: 1,
+              over_72: 2,
+              oldest_since: '2026-11-23T08:00:00.000Z',
+              oldest_hours: 98,
+              cancelled_held: 1,
+            },
+          ],
+          totals: {
+            couriers: 1,
+            total: 12,
+            under_36: 7,
+            near_48: 2,
+            over_48: 1,
+            over_72: 2,
+            oldest_hours: 98,
+            cancelled_held: 1,
+          },
+          now: '2026-11-27T10:00:00.000Z',
+          thresholds: { near_from: 36, deadline: 48, over: 72 },
+        },
+      },
+    },
+  })
+  async courierHoldSummary(
+    @Req() req: { user: JwtUser },
+    @Query('market_id') market_id?: string,
+    @Query('branch_id') branch_id?: string,
+    @Query('region_id') region_id?: string,
+    @Query('courier_id') courier_id?: string,
+  ) {
+    const user = req?.user;
+    const roles = this.normalizeRoles(user?.roles);
+    if (!canViewCourierHold(roles)) {
+      throw new ForbiddenException(COURIER_HOLD_FORBIDDEN_MESSAGE);
+    }
+    const idParam = (name: string, value?: string): string | undefined => {
+      const text = String(value ?? '').trim();
+      if (!text) return undefined;
+      if (!/^\d{1,19}$/.test(text)) {
+        throw new BadRequestException(`${name} noto'g'ri: ${text}`);
+      }
+      return text;
+    };
+    const marketId = idParam('market_id', market_id);
+    const branchId = idParam('branch_id', branch_id);
+    const regionId = idParam('region_id', region_id);
+    const courierId = idParam('courier_id', courier_id);
+    const sub = String(user?.sub ?? '').trim();
+    const isAdmin =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    const isManager = !isAdmin && roles.includes(RoleEnum.MANAGER);
+    const isCourier =
+      !isAdmin && !isManager && roles.includes(RoleEnum.COURIER);
+    const isMarket =
+      !isAdmin && !isManager && !isCourier && roles.includes(RoleEnum.MARKET);
+
+    const query: Record<string, unknown> = {};
+    if (isAdmin) {
+      Object.assign(query, {
+        ...(marketId ? { market_id: marketId } : {}),
+        ...(branchId ? { branch_id: branchId } : {}),
+        ...(regionId ? { region_id: regionId } : {}),
+        ...(courierId ? { courier_ids: [courierId] } : {}),
+      });
+    } else if (isManager) {
+      // GET /orders bilan bir xil: menejer — o'z filiali (JWT / branch_users).
+      const assignment = user ? await this.resolveBranchAssignment(user) : null;
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      Object.assign(query, {
+        branch_id: String(assignment.branch_id),
+        ...(marketId ? { market_id: marketId } : {}),
+        ...(courierId ? { courier_ids: [courierId] } : {}),
+      });
+    } else if (isCourier) {
+      query.courier_ids = [sub];
+    } else if (isMarket) {
+      if (marketId && marketId !== sub) {
+        throw new BadRequestException(
+          "Market boshqa market ma'lumotini so'rashi mumkin emas",
+        );
+      }
+      query.market_id = sub;
+    } else {
+      throw new ForbiddenException(COURIER_HOLD_FORBIDDEN_MESSAGE);
+    }
+
+    const response = (await this.sendOrderWithTimeout(
+      { cmd: 'order.courier_hold.summary' },
+      { query },
+    )) as { data?: Record<string, unknown> } | null;
+    const data = response?.data ?? {};
+    const rows = Array.isArray(data.couriers)
+      ? (data.couriers as Array<Record<string, unknown>>)
+      : [];
+    const people = await this.loadCourierHoldNames(
+      rows.map((row) => replacementIdText(row.courier_id)).filter(Boolean),
+    );
+    // Market — kuryer telefoni YO'Q (txZJQiCe: market matnlarida kuryer raqami
+    // o'rniga «Elchi mas'ulingiz»).
+    const hidePhone = isMarket;
+    return successRes(
+      {
+        ...data,
+        couriers: rows.map((row) => {
+          const id = replacementIdText(row.courier_id);
+          const person = people.get(id);
+          return {
+            ...row,
+            courier: {
+              id,
+              name: person?.name ?? null,
+              phone_number: hidePhone ? null : (person?.phone_number ?? null),
+            },
+          };
+        }),
+      },
+      200,
+      'Courier hold summary',
+    );
+  }
+
+  /**
+   * onXzDc5n: kuryer ismi/telefoni (`identity.courier.find_by_ids`). Xato —
+   * bo'sh Map (jamlama ismsiz qaytadi, yiqilmaydi). O'chirilgan kuryer — yo'q.
+   */
+  private async loadCourierHoldNames(
+    ids: string[],
+  ): Promise<
+    Map<string, { name: string | null; phone_number: string | null }>
+  > {
+    const byId = new Map<
+      string,
+      { name: string | null; phone_number: string | null }
+    >();
+    const unique = [...new Set(ids)].filter((id) => /^\d{1,19}$/.test(id));
+    if (!unique.length) return byId;
+    try {
+      const response = (await this.sendIdentityWithTimeout(
+        { cmd: 'identity.courier.find_by_ids' },
+        { ids: unique },
+      )) as { data?: unknown } | null;
+      const users = Array.isArray(response?.data) ? response.data : [];
+      for (const raw of users as Array<Record<string, unknown>>) {
+        const id = replacementIdText(raw?.id);
+        if (!id) continue;
+        const text = (value: unknown) =>
+          typeof value === 'string' && value.trim() ? value.trim() : null;
+        byId.set(id, {
+          name: text(raw.name),
+          phone_number: text(raw.phone_number),
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `courier-hold summary: kuryer ismlari olinmadi (${
+          error instanceof Error ? error.message : 'unknown error'
+        })`,
+      );
+    }
+    return byId;
+  }
+
   @Get('courier/orders/counts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
@@ -6405,13 +6645,13 @@ export class OrderGatewayController {
     required: false,
     type: Number,
     example: 1,
-    schema: { default: 1, minimum: 1 } as any,
+    schema: { default: 1, minimum: 1 },
   })
   @ApiQuery({
     name: 'limit',
     required: false,
     enum: [10, 25, 50, 100],
-    schema: { default: 10 } as any,
+    schema: { default: 10 },
   })
   @ApiQuery({
     name: 'where_deliver',
@@ -7082,13 +7322,13 @@ export class OrderGatewayController {
     name: 'page',
     required: false,
     type: Number,
-    schema: { default: 1, minimum: 1 } as any,
+    schema: { default: 1, minimum: 1 },
   })
   @ApiQuery({
     name: 'limit',
     required: false,
     enum: [10, 25, 50, 100],
-    schema: { default: 10 } as any,
+    schema: { default: 10 },
   })
   async findBranchCancelledOrders(
     @Query('status') status?: string | string[],

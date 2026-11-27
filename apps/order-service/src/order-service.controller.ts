@@ -37,6 +37,10 @@ import {
 import { AiPreviewService } from './ai/ai-preview.service';
 import { PostMembershipService } from './post-membership/post-membership.service';
 import { OpenCustodyByDistrictService } from './custody/open-custody-by-district.service';
+import {
+  CourierHoldService,
+  type CourierHoldSummaryQuery,
+} from './courier-hold/courier-hold.service';
 import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
 import {
   findCompletedAiCreates,
@@ -160,6 +164,10 @@ export class OrderServiceController {
     // argumentlar bilan quradi (servis yo'q — darvoza o'chiq).
     @Optional()
     private readonly orderIntake?: OrderIntakeService,
+    // onXzDc5n: kuryerdagi buyurtmalar jamlamasi. Ixtiyoriy: eski spec'lar
+    // controllerni pozitsion argumentlar bilan quradi.
+    @Optional()
+    private readonly courierHold?: CourierHoldService,
   ) {}
 
   /**
@@ -1802,6 +1810,28 @@ export class OrderServiceController {
     return this.executeAndAck(context, () =>
       this.orderService.courierOrderCounts(data ?? {}),
     );
+  }
+
+  // onXzDc5n — GET /orders/courier-hold/summary (kuryer bo'yicha jamlama).
+  // Doira (market / filial / kuryer) gateway'da tokendan hal qilinadi.
+  @MessagePattern({ cmd: 'order.courier_hold.summary' })
+  courierHoldSummary(
+    @Payload() data: { query?: CourierHoldSummaryQuery } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, async () => {
+      if (!this.courierHold) {
+        throw new RpcException({
+          statusCode: 503,
+          message: 'Kuryer jamlamasi xizmati mavjud emas',
+        });
+      }
+      return successRes(
+        await this.courierHold.summary(data?.query ?? {}),
+        200,
+        'Courier hold summary',
+      );
+    });
   }
 
   // GaBIPi3Z — GET /orders/status-counts (holat tablari + «Qabul va yaratish»).

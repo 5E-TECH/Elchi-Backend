@@ -23,6 +23,33 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-27 — Kuryerdagi buyurtmalar: 72 soatdan oshgan, 48 soatga yaqin, kuryerlar bo'yicha + ogohlantirish (onXzDc5n)
+
+Deploy: **order-service** (migratsiya **1716000000254**: `orders.courier_hold_warned_at` + qism indeks
+`IDX_orders_courier_hold`), **api-gateway**, **libs/common** (notification-service katalogi —
+`order.courier_hold_warning`). Yangi env (ixtiyoriy): `COURIER_HOLD_WARN_ENABLED` (sukut `true`),
+`COURIER_HOLD_WARN_QUIET_HOURS` (sukut `22:00-08:00` Toshkent). BE FE'dan OLDIN chiqadi.
+
+Soat — buyurtma kuryer qo'liga o'tgan paytdan (`last_handover_at`, holder COURIER: pochta kuryerga jo'natildi /
+kuryer skan bilan oldi / kuryerdan kuryerga). Kuryer pochtani qabul qilganda soat qayta boshlanmaydi. Faqat holat
+`on the road` / `waiting` / `waiting_customer`. Kalendar soat (ish kuni sozlamasi ta'sir qilmaydi).
+
+- 🆕 [gateway] `GET /orders?courier_hold=any|near_48|over_48|over_72` (ham `GET /orders/status-counts`,
+  `GET /orders/export/excel`): `near_48` — 36 ≤ soat < 48, `over_48` — 48–72, `over_72` — ≥ 72, `any` — kuryerdagi
+  hammasi. Berilsa va `sort_by` yo'q bo'lsa — eng uzoq turgani birinchi (`last_handover_at ASC`). Rol doirasi
+  o'zgarmaydi; faqat superadmin/admin, menejer, kuryer, market — registrator, operator, market operatori, logist
+  **403**. Noto'g'ri qiymat — 400.
+- 🆕 [gateway] `GET /orders/courier-hold/summary[?market_id&branch_id&region_id&courier_id]` → `{couriers: [{courier_id,
+  courier: {id, name, phone_number}, total, under_36, near_48, over_48, over_72, oldest_since, oldest_hours,
+  cancelled_held}], totals, now, thresholds: {near_from: 36, deadline: 48, over: 72}}`. Doira tokendan: SA/admin —
+  hammasi (filtrlar bilan), menejer — o'z filiali, kuryer — o'zi, market — o'zi (`phone_number: null`). Boshqa rol
+  403. `cancelled_held` — kuryerda turgan, hali qaytarish pochtasiga qo'yilmagan bekorlar.
+- 🆕 [notification] `order.courier_hold_warning` — 36 soatda BIR MARTA (har kuryer topshirishida): kuryerga ilova +
+  Telegram shaxsiy chat, marketga ilova + asosiy («create») Telegram guruhi; `link: /courier-hold?tab=near_48`,
+  `data.audience: courier|market`, `data.order_ids`.
+→ Frontend: `/courier-hold` sahifasi (tablar «72 soatdan oshgan» · «48 soatga yaqin» · «Kuryerlar bo'yicha») va
+«Buyurtmalar» filtr panelida «Kuryerda turgan vaqti».
+
 ### 2026-11-27 — Carrier API: Olcha uslubidagi kirish (`/carrier/auth/token`, `/carrier/qrorder/find`) (ega)
 
 Deploy: **api-gateway** + **integration-service** (migratsiya va yangi env yo'q). Eski `/carrier/*` yo'llari va

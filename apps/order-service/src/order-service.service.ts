@@ -66,6 +66,11 @@ import {
 } from './lookup/external-batch-counts';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import {
+  courierHoldRange,
+  courierHoldSql,
+  type CourierHoldFilter,
+} from './courier-hold/courier-hold';
+import {
   buildSaleQuotePayload,
   fetchSaleDeliveryQuote,
   isSalePricingEngineActive,
@@ -471,6 +476,13 @@ export type OrderListQuery = {
    * esa chiqib qolardi.
    */
   branch_physical_only?: boolean | string;
+  /**
+   * onXzDc5n — kuryerdagi buyurtmalar: `any` (hammasi), `near_48` (36–48
+   * soat), `over_48` (48–72), `over_72` (≥ 72). Soat — `last_handover_at`
+   * (kuryer qo'liga o'tgan payt). Berilsa va `sort_by` yo'q bo'lsa — eng
+   * eskisi birinchi. Gateway qiymat va rolni tekshiradi.
+   */
+  courier_hold?: CourierHoldFilter;
   fetch_all?: boolean | string;
   fetchAll?: boolean | string;
   disable_pagination?: boolean;
@@ -874,7 +886,14 @@ export class OrderServiceService {
   private applyOrderListSort(
     qb: SelectQueryBuilder<Order>,
     sort: OrderListSort | null,
+    courierHold?: CourierHoldFilter,
   ) {
+    if (!sort && courierHold) {
+      // onXzDc5n: kuryerdagi buyurtmalar — eng uzoq turgani birinchi.
+      qb.orderBy('order.last_handover_at', 'ASC');
+      qb.addOrderBy('order.id', 'ASC');
+      return;
+    }
     if (!sort) {
       qb.orderBy('order.createdAt', 'DESC');
       qb.addOrderBy('order.id', 'DESC');
@@ -1088,7 +1107,7 @@ export class OrderServiceService {
       'order.branch',
       'branch',
     );
-    this.applyOrderListSort(qb, sort);
+    this.applyOrderListSort(qb, sort, query.courier_hold);
     if (disable_pagination) {
       qb.take(MAX_FETCH_ALL);
     } else {
@@ -1247,6 +1266,7 @@ export class OrderServiceService {
       exclude_hq_warehouse,
       unbatched_only,
       branch_physical_only,
+      courier_hold,
     } = query;
     const useCourierHistory =
       include_courier_history === true ||
@@ -1376,6 +1396,21 @@ export class OrderServiceService {
     }
     if (where_deliver) {
       qb.andWhere('order.where_deliver = :where_deliver', { where_deliver });
+    }
+    if (courier_hold) {
+      // onXzDc5n: kuryer qo'lidagi faol buyurtmalar + soat oralig'i.
+      qb.andWhere(courierHoldSql('order'));
+      const range = courierHoldRange(courier_hold, new Date());
+      if (range.before) {
+        qb.andWhere('order.last_handover_at <= :courier_hold_before', {
+          courier_hold_before: range.before,
+        });
+      }
+      if (range.after) {
+        qb.andWhere('order.last_handover_at > :courier_hold_after', {
+          courier_hold_after: range.after,
+        });
+      }
     }
     if (typeof return_requested === 'boolean') {
       qb.andWhere('order.return_requested = :return_requested', {
@@ -3800,9 +3835,7 @@ export class OrderServiceService {
    * HOLAT sinxronini sanaydi va importda o'zgarmaydi — 49 ta buyurtma olingan
    * sayt «0 ta · Sinxronlanmagan» bo'lib turardi.
    */
-  async findExternalImportStats(
-    slugs: unknown,
-  ): Promise<
+  async findExternalImportStats(slugs: unknown): Promise<
     Array<{
       slug: string;
       total: number;

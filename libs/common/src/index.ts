@@ -84,6 +84,7 @@ export * from './catalog/warehouse';
 export * from './contacts/contacts';
 export * from './order/cancel-return-stage';
 export * from './order/courier-order-list';
+export * from './order/courier-hold';
 export * from './order/order-create-content';
 export * from './order/order-special-categories';
 export * from './order/order-operator-assign';
