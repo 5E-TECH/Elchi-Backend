@@ -175,10 +175,10 @@
 <section class="cover">
   <div class="kicker">Dasturchilar uchun texnik hujjat</div>
   <h1>Carrier API — tashqi yetkazuvchi uchun&nbsp;<wbr>integratsiya qo'llanmasi</h1>
-  <div class="sub">Elchi Pochta · BeePost</div>
-  <div class="meta"><span>Versiya: <b>1.1</b></span><span>Sana: <b>2026-11-14</b></span><span>Til: o'zbek (lotin)</span></div>
+  <div class="sub">Elchi Pochta</div>
+  <div class="meta"><span>Versiya: <b>1.2</b></span><span>Sana: <b>2026-11-27</b></span><span>Til: o'zbek (lotin)</span></div>
 
-  <p class="summary">Bu qo'llanma Elchi Pochta va BeePost tizimlarida <strong>bitta kurier akkaunti</strong> sifatida ishlaydigan yetkazib berish kompaniyasining backend va mobil dasturchilari uchun. Sizning tizimingiz bizning API'ga <code>X-Api-Key</code> kaliti bilan murojaat qiladi: posilka QR kodini skanerlab uni qabul qiladi, yetkazish natijasini yuboradi (<code>sold</code>, <code>partly_sold</code> yoki <code>cancelled</code>), o'zidagi buyurtmalar ro'yxatini va kurier kassasini o'qiydi, bekor qilingan posilkalarni qaytarishga rasmiylashtiradi. Shartnoma (endpointlar, maydonlar, xatolar) ikkala tizimda bir xil, farqlari <span class="nowrap">12-bo'limda</span>. Avval Elchi test muhitida Swagger orqali sinab ko'ring, so'ng <span class="nowrap">11-bo'limdagi</span> test ssenariylarini bajaring — shundan keyin production kalitlari beriladi.</p>
+  <p class="summary">Bu qo'llanma Elchi Pochta tizimida <strong>bitta kurier akkaunti</strong> sifatida ishlaydigan yetkazib berish kompaniyasining backend va mobil dasturchilari uchun. Sizning tizimingiz bizning API'ga <code>X-Api-Key</code> kaliti bilan murojaat qiladi: posilka QR kodini skanerlab uni qabul qiladi, yetkazish natijasini yuboradi (<code>sold</code>, <code>partly_sold</code> yoki <code>cancelled</code>), o'zidagi buyurtmalar ro'yxatini va kurier kassasini o'qiydi, bekor qilingan posilkalarni qaytarishga rasmiylashtiradi. Avval test muhitida Swagger orqali sinab ko'ring, so'ng <span class="nowrap">11-bo'limdagi</span> test ssenariylarini bajaring — shundan keyin production kaliti beriladi. Tizimingiz Olcha API bilan ishlasa, o'sha kod Elchi bilan ham ishlaydi (<code>auth/token</code> → <code>qrorder/find</code>) — <span class="nowrap">12-bo'lim</span>.</p>
 
   <div class="quick">
     <div><span class="label">Test Swagger</span><a class="val" href="https://test-api.elchipochta.uz/carrier-docs">https://test-api.elchipochta.uz/carrier-docs</a></div>
@@ -201,7 +201,7 @@
       <li><a href="#s9"><span class="n">9.</span>Xatolar</a><span class="pg" data-for="s9"></span></li>
       <li><a href="#s10"><span class="n">10.</span>Pul va kurier kassasi</a><span class="pg" data-for="s10"></span></li>
       <li><a href="#s11"><span class="n">11.</span>Ishga tushirish tartibi</a><span class="pg" data-for="s11"></span></li>
-      <li><a href="#s12"><span class="n">12.</span>Ilova: BeePost farqlari</a><span class="pg" data-for="s12"></span></li>
+      <li><a href="#s12"><span class="n">12.</span>Ilova: Olcha uslubidagi kirish</a><span class="pg" data-for="s12"></span></li>
     </ol>
   </nav>
 </section>
@@ -209,11 +209,11 @@
 <!-- ============ 1 ============ -->
 <section class="newpage">
 <h2 id="s1"><span class="num">1.</span> Qisqacha: qanday ishlaydi</h2>
-<p>Elchi (va BeePost) ichida siz <strong>bitta kurier akkaunti</strong>siz. Posilkalar shu kurierga pochta orqali biriktiriladi, ularning holati <code>on the road</code> bo'ladi. Sizga kurier paroli berilmaydi — tizim bilan faqat API kaliti orqali ishlaysiz. Ish tartibi to'rt qadamdan iborat:</p>
+<p>Elchi ichida siz <strong>bitta kurier akkaunti</strong>siz. Posilkalar shu kurierga pochta orqali biriktiriladi, ularning holati <code>on the road</code> bo'ladi. Sizga kurier paroli berilmaydi — tizim bilan faqat API kaliti orqali ishlaysiz. Ish tartibi to'rt qadamdan iborat:</p>
 <ol class="steps">
   <li><strong>Skan.</strong> Posilkani qo'lingizga olganda yorliqdagi QR qiymatini <code>POST /carrier/scan</code> ga yuborasiz. Posilka sizga o'tadi (holati <code>waiting</code>), javobda buyurtma ma'lumotlari keladi: mijoz, manzil, summa, tovarlar.</li>
-  <li><strong>Natija.</strong> Mijoz bilan ish tugagach <code>POST /carrier/orders/{id}/status</code>: <code>sold</code> (sotildi), <code>partly_sold</code> (qisman sotildi), <code>cancelled</code> (bekor qilindi). Xato natija yuborilgan bo'lsa — darhol biz bilan bog'laning (<code>trace_id</code> bilan); tuzatishni Elchi/BeePost operatori bajaradi.</li>
-  <li><strong>Qaytarish.</strong> Bekor qilingan posilkalar (va qisman sotuvning sotilmagan qismi) sizda qoladi. Ularni <code>POST /carrier/returns</code> bilan qaytarish pochtasiga rasmiylashtirib, bizga topshirasiz (Elchi — filialga, BeePost — BeePost markaziga).</li>
+  <li><strong>Natija.</strong> Mijoz bilan ish tugagach <code>POST /carrier/orders/{id}/status</code>: <code>sold</code> (sotildi), <code>partly_sold</code> (qisman sotildi), <code>cancelled</code> (bekor qilindi). Xato natija yuborilgan bo'lsa — darhol biz bilan bog'laning (<code>trace_id</code> bilan); tuzatishni Elchi operatori bajaradi.</li>
+  <li><strong>Qaytarish.</strong> Bekor qilingan posilkalar (va qisman sotuvning sotilmagan qismi) sizda qoladi. Ularni <code>POST /carrier/returns</code> bilan qaytarish pochtasiga rasmiylashtirib, filialimizga topshirasiz.</li>
   <li><strong>Pul.</strong> Har bir sotuvdan keyin kurier kassangizga yozuv tushadi (yig'ilgan naqd minus xizmat haqingiz). Naqd pulni xodimimizga topshirasiz; hammasi <code>GET /carrier/cashbox</code> da ko'rinadi.</li>
 </ol>
 
@@ -275,18 +275,13 @@
   <tbody>
     <tr><td><strong>Elchi test</strong><br>kalit <code>elc_…</code> (test)</td><td><a class="url" href="https://test-api.elchipochta.uz">https://test-api.elchipochta.uz</a></td><td><a class="url" href="https://test-api.elchipochta.uz/carrier-docs">https://test-api.elchipochta.uz/carrier-docs</a></td></tr>
     <tr><td>Elchi production<br>kalit <code>elc_…</code></td><td><a class="url" href="https://api.elchipochta.uz">https://api.elchipochta.uz</a></td><td><a class="url" href="https://api.elchipochta.uz/carrier-docs">https://api.elchipochta.uz/carrier-docs</a></td></tr>
-    <tr><td>BeePost production<br>kalit <code>bpc_…</code></td><td><a class="url" href="https://beepost.uz/api/v1">https://beepost.uz/api/v1</a></td><td><a class="url" href="https://beepost.uz/api/v1/carrier-docs">https://beepost.uz/api/v1/carrier-docs</a></td></tr>
   </tbody>
 </table>
-<div class="note">
-  <p><strong>BeePost test muhiti hozircha yo'q.</strong> Elchi test muhitida sinang — shartnoma bir xil. BeePost sinov akkaunti kerak bo'lsa, so'rang: u BeePost <strong>production</strong> tizimida alohida <code>bpc_…</code> kaliti bilan beriladi, ya'ni u yerdagi har bir amal haqiqiy — sinov posilkalarini oldindan kelishamiz. Elchi testida tekshirib bo'lmaydigan BeePost farqlari — <span class="nowrap">12-bo'limda</span>, ularni tekshirish ro'yxati — <span class="nowrap">11-bo'limda</span>.</p>
-</div>
 <ul>
-  <li><strong>Qaysi tizimga murojaat qilish kerak?</strong> Posilkani sizga qaysi tizim biriktirgan bo'lsa (Elchi yoki BeePost), skan va natijani o'sha tizim API'siga yuboring. Elchi orqali biriktirilgan posilka BeePost API'da ko'rinmaydi va aksincha — ikkalasi ham 404 qaytaradi. Shuning uchun manbasi noma'lum posilkada bir tizimdan kelgan 404 hali "sizniki emas" degani emas — ikkinchi tizimda ham tekshiring. Buyurtma id'larini tizim belgisi bilan saqlang (masalan <code>elchi:900</code>, <code>beepost:&lt;uuid&gt;</code>) va ularni shaffof satr deb biling.</li>
-  <li><strong>Yo'l prefiksi farq qiladi.</strong> Elchi'da yo'llar to'g'ridan-to'g'ri hostdan boshlanadi (<code>/api/v1</code> yo'q): <span class="url">https://api.elchipochta.uz/carrier/ping</span>. BeePost'da: <span class="url">https://beepost.uz/api/v1/carrier/ping</span>. Shuning uchun har bir tizim uchun konfiguratsiyada alohida <code>BASE_URL</code> saqlang va yo'llarni <code>$BASE_URL/carrier/...</code> ko'rinishida quring. BeePost'da <code>/api/v1/carrier/</code> qismi faqat kichik harflarda bo'lishi kerak (aks holda 404).</li>
+  <li><strong>Yo'l prefiksi yo'q.</strong> Yo'llar to'g'ridan-to'g'ri hostdan boshlanadi (<code>/api/v1</code> yo'q): <span class="url">https://api.elchipochta.uz/carrier/ping</span>. Konfiguratsiyada <code>BASE_URL</code> ni saqlang va yo'llarni <code>$BASE_URL/carrier/...</code> ko'rinishida quring. Buyurtma id'larini shaffof satr deb biling.</li>
   <li><strong>OpenAPI JSON</strong> Swagger manzili + <code>-json</code>: masalan <a class="url" href="https://test-api.elchipochta.uz/carrier-docs-json">https://test-api.elchipochta.uz/carrier-docs-json</a>. Uni Postman yoki kod generatoriga import qilish mumkin. Swagger va JSON login/parol (HTTP Basic Auth) bilan himoyalangan; login/parol alohida beriladi. Production Swagger sahifalari kerak bo'lganda ochiladi.</li>
-  <li>Har bir muhit va tizim uchun <strong>alohida kalit</strong> beriladi: test kaliti production'da ishlamaydi, Elchi kaliti BeePost'da ishlamaydi.</li>
-  <li>Elchi Swagger sahifasining kirish matnida test va production <code>BASE_URL</code> qiymatlari ikkalasi ham ko'rsatilgan. BeePost Swagger matnidagi <code>&lt;beepost-domain&gt;</code> o'rniga <a class="url" href="https://beepost.uz/api/v1">https://beepost.uz/api/v1</a> ni ishlating. "Try it out" har doim sahifa ochilgan serverga yuboradi.</li>
+  <li>Har bir muhit uchun <strong>alohida kalit</strong> beriladi: test kaliti production'da ishlamaydi.</li>
+  <li>Swagger sahifasining kirish matnida test va production <code>BASE_URL</code> qiymatlari ikkalasi ham ko'rsatilgan. "Try it out" har doim sahifa ochilgan serverga yuboradi.</li>
 </ul>
 
 <!-- ============ 3 ============ -->
@@ -296,9 +291,10 @@
     <h3>Biz sizga beramiz</h3>
     <ul class="check">
       <li><strong>Test API kaliti</strong> (<code>elc_xxxxxxxx…</code>). Kalit faqat bir marta ko'rsatiladi, xavfsiz kanal orqali yuboriladi.</li>
+      <li><strong>Akkaunt ID raqami</strong> — Olcha uslubidagi kirishda login (<code>username</code>, <span class="nowrap">12-bo'lim</span>).</li>
       <li><strong>Test Swagger login va paroli</strong> — kalitdan alohida xabarda.</li>
       <li><strong>Test posilkalarining QR tokenlari</strong> — kamida 10 ta, kurieringizga biriktirilgan, holati <code>on the road</code>: oddiy, 2+ tovarli (qisman sotish uchun), almashtirish buyurtmasi va isbot talab qiladigan sotuvchining posilkasi. Ma'lumotlar sintetik.</li>
-      <li><strong>Production kalitlari</strong> — testdan keyin: Elchi uchun <code>elc_…</code>, BeePost uchun <code>bpc_…</code>, har biri alohida.</li>
+      <li><strong>Production kaliti</strong> (<code>elc_…</code>) — testdan keyin.</li>
       <li><strong>Qo'llab-quvvatlash aloqasi</strong> va murojaat tartibi: muammo bo'lsa <code>trace_id</code>, vaqt (UTC), endpoint va so'rov tanasini yuborasiz (<span class="nowrap">9-bo'lim</span>).</li>
     </ul>
   </div>
@@ -334,9 +330,10 @@
 <h2 id="s5"><span class="num">5.</span> Autentifikatsiya va xavfsizlik</h2>
 <h3>5.1 API kaliti</h3>
 <ul>
-  <li>Har bir so'rovda sarlavha: <code>X-Api-Key: elc_&lt;64 ta hex belgi&gt;</code> (jami 68 belgi; BeePost'da <code>bpc_…</code>). Kalitni oddiy satr sifatida saqlang, uning tuzilishiga tayanmang. JWT yoki kurier paroli ishlatilmaydi.</li>
+  <li>Har bir so'rovda sarlavha: <code>X-Api-Key: elc_&lt;64 ta hex belgi&gt;</code> (jami 68 belgi). Kalitni oddiy satr sifatida saqlang, uning tuzilishiga tayanmang. Kurier paroli ishlatilmaydi.</li>
+  <li><strong>Muqobil — Bearer token.</strong> Kalit o'rniga Olcha uslubidagi <code>Authorization: Bearer &lt;access_token&gt;</code> ham qabul qilinadi (barcha <code>/carrier/*</code> da). Token <code>POST /carrier/auth/token</code> dan olinadi va 1 soat amal qiladi (<span class="nowrap">12-bo'lim</span>). Ikkalasi kelsa <code>X-Api-Key</code> ishlatiladi.</li>
   <li>Kalit <strong>faqat bir marta</strong> ko'rsatiladi; bizda faqat uning xeshi saqlanadi, shuning uchun uni qayta tiklab bo'lmaydi. Yo'qolsa — yangi kalit chiqariladi.</li>
-  <li><strong>Almashtirish (rotation)</strong> eski kalitni <strong>darhol</strong> o'chiradi (o'tish davri yo'q) — almashtirish vaqtini oldindan kelishamiz.</li>
+  <li><strong>Almashtirish (rotation)</strong> eski kalitni <strong>darhol</strong> o'chiradi (o'tish davri yo'q) — almashtirish vaqtini oldindan kelishamiz. Shu kalit bilan olingan Bearer tokenlar ham darhol ishlamay qoladi.</li>
   <li>Akkauntni biz to'xtatib qo'yishimiz va qayta yoqishimiz mumkin: to'xtatilganda <code>403</code> (<code>Carrier akkaunt faol emas</code>); bog'langan kurier bloklansa <code>403 CARRIER_COURIER_INACTIVE</code>.</li>
   <li>Kalitni faqat serveringizda saqlang (maxfiy saqlagich / muhit sozlamasi). Mobil ilova, brauzer kodi, git yoki loglarga qo'ymang — kurier ilovangiz sizning backend'ingizga, backend esa bizga murojaat qilsin.</li>
 </ul>
@@ -348,13 +345,14 @@
 </ul>
 <h3>5.3 So'rovlar chegarasi (rate limit)</h3>
 <table class="keep">
-  <thead><tr><th style="width:44%">Chegara</th><th>Elchi</th><th>BeePost</th></tr></thead>
+  <thead><tr><th style="width:62%">Chegara</th><th>Qiymat</th></tr></thead>
   <tbody>
-    <tr><td>Akkaunt bo'yicha, 6 endpoint uchun <strong>bitta umumiy</strong> hisob</td><td>120 so'rov / daqiqa</td><td>120 so'rov / daqiqa</td></tr>
-    <tr><td>IP bo'yicha, kalit tekshiruvidan <strong>oldin</strong> (xato kalitli so'rovlar ham sanaladi)</td><td>120 / daqiqa har bir endpointga</td><td>600 / daqiqa barcha endpointlarga</td></tr>
+    <tr><td>Akkaunt bo'yicha, barcha endpointlar uchun <strong>bitta umumiy</strong> hisob (<code>qrorder/find</code> ham)</td><td>120 so'rov / daqiqa</td></tr>
+    <tr><td>IP bo'yicha, kalit tekshiruvidan <strong>oldin</strong> (xato kalitli so'rovlar ham sanaladi)</td><td>120 / daqiqa har bir endpointga</td></tr>
+    <tr><td>Token olish (<code>POST /carrier/auth/token</code>), IP bo'yicha</td><td>20 / daqiqa</td></tr>
   </tbody>
 </table>
-<p>Chegaradan oshganda <code>429</code> va <code>Retry-After</code> sarlavhasi (soniya) keladi. Ikkala tizimda ham chegaradan oshgan hisob (akkaunt yoki IP) <strong>~60 soniyaga bloklanadi</strong> — <code>Retry-After</code> qancha kutishni ko'rsatadi; shuncha kuting, keyin qayta yuboring. Muvaffaqiyatli javoblarda <code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code>, <code>X-RateLimit-Reset</code> bo'lishi mumkin (ma'lumot uchun).</p>
+<p>Chegaradan oshganda <code>429</code> va <code>Retry-After</code> sarlavhasi (soniya) keladi. Chegaradan oshgan hisob (akkaunt yoki IP) <strong>~60 soniyaga bloklanadi</strong> — <code>Retry-After</code> qancha kutishni ko'rsatadi; shuncha kuting, keyin qayta yuboring. Muvaffaqiyatli javoblarda <code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code>, <code>X-RateLimit-Reset</code> bo'lishi mumkin (ma'lumot uchun).</p>
 <p><strong>Webhook yo'q.</strong> Yangi biriktirilgan posilkalarni <code>GET /carrier/orders?status=on%20the%20road</code> bilan sahifalab, masalan har 5–10 daqiqada oling. Holatlar bizning tomonda ham o'zgarishi mumkin (masalan <code>sold</code> → <code>paid</code>, filial qaytarishni qabul qildi), shuning uchun ro'yxatni vaqti-vaqti bilan solishtiring. O'zingiz yuborgan natijalar holatini javoblardan saqlang — ro'yxatni tez-tez so'rab umumiy 120/daqiqa chegarasini sarflamang.</p>
 <h3>5.4 Umumiy talablar</h3>
 <ul>
@@ -374,10 +372,12 @@
     <tr><td>4</td><td>GET</td><td><code>/carrier/orders</code></td><td>Sizdagi buyurtmalar ro'yxati</td><td>—</td></tr>
     <tr><td>5</td><td>GET</td><td><code>/carrier/cashbox</code></td><td>Kurier kassasi: balans va tarix</td><td>—</td></tr>
     <tr><td>6</td><td>POST</td><td><code>/carrier/returns</code></td><td>Bekor posilkalarni qaytarish pochtasiga</td><td>—</td></tr>
+    <tr><td>7</td><td>POST</td><td><code>/carrier/auth/token</code></td><td>Olcha uslubi: Bearer token olish (12.1)</td><td>—</td></tr>
+    <tr><td>8</td><td>POST</td><td><code>/carrier/qrorder/find</code></td><td>Olcha uslubi: QR bo'yicha buyurtma (12.2)</td><td>—</td></tr>
   </tbody>
 </table>
-<p>Har qanday muvaffaqiyatli javob — <strong>HTTP 200</strong> (POST'da ham, 201 emas) va bir xil qobiq: <code class="w">{"statusCode": 200, "message": "…", "data": {…}}</code>. <code>message</code> matniga tayanmang, <code>data</code> ni o'qing. Quyidagi misollarda:</p>
-<pre><code>export BASE_URL="https://test-api.elchipochta.uz"     <span class="c"># BeePost: https://beepost.uz/api/v1</span>
+<p>Har qanday muvaffaqiyatli javob — <strong>HTTP 200</strong> (POST'da ham, 201 emas) va bir xil qobiq: <code class="w">{"statusCode": 200, "message": "…", "data": {…}}</code>. <code>message</code> matniga tayanmang, <code>data</code> ni o'qing. Istisno — 7 va 8: ularning javobi Olcha shaklida (<span class="nowrap">12-bo'lim</span>). Quyidagi misollarda:</p>
+<pre><code>export BASE_URL="https://test-api.elchipochta.uz"     <span class="c"># production: https://api.elchipochta.uz</span>
 export API_KEY="elc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  <span class="c"># namuna, haqiqiy kalit emas</span></code></pre>
 
 <h3>6.1 <span class="method get">GET</span>&nbsp;<code>/carrier/ping</code></h3>
@@ -414,7 +414,7 @@ export API_KEY="elc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  <span class="c"># namuna,
 <table class="small">
   <thead><tr><th style="width:24%">Maydon</th><th style="width:13%">Tur</th><th>Izoh</th></tr></thead>
   <tbody>
-    <tr><td><code>id</code></td><td>string</td><td>Buyurtma id'si (Elchi: raqamli satr <code>"900"</code>; BeePost: UUID). Status yo'lida shu qiymat.</td></tr>
+    <tr><td><code>id</code></td><td>string</td><td>Buyurtma id'si — raqamli satr (<code>"900"</code>). Status yo'lida shu qiymat.</td></tr>
     <tr><td><code>order_number</code></td><td>string | null</td><td>Odam o'qiydigan raqam</td></tr>
     <tr><td><code>qr_token</code></td><td>string | null</td><td>Yorliqdagi QR qiymati</td></tr>
     <tr><td><code>parent_order_id</code></td><td>string | null</td><td>Faqat qisman sotuvdan ajralgan sotilmagan qismda — asl buyurtma id'si</td></tr>
@@ -474,7 +474,7 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   <li><code class="w">{"order": null, "refreshed": false}</code> — holat <strong>qabul qilindi</strong>, faqat qayta o'qilmadi. Qayta yubormang; keyin <code>GET /carrier/orders</code> dan o'qing.</li>
   <li><strong>Multipart:</strong> maydonlar matn; <code>total_price</code> — raqamli satr; <code>old_item_collected</code> — <code>true</code>/<code>false</code>; <code>items</code> — bitta JSON-massiv satri.</li>
   <li><strong>Isbot (<code>proof</code>):</strong> rasm (<code>jpeg</code>, <code>png</code>, <code>webp</code>) yoki PDF — 10 MB gacha; video (<code>mp4</code>, <code>mov</code>, <code>webm</code>) — 50 MB gacha. Fayl turi qismning <code>Content-Type</code>'idan olinadi (boshqa tur, masalan HEIC — 400). Rasm/PDF 10 MB dan katta — 400; har qanday fayl 50 MB dan katta — 413.</li>
-  <li><strong>Isbot qachon majburiy?</strong> Faqat sotuvchi siyosati talab qilsa (Elchi). Buyurtma obyektida bu belgi yo'q — so'rov <code class="w">400 Bu amal uchun rasm yoki video isbot majburiy…</code> bilan qaytsa, faylni biriktirib, <strong>yangi</strong> Idempotency-Key bilan multipart qilib yuboring.</li>
+  <li><strong>Isbot qachon majburiy?</strong> Faqat sotuvchi siyosati talab qilsa. Buyurtma obyektida bu belgi yo'q — so'rov <code class="w">400 Bu amal uchun rasm yoki video isbot majburiy…</code> bilan qaytsa, faylni biriktirib, <strong>yangi</strong> Idempotency-Key bilan multipart qilib yuboring.</li>
   <li>Xatolar: 400, 404, 409 (<code>IDEMPOTENCY_IN_PROGRESS</code>, <code>CARRIER_IDEMPOTENCY_KEY_STALE</code>), 413, 422 (<code>IDEMPOTENCY_KEY_MISMATCH</code>), 503, 504 va umumiylar.</li>
 </ul>
 
@@ -515,7 +515,7 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   <li>Har bir id sizniki bo'lishi kerak, aks holda butun so'rov <code>404</code> (xabarda id'lar sanab o'tiladi). Har biri <code>cancelled</code> holatida bo'lishi kerak, aks holda <code class="w">400 Faqat bekor qilingan (cancelled) posilkani qaytarish mumkin: 901 (sold)</code>.</li>
   <li>Qisman sotuvning sotilmagan qismi (<code>parent_order_id</code> li <code>cancelled</code> buyurtma) ham shu yo'l bilan qaytariladi.</li>
   <li>Natija: sizning ochiq qaytarish pochtangiz (partiya) yaratiladi yoki to'ldiriladi, buyurtmalar <code>cancelled (sent)</code> bo'ladi. Qayta yuborish xavfsiz: allaqachon pochtangizdagi id'lar uchun o'sha <code>post_id</code> qaytadi.</li>
-  <li><strong>Jismoniy topshirish.</strong> <code>post_id</code> — qaytarish partiyasi raqami; posilkalarni topshirishda shu raqamni ayting. Elchi'da posilkalar filialga, BeePost'da BeePost markaziga topshiriladi. Qaytarilgan buyurtmalar shu zahoti <code>GET /carrier/orders</code> ro'yxatidan chiqadi, posilka esa hali sizda — javobdagi <code>order_ids</code> ni topshirguncha o'zingizda saqlang (holatini <code>POST /carrier/scan</code> bilan ko'rish mumkin).</li>
+  <li><strong>Jismoniy topshirish.</strong> <code>post_id</code> — qaytarish partiyasi raqami; posilkalarni topshirishda shu raqamni ayting. Posilkalar filialimizga topshiriladi. Qaytarilgan buyurtmalar shu zahoti <code>GET /carrier/orders</code> ro'yxatidan chiqadi, posilka esa hali sizda — javobdagi <code>order_ids</code> ni topshirguncha o'zingizda saqlang (holatini <code>POST /carrier/scan</code> bilan ko'rish mumkin).</li>
 </ul>
 <pre><code>curl -s -X POST "$BASE_URL/carrier/returns" \
   -H "X-Api-Key: $API_KEY" -H "Content-Type: application/json" \
@@ -532,13 +532,13 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   <thead><tr><th style="width:15%">Amal</th><th style="width:38%">Shart</th><th>Natija</th></tr></thead>
   <tbody>
     <tr><td><code>sold</code></td><td>Holat <code>waiting</code>; almashtirishda <code>old_item_collected: true</code></td><td><code>sold</code> (yoki darhol <code>paid</code>/<code>partly_paid</code>); kassaga yozuv (10)</td></tr>
-    <tr><td><code>partly_sold</code></td><td>Holat <code>waiting</code> + 7.4 qoidalari</td><td>Asl buyurtma yangi summa bilan sotilgan. Dona kamaytirilgan bo'lsa, sotilmagan qism — yangi <code>cancelled</code> buyurtma (<code>parent_order_id</code> bilan); faqat narx tushirilgan bo'lsa (Elchi) — bunday buyurtma yo'q</td></tr>
+    <tr><td><code>partly_sold</code></td><td>Holat <code>waiting</code> + 7.4 qoidalari</td><td>Asl buyurtma yangi summa bilan sotilgan. Dona kamaytirilgan bo'lsa, sotilmagan qism — yangi <code>cancelled</code> buyurtma (<code>parent_order_id</code> bilan); faqat narx tushirilgan bo'lsa — bunday buyurtma yo'q</td></tr>
     <tr><td><code>cancelled</code></td><td>Holat <code>waiting</code>; <code>reason</code> majburiy</td><td><code>cancelled</code>; pul harakati yo'q; posilka sizda → qaytarish (6.7)</td></tr>
   </tbody>
 </table>
 <p><code>waiting</code> bo'lmagan buyurtmaga <code>sold</code>/<code>partly_sold</code>/<code>cancelled</code> — 400; avval skan qiling.</p>
 <div class="note">
-  <p><strong>Xato natija yuborilgan bo'lsa</strong> — darhol biz bilan bog'laning (<code>trace_id</code> bilan); tuzatishni Elchi/BeePost operatori bajaradi. Tuzatishdan keyin shu buyurtmaga yana natija yuborsangiz — <strong>yangi</strong> <span class="nowrap">Idempotency-Key</span> bilan (<span class="nowrap">8-bo'lim</span>).</p>
+  <p><strong>Xato natija yuborilgan bo'lsa</strong> — darhol biz bilan bog'laning (<code>trace_id</code> bilan); tuzatishni Elchi operatori bajaradi. Tuzatishdan keyin shu buyurtmaga yana natija yuborsangiz — <strong>yangi</strong> <span class="nowrap">Idempotency-Key</span> bilan (<span class="nowrap">8-bo'lim</span>).</p>
 </div>
 <h3>7.3 Bekor qilish sabablari (<code>reason</code>)</h3>
 <table class="small keep">
@@ -552,20 +552,21 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
     <tr><td><code>OTHER</code></td><td>Boshqa — <code>comment</code> majburiy (aks holda 400)</td></tr>
   </tbody>
 </table>
+<p>Sabab alohida maydonda saqlanadi (API javobida qaytmaydi); <code>comment</code> buyurtma izohiga qo'shiladi.</p>
 <p><strong>Bugun yetkazib bo'lmadi, lekin yana urinasizmi?</strong> Hech narsa yubormang — buyurtma <code>waiting</code> holatida sizda qoladi. <code>cancelled</code> ni faqat posilka qaytariladigan bo'lsa yuboring.</p>
 <h3>7.4 <code>partly_sold</code> qoidalari</h3>
 <ul>
   <li><code>items</code> da buyurtmaning <strong>har bir qatori</strong> bo'lishi shart (sotilmagan qator — <code>quantity: 0</code>). Har qatordagi son asl sondan oshmasin.</li>
   <li>Kamida bitta dona sotilgan bo'lishi kerak; hech narsa sotilmagan bo'lsa — <code>cancelled</code> yuboring.</li>
-  <li><strong>Dona kamaytirilgan qisman sotuv</strong> (ikkala tizimda): kamida bitta qatorda son kamaytiriladi; sotilmagan donalar alohida <code>cancelled</code> buyurtma bo'lib ajraladi (<code>parent_order_id</code> bilan) va uni qaytarasiz (6.7).</li>
-  <li><strong>Faqat narx tushirish</strong> (faqat Elchi): barcha qatorlar to'liq sonda, <code>total_price</code> buyurtma summasidan kam — mijoz hamma tovarni arzonroq oldi (sotuvchi bilan kelishilgan chegirma; tizim alohida tasdiq so'ramaydi). Bola buyurtma yaratilmaydi, qaytariladigan narsa yo'q. Soni ham, summa ham o'zgarmagan bo'lsa — 400 (<code>sold</code> yuboring). BeePost'da bu holat 400: u yerda kamida bitta qator kamaytirilishi shart, shuning uchun 1 qatorli, 1 donali buyurtmani BeePost'da qisman sotib bo'lmaydi.</li>
+  <li><strong>Dona kamaytirilgan qisman sotuv</strong>: kamida bitta qatorda son kamaytiriladi; sotilmagan donalar alohida <code>cancelled</code> buyurtma bo'lib ajraladi (<code>parent_order_id</code> bilan) va uni qaytarasiz (6.7).</li>
+  <li><strong>Faqat narx tushirish</strong>: barcha qatorlar to'liq sonda, <code>total_price</code> buyurtma summasidan kam — mijoz hamma tovarni arzonroq oldi (sotuvchi bilan kelishilgan chegirma; tizim alohida tasdiq so'ramaydi). Bola buyurtma yaratilmaydi, qaytariladigan narsa yo'q. Soni ham, summa ham o'zgarmagan bo'lsa — 400 (<code>sold</code> yuboring).</li>
   <li><code>total_price</code> — mijoz olib qolgan tovarlar qiymati (onlayn to'langan qism ham ichida), 0 … buyurtma summasi. API tovar narxlarini bermaydi: qiymatni sotuvchi bilan kelishilgan narxdan oling (masalan, sotuvchiga qo'ng'iroq qilib). Mijozdan olinadigan naqd shundan kelib chiqadi: <code class="w">naqd = max(total_price − paid_online_amount, 0)</code>.</li>
 </ul>
 <div class="note keep">
   <p><strong>Misol.</strong> Buyurtma 300&nbsp;000 so'm, onlayn to'langan 100&nbsp;000. Qatorlar: <code>5501</code> — kurtka × 2, <code>5502</code> — shim × 1. Mijoz 1 kurtka va shimni oldi; sotuvchi bilan kelishilgan qiymat: kurtka 100&nbsp;000 + shim 100&nbsp;000 → <code>total_price: 200000</code>, <code class="w">items: [{"order_item_id":"5501","quantity":1}, {"order_item_id":"5502","quantity":1}]</code>. Mijozdan naqd: 200&nbsp;000 − 100&nbsp;000 = 100&nbsp;000. Asl buyurtma sotilgan (200&nbsp;000), sotilmagan kurtka — 100&nbsp;000 so'mlik yangi <code>cancelled</code> buyurtma; uni qaytarishga topshirasiz.</p>
 </div>
 <h3>7.5 Almashtirish buyurtmasi</h3>
-<p><code>replacement</code> to'ldirilgan buyurtma — mijozdagi eski tovar o'rniga yangisi (<code>of_order_id</code> — eski buyurtma). <code>old_item_required: true</code> bo'lsa, eski tovarni olganingizni <code>"old_item_collected": true</code> bilan tasdiqlaysiz; usiz <code>sold</code> (va <code>partly_sold</code>) — 400. Eski tovar bilan nima qilinadi: <strong>Elchi'da</strong> sotuv faqat "eski tovar olindi" belgisini qo'yadi — eski tovar qaytarish pochtasiga avtomatik qo'shilmaydi va uni topshirish uchun API chaqiruvi yo'q; qayerga va qachon topshirishni biz bilan oldindan kelishing. <strong>BeePost'da</strong> eski buyurtma qaytarish pochtangizga avtomatik qo'shiladi — eski tovarni keyingi qaytarish bilan topshirasiz.</p>
+<p><code>replacement</code> to'ldirilgan buyurtma — mijozdagi eski tovar o'rniga yangisi (<code>of_order_id</code> — eski buyurtma). <code>old_item_required: true</code> bo'lsa, eski tovarni olganingizni <code>"old_item_collected": true</code> bilan tasdiqlaysiz; usiz <code>sold</code> (va <code>partly_sold</code>) — 400. Eski tovar bilan nima qilinadi: sotuv faqat "eski tovar olindi" belgisini qo'yadi — eski tovar qaytarish pochtasiga avtomatik qo'shilmaydi va uni topshirish uchun API chaqiruvi yo'q; qayerga va qachon topshirishni biz bilan oldindan kelishing.</p>
 <!-- ============ 8 ============ -->
 <h2 id="s8"><span class="num">8.</span> Idempotency-Key</h2>
 <p>Faqat <code>POST /carrier/orders/{id}/status</code> uchun majburiy. Maqsad — tarmoq uzilganda so'rovni qayta yuborsangiz, amal <strong>ikki marta bajarilmasligi</strong> (masalan, kassaga ikki marta yozilmasligi).</p>
@@ -587,7 +588,7 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
     <tr><td>Ayni kalit, boshqa amal / buyurtma / tana</td><td>422 <code>IDEMPOTENCY_KEY_MISMATCH</code></td><td><strong>Yangi</strong> kalit</td></tr>
     <tr><td>Eski kalit, buyurtma holati o'shandan beri o'zgargan (masalan, natijani operator tuzatgan)</td><td>409 <code>CARRIER_IDEMPOTENCY_KEY_STALE</code>, hech narsa bajarilmaydi</td><td>Holatni tekshiring, <strong>yangi</strong> kalit bilan yuboring</td></tr>
     <tr><td>Kalit yo'q yoki bo'sh</td><td>400 <code>CARRIER_IDEMPOTENCY_KEY_REQUIRED</code></td><td>Sarlavhani qo'shing</td></tr>
-    <tr><td>Kalit 255 belgidan uzun</td><td>400 <code class="w">Idempotency-Key 255 belgidan oshmasligi kerak</code>; <code>code</code> faqat BeePost'da (<code>CARRIER_IDEMPOTENCY_KEY_REQUIRED</code>), Elchi'da yo'q</td><td>UUID ishlating (36 belgi)</td></tr>
+    <tr><td>Kalit 255 belgidan uzun</td><td>400 <code class="w">Idempotency-Key 255 belgidan oshmasligi kerak</code> (<code>code</code> maydonisiz)</td><td>UUID ishlating (36 belgi)</td></tr>
   </tbody>
 </table>
 
@@ -599,15 +600,15 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   "trace_id": "eaff465b-4c89-4721-b7c8-30cf22fb403e" }</code></pre>
 <ul>
   <li>Qarorni <strong>HTTP status + <code>code</code></strong> bo'yicha qabul qiling. <code>message</code> — odam uchun (odatda o'zbekcha; bir nechta validatsiya xatosi bitta satrga qo'shiladi), matni o'zgarishi mumkin. <code>code</code> faqat quyidagi 7 holatda bo'ladi. Boshqa maydonlar (masalan <code>data</code>) kelsa — e'tiborsiz qoldiring.</li>
-  <li><code>trace_id</code> — har bir xatoda. Elchi har javobda <code>x-request-id</code> sarlavhasini qaytaradi; o'zingiz <code>X-Request-Id</code> yuborsangiz (1–64 belgi: harf, raqam, <code>. _ : -</code>), shu qiymat <code>trace_id</code> bo'ladi. BeePost'da sarlavha — <code>X-Trace-Id</code>.</li>
+  <li><code>trace_id</code> — har bir xatoda. Elchi har javobda <code>x-request-id</code> sarlavhasini qaytaradi; o'zingiz <code>X-Request-Id</code> yuborsangiz (1–64 belgi: harf, raqam, <code>. _ : -</code>), shu qiymat <code>trace_id</code> bo'ladi.</li>
   <li>502/504 va ba'zi 413 javoblari proksidan kelishi mumkin — tanasi JSON bo'lmasligi mumkin. Statusga qarab ishlang.</li>
 </ul>
 <table class="small">
   <thead><tr><th style="width:7%">HTTP</th><th style="width:34%">code</th><th style="width:30%">Ma'nosi</th><th>Nima qilish kerak</th></tr></thead>
   <tbody>
-    <tr><td>400</td><td>—</td><td>Maydon xato yoki ortiqcha, id/sana noto'g'ri, holat ruxsat bermaydi, isbot kerak yoki yaroqsiz; Elchi'da Idempotency-Key &gt;255 belgi</td><td>Tuzating; status uchun <strong>yangi</strong> Idempotency-Key bilan</td></tr>
-    <tr><td>400</td><td><code>CARRIER_IDEMPOTENCY_KEY_REQUIRED</code></td><td>Idempotency-Key yo'q yoki bo'sh (BeePost'da &gt;255 ham)</td><td>Sarlavhani qo'shing (UUID)</td></tr>
-    <tr><td>401</td><td>—</td><td>API kaliti yo'q yoki yaroqsiz</td><td>API kalitini tekshiring; takrorlamang</td></tr>
+    <tr><td>400</td><td>—</td><td>Maydon xato yoki ortiqcha, id/sana noto'g'ri, holat ruxsat bermaydi, isbot kerak yoki yaroqsiz; Idempotency-Key &gt;255 belgi</td><td>Tuzating; status uchun <strong>yangi</strong> Idempotency-Key bilan</td></tr>
+    <tr><td>400</td><td><code>CARRIER_IDEMPOTENCY_KEY_REQUIRED</code></td><td>Idempotency-Key yo'q yoki bo'sh</td><td>Sarlavhani qo'shing (UUID)</td></tr>
+    <tr><td>401</td><td>—</td><td>API kaliti (yoki Bearer token) yo'q yoki yaroqsiz</td><td>API kalitini tekshiring; takrorlamang. Token muddati o'tgan bo'lsa — yangi token oling (12.1)</td></tr>
     <tr><td>403</td><td>—</td><td>Akkaunt to'xtatilgan yoki IP ruxsat etilmagan</td><td>Biz bilan bog'laning</td></tr>
     <tr><td>403</td><td><code>CARRIER_COURIER_INACTIVE</code></td><td>Bog'langan kurier faol emas</td><td>Biz bilan bog'laning</td></tr>
     <tr><td>404</td><td>—</td><td>Buyurtma topilmadi yoki sizga biriktirilmagan</td><td>QR/id'ni tekshiring; takrorlamang</td></tr>
@@ -631,9 +632,9 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   <li><strong><code>sold</code>:</strong> kassangizga <code>income</code> qatori (<code>source_type: sell</code>) = <code>cod_amount − xizmat haqingiz</code> — bu siz bizga topshirishingiz kerak bo'lgan summa. Xizmat haqi (tarif) shartnoma bo'yicha (markazga yoki manzilga yetkazish, hududga qarab farq qilishi mumkin). Agar naqd tarifdan kam bo'lsa (masalan, oldindan to'langan buyurtma) — <code>expense</code> qatori (<code>tarif − naqd</code>): bu safar biz sizga qarzdormiz.</li>
   <li><strong><code>partly_sold</code>:</strong> xuddi shunday, naqd = <code>max(total_price − paid_online_amount, 0)</code>. Sotilmagan qism uchun pul yo'q.</li>
   <li><strong><code>cancelled</code>:</strong> pul harakati yo'q.</li>
-  <li><strong>Xato natija:</strong> xato natija yuborilgan bo'lsa — darhol biz bilan bog'laning (<code>trace_id</code> bilan); tuzatishni Elchi/BeePost operatori bajaradi. Elchi'da operator sotuvni tuzatsa, kassada teskari yozuv paydo bo'ladi — <code>source_type: correction</code>.</li>
-  <li><strong>Naqd topshirish:</strong> xodimimiz qabul qiladi → <code>expense</code> qatori, <code>source_type: courier_payment</code>. Elchi'da u eng eski sotuvlarni birinchi yopadi.</li>
-  <li>Elchi'da kassa yozuvi status javobidan <strong>bir necha soniya keyin</strong> paydo bo'ladi.</li>
+  <li><strong>Xato natija:</strong> xato natija yuborilgan bo'lsa — darhol biz bilan bog'laning (<code>trace_id</code> bilan); tuzatishni Elchi operatori bajaradi. Operator sotuvni tuzatsa, kassada teskari yozuv paydo bo'ladi — <code>source_type: correction</code>.</li>
+  <li><strong>Naqd topshirish:</strong> xodimimiz qabul qiladi → <code>expense</code> qatori, <code>source_type: courier_payment</code>. U eng eski sotuvlarni birinchi yopadi.</li>
+  <li>Kassa yozuvi status javobidan <strong>bir necha soniya keyin</strong> paydo bo'ladi.</li>
 </ul>
 <h3><code>GET /carrier/cashbox</code> javobini o'qish</h3>
 <table class="small keep">
@@ -660,7 +661,7 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
   <tbody>
     <tr><td>1</td><td><code>GET /carrier/ping</code> to'g'ri kalit bilan</td><td>200, <code>authenticated: true</code>, akkaunt nomi</td></tr>
     <tr><td>2</td><td>Kalitsiz va noto'g'ri kalit bilan</td><td>401</td></tr>
-    <tr><td>3</td><td>Begona yoki o'ylab topilgan QR bilan skan</td><td>404; manba noma'lum bo'lsa ilovangiz ikkinchi tizimni ham tekshiradi, keyin "posilka topilmadi" deb ko'rsatadi</td></tr>
+    <tr><td>3</td><td>Begona yoki o'ylab topilgan QR bilan skan</td><td>404; ilovangiz "posilka topilmadi" deb ko'rsatadi</td></tr>
     <tr><td>4</td><td>Test QR bilan skan, so'ng yana skan</td><td><code>received: true</code>, <code>waiting</code>; keyin <code>received: false</code></td></tr>
     <tr><td>5</td><td><code>sold</code> yangi Idempotency-Key bilan</td><td>200, <code>sold</code>/<code>paid</code>; bir necha soniyadan keyin kassada <code>sell</code></td></tr>
     <tr><td>6</td><td><span class="nowrap">5-so'rovni</span> aynan shu kalit va tana bilan takrorlash</td><td>200, kassada ikkinchi yozuv <strong>yo'q</strong></td></tr>
@@ -672,53 +673,107 @@ curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
     <tr><td>12</td><td>Isbot bilan multipart (rasm ≤10 MB); ruxsat etilmagan tur (masalan HEIC)</td><td>200; HEIC — 400</td></tr>
     <tr><td>13</td><td>Timeout imitatsiyasi: status so'rovini javobni kutmasdan ayni kalit bilan qayta yuborish</td><td>Amal bir marta bajariladi (200 yoki 409 <code>IDEMPOTENCY_IN_PROGRESS</code> → kutib qayta)</td></tr>
     <tr><td>14</td><td>1 daqiqada 120 dan ortiq so'rov (masalan <code>ping</code>)</td><td>429; ilovangiz <code>Retry-After</code> ni kutib davom etadi</td></tr>
-    <tr><td>15</td><td><code>partly_sold</code>, barcha qatorlar to'liq sonda: avval <code>total_price</code> = buyurtma summasi, so'ng yangi kalit bilan kamroq summa</td><td>400; keyin 200, <code>parent_order_id</code> li buyurtma <strong>yo'q</strong> (Elchi; BeePost'da ikkalasi ham 400)</td></tr>
+    <tr><td>15</td><td><code>partly_sold</code>, barcha qatorlar to'liq sonda: avval <code>total_price</code> = buyurtma summasi, so'ng yangi kalit bilan kamroq summa</td><td>400; keyin 200, <code>parent_order_id</code> li buyurtma <strong>yo'q</strong></td></tr>
     <tr><td>16</td><td>Almashtirish buyurtmasi: <code>sold</code> <code>old_item_collected</code>'siz, so'ng yangi kalit va <code>"old_item_collected": true</code> bilan</td><td>400, keyin 200</td></tr>
     <tr><td>17</td><td>Isbot talab qiladigan sotuvchining posilkasi: JSON bilan <code>sold</code>, so'ng yangi kalit va multipart <code>proof</code> bilan</td><td>400 (isbot majburiy), keyin 200</td></tr>
+    <tr><td>18</td><td><em>Olcha uslubidan foydalansangiz:</em> <code>auth/token</code> (to'g'ri va noto'g'ri parol), so'ng token bilan <code>qrorder/find</code> va <code>orders/{id}/status</code></td><td>200 <code>access_token</code>, noto'g'ri parol — 401; <code>success: true</code>, posilka <code>waiting</code>; status — 200</td></tr>
   </tbody>
 </table>
 <h3>Production'ga chiqish</h3>
 <ol class="steps">
   <li>Natijalarni ushbu hujjatni sizga yuborgan mas'ul xodim (yoki shartnomadagi texnik aloqa) orqali yuboring: ssenariy raqami, vaqt (UTC), buyurtma id, <code>trace_id</code> (muvaffaqiyatli javobda — <code>x-request-id</code> sarlavhasidan yoki o'zingiz yuborgan <code>X-Request-Id</code>).</li>
   <li>Egress IP manzillaringizni (yoki ro'yxatsiz ishlashga rozilikni) tasdiqlang.</li>
-  <li>Biz production kalitlarini beramiz: Elchi — <code>elc_…</code>, BeePost — <code>bpc_…</code> (har biri bir marta ko'rsatiladi).</li>
-  <li>Konfiguratsiya har tizim uchun alohida: <code>BASE_URL</code> (<a class="url" href="https://api.elchipochta.uz">https://api.elchipochta.uz</a> yoki <a class="url" href="https://beepost.uz/api/v1">https://beepost.uz/api/v1</a>) va kalit.</li>
-  <li><strong>BeePost tekshiruvi</strong> (test muhiti yo'q — production'da, kelishilgan sinov posilkalarida): <code>ping</code> (<code>bpc_</code> kaliti bilan) → <code>scan</code> va <code>sold</code> UUID id bilan → bitta <code>partly_sold</code> (kamida bitta qator kamaytirilgan) → <code>cashbox</code>. BeePost farqlari — <span class="nowrap">12-bo'lim</span>.</li>
+  <li>Biz production kalitini beramiz: <code>elc_…</code> (bir marta ko'rsatiladi).</li>
+  <li>Konfiguratsiya: <code>BASE_URL</code> = <a class="url" href="https://api.elchipochta.uz">https://api.elchipochta.uz</a> va production kaliti.</li>
   <li>Birinchi kun: <code>ping</code> → kichik hajm → 429/5xx va kassani <code>order_id</code> bo'yicha kuzatish.</li>
   <li>Kalitni almashtirish kerak bo'lsa — vaqtni oldindan kelishamiz (eski kalit darhol o'chadi).</li>
 </ol>
 
 <!-- ============ 12 ============ -->
-<h2 id="s12"><span class="num">12.</span> Ilova: BeePost farqlari</h2>
-<p>Endpointlar, maydonlar, xato kodlari va Idempotency-Key qoidalari deyarli bir xil. Integratsiyada hisobga olish kerak bo'lgan farqlar:</p>
-<table class="small">
-  <thead><tr><th style="width:20%">Mavzu</th><th style="width:30%">Elchi</th><th>BeePost</th></tr></thead>
+<h2 id="s12"><span class="num">12.</span> Ilova: Olcha uslubidagi kirish</h2>
+<p>Tizimingiz <a href="https://api.olchamarket.uz/swagger">Olcha API</a> bilan ishlasa (<code>POST /auth/token</code> → JWT, so'ng <code>POST /qrorder/find</code>), Elchi bilan <strong>o'sha kod</strong> ishlaydi — baza manzilini almashtirish kifoya. Yo'l, metod, maydonlar, javob va xato shakli Olcha'dagi bilan bir xil. Bu yo'l ixtiyoriy: <code>X-Api-Key</code> bilan ishlash (5–6-bo'limlar) avvalgidek qoladi.</p>
+<table class="keep">
+  <thead><tr><th style="width:24%"></th><th style="width:32%">Olcha</th><th>Elchi</th></tr></thead>
   <tbody>
-    <tr><td>Base URL, yo'l</td><td><a class="url" href="https://api.elchipochta.uz">https://api.elchipochta.uz</a> + <code>/carrier/...</code></td><td><a class="url" href="https://beepost.uz/api/v1">https://beepost.uz/api/v1</a> + <code>/carrier/...</code>; <code>/api/v1/carrier/</code> gacha faqat kichik harf (aks holda 404)</td></tr>
-    <tr><td>Swagger</td><td><code>/carrier-docs</code>; test muhit bor; kirish matnida test va production manzillari</td><td><a class="url" href="https://beepost.uz/api/v1/carrier-docs">https://beepost.uz/api/v1/carrier-docs</a>; test muhit yo'q — "Try it out" <strong>production</strong>'ga yuboradi; matndagi <code>&lt;beepost-domain&gt;</code> = <code>beepost.uz</code></td></tr>
-    <tr><td>Kalit</td><td><code>elc_</code> + 64 hex</td><td><code>bpc_</code> + 64 hex</td></tr>
-    <tr><td>Id'lar</td><td>Raqamli satr (<code>"900"</code>)</td><td>UUID satr; UUID bo'lmagan id — 400</td></tr>
-    <tr><td><code>paid_online_amount</code></td><td>0 yoki undan katta</td><td>Doim 0 → <code>cod_amount = total_price</code></td></tr>
-    <tr><td>Skan qabul qiladi</td><td><code>on the road</code>, <code>waiting_customer</code></td><td>Faqat <code>on the road</code></td></tr>
-    <tr><td>QR moslashtirish</td><td>Aniq qiymat</td><td>Kichik harfga o'tkaziladi, rus klaviaturasidagi harflar lotinga; asl qiymat ham sinaladi</td></tr>
-    <tr><td>Isbot (<code>proof</code>)</td><td>Sotuvchi siyosati talab qilsa majburiy</td><td>Hech qachon majburiy emas; tekshiriladi, saqlanmaydi</td></tr>
-    <tr><td><code>partly_sold</code></td><td>Almashtirishda ham mumkin (<code>old_item_collected: true</code>)</td><td>Almashtirish, tovar qatorlari yo'q yoki bir mahsulot bir necha qatorda bo'lgan buyurtmada — 400; <code>total_price</code> butun son</td></tr>
-    <tr><td><code>partly_sold</code> faqat narx tushirib (dona kamaytirmasdan)</td><td>Mumkin: bola buyurtma yo'q (7.4)</td><td>400 — kamida bitta qator kamaytirilishi shart</td></tr>
-    <tr><td>Almashtirish sotilganda</td><td>Faqat "eski tovar olindi" belgisi; qaytarish pochtasiga qo'shilmaydi, API chaqiruvi yo'q — topshirishni biz bilan kelishing (7.5)</td><td>Eski buyurtma qaytarish pochtangizga avtomatik qo'shiladi — eski tovarni keyingi qaytarish bilan topshiring</td></tr>
-    <tr><td><code>cancelled</code> sababi</td><td>Alohida sabab maydonida saqlanadi (API javobida yo'q); <code>comment</code> buyurtma izohiga qo'shiladi</td><td><code>order.comment</code> ga <code>[REASON] izoh</code> ko'rinishida qo'shiladi</td></tr>
-    <tr><td>Idempotency-Key &gt;255 belgi</td><td>400, <code>code</code> yo'q</td><td>400 <code>CARRIER_IDEMPOTENCY_KEY_REQUIRED</code></td></tr>
-    <tr><td>Holatlar</td><td><code>waiting_customer</code>, <code>returned_to_market</code> bor</td><td>Ular yo'q (filtrda — bo'sh natija); qaytarilgan posilka <code>cancelled (sent)</code> → <code>closed</code></td></tr>
-    <tr><td>Kassa yozuvi</td><td>Bir necha soniyadan keyin</td><td>Darhol (status bilan bir tranzaksiyada); <code>cancel</code> qatori yozilmaydi</td></tr>
-    <tr><td>Naqd topshirish</td><td>Eng eski sotuvlarni yopadi</td><td>Buyurtmalarga bog'lanmaydi, faqat balansni kamaytiradi</td></tr>
-    <tr><td>Rate limit</td><td>IP: 120/daqiqa har endpointga</td><td>IP: 600/daqiqa barcha endpointlarga</td></tr>
-    <tr><td>Trace sarlavhasi</td><td><code>x-request-id</code> (o'zingiz <code>X-Request-Id</code> berishingiz mumkin)</td><td><code>X-Trace-Id</code></td></tr>
-    <tr><td>Validatsiya xabari</td><td>O'zbekcha, ". " bilan birlashtirilgan</td><td>Inglizcha (masalan <code class="w">property extraCost should not exist</code>), "; " bilan</td></tr>
-    <tr><td>5xx</td><td>504 — JSON (ilovadan)</td><td>GET endpointlarda kutilmagan xato — 500; 502/504 faqat proksidan (HTML tana)</td></tr>
-    <tr><td>Qaytarish (<code>/carrier/returns</code>)</td><td>Ichki xizmat ~20 s da javob bermasa — 504 (ayni so'rovni qayta yuboring, xavfsiz)</td><td>Bitta akkaunt so'rovlari navbat bilan bajariladi; uzoq kutilsa — 503 (ayni so'rovni qayta yuboring)</td></tr>
-    <tr><td><code>orders</code> filtri</td><td>Bir xil (6.5): qaytarilganlar ro'yxatda ko'rinmaydi, <code>cancelled (sent)</code> deyarli doim bo'sh</td><td>Bir xil; <code>cancelled (sent)</code> va <code>closed</code> deyarli doim bo'sh</td></tr>
+    <tr><td>Baza manzili</td><td><span class="url">https://api.olchamarket.uz</span></td><td><code>BASE_URL/carrier</code>, masalan <span class="url">https://api.elchipochta.uz/carrier</span></td></tr>
+    <tr><td>Token</td><td><code>POST /auth/token</code></td><td><code>POST /carrier/auth/token</code></td></tr>
+    <tr><td>QR bo'yicha buyurtma</td><td><code>POST /qrorder/find</code></td><td><code>POST /carrier/qrorder/find</code></td></tr>
   </tbody>
 </table>
-<p style="color:var(--muted);font-size:9pt;margin-top:8pt">Savollar va kirish ma'lumotlari bo'yicha: ushbu hujjatni sizga yuborgan mas'ul xodim (yoki shartnomadagi texnik aloqa) orqali murojaat qiling. Hujjat versiyasi 1.1, 2026-11-14.</p>
+<p>Natija yuborish, qaytarish, ro'yxat va kassa uchun Olcha'da endpoint yo'q — ular uchun <span class="nowrap">6-bo'limdagi</span> yo'llardan foydalaning. Ular ham shu token bilan ishlaydi: <code>X-Api-Key</code> o'rniga <code>Authorization: Bearer &lt;access_token&gt;</code>. Swagger'da (<span class="nowrap">4-bo'lim</span>) <strong>Authorize</strong> oynasidagi <code>carrier-bearer</code> maydoniga tokenning o'zini qo'ying.</p>
+
+<h3>12.1 <span class="method">POST</span>&nbsp;<code>/carrier/auth/token</code></h3>
+<p>Kirishsiz (kalit sarlavhasi kerak emas). Tana — JSON yoki <code>application/x-www-form-urlencoded</code>:</p>
+<table class="small keep">
+  <thead><tr><th style="width:18%">Maydon</th><th style="width:12%">Tur</th><th>Qoida</th></tr></thead>
+  <tbody>
+    <tr><td><code>username</code></td><td>string</td><td>Majburiy: carrier akkaunt <strong>ID raqami</strong> — kalit bilan birga beramiz (<span class="nowrap">3-bo'lim</span>)</td></tr>
+    <tr><td><code>password</code></td><td>string</td><td>Majburiy: API kalitingiz (<code>elc_…</code>)</td></tr>
+  </tbody>
+</table>
+<pre><code>curl -s -X POST "$BASE_URL/carrier/auth/token" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"3","password":"elc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}'
+
+{ "access_token": "eyJhbGciOi…", "token_type": "Bearer", "expires_in": 3600 }</code></pre>
+<ul>
+  <li>Javob Olcha shaklida — <code>statusCode</code>/<code>data</code> qobig'isiz. <code>expires_in</code> — soniya: token <strong>1 soat</strong> amal qiladi. Tokenni saqlab, qayta ishlating; muddati tugaganda yoki 401 olganda yangisini oling — har so'rovdan oldin token so'ramang.</li>
+  <li>Login yoki parol noto'g'ri — <code>401</code> <code class="w">{"name":"Unauthorized","message":"Invalid username or password.","code":0,"status":401}</code>. Akkaunt yoki kurier faol emas, IP ruxsat etilmagan — <code>403</code> (shu shaklda).</li>
+  <li>Limit: bitta IP'dan daqiqada 20 ta token so'rovi (<span class="nowrap">5.3-bo'lim</span>).</li>
+  <li>Kalit almashtirilsa yoki akkaunt to'xtatilsa, oldin olingan tokenlar <strong>darhol</strong> ishlamay qoladi — 1 soat kutilmaydi.</li>
+  <li>Token ham kalit kabi maxfiy: faqat serveringizda saqlang (<span class="nowrap">5.1-bo'lim</span>).</li>
+</ul>
+
+<h3>12.2 <span class="method">POST</span>&nbsp;<code>/carrier/qrorder/find</code></h3>
+<p>Sarlavha <code>Authorization: Bearer &lt;access_token&gt;</code> (yoki <code>X-Api-Key</code>). Tana: <code>qr_code</code> — satr, majburiy: posilka yorlig'idagi QR qiymati (<code>/carrier/scan</code> dagi <code>qr_token</code> bilan bir xil).</p>
+<ul>
+  <li>Faqat <strong>yetkazilmoqda</strong> holatidagi (<code>on the road</code>, <code>waiting_customer</code>, <code>waiting</code>) va sizga biriktirilgan buyurtma qaytadi.</li>
+  <li><code>on the road</code> yoki <code>waiting_customer</code> posilka shu chaqiruvda <strong>sizga qabul qilinadi</strong> (<code>waiting</code>) — <code>POST /carrier/scan</code> bilan bir xil (6.2). Qayta chaqirish xavfsiz.</li>
+</ul>
+<pre><code>curl -s -X POST "$BASE_URL/carrier/qrorder/find" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"qr_code":"a1b2c3d4e5"}'</code></pre>
+<pre><code>{ "success": true, "msg": "Buyurtma topildi",
+  "data": { "id": 900, "full_name": "Alisher Navoiy",
+    "phone": "998901234567", "additional_phone": "998909876543",
+    "region": 1726, "district": 1726294,
+    "address": "Chilonzor 10-kvartal, 5-uy", "comment": "Qo'ng'iroq qiling",
+    "delivery_price": 0, "total_price": 250000, "total_count": 2,
+    "created_at": "2026-11-27 14:30:00",
+    "items": "Kurtka x 2 = 250 000 so'm",
+    "status": "waiting", "paid_online_amount": 0 } }</code></pre>
+<table class="small">
+  <thead><tr><th style="width:26%">Maydon</th><th>Izoh</th></tr></thead>
+  <tbody>
+    <tr><td><code>id</code></td><td>Buyurtma id'si (son). Natijani <code>POST /carrier/orders/{id}/status</code> ga shu id bilan yuboring</td></tr>
+    <tr><td><code>full_name</code></td><td>Mijoz ismi</td></tr>
+    <tr><td><code>phone</code></td><td>Mijoz telefoni — faqat raqam, <code>998</code> bilan</td></tr>
+    <tr><td><code>additional_phone</code>, <code>address</code>, <code>comment</code></td><td>Qo'shimcha telefon, manzil, izoh; yo'q bo'lsa bo'sh satr</td></tr>
+    <tr><td><code>region</code>, <code>district</code></td><td>Viloyat (4 xona) va tuman (7 xona) <strong>SOATO kodi</strong>, son; noma'lum bo'lsa <code>null</code></td></tr>
+    <tr><td><code>delivery_price</code></td><td>Doim <code>0</code>: yetkazish haqi <code>total_price</code> ichida</td></tr>
+    <tr><td><code>total_price</code></td><td><strong>Mijozdan olinadigan naqd</strong> (onlayn to'langan qism ayirilgan) — 6.3 dagi <code>cod_amount</code></td></tr>
+    <tr><td><code>total_count</code></td><td>Mahsulotlar soni (jami)</td></tr>
+    <tr><td><code>created_at</code></td><td>Buyurtma yaratilgan vaqt, Toshkent: <code>YYYY-MM-DD HH:mm:ss</code></td></tr>
+    <tr><td><code>items</code></td><td>Mahsulotlar matni: bitta mahsulot — <code class="w">Nomi x 2 = 250 000 so'm</code>, bir nechta — <code class="w">A x 1, B x 2</code>. <code>partly_sold</code> uchun qator id'lari (<code>items[].id</code>) kerak bo'lsa — <code>POST /carrier/scan</code> yoki <code>GET /carrier/orders</code> (6.3)</td></tr>
+    <tr><td><code>status</code>, <code>paid_online_amount</code></td><td><em>Elchi qo'shimchasi</em> — buyurtma holati (7.1) va oldindan onlayn to'langan qism</td></tr>
+  </tbody>
+</table>
+<table class="small keep">
+  <thead><tr><th style="width:42%">Xato holati</th><th style="width:10%">HTTP</th><th>Tana</th></tr></thead>
+  <tbody>
+    <tr><td>Topilmadi yoki sizga biriktirilmagan</td><td>200</td><td><code class="w">{"success":false,"msg":"…","status":404}</code></td></tr>
+    <tr><td>Yetkazilmoqda holatida emas (sotilgan, bekor qilingan…) yoki <code>qr_code</code> yo'q</td><td>200</td><td><code class="w">{"success":false,"msg":"…","status":400}</code></td></tr>
+    <tr><td>Token yo'q, yaroqsiz yoki muddati o'tgan</td><td>401</td><td><code class="w">{"name":"Unauthorized","message":"…","code":0,"status":401}</code></td></tr>
+    <tr><td>Ruxsat yo'q (akkaunt yoki kurier faol emas, IP)</td><td>403</td><td><code class="w">{"name":"Forbidden",…,"status":403}</code></td></tr>
+    <tr><td>Vaqtinchalik xato</td><td>503 / 504</td><td><code class="w">{"success":false,"msg":"…","status":503}</code> — qayta urining</td></tr>
+  </tbody>
+</table>
+<p>Olcha'dagidek, "topilmadi" va holat xatolari <strong>HTTP 200</strong> bilan keladi — natijani <code>success</code> va <code>status</code> maydonlaridan o'qing. Elchi qo'shimchasi: xato tanasida (bo'lsa) <code>error_code</code> — mashina kodi (<span class="nowrap">9-bo'lim</span>; Olcha'ning <code>code</code> maydoni doim <code>0</code>) va <code>trace_id</code>.</p>
+<pre><code><span class="c"># keyingi qadam — natija (6.4), o'sha token bilan</span>
+curl -s -X POST "$BASE_URL/carrier/orders/900/status" \
+  -H "Authorization: Bearer $TOKEN" -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" -d '{"status":"sold"}'</code></pre>
+<p style="color:var(--muted);font-size:9pt;margin-top:8pt">Savollar va kirish ma'lumotlari bo'yicha: ushbu hujjatni sizga yuborgan mas'ul xodim (yoki shartnomadagi texnik aloqa) orqali murojaat qiling. Hujjat versiyasi 1.2, 2026-11-27.</p>
 </section>
 
 </main>
