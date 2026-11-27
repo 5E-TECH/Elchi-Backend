@@ -71,13 +71,18 @@ describe('ApiGatewayController', () => {
         },
       }),
     );
+    // Filial kassalari bitta batch so'rovda (`finance.cashbox.find_by_users`), har menejerga alohida emas.
     financeClient.send.mockReturnValueOnce(
       of({
         data: {
-          id: 'cashbox-16',
-          user_id: '16',
-          cashbox_type: 'branch',
-          balance: 0,
+          items: [
+            {
+              id: 'cashbox-16',
+              user_id: '16',
+              cashbox_type: 'branch',
+              balance: 0,
+            },
+          ],
         },
       }),
     );
@@ -108,6 +113,11 @@ describe('ApiGatewayController', () => {
         cashbox: expect.objectContaining({ user_id: '16' }),
       }),
     ]);
+    expect(financeClient.send).toHaveBeenCalledTimes(1);
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.cashbox.find_by_users' },
+      { user_ids: ['16'], cashbox_type: 'branch' },
+    );
   });
 
   // «Pul qabul qilish» qatori: filialda bir nechta menejer bo'lsa ham summa ko'rinadi.
@@ -299,7 +309,7 @@ describe('ApiGatewayController', () => {
       expect(financeClient.send).not.toHaveBeenCalled();
     });
 
-    it("bo'sh sahifa meta'si identity'dagi kabi normallashtiriladi (sukut: page 1, limit 10; limit ≤ 100)", async () => {
+    it("bo'sh sahifa meta'si identity'dagi kabi normallashtiriladi (sukut: page 1, limit 10; limit ≤ 10 000)", async () => {
       mockBranchUsers([]);
 
       const defaults = await apiGatewayController.getCouriers(
@@ -319,7 +329,7 @@ describe('ApiGatewayController', () => {
         undefined,
         undefined,
         '1',
-        '500',
+        '20000',
         registratorReq,
       );
 
@@ -329,7 +339,7 @@ describe('ApiGatewayController', () => {
         total: 0,
         totalPages: 1,
       });
-      expect(capped.data.meta.limit).toBe(100);
+      expect(capped.data.meta.limit).toBe(10000);
       expect(identityClient.send).not.toHaveBeenCalled();
     });
 

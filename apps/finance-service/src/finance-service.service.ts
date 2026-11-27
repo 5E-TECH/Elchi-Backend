@@ -99,6 +99,7 @@ import {
   formatMoneyLimit,
   isNearCents,
 } from '@app/common/finance/money';
+import { LOOKUP_LIST_MAX_LIMIT } from '@app/common/pagination/list-limit';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { randomUUID } from 'node:crypto';
@@ -2187,6 +2188,52 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         200,
         'Market balances',
       );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /**
+   * Ko'p foydalanuvchining bitta turdagi kassasi bir so'rovda: `{ items: Cashbox[] }` (kassasi yo'q id — ro'yxatda
+   * yo'q). Gateway `GET /markets` (SA/admin) va `GET /couriers` ro'yxatidagi har qatorga alohida
+   * `finance.cashbox.find_by_user` o'rniga (tanlash ro'yxati endi 100 dan ortiq — `LOOKUP_LIST_MAX_LIMIT`). Faqat
+   * o'qiydi; ≤ `LOOKUP_LIST_MAX_LIMIT` id, `In()` 1000 talik bo'laklarda.
+   */
+  async findCashboxesByUsers(data: {
+    user_ids?: unknown;
+    cashbox_type?: unknown;
+  }) {
+    try {
+      const raw = Array.isArray(data?.user_ids) ? data.user_ids : [];
+      if (raw.length > LOOKUP_LIST_MAX_LIMIT) {
+        throw new BadRequestException("user_ids ro'yxati juda uzun");
+      }
+      const type =
+        typeof data?.cashbox_type === 'string' ? data.cashbox_type : '';
+      if (!(Object.values(Cashbox_type) as string[]).includes(type)) {
+        throw new BadRequestException("cashbox_type noto'g'ri");
+      }
+      const ids = [
+        ...new Set(
+          raw
+            .map((id) => String(id ?? '').trim())
+            .filter((id) => /^\d{1,18}$/.test(id))
+            .map((id) => FinanceServiceService.canonicalId(id)),
+        ),
+      ];
+      const items: Cashbox[] = [];
+      for (let at = 0; at < ids.length; at += 1000) {
+        items.push(
+          ...(await this.cashboxRepo.find({
+            where: {
+              user_id: In(ids.slice(at, at + 1000)),
+              cashbox_type: type as Cashbox_type,
+              isDeleted: false,
+            },
+          })),
+        );
+      }
+      return this.successRes({ items }, 200, 'Cashboxes found');
     } catch (error) {
       this.toRpcError(error);
     }

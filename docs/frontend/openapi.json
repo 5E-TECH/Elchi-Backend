@@ -15532,6 +15532,15 @@
               "example": 10,
               "type": "number"
             }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Integratsiya nomi yoki slug bo‘yicha qidiruv (ILIKE), sahifalashdan oldin",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

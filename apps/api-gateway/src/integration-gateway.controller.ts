@@ -199,6 +199,13 @@ export class IntegrationGatewayController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description:
+      'Integratsiya nomi yoki slug bo‘yicha qidiruv (ILIKE), sahifalashdan oldin',
+  })
   findAll(
     @Query('is_active') is_active?: string,
     @Query('status') status?: string,
@@ -210,6 +217,7 @@ export class IntegrationGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user?: { sub?: string; roles?: string[] } },
+    @Query('search') search?: string,
   ) {
     if (!canSeeIntegrationConfig(req?.user?.roles)) {
       return this.integrationClient
@@ -246,6 +254,9 @@ export class IntegrationGatewayController {
             to_date,
             page: page ? Number(page) : undefined,
             limit: limit ? Number(limit) : undefined,
+            ...(typeof search === 'string' && search.trim()
+              ? { search: search.trim() }
+              : {}),
           },
         },
       )

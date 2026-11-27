@@ -23,6 +23,7 @@ import {
   Status,
   transferBatchCancelBlock,
 } from '@app/common';
+import { clampListLimit } from '@app/common/pagination/list-limit';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -830,7 +831,8 @@ export class BranchServiceService implements OnModuleInit {
 
   private normalizePagination(page?: number, limit?: number) {
     const safePage = Number(page) > 0 ? Number(page) : 1;
-    const safeLimit = Number(limit) > 0 ? Math.min(Number(limit), 100) : 10;
+    // Filiallar tanlash ro'yxatlari (`limit=1000`) — ilgari 100 bilan kesilardi; endi `LOOKUP_LIST_MAX_LIMIT` gacha.
+    const safeLimit = clampListLimit(limit, 10);
     return {
       page: safePage,
       limit: safeLimit,

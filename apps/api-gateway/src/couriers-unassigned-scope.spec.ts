@@ -117,19 +117,19 @@ describe('GET /couriers — biriktirilmagan so`rovchi: bo`sh sahifa (2026-11-04)
     },
   );
 
-  it('bo`sh sahifa meta`si so`ralgan page/limit bilan (limit ≤ 100)', async () => {
+  it('bo`sh sahifa meta`si so`ralgan page/limit bilan (limit ≤ 10 000 — LOOKUP_LIST_MAX_LIMIT)', async () => {
     branchReplies(null);
 
     const res = await listCouriers(
       { sub: '500', roles: ['manager'] },
       undefined,
       '3',
-      '500',
+      '20000',
     );
 
     expect(res.data.meta).toEqual({
       page: 3,
-      limit: 100,
+      limit: 10000,
       total: 0,
       totalPages: 1,
     });

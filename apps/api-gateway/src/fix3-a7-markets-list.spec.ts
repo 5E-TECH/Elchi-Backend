@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { ApiGatewayController } from './api-gateway.controller';
 import { ROLES_KEY } from './auth/roles.decorator';
 
@@ -43,8 +43,22 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
 
   beforeEach(async () => {
     identityClient = { send: jest.fn(() => of(listResponse())) };
+    // Kassalar bitta batch so'rovda (`finance.cashbox.find_by_users`); eski `find_by_user` — faqat zaxira yo'l.
     financeClient = {
-      send: jest.fn(() => of({ data: { id: 'cb', balance: 125000 } })),
+      send: jest.fn((pattern: { cmd: string }, payload: any) =>
+        pattern.cmd === 'finance.cashbox.find_by_users'
+          ? of({
+              data: {
+                items: (payload.user_ids as string[]).map((id) => ({
+                  id: `cb${id}`,
+                  user_id: id,
+                  cashbox_type: payload.cashbox_type,
+                  balance: 125000,
+                })),
+              },
+            })
+          : of({ data: { id: 'cb', balance: 125000 } }),
+      ),
     };
 
     const app: TestingModule = await Test.createTestingModule({
@@ -72,12 +86,54 @@ describe('FIX3 A7 — GET /markets maydonlari rolga qarab', () => {
       expect(res.data.items[0]).toEqual(
         expect.objectContaining({
           ...fullMarket('5'),
-          cashbox: expect.anything(),
+          cashbox: expect.objectContaining({ user_id: '5', balance: 125000 }),
         }),
       );
-      expect(financeClient.send).toHaveBeenCalledTimes(2);
+      expect(res.data.items[1].cashbox).toEqual(
+        expect.objectContaining({ user_id: '7' }),
+      );
+      // N+1 yo'q: barcha qatorlar kassasi bitta so'rovda.
+      expect(financeClient.send).toHaveBeenCalledTimes(1);
+      expect(financeClient.send).toHaveBeenCalledWith(
+        { cmd: 'finance.cashbox.find_by_users' },
+        { user_ids: ['5', '7'], cashbox_type: 'markets' },
+      );
     },
   );
+
+  it("kassasi yo'q market — cashbox null; batch xato bo'lsa har qatorga eski so'rov", async () => {
+    financeClient.send.mockImplementationOnce(() =>
+      of({
+        data: {
+          items: [
+            { id: 'cb7', user_id: '7', cashbox_type: 'markets', balance: 5 },
+          ],
+        },
+      }),
+    );
+    const first = await controller.getMarkets(user(['admin']));
+    expect(
+      first.data.items.map((m: any) => m.cashbox?.balance ?? null),
+    ).toEqual([null, 5]);
+
+    financeClient.send.mockClear();
+    financeClient.send.mockImplementationOnce(() =>
+      throwError(() => new Error('finance down')),
+    );
+    const second = await controller.getMarkets(user(['superadmin']));
+    expect(second.data.items.map((m: any) => m.cashbox?.balance)).toEqual([
+      125000, 125000,
+    ]);
+    expect(
+      financeClient.send.mock.calls.map(
+        ([pattern]: [{ cmd: string }]) => pattern.cmd,
+      ),
+    ).toEqual([
+      'finance.cashbox.find_by_users',
+      'finance.cashbox.find_by_user',
+      'finance.cashbox.find_by_user',
+    ]);
+  });
 
   it.each([['manager'], ['registrator'], ['branch']])(
     "%s: {id, name, status, (registrator: phone_number va narxlar — yiFTzkzH)}, menejer/filial narxsiz (D5NxxpJW) — login, kassa yo'q",
