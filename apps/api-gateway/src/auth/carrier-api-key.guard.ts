@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -11,6 +12,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { CARRIER_ERROR_CODES } from '@app/common';
 import { isIpAllowed, normalizeIp } from './ip-allowlist.util';
+import { CarrierTokenService } from './carrier-token.service';
 
 /**
  * Carrier API autentifikatsiyasi (JWT EMAS) — tashqi yetkazuvchi kompaniya.
@@ -24,6 +26,13 @@ import { isIpAllowed, normalizeIp } from './ip-allowlist.util';
  * `PartnerApiKeyGuard` bilan bir xil naqsh, lekin ATAYLAB alohida jadval va
  * alohida RMQ buyrug'i: partner kaliti `/carrier/*` ga, carrier kaliti esa
  * `/partner/*` ga (buyurtma yaratishga) kira olmaydi.
+ *
+ * OLCHA USLUBIDAGI KIRISH (ega 2026-11-27): `X-Api-Key` o'rniga
+ * `Authorization: Bearer <access_token>` ham qabul qilinadi — token
+ * `POST /carrier/auth/token` dan (`CarrierTokenService`). Ikkalasi kelsa
+ * `X-Api-Key` ustun (eski chaqiruvchilar xulqi o'zgarmaydi). Token egasi har
+ * so'rovda `integration.carrier.validate_token` bilan qayta o'qiladi, so'ng
+ * kalitdagi bilan AYNI tekshiruvlar (faol, IP, kurier) — `admit`.
  *
  * Faqat `/carrier/*` route'larida ishlaydi. Kontrakt: docs/public/CARRIER_API.md.
  */
@@ -42,41 +51,89 @@ export interface CarrierPrincipal {
   rollback_enabled: boolean;
 }
 
-interface CarrierValidation extends Omit<CarrierPrincipal, 'rollback_enabled'> {
+export interface CarrierValidation extends Omit<
+  CarrierPrincipal,
+  'rollback_enabled'
+> {
   is_active: boolean;
   /** Eski integration-service javobida yo'q — yopiq (`false`). */
   rollback_enabled?: boolean;
   ip_allowlist?: string[] | null;
   /** Bog'langan kurier hozir faolmi (integration-service tekshiradi, 30 s kesh). */
   courier_active?: boolean;
+  /**
+   * Joriy kalit barmoq izi — faqat token berishda (`/carrier/auth/token`)
+   * ishlatiladi; `request.carrier` ga TUSHMAYDI. Eski integration-service
+   * javobida yo'q — u holda token berilmaydi (503).
+   */
+  token_fp?: string;
 }
+
+type GuardRequest = {
+  headers: Record<string, unknown>;
+  carrier?: CarrierPrincipal;
+  ip?: string;
+  ips?: string[];
+};
 
 @Injectable()
 export class CarrierApiKeyGuard implements CanActivate {
   constructor(
     @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
+    @Optional() private readonly tokens?: CarrierTokenService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<{
-      headers: Record<string, unknown>;
-      carrier?: CarrierPrincipal;
-      ip?: string;
-      ips?: string[];
-    }>();
+    const request = context.switchToHttp().getRequest<GuardRequest>();
     const apiKey = this.extractApiKey(request);
-    if (!apiKey) {
-      throw new UnauthorizedException('X-Api-Key header majburiy');
-    }
-
     let carrier: CarrierValidation | null;
+    if (apiKey) {
+      carrier = await this.resolveByKey(apiKey);
+      if (!carrier) {
+        throw new UnauthorizedException('API kalit yaroqsiz');
+      }
+    } else {
+      const bearer = this.extractBearer(request);
+      if (!bearer) {
+        throw new UnauthorizedException(
+          'X-Api-Key header majburiy (yoki Authorization: Bearer <access_token> — POST /carrier/auth/token)',
+        );
+      }
+      const claims = this.tokens?.verify(bearer) ?? null;
+      if (!claims) {
+        throw new UnauthorizedException(
+          'Token yaroqsiz yoki muddati tugagan — POST /carrier/auth/token orqali yangisini oling',
+        );
+      }
+      carrier = await this.resolve('integration.carrier.validate_token', {
+        id: claims.sub,
+        token_fp: claims.kfp,
+      });
+      if (!carrier) {
+        throw new UnauthorizedException(
+          'Token bekor qilingan (kalit almashtirilgan yoki akkaunt o‘chirilgan) — POST /carrier/auth/token orqali yangisini oling',
+        );
+      }
+    }
+    request.carrier = this.admit(request, carrier);
+    return true;
+  }
+
+  /** `X-Api-Key` (yoki `/carrier/auth/token` dagi `password`) egasi; topilmasa `null`. */
+  resolveByKey(apiKey: string): Promise<CarrierValidation | null> {
+    return this.resolve('integration.carrier.validate_key', {
+      api_key: apiKey,
+    });
+  }
+
+  private async resolve(
+    cmd: string,
+    payload: object,
+  ): Promise<CarrierValidation | null> {
     try {
-      carrier = await firstValueFrom(
+      return await firstValueFrom(
         this.integrationClient
-          .send<CarrierValidation | null>(
-            { cmd: 'integration.carrier.validate_key' },
-            { api_key: apiKey },
-          )
+          .send<CarrierValidation | null>({ cmd }, payload)
           .pipe(timeout(5000)),
       );
     } catch {
@@ -94,10 +151,14 @@ export class CarrierApiKeyGuard implements CanActivate {
         code: CARRIER_ERROR_CODES.KEY_CHECK_UNAVAILABLE,
       });
     }
+  }
 
-    if (!carrier) {
-      throw new UnauthorizedException('API kalit yaroqsiz');
-    }
+  /**
+   * Topilgan akkauntni so'rovga QO'YISH-QO'YMASLIK (kalit ham, token ham,
+   * `/carrier/auth/token` ham shu yerdan o'tadi): faol emas 403, IP 403,
+   * kurier faol emas 403, kurier bog'lanmagan 403.
+   */
+  admit(request: GuardRequest, carrier: CarrierValidation): CarrierPrincipal {
     if (!carrier.is_active) {
       throw new ForbiddenException('Carrier akkaunt faol emas');
     }
@@ -135,14 +196,13 @@ export class CarrierApiKeyGuard implements CanActivate {
       throw new ForbiddenException('Carrier akkauntga kurier bog‘lanmagan');
     }
 
-    request.carrier = {
+    return {
       id: String(carrier.id),
       name: carrier.name,
       courier_user_id: String(carrier.courier_user_id),
       // Faqat aniq `true` (rolling deploy: eski javobda maydon yo'q — o'chiq).
       rollback_enabled: carrier.rollback_enabled === true,
     };
-    return true;
   }
 
   private resolveClientIp(request: {
@@ -165,5 +225,16 @@ export class CarrierApiKeyGuard implements CanActivate {
     const raw: unknown = request.headers?.['x-api-key'];
     const value: unknown = Array.isArray(raw) ? (raw as unknown[])[0] : raw;
     return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  /** `Authorization: Bearer <token>` (sxema registrsiz); bo'lmasa `null`. */
+  private extractBearer(request: {
+    headers?: Record<string, unknown>;
+  }): string | null {
+    const raw: unknown = request.headers?.authorization;
+    const value: unknown = Array.isArray(raw) ? (raw as unknown[])[0] : raw;
+    if (typeof value !== 'string') return null;
+    const match = /^Bearer\s+(\S+)\s*$/i.exec(value.trim());
+    return match ? match[1] : null;
   }
 }

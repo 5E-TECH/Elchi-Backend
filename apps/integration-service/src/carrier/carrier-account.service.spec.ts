@@ -1,6 +1,9 @@
 import { createHash } from 'crypto';
 import { of, throwError } from 'rxjs';
-import { CarrierAccountService } from './carrier-account.service';
+import {
+  CarrierAccountService,
+  carrierTokenFingerprint,
+} from './carrier-account.service';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -113,6 +116,7 @@ describe('CarrierAccountService.validateKey', () => {
     is_active: true,
     ip_allowlist: ['1.2.3.4'],
     courier_user_id: '55',
+    api_key_hash: sha256('elc_secret'),
     ...over,
   });
 
@@ -131,6 +135,8 @@ describe('CarrierAccountService.validateKey', () => {
       courier_active: true,
       // Ustun yo'q / null — yopiq.
       rollback_enabled: false,
+      // Olcha uslubidagi token uchun — hash'ning o'zi emas, barmoq izi.
+      token_fp: carrierTokenFingerprint(sha256('elc_secret')),
     });
     expect(repo.findOne).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -218,6 +224,96 @@ describe('CarrierAccountService.validateKey', () => {
     const { svc } = makeService(repo);
     await expect(svc.validateKey('  ')).resolves.toBeNull();
     expect(repo.findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('CarrierAccountService.validateToken (Olcha uslubidagi Bearer)', () => {
+  const tokenRow = (over: Record<string, unknown> = {}) => ({
+    id: '3',
+    name: 'BTS',
+    is_active: true,
+    ip_allowlist: null,
+    courier_user_id: '55',
+    rollback_enabled: false,
+    api_key_hash: sha256('elc_current'),
+    ...over,
+  });
+  const FP = carrierTokenFingerprint(sha256('elc_current'));
+
+  it('barmoq izi 32 hex, kalit yoki hash’ni o‘z ichiga olmaydi', () => {
+    expect(FP).toMatch(/^[0-9a-f]{32}$/);
+    expect(FP).not.toContain(sha256('elc_current').slice(0, 16));
+    expect(carrierTokenFingerprint(sha256('elc_other'))).not.toBe(FP);
+  });
+
+  it('id + joriy kalit izi -> validate_key bilan bir xil javob', async () => {
+    const repo = makeRepo({
+      findOne: jest.fn(() => Promise.resolve(tokenRow())),
+    });
+    const { svc } = makeService(repo);
+    await expect(svc.validateToken({ id: '3', token_fp: FP })).resolves.toEqual(
+      {
+        id: '3',
+        name: 'BTS',
+        is_active: true,
+        ip_allowlist: null,
+        courier_user_id: '55',
+        courier_active: true,
+        rollback_enabled: false,
+        token_fp: FP,
+      },
+    );
+    expect(repo.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: '3', isDeleted: false } }),
+    );
+  });
+
+  it('⭐ kalit almashtirilgan (rotate) -> eski token izi mos emas -> null', async () => {
+    const repo = makeRepo({
+      findOne: jest.fn(() =>
+        Promise.resolve(tokenRow({ api_key_hash: sha256('elc_rotated') })),
+      ),
+    });
+    const { svc, identityClient } = makeService(repo);
+    await expect(
+      svc.validateToken({ id: '3', token_fp: FP }),
+    ).resolves.toBeNull();
+    expect(identityClient.send).not.toHaveBeenCalled();
+  });
+
+  it('o‘chirilgan / topilmagan akkaunt -> null', async () => {
+    const repo = makeRepo();
+    const { svc } = makeService(repo);
+    await expect(
+      svc.validateToken({ id: '3', token_fp: FP }),
+    ).resolves.toBeNull();
+  });
+
+  it('yaroqsiz id yoki iz -> null, bazaga bormaydi', async () => {
+    const repo = makeRepo();
+    const { svc } = makeService(repo);
+    for (const input of [
+      { id: 'abc', token_fp: FP },
+      { id: '0', token_fp: FP },
+      { id: '3', token_fp: 'short' },
+      { id: '3', token_fp: FP.toUpperCase() },
+      { id: '3' },
+      {},
+    ]) {
+      await expect(svc.validateToken(input)).resolves.toBeNull();
+    }
+    expect(repo.findOne).not.toHaveBeenCalled();
+  });
+
+  it('faol emas akkaunt — null EMAS (guard 403 qaytarsin), kurier tekshirilmaydi', async () => {
+    const repo = makeRepo({
+      findOne: jest.fn(() => Promise.resolve(tokenRow({ is_active: false }))),
+    });
+    const { svc, identityClient } = makeService(repo);
+    await expect(
+      svc.validateToken({ id: '3', token_fp: FP }),
+    ).resolves.toMatchObject({ is_active: false, courier_active: false });
+    expect(identityClient.send).not.toHaveBeenCalled();
   });
 });
 

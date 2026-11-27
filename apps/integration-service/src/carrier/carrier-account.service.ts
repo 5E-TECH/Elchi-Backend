@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import {
   ActivityAction,
   ActivityLogService,
@@ -36,7 +36,29 @@ export type CarrierKeyValidation = {
    * keyingi so'rovdan kuchga kiradi.
    */
   rollback_enabled: boolean;
+  /**
+   * Joriy kalitning BARMOQ IZI — `POST /carrier/auth/token` (Olcha uslubidagi
+   * JWT) tokeniga yoziladi. Har Bearer so'rovida `validate_token` uni bazadagi
+   * joriy kalitdan qayta hisoblab solishtiradi: kalit almashtirilsa (rotate)
+   * eski tokenlar 1 soat kutmasdan DARHOL bekor bo'ladi. Kalitning o'zi ham,
+   * hash'i ham tashqariga chiqmaydi (`carrierTokenFingerprint`).
+   */
+  token_fp: string;
 };
+
+/**
+ * Kalit hash'idan token barmoq izi (domen ajratilgan SHA-256, 32 hex).
+ *
+ * Nega hash'ning o'zi emas: JWT tanasi mijozga ochiq (base64). Barmoq izi
+ * faqat «token shu kalit bilan olinganmi» degan savolga javob beradi — undan
+ * kalitni ham, `api_key_hash` ni ham tiklab bo'lmaydi.
+ */
+export function carrierTokenFingerprint(apiKeyHash: string): string {
+  return createHash('sha256')
+    .update(`elchi:carrier-token-fp:v1:${apiKeyHash}`)
+    .digest('hex')
+    .slice(0, 32);
+}
 
 /** Ro'yxat va javoblardagi xavfsiz ko'rinish (hash hech qachon chiqmaydi). */
 type CarrierAccountView = {
@@ -109,6 +131,20 @@ export type CarrierCourierLink = {
   name: string;
   is_active: boolean;
 };
+
+/**
+ * Kalit / token tekshiruvida o'qiladigan ustunlar. `api_key_hash` — faqat
+ * `token_fp` hisoblash uchun (tashqariga chiqmaydi).
+ */
+const CARRIER_VALIDATION_SELECT = {
+  id: true,
+  name: true,
+  is_active: true,
+  ip_allowlist: true as never,
+  courier_user_id: true,
+  rollback_enabled: true,
+  api_key_hash: true,
+} as const;
 
 /** Postgres BIGINT chegarasi — undan kattasi DB'da 22003 (500 + requeue) berardi. */
 const BIGINT_MAX = 9223372036854775807n;
@@ -475,18 +511,47 @@ export class CarrierAccountService {
     }
     const row = await this.carrierRepo.findOne({
       where: { api_key_hash: this.hashApiKey(apiKey.trim()), isDeleted: false },
-      select: {
-        id: true,
-        name: true,
-        is_active: true,
-        ip_allowlist: true as never,
-        courier_user_id: true,
-        rollback_enabled: true,
-      },
+      select: CARRIER_VALIDATION_SELECT,
     });
-    if (!row) {
+    return row ? this.toValidation(row) : null;
+  }
+
+  /**
+   * Olcha uslubidagi Bearer token (`POST /carrier/auth/token` bergan JWT)
+   * egasini tekshiradi. Imzo va muddatni gateway tekshiradi; bu yerda —
+   * akkaunt hali bormi va token JORIY kalit bilan olinganmi (`token_fp`).
+   * Kalit almashtirilgan yoki akkaunt o'chirilgan bo'lsa `null` (gateway 401).
+   * Qolgan qaror (faol emas, IP, kurier) — `validateKey` dagidek guard'da.
+   */
+  async validateToken(input: {
+    id?: unknown;
+    token_fp?: unknown;
+  }): Promise<CarrierKeyValidation | null> {
+    const id =
+      typeof input?.id === 'string' || typeof input?.id === 'number'
+        ? String(input.id).trim()
+        : '';
+    const fp = typeof input?.token_fp === 'string' ? input.token_fp : '';
+    if (!isBigintId(id) || !/^[0-9a-f]{32}$/.test(fp)) {
       return null;
     }
+    const row = await this.carrierRepo.findOne({
+      where: { id, isDeleted: false },
+      select: CARRIER_VALIDATION_SELECT,
+    });
+    if (!row || !row.api_key_hash) {
+      return null;
+    }
+    const current = carrierTokenFingerprint(row.api_key_hash);
+    if (!timingSafeEqual(Buffer.from(current), Buffer.from(fp))) {
+      return null;
+    }
+    return this.toValidation(row);
+  }
+
+  private async toValidation(
+    row: CarrierAccount,
+  ): Promise<CarrierKeyValidation> {
     const courierId = String(row.courier_user_id);
     return {
       id: String(row.id),
@@ -499,6 +564,7 @@ export class CarrierAccountService {
         : false,
       // Faqat aniq `true` — eski/yo'q ustun yopiq (rollback o'chiq).
       rollback_enabled: row.rollback_enabled === true,
+      token_fp: carrierTokenFingerprint(row.api_key_hash),
     };
   }
 

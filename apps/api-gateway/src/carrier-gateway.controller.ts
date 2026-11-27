@@ -16,6 +16,7 @@ import {
   Req,
   ServiceUnavailableException,
   UploadedFile,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -25,6 +26,7 @@ import { memoryStorage } from 'multer';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
   ApiConsumes,
@@ -73,8 +75,12 @@ import {
   CarrierOrderListQueryDto,
   CarrierOrderListResponseDto,
   CarrierOrderStatus,
+  CarrierOlchaErrorDto,
   CarrierOrderStatusRequestDto,
   CarrierPingResponseDto,
+  CarrierQrOrderFailDto,
+  CarrierQrOrderRequestDto,
+  CarrierQrOrderResponseDto,
   CarrierReturnRequestDto,
   CarrierReturnResponseDto,
   CarrierScanRequestDto,
@@ -88,7 +94,16 @@ import {
   unwrapOrderRow,
 } from './carrier-order-view';
 import { toCarrierCashboxView } from './carrier-cashbox-view';
-import { CARRIER_API_KEY_SCHEME } from './carrier-swagger';
+import {
+  CARRIER_API_KEY_SCHEME,
+  CARRIER_BEARER_SCHEME,
+} from './carrier-swagger';
+import {
+  CarrierOlchaExceptionFilter,
+  QR_ORDER_FOUND_MSG,
+  QR_ORDER_RECEIVED_MSG,
+  toCarrierQrOrderData,
+} from './carrier-olcha-compat';
 import {
   CarrierStatusBody,
   carrierStatusRejected,
@@ -157,6 +172,16 @@ export const isBigintId = (value: string): boolean =>
 const RECEIVABLE_STATUSES: ReadonlySet<string> = new Set([
   Order_status.ON_THE_ROAD,
   Order_status.WAITING_CUSTOMER,
+]);
+
+/**
+ * Olcha `qrorder/find`: «faqat yetkazilmoqda holatidagi buyurtmalar». Elchi'da
+ * — kurierdagi posilka: yo'lda, mijozni kutishda yoki qabul qilingan.
+ */
+const IN_DELIVERY_STATUSES: ReadonlySet<string> = new Set([
+  Order_status.ON_THE_ROAD,
+  Order_status.WAITING_CUSTOMER,
+  Order_status.WAITING,
 ]);
 
 /** logistics `receive_order` rad sababi: buyurtma yo'lda emas (400). */
@@ -264,11 +289,13 @@ type Row = Record<string, unknown>;
  * Kontrakt: docs/public/CARRIER_API.md.
  */
 @ApiTags('Carrier')
-// `X-Api-Key` — Swagger'da "Authorize" tugmasi (`carrier-swagger.ts`).
+// `X-Api-Key` YOKI Olcha uslubidagi Bearer token (`/carrier/auth/token`) —
+// Swagger'da "Authorize" tugmasi (`carrier-swagger.ts`).
 @ApiSecurity(CARRIER_API_KEY_SCHEME)
+@ApiBearerAuth(CARRIER_BEARER_SCHEME)
 @ApiExtraModels(CarrierOrderStatusRequestDto)
 @ApiUnauthorizedResponse({
-  description: 'X-Api-Key yo‘q yoki yaroqsiz',
+  description: 'X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz',
   type: CarrierErrorResponseDto,
 })
 @ApiForbiddenResponse({
@@ -623,16 +650,47 @@ export class CarrierGatewayController {
     type: CarrierErrorResponseDto,
   })
   async scan(@Body() dto: CarrierScanRequestDto, @Req() req: CarrierRequest) {
-    const token = dto.qr_token.trim();
-    const courierId = req.carrier.courier_user_id;
-    let row = await this.assertOwned(await this.findByQr(token), req.carrier);
+    const { received, row } = await this.scanAndReceive(
+      dto.qr_token.trim(),
+      req.carrier,
+    );
+    if (!row) {
+      /**
+       * Qabul commit bo'lgan — 503 BERMAYMIZ (qayta skan `received:false`
+       * deb aldardi). Holat bilan birga, buyurtmani keyinroq o'qish kerak.
+       */
+      return successRes(
+        { received: true, order: null, refreshed: false },
+        200,
+        'Posilka qabul qilindi',
+      );
+    }
+    return successRes(
+      { received, order: toCarrierOrderView(row), refreshed: true },
+      200,
+      received ? 'Posilka qabul qilindi' : 'Buyurtma topildi',
+    );
+  }
+
+  /**
+   * SKAN + QABUL (`/carrier/scan` va Olcha uslubidagi `/carrier/qrorder/find`
+   * uchun umumiy). Faqat shu kurierniki (aks holda 404); yo'ldagi yoki
+   * mijozni kutishdagi posilka shu chaqiruvda qabul qilinadi (`waiting`).
+   * `row: null` — qabul BAJARILDI, lekin to'liq qatorni qayta o'qib bo'lmadi.
+   */
+  private async scanAndReceive(
+    token: string,
+    carrier: CarrierPrincipal,
+  ): Promise<{ received: boolean; row: Row | null }> {
+    const courierId = carrier.courier_user_id;
+    let row = await this.assertOwned(await this.findByQr(token), carrier);
 
     let received = false;
     if (
       RECEIVABLE_STATUSES.has(text(row.status)) &&
       isOrderHeldByCourier(row, courierId)
     ) {
-      received = await this.receiveByScan(row, req.carrier);
+      received = await this.receiveByScan(row, carrier);
       if (!received) {
         /**
          * Parallel skan (masalan timeout'dan keyingi takror) buyurtmani shu
@@ -646,12 +704,12 @@ export class CarrierGatewayController {
         if (!current) {
           throw this.temporarilyUnavailable('Buyurtma holatini o‘qib bo‘lmadi');
         }
-        row = await this.assertOwned(current, req.carrier);
+        row = await this.assertOwned(current, carrier);
       }
     }
     if (received) {
       this.logger.log(
-        `carrier ${req.carrier.id} received order ${text(row.id)} by scan`,
+        `carrier ${carrier.id} received order ${text(row.id)} by scan`,
       );
       const fresh = await this.tryRefresh(() => this.findByQr(token), 'scan');
       if (
@@ -664,15 +722,7 @@ export class CarrierGatewayController {
         // Qabul BAJARILDI — oldingi (to'liq) qator, holati `waiting`.
         row = { ...row, status: Order_status.WAITING };
       } else {
-        /**
-         * Qabul commit bo'lgan — 503 BERMAYMIZ (qayta skan `received:false`
-         * deb aldardi). Holat bilan birga, buyurtmani keyinroq o'qish kerak.
-         */
-        return successRes(
-          { received: true, order: null, refreshed: false },
-          200,
-          'Posilka qabul qilindi',
-        );
+        return { received: true, row: null };
       }
     }
 
@@ -685,7 +735,7 @@ export class CarrierGatewayController {
       if (
         again &&
         !isEnrichmentIncomplete(again) &&
-        (await this.isOwned(again, req.carrier))
+        (await this.isOwned(again, carrier))
       ) {
         row = again;
       } else {
@@ -695,11 +745,83 @@ export class CarrierGatewayController {
       }
     }
 
-    return successRes(
-      { received, order: toCarrierOrderView(row), refreshed: true },
-      200,
-      received ? 'Posilka qabul qilindi' : 'Buyurtma topildi',
-    );
+    return { received, row };
+  }
+
+  /**
+   * OLCHA USLUBI — `POST /qrorder/find` (https://api.olchamarket.uz/swagger)
+   * bilan AYNI so'rov va javob: `{qr_code}` → `{success, msg, data}`; xato —
+   * `{success: false, msg, status: 400|404}` (HTTP 200). Kirish: Bearer
+   * (`/carrier/auth/token`) yoki `X-Api-Key`.
+   *
+   * Olcha kabi faqat YETKAZILMOQDA holatidagi buyurtma qaytadi (`on the
+   * road` / `waiting_customer` / `waiting`), boshqasi 400. `/carrier/scan`
+   * dagidek posilka shu chaqiruvda sizga QABUL QILINADI (`waiting`) —
+   * Olcha mijozida alohida «qabul» qadami yo'q, busiz sotib bo'lmasdi.
+   */
+  @Post('qrorder/find')
+  @HttpCode(200)
+  @UseFilters(new CarrierOlchaExceptionFilter('result'))
+  @ApiOperation({
+    summary: 'QR kod orqali buyurtmani topish (Olcha uslubi)',
+    description:
+      'Olcha API `POST /qrorder/find` bilan bir xil. QR orqali sizga biriktirilgan buyurtmani topib, ' +
+      'uning ma’lumotlarini qaytaradi. Faqat yetkazilmoqda holatidagi buyurtmalar qaytariladi; aks holda ' +
+      '`{success: false, msg: <sabab>, status: 400|404}` (HTTP 200). Yo‘ldagi posilka shu chaqiruvda ' +
+      'sizga qabul qilinadi (`status: waiting`) — natijani `POST /carrier/orders/{id}/status` bilan yuboring.',
+  })
+  @ApiBody({ type: CarrierQrOrderRequestDto })
+  @ApiExtraModels(CarrierQrOrderFailDto)
+  @ApiOkResponse({
+    description:
+      'Natija: muvaffaqiyat (`CarrierQrOrderResponseDto`) yoki 400/404 xato (`CarrierQrOrderFailDto`)',
+    schema: {
+      oneOf: [
+        { $ref: getSchemaPath(CarrierQrOrderResponseDto) },
+        { $ref: getSchemaPath(CarrierQrOrderFailDto) },
+      ],
+    },
+  })
+  @ApiExtraModels(CarrierQrOrderResponseDto)
+  @ApiUnauthorizedResponse({
+    description: 'Token yuborilmagan yoki yaroqsiz',
+    type: CarrierOlchaErrorDto,
+  })
+  @ApiForbiddenResponse({
+    description: 'Ruxsat yo‘q',
+    type: CarrierOlchaErrorDto,
+  })
+  async qrOrderFind(
+    @Body() body: Record<string, unknown>,
+    @Req() req: CarrierRequest,
+  ) {
+    const raw = body?.qr_code;
+    const qr =
+      typeof raw === 'string' || typeof raw === 'number'
+        ? String(raw).trim()
+        : '';
+    if (!qr) {
+      throw new BadRequestException('qr_code majburiy');
+    }
+    if (qr.length > 255) {
+      throw new BadRequestException('qr_code 255 belgidan oshmasin');
+    }
+    const { received, row } = await this.scanAndReceive(qr, req.carrier);
+    if (!row) {
+      throw this.temporarilyUnavailable(
+        'Posilka sizga qabul qilindi, lekin ma’lumotini o‘qib bo‘lmadi — so‘rovni qayta yuboring',
+      );
+    }
+    if (!IN_DELIVERY_STATUSES.has(text(row.status))) {
+      throw new BadRequestException(
+        `Buyurtma yetkazilmoqda holatida emas (holati: ${text(row.status) || 'noma’lum'})`,
+      );
+    }
+    return {
+      success: true,
+      msg: received ? QR_ORDER_RECEIVED_MSG : QR_ORDER_FOUND_MSG,
+      data: toCarrierQrOrderData(row),
+    };
   }
 
   /**
