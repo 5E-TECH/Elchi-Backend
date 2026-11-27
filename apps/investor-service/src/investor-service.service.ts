@@ -1,22 +1,38 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, ILike, In, MoreThanOrEqual, Repository } from 'typeorm';
+import { Between, ILike, In, Repository } from 'typeorm';
 import {
   ActivityAction,
   ActivityLogQuery,
   ActivityLogService,
   Cashbox_type,
+  DEFAULT_PROFIT_BASIS,
   FinancialSource_type,
+  INVESTOR_PROFIT_DEDUP_PREFIX,
   Roles,
   Status,
   TASHKENT_OFFSET_MINUTES,
+  isDayKey,
+  isProfitBasis,
   normalizePersonName,
   rmqSend,
+  type ProfitBasis,
 } from '@app/common';
 import { Investor } from './entities/investor.entity';
 import { Investment } from './entities/investment.entity';
 import { ProfitShare } from './entities/profit-share.entity';
+import { InvestorShareTerm } from './entities/investor-share-term.entity';
+import {
+  allocatePaid,
+  computeAccrual,
+  planShareTermChange,
+  planStartChange,
+  type Accrual,
+  type DailyPnlLike,
+  type TermPlan,
+  type TermRow,
+} from './investor-accrual';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { CreateInvestorDto } from './dto/create-investor.dto';
 import { UpdateInvestorDto } from './dto/update-investor.dto';
@@ -63,7 +79,19 @@ export type SelfInvestorProfile = {
   status: Status;
   /** «Ulush (%)» — kiritilmagan bo'lsa `null`. */
   share_percent: number | null;
+  /** Joriy foyda asosi: 'net' — sof foydadan, 'gross' — daromaddan. */
+  profit_basis: ProfitBasis;
   created_at: Date;
+};
+
+/** Ulush sharti versiyasi (investor o'zi ham ko'radi — o'z kelishuvi). */
+export type SelfShareTerm = {
+  share_percent: number;
+  profit_basis: ProfitBasis;
+  /** `YYYY-MM-DD`, inklyuziv. */
+  effective_from: string;
+  /** `YYYY-MM-DD`, eksklyuziv; `null` — hozir amal qilmoqda. */
+  effective_to: string | null;
 };
 
 export type SelfInvestment = {
@@ -90,9 +118,27 @@ export type InvestorSummary = {
   investments_count: number;
   first_invested_at: Date | null;
   last_invested_at: Date | null;
+  /** Investorga haqiqatan to'langan (to'langan `profit_shares`). */
   total_paid_profit: number;
+  /**
+   * «Kutilayotgan foyda» = hisoblangan ulush − to'langan (2026-11-28 dan;
+   * ilgari to'lanmagan `profit_shares` yig'indisi edi). Manfiy — ortiqcha
+   * to'langan.
+   */
   total_unpaid_profit: number;
+  /** = `accrued_profit` (eski maydon nomi). */
   total_profit: number;
+  /** Shart boshlanganidan bugungacha hisoblangan ulush (kunlik, P&L daftaridan). */
+  accrued_profit: number;
+  /** Shu davrdagi asos yig'indisi (sof foyda yoki daromad, investor ulushi olinadigan qism emas — butuni). */
+  accrued_basis: number;
+  /** Hisob qaysi ish kunigacha (`YYYY-MM-DD`); shart yo'q bo'lsa `null`. */
+  accrued_through: string | null;
+  /** Investorlik sanasi — birinchi ulush sharti boshi; shart yo'q — `null`. */
+  share_started_at: string | null;
+  profit_basis: ProfitBasis;
+  /** Yozilgan, lekin hali to'lanmagan to'lov qatorlari (`profit_shares`). */
+  pending_payout_amount: number;
   profit_shares_count: number;
   current_percentage: number | null;
   last_paid_at: Date | null;
@@ -100,15 +146,27 @@ export type InvestorSummary = {
 
 export type MonthlyProfitPoint = {
   month: string;
+  /** Shu oyda hisoblangan ulush. */
+  accrued_amount: number;
+  /** Investor shart amal qilgan kunlardagi asos (sof foyda / daromad). */
+  basis_amount: number;
+  /** Shu oyning ulushidan to'langan qismi (to'lovlar eski oydan boshlab taqsimlanadi). */
   paid_amount: number;
+  /** Shu oyning ulushidan hali to'lanmagan qismi. */
   unpaid_amount: number;
+  /** = `accrued_amount` (eski maydon nomi). */
   total_amount: number;
+  /** Oyda amal qilgan oxirgi ulush foizi; hisob bo'lmagan oy — `null`. */
+  share_percent: number | null;
+  profit_basis: ProfitBasis | null;
 };
 
 /** vpKijXce: oylik foyda grafigi oynasi (oy). */
 const MONTHLY_DEFAULT = 12;
 const MONTHLY_MAX = 36;
 const TASHKENT_OFFSET_MS = TASHKENT_OFFSET_MINUTES * 60 * 1000;
+/** To'liq ISO vaqt (`2026-11-01T00:00:00Z`, `…+05:00`). */
+const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 /** users.id — bigint; '0' = "login bilan bog'lanmagan" investor. */
 const LINKED_USER_ID_RE = /^[1-9]\d{0,18}$/;
 
@@ -134,13 +192,6 @@ function toDateOrNull(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-/** `date` tushgan Toshkent oyi — 'YYYY-MM'. */
-function tashkentMonthKey(date: Date): string {
-  const shifted = new Date(date.getTime() + TASHKENT_OFFSET_MS);
-  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
-  return `${shifted.getUTCFullYear()}-${month}`;
-}
-
 @Injectable()
 export class InvestorServiceService {
   constructor(
@@ -152,6 +203,8 @@ export class InvestorServiceService {
     private readonly profitShareRepo: Repository<ProfitShare>,
     private readonly activityLog: ActivityLogService,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    @InjectRepository(InvestorShareTerm)
+    private readonly termRepo: Repository<InvestorShareTerm>,
   ) {}
 
   private auditActor(requester?: { id?: string; roles?: string[] } | null): {
@@ -208,6 +261,289 @@ export class InvestorServiceService {
       this.badRequest("Ulush ko'pi bilan 2 kasr xonali bo'lishi kerak");
     }
     return value;
+  }
+
+  /** Foyda asosi: bo'sh — `undefined` (tegilmaydi); aks holda 'net' | 'gross'. */
+  private normalizeProfitBasis(raw: unknown): ProfitBasis | undefined {
+    if (raw === undefined || raw === null || raw === '') return undefined;
+    const value = typeof raw === 'string' ? raw.trim().toLowerCase() : raw;
+    if (!isProfitBasis(value)) {
+      this.badRequest(
+        "profit_basis 'net' (sof foyda) yoki 'gross' (daromad) bo'lishi kerak",
+      );
+    }
+    return value;
+  }
+
+  /** Bugungi Toshkent sanasi (`YYYY-MM-DD`). */
+  private todayDay(now: Date = new Date()): string {
+    return new Date(now.getTime() + TASHKENT_OFFSET_MS)
+      .toISOString()
+      .slice(0, 10);
+  }
+
+  /**
+   * Ulush sanasi: `YYYY-MM-DD` yoki to'liq ISO (→ Toshkent kuni). Bo'sh —
+   * `undefined`. Kelajak sanasi — 400 (ulush hali boshlanmagan kunni
+   * «joriy shart» qilib qo'ymaslik uchun).
+   */
+  private normalizeShareDay(raw: unknown, field: string): string | undefined {
+    if (raw === undefined || raw === null || raw === '') return undefined;
+    let day: string | null = null;
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (isDayKey(text)) {
+      day = text;
+    } else if (raw instanceof Date || ISO_DATETIME_RE.test(text)) {
+      // Faqat aniq ISO vaqt — `new Date('01.11.2026')` kabi taxminiy
+      // o'qishlar (oy/kun almashadi) qabul qilinmaydi.
+      const date = toDateOrNull(raw);
+      if (date) day = this.todayDay(date);
+    }
+    if (!day) {
+      this.badRequest(`${field} noto'g'ri sana`);
+    }
+    if (day > this.todayDay()) {
+      this.badRequest(`${field} kelajakdagi sana bo'lmasligi kerak`);
+    }
+    return day;
+  }
+
+  /** O'chirilmagan ulush shartlari, `effective_from` bo'yicha o'sib boruvchi. */
+  private activeTerms(
+    investorId: string,
+    repo: Repository<InvestorShareTerm> = this.termRepo,
+  ): Promise<InvestorShareTerm[]> {
+    return repo.find({
+      where: { investor_id: String(investorId), isDeleted: false },
+      order: { effective_from: 'ASC' },
+    });
+  }
+
+  private toTermRow(term: InvestorShareTerm): TermRow {
+    return {
+      id: String(term.id),
+      share_percent: Number(term.share_percent),
+      profit_basis: isProfitBasis(term.profit_basis)
+        ? term.profit_basis
+        : DEFAULT_PROFIT_BASIS,
+      effective_from: String(term.effective_from),
+      effective_to: term.effective_to ? String(term.effective_to) : null,
+    };
+  }
+
+  private toSelfTerm(term: InvestorShareTerm): SelfShareTerm {
+    const row = this.toTermRow(term);
+    return {
+      share_percent: row.share_percent,
+      profit_basis: row.profit_basis,
+      effective_from: row.effective_from,
+      effective_to: row.effective_to,
+    };
+  }
+
+  /**
+   * Ulush sharti rejasini bitta tranzaksiyada qo'llaydi va investordagi
+   * joriy nusxani (`share_percent`, `profit_basis`) ochiq shartdan yangilaydi.
+   * Xato rejasi — 400, hech narsa yozilmaydi.
+   */
+  private async applyTermPlan(
+    investor: Investor,
+    plan: (terms: TermRow[]) => TermPlan,
+    requester?: Requester,
+    note?: string | null,
+  ): Promise<{ changed: boolean; terms: InvestorShareTerm[] }> {
+    const actorId = this.normalizeLinkedUserId(requester?.id);
+    const result = await this.termRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(InvestorShareTerm);
+      const before = await this.activeTerms(investor.id, repo);
+      const decision = plan(before.map((term) => this.toTermRow(term)));
+      if (decision.kind === 'error') {
+        this.badRequest(decision.message);
+      }
+      if (decision.kind === 'noop') {
+        return { changed: false, before, terms: before };
+      }
+      // Yopish/surish — yangi ochiq shartdan OLDIN (ochiq shart unikal).
+      for (const update of decision.updates) {
+        await repo.update({ id: update.id }, update.patch);
+      }
+      if (decision.insert) {
+        await repo.save(
+          repo.create({
+            investor_id: String(investor.id),
+            ...decision.insert,
+            effective_to: null,
+            note: note ?? null,
+            created_by: actorId,
+          }),
+        );
+      }
+      const terms = await this.activeTerms(investor.id, repo);
+      const open = terms.find((term) => !term.effective_to);
+      if (open) {
+        investor.share_percent = Number(open.share_percent);
+        investor.profit_basis = this.toTermRow(open).profit_basis;
+        await manager.getRepository(Investor).save(investor);
+      }
+      return { changed: true, before, terms };
+    });
+
+    if (result.changed) {
+      await this.activityLog.log({
+        entity_type: 'Investor',
+        entity_id: String(investor.id),
+        action: ActivityAction.UPDATED,
+        old_value: {
+          share_terms: result.before.map((term) => this.toSelfTerm(term)),
+        },
+        new_value: {
+          share_terms: result.terms.map((term) => this.toSelfTerm(term)),
+        },
+        metadata: { kind: 'share_terms' },
+        ...this.auditActor(requester),
+      });
+    }
+    return { changed: result.changed, terms: result.terms };
+  }
+
+  /**
+   * «Ulush (%)» tozalandi (`null`): ochiq shart bugun yopiladi (bugun
+   * boshlangan bo'lsa — o'chiriladi). O'tgan kunlar hisobi qoladi.
+   */
+  private async closeOpenTerm(investor: Investor, requester?: Requester) {
+    const today = this.todayDay();
+    const terms = await this.activeTerms(investor.id);
+    const open = terms.find((term) => !term.effective_to);
+    if (!open) return;
+    if (String(open.effective_from) < today) {
+      await this.termRepo.update({ id: open.id }, { effective_to: today });
+    } else {
+      await this.termRepo.update({ id: open.id }, { isDeleted: true });
+    }
+    await this.activityLog.log({
+      entity_type: 'Investor',
+      entity_id: String(investor.id),
+      action: ActivityAction.UPDATED,
+      old_value: { share_terms: terms.map((term) => this.toSelfTerm(term)) },
+      new_value: { share_terms_closed_at: today },
+      metadata: { kind: 'share_terms' },
+      ...this.auditActor(requester),
+    });
+  }
+
+  /**
+   * PATCH / attach'dagi `share_percent` / `profit_basis` → shart versiyasi.
+   * `share_percent`: `undefined` — tegilmaydi; `null` — joriy shart yopiladi;
+   * son — `effective_from` dan (sukut bugun) yangi shart. Faqat asos berilsa —
+   * joriy foiz bilan yangi versiya. O'zgarish bo'ldimi — qaytadi.
+   */
+  private async applyShareFields(
+    investor: Investor,
+    fields: {
+      share_percent?: number | null;
+      profit_basis?: ProfitBasis;
+      effective_from?: string;
+    },
+    requester?: Requester,
+  ): Promise<boolean> {
+    if (
+      fields.share_percent === undefined &&
+      fields.profit_basis === undefined
+    ) {
+      return false;
+    }
+    if (fields.share_percent === null) {
+      const had = investor.share_percent !== null;
+      await this.closeOpenTerm(investor, requester);
+      investor.share_percent = null;
+      if (fields.profit_basis) investor.profit_basis = fields.profit_basis;
+      await this.investorRepo.save(investor);
+      return had;
+    }
+    const currentBasis = isProfitBasis(investor.profit_basis)
+      ? investor.profit_basis
+      : DEFAULT_PROFIT_BASIS;
+    const { changed } = await this.applyTermPlan(
+      investor,
+      (rows) => {
+        const open = rows.find((row) => row.effective_to === null);
+        const share =
+          fields.share_percent ?? open?.share_percent ?? investor.share_percent;
+        if (share === null || share === undefined) return { kind: 'noop' };
+        return planShareTermChange(rows, {
+          share_percent: Number(share),
+          profit_basis:
+            fields.profit_basis ?? open?.profit_basis ?? currentBasis,
+          effective_from: fields.effective_from ?? this.todayDay(),
+        });
+      },
+      requester,
+    );
+    // Ulushsiz investor: faqat asos nusxasi (shart yo'q — hisob ham yo'q).
+    if (
+      !changed &&
+      fields.profit_basis &&
+      investor.share_percent === null &&
+      investor.profit_basis !== fields.profit_basis
+    ) {
+      investor.profit_basis = fields.profit_basis;
+      await this.investorRepo.save(investor);
+      return true;
+    }
+    return changed;
+  }
+
+  /**
+   * PUT /investors/:id/share-terms — «shu sanadan boshlab ulush X%, asos Y».
+   * Sana joriy shart boshidan keyin bo'lsa — yangi versiya (o'tgan kunlar
+   * eski shart bilan qoladi); teng yoki oldin bo'lsa — joriy shart tuzatiladi.
+   * Qoidalar: `planShareTermChange`.
+   */
+  async setShareTerms(
+    investorId: string,
+    dto: {
+      share_percent?: unknown;
+      profit_basis?: unknown;
+      effective_from?: unknown;
+      note?: unknown;
+    },
+    requester?: Requester,
+  ) {
+    const investor = await this.getInvestorOrThrow(investorId);
+    const share = this.normalizeSharePercent(dto?.share_percent);
+    if (share === undefined || share === null) {
+      this.badRequest('share_percent majburiy (0..100)');
+    }
+    const basis =
+      this.normalizeProfitBasis(dto?.profit_basis) ??
+      (isProfitBasis(investor.profit_basis)
+        ? investor.profit_basis
+        : DEFAULT_PROFIT_BASIS);
+    const from =
+      this.normalizeShareDay(dto?.effective_from, 'effective_from') ??
+      this.todayDay();
+    const note =
+      typeof dto?.note === 'string' && dto.note.trim() ? dto.note.trim() : null;
+
+    const { changed, terms } = await this.applyTermPlan(
+      investor,
+      (rows) =>
+        planShareTermChange(rows, {
+          share_percent: share,
+          profit_basis: basis,
+          effective_from: from,
+        }),
+      requester,
+      note,
+    );
+    return successRes(
+      {
+        investor,
+        share_terms: terms.map((term) => this.toSelfTerm(term)),
+      },
+      200,
+      changed ? 'share terms updated' : 'share terms unchanged',
+    );
   }
 
   /**
@@ -332,16 +668,40 @@ export class InvestorServiceService {
       linkedUserId = normalized;
     }
 
+    const sharePercent = this.normalizeSharePercent(dto.share_percent) ?? null;
+    const profitBasis =
+      this.normalizeProfitBasis(dto.profit_basis) ?? DEFAULT_PROFIT_BASIS;
+    // «Investorlik sanasi» — ulush shu kundan hisoblanadi (bo'sh — bugun).
+    const shareStartedAt = this.normalizeShareDay(
+      dto.share_started_at,
+      'share_started_at',
+    );
+
     const investor = this.investorRepo.create({
       user_id: linkedUserId,
       name,
       phone_number: phoneNumber,
       status: (dto.status as Status) ?? Status.ACTIVE,
       description: dto.description ? String(dto.description).trim() : null,
-      share_percent: this.normalizeSharePercent(dto.share_percent) ?? null,
+      share_percent: sharePercent,
+      profit_basis: profitBasis,
     });
 
     const saved = await this.investorRepo.save(investor);
+
+    if (sharePercent !== null) {
+      await this.termRepo.save(
+        this.termRepo.create({
+          investor_id: String(saved.id),
+          share_percent: sharePercent,
+          profit_basis: profitBasis,
+          effective_from: shareStartedAt ?? this.todayDay(),
+          effective_to: null,
+          note: null,
+          created_by: this.normalizeLinkedUserId(requester?.id),
+        }),
+      );
+    }
 
     await this.activityLog.log({
       entity_type: 'Investor',
@@ -371,6 +731,8 @@ export class InvestorServiceService {
       name?: unknown;
       phone_number?: unknown;
       share_percent?: unknown;
+      profit_basis?: unknown;
+      share_started_at?: unknown;
       dry_run?: boolean;
     },
     requester?: Requester,
@@ -378,8 +740,13 @@ export class InvestorServiceService {
     const phoneNumber =
       typeof dto?.phone_number === 'string' ? dto.phone_number.trim() : '';
     this.validateUzPhoneNumber(phoneNumber);
-    // dry_run da ham — noto'g'ri ulush login yaratilishidan OLDIN 400.
+    // dry_run da ham — noto'g'ri ulush/asos/sana login yaratilishidan OLDIN 400.
     const sharePercent = this.normalizeSharePercent(dto?.share_percent);
+    const profitBasis = this.normalizeProfitBasis(dto?.profit_basis);
+    const shareStartedAt = this.normalizeShareDay(
+      dto?.share_started_at,
+      'share_started_at',
+    );
 
     const existing = await this.investorRepo.findOne({
       where: { phone_number: phoneNumber, isDeleted: false },
@@ -402,25 +769,34 @@ export class InvestorServiceService {
     await this.assertUserIdFree(userId, existing?.id);
 
     if (existing) {
-      const shareChanged =
-        sharePercent !== undefined && sharePercent !== existing.share_percent;
-      if (linkedTo === userId && !shareChanged) {
-        return successRes(existing, 200, 'investor already linked');
+      let saved = existing;
+      if (linkedTo !== userId) {
+        const before = { ...existing };
+        existing.user_id = userId;
+        saved = await this.investorRepo.save(existing);
+        await this.activityLog.logChange({
+          entity_type: 'Investor',
+          entity_id: String(saved.id),
+          old_value: before,
+          new_value: saved as unknown as Record<string, unknown>,
+          action: ActivityAction.UPDATED,
+          ...this.auditActor(requester),
+        });
       }
-      const before = { ...existing };
-      existing.user_id = userId;
-      if (sharePercent !== undefined) {
-        existing.share_percent = sharePercent;
+      // Ulush / asos — versiyalangan shart orqali (o'tgan kunlar qayta
+      // yozilmaydi); `null` ulush — joriy shart yopiladi.
+      const termsChanged = await this.applyShareFields(
+        saved,
+        {
+          share_percent: sharePercent,
+          profit_basis: profitBasis,
+          effective_from: shareStartedAt,
+        },
+        requester,
+      );
+      if (linkedTo === userId && !termsChanged) {
+        return successRes(saved, 200, 'investor already linked');
       }
-      const saved = await this.investorRepo.save(existing);
-      await this.activityLog.logChange({
-        entity_type: 'Investor',
-        entity_id: String(saved.id),
-        old_value: before,
-        new_value: saved as unknown as Record<string, unknown>,
-        action: ActivityAction.UPDATED,
-        ...this.auditActor(requester),
-      });
       return successRes(saved, 200, 'investor linked');
     }
 
@@ -430,6 +806,8 @@ export class InvestorServiceService {
         phone_number: phoneNumber,
         user_id: userId,
         share_percent: sharePercent ?? undefined,
+        profit_basis: profitBasis,
+        share_started_at: shareStartedAt,
       },
       requester,
     );
@@ -506,7 +884,7 @@ export class InvestorServiceService {
 
   async findInvestorById(id: string) {
     const investor = await this.getInvestorOrThrow(id);
-    const [investments, profits] = await Promise.all([
+    const [investments, profits, terms] = await Promise.all([
       this.investmentRepo.find({
         where: { investor_id: investor.id, isDeleted: false },
         order: { invested_at: 'DESC' },
@@ -515,12 +893,14 @@ export class InvestorServiceService {
         where: { investor_id: investor.id, isDeleted: false },
         order: { period_start: 'DESC' },
       }),
+      this.activeTerms(investor.id),
     ]);
 
     return successRes({
       ...investor,
       investments,
       profit_shares: profits,
+      share_terms: terms.map((term) => this.toSelfTerm(term)),
     });
   }
 
@@ -571,10 +951,19 @@ export class InvestorServiceService {
       }
       investor.status = dto.status;
     }
-    if (dto.share_percent !== undefined) {
-      investor.share_percent =
-        this.normalizeSharePercent(dto.share_percent) ?? null;
-    }
+    // Ulush / asos / investorlik sanasi — saqlashdan OLDIN tekshiriladi
+    // (noto'g'ri qiymat bo'lsa boshqa maydonlar ham yozilmaydi), qo'llash —
+    // keyin, versiyalangan shart orqali.
+    const sharePercent = this.normalizeSharePercent(dto.share_percent);
+    const profitBasis = this.normalizeProfitBasis(dto.profit_basis);
+    const shareEffectiveFrom = this.normalizeShareDay(
+      dto.share_effective_from,
+      'share_effective_from',
+    );
+    const shareStartedAt = this.normalizeShareDay(
+      dto.share_started_at,
+      'share_started_at',
+    );
     // vpKijXce: login bilan bog'lash / uzish (null yoki '' → '0').
     if (dto.user_id !== undefined) {
       if (dto.user_id === null || String(dto.user_id).trim() === '') {
@@ -601,6 +990,23 @@ export class InvestorServiceService {
       action: ActivityAction.UPDATED,
       ...this.auditActor(requester),
     });
+
+    await this.applyShareFields(
+      saved,
+      {
+        share_percent: sharePercent,
+        profit_basis: profitBasis,
+        effective_from: shareEffectiveFrom,
+      },
+      requester,
+    );
+    if (shareStartedAt !== undefined) {
+      await this.applyTermPlan(
+        saved,
+        (rows) => planStartChange(rows, shareStartedAt),
+        requester,
+      );
+    }
 
     return successRes(saved, 200, 'investor updated');
   }
@@ -1145,7 +1551,7 @@ export class InvestorServiceService {
      * o'tadi.
      */
     if (!row.is_paid) {
-      const dedupToken = `investor-profit:${String(row.id)}`;
+      const dedupToken = `${INVESTOR_PROFIT_DEDUP_PREFIX}${String(row.id)}`;
       await rmqSend(
         this.financeClient,
         { cmd: 'finance.cashbox.spend' },
@@ -1242,6 +1648,9 @@ export class InvestorServiceService {
         investor.share_percent === null || investor.share_percent === undefined
           ? null
           : Number(investor.share_percent),
+      profit_basis: isProfitBasis(investor.profit_basis)
+        ? investor.profit_basis
+        : DEFAULT_PROFIT_BASIS,
       created_at: investor.createdAt,
     };
   }
@@ -1270,15 +1679,67 @@ export class InvestorServiceService {
   }
 
   /**
-   * Dashboard kartalari: "Mening investitsiyam" (total_invested), "Ulush
-   * foizi" (current_percentage — oxirgi davr foiz stavkasi), "To'langan foyda"
-   * (total_paid_profit), "Kutilayotgan foyda" (total_unpaid_profit).
+   * Investor ulushi — kunlik, birinchi shart boshidan bugungacha
+   * (`finance.pnl.series` + `computeAccrual`). Moliya javob bermasa — 503:
+   * nol ko'rsatish («foyda yo'q») noto'g'ri bo'lardi.
+   */
+  private async loadAccrual(investorId: string): Promise<{
+    terms: InvestorShareTerm[];
+    accrual: Accrual;
+    throughDay: string | null;
+  }> {
+    const terms = await this.activeTerms(investorId);
+    const empty: Accrual = { months: [], totalCents: 0, totalBasisCents: 0 };
+    const fromDay = terms.length ? String(terms[0].effective_from) : null;
+    if (!fromDay || fromDay > this.todayDay()) {
+      return { terms, accrual: empty, throughDay: null };
+    }
+    let response: { data?: { to_day?: unknown; items?: unknown } } | null;
+    try {
+      response = await rmqSend(
+        this.financeClient,
+        { cmd: 'finance.pnl.series' },
+        { from_day: fromDay, granularity: 'day' },
+        // Gateway dashboard timeout — 8 s: 2 × 3,5 s + kutish undan oshmaydi.
+        { timeoutMs: 3500, retries: 1 },
+      );
+    } catch {
+      throw new RpcException(
+        errorRes(
+          "Kompaniya foydasi hozir olinmadi — birozdan keyin qayta urinib ko'ring",
+          503,
+        ),
+      );
+    }
+    const data = response?.data ?? {};
+    const days: DailyPnlLike[] = (Array.isArray(data.items) ? data.items : [])
+      .map((row: { period?: unknown; gross?: unknown; net?: unknown }) => ({
+        period: typeof row?.period === 'string' ? row.period : '',
+        gross: Number(row?.gross) || 0,
+        net: Number(row?.net) || 0,
+      }))
+      .filter((row) => isDayKey(row.period));
+    return {
+      terms,
+      accrual: computeAccrual(
+        terms.map((term) => this.toTermRow(term)),
+        days,
+      ),
+      throughDay: typeof data.to_day === 'string' ? data.to_day : null,
+    };
+  }
+
+  /**
+   * Dashboard kartalari: «Mening investitsiyam» (total_invested), «Ulush»,
+   * «To'langan foyda» (total_paid_profit — haqiqatan to'langan),
+   * «Kutilayotgan foyda» (total_unpaid_profit = hisoblangan − to'langan).
    * Faqat shu investorning yozuvlari (soft-delete'lar hisobga kirmaydi).
    */
   private async buildInvestorSummary(
-    investorId: string,
+    investor: Investor,
+    loaded: Awaited<ReturnType<InvestorServiceService['loadAccrual']>>,
   ): Promise<InvestorSummary> {
-    const id = String(investorId);
+    const id = String(investor.id);
     const [investmentAgg, profitAgg, latestProfit] = await Promise.all([
       this.investmentRepo
         .createQueryBuilder('investment')
@@ -1321,15 +1782,29 @@ export class InvestorServiceService {
     ]);
 
     const paidCents = toCents(profitAgg?.paid);
-    const unpaidCents = toCents(profitAgg?.unpaid);
+    const pendingCents = toCents(profitAgg?.unpaid);
+    const accruedCents = loaded.accrual.totalCents;
+    const open = loaded.terms.find((term) => !term.effective_to);
     return {
       total_invested: fromCents(toCents(investmentAgg?.total)),
       investments_count: Number(investmentAgg?.count ?? 0) || 0,
       first_invested_at: toDateOrNull(investmentAgg?.first_at),
       last_invested_at: toDateOrNull(investmentAgg?.last_at),
       total_paid_profit: fromCents(paidCents),
-      total_unpaid_profit: fromCents(unpaidCents),
-      total_profit: fromCents(paidCents + unpaidCents),
+      total_unpaid_profit: fromCents(accruedCents - paidCents),
+      total_profit: fromCents(accruedCents),
+      accrued_profit: fromCents(accruedCents),
+      accrued_basis: fromCents(loaded.accrual.totalBasisCents),
+      accrued_through: loaded.throughDay,
+      share_started_at: loaded.terms.length
+        ? String(loaded.terms[0].effective_from)
+        : null,
+      profit_basis: open
+        ? this.toTermRow(open).profit_basis
+        : isProfitBasis(investor.profit_basis)
+          ? investor.profit_basis
+          : DEFAULT_PROFIT_BASIS,
+      pending_payout_amount: fromCents(pendingCents),
       profit_shares_count: Number(profitAgg?.count ?? 0) || 0,
       current_percentage: latestProfit ? Number(latestProfit.percentage) : null,
       last_paid_at: toDateOrNull(profitAgg?.last_paid_at),
@@ -1351,20 +1826,19 @@ export class InvestorServiceService {
 
   /**
    * Oylik foyda grafigi: oxirgi `months` ta Toshkent oyi (joriy oy ham),
-   * bo'sh oylar 0 bilan. Oy — foyda DAVRINING oxiri (period_end) bo'yicha.
+   * bo'sh oylar 0 bilan. Har oy — shu oyda HISOBLANGAN ulush; «To'langan» /
+   * «Kutilmoqda» bo'linmasi — butun to'lovlar eski oydan boshlab
+   * taqsimlanganda (`allocatePaid`).
    */
-  async buildMonthlyProfits(
-    investorId: string,
+  buildMonthlyProfits(
+    accrual: Accrual,
+    paidCents: number,
     months: number,
     now: Date = new Date(),
-  ): Promise<MonthlyProfitPoint[]> {
+  ): MonthlyProfitPoint[] {
     const shiftedNow = new Date(now.getTime() + TASHKENT_OFFSET_MS);
     const year = shiftedNow.getUTCFullYear();
     const month = shiftedNow.getUTCMonth();
-    const rangeStart = new Date(
-      Date.UTC(year, month - (months - 1), 1) - TASHKENT_OFFSET_MS,
-    );
-
     const keys: string[] = [];
     for (let i = months - 1; i >= 0; i -= 1) {
       const monthStart = new Date(Date.UTC(year, month - i, 1));
@@ -1375,63 +1849,47 @@ export class InvestorServiceService {
       );
     }
 
-    const rows = await this.profitShareRepo.find({
-      where: {
-        investor_id: String(investorId),
-        isDeleted: false,
-        period_end: MoreThanOrEqual(rangeStart),
-      },
-      order: { period_end: 'ASC' },
-    });
-
-    const buckets = new Map<string, { paid: number; unpaid: number }>(
-      keys.map((key) => [key, { paid: 0, unpaid: 0 }]),
-    );
-    for (const row of rows) {
-      const end = toDateOrNull(row.period_end);
-      if (!end) {
-        continue;
-      }
-      const bucket = buckets.get(tashkentMonthKey(end));
-      if (!bucket) {
-        // Oynadan tashqari (masalan kelajak davri) — grafikka kirmaydi.
-        continue;
-      }
-      if (row.is_paid) {
-        bucket.paid += toCents(row.amount);
-      } else {
-        bucket.unpaid += toCents(row.amount);
-      }
-    }
-
+    const byMonth = new Map(accrual.months.map((row) => [row.month, row]));
+    const paidByMonth = allocatePaid(accrual.months, paidCents);
     return keys.map((key) => {
-      const bucket = buckets.get(key) ?? { paid: 0, unpaid: 0 };
+      const row = byMonth.get(key);
+      const accrued = row?.accruedCents ?? 0;
+      const paid = paidByMonth.get(key) ?? 0;
       return {
         month: key,
-        paid_amount: fromCents(bucket.paid),
-        unpaid_amount: fromCents(bucket.unpaid),
-        total_amount: fromCents(bucket.paid + bucket.unpaid),
+        accrued_amount: fromCents(accrued),
+        basis_amount: fromCents(row?.basisCents ?? 0),
+        paid_amount: fromCents(paid),
+        unpaid_amount: fromCents(accrued - paid),
+        total_amount: fromCents(accrued),
+        share_percent: row ? row.sharePercent : null,
+        profit_basis: row ? row.profitBasis : null,
       };
     });
   }
 
   private async buildDashboard(investor: Investor, monthsRaw: unknown) {
     const months = this.normalizeMonths(monthsRaw);
-    const [summary, items] = await Promise.all([
-      this.buildInvestorSummary(investor.id),
-      this.buildMonthlyProfits(investor.id, months),
-    ]);
+    const loaded = await this.loadAccrual(investor.id);
+    const summary = await this.buildInvestorSummary(investor, loaded);
+    const items = this.buildMonthlyProfits(
+      loaded.accrual,
+      toCents(summary.total_paid_profit),
+      months,
+    );
     return {
       investor: this.toSelfProfile(investor),
       summary,
       monthly: { months, items },
+      share_terms: loaded.terms.map((term) => this.toSelfTerm(term)),
     };
   }
 
   /** GET /investors/me — o'z profili + kartalar uchun yig'indi. */
   async getMyProfile(requester: Requester) {
     const investor = await this.resolveSelfInvestor(requester);
-    const summary = await this.buildInvestorSummary(investor.id);
+    const loaded = await this.loadAccrual(investor.id);
+    const summary = await this.buildInvestorSummary(investor, loaded);
     return successRes({ investor: this.toSelfProfile(investor), summary });
   }
 

@@ -10,6 +10,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   ServiceUnavailableException,
@@ -36,6 +37,7 @@ import {
   CreateInvestorInvestmentDto,
   CreateInvestorProfitShareDto,
   CreateProfitShareDto,
+  SetInvestorShareTermsDto,
   UpdateInvestmentDto,
   UpdateInvestorDto,
 } from './dto/investor.swagger.dto';
@@ -373,6 +375,32 @@ export class InvestorGatewayController {
         )
         .pipe(timeout(8000)),
     );
+  }
+
+  /**
+   * Ulush sharti (ega 2026-11-28, BeePost naqshi): «shu sanadan boshlab ulush
+   * X%, foyda asosi — sof foyda yoki daromad». Investor ulushi har kun o'sha
+   * kungi shart bilan hisoblanadi; o'tgan kunlar qayta yozilmaydi.
+   */
+  @Put('investors/:id/share-terms')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Investor ulush sharti: foiz, foyda asosi (net/gross) va qaysi kundan',
+  })
+  @ApiParam({ name: 'id' })
+  @ApiBody({ type: SetInvestorShareTermsDto })
+  setShareTerms(
+    @Param('id') id: string,
+    @Body() dto: SetInvestorShareTermsDto,
+    @Req() req?: AuthedRequest,
+  ) {
+    return this.investorClient
+      .send(
+        { cmd: 'investor.share_terms.set' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete('investors/:id')
