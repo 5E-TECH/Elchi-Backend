@@ -445,6 +445,11 @@ export function hqPostAttachTimeoutMs(
  */
 interface RemittedCourierCredit {
   courierId: string;
+  /**
+   * Kredit sarflanadigan filial. `''` — HQ sotuvi (2026-11-27, faqat D2
+   * settled yo'li): kuryer qoldig'i `branch_id` NULL bilan (HQ kuryeri FIFO'si
+   * kabi), `branch_to_hq` qoldig'i qulflanmaydi.
+   */
   branchId: string;
   /** Qatorning `courier_amount` i — musbat, so'm. */
   amount: number;
@@ -6099,6 +6104,8 @@ export class OrderLifecycleService {
       remittedCourierCredit = await this.prepareRemittedCourierCredit(
         creditSale,
         isSuperAdmin,
+        // HQ sotuvi (`branch_id` NULL) — faqat D2 settled yo'lida (2026-11-27).
+        { allowHq: creditSale === settledSale },
       );
       const remittedChainAmount = deferredRollback.plan.remittedChainRows
         .map((row) => Number(row.courier_amount) || 0)
@@ -6956,7 +6963,8 @@ export class OrderLifecycleService {
                 remittedCourierCredit,
               ),
               courier_credit_courier_id: remittedCourierCredit.courierId,
-              courier_credit_branch_id: remittedCourierCredit.branchId,
+              // `null` — HQ sotuvi (kredit kuryerning HQ qoldig'ida).
+              courier_credit_branch_id: remittedCourierCredit.branchId || null,
             }
           : {}),
         // D2 — superadmin: filialga kredit va marketga debet (daftar).
@@ -6964,7 +6972,7 @@ export class OrderLifecycleService {
           ? {
               settled_rollback: {
                 settlement_status: settledLedger.status,
-                branch_id: settledLedger.branchId,
+                branch_id: settledLedger.branchId || null,
                 branch_credit: settledLedger.branchCredit,
                 market_id: settledLedger.marketId,
                 market_debit: settledLedger.marketDebit,
@@ -6999,7 +7007,8 @@ export class OrderLifecycleService {
     // fix3b (M6): superadmin tuzatishida kuryer krediti haqida aniq xabar.
     const courierCreditNote =
       (remittedCourierCredit
-        ? `. Kuryer filialga topshirgan ${remittedCarryCredit(remittedCourierCredit)} so'm ` +
+        ? `. Kuryer ${remittedCourierCredit.branchId ? 'filialga' : "bosh ofisga (HQ'ga)"} ` +
+          `topshirgan ${remittedCarryCredit(remittedCourierCredit)} so'm ` +
           "uning keyingi topshirig'iga hisoblanadi"
         : '') +
       (settledLedger && settledLedger.branchCredit > 0
@@ -8052,6 +8061,14 @@ export class OrderLifecycleService {
   private async prepareRemittedCourierCredit(
     settlement: OrderSettlement | null,
     isSuperAdmin = false,
+    opts: {
+      /**
+       * 2026-11-27 — faqat D2 settled yo'li (superadmin): HQ sotuvi qatori
+       * (`branch_id` NULL) — kredit kuryerning HQ qoldig'iga (`branchId: ''`).
+       * `hqCourierCreditBlocker` bilan AYNI shartlar.
+       */
+      allowHq?: boolean;
+    } = {},
   ): Promise<RemittedCourierCredit> {
     /**
      * WX-3 — qaror shu shartlarni tekshirgan; bu yerdagi rad = qarordan keyin
@@ -8079,7 +8096,7 @@ export class OrderLifecycleService {
     if (toTiyin(amount) <= 0) {
       deny(REMITTED_CREDIT_ROW_MESSAGE);
     }
-    if (!branchId) {
+    if (!branchId && !opts.allowHq) {
       deny(
         "Kuryer to'lovi filialsiz qatorda — rollback mumkin emas (naqd HQ'da)",
       );
@@ -8092,6 +8109,39 @@ export class OrderLifecycleService {
         message:
           "Bosh ofis filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
       });
+    }
+    if (!branchId) {
+      // 2026-11-27 — HQ sotuvi: kuryer hali HQ kuryeri bo'lishi shart (kredit
+      // uning keyingi HQ topshirig'ida ishlatiladi).
+      if (!(await this.isSettlementCarryTablePresent())) {
+        deny(
+          "Hisob-kitob qoldig'i jadvali topilmadi — kuryer kreditini yozib bo'lmaydi, " +
+            'rollback bajarilmadi',
+        );
+      }
+      let hqAssignment: { branch_id?: string | null } | null;
+      try {
+        hqAssignment =
+          await this.lookup.getBranchAssignmentByUserStrict(courierId);
+      } catch {
+        throw new RpcException({
+          statusCode: 503,
+          message:
+            "Kuryer filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+        });
+      }
+      if (String(hqAssignment?.branch_id ?? '').trim() !== hqBranchId) {
+        deny(
+          "Kuryer endi bosh ofis (HQ) kuryeri emas — HQ'ga topshirilgan summani " +
+            "uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi",
+        );
+      }
+      return {
+        courierId,
+        branchId: '',
+        amount: toTiyin(amount) / 100,
+        status: settlement.status,
+      };
     }
     if (branchId === hqBranchId) {
       // HQ qatorida kuryer naqdi MAIN'da; qoldiq esa filial kuryeri deb
@@ -8260,20 +8310,30 @@ export class OrderLifecycleService {
     const reachedHq =
       status === SettlementStatus.BRANCH_SETTLED ||
       status === SettlementStatus.MARKET_SETTLED;
-    const branchCreditTiyin = reachedHq
-      ? toTiyin(sale.branch_amount ?? 0)
-      : paidByBranch;
+    const branchId = String(sale.branch_id ?? '').trim();
+    const marketId = String(sale.market_id ?? '').trim();
+    /**
+     * 2026-11-27 — HQ sotuvi (`branch_id` NULL): filial bo'g'ini yo'q, naqd
+     * kuryerdan (yoki HQ menejeri sotuvida — to'g'ridan-to'g'ri) HQ'ga
+     * tushgan. Filialga kredit YO'Q; HQ olgan summa kuryer kreditida
+     * (`courier_to_branch`, `branch_id` NULL) qaytadi. HQ neti:
+     * −kuryer krediti (HQ olgan `courier_amount`) + market debeti (HQ
+     * to'lagan `market_amount`) = sotuvdagi foydaning teskarisi.
+     */
+    if (!branchId && paidByBranch !== 0) {
+      this.badRequest(
+        "HQ sotuvi qatorida filial to'lovi yozilgan — daftarni avtomatik teskari yozib bo'lmaydi",
+      );
+    }
+    const branchCreditTiyin = !branchId
+      ? 0
+      : reachedHq
+        ? toTiyin(sale.branch_amount ?? 0)
+        : paidByBranch;
     const marketDebitTiyin =
       status === SettlementStatus.MARKET_SETTLED
         ? toTiyin(sale.market_amount ?? 0)
         : paidByBranch;
-    const branchId = String(sale.branch_id ?? '').trim();
-    const marketId = String(sale.market_id ?? '').trim();
-    if (!branchId) {
-      this.badRequest(
-        "Filialsiz (HQ kuryeri) qator — daftarni avtomatik teskari yozib bo'lmaydi",
-      );
-    }
     if (marketDebitTiyin !== 0 && !marketId) {
       this.badRequest(
         "Hisob-kitob qatorida market yo'q — market debetini yozib bo'lmaydi",
@@ -8338,12 +8398,18 @@ export class OrderLifecycleService {
         lock: { mode: 'pessimistic_write' },
       });
     };
-    const branchCarry = await lockCarry('branch_to_hq', plan.branchId);
+    // 2026-11-27 — HQ sotuvi (`branchId` ''): filial qoldig'i yo'q, qulflanmaydi.
+    const branchCarry = plan.branchId
+      ? await lockCarry('branch_to_hq', plan.branchId)
+      : null;
     const marketCarry =
       plan.marketDebit !== 0
         ? await lockCarry('hq_to_market', plan.marketId)
         : null;
-    if (!branchCarry || (plan.marketDebit !== 0 && !marketCarry)) {
+    if (
+      (plan.branchId && !branchCarry) ||
+      (plan.marketDebit !== 0 && !marketCarry)
+    ) {
       this.badRequest(
         "Hisob-kitob qoldig'i qatorini qulflab bo'lmadi — rollback bajarilmadi",
       );
@@ -8392,7 +8458,8 @@ export class OrderLifecycleService {
             (toTiyin(existingAmount) +
               toTiyin(remittedCarryCredit(courierCredit))) /
             100,
-          branch_id: courierCredit.branchId,
+          // HQ sotuvi — `null` (HQ kuryeri qoldig'i FIFO'da shunday).
+          branch_id: courierCredit.branchId || null,
         },
       );
     }
@@ -8438,7 +8505,7 @@ export class OrderLifecycleService {
       .values({
         level: 'courier_to_branch',
         party_id: credit.courierId,
-        branch_id: credit.branchId,
+        branch_id: credit.branchId || null,
         amount: 0,
       })
       .orIgnore()
@@ -8447,6 +8514,10 @@ export class OrderLifecycleService {
       where: { level: 'courier_to_branch', party_id: credit.courierId },
       lock: { mode: 'pessimistic_write' },
     });
+    // 2026-11-27 — HQ sotuvi (`branchId` ''): filial qoldig'i yo'q.
+    if (!credit.branchId) {
+      return courierCarry ?? null;
+    }
     await carryRepo
       .createQueryBuilder()
       .insert()
