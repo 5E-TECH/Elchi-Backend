@@ -23,6 +23,29 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-27 — Carrier API: Olcha uslubidagi kirish (`/carrier/auth/token`, `/carrier/qrorder/find`) (ega)
+
+Deploy: **api-gateway** + **integration-service** (migratsiya va yangi env yo'q). Eski `/carrier/*` yo'llari va
+javoblari o'zgarmagan.
+
+Ega: «Carrier integratsiyasi endpointlarini https://api.olchamarket.uz/swagger dagi endpointlar bilan bir xil qilish
+kerak, faqat Elchinikini». Olcha'ning yetkazuvchiga tegishli ikki endpointi Elchi'da `/carrier/` ostida — baza manzili
+`BASE_URL/carrier` bo'lsa yo'l, metod, maydonlar va javob/xato shakli Olcha'niki bilan bir xil:
+
+- 🆕 [gateway] `POST /carrier/auth/token` `{username, password}` (JSON yoki form) → `{access_token, token_type:
+  "Bearer", expires_in: 3600}`. `username` — **carrier akkaunt ID**, `password` — o'sha akkauntning `elc_` API kaliti
+  (yangi sir yo'q). Kalit rotate qilinsa yoki akkaunt to'xtatilsa token darhol bekor bo'ladi.
+- 🆕 [gateway] `POST /carrier/qrorder/find` `{qr_code}` (Bearer yoki `X-Api-Key`) → `{success, msg, data: {id,
+  full_name, phone, additional_phone, region, district, address, comment, delivery_price, total_price, total_count,
+  created_at, items, status, paid_online_amount}}`; posilkani `/carrier/scan` kabi qabul qiladi.
+- ✏️ [gateway] barcha `/carrier/*` endi `Authorization: Bearer <access_token>` ni ham qabul qiladi (`X-Api-Key` ustun).
+- 🔧 **Frontendda** (Integratsiyalar → Tashqi yetkazuvchi): akkaunt kartasida va kalit yaratilgan/almashtirilgan
+  oynada **«Login (username): <akkaunt ID>»** ni ko'rsatish kerak — hozir ID ekranda yo'q, operator uni kompaniyaga
+  aytolmaydi. «Carrier API imkoniyatlari» ro'yxatiga ikki yangi endpoint qo'shilsin.
+
+Kontrakt: `docs/public/CARRIER_API.md` §10.
+
+
 ### 2026-11-26 — Kassa tarixi: «Marketga o'tkazma» izi kirim / chiqimga kirmaydi (ega)
 
 Deploy: **finance-service** (migratsiya, env yo'q). ⚠️ Frontend jufti bilan birga chiqsin (aks holda eski ekranda juft

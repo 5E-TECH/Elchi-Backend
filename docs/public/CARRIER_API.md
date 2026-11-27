@@ -1,6 +1,6 @@
 # Elchi Pochta — Carrier API (tashqi yetkazuvchi)
 
-**Dasturchilar uchun qo'llanma** · Versiya 1 · Oxirgi yangilanish: 2026-11-14
+**Dasturchilar uchun qo'llanma** · Versiya 1.1 · Oxirgi yangilanish: 2026-11-27
 
 > Qisqa variant: [`CARRIER_API_QUICKSTART.md`](./CARRIER_API_QUICKSTART.md).
 > Interaktiv hujjat (Swagger, faqat Carrier API): test —
@@ -15,6 +15,12 @@ dasturchisi uchun. Unda quyidagilar bor: posilka QR'ini skanerlab buyurtma
 ma'lumotini olish, yetkazish natijasini (sotildi, qisman sotildi, bekor
 qilindi) Elchi'ga yuborish, bekor qilingan posilkani qaytarish va
 hisob-kitobni kuzatish.
+
+> **Olcha API'ga moslashgan tizim uchun:** `POST /carrier/auth/token` va
+> `POST /carrier/qrorder/find` — [Olcha API](https://api.olchamarket.uz/swagger)
+> dagi `POST /auth/token` va `POST /qrorder/find` bilan **bir xil** (yo'l,
+> metod, maydonlar, javob va xato shakli). Baza manzili sifatida
+> `BASE_URL/carrier` ni oling — §10.
 
 > **Marketplace API bilan adashtirmang.** `/partner/*` (Marketplace API,
 > [`MARKETPLACE_API.md`](./MARKETPLACE_API.md)) Elchi'ga buyurtma
@@ -84,7 +90,10 @@ Host: test-api.elchipochta.uz
 X-Api-Key: elc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-- JWT **ishlatilmaydi**, faqat API kalit. Kalit `elc_` bilan boshlanadi.
+- Kalit `elc_` bilan boshlanadi. **Muqobil (Olcha uslubi):** kalit o'rniga
+  `POST /carrier/auth/token` bergan `Authorization: Bearer <access_token>`
+  ham qabul qilinadi (barcha `/carrier/*` da) — §10. Ikkalasi kelsa
+  `X-Api-Key` ishlatiladi.
 - Kalit **bir marta** ko'rsatiladi (yaratilganda). Bazada faqat uning
   SHA-256 hash'i saqlanadi, shuning uchun biz uni tiklab bera olmaymiz.
   Yo'qotsangiz, yangisi beriladi.
@@ -148,7 +157,7 @@ loglardan aniq so'rovni topamiz. Qarorni xabar **matniga emas**,
 | Kod | Ma'nosi | Qayta urinishmi |
 |---|---|---|
 | `400` | So'rov noto'g'ri (maydon, `Idempotency-Key` yo'q — `CARRIER_IDEMPOTENCY_KEY_REQUIRED`, isbot fayli mos emas) yoki buyurtma bu amal uchun mos holatda emas | ❌ yo'q — tuzatish kerak |
-| `401` | `X-Api-Key` yo'q yoki yaroqsiz | ❌ yo'q |
+| `401` | `X-Api-Key` (yoki Bearer token) yo'q yoki yaroqsiz | ❌ yo'q (token muddati o'tgan bo'lsa — yangi token oling) |
 | `403` | Akkaunt o'chirilgan, bog'langan kurier faol emas (`CARRIER_COURIER_INACTIVE`) yoki IP ruxsat etilmagan | ❌ yo'q — Elchi'ga murojaat |
 | `404` | Buyurtma topilmadi yoki sizga biriktirilmagan | ❌ yo'q |
 | `409` + `IDEMPOTENCY_IN_PROGRESS` | Ayni `Idempotency-Key` bilan so'rov hali bajarilmoqda | ✅ ha, biroz kutib, **ayni** kalit bilan |
@@ -490,3 +499,122 @@ emas, "boshqa" deb qabul qilsin.
 | `CARRIER_COURIER_INACTIVE` (403) | Bog'langan kurier bloklangan | Elchi operatoriga murojaat qiling |
 | `Carrier akkaunt faol emas` (403) | Akkaunt o'chirilgan | Elchi operatoriga murojaat qiling |
 | `CARRIER_KEY_CHECK_UNAVAILABLE` / `CARRIER_TEMPORARILY_UNAVAILABLE` (503) | Vaqtinchalik ichki xato | Biroz kutib ayni kalit bilan qayta urining |
+
+---
+
+## 10. Olcha uslubi: `auth/token` va `qrorder/find`
+
+Tizimingiz [Olcha API](https://api.olchamarket.uz/swagger) bilan ishlasa
+(`POST /auth/token` → JWT, so'ng `POST /qrorder/find`), Elchi bilan **o'sha
+kod** ishlaydi — baza manzilini almashtirish kifoya:
+
+| | Olcha | Elchi |
+|---|---|---|
+| Baza manzili | `https://api.olchamarket.uz` | `BASE_URL/carrier` (masalan `https://api.elchipochta.uz/carrier`) |
+| Token | `POST /auth/token` | `POST /carrier/auth/token` |
+| QR bo'yicha buyurtma | `POST /qrorder/find` | `POST /carrier/qrorder/find` |
+
+Natijani yuborish, qaytarish, ro'yxat va kassa uchun Olcha'da endpoint yo'q —
+ular Elchi'ning §5 dagi yo'llari bilan (o'sha Bearer token bilan ham ishlaydi).
+
+### 10.1 Token olish
+
+`POST /carrier/auth/token` — kirishsiz. Tana JSON yoki
+`application/x-www-form-urlencoded`:
+
+| Maydon | Turi | Majburiy | Izoh |
+|---|---|---|---|
+| `username` | string | ✅ | Carrier akkaunt **ID raqami** (Elchi operatori kalit bilan birga beradi) |
+| `password` | string | ✅ | Sizning API kalitingiz (`elc_…`) |
+
+```bash
+curl -X POST "$BASE_URL/carrier/auth/token" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"3","password":"elc_..."}'
+```
+
+Javob (`200`):
+
+| Maydon | Izoh |
+|---|---|
+| `access_token` | JWT. Keyingi so'rovlarda `Authorization: Bearer <access_token>` |
+| `token_type` | Doim `Bearer` |
+| `expires_in` | Amal qilish muddati, soniya — `3600` (1 soat). Tugagach yangisini oling |
+
+- Login yoki parol noto'g'ri — `401`
+  `{"name":"Unauthorized","message":"Invalid username or password.","code":0,"status":401}`.
+- Akkaunt yoki kurier faol emas, IP ruxsat etilmagan — `403` (shu shaklda).
+- Limit: bitta IP'dan daqiqada 20 ta token so'rovi.
+- Kalit almashtirilsa (rotate) yoki akkaunt to'xtatilsa, oldin olingan
+  tokenlar **darhol** ishlamay qoladi (1 soat kutilmaydi).
+
+### 10.2 QR bo'yicha buyurtma
+
+`POST /carrier/qrorder/find`, sarlavha `Authorization: Bearer <access_token>`
+(yoki `X-Api-Key`). Tana:
+
+| Maydon | Turi | Majburiy | Izoh |
+|---|---|---|---|
+| `qr_code` | string | ✅ | Posilka yorlig'idagi QR qiymati (`/carrier/scan` dagi `qr_token` bilan bir xil) |
+
+Faqat **yetkazilmoqda** holatidagi va sizga biriktirilgan buyurtma qaytadi.
+Yo'ldagi (`on the road`) yoki mijozni kutishdagi posilka **shu chaqiruvda
+sizga qabul qilinadi** (`waiting`) — `POST /carrier/scan` bilan bir xil.
+Qayta chaqirish xavfsiz.
+
+```json
+{
+  "success": true,
+  "msg": "Buyurtma topildi",
+  "data": {
+    "id": 900,
+    "full_name": "Alisher Navoiy",
+    "phone": "998901234567",
+    "additional_phone": "998909876543",
+    "region": 1726,
+    "district": 1726294,
+    "address": "Chilonzor 10-kvartal, 5-uy",
+    "comment": "Qo'ng'iroq qiling",
+    "delivery_price": 0,
+    "total_price": 250000,
+    "total_count": 2,
+    "created_at": "2026-11-27 14:30:00",
+    "items": "Kurtka x 2 = 250 000 so'm",
+    "status": "waiting",
+    "paid_online_amount": 0
+  }
+}
+```
+
+`data` maydonlari:
+
+| Maydon | Izoh |
+|---|---|
+| `id` | Elchi buyurtma ID'si — natijani `POST /carrier/orders/{id}/status` ga shu bilan yuboring |
+| `full_name` | Mijoz ismi |
+| `phone` | Mijoz telefoni — faqat raqam, `998` bilan |
+| `additional_phone` | Qo'shimcha telefon (yo'q bo'lsa bo'sh satr) |
+| `region` | Viloyat **SOATO kodi** (4 xona, son); noma'lum bo'lsa `null` |
+| `district` | Tuman **SOATO kodi** (7 xona, son); noma'lum bo'lsa `null` |
+| `address` | Manzil (yo'q bo'lsa bo'sh satr) |
+| `comment` | Izoh (yo'q bo'lsa bo'sh satr) |
+| `delivery_price` | Doim `0`: Elchi'da yetkazish haqi `total_price` ichida |
+| `total_price` | **Mijozdan olinadigan naqd** (onlayn to'langan qism ayirilgan) |
+| `total_count` | Mahsulotlar soni (jami) |
+| `created_at` | Buyurtma yaratilgan vaqt, Toshkent: `YYYY-MM-DD HH:mm:ss` |
+| `items` | Mahsulotlar matni: bitta mahsulot — `Nomi x 2 = 250 000 so'm`, bir nechta — `A x 1, B x 2` (har qator narxi Elchi'da saqlanmaydi) |
+| `status` | *Elchi qo'shimchasi* — buyurtma holati (§6) |
+| `paid_online_amount` | *Elchi qo'shimchasi* — oldindan onlayn to'langan qism |
+
+Xatolar — Olcha'dagidek:
+
+| Holat | HTTP | Tana |
+|---|---|---|
+| Topilmadi yoki sizga biriktirilmagan | `200` | `{"success":false,"msg":"…","status":404}` |
+| Yetkazilmoqda holatida emas (sotilgan, bekor qilingan…), `qr_code` yo'q | `200` | `{"success":false,"msg":"…","status":400}` |
+| Token yo'q, yaroqsiz yoki muddati o'tgan | `401` | `{"name":"Unauthorized","message":"…","code":0,"status":401}` |
+| Ruxsat yo'q (akkaunt/kurier faol emas, IP) | `403` | `{"name":"Forbidden",…,"status":403}` |
+| Vaqtinchalik xato | `503` / `504` | `{"success":false,"msg":"…","status":503}` — qayta urining |
+
+Elchi qo'shimchasi: xato tanasida (bo'lsa) `error_code` — mashina kodi
+(§3; Olcha'ning `code` maydoni doim `0`) va `trace_id`.

@@ -2047,6 +2047,28 @@ settlement FIFO and tracking are unchanged (no `markByProvider`, no
   remainders already put into a return post. Admin: `/admin/carriers` (SA/ADMIN).
   Public contract: `docs/public/CARRIER_API.md` (doc↔DTO spec
   `carrier-api-docs-contract.spec.ts`).
+- **Olcha-style access (2026-11-27, owner):** the carrier half of
+  https://api.olchamarket.uz/swagger mirrored under `/carrier/` (base URL
+  `BASE_URL/carrier` → identical paths/fields/shapes). `POST
+  /carrier/auth/token` (`CarrierAuthGatewayController`, `@Public`, IP throttle
+  `CARRIER_AUTH_THROTTLE_LIMIT` 20/min) `{username = carrier account id,
+  password = elc_ key}` (JSON or form) → `{access_token, token_type: Bearer,
+  expires_in: 3600}`; errors Yii2-shaped `{name, message, code: 0, status}`.
+  JWT signed by `CarrierTokenService` with an HMAC-derived key from
+  `ACCESS_TOKEN_KEY` (aud `elchi-carrier-api`) — never valid as a staff token
+  and vice versa; claims `sub` + `kfp` (key fingerprint,
+  `carrierTokenFingerprint(api_key_hash)`). `CarrierApiKeyGuard` accepts
+  `Authorization: Bearer` on ALL `/carrier/*` when `X-Api-Key` is absent →
+  `integration.carrier.validate_token {id, token_fp}` (rotate/delete → 401
+  immediately), then the same `admit` checks (active/IP/courier). `POST
+  /carrier/qrorder/find {qr_code}` = `scan` core (`scanAndReceive`, receives
+  `on the road`/`waiting_customer`) → `{success, msg, data}`
+  (`toCarrierQrOrderData`: SOATO ints, digits-only phones, `total_price` = COD,
+  `delivery_price` 0, `items` text readable by `external-items-text.ts`);
+  only `on the road`/`waiting_customer`/`waiting` else 400. 400/404 →
+  HTTP 200 `{success:false, msg, status}` (`CarrierOlchaExceptionFilter`,
+  wraps `AllExceptionsFilter`; Elchi code → `error_code`). Contract:
+  `docs/public/CARRIER_API.md` §10.
 - Separate Swagger for carriers: `/carrier-docs` (+ `-json`), built by
   `carrier-swagger.ts` from the gateway doc filtered to `/carrier/*` (unused
   schemas and other security schemes pruned; `X-Api-Key` = `carrier-api-key`

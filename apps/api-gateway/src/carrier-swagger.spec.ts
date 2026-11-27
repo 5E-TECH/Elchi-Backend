@@ -12,9 +12,12 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { CarrierApiKeyGuard } from './auth/carrier-api-key.guard';
 import { CarrierThrottlerGuard } from './auth/carrier-throttler.guard';
+import { CarrierTokenService } from './auth/carrier-token.service';
+import { CarrierAuthGatewayController } from './carrier-auth-gateway.controller';
 import { CarrierGatewayController } from './carrier-gateway.controller';
 import {
   CARRIER_API_KEY_SCHEME,
+  CARRIER_BEARER_SCHEME,
   CARRIER_API_SERVERS,
   CARRIER_SWAGGER_GUIDE,
   buildCarrierSwaggerDocument,
@@ -43,9 +46,15 @@ async function buildApp(
         throttlers: [{ name: 'default', ttl: 60_000, limit: 1_000_000 }],
       }),
     ],
-    controllers: [CarrierGatewayController, InternalProbeController],
+    controllers: [
+      CarrierGatewayController,
+      CarrierAuthGatewayController,
+      InternalProbeController,
+    ],
     providers: [
       CarrierThrottlerGuard,
+      CarrierApiKeyGuard,
+      { provide: CarrierTokenService, useValue: {} },
       { provide: 'ORDER', useValue: { send: jest.fn() } },
       { provide: 'LOGISTICS', useValue: { send: jest.fn() } },
       { provide: 'FINANCE', useValue: { send: jest.fn() } },
@@ -94,25 +103,93 @@ describe('Carrier API Swagger (/carrier-docs)', () => {
 
     it('faqat /carrier/* marshrutlari — ichki marshrut yo‘q', () => {
       expect(Object.keys(doc.paths).sort()).toEqual([
+        // Olcha uslubi (ega 2026-11-27).
+        '/carrier/auth/token',
         '/carrier/cashbox',
         '/carrier/orders',
         '/carrier/orders/{id}/status',
         '/carrier/ping',
+        '/carrier/qrorder/find',
         '/carrier/returns',
         '/carrier/scan',
       ]);
       expect(JSON.stringify(doc)).not.toContain('/orders/secret');
     });
 
-    it('X-Api-Key sxemasi — Authorize tugmasi; boshqa sxemalar yo‘q', () => {
+    it('X-Api-Key va Olcha uslubidagi Bearer — Authorize tugmasi; boshqa sxemalar yo‘q', () => {
       expect(doc.components?.securitySchemes).toEqual({
         [CARRIER_API_KEY_SCHEME]: {
           type: 'apiKey',
           name: 'X-Api-Key',
           in: 'header',
         },
+        [CARRIER_BEARER_SCHEME]: expect.objectContaining({
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+        }) as unknown,
       });
-      expect(doc.security).toEqual([{ [CARRIER_API_KEY_SCHEME]: [] }]);
+      // Ikkalasidan biri (OR).
+      expect(doc.security).toEqual([
+        { [CARRIER_API_KEY_SCHEME]: [] },
+        { [CARRIER_BEARER_SCHEME]: [] },
+      ]);
+    });
+
+    it('⭐ token olish yo‘li kirishsiz; qolgan yo‘llar kalit YOKI Bearer', () => {
+      const ops = doc.paths as Record<
+        string,
+        Record<string, { security?: unknown }>
+      >;
+      expect(ops['/carrier/auth/token'].post.security).toEqual([]);
+      for (const [path, method] of [
+        ['/carrier/qrorder/find', 'post'],
+        ['/carrier/scan', 'post'],
+        ['/carrier/ping', 'get'],
+      ]) {
+        expect(ops[path][method].security).toEqual(
+          expect.arrayContaining([
+            { [CARRIER_API_KEY_SCHEME]: [] },
+            { [CARRIER_BEARER_SCHEME]: [] },
+          ]),
+        );
+      }
+    });
+
+    it('⭐ Olcha sxemalari: AuthToken, QrOrder maydonlari Olcha swagger’idagi bilan bir xil', () => {
+      // https://api.olchamarket.uz/swagger.json — AuthTokenRequest/Response, QrOrderRequest/Response.
+      expect(schemaProps(doc, 'CarrierAuthTokenRequestDto')).toEqual([
+        'password',
+        'username',
+      ]);
+      expect(schemaProps(doc, 'CarrierAuthTokenResponseDto')).toEqual([
+        'access_token',
+        'expires_in',
+        'token_type',
+      ]);
+      expect(schemaProps(doc, 'CarrierQrOrderRequestDto')).toEqual(['qr_code']);
+      expect(schemaProps(doc, 'CarrierQrOrderResponseDto')).toEqual([
+        'data',
+        'msg',
+        'success',
+      ]);
+      expect(schemaProps(doc, 'CarrierQrOrderDataDto')).toEqual(
+        expect.arrayContaining([
+          'id',
+          'full_name',
+          'phone',
+          'additional_phone',
+          'region',
+          'district',
+          'address',
+          'comment',
+          'delivery_price',
+          'total_price',
+          'total_count',
+          'created_at',
+          'items',
+        ]),
+      );
     });
 
     it('tavsif — qisqa qo‘llanma; teglar faqat Carrier', () => {

@@ -22734,7 +22734,7 @@
             }
           },
           "401": {
-            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "description": "X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz",
             "content": {
               "application/json": {
                 "schema": {
@@ -22786,6 +22786,9 @@
         },
         "security": [
           {
+            "carrier-bearer": []
+          },
+          {
             "carrier-api-key": []
           }
         ],
@@ -22833,7 +22836,7 @@
             }
           },
           "401": {
-            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "description": "X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz",
             "content": {
               "application/json": {
                 "schema": {
@@ -22895,10 +22898,112 @@
         },
         "security": [
           {
+            "carrier-bearer": []
+          },
+          {
             "carrier-api-key": []
           }
         ],
         "summary": "Posilka QR skani",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/carrier/qrorder/find": {
+      "post": {
+        "description": "Olcha API `POST /qrorder/find` bilan bir xil. QR orqali sizga biriktirilgan buyurtmani topib, uning ma’lumotlarini qaytaradi. Faqat yetkazilmoqda holatidagi buyurtmalar qaytariladi; aks holda `{success: false, msg: <sabab>, status: 400|404}` (HTTP 200). Yo‘ldagi posilka shu chaqiruvda sizga qabul qilinadi (`status: waiting`) — natijani `POST /carrier/orders/{id}/status` bilan yuboring.",
+        "operationId": "CarrierGatewayController_qrOrderFind",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierQrOrderRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Natija: muvaffaqiyat (`CarrierQrOrderResponseDto`) yoki 400/404 xato (`CarrierQrOrderFailDto`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/CarrierQrOrderResponseDto"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CarrierQrOrderFailDto"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token yuborilmagan yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Ruxsat yo‘q",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-bearer": []
+          },
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "QR kod orqali buyurtmani topish (Olcha uslubi)",
         "tags": [
           "Carrier"
         ],
@@ -23096,7 +23201,7 @@
             }
           },
           "401": {
-            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "description": "X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz",
             "content": {
               "application/json": {
                 "schema": {
@@ -23188,6 +23293,9 @@
         },
         "security": [
           {
+            "carrier-bearer": []
+          },
+          {
             "carrier-api-key": []
           }
         ],
@@ -23235,7 +23343,7 @@
             }
           },
           "401": {
-            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "description": "X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz",
             "content": {
               "application/json": {
                 "schema": {
@@ -23296,6 +23404,9 @@
           }
         },
         "security": [
+          {
+            "carrier-bearer": []
+          },
           {
             "carrier-api-key": []
           }
@@ -23390,7 +23501,7 @@
             }
           },
           "401": {
-            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "description": "X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz",
             "content": {
               "application/json": {
                 "schema": {
@@ -23441,6 +23552,9 @@
           }
         },
         "security": [
+          {
+            "carrier-bearer": []
+          },
           {
             "carrier-api-key": []
           }
@@ -23500,7 +23614,7 @@
             }
           },
           "401": {
-            "description": "X-Api-Key yo‘q yoki yaroqsiz",
+            "description": "X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz",
             "content": {
               "application/json": {
                 "schema": {
@@ -23551,6 +23665,9 @@
           }
         },
         "security": [
+          {
+            "carrier-bearer": []
+          },
           {
             "carrier-api-key": []
           }
@@ -23737,6 +23854,95 @@
           "superadmin",
           "admin"
         ]
+      }
+    },
+    "/carrier/auth/token": {
+      "post": {
+        "description": "Olcha API `POST /auth/token` bilan bir xil. `username` (carrier akkaunt ID) va `password` (API kalit `elc_…`) orqali JWT access token olinadi. Tokenni boshqa `/carrier/*` endpointlarga `Authorization: Bearer <access_token>` sarlavhasi bilan yuboring. Token amal qilish muddati — 1 soat (`expires_in=3600`). Kalit almashtirilsa (rotate) eski tokenlar darhol bekor bo‘ladi.",
+        "operationId": "CarrierAuthGatewayController_token",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierAuthTokenRequestDto"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierAuthTokenRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Muvaffaqiyatli — access token qaytadi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierAuthTokenResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "username yoki password yuborilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Login yoki parol noto‘g‘ri",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (error_code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bitta IP’dan daqiqasiga 20 so‘rovdan ko‘p",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato — birozdan keyin qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "JWT token olish (Olcha uslubi)",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
       }
     },
     "/ai/status": {
@@ -28705,6 +28911,11 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-Api-Key"
+      },
+      "carrier-bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
       }
     },
     "schemas": {
@@ -39451,6 +39662,201 @@
           "data"
         ]
       },
+      "CarrierQrOrderDataDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "example": 12345
+          },
+          "full_name": {
+            "type": "string",
+            "example": "Alisher Navoiy"
+          },
+          "phone": {
+            "type": "string",
+            "example": "998901234567"
+          },
+          "additional_phone": {
+            "type": "string",
+            "example": "998909876543",
+            "description": "Yo‘q bo‘lsa bo‘sh satr"
+          },
+          "region": {
+            "type": "number",
+            "nullable": true,
+            "example": 1726,
+            "description": "Viloyat SOATO kodi (4 xona); noma’lum bo‘lsa null"
+          },
+          "district": {
+            "type": "number",
+            "nullable": true,
+            "example": 1726294,
+            "description": "Tuman SOATO kodi (7 xona); noma’lum bo‘lsa null"
+          },
+          "address": {
+            "type": "string",
+            "example": "Chilonzor 10-kvartal, 5-uy"
+          },
+          "comment": {
+            "type": "string",
+            "example": "Qo‘ng‘iroq qiling"
+          },
+          "delivery_price": {
+            "type": "number",
+            "example": 0,
+            "description": "Elchi’da doim 0 — yetkazish haqi total_price ichida"
+          },
+          "total_price": {
+            "type": "number",
+            "example": 250000,
+            "description": "Mijozdan olinadigan naqd (onlayn to‘langan qism ayirilgan)"
+          },
+          "total_count": {
+            "type": "number",
+            "example": 2
+          },
+          "created_at": {
+            "type": "string",
+            "example": "2025-01-20 14:30:00",
+            "description": "Toshkent vaqti"
+          },
+          "items": {
+            "type": "string",
+            "example": "Mahsulot nomi x 2 = 250 000 so'm"
+          },
+          "status": {
+            "type": "string",
+            "example": "waiting",
+            "description": "Elchi qo‘shimchasi: buyurtma holati"
+          },
+          "paid_online_amount": {
+            "type": "number",
+            "example": 0,
+            "description": "Elchi qo‘shimchasi: oldindan onlayn to‘langan qism (so‘m)"
+          }
+        },
+        "required": [
+          "id",
+          "full_name",
+          "phone",
+          "additional_phone",
+          "region",
+          "district",
+          "address",
+          "comment",
+          "delivery_price",
+          "total_price",
+          "total_count",
+          "created_at",
+          "items",
+          "status",
+          "paid_online_amount"
+        ]
+      },
+      "CarrierQrOrderResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "msg": {
+            "type": "string",
+            "example": "Buyurtma topildi"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CarrierQrOrderDataDto"
+          }
+        },
+        "required": [
+          "success",
+          "msg",
+          "data"
+        ]
+      },
+      "CarrierQrOrderFailDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "msg": {
+            "type": "string",
+            "example": "Buyurtma topilmadi yoki sizga biriktirilmagan"
+          },
+          "status": {
+            "type": "number",
+            "example": 404,
+            "description": "400 | 404 | 503 | 504"
+          },
+          "error_code": {
+            "type": "string",
+            "example": "CARRIER_TEMPORARILY_UNAVAILABLE"
+          },
+          "trace_id": {
+            "type": "string",
+            "example": "eaff465b-4c89-4721-b7c8-30cf22fb403e"
+          }
+        },
+        "required": [
+          "success",
+          "msg",
+          "status"
+        ]
+      },
+      "CarrierQrOrderRequestDto": {
+        "type": "object",
+        "properties": {
+          "qr_code": {
+            "type": "string",
+            "example": "1737123456789123",
+            "description": "Posilka yorlig‘idagi QR qiymati (`/carrier/scan` dagi `qr_token` bilan bir xil)."
+          }
+        },
+        "required": [
+          "qr_code"
+        ]
+      },
+      "CarrierOlchaErrorDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Unauthorized"
+          },
+          "message": {
+            "type": "string",
+            "example": "Invalid username or password."
+          },
+          "code": {
+            "type": "number",
+            "example": 0,
+            "description": "Olcha kabi doim 0"
+          },
+          "status": {
+            "type": "number",
+            "example": 401
+          },
+          "error_code": {
+            "type": "string",
+            "example": "CARRIER_COURIER_INACTIVE",
+            "description": "Elchi qo‘shimchasi: mashina o‘qiydigan kod (bo‘lsa)"
+          },
+          "trace_id": {
+            "type": "string",
+            "example": "eaff465b-4c89-4721-b7c8-30cf22fb403e",
+            "description": "Elchi qo‘shimchasi: muammo bo‘lganda Elchi jamoasiga yuboring"
+          }
+        },
+        "required": [
+          "name",
+          "message",
+          "code",
+          "status"
+        ]
+      },
       "CarrierStatusDataDto": {
         "type": "object",
         "properties": {
@@ -39803,6 +40209,50 @@
         },
         "required": [
           "is_active"
+        ]
+      },
+      "CarrierAuthTokenRequestDto": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "example": "3",
+            "description": "Login — carrier akkaunt ID raqami (Elchi operatori API kalit bilan birga beradi)."
+          },
+          "password": {
+            "type": "string",
+            "example": "elc_…",
+            "format": "password",
+            "description": "Parol — carrier API kaliti (`elc_` bilan boshlanadi)."
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ]
+      },
+      "CarrierAuthTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "description": "JWT access token"
+          },
+          "token_type": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "expires_in": {
+            "type": "number",
+            "example": 3600,
+            "description": "Token amal qilish muddati (soniyalarda)"
+          }
+        },
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in"
         ]
       },
       "RaiseAiCapRequestDto": {

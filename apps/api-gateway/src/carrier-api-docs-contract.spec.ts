@@ -4,11 +4,16 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
   CARRIER_PUBLIC_ORDER_STATUSES,
+  CarrierAuthTokenRequestDto,
+  CarrierAuthTokenResponseDto,
   CarrierOrderStatusRequestDto,
   CarrierPartlySoldItemDto,
+  CarrierQrOrderDataDto,
+  CarrierQrOrderRequestDto,
   CarrierReturnRequestDto,
   CarrierScanRequestDto,
 } from './dto/carrier.swagger.dto';
+import { toCarrierQrOrderData } from './carrier-olcha-compat';
 import { toCarrierOrderView } from './carrier-order-view';
 import { toCarrierCashboxView } from './carrier-cashbox-view';
 
@@ -103,5 +108,19 @@ describe('CARRIER_API.md ↔ gateway DTO', () => {
       data: { cashboxHistory: [{ id: 1 }] },
     }).history[0];
     expect(table).toEqual(Object.keys(entry).sort());
+  });
+
+  it('§10.1 token: so‘rov jadvali = CarrierAuthTokenRequestDto, javob = CarrierAuthTokenResponseDto', () => {
+    const [body, response] = sectionTables('### 10.1 Token olish');
+    expect(body).toEqual(dtoFields(CarrierAuthTokenRequestDto));
+    expect(response).toEqual(dtoFields(CarrierAuthTokenResponseDto));
+  });
+
+  it('§10.2 qrorder/find: so‘rov = DTO, data jadvali = toCarrierQrOrderData kalitlari = DTO', () => {
+    const [body, data] = sectionTables('### 10.2 QR bo');
+    expect(body).toEqual(dtoFields(CarrierQrOrderRequestDto));
+    const keys = Object.keys(toCarrierQrOrderData({ id: '1' })).sort();
+    expect(data).toEqual(keys);
+    expect(dtoFields(CarrierQrOrderDataDto)).toEqual(keys);
   });
 });

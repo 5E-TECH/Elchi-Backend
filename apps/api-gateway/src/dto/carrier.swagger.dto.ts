@@ -933,3 +933,184 @@ export class CarrierErrorResponseDto {
   })
   trace_id?: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// OLCHA USLUBI (ega 2026-11-27) — https://api.olchamarket.uz/swagger dagi
+// `AuthTokenRequest/Response` va `QrOrderRequest/Response` bilan AYNI maydonlar.
+// So'rov tanasi global ValidationPipe'dan O'TMAYDI (xato Olcha shaklida
+// bo'lsin): tekshiruv kontrollerda. Bu sinflar faqat Swagger uchun.
+// ─────────────────────────────────────────────────────────────────────────
+
+export class CarrierAuthTokenRequestDto {
+  @ApiProperty({
+    example: '3',
+    description:
+      'Login — carrier akkaunt ID raqami (Elchi operatori API kalit bilan birga beradi).',
+  })
+  username!: string;
+
+  @ApiProperty({
+    example: 'elc_…',
+    format: 'password',
+    description: 'Parol — carrier API kaliti (`elc_` bilan boshlanadi).',
+  })
+  password!: string;
+}
+
+export class CarrierAuthTokenResponseDto {
+  @ApiProperty({
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+    description: 'JWT access token',
+  })
+  access_token!: string;
+
+  @ApiProperty({ example: 'Bearer' })
+  token_type!: string;
+
+  @ApiProperty({
+    example: 3600,
+    description: 'Token amal qilish muddati (soniyalarda)',
+  })
+  expires_in!: number;
+}
+
+/** Olcha (Yii2) xato shakli: 401/403/429 va `/carrier/auth/token` xatolari. */
+export class CarrierOlchaErrorDto {
+  @ApiProperty({ example: 'Unauthorized' })
+  name!: string;
+
+  @ApiProperty({ example: 'Invalid username or password.' })
+  message!: string;
+
+  @ApiProperty({ example: 0, description: 'Olcha kabi doim 0' })
+  code!: number;
+
+  @ApiProperty({ example: 401 })
+  status!: number;
+
+  @ApiPropertyOptional({
+    example: 'CARRIER_COURIER_INACTIVE',
+    description: 'Elchi qo‘shimchasi: mashina o‘qiydigan kod (bo‘lsa)',
+  })
+  error_code?: string;
+
+  @ApiPropertyOptional({
+    example: 'eaff465b-4c89-4721-b7c8-30cf22fb403e',
+    description:
+      'Elchi qo‘shimchasi: muammo bo‘lganda Elchi jamoasiga yuboring',
+  })
+  trace_id?: string;
+}
+
+export class CarrierQrOrderRequestDto {
+  @ApiProperty({
+    example: '1737123456789123',
+    description:
+      'Posilka yorlig‘idagi QR qiymati (`/carrier/scan` dagi `qr_token` bilan bir xil).',
+  })
+  qr_code!: string;
+}
+
+export class CarrierQrOrderDataDto {
+  @ApiProperty({ example: 12345 })
+  id!: number;
+
+  @ApiProperty({ example: 'Alisher Navoiy' })
+  full_name!: string;
+
+  @ApiProperty({ example: '998901234567' })
+  phone!: string;
+
+  @ApiProperty({
+    example: '998909876543',
+    description: 'Yo‘q bo‘lsa bo‘sh satr',
+  })
+  additional_phone!: string;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 1726,
+    description: 'Viloyat SOATO kodi (4 xona); noma’lum bo‘lsa null',
+  })
+  region!: number | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 1726294,
+    description: 'Tuman SOATO kodi (7 xona); noma’lum bo‘lsa null',
+  })
+  district!: number | null;
+
+  @ApiProperty({ example: 'Chilonzor 10-kvartal, 5-uy' })
+  address!: string;
+
+  @ApiProperty({ example: 'Qo‘ng‘iroq qiling' })
+  comment!: string;
+
+  @ApiProperty({
+    example: 0,
+    description: 'Elchi’da doim 0 — yetkazish haqi total_price ichida',
+  })
+  delivery_price!: number;
+
+  @ApiProperty({
+    example: 250000,
+    description: 'Mijozdan olinadigan naqd (onlayn to‘langan qism ayirilgan)',
+  })
+  total_price!: number;
+
+  @ApiProperty({ example: 2 })
+  total_count!: number;
+
+  @ApiProperty({
+    example: '2025-01-20 14:30:00',
+    description: 'Toshkent vaqti',
+  })
+  created_at!: string;
+
+  @ApiProperty({ example: "Mahsulot nomi x 2 = 250 000 so'm" })
+  items!: string;
+
+  @ApiProperty({
+    example: 'waiting',
+    description: 'Elchi qo‘shimchasi: buyurtma holati',
+  })
+  status!: string;
+
+  @ApiProperty({
+    example: 0,
+    description: 'Elchi qo‘shimchasi: oldindan onlayn to‘langan qism (so‘m)',
+  })
+  paid_online_amount!: number;
+}
+
+export class CarrierQrOrderResponseDto {
+  @ApiProperty({ example: true })
+  success!: boolean;
+
+  @ApiProperty({ example: 'Buyurtma topildi' })
+  msg!: string;
+
+  @ApiProperty({ type: CarrierQrOrderDataDto })
+  data!: CarrierQrOrderDataDto;
+}
+
+/** `qrorder/find` biznes-xatosi (HTTP 200 da 400/404, 5xx — o'z holati bilan). */
+export class CarrierQrOrderFailDto {
+  @ApiProperty({ example: false })
+  success!: boolean;
+
+  @ApiProperty({ example: 'Buyurtma topilmadi yoki sizga biriktirilmagan' })
+  msg!: string;
+
+  @ApiProperty({ example: 404, description: '400 | 404 | 503 | 504' })
+  status!: number;
+
+  @ApiPropertyOptional({ example: 'CARRIER_TEMPORARILY_UNAVAILABLE' })
+  error_code?: string;
+
+  @ApiPropertyOptional({ example: 'eaff465b-4c89-4721-b7c8-30cf22fb403e' })
+  trace_id?: string;
+}

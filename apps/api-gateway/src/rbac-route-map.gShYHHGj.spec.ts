@@ -261,6 +261,10 @@ const NO_ROLES_WHITELIST: readonly string[] = [
   'POST /carrier/orders/:id/status',
   'POST /carrier/returns',
   'POST /carrier/scan',
+  // Olcha uslubi (ega 2026-11-27): token — kirishsiz (o'zi login/parolni
+  // tekshiradi, IP limiti); qrorder/find — CarrierApiKeyGuard (Bearer/kalit).
+  'POST /carrier/auth/token',
+  'POST /carrier/qrorder/find',
   // Ochiq narx kalkulyatori (mSkzzNBJ).
   'GET /public/delivery-tariffs',
   'POST /public/delivery-quote',
