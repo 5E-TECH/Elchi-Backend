@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
-import { ActivityLogService } from '@app/common';
+import { ActivityLogService, Roles } from '@app/common';
 import { BotActionsService } from './bot-actions.service';
 import {
   BOT_PASSWORD_CHANGE_TEXT,
@@ -33,10 +33,18 @@ import {
   type BotMessageHandler,
 } from './handlers/bot-context';
 import { CommandGateHandler } from './handlers/command-gate.handler';
-import { AiOrderHandler } from './ai-order/ai-order.handler';
+import {
+  AiOrderHandler,
+  STAFF_AI_ORDER_TEXT,
+  looksLikeOrder,
+} from './ai-order/ai-order.handler';
 import { CourierHandler } from './courier/courier.handler';
 import { GroupHandler } from './handlers/group.handler';
-import { MarketHandler, UNKNOWN_COMMAND_TEXT } from './handlers/market.handler';
+import {
+  MarketHandler,
+  STAFF_UNKNOWN_COMMAND_TEXT,
+  UNKNOWN_COMMAND_TEXT,
+} from './handlers/market.handler';
 import { MembershipHandler } from './handlers/membership.handler';
 import { StartHandler } from './handlers/start.handler';
 import type { TelegramUpdate } from './telegram.types';
@@ -59,6 +67,22 @@ export const BOT_IDENTITY_UNAVAILABLE_TEXT =
   "⚠️ Tizim vaqtincha ishlamayapti — birozdan so'ng qayta urinib ko'ring.";
 export const CHAT_QUEUE_FULL_TEXT =
   '⏳ Juda ko‘p xabar navbatda — oldingilari tugashini kuting.';
+
+/**
+ * Ulangan odamning tushunarsiz matni. Market — `/status` ko'rsatmasi (oddiy
+ * matni AI'ga ketadi, bu yerga faqat noma'lum `/buyruq` tushadi). Xodim
+ * buyurtmaga o'xshash matn yozsa — kim yarata olishi (ega 2026-11-27: admin
+ * sinab «Tushunarsiz buyruq» olgan); kuryer va qolgani — umumiy menyu.
+ */
+export function unknownTextReply(role: string, text: string): string {
+  if (role === Roles.MARKET || role === Roles.MARKET_OPERATOR) {
+    return UNKNOWN_COMMAND_TEXT;
+  }
+  if (role !== Roles.COURIER && !text.startsWith('/') && looksLikeOrder(text)) {
+    return STAFF_AI_ORDER_TEXT;
+  }
+  return STAFF_UNKNOWN_COMMAND_TEXT;
+}
 
 const chatIdIsPrivate = (update: TelegramUpdate) =>
   (update.message?.chat?.type ?? update.callback_query?.message?.chat?.type) ===
@@ -282,8 +306,11 @@ export class BotRouterService implements OnModuleDestroy {
     }
     // (3ZfiXuaW #1) FAIL-CLOSED: bog'lanmagan chatga faqat /start (ulash
     // ko'rsatmasi) javob beradi — tushunarsiz matnga jim.
-    if (ctx.isPrivate && (await ctx.actor())) {
-      await ctx.reply(UNKNOWN_COMMAND_TEXT, { parse_mode: 'HTML' });
+    const actor = ctx.isPrivate ? await ctx.actor() : null;
+    if (actor) {
+      await ctx.reply(unknownTextReply(actor.role, ctx.text), {
+        parse_mode: 'HTML',
+      });
     }
   }
 

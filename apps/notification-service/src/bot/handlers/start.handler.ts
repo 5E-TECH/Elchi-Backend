@@ -5,6 +5,7 @@ import { TelegramDmService } from '../../telegram/telegram-dm.service';
 import { BotRateLimiterService } from '../bot-rate-limiter.service';
 import { BotChannelService } from '../bot-channel.service';
 import { Roles } from '@app/common';
+import { MARKET_AI_ORDER_HINT } from '../ai-order/ai-order.handler';
 import type { BotContext, BotMessageHandler } from './bot-context';
 
 /**
@@ -97,6 +98,11 @@ export class StartHandler implements BotMessageHandler {
           });
         }
         await ctx.reply(result.message);
+        // Market / operator — darhol menyu: bot orqali buyurtma ko'rsatmasi bilan.
+        const actor = result.ok ? await ctx.actor() : null;
+        if (actor && MARKET_ROLES.includes(actor.role)) {
+          await this.replyMenu(ctx);
+        }
         return true;
       }
       const result = await this.telegramDm.unbind(ctx.chatId);
@@ -139,6 +145,8 @@ export class StartHandler implements BotMessageHandler {
       ).trim();
       const lines = [
         '🛍️ <b>Elchi — market</b>',
+        '',
+        MARKET_AI_ORDER_HINT,
         '',
         'Buyurtma holati: <code>/status &lt;buyurtma raqami&gt;</code>',
         'Uzish: /uzish',

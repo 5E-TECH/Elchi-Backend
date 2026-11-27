@@ -28,6 +28,8 @@ export const ORDER_LOOKUP_FAILED_TEXT =
   "❌ Buyurtmani olishda xatolik. Birozdan so'ng qayta urinib ko'ring.";
 export const UNKNOWN_COMMAND_TEXT =
   'Tushunarsiz buyruq. Menyu: /start. Buyurtma holati: <code>/status &lt;buyurtma raqami&gt;</code>';
+/** Ulangan xodim (market emas): `/status` — market buyrug'i, ko'rsatilmaydi. */
+export const STAFF_UNKNOWN_COMMAND_TEXT = 'Tushunarsiz buyruq. Menyu: /start';
 
 const MARKET_ROLES: readonly string[] = [Roles.MARKET, Roles.MARKET_OPERATOR];
 
@@ -111,11 +113,7 @@ export function unwrapOrder(response: unknown): {
 } | null {
   if (!response || typeof response !== 'object') return null;
   const wrapped = (response as { data?: unknown }).data;
-  return (wrapped && typeof wrapped === 'object' ? wrapped : response) as {
-    id?: string | number;
-    status?: string;
-    market_id?: string | number | null;
-  };
+  return wrapped && typeof wrapped === 'object' ? wrapped : response;
 }
 
 /** Masofaviy RpcException holat kodi (RMQ orqali oddiy obyekt). */
