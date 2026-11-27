@@ -16,8 +16,6 @@ import {
   Req,
   ServiceUnavailableException,
   UploadedFile,
-  UseFilters,
-  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -26,7 +24,6 @@ import { memoryStorage } from 'multer';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import {
   ApiBadRequestResponse,
-  ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
   ApiConsumes,
@@ -39,7 +36,6 @@ import {
   ApiOperation,
   ApiParam,
   ApiPayloadTooLargeResponse,
-  ApiSecurity,
   ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
@@ -47,7 +43,6 @@ import {
   ApiUnprocessableEntityResponse,
   getSchemaPath,
 } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import {
   CARRIER_ERROR_CODES,
   Cashbox_type,
@@ -55,17 +50,8 @@ import {
   Roles as RoleEnum,
 } from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
-import {
-  CarrierApiKeyGuard,
-  CarrierPrincipal,
-} from './auth/carrier-api-key.guard';
-import {
-  CarrierThrottlerGuard,
-  carrierThrottleLimit,
-  carrierThrottleTtlMs,
-  readPositiveIntEnv,
-} from './auth/carrier-throttler.guard';
-import { Public } from './auth/public.decorator';
+import { CarrierPrincipal } from './auth/carrier-api-key.guard';
+import { readPositiveIntEnv } from './auth/carrier-throttler.guard';
 import {
   CARRIER_ORDER_LIST_STATUSES,
   CARRIER_STATUS_REQUEST_EXAMPLES,
@@ -75,12 +61,8 @@ import {
   CarrierOrderListQueryDto,
   CarrierOrderListResponseDto,
   CarrierOrderStatus,
-  CarrierOlchaErrorDto,
   CarrierOrderStatusRequestDto,
   CarrierPingResponseDto,
-  CarrierQrOrderFailDto,
-  CarrierQrOrderRequestDto,
-  CarrierQrOrderResponseDto,
   CarrierReturnRequestDto,
   CarrierReturnResponseDto,
   CarrierScanRequestDto,
@@ -95,15 +77,15 @@ import {
 } from './carrier-order-view';
 import { toCarrierCashboxView } from './carrier-cashbox-view';
 import {
-  CARRIER_API_KEY_SCHEME,
-  CARRIER_BEARER_SCHEME,
-} from './carrier-swagger';
-import {
-  CarrierOlchaExceptionFilter,
+  type CarrierQrOrderResult,
   QR_ORDER_FOUND_MSG,
   QR_ORDER_RECEIVED_MSG,
   toCarrierQrOrderData,
 } from './carrier-olcha-compat';
+import {
+  CarrierApiAccess,
+  CarrierQrOrderFindRoute,
+} from './carrier-olcha-routes';
 import {
   CarrierStatusBody,
   carrierStatusRejected,
@@ -114,14 +96,6 @@ import {
   type UploadedProofFile,
   withUploadedProof,
 } from './order-proof-upload';
-
-/**
- * Per-carrier rate limit — env HAR SO'ROVDA o'qiladi (`@Throttle` resolvable,
- * `carrier-throttler.guard.ts`): bo'sh/xato qiymat sukutga tushadi.
- */
-const CARRIER_THROTTLE = {
-  default: { limit: carrierThrottleLimit, ttl: carrierThrottleTtlMs },
-};
 
 const CARRIER_RPC_TIMEOUT_MS = 8000;
 /** Qaytarish pochtasi: har buyurtma uchun order.update — biroz uzoqroq. */
@@ -249,7 +223,7 @@ const text = (value: unknown): string =>
       ? String(value)
       : '';
 
-type CarrierRequest = {
+export type CarrierRequest = {
   carrier: CarrierPrincipal;
   headers?: Record<string, unknown>;
 };
@@ -289,10 +263,9 @@ type Row = Record<string, unknown>;
  * Kontrakt: docs/public/CARRIER_API.md.
  */
 @ApiTags('Carrier')
-// `X-Api-Key` YOKI Olcha uslubidagi Bearer token (`/carrier/auth/token`) —
-// Swagger'da "Authorize" tugmasi (`carrier-swagger.ts`).
-@ApiSecurity(CARRIER_API_KEY_SCHEME)
-@ApiBearerAuth(CARRIER_BEARER_SCHEME)
+// `X-Api-Key` YOKI Olcha uslubidagi Bearer token (`/carrier/auth/token`),
+// akkaunt limiti, `@Public` (xodim JWT'si emas) — `carrier-olcha-routes.ts`.
+@CarrierApiAccess()
 @ApiExtraModels(CarrierOrderStatusRequestDto)
 @ApiUnauthorizedResponse({
   description: 'X-Api-Key (yoki Bearer token) yo‘q yoki yaroqsiz',
@@ -317,9 +290,6 @@ type Row = Record<string, unknown>;
     'Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining',
   type: CarrierErrorResponseDto,
 })
-@Throttle(CARRIER_THROTTLE)
-@UseGuards(CarrierApiKeyGuard, CarrierThrottlerGuard)
-@Public()
 @Controller('carrier')
 export class CarrierGatewayController {
   private readonly logger = new Logger(CarrierGatewayController.name);
@@ -752,49 +722,20 @@ export class CarrierGatewayController {
    * OLCHA USLUBI — `POST /qrorder/find` (https://api.olchamarket.uz/swagger)
    * bilan AYNI so'rov va javob: `{qr_code}` → `{success, msg, data}`; xato —
    * `{success: false, msg, status: 400|404}` (HTTP 200). Kirish: Bearer
-   * (`/carrier/auth/token`) yoki `X-Api-Key`.
+   * (`/carrier/auth/token`) yoki `X-Api-Key`. Olcha'dagi kabi prefikssiz
+   * `POST /qrorder/find` ham AYNAN shu metodni chaqiradi
+   * (`carrier-olcha-root-gateway.controller.ts`).
    *
    * Olcha kabi faqat YETKAZILMOQDA holatidagi buyurtma qaytadi (`on the
    * road` / `waiting_customer` / `waiting`), boshqasi 400. `/carrier/scan`
    * dagidek posilka shu chaqiruvda sizga QABUL QILINADI (`waiting`) —
    * Olcha mijozida alohida «qabul» qadami yo'q, busiz sotib bo'lmasdi.
    */
-  @Post('qrorder/find')
-  @HttpCode(200)
-  @UseFilters(new CarrierOlchaExceptionFilter('result'))
-  @ApiOperation({
-    summary: 'QR kod orqali buyurtmani topish (Olcha uslubi)',
-    description:
-      'Olcha API `POST /qrorder/find` bilan bir xil. QR orqali sizga biriktirilgan buyurtmani topib, ' +
-      'uning ma’lumotlarini qaytaradi. Faqat yetkazilmoqda holatidagi buyurtmalar qaytariladi; aks holda ' +
-      '`{success: false, msg: <sabab>, status: 400|404}` (HTTP 200). Yo‘ldagi posilka shu chaqiruvda ' +
-      'sizga qabul qilinadi (`status: waiting`) — natijani `POST /carrier/orders/{id}/status` bilan yuboring.',
-  })
-  @ApiBody({ type: CarrierQrOrderRequestDto })
-  @ApiExtraModels(CarrierQrOrderFailDto)
-  @ApiOkResponse({
-    description:
-      'Natija: muvaffaqiyat (`CarrierQrOrderResponseDto`) yoki 400/404 xato (`CarrierQrOrderFailDto`)',
-    schema: {
-      oneOf: [
-        { $ref: getSchemaPath(CarrierQrOrderResponseDto) },
-        { $ref: getSchemaPath(CarrierQrOrderFailDto) },
-      ],
-    },
-  })
-  @ApiExtraModels(CarrierQrOrderResponseDto)
-  @ApiUnauthorizedResponse({
-    description: 'Token yuborilmagan yoki yaroqsiz',
-    type: CarrierOlchaErrorDto,
-  })
-  @ApiForbiddenResponse({
-    description: 'Ruxsat yo‘q',
-    type: CarrierOlchaErrorDto,
-  })
+  @CarrierQrOrderFindRoute('carrier')
   async qrOrderFind(
     @Body() body: Record<string, unknown>,
     @Req() req: CarrierRequest,
-  ) {
+  ): Promise<CarrierQrOrderResult> {
     const raw = body?.qr_code;
     const qr =
       typeof raw === 'string' || typeof raw === 'number'

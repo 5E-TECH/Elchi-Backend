@@ -265,6 +265,10 @@ const NO_ROLES_WHITELIST: readonly string[] = [
   // tekshiradi, IP limiti); qrorder/find — CarrierApiKeyGuard (Bearer/kalit).
   'POST /carrier/auth/token',
   'POST /carrier/qrorder/find',
+  // Olcha'dagi kabi prefikssiz (ega 2026-11-27: «Ha, qo'sh») — AYNI handlerlar
+  // va guardlar (`carrier-olcha-root-gateway.controller.ts`).
+  'POST /auth/token',
+  'POST /qrorder/find',
   // Ochiq narx kalkulyatori (mSkzzNBJ).
   'GET /public/delivery-tariffs',
   'POST /public/delivery-quote',

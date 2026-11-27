@@ -22945,7 +22945,7 @@
             }
           },
           "401": {
-            "description": "Token yuborilmagan yoki yaroqsiz",
+            "description": "Token (yoki X-Api-Key) yuborilmagan yoki yaroqsiz",
             "content": {
               "application/json": {
                 "schema": {
@@ -22955,7 +22955,7 @@
             }
           },
           "403": {
-            "description": "Ruxsat yo‘q",
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (error_code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
             "content": {
               "application/json": {
                 "schema": {
@@ -22965,31 +22965,31 @@
             }
           },
           "429": {
-            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint)",
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint birgalikda)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
                 }
               }
             }
           },
           "503": {
-            "description": "Vaqtinchalik xato (CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — ayni Idempotency-Key bilan qayta urining",
+            "description": "Vaqtinchalik xato (error_code CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — qayta urining",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                  "$ref": "#/components/schemas/CarrierQrOrderFailDto"
                 }
               }
             }
           },
           "504": {
-            "description": "Ichki xizmat vaqtida javob bermadi — ayni Idempotency-Key bilan qayta urining",
+            "description": "Ichki xizmat vaqtida javob bermadi — qayta urining",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CarrierErrorResponseDto"
+                  "$ref": "#/components/schemas/CarrierQrOrderFailDto"
                 }
               }
             }
@@ -23858,7 +23858,7 @@
     },
     "/carrier/auth/token": {
       "post": {
-        "description": "Olcha API `POST /auth/token` bilan bir xil. `username` (carrier akkaunt ID) va `password` (API kalit `elc_…`) orqali JWT access token olinadi. Tokenni boshqa `/carrier/*` endpointlarga `Authorization: Bearer <access_token>` sarlavhasi bilan yuboring. Token amal qilish muddati — 1 soat (`expires_in=3600`). Kalit almashtirilsa (rotate) eski tokenlar darhol bekor bo‘ladi.",
+        "description": "Olcha API `POST /auth/token` bilan bir xil. `username` (carrier akkaunt ID) va `password` (API kalit `elc_…`) orqali JWT access token olinadi. Tokenni boshqa carrier endpointlarga `Authorization: Bearer <access_token>` sarlavhasi bilan yuboring. Token amal qilish muddati — 1 soat (`expires_in=3600`). Kalit almashtirilsa (rotate) eski tokenlar darhol bekor bo‘ladi.",
         "operationId": "CarrierAuthGatewayController_token",
         "parameters": [],
         "requestBody": {
@@ -23939,6 +23939,194 @@
           }
         },
         "summary": "JWT token olish (Olcha uslubi)",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/auth/token": {
+      "post": {
+        "description": "Olcha API `POST /auth/token` bilan bir xil. `username` (carrier akkaunt ID) va `password` (API kalit `elc_…`) orqali JWT access token olinadi. Tokenni boshqa carrier endpointlarga `Authorization: Bearer <access_token>` sarlavhasi bilan yuboring. Token amal qilish muddati — 1 soat (`expires_in=3600`). Kalit almashtirilsa (rotate) eski tokenlar darhol bekor bo‘ladi. Bu — Olcha bilan AYNI manzil (prefikssiz): Olcha bilan ishlaydigan tizim faqat domenni almashtiradi (`https://api.olchamarket.uz` → `https://api.elchipochta.uz`). Ishlashi `/carrier/...` dagi yo‘l bilan bir xil.",
+        "operationId": "CarrierOlchaRootGatewayController_token",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierAuthTokenRequestDto"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierAuthTokenRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Muvaffaqiyatli — access token qaytadi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierAuthTokenResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "username yoki password yuborilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Login yoki parol noto‘g‘ri",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (error_code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Bitta IP’dan daqiqasiga 20 so‘rovdan ko‘p",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato — birozdan keyin qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "JWT token olish (Olcha uslubi) — Olcha manzili",
+        "tags": [
+          "Carrier"
+        ],
+        "x-roles": null
+      }
+    },
+    "/qrorder/find": {
+      "post": {
+        "description": "Olcha API `POST /qrorder/find` bilan bir xil. QR orqali sizga biriktirilgan buyurtmani topib, uning ma’lumotlarini qaytaradi. Faqat yetkazilmoqda holatidagi buyurtmalar qaytariladi; aks holda `{success: false, msg: <sabab>, status: 400|404}` (HTTP 200). Yo‘ldagi posilka shu chaqiruvda sizga qabul qilinadi (`status: waiting`) — natijani `POST /carrier/orders/{id}/status` bilan yuboring. Bu — Olcha bilan AYNI manzil (prefikssiz): Olcha bilan ishlaydigan tizim faqat domenni almashtiradi (`https://api.olchamarket.uz` → `https://api.elchipochta.uz`). Ishlashi `/carrier/...` dagi yo‘l bilan bir xil.",
+        "operationId": "CarrierOlchaRootGatewayController_qrOrderFind",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CarrierQrOrderRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Natija: muvaffaqiyat (`CarrierQrOrderResponseDto`) yoki 400/404 xato (`CarrierQrOrderFailDto`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/CarrierQrOrderResponseDto"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CarrierQrOrderFailDto"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token (yoki X-Api-Key) yuborilmagan yoki yaroqsiz",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Akkaunt yoki bog‘langan kurier faol emas (error_code CARRIER_COURIER_INACTIVE), yoki IP ruxsat etilmagan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limit: akkaunt uchun daqiqasiga 120 so‘rov (barcha endpoint birgalikda)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierOlchaErrorDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Vaqtinchalik xato (error_code CARRIER_KEY_CHECK_UNAVAILABLE / CARRIER_TEMPORARILY_UNAVAILABLE) — qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierQrOrderFailDto"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ichki xizmat vaqtida javob bermadi — qayta urining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarrierQrOrderFailDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "carrier-bearer": []
+          },
+          {
+            "carrier-api-key": []
+          }
+        ],
+        "summary": "QR kod orqali buyurtmani topish (Olcha uslubi) — Olcha manzili",
         "tags": [
           "Carrier"
         ],

@@ -25,15 +25,31 @@ export const CARRIER_SWAGGER_PATH = 'carrier-docs';
 export const CARRIER_API_KEY_SCHEME = 'carrier-api-key';
 /** Olcha uslubidagi `Authorization: Bearer` (`POST /carrier/auth/token` tokeni). */
 export const CARRIER_BEARER_SCHEME = 'carrier-bearer';
-/** Kirishsiz yo'l — token shu yerda olinadi (Swagger'da qulf ko'rsatilmaydi). */
-const CARRIER_AUTH_TOKEN_PATH = '/carrier/auth/token';
+/**
+ * Olcha'dagi kabi PREFIKSSIZ manzillar (`carrier-olcha-root-gateway.controller.ts`)
+ * — `/carrier/` bilan boshlanmaydi, lekin carrier hujjatiga kiradi. Faqat
+ * shu ikkitasi: asosiy hujjatdagi boshqa `/auth/*` (xodimlar) chiqmaydi.
+ */
+export const CARRIER_ROOT_ALIAS_PATHS: readonly string[] = [
+  '/auth/token',
+  '/qrorder/find',
+];
+/** Kirishsiz yo'llar — token shu yerda olinadi (Swagger'da qulf ko'rsatilmaydi). */
+const CARRIER_AUTH_TOKEN_PATHS: readonly string[] = [
+  '/carrier/auth/token',
+  '/auth/token',
+];
 const CARRIER_SCHEMES: ReadonlySet<string> = new Set([
   CARRIER_API_KEY_SCHEME,
   CARRIER_BEARER_SCHEME,
 ]);
 
-/** Hujjatga faqat shu prefiksli yo'llar kiradi. */
+/** Hujjatga shu prefiksli yo'llar (va `CARRIER_ROOT_ALIAS_PATHS`) kiradi. */
 const CARRIER_PATH_PREFIX = '/carrier/';
+
+const isCarrierDocPath = (path: string): boolean =>
+  path.startsWith(CARRIER_PATH_PREFIX) ||
+  CARRIER_ROOT_ALIAS_PATHS.includes(path);
 
 /**
  * Qisqa qo'llanma — Swagger sahifasining tepasida ko'rinadi.
@@ -117,12 +133,17 @@ Sotuvda kassangizga **(mijozdan olingan naqd − yetkazish haqingiz)** yoziladi 
 
 ## 5. Olcha uslubi (ixtiyoriy)
 
-Tizimingiz Olcha API bilan ishlasa (\`POST /auth/token\` → JWT, \`POST /qrorder/find\`), o'sha kod Elchi bilan ham ishlaydi — baza manzili \`BASE_URL/carrier\`:
+Tizimingiz Olcha API bilan ishlasa (\`POST /auth/token\` → JWT, \`POST /qrorder/find\`), o'sha kod Elchi bilan ham ishlaydi. Baza manzili — domen **yoki** domen/carrier, ikkalasi ishlaydi: faqat domenni almashtirish kifoya (\`https://api.olchamarket.uz\` → \`https://api.elchipochta.uz\`).
 
-- \`POST /carrier/auth/token\` \`{"username":"<akkaunt ID>","password":"elc_..."}\` → \`{access_token, token_type: "Bearer", expires_in: 3600}\`.
-- \`POST /carrier/qrorder/find\` \`{"qr_code":"..."}\` (\`Authorization: Bearer <access_token>\`) → \`{success, msg, data}\`; posilka shu chaqiruvda sizga qabul qilinadi. Xato: \`{success: false, msg, status: 400|404}\`.
+| Olcha bilan bir xil (\`BASE_URL\`) | Elchi Carrier API (\`BASE_URL/carrier\`) |
+|---|---|
+| \`POST /auth/token\` | \`POST /carrier/auth/token\` |
+| \`POST /qrorder/find\` | \`POST /carrier/qrorder/find\` |
 
-Bearer token barcha \`/carrier/*\` endpointlarda \`X-Api-Key\` o'rniga ishlaydi. Batafsil: \`CARRIER_API.md\` §10.`;
+- \`auth/token\` \`{"username":"<akkaunt ID>","password":"elc_..."}\` → \`{access_token, token_type: "Bearer", expires_in: 3600}\`.
+- \`qrorder/find\` \`{"qr_code":"..."}\` (\`Authorization: Bearer <access_token>\`) → \`{success, msg, data}\`; posilka shu chaqiruvda sizga qabul qilinadi. Xato: \`{success: false, msg, status: 400|404}\`.
+
+Bearer token barcha \`/carrier/*\` endpointlarda \`X-Api-Key\` o'rniga ishlaydi. Elchi'ning boshqa endpointlari faqat \`/carrier/\` ostida. Batafsil: \`CARRIER_API.md\` §10.`;
 
 export type CarrierSwaggerSetupResult =
   'mounted' | 'disabled' | 'disabled_no_password';
@@ -145,15 +166,14 @@ function collectRefs(value: unknown, out: Set<string>): void {
 }
 
 /**
- * To'liq gateway hujjatidan faqat `/carrier/*` yo'llarini va ular
- * ishlatadigan sxemalarni qoldiradi. Boshqa marshrutlar, teglar va
+ * To'liq gateway hujjatidan faqat `/carrier/*` yo'llarini (va Olcha'dagi
+ * kabi prefikssiz `/auth/token`, `/qrorder/find`) va ular ishlatadigan
+ * sxemalarni qoldiradi. Boshqa marshrutlar, teglar va
  * xavfsizlik sxemalari tashqariga chiqmaydi.
  */
 export function filterCarrierDocument(full: OpenAPIObject): OpenAPIObject {
   const paths = Object.fromEntries(
-    Object.entries(full.paths ?? {}).filter(([path]) =>
-      path.startsWith(CARRIER_PATH_PREFIX),
-    ),
+    Object.entries(full.paths ?? {}).filter(([path]) => isCarrierDocPath(path)),
   );
 
   const allSchemas = full.components?.schemas ?? {};
@@ -180,11 +200,12 @@ export function filterCarrierDocument(full: OpenAPIObject): OpenAPIObject {
    * `security` unga tushmasin, aks holda Swagger UI qulf ko'rsatib, kalit
    * so'rardi.
    */
-  const tokenPost = (
-    paths[CARRIER_AUTH_TOKEN_PATH] as
-      { post?: { security?: unknown } } | undefined
-  )?.post;
-  if (tokenPost) tokenPost.security = [];
+  for (const tokenPath of CARRIER_AUTH_TOKEN_PATHS) {
+    const tokenPost = (
+      paths[tokenPath] as { post?: { security?: unknown } } | undefined
+    )?.post;
+    if (tokenPost) tokenPost.security = [];
+  }
 
   return {
     ...full,
@@ -273,7 +294,7 @@ export function buildCarrierSwaggerDocument(
         scheme: 'bearer',
         bearerFormat: 'JWT',
         description:
-          'Olcha uslubi: `POST /carrier/auth/token` bergan `access_token` (1 soat).',
+          'Olcha uslubi: `POST /carrier/auth/token` (yoki `POST /auth/token`) bergan `access_token` (1 soat).',
       },
       CARRIER_BEARER_SCHEME,
     )
