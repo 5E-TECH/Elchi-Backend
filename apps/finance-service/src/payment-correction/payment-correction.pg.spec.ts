@@ -10,6 +10,7 @@ import {
 import { FinanceServiceService } from '../finance-service.service';
 import { Cashbox } from '../entities/cashbox.entity';
 import { CashboxCard } from '../entities/cashbox-card.entity';
+import { CashboxCardMovement } from '../entities/cashbox-card-movement.entity';
 import { CashboxHistory } from '../entities/cashbox-history.entity';
 import { CourierPaymentAck } from '../entities/courier-payment-ack.entity';
 import { FinanceSetting } from '../entities/finance-setting.entity';
@@ -67,6 +68,7 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
         Cashbox,
         CashboxHistory,
         CashboxCard,
+        CashboxCardMovement,
         FinancialBalanceHistory,
         FinanceSetting,
         PaymentCorrection,
@@ -764,28 +766,16 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     ).toMatchObject({ statusCode: 409, code: 'NOT_CORRECTABLE' });
   });
 
-  it('⭐ 9: smena yopiq → 400 SHIFT_REQUIRED; MAIN naqdi yetmaydi → 409, balans o`zgarmagan; tahrir > max → AMOUNT_EXCEEDS', async () => {
+  it('⭐ 9: darvoza yoqiq, smena YO`Q — tuzatish smena so`ramaydi (2026-11-28); MAIN naqdi yetmaydi → 409, balans o`zgarmagan; tahrir > max → AMOUNT_EXCEEDS', async () => {
     await seed('0', Cashbox_type.MAIN);
     await seed('301', Cashbox_type.FOR_COURIER);
     await sale('301', Cashbox_type.FOR_COURIER, 500_000);
     const tid = await payCourier(500_000);
     const leg = await legOf(tid, Cashbox_type.FOR_COURIER);
 
-    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'main';
-    expect(
-      await reverse(String(leg.id)).catch((e) => e.getError()),
-    ).toMatchObject({
-      statusCode: 400,
-      code: 'SHIFT_REQUIRED',
-    });
-    await db.getRepository(Shift).save(
-      db.getRepository(Shift).create({
-        cashbox_user_id: '0',
-        opened_by: '1',
-        opened_at: new Date(),
-        status: ShiftStatus.OPEN,
-      } as never),
-    );
+    // Smena ochilmaydi: xatolar SHIFT_REQUIRED emas — keyingi tekshiruvlar.
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    expect(await db.getRepository(Shift).count()).toBe(0);
 
     // Pul HQ'dan chiqib ketgan (qo'lda chiqim) — qaytarishga yetmaydi.
     await db.query(
@@ -819,6 +809,140 @@ describePg('T6 payment correction — haqiqiy Postgres', () => {
     ).rejects.toMatchObject({ error: { statusCode: 400 } });
     await expect(reverse(String(leg.id), '')).rejects.toMatchObject({
       error: { statusCode: 400, code: 'IDEMPOTENCY_KEY_REQUIRED' },
+    });
+  });
+
+  it('(2026-11-28, ega) MAIN smenasi YOPIQ: qaytarish o`tadi; yopilgan smena jamisi o`zgarmaydi; keyingi smenada — ochilish qoldig`ida va «Smenalar orasida»; oddiy to`lov darvozasi o`zgarmagan', async () => {
+    await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await sale('301', Cashbox_type.FOR_COURIER, 800_000);
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+
+    const s1: any = await finance.openShift({ opened_by: '1' });
+    const tid = await payCourier(500_000);
+    const closed: any = await finance.closeShift({
+      closed_by: '1',
+      closing_balance_cash: 500_000,
+      closing_balance_card: 0,
+    });
+    const totals = (shift: Shift) => ({
+      status: shift.status,
+      closed_at: new Date(shift.closed_at as Date).toISOString(),
+      total_income_cash: Number(shift.total_income_cash),
+      total_expense_cash: Number(shift.total_expense_cash),
+      expected_balance_cash: Number(shift.expected_balance_cash),
+      discrepancy_cash: Number(shift.discrepancy_cash),
+    });
+    const s1Closed = totals(closed.data as Shift);
+    expect(s1Closed).toMatchObject({
+      status: ShiftStatus.CLOSED,
+      total_income_cash: 500_000,
+      total_expense_cash: 0,
+      expected_balance_cash: 500_000,
+      discrepancy_cash: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Oddiy kuryer to'lovi smenasiz — avvalgidek 400 (darvoza o'zgarmagan).
+    await expect(payCourier(100_000)).rejects.toMatchObject({
+      error: { statusCode: 400, message: expect.stringMatching(/^Smena/) },
+    });
+
+    // Superadmin qaytarishi — smenasiz o'tadi.
+    const res = await reverse(
+      String((await legOf(tid, Cashbox_type.FOR_COURIER)).id),
+    );
+    expect(res.statusCode).toBe(201);
+    expect(await box('0', Cashbox_type.MAIN)).toMatchObject({ cash: 0 });
+    expect(await box('301', Cashbox_type.FOR_COURIER)).toMatchObject({
+      balance: 800_000,
+    });
+    await assertInvariant();
+
+    // Yopilgan smena (S1) — jami va farq o'zgarmagan.
+    expect(
+      totals(await db.getRepository(Shift).findOneByOrFail({ id: s1.data.id })),
+    ).toEqual(s1Closed);
+
+    // Keyingi smena (S2): ochilish — jonli qoldiq (qaytarilgandan keyin),
+    // hisobotda «Smenalar orasida»: MAIN dan 500 000 chiqim, 1 ta qator.
+    const s2: any = await finance.openShift({ opened_by: '1' });
+    expect(Number(s2.data.opening_balance_cash)).toBe(0);
+    const reports = new ShiftReportService(
+      db,
+      activityLog as never,
+      { listForShift: jest.fn().mockResolvedValue([]) } as never,
+      {} as never,
+      { send: jest.fn(() => of({ data: [] })) } as never,
+    );
+    const snapshot = await reports.buildSnapshot(s2.data as Shift, 1);
+    expect(snapshot.between_shifts).toMatchObject({
+      income: 0,
+      expense: 500_000,
+      count: 1,
+    });
+    // S2 oynasiga kirmaydi (qaytarish smenalar orasida bo'lgan).
+    const s2Closed: any = await finance.closeShift({
+      closed_by: '1',
+      closing_balance_cash: 0,
+      closing_balance_card: 0,
+    });
+    expect(s2Closed.data).toMatchObject({
+      total_income_cash: 0,
+      total_expense_cash: 0,
+      expected_balance_cash: 0,
+      discrepancy_cash: 0,
+    });
+  });
+
+  it('(2026-11-28) MAIN smenasi OCHIQ: tuzatish smenani FOR SHARE ushlaydi — parallel closeShift kutadi va qaytarishni shu smena jamisiga oladi', async () => {
+    await seed('0', Cashbox_type.MAIN);
+    await seed('301', Cashbox_type.FOR_COURIER);
+    await sale('301', Cashbox_type.FOR_COURIER, 500_000);
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'main';
+    await finance.openShift({ opened_by: '1' });
+    const tid = await payCourier(500_000);
+    const leg = await legOf(tid, Cashbox_type.FOR_COURIER);
+
+    // `as` — TS qayta chaqiruv ichidagi tayinlashni ko`rmay `null` ga toraytirmasin.
+    let closing = null as Promise<any> | null;
+    let closeSettled = false;
+    let settledWhileHeld: boolean | null = null;
+    const real = finance.holdOpenShiftIfAny.bind(finance);
+    const spy = jest
+      .spyOn(finance, 'holdOpenShiftIfAny')
+      .mockImplementation(async (manager, target) => {
+        const shift = await real(manager, target);
+        if (shift && !closing) {
+          closing = finance
+            .closeShift({
+              closed_by: '1',
+              closing_balance_cash: 0,
+              closing_balance_card: 0,
+            })
+            .finally(() => {
+              closeSettled = true;
+            });
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          settledWhileHeld = closeSettled;
+        }
+        return shift;
+      });
+    try {
+      expect((await reverse(String(leg.id))).statusCode).toBe(201);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(closing).not.toBeNull();
+    // Smena ushlangan paytda yopilish tugamagan — tuzatish commit'ini kutgan.
+    expect(settledWhileHeld).toBe(false);
+    const closed: any = await closing;
+    expect(closed.data).toMatchObject({
+      status: ShiftStatus.CLOSED,
+      total_income_cash: 500_000,
+      total_expense_cash: 500_000,
+      expected_balance_cash: 0,
+      discrepancy_cash: 0,
     });
   });
 

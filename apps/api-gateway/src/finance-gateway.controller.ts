@@ -61,13 +61,19 @@ import {
   CASHBOX_RECEIPT_MESSAGES,
   Roles as RoleEnum,
   Source_type,
+  PNL_DEFAULT_MONTHS,
+  businessDayKey,
+  fillPnlSeries,
   matchesDeclaredType,
+  pnlMonthsBackStart,
   stripImageMetadata,
   toPublicUserSummary,
   type AiBalanceScreenshotMediaType,
   type AiBalanceScreenshotResponse,
   type AiReceiptExtractResponse,
   type AiReceiptMediaType,
+  type PnlGranularity,
+  type PnlPoint,
 } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
@@ -85,6 +91,7 @@ import {
   FindCashboxByUserQueryDto,
   FindHistoryQueryDto,
   FinancialBalanceDailyQueryDto,
+  FinancePnlQueryDto,
   HistoryDailyQueryDto,
   PaymentsMetaQueryDto,
   FindShiftQueryDto,
@@ -3529,6 +3536,97 @@ export class FinanceGatewayController {
     );
   }
 
+  /**
+   * Tizim bo'yicha oylik daromad / xarajat / sof foyda grafigi (ega
+   * 2026-11-28). Qoidalar FAQAT `finance.pnl.series` da (`@app/common`
+   * `pnlSql` — investor ulushi bilan bir manba); gateway hech narsani qayta
+   * hisoblamaydi, faqat qatori yo'q oy/kunni 0 bilan to'ldiradi.
+   */
+  @Get('pnl')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Tizim P&L: oylik daromad, xarajat, sof foyda',
+    description:
+      "P&L daftari (`financial_balance_history`) bo'yicha har oy (yoki kun). `gross` — daromad: sotuv foydasi " +
+      '(`sell_profit`), uning qaytarilishi (`correction`, `rollback-extra:*` dan tashqari), pickup haqi (`pickup_fee`). ' +
+      "`opex` — xarajat (musbat son): qo'lda chiqim, ish haqi, hisoblar. Buyurtma qo'shimcha xarajati (va uning " +
+      "qaytarilishi) KIRMAYDI — marketdan ayriladi, kompaniyaga ta'siri nol. `net` = `gross` − `opex`. " +
+      "`other_income` — qo'lda kirim (`manual_income`), alohida, sof foydaga KIRMAYDI. Investorga foyda to'lovi " +
+      '(`investor-profit:*`) umuman kirmaydi. Kalit — Toshkent ish kuni. `items` — `from_day`..`to_day` dagi HAR oy ' +
+      "(kun), qatori yo'g'i 0 bilan; chetdagi oylar chala bo'lishi mumkin (masalan joriy oy). Sukut: joriy oy bilan " +
+      "12 oy. Noto'g'ri sana, `from_day` > `to_day`, oraliq > 3700 kun — 400.",
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'P&L series',
+        data: {
+          from_day: '2026-09-01',
+          to_day: '2026-11-28',
+          granularity: 'month',
+          items: [
+            {
+              period: '2026-09',
+              gross: 41250000,
+              opex: 18400000,
+              net: 22850000,
+              other_income: 5000000,
+            },
+            { period: '2026-10', gross: 0, opex: 0, net: 0, other_income: 0 },
+            {
+              period: '2026-11',
+              gross: 38900000,
+              opex: 21300000,
+              net: 17600000,
+              other_income: 0,
+            },
+          ],
+          totals: {
+            gross: 80150000,
+            opex: 39700000,
+            net: 40450000,
+            other_income: 5000000,
+          },
+        },
+      },
+    },
+  })
+  async pnlSeries(@Query() query: FinancePnlQueryDto) {
+    const granularity: PnlGranularity =
+      query?.granularity === 'day' ? 'day' : 'month';
+    const toDay = query?.to_day ?? businessDayKey(new Date());
+    const fromDay =
+      query?.from_day ?? pnlMonthsBackStart(toDay, PNL_DEFAULT_MONTHS);
+    const response = await this.send<{
+      data?: {
+        from_day: string;
+        to_day: string;
+        granularity: PnlGranularity;
+        items: PnlPoint[];
+      };
+    }>(
+      { cmd: 'finance.pnl.series' },
+      { from_day: fromDay, to_day: toDay, granularity },
+    );
+    const data = response?.data;
+    if (!data || !Array.isArray(data.items)) return response;
+    return {
+      ...response,
+      data: {
+        ...data,
+        items: fillPnlSeries(
+          data.items,
+          data.from_day,
+          data.to_day,
+          data.granularity,
+        ),
+      },
+    };
+  }
+
   @Patch('cashbox/spend')
   @UseGuards(JwtAuthGuard, RolesGuard)
   // 63HO6cBU (P0, PR-B) — filialda «Kassadan xarajat» / «Kassani to'ldirish»
@@ -4351,7 +4449,8 @@ export class FinanceGatewayController {
     description:
       "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN (yoki menejer yozganda filial) sof 0, market +X. Marketga to'lov: to'lagan kassa (MAIN yoki filial) +X, market +X. Filialdan marketga o'tkazma: filial +X, MAIN sof 0, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi; buyurtmalar daftari orqaga (outbox). " +
       "201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. " +
-      'Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` / `IDEMPOTENCY_KEY_REQUIRED`.',
+      'Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `IDEMPOTENCY_KEY_REQUIRED`. ' +
+      "(2026-11-28, ega) Smena SHART EMAS: filial yoki asosiy kassa smenasi yopiq bo'lsa ham o'tadi (`SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` bu yo'lda qaytmaydi). Smena ochiq bo'lsa teskari qatorlar shu smena jamisiga kiradi; yopiq bo'lsa — keyingi smenaning ochilish qoldig'ida va hisobotida «Smenalar orasida (smenasiz)».",
   })
   @ApiCreatedResponse({
     schema: {
@@ -4424,7 +4523,7 @@ export class FinanceGatewayController {
       "(T6) To'lov summasini tuzatish (qaytarish + yangi summa) — FAQAT superadmin",
     description:
       "Qaytarish + yangi summali to'lov (o'sha usul / karta / qabul qiluvchi), BITTA tranzaksiyada; kvitansiya (`finance.payment_received`) yo'q, tomonlarga `finance.payment_corrected`. Javob `/reverse` bilan bir xil shakl (`correction.action = edit`). " +
-      "Qo'shimcha xatolar: 409 `SAME_AMOUNT`; 409 `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi). Tahrirdan keyingi to'lovni yana tuzatish mumkin, muddat zanjirning birinchi to'lovidan.",
+      "Qo'shimcha xatolar: 409 `SAME_AMOUNT`; 409 `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi). Tahrirdan keyingi to'lovni yana tuzatish mumkin, muddat zanjirning birinchi to'lovidan. Smena shart emas (`/reverse` kabi).",
   })
   async correctPaymentAmount(
     @Req() req: { user: JwtUser },

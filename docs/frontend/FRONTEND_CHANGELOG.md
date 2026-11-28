@@ -23,6 +23,52 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-28 — To'lovni qaytarish / summani tuzatish smenaga bog'liq emas (T6, ega)
+
+Deploy: **finance-service** (+ **api-gateway** — faqat Swagger matni). Migratsiya, env, backfill yo'q.
+
+- ✏️ [finance] `POST /finance/history/:id/reverse` va `POST /finance/history/:id/correct-amount` (superadmin) endi
+  filial yoki asosiy kassa smenasi YOPIQ bo'lsa ham o'tadi — 400 `BRANCH_SHIFT_REQUIRED` / `SHIFT_REQUIRED` bu
+  yo'lda QAYTMAYDI (kechasi filial menejeriga «smenani och» deb qo'ng'iroq qilish shart emas). Smena ochiq bo'lsa
+  teskari qatorlar shu smena jamisiga kiradi (yopilayotgan smena tuzatish commit'ini kutadi); yopiq bo'lsa —
+  yopilgan smena hisoboti o'zgarmaydi, harakat keyingi smenaning ochilish qoldig'ida va hisobotida «Smenalar
+  orasida (smenasiz)» bo'lib ko'rinadi. Oddiy to'lovlar (kuryerdan qabul, HQ'ga topshiriq, marketga to'lov,
+  qo'lda kirim/chiqim) darvozasi O'ZGARMAGAN.
+- 🟢 Frontend: o'zgarish shart emas. Tasdiq oynasidagi «Filial smenasi ochilmagan» / «Smenani ochish» qutisi
+  endi bu yo'lda chiqmaydi (xato xaritasi eski BE bilan moslik uchun qolishi mumkin).
+
+### 2026-11-28 — Tizim bo'yicha oylik daromad, xarajat, sof foyda (`GET /finance/pnl`) (ega)
+
+Deploy: **api-gateway** (+ **libs/common**). Migratsiya va env yo'q. `finance.pnl.series` (#811) allaqachon
+finance-service'da — qoidalar o'sha yerda, gateway qayta hisoblamaydi.
+
+- 🆕 [gateway] `GET /finance/pnl[?from_day&to_day&granularity=month|day]` — faqat superadmin/admin (boshqa rol 403).
+  Javob: `{from_day, to_day, granularity, items: [{period, gross, opex, net, other_income}], totals}`. `period` —
+  `YYYY-MM` (sukut) yoki `YYYY-MM-DD`. `items` — oraliqdagi HAR oy, qatori yo'q oy 0 bilan (grafikda bo'shliq yo'q).
+  Sukut: joriy oy bilan 12 oy (`from_day` = 11 oy oldingi oyning 1-kuni, `to_day` = bugungi ish kuni). Chetdagi
+  oylar chala bo'lishi mumkin (joriy oy — bugungacha).
+  - `gross` (Daromad) — sotuv foydasi + uning qaytarilishi + pickup haqi;
+  - `opex` (Xarajat, musbat) — qo'lda chiqim, ish haqi, hisoblar (buyurtma qo'shimcha xarajati KIRMAYDI — marketdan
+    ayriladi; BE #812);
+  - `net` (Sof foyda) = `gross` − `opex` (manfiy bo'lishi mumkin);
+  - `other_income` (qo'lda kirim) — alohida, sof foydaga KIRMAYDI; investorga foyda to'lovi umuman kirmaydi.
+  Noto'g'ri sana, `from_day` > `to_day`, oraliq > 3700 kun — 400.
+→ Frontend: superadmin/admin uchun oylik daromad / xarajat / sof foyda grafigi.
+
+### 2026-11-27 — Rollback: superadmin HQ (Toshkent) sotuvini ham qaytaradi; kuryer/menejer xabarida market yo'q
+
+Deploy: **order-service**. Migratsiya / env / backfill yo'q. FE o'zgarishi shart emas.
+
+- 🟢 [order] `POST /orders/rollback/:id` va ro'yxat/tafsilotdagi `rollback` maydoni: HQ sotuvi (HQ kuryeri
+  yoki HQ menejeri; hisob-kitob qatorida filial yo'q) pul HQ'ga topshirilgan / market to'langan bo'lsa ham
+  superadmin uchun endi `allowed: true` (ilgari `CORRECTION_REQUIRED` «Kuryer to'lovi filialsiz qatorda…»).
+  Naqd ko'chmaydi: kuryerga HQ krediti (keyingi HQ topshirig'ida), market oldindan olgan (keyingi to'lovidan).
+  HQ kuryeri boshqa filialga o'tkazilgan bo'lsa — `CORRECTION_REQUIRED` («…bosh ofis (HQ) kuryeri emas…»).
+- ✏️ [order] Kuryer / menejer uchun `PAID` / `PARTLY_PAID` rad xabari (`SUPERADMIN_ONLY`) endi bitta neytral matn:
+  «Bu buyurtmani faqat superadmin qaytara oladi — superadminga murojaat qiling» (ilgari «Market to'langan…» /
+  «Qisman to'langan…»). Kuryerga filial→market to'lovi va 246 izi ham aytilmaydi. Kod o'zgarmagan — FE matnni
+  `rollback.message` dan oladi.
+
 ### 2026-11-27 — Kuryerdagi buyurtmalar: 72 soatdan oshgan, 48 soatga yaqin, kuryerlar bo'yicha + ogohlantirish (onXzDc5n)
 
 Deploy: **order-service** (migratsiya **1716000000254**: `orders.courier_hold_warned_at` + qism indeks

@@ -90,6 +90,13 @@ import {
   OutboxEvent,
   businessDayLocalSql,
   businessDayRange,
+  businessDayKey,
+  businessDayStart,
+  businessDayEnd,
+  isDayKey,
+  pnlSql,
+  type PnlGranularity,
+  type PnlPoint,
   toPublicUserSummary,
   type PublicUserSummary,
 } from '@app/common';
@@ -3755,6 +3762,34 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           : FinanceServiceService.BRANCH_SHIFT_REQUIRED_MESSAGE,
       );
     }
+  }
+
+  /**
+   * (2026-11-28, ega) Smena SHART EMAS, lekin OCHIQ bo'lsa uni ushlab turadi:
+   * superadmin tuzatishi (T6 qaytarish / summa tahriri) kabi smenaga bog'liq
+   * bo'lmasligi kerak bo'lgan pul harakati uchun. Ochiq smena qatori FOR
+   * SHARE bilan o'qiladi — shu payt yopilayotgan `closeShift` (FOR UPDATE)
+   * bu harakat commit bo'lishini kutadi va uni o'z jamisiga qo'shadi; smena
+   * yopiq bo'lsa harakat ikki smena orasiga tushadi (keyingi smena ochilish
+   * qoldig'ida, hisobotda «Smenalar orasida (smenasiz)»). Smena yuritilmaydigan
+   * kassa (kuryer / market) — hech narsa qilinmaydi. Rad etmaydi.
+   */
+  async holdOpenShiftIfAny(
+    manager: EntityManager,
+    target: { user_id: string; cashbox_type?: Cashbox_type | null },
+  ): Promise<Shift | null> {
+    const cashboxType = target.cashbox_type ?? Cashbox_type.MAIN;
+    if (
+      cashboxType !== Cashbox_type.MAIN &&
+      cashboxType !== Cashbox_type.BRANCH
+    ) {
+      return null;
+    }
+    return this.findOpenShiftForCashbox(
+      manager,
+      String(target.user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID),
+      'pessimistic_read',
+    );
   }
 
   /**
@@ -9250,6 +9285,133 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         },
         200,
         'Financial balance analytics',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /** P&L seriyasining eng uzun oralig'i (kun, ≈10 yil) — cheksiz so'rovdan himoya. */
+  private static readonly PNL_MAX_DAYS = 3700;
+
+  /**
+   * KOMPANIYA P&L SERIYASI — `finance.pnl.series` (ega 2026-11-28).
+   *
+   * P&L daftaridan (`financial_balance_history`) har ish kuni yoki oy bo'yicha
+   * daromad / xarajat / sof foyda / boshqa kirim. Ajratish qoidalari —
+   * `@app/common` `pnlSql` (BeePost ma'nosi; investor to'lovi kirmaydi).
+   * Investor ulushi (investor-service) kunlik seriyani o'qiydi; tizim
+   * bo'yicha oylik grafik — oylik seriyani.
+   *
+   * Faqat qatori bor davrlar qaytadi (bo'sh kun/oy — yo'q); o'quvchi skeletni
+   * o'zi quradi. Kalit — ISH KUNI (`businessDayLocalSql`), boshqa moliyaviy
+   * hisobotlar bilan bir xil.
+   */
+  async financialPnlSeries(input: {
+    from_day?: string;
+    to_day?: string;
+    granularity?: string;
+  }) {
+    try {
+      const granularity: PnlGranularity =
+        input?.granularity === 'month' ? 'month' : 'day';
+      const fromDay = String(input?.from_day ?? '').trim();
+      const toDay = input?.to_day
+        ? String(input.to_day).trim()
+        : businessDayKey(new Date());
+      if (!isDayKey(fromDay) || !isDayKey(toDay)) {
+        throw new BadRequestException(
+          "from_day va to_day 'YYYY-MM-DD' formatida bo'lishi kerak",
+        );
+      }
+      if (fromDay > toDay) {
+        throw new BadRequestException(
+          "from_day to_day dan katta bo'lmasligi kerak",
+        );
+      }
+      const spanDays =
+        (Date.parse(`${toDay}T00:00:00Z`) -
+          Date.parse(`${fromDay}T00:00:00Z`)) /
+          86_400_000 +
+        1;
+      if (spanDays > FinanceServiceService.PNL_MAX_DAYS) {
+        throw new BadRequestException(
+          `Oraliq ${FinanceServiceService.PNL_MAX_DAYS} kundan oshmasligi kerak`,
+        );
+      }
+
+      const rules = pnlSql('h');
+      const local = businessDayLocalSql('h."createdAt"');
+      const periodSql = `to_char(${local}, '${
+        granularity === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD'
+      }')`;
+      const rows = await this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .select(periodSql, 'period')
+        .addSelect(
+          `COALESCE(SUM(CASE WHEN ${rules.gross} THEN h.amount ELSE 0 END), 0)`,
+          'gross',
+        )
+        .addSelect(
+          `COALESCE(SUM(CASE WHEN ${rules.opex} THEN -h.amount ELSE 0 END), 0)`,
+          'opex',
+        )
+        .addSelect(
+          `COALESCE(SUM(CASE WHEN ${rules.otherIncome} THEN h.amount ELSE 0 END), 0)`,
+          'other_income',
+        )
+        .where('h.isDeleted = false')
+        .andWhere(rules.included)
+        .andWhere('h.createdAt BETWEEN :pnlStart AND :pnlEnd', {
+          pnlStart: businessDayStart(fromDay),
+          pnlEnd: businessDayEnd(toDay),
+        })
+        .groupBy('period')
+        .orderBy('period', 'ASC')
+        .getRawMany<{
+          period: string;
+          gross: string | number | null;
+          opex: string | number | null;
+          other_income: string | number | null;
+        }>();
+
+      // Tiyinlarda — float driftisiz yig'indi.
+      const cents = (value: unknown) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? Math.round(n * 100) : 0;
+      };
+      const totals = { gross: 0, opex: 0, other_income: 0 };
+      const items: PnlPoint[] = rows.map((row) => {
+        const gross = cents(row.gross);
+        const opex = cents(row.opex);
+        const otherIncome = cents(row.other_income);
+        totals.gross += gross;
+        totals.opex += opex;
+        totals.other_income += otherIncome;
+        return {
+          period: String(row.period),
+          gross: gross / 100,
+          opex: opex / 100,
+          net: (gross - opex) / 100,
+          other_income: otherIncome / 100,
+        };
+      });
+
+      return this.successRes(
+        {
+          from_day: fromDay,
+          to_day: toDay,
+          granularity,
+          items,
+          totals: {
+            gross: totals.gross / 100,
+            opex: totals.opex / 100,
+            net: (totals.gross - totals.opex) / 100,
+            other_income: totals.other_income / 100,
+          },
+        },
+        200,
+        'P&L series',
       );
     } catch (error) {
       this.toRpcError(error);

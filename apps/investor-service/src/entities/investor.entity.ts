@@ -1,6 +1,7 @@
 import { Column, Entity, Index, OneToMany } from 'typeorm';
 import { BaseEntity, numericTransformer } from '@app/common';
 import { Status } from '@app/common';
+import type { ProfitBasis } from '@app/common';
 import { Investment } from './investment.entity';
 import { ProfitShare } from './profit-share.entity';
 
@@ -39,6 +40,14 @@ export class Investor extends BaseEntity {
     transformer: numericTransformer,
   })
   share_percent!: number | null;
+
+  /**
+   * Joriy foyda asosi (migratsiya 1716000000256): 'net' — sof foydadan,
+   * 'gross' — daromaddan. Tarix va hisob — `investor_share_terms` da; bu
+   * ustun ochiq shartning nusxasi (ro'yxat va forma uchun).
+   */
+  @Column({ type: 'varchar', length: 8, default: 'net' })
+  profit_basis!: ProfitBasis;
 
   @OneToMany(() => Investment, (investment) => investment.investor)
   investments!: Investment[];

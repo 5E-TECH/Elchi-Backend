@@ -693,7 +693,8 @@ describe('RBAC-20 — menejer faqat SOLD/CANCELLED buyurtmani qaytaradi', () => 
     [
       Order_status.PAID,
       'SUPERADMIN_ONLY',
-      "Market to'langan buyurtmani faqat superadmin qaytara oladi",
+      // Ega (2026-11-27): menejerga market to'lovi aytilmaydi.
+      'Bu buyurtmani faqat superadmin qaytara oladi — superadminga murojaat qiling',
     ],
   ])(
     '⭐ menejer %s buyurtmani qaytara olmaydi (%s)',

@@ -526,8 +526,18 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
         WHERE branch_id = $1`,
       [BRANCH],
     );
+    // 2026-11-27 — faqat SHU filialga bog'langan kuryer qoldig'i filial
+    // kassasida turibdi; HQ kuryeri qoldig'i (`branch_id` NULL) — naqd MAIN'da.
+    const courierCarryAtBranch = await sumOf(
+      `SELECT SUM(amount) FROM "${orderSchema}".order_settlement_carry
+        WHERE level = 'courier_to_branch' AND branch_id = $1`,
+      [BRANCH],
+    );
     expect(s.branch).toBeCloseTo(
-      branchOwed - s.carries.branch + s.carries.courier - branchMarketPrepaid,
+      branchOwed -
+        s.carries.branch +
+        courierCarryAtBranch -
+        branchMarketPrepaid,
       2,
     );
     return s;
@@ -1014,6 +1024,198 @@ describePg('Rollback D1–D4 — haqiqiy Postgres (pg)', () => {
           WHERE amount <> 0`,
       );
       expect(n).toBe(0);
+    }, 60_000);
+
+    /**
+     * 2026-11-27 (ega): Toshkent (HQ) kuryeri sotgan, pulni HQ'ga topshirgan,
+     * HQ marketga to'lagan (buyurtma «To'landi») — superadmin «Kutilmoqda» ga
+     * qaytara olmasdi (HQ qatorida `branch_id` NULL → CORRECTION_REQUIRED).
+     */
+    const hqOrder = {
+      holder_branch_id: HQ,
+      branch_id: HQ,
+      home_branch_id: HQ,
+    };
+    const HQ_COURIER = { id: COURIER_ID, roles: ['courier'], branch_id: HQ };
+    const hqCourierPays = async (amount: number, key: string) => {
+      // HQ kuryeri — qabul qiluvchi MAIN (sukut).
+      await finance.paymentsFromCourier({
+        courier_id: COURIER_ID,
+        amount,
+        payment_method: PaymentMethod.CASH,
+        created_by: SUPERADMIN.id,
+        dedup_epoch: key,
+      });
+      await relay();
+      await assertInvariants();
+    };
+    const markPaid = (id: string) =>
+      // finance `writeOrderPayment` (bu harness'da order mijozi mock).
+      orderDb.query(
+        `UPDATE "${orderSchema}".orders
+            SET status = 'paid', paid_amount = to_be_paid WHERE id = $1`,
+        [id],
+      );
+
+    it('⭐ HQ kuryeri: sotdi → HQ`ga topshirdi → HQ marketga to`ladi (PAID) — superadmin qaytaradi: kuryerga HQ krediti, filial krediti yo`q, market oldindan olgan; HQ neti 0; qayta sotuvda kreditlar yopiladi', async () => {
+      courierBranch.set(COURIER_ID, HQ);
+      await addOrder('7001', hqOrder);
+      await sell(HQ_COURIER, '7001');
+      expect(await saleRow('7001')).toMatchObject({
+        status: SettlementStatus.PENDING,
+      });
+      await hqCourierPays(COURIER_SHARE, 'cp-hq');
+      // HQ sotuvi: filial bo'g'ini yo'q — darhol BRANCH_SETTLED.
+      expect((await saleRow('7001'))?.status).toBe(
+        SettlementStatus.BRANCH_SETTLED,
+      );
+      await hqPaysMarket(MARKET_SHARE, 'mp-hq');
+      expect((await saleRow('7001'))?.status).toBe(
+        SettlementStatus.MARKET_SETTLED,
+      );
+      await markPaid('7001');
+
+      // Kuryerga market to'lovi aytilmaydi.
+      const courierError = await deniedRollback(
+        HQ_COURIER,
+        '7001',
+        'SUPERADMIN_ONLY',
+      );
+      expect(courierError.message).not.toMatch(/market/i);
+
+      const mainBefore = await balance('0', Cashbox_type.MAIN);
+      const res = await allowedRollback(SUPERADMIN, '7001', 'rb-hq');
+      expect(res.message).toContain(
+        `Kuryer bosh ofisga (HQ'ga) topshirgan ${COURIER_SHARE} so'm uning keyingi topshirig'iga hisoblanadi`,
+      );
+      expect(res.message).toContain(`Market ${MARKET_SHARE} so'm`);
+      expect(res.message).not.toContain('Filialga');
+      expect(await orderStatus('7001')).toBe(Order_status.WAITING);
+      // Naqd ko'chmaydi: HQ kassasi joyida.
+      expect(await balance('0', Cashbox_type.MAIN)).toBe(mainBefore);
+      expect(await snapshot()).toEqual({
+        main: COURIER_SHARE - MARKET_SHARE,
+        branch: 0,
+        courier: -COURIER_SHARE,
+        market: -MARKET_SHARE,
+        carries: { courier: COURIER_SHARE, branch: 0, market: MARKET_SHARE },
+      });
+      // Kredit HQ qoldig'ida (`branch_id` NULL) — FIFO HQ kuryeri kabi.
+      const [{ branch_id: carryBranch }] = await orderDb.query(
+        `SELECT branch_id FROM "${orderSchema}".order_settlement_carry
+          WHERE level = 'courier_to_branch' AND party_id = $1`,
+        [COURIER_ID],
+      );
+      expect(carryBranch).toBeNull();
+      const [{ n: branchCarries }] = await orderDb.query(
+        `SELECT count(*)::int AS n FROM "${orderSchema}".order_settlement_carry
+          WHERE level = 'branch_to_hq'`,
+      );
+      expect(branchCarries).toBe(0);
+      // HQ neti: oldin +220 000 (kuryerdan) − 205 000 (marketga) = 15 000;
+      // kelajakda −220 000 (kuryer krediti) + 205 000 (market oldindan olgan).
+      const s = await snapshot();
+      expect(s.main - s.carries.courier + s.carries.market).toBe(0);
+      expect(await equity()).toBe(0);
+
+      // Qayta sotuv: kuryer krediti yangi sotuvni to'liq qoplaydi.
+      await addOrder('7002', hqOrder);
+      await sell(HQ_COURIER, '7002');
+      expect(await balance(COURIER_ID, Cashbox_type.FOR_COURIER)).toBe(0);
+      await settlement.closeZeroCourierRows({
+        courier_id: COURIER_ID,
+        requester: { id: SUPERADMIN.id, roles: SUPERADMIN.roles },
+      });
+      await relay();
+      await assertInvariants();
+      // HQ'ga qayta pul berilmaydi, market oldindan olgani ham qo'llanadi.
+      expect((await saleRow('7002'))?.status).toBe(
+        SettlementStatus.MARKET_SETTLED,
+      );
+      expect(await carry('courier_to_branch', COURIER_ID)).toBe(0);
+      expect(await carry('hq_to_market', MARKET_ID)).toBe(0);
+      expect(await balance(MARKET_ID, Cashbox_type.FOR_MARKET)).toBe(0);
+      expect(await balance('0', Cashbox_type.MAIN)).toBe(mainBefore);
+      expect(await equity()).toBe(COURIER_SHARE - MARKET_SHARE);
+    }, 60_000);
+
+    it('HQ kuryeri: HQ`ga topshirgan, market hali to`lanmagan (BRANCH_SETTLED, SOLD) — superadmin qaytaradi, market debeti yo`q', async () => {
+      courierBranch.set(COURIER_ID, HQ);
+      await addOrder('7001', hqOrder);
+      await sell(HQ_COURIER, '7001');
+      await hqCourierPays(COURIER_SHARE, 'cp-hq-bs');
+      expect((await saleRow('7001'))?.status).toBe(
+        SettlementStatus.BRANCH_SETTLED,
+      );
+      await allowedRollback(SUPERADMIN, '7001', 'rb-hq-bs');
+      expect(await snapshot()).toEqual({
+        main: COURIER_SHARE,
+        branch: 0,
+        courier: -COURIER_SHARE,
+        market: 0,
+        carries: { courier: COURIER_SHARE, branch: 0, market: 0 },
+      });
+      expect(await equity()).toBe(0);
+    }, 60_000);
+
+    it('HQ kuryeri boshqa filialga o`tkazilgan — superadmin CORRECTION_REQUIRED, hech narsa o`zgarmaydi', async () => {
+      courierBranch.set(COURIER_ID, HQ);
+      await addOrder('7001', hqOrder);
+      await sell(HQ_COURIER, '7001');
+      await hqCourierPays(COURIER_SHARE, 'cp-hq-moved');
+      courierBranch.set(COURIER_ID, BRANCH);
+      const error = await deniedRollback(
+        SUPERADMIN,
+        '7001',
+        'CORRECTION_REQUIRED',
+      );
+      expect(error.message).toContain('bosh ofis (HQ) kuryeri emas');
+    }, 60_000);
+
+    it('HQ menejeri sotgan (kuryersiz), HQ marketga to`lagan — superadmin qaytaradi: faqat market oyog`i va market debeti', async () => {
+      const HQ_MANAGER = { id: '211', roles: ['manager'], branch_id: HQ };
+      await addOrder('7001', {
+        ...hqOrder,
+        holder_type: 'BRANCH',
+        holder_courier_id: null,
+        courier_id: null,
+        post_id: 9002,
+      });
+      // HQ menejeri sotuvida naqd hech qaysi kassaga yozilmaydi (sotuv faqat
+      // market oyog'ini yozadi) — HQ marketga to'lashi uchun MAIN'ga naqd.
+      await finance.updateBalance({
+        user_id: '0',
+        cashbox_type: Cashbox_type.MAIN,
+        amount: MARKET_SHARE,
+        operation_type: 'income',
+        source_type: 'correction',
+        source_id: '7001',
+        created_by: SUPERADMIN.id,
+        comment: 'HQ menejeri sotuvi naqdi (test)',
+        dedup_epoch: 'seed-main-hq-mgr',
+      } as never);
+      const equityBeforeSale = await equity();
+      await sell(HQ_MANAGER, '7001');
+      expect(await saleRow('7001')).toMatchObject({
+        status: SettlementStatus.BRANCH_SETTLED,
+      });
+      await hqPaysMarket(MARKET_SHARE, 'mp-hq-mgr');
+      expect((await saleRow('7001'))?.status).toBe(
+        SettlementStatus.MARKET_SETTLED,
+      );
+      await markPaid('7001');
+
+      const mainBefore = await balance('0', Cashbox_type.MAIN);
+      await allowedRollback(SUPERADMIN, '7001', 'rb-hq-mgr');
+      expect(await orderStatus('7001')).toBe(Order_status.WAITING);
+      expect(await balance('0', Cashbox_type.MAIN)).toBe(mainBefore);
+      expect(await carry('hq_to_market', MARKET_ID)).toBe(MARKET_SHARE);
+      expect(await carry('courier_to_branch', COURIER_ID)).toBe(0);
+      expect(await balance(MARKET_ID, Cashbox_type.FOR_MARKET)).toBe(
+        -MARKET_SHARE,
+      );
+      // Sotuv oldidagi holat: market oldindan olgan 205 000 — HQ to'lagan pul.
+      expect(await equity()).toBe(equityBeforeSale);
     }, 60_000);
   });
 
