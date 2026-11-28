@@ -69,6 +69,17 @@ const LIST_SQL = `
             m."market_id" ASC
 `;
 
+/** Kanonik bigint id ('007' → '7'); noto'g'ri yoki INT8 dan katta — ''. */
+const canonicalId = (value: unknown): string => {
+  const raw =
+    typeof value === 'string' || typeof value === 'number'
+      ? String(value).trim()
+      : '';
+  return ID_RE.test(raw) && BigInt(raw) <= INT8_MAX
+    ? BigInt(raw).toString()
+    : '';
+};
+
 const toIso = (value: Date | string | null): string | null => {
   if (value == null) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -80,6 +91,27 @@ const toNumber = (value: string | number | null): number | null => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+/** (operator, market) komissiyasi — finance earning yozishi uchun. */
+export interface MarketOperatorCommissionView {
+  /** A'zolik topildimi (yo'q — chaqiruvchi eski `admins` stavkasiga tushadi). */
+  found: boolean;
+  commission_type: Commission_type | null;
+  commission_value: number | null;
+}
+
+/**
+ * Ochiq a'zolik birinchi, keyin eng so'nggi chiqarilgani: buyurtma operator
+ * marketdan chiqarilishidan OLDIN olingan bo'lsa ham sotuvda o'sha market
+ * stavkasi ishlatiladi.
+ */
+const COMMISSION_SQL = `
+  SELECT m."commission_type", m."commission_value"
+    FROM "identity_schema"."market_operator_markets" m
+   WHERE m."operator_id" = $1 AND m."market_id" = $2
+   ORDER BY (m."status" <> 'removed') DESC, m."updated_at" DESC, m."id" DESC
+   LIMIT 1
+`;
 
 /**
  * Bitta operator — bir nechta market (1-bosqich): a'zoliklarni O'QISH.
@@ -97,19 +129,49 @@ export class MarketOperatorMembershipService {
     private readonly memberships: Repository<MarketOperatorMembership>,
   ) {}
 
+  /**
+   * 3-bosqich (D3 — komissiya har market alohida): operatorning SHU marketdagi
+   * stavkasi. Noto'g'ri id yoki a'zolik yo'q — `found: false`.
+   */
+  async commissionFor(
+    operatorId: unknown,
+    marketId: unknown,
+  ): Promise<MarketOperatorCommissionView> {
+    const none: MarketOperatorCommissionView = {
+      found: false,
+      commission_type: null,
+      commission_value: null,
+    };
+    const operator = canonicalId(operatorId);
+    const market = canonicalId(marketId);
+    if (!operator || !market) {
+      return none;
+    }
+    const rows: Array<{
+      commission_type: string | null;
+      commission_value: string | number | null;
+    }> = await this.memberships.query(COMMISSION_SQL, [operator, market]);
+    const row = rows[0];
+    if (!row) {
+      return none;
+    }
+    return {
+      found: true,
+      commission_type: (row.commission_type as Commission_type | null) ?? null,
+      commission_value: toNumber(row.commission_value),
+    };
+  }
+
   async listForOperator(
     operatorId: unknown,
     options: { include_removed?: unknown } = {},
   ): Promise<MarketOperatorMembershipView[]> {
-    const raw =
-      typeof operatorId === 'string' || typeof operatorId === 'number'
-        ? String(operatorId).trim()
-        : '';
-    if (!ID_RE.test(raw) || BigInt(raw) > INT8_MAX) {
+    const operator = canonicalId(operatorId);
+    if (!operator) {
       return [];
     }
     const rows: Row[] = await this.memberships.query(LIST_SQL, [
-      BigInt(raw).toString(),
+      operator,
       options.include_removed === true,
     ]);
     return rows.map((row) => ({

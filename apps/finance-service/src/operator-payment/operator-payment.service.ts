@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
-import { Brackets, DataSource, EntityManager, QueryFailedError } from 'typeorm';
+import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
 import {
   ActivityDescribeUz,
   ActivityLogService,
@@ -48,6 +48,12 @@ export interface OperatorPaymentListInput {
 
 export interface OperatorBalancesInput {
   operator_ids?: unknown;
+  /**
+   * Bitta operator — bir nechta market (3-bosqich): faqat SHU market daromadi
+   * va to'lovlari (gateway JWT `sub`). Berilmasa — eski xatti-harakat
+   * (operatorning barcha marketlari) — faqat eski gateway bilan moslik uchun.
+   */
+  market_id?: unknown;
 }
 
 const ID_RE = /^[1-9]\d{0,18}$/;
@@ -304,11 +310,17 @@ export class OperatorPaymentService {
           ? await this.dataSource.transaction(async (manager) => {
               // Ayni operatorga parallel ikki to'lov qoldiqni birga oshirib
               // yubormasin — tekshiruv va yozuv bitta qulf ostida.
+              // 3-bosqich: qoldiq va qulf — (operator, SHU market): market A
+              // operatorning B dagi daromadini to'lay olmaydi.
               await manager.query(
                 'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-                [`operator-payment:balance:${operatorId}`],
+                [`operator-payment:balance:${operatorId}:${marketId}`],
               );
-              const balance = await this.balanceCents(manager, operatorId);
+              const balance = await this.balanceCents(
+                manager,
+                operatorId,
+                marketId,
+              );
               if (balance <= 0) {
                 reject(
                   409,
@@ -472,14 +484,17 @@ export class OperatorPaymentService {
 
   /**
    * Marketning to'lovlar tarixi (yangisi tepada — to'lov sanasi, keyin id).
-   * Ko'lam: shu market yozganlari + marketning operatorlariga Elchi eski
-   * yo'lda (market_id siz) yozganlari. Bekor qilinganlar ham chiqadi
-   * (`status: 'cancelled'`).
+   * Ko'lam: FAQAT `market_id = shu market` — o'zi yozganlari va Elchi eski
+   * yo'lda yozganlari (ular migratsiya 257 da operatorning o'sha paytdagi
+   * marketiga biriktirilgan). Ilgari `market_id IS NULL` qatorlar operator
+   * bo'yicha har marketga chiqardi — bir nechta marketli operatorda boshqa
+   * market to'lovi ko'rinib qolardi. Bekor qilinganlar ham chiqadi
+   * (`status: 'cancelled'`). `operator_ids` endi ishlatilmaydi (eski gateway
+   * yuborsa — e'tiborsiz).
    */
   async list(input: OperatorPaymentListInput) {
     try {
       const marketId = this.parseId(input?.market_id, 'market_id');
-      const operatorIds = this.parseIds(input?.operator_ids);
       const operatorId =
         input?.operator_id != null && input.operator_id !== ''
           ? this.parseId(input.operator_id, 'operator_id')
@@ -494,17 +509,7 @@ export class OperatorPaymentService {
         .getRepository(OperatorPayment)
         .createQueryBuilder('p')
         .where('p.is_deleted = false')
-        .andWhere(
-          new Brackets((scope) => {
-            scope.where('p.market_id = :marketId', { marketId });
-            if (operatorIds.length) {
-              scope.orWhere(
-                'p.market_id IS NULL AND p.operator_id IN (:...operatorIds)',
-                { operatorIds },
-              );
-            }
-          }),
-        );
+        .andWhere('p.market_id = :marketId', { marketId });
       if (operatorId) {
         qb.andWhere('p.operator_id = :operatorId', { operatorId });
       }
@@ -536,13 +541,15 @@ export class OperatorPaymentService {
   // --------------------------------------------------------------- balances
 
   /**
-   * Bitta operatorning «Qoldiq»i tiyinda — {@link balances} bilan AYNI qoida
-   * (o'chirilmagan daromadlar − o'chirilmagan va bekor qilinmagan to'lovlar).
-   * Chaqiruvchining tranzaksiyasi ichida (qulf ostida) o'qiladi.
+   * Bitta operatorning SHU marketdagi «Qoldiq»i tiyinda — {@link balances}
+   * bilan AYNI qoida (o'chirilmagan daromadlar − o'chirilmagan va bekor
+   * qilinmagan to'lovlar, ikkalasi ham `market_id = marketId`). Chaqiruvchining
+   * tranzaksiyasi ichida (qulf ostida) o'qiladi.
    */
   private async balanceCents(
     manager: EntityManager,
     operatorId: string,
+    marketId: string,
   ): Promise<number> {
     const [earned, paid] = await Promise.all([
       manager
@@ -550,6 +557,7 @@ export class OperatorPaymentService {
         .createQueryBuilder('e')
         .select('COALESCE(SUM(e.amount), 0)', 'total')
         .where('e.operator_id = :operatorId', { operatorId })
+        .andWhere('e.market_id = :marketId', { marketId })
         .andWhere('e.is_deleted = false')
         .getRawOne<{ total: string }>(),
       manager
@@ -557,6 +565,7 @@ export class OperatorPaymentService {
         .createQueryBuilder('p')
         .select('COALESCE(SUM(p.amount), 0)', 'total')
         .where('p.operator_id = :operatorId', { operatorId })
+        .andWhere('p.market_id = :marketId', { marketId })
         .andWhere('p.is_deleted = false')
         .andWhere('p.cancelled_at IS NULL')
         .getRawOne<{ total: string }>(),
@@ -571,11 +580,17 @@ export class OperatorPaymentService {
    * bilan AYNI qoida), «To'landi» (o'chirilmagan va bekor qilinmagan to'lovlar,
    * eski Elchi to'lovlari ham) va «Qoldiq» = ishlab topdi − to'landi (manfiy
    * bo'lishi mumkin — ortiqcha to'langan). So'ralgan har id qaytadi (yozuvsiz —
-   * 0).
+   * 0). `market_id` berilsa (3-bosqich, gateway doim beradi) — faqat SHU
+   * market daromadi va to'lovlari: market A operatorning B dagi pulini
+   * ko'rmaydi.
    */
   async balances(input: OperatorBalancesInput) {
     try {
       const operatorIds = this.parseIds(input?.operator_ids);
+      const marketId =
+        input?.market_id != null && input.market_id !== ''
+          ? this.parseId(input.market_id, 'market_id')
+          : null;
       if (!operatorIds.length) {
         return successRes(
           { items: [], totals: { earned: 0, paid: 0, balance: 0 } },
@@ -583,33 +598,37 @@ export class OperatorPaymentService {
           'Operatorlar hisobi',
         );
       }
+      const earnedQb = this.dataSource
+        .getRepository(OperatorEarning)
+        .createQueryBuilder('e')
+        .select('e.operator_id::text', 'operator_id')
+        .addSelect('COALESCE(SUM(e.amount), 0)', 'total')
+        .where('e.is_deleted = false')
+        .andWhere('e.operator_id IN (:...operatorIds)', { operatorIds });
+      const paidQb = this.dataSource
+        .getRepository(OperatorPayment)
+        .createQueryBuilder('p')
+        .select('p.operator_id::text', 'operator_id')
+        .addSelect('COALESCE(SUM(p.amount), 0)', 'total')
+        .addSelect('COUNT(*)', 'count')
+        .addSelect("to_char(MAX(p.paid_at), 'YYYY-MM-DD')", 'last_paid_at')
+        .where('p.is_deleted = false')
+        .andWhere('p.cancelled_at IS NULL')
+        .andWhere('p.operator_id IN (:...operatorIds)', { operatorIds });
+      if (marketId) {
+        earnedQb.andWhere('e.market_id = :marketId', { marketId });
+        paidQb.andWhere('p.market_id = :marketId', { marketId });
+      }
       const [earnedRows, paidRows] = await Promise.all([
-        this.dataSource
-          .getRepository(OperatorEarning)
-          .createQueryBuilder('e')
-          .select('e.operator_id::text', 'operator_id')
-          .addSelect('COALESCE(SUM(e.amount), 0)', 'total')
-          .where('e.is_deleted = false')
-          .andWhere('e.operator_id IN (:...operatorIds)', { operatorIds })
+        earnedQb
           .groupBy('e.operator_id')
           .getRawMany<{ operator_id: string; total: string }>(),
-        this.dataSource
-          .getRepository(OperatorPayment)
-          .createQueryBuilder('p')
-          .select('p.operator_id::text', 'operator_id')
-          .addSelect('COALESCE(SUM(p.amount), 0)', 'total')
-          .addSelect('COUNT(*)', 'count')
-          .addSelect("to_char(MAX(p.paid_at), 'YYYY-MM-DD')", 'last_paid_at')
-          .where('p.is_deleted = false')
-          .andWhere('p.cancelled_at IS NULL')
-          .andWhere('p.operator_id IN (:...operatorIds)', { operatorIds })
-          .groupBy('p.operator_id')
-          .getRawMany<{
-            operator_id: string;
-            total: string;
-            count: string;
-            last_paid_at: string | null;
-          }>(),
+        paidQb.groupBy('p.operator_id').getRawMany<{
+          operator_id: string;
+          total: string;
+          count: string;
+          last_paid_at: string | null;
+        }>(),
       ]);
 
       const earnedBy = new Map(

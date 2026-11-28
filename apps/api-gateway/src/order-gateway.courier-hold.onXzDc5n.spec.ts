@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { of } from 'rxjs';
 import { OrderGatewayController } from './order-gateway.controller';
+import { operatorMarketScopeFromProfile } from './auth/market-operator-market';
 import { ROLES_KEY } from './auth/roles.decorator';
 
 /**
@@ -69,14 +70,16 @@ function makeController() {
     resolveBranchAssignment: jest.Mock;
     isHqRegistrator: jest.Mock;
     logistRegionIds: jest.Mock;
-    resolveMarketOperatorMarketId: jest.Mock;
+    operatorMarketScope: jest.Mock;
   };
   internals.resolveBranchAssignment = jest
     .fn()
     .mockResolvedValue({ branch_id: '13', role: 'MANAGER' });
   internals.isHqRegistrator = jest.fn().mockResolvedValue(false);
   internals.logistRegionIds = jest.fn().mockResolvedValue(['5']);
-  internals.resolveMarketOperatorMarketId = jest.fn().mockResolvedValue('37');
+  internals.operatorMarketScope = jest
+    .fn()
+    .mockResolvedValue(operatorMarketScopeFromProfile({ market_id: '37' }));
   const resolve: Resolver = internals.resolveOrderListRequest.bind(controller);
   const summary = (user: unknown, q: Record<string, string> = {}) =>
     controller.courierHoldSummary(

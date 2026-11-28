@@ -729,7 +729,7 @@ describe('FinanceServiceService.updateBalance', () => {
       operation_type: 'income' as any,
       source_type: 'sell' as any,
       source_id: '42',
-    } as any);
+    });
 
     // Cashbox NOT saved a second time → balance left intact
     expect(manager.save).not.toHaveBeenCalled();
@@ -784,7 +784,7 @@ describe('FinanceServiceService.updateBalance', () => {
       source_type: 'sell' as any,
       source_id: '42',
       payment_method: 'cash' as any,
-    } as any);
+    });
 
     // Cashbox AND history both persisted
     expect(manager.save).toHaveBeenCalledTimes(2);
@@ -825,7 +825,7 @@ describe('FinanceServiceService.updateBalance', () => {
       operation_type: 'income' as any,
       source_type: 'sell' as any,
       // no source_id
-    } as any);
+    });
 
     expect(manager.findOne).toHaveBeenCalledTimes(1);
     expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
@@ -856,7 +856,7 @@ describe('FinanceServiceService.updateBalance', () => {
       operation_type: 'income' as any,
       source_type: 'sell' as any,
       source_id: '99',
-    } as any);
+    });
 
     const firstCall = manager.findOne.mock.calls[0];
     // [Cashbox, { where: {...}, lock: { mode: 'pessimistic_write' } }]
@@ -908,9 +908,11 @@ describe('FinanceServiceService operator earnings & payments', () => {
     const manager = makeManager();
     const { service, earningRepo, activityLog } = makeService(manager);
 
-    // identity returns the operator's commission config
+    // D3: identity returns the operator's commission for THIS market
     rmqSendMock.mockResolvedValueOnce({
-      data: { commission_type: 'percent', commission_value: 5 },
+      found: true,
+      commission_type: 'percent',
+      commission_value: 5,
     });
     earningRepo.findOne.mockResolvedValueOnce(null); // no existing earning
 
@@ -922,15 +924,103 @@ describe('FinanceServiceService operator earnings & payments', () => {
     });
 
     expect(res.statusCode).toBe(201);
+    expect(rmqSendMock).toHaveBeenCalledTimes(1);
+    expect(rmqSendMock.mock.calls[0][1]).toEqual({
+      cmd: 'identity.market_operator.commission',
+    });
+    expect(rmqSendMock.mock.calls[0][2]).toEqual({
+      operator_id: '42',
+      market_id: '7',
+    });
     // 5% of 200000 = 10000
     expect(earningRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         amount: 10000,
         operator_id: '42',
         order_id: '1001',
+        market_id: '7',
       }),
     );
     expect(activityLog.log).toHaveBeenCalled();
+  });
+
+  it('D3: stavka (operator, market) a`zoligidan — boshqa marketdagi stavka emas; a`zolik yo`q yoki eski identity — operator qatoridagi stavka', async () => {
+    const recordWith = async (
+      membership: unknown,
+      marketId: string | null = '7',
+    ) => {
+      rmqSendMock.mockReset();
+      const manager = makeManager();
+      const { service, earningRepo } = makeService(manager);
+      if (membership instanceof Error) {
+        rmqSendMock.mockRejectedValueOnce(membership);
+      } else if (membership !== undefined) {
+        rmqSendMock.mockResolvedValueOnce(membership);
+      }
+      rmqSendMock.mockResolvedValueOnce({
+        data: { commission_type: 'fixed', commission_value: 3000 },
+      });
+      earningRepo.findOne.mockResolvedValueOnce(null);
+      await service.recordOperatorEarning({
+        order_id: '1002',
+        operator_id: '42',
+        market_id: marketId,
+        total_price: 100000,
+      });
+      return {
+        saved: (earningRepo.save as jest.Mock).mock.calls[0]?.[0] as
+          Record<string, unknown> | undefined,
+        cmds: rmqSendMock.mock.calls.map(
+          (call) => (call[1] as { cmd: string }).cmd,
+        ),
+      };
+    };
+
+    // A'zolik bor — o'sha market stavkasi (10% → 10000), find_by_id so'ralmaydi.
+    const own = await recordWith({
+      found: true,
+      commission_type: 'percent',
+      commission_value: 10,
+    });
+    expect(own.saved).toMatchObject({ amount: 10000, commission_value: 10 });
+    expect(own.cmds).toEqual(['identity.market_operator.commission']);
+
+    // A'zolik topilmadi — operator qatoridagi stavka (fixed 3000).
+    const missing = await recordWith({ found: false });
+    expect(missing.saved).toMatchObject({ amount: 3000 });
+    expect(missing.cmds).toEqual([
+      'identity.market_operator.commission',
+      'identity.user.find_by_id',
+    ]);
+
+    // Eski identity (handler yo'q) — eski yo'l.
+    const legacy = await recordWith(
+      new Error(
+        'There is no matching message handler defined in the remote service.',
+      ),
+    );
+    expect(legacy.saved).toMatchObject({ amount: 3000 });
+
+    // Market yo'q (eski buyurtma) — to'g'ridan-to'g'ri operator qatori.
+    const noMarket = await recordWith(undefined, null);
+    expect(noMarket.saved).toMatchObject({ amount: 3000 });
+    expect(noMarket.cmds).toEqual(['identity.user.find_by_id']);
+  });
+
+  it('D3: a`zolik so`rovi boshqa xato bersa — earning YOZILMAYDI (outbox qayta urinadi), noto`g`ri stavka snapshot qilinmaydi', async () => {
+    const manager = makeManager();
+    const { service, earningRepo } = makeService(manager);
+    rmqSendMock.mockRejectedValueOnce(new Error('identity timeout'));
+    await expect(
+      service.recordOperatorEarning({
+        order_id: '1003',
+        operator_id: '42',
+        market_id: '7',
+        total_price: 100000,
+      }),
+    ).rejects.toBeDefined();
+    expect(earningRepo.save).not.toHaveBeenCalled();
+    expect(rmqSendMock).toHaveBeenCalledTimes(1);
   });
 
   it('records a FIXED commission regardless of total_price', async () => {
@@ -1087,22 +1177,35 @@ describe('FinanceServiceService operator earnings & payments', () => {
     expect(activityLog.log).toHaveBeenCalled();
   });
 
+  /** findOperatorBalance qb taqlidi: market bo'yicha guruhlangan qatorlar. */
+  const groupedQb = (
+    rows: Array<{ market_id: string | null; total: string }>,
+    clauses: string[] = [],
+  ) => {
+    const qb = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn((clause: string) => {
+        clauses.push(clause);
+        return qb;
+      }),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    };
+    return qb;
+  };
+
   it('computes operator balance as earned - paid', async () => {
     const manager = makeManager();
     const { service, earningRepo, paymentRepo } = makeService(manager);
 
-    earningRepo.createQueryBuilder.mockReturnValue({
-      select: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      getRawOne: jest.fn().mockResolvedValue({ total: '50000' }),
-    });
-    paymentRepo.createQueryBuilder.mockReturnValue({
-      select: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      getRawOne: jest.fn().mockResolvedValue({ total: '20000' }),
-    });
+    earningRepo.createQueryBuilder.mockReturnValue(
+      groupedQb([{ market_id: '7', total: '50000' }]),
+    );
+    paymentRepo.createQueryBuilder.mockReturnValue(
+      groupedQb([{ market_id: '7', total: '20000' }]),
+    );
 
     const res = await service.findOperatorBalance({ operator_id: '42' });
 
@@ -1111,6 +1214,56 @@ describe('FinanceServiceService operator earnings & payments', () => {
       paid: 20000,
       balance: 30000,
     });
+  });
+
+  it('3-bosqich: bir nechta marketli operator — `by_market` (har market alohida qoldiq), `market_id` filtri', async () => {
+    const manager = makeManager();
+    const { service, earningRepo, paymentRepo } = makeService(manager);
+    earningRepo.createQueryBuilder.mockReturnValue(
+      groupedQb([
+        { market_id: '20', total: '30000' },
+        { market_id: '7', total: '50000' },
+        { market_id: null, total: '100' },
+      ]),
+    );
+    paymentRepo.createQueryBuilder.mockReturnValue(
+      groupedQb([{ market_id: '7', total: '60000' }]),
+    );
+
+    const res = await service.findOperatorBalance({ operator_id: '42' });
+    expect(res.data).toEqual({
+      operator_id: '42',
+      earned: 80100,
+      paid: 60000,
+      balance: 20100,
+      by_market: [
+        { market_id: '7', earned: 50000, paid: 60000, balance: -10000 },
+        { market_id: '20', earned: 30000, paid: 0, balance: 30000 },
+        { market_id: null, earned: 100, paid: 0, balance: 100 },
+      ],
+    });
+
+    const earnedClauses: string[] = [];
+    const paidClauses: string[] = [];
+    earningRepo.createQueryBuilder.mockReturnValue(
+      groupedQb([{ market_id: '20', total: '30000' }], earnedClauses),
+    );
+    paymentRepo.createQueryBuilder.mockReturnValue(groupedQb([], paidClauses));
+    const filtered = await service.findOperatorBalance({
+      operator_id: '42',
+      market_id: '20',
+    });
+    expect(earnedClauses).toContain('e.market_id = :marketId');
+    expect(paidClauses).toContain('p.market_id = :marketId');
+    expect(filtered.data).toMatchObject({
+      market_id: '20',
+      earned: 30000,
+      paid: 0,
+      balance: 30000,
+    });
+    await expect(
+      service.findOperatorBalance({ operator_id: '42', market_id: 'x' }),
+    ).rejects.toBeDefined();
   });
 
   /**
@@ -1139,22 +1292,12 @@ describe('FinanceServiceService operator earnings & payments', () => {
     const manager = makeManager();
     const { service, earningRepo, paymentRepo } = makeService(manager);
     const paymentWhere: string[] = [];
-    earningRepo.createQueryBuilder.mockReturnValue({
-      select: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      getRawOne: jest.fn().mockResolvedValue({ total: '0.3' }),
-    });
-    const paymentQb = {
-      select: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn((clause: string) => {
-        paymentWhere.push(clause);
-        return paymentQb;
-      }),
-      getRawOne: jest.fn().mockResolvedValue({ total: '0.1' }),
-    };
-    paymentRepo.createQueryBuilder.mockReturnValue(paymentQb);
+    earningRepo.createQueryBuilder.mockReturnValue(
+      groupedQb([{ market_id: '7', total: '0.3' }]),
+    );
+    paymentRepo.createQueryBuilder.mockReturnValue(
+      groupedQb([{ market_id: '7', total: '0.1' }], paymentWhere),
+    );
 
     const res = await service.findOperatorBalance({ operator_id: '42' });
 
@@ -1259,7 +1402,7 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
       source_type: 'manual_expense' as any,
       dedup_epoch: 'tok-abc',
       // no source_id — manual op
-    } as any);
+    });
 
     // pre-check ran (2 findOne) and found the prior row → idempotent skip
     expect(manager.findOne).toHaveBeenCalledTimes(2);

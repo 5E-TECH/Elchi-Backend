@@ -31,7 +31,11 @@ import {
 import { firstValueFrom, timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
-import { resolveMarketOperatorMarketId } from './auth/market-operator-market';
+import {
+  OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
+  pickOperatorMarket,
+  resolveOperatorMarketScope,
+} from './auth/market-operator-market';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
@@ -138,8 +142,10 @@ export class MarketOperatorGatewayController {
    * «Operator» tanlovi ko'lami — `POST /orders` dagi yakuniy market bilan
    * AYNI (tanlangan operator yaratishda shu market bo'yicha tekshiriladi):
    *  - MARKET — o'zi (JWT sub); boshqa `market_id` → 400;
-   *  - MARKET_OPERATOR — biriktirilgan marketi (identity `user.market_id`);
-   *    boshqa `market_id` → 400, biriktirilmagan → 400;
+   *  - MARKET_OPERATOR — faol a'zolik marketlari (identity
+   *    `find_by_id.operator_markets`): `market_id` shulardan biri bo'lishi
+   *    shart (boshqasi → 400), berilmasa — yagona faol market (2+ → 400),
+   *    faol market yo'q → 400;
    *  - qolganlar (superadmin, admin, registrator, menejer, filial) —
    *    formada tanlangan `market_id` MAJBURIY.
    */
@@ -156,21 +162,20 @@ export class MarketOperatorGatewayController {
       throw new BadRequestException("market_id noto'g'ri");
     }
     if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
-      const own = await resolveMarketOperatorMarketId(
-        this.identityClient,
-        req?.user?.sub,
+      const pick = pickOperatorMarket(
+        await resolveOperatorMarketScope(this.identityClient, req?.user?.sub),
+        requested,
       );
-      if (!BIGINT_ID_RE.test(own)) {
-        throw new BadRequestException(
-          'Operator hech qaysi marketga biriktirilmagan',
-        );
+      if (pick.ok) {
+        return pick.marketId;
       }
-      if (requested && BigInt(requested) !== BigInt(own)) {
-        throw new BadRequestException(
-          "Market operatori faqat o'z marketi operatorlarini ko'ra oladi (market_id yubormang)",
-        );
-      }
-      return own;
+      throw new BadRequestException(
+        pick.reason === 'unassigned'
+          ? 'Operator hech qaysi marketga biriktirilmagan'
+          : pick.reason === 'foreign'
+            ? "Market operatori faqat o'z marketi operatorlarini ko'ra oladi (market_id yubormang)"
+            : OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
+      );
     }
     if (!requested) {
       throw new BadRequestException('market_id majburiy');

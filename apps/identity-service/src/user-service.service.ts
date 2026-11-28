@@ -37,6 +37,7 @@ import {
   type PasswordSmsView,
   TempPasswordService,
 } from './temp-password/temp-password.service';
+import { MarketOperatorMembershipService } from './market-operator/market-operator-membership.service';
 import {
   CHANGEABLE_ROLES,
   ROLE_CATALOG,
@@ -520,6 +521,13 @@ export class UserServiceService implements OnModuleInit {
      * yuborilmaydi (`password_sms: null`).
      */
     @Optional() private readonly tempPasswords?: TempPasswordService,
+    /**
+     * Bitta operator — bir nechta market: operatorning a'zoliklari
+     * (`find_by_id` → `operator_markets`). Ixtiyoriy — spec'lar servisni usiz
+     * quradi (u holda kalit qo'shilmaydi, gateway `market_id` ga tushadi).
+     */
+    @Optional()
+    private readonly memberships?: MarketOperatorMembershipService,
   ) {}
 
   /**
@@ -2996,7 +3004,7 @@ export class UserServiceService implements OnModuleInit {
     await this.revokeSessionsAfterSecurityChange(saved);
     // Qidiruv indeksi rol bo'yicha kalitlangan: eski rol yozuvi olib
     // tashlanadi, yangisi yoziladi (ikkalasi ham best-effort).
-    void this.removeUserFromSearch({ ...saved, role: previousRole } as User);
+    void this.removeUserFromSearch({ ...saved, role: previousRole });
     void this.syncUserToSearch(saved);
 
     await this.activityLog.log({
@@ -3327,10 +3335,14 @@ export class UserServiceService implements OnModuleInit {
     // flag uchun. Ko'rish: GET /markets/:id/tg-token (faqat SUPERADMIN).
     const safeUser = this.sanitize(user);
     if (!options.includeBranch) {
-      const profileRegion = await this.getRegionById(safeUser.region_id);
+      const [profileRegion, operatorMarkets] = await Promise.all([
+        this.getRegionById(safeUser.region_id),
+        this.operatorMarketsOf(user),
+      ]);
       return successRes({
         ...safeUser,
         region: profileRegion,
+        ...operatorMarkets,
       });
     }
 
@@ -3359,15 +3371,21 @@ export class UserServiceService implements OnModuleInit {
     // bir xil). Faqat gateway (`include_branch`) yo'li — ichki chaqiruvlar
     // uchun so'rov ham, shakl ham o'zgarmagan.
     const isMarketOperator = user.role === Roles.MARKET_OPERATOR;
-    const [profileRegion, branchAssignment, marketById, responsible] =
-      await Promise.all([
-        this.getRegionById(safeUser.region_id),
-        branchLookup,
-        isMarketOperator
-          ? this.findMarketSummaries([user.market_id])
-          : Promise.resolve(null),
-        responsibleLookup,
-      ]);
+    const [
+      profileRegion,
+      branchAssignment,
+      marketById,
+      responsible,
+      operatorMarkets,
+    ] = await Promise.all([
+      this.getRegionById(safeUser.region_id),
+      branchLookup,
+      isMarketOperator
+        ? this.findMarketSummaries([user.market_id])
+        : Promise.resolve(null),
+      responsibleLookup,
+      this.operatorMarketsOf(user),
+    ]);
     const branch = this.toBranchSummary(branchAssignment);
     return successRes({
       ...safeUser,
@@ -3378,7 +3396,47 @@ export class UserServiceService implements OnModuleInit {
       branch,
       ...(marketById ? { market: this.marketSummaryOf(user, marketById) } : {}),
       ...(responsible && typeof responsible === 'object' ? responsible : {}),
+      ...operatorMarkets,
     });
+  }
+
+  /**
+   * Bitta operator — bir nechta market (2-bosqich): market operatorining
+   * OCHIQ a'zoliklari (`operator_markets`, asosiy birinchi) — gateway
+   * operator doirasini shundan hisoblaydi (`auth/market-operator-market.ts`).
+   * Faqat doira uchun kerakli maydonlar — komissiya va market nomi YO'Q.
+   *
+   * Boshqa rol, a'zolik servisi yo'q (spec'lar) yoki o'qish xatosi — kalit
+   * QO'SHILMAYDI: gateway avvalgidek `market_id` ga tushadi (u o'tish davrida
+   * asosiy a'zolik bilan trigger orqali bir xil, migratsiya 255).
+   */
+  private async operatorMarketsOf(user: User): Promise<{
+    operator_markets?: Array<{
+      market_id: string;
+      status: string;
+      is_primary: boolean;
+      can_view_warehouse_stock: boolean;
+    }>;
+  }> {
+    if (user.role !== Roles.MARKET_OPERATOR || !this.memberships) {
+      return {};
+    }
+    try {
+      const items = await this.memberships.listForOperator(user.id);
+      return {
+        operator_markets: items.map((item) => ({
+          market_id: item.market_id,
+          status: item.status,
+          is_primary: item.is_primary,
+          can_view_warehouse_stock: item.can_view_warehouse_stock,
+        })),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `findUserById: operator a'zoliklari o'qilmadi (${error instanceof Error ? error.message : String(error)}) — operator_markets qo'shilmadi`,
+      );
+      return {};
+    }
   }
 
   /**
@@ -6954,7 +7012,7 @@ export class UserServiceService implements OnModuleInit {
     if (rawStatus !== Status.ACTIVE && rawStatus !== Status.INACTIVE) {
       this.badRequest("status noto'g'ri (active | inactive)");
     }
-    const next = rawStatus as Status;
+    const next = rawStatus;
 
     const operator = await this.findOwnMarketOperator(id, scopedMarketId);
     const previous = operator.status;

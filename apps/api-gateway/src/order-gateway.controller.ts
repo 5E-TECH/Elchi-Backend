@@ -249,7 +249,15 @@ import {
   MARKET_OPERATOR_SELECTABLE_CMD,
   resolveChosenOrderOperator,
 } from './order-create/order-chosen-operator';
-import { resolveMarketOperatorMarketId } from './auth/market-operator-market';
+import {
+  isOperatorMarket,
+  OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
+  OPERATOR_MARKET_FOREIGN_MESSAGE,
+  operatorMarketScopeFromProfile,
+  pickOperatorMarket,
+  resolveOperatorMarketScope,
+  type OperatorMarketScope,
+} from './auth/market-operator-market';
 import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
 import { scanOrderSummary } from './order-scan-summary';
 import {
@@ -1207,13 +1215,9 @@ export class OrderGatewayController {
       return sub && field('market_id') === sub ? undefined : denied();
     }
     if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
-      // Operator faqat o'zi biriktirilgan marketning buyurtmasini ko'radi.
-      const operatorMarketId = await this.resolveMarketOperatorMarketId(
-        reqUser as JwtUser,
-      );
-      return operatorMarketId && field('market_id') === operatorMarketId
-        ? undefined
-        : denied();
+      // Operator faqat o'zi FAOL ishlaydigan marketlarning buyurtmasini ko'radi.
+      const scope = await this.operatorMarketScope(reqUser as JwtUser);
+      return isOperatorMarket(scope, field('market_id')) ? undefined : denied();
     }
     if (roles.includes(RoleEnum.CUSTOMER)) {
       return sub && field('customer_id') === sub ? undefined : denied();
@@ -1313,12 +1317,34 @@ export class OrderGatewayController {
   }
 
   /**
-   * MARKET_OPERATOR biriktirilgan market (identity `user.market_id`).
-   * Topilmasa yoki identity javob bermasa — '' (chaqiruvchi rad etadi).
-   * Manba `GET /market-operators/selectable` bilan umumiy.
+   * Bitta operator — bir nechta market: MARKET_OPERATOR doirasi — faol
+   * a'zolik marketlari (identity `find_by_id.operator_markets`, o'tish
+   * davrida `market_id`). Identity javob bermasa — bo'sh (chaqiruvchi rad
+   * etadi, fail-closed). Manba `GET /market-operators/selectable` bilan umumiy.
    */
-  private async resolveMarketOperatorMarketId(user: JwtUser): Promise<string> {
-    return resolveMarketOperatorMarketId(this.identityClient, user?.sub);
+  private async operatorMarketScope(
+    user: JwtUser,
+  ): Promise<OperatorMarketScope> {
+    return resolveOperatorMarketScope(this.identityClient, user?.sub);
+  }
+
+  /**
+   * Bitta marketda bajariladigan, `market_id` qabul qilmaydigan operator
+   * amali: yagona faol market. Faol market yo'q — 403 (`unassignedMessage`,
+   * avvalgi matn); 2+ — 400 (hali tanlov yo'q, 3-bosqichda to'plam bo'yicha).
+   */
+  private async singleOperatorMarket(
+    user: JwtUser,
+    unassignedMessage: string,
+  ): Promise<string> {
+    const pick = pickOperatorMarket(await this.operatorMarketScope(user));
+    if (pick.ok) {
+      return pick.marketId;
+    }
+    if (pick.reason === 'unassigned') {
+      throw new ForbiddenException(unassignedMessage);
+    }
+    throw new BadRequestException(OPERATOR_MARKET_AMBIGUOUS_MESSAGE);
   }
 
   /**
@@ -1784,7 +1810,10 @@ export class OrderGatewayController {
   /**
    * AI oqimi uchun market SERVER tomonda aniqlanadi (mijozga ishonilmaydi):
    *  - MARKET — token `sub`; tanadagi market_id E'TIBORSIZ;
-   *  - MARKET_OPERATOR — identity `user.market_id`; bo'lmasa `{noMarket}`
+   *  - MARKET_OPERATOR — faol a'zolik marketlari (identity
+   *    `find_by_id.operator_markets`): bitta bo'lsa — o'sha (tanadagi
+   *    market_id e'tiborsiz, avvalgidek); 2+ — tanadagi market_id majburiy va
+   *    doirada bo'lishi shart (403 / 400); faol market yo'q — `{noMarket}`
    *    (parse → 200 no_market, confirm → 400);
    *  - SUPERADMIN / ADMIN / REGISTRATOR / MANAGER — tanadagi market_id
    *    majburiy, aks holda 400.
@@ -1803,11 +1832,21 @@ export class OrderGatewayController {
         { cmd: 'identity.user.find_by_id' },
         { id: user.sub },
       ).catch(() => null);
-      const marketId = this.asStr(
-        (operatorProfile as { data?: { market_id?: unknown } } | null)?.data
-          ?.market_id,
-      ).trim();
-      return marketId ? { marketId } : { noMarket: true };
+      const pick = pickOperatorMarket(
+        operatorMarketScopeFromProfile(operatorProfile),
+        bodyMarketId,
+        { ignoreRequestedWhenSingle: true },
+      );
+      if (pick.ok) {
+        return { marketId: pick.marketId };
+      }
+      if (pick.reason === 'unassigned') {
+        return { noMarket: true };
+      }
+      if (pick.reason === 'foreign') {
+        throw new ForbiddenException(OPERATOR_MARKET_FOREIGN_MESSAGE);
+      }
+      throw new BadRequestException(OPERATOR_MARKET_AMBIGUOUS_MESSAGE);
     }
     const marketId = this.asStr(bodyMarketId).trim();
     if (!marketId) {
@@ -3358,28 +3397,37 @@ export class OrderGatewayController {
     } else if (roles.includes(RoleEnum.MARKET)) {
       resolvedMarketId = req.user.sub;
     } else if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
-      // An operator (incl. the telegram bot) is linked to a market via
-      // user.market_id — resolve it server-side. The bot DTO carries no
-      // market_id, so without this the order.create insert hit a NOT-NULL
-      // violation and orphaned the just-created customer. Resolving BEFORE the
-      // customer is created also avoids the orphan on failure. (Audit I6.)
+      // An operator (incl. the telegram bot) works for its ACTIVE memberships
+      // (identity `find_by_id.operator_markets`) — resolve server-side. The
+      // bot DTO carries no market_id, so without this the order.create insert
+      // hit a NOT-NULL violation and orphaned the just-created customer.
+      // Resolving BEFORE the customer is created also avoids the orphan on
+      // failure. (Audit I6.) One active market — that one (body market_id
+      // ignored, as before); 2+ — body market_id required and must be one of
+      // them.
       const operatorProfile = await this.sendIdentityWithTimeout(
         { cmd: 'identity.user.find_by_id' },
         { id: req.user.sub },
       ).catch(() => null);
       const operatorData =
-        (
-          operatorProfile as {
-            data?: { market_id?: string | null; name?: string | null };
-          }
-        )?.data ?? null;
-      resolvedMarketId =
-        String(operatorData?.market_id ?? '').trim() || undefined;
-      if (!resolvedMarketId) {
+        (operatorProfile as { data?: { name?: string | null } } | null)?.data ??
+        null;
+      const pick = pickOperatorMarket(
+        operatorMarketScopeFromProfile(operatorProfile),
+        orderDto.market_id,
+        { ignoreRequestedWhenSingle: true },
+      );
+      if (!pick.ok) {
+        if (pick.reason === 'foreign') {
+          throw new ForbiddenException(OPERATOR_MARKET_FOREIGN_MESSAGE);
+        }
         throw new BadRequestException(
-          "Operator hech qaysi marketga biriktirilmagan — buyurtma yaratib bo'lmaydi",
+          pick.reason === 'unassigned'
+            ? "Operator hech qaysi marketga biriktirilmagan — buyurtma yaratib bo'lmaydi"
+            : OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
         );
       }
+      resolvedMarketId = pick.marketId;
       requesterName = this.asStr(operatorData?.name).trim() || null;
     } else if (
       (roles.includes(RoleEnum.ADMIN) ||
@@ -6083,21 +6131,27 @@ export class OrderGatewayController {
 
     let resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
     if (isMarketOperator && user) {
-      // Operator — faqat o'zi biriktirilgan market (server tomonda).
-      const operatorMarketId = await this.resolveMarketOperatorMarketId(user);
-      if (!operatorMarketId) {
-        throw new ForbiddenException(
-          'Operator hech qaysi marketga biriktirilmagan',
-        );
-      }
-      // WWbdu8ya TC3: boshqa marketni so'rash market roli bilan bir xil
-      // ochiq 400 — jimgina o'z marketiga almashtirilmaydi.
-      if (market_id && String(market_id) !== String(operatorMarketId)) {
+      // Operator — faqat o'z faol marketlari (server tomonda). `market_id`
+      // filtri — shu doira ichidan tanlov.
+      const pick = pickOperatorMarket(
+        await this.operatorMarketScope(user),
+        market_id,
+      );
+      if (!pick.ok) {
+        if (pick.reason === 'unassigned') {
+          throw new ForbiddenException(
+            'Operator hech qaysi marketga biriktirilmagan',
+          );
+        }
+        // WWbdu8ya TC3: boshqa marketni so'rash market roli bilan bir xil
+        // ochiq 400 — jimgina o'z marketiga almashtirilmaydi.
         throw new BadRequestException(
-          "Market operatori boshqa market ma'lumotini so'rashi mumkin emas",
+          pick.reason === 'foreign'
+            ? "Market operatori boshqa market ma'lumotini so'rashi mumkin emas"
+            : OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
         );
       }
-      resolvedMarketId = operatorMarketId;
+      resolvedMarketId = pick.marketId;
     }
     // Mijoz — faqat o'z buyurtmalari.
     const resolvedCustomerId =
@@ -7450,16 +7504,15 @@ export class OrderGatewayController {
       !normalizedRoles.includes(RoleEnum.SUPERADMIN) &&
       !normalizedRoles.includes(RoleEnum.ADMIN)
     ) {
-      // (nCAFnqIe) operator marketi SERVER tomonda aniqlanadi.
-      const operatorMarketId = await this.resolveMarketOperatorMarketId(
-        req?.user as JwtUser,
-      );
-      if (!operatorMarketId) {
+      // (nCAFnqIe) operator doirasi SERVER tomonda aniqlanadi —
+      // `:marketId` uning faol marketlaridan biri bo'lishi shart.
+      const scope = await this.operatorMarketScope(req?.user as JwtUser);
+      if (!scope.active.length) {
         throw new ForbiddenException(
           'Operator hech qaysi marketga biriktirilmagan',
         );
       }
-      if (operatorMarketId !== String(marketId ?? '').trim()) {
+      if (!isOperatorMarket(scope, marketId)) {
         throw new ForbiddenException(
           "Market operatori boshqa market ma'lumotini so'rashi mumkin emas",
         );
@@ -7748,21 +7801,29 @@ export class OrderGatewayController {
     if (roles.includes(RoleEnum.MARKET)) {
       marketId = String(req.user.sub);
     } else if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
-      // Operator marketi — `POST /orders` dagi kabi identity'dan (yaratish
-      // formasi `replaced_order_id` ni shu market buyurtmalaridan oladi).
+      // Operator marketi — `POST /orders` dagi kabi a'zoliklaridan (yaratish
+      // formasi `replaced_order_id` ni shu market buyurtmalaridan oladi):
+      // bitta faol market — o'sha (query e'tiborsiz), 2+ — `market_id` shart.
       const operatorProfile = await this.sendIdentityWithTimeout(
         { cmd: 'identity.user.find_by_id' },
         { id: req.user.sub },
       ).catch(() => null);
-      marketId = String(
-        (operatorProfile as { data?: { market_id?: string | null } } | null)
-          ?.data?.market_id ?? '',
-      ).trim();
-      if (!marketId) {
+      const pick = pickOperatorMarket(
+        operatorMarketScopeFromProfile(operatorProfile),
+        marketIdRaw,
+        { ignoreRequestedWhenSingle: true },
+      );
+      if (!pick.ok) {
+        if (pick.reason === 'foreign') {
+          throw new ForbiddenException(OPERATOR_MARKET_FOREIGN_MESSAGE);
+        }
         throw new BadRequestException(
-          'Operator hech qaysi marketga biriktirilmagan',
+          pick.reason === 'unassigned'
+            ? 'Operator hech qaysi marketga biriktirilmagan'
+            : OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
         );
       }
+      marketId = pick.marketId;
     } else {
       marketId = String(marketIdRaw ?? '').trim();
     }
@@ -7990,8 +8051,8 @@ export class OrderGatewayController {
     @Query('auto_approved') autoApproved?: string,
   ) {
     const roles = this.normalizeRoles(req.user.roles);
-    // (6QLF7nst) operator marketi SERVER tomonda (identity `user.market_id`),
-    // so'rovdan olinmaydi. Market/SA/admin uchun o'zgarishsiz.
+    // (6QLF7nst) operator marketi SERVER tomonda (a'zoliklaridan), so'rovdan
+    // olinmaydi. Market/SA/admin uchun o'zgarishsiz.
     let operatorMarketId: string | undefined;
     if (
       roles.includes(RoleEnum.MARKET_OPERATOR) &&
@@ -7999,12 +8060,10 @@ export class OrderGatewayController {
       !roles.includes(RoleEnum.SUPERADMIN) &&
       !roles.includes(RoleEnum.ADMIN)
     ) {
-      operatorMarketId = await this.resolveMarketOperatorMarketId(req.user);
-      if (!operatorMarketId) {
-        throw new ForbiddenException(
-          'Operator hech qaysi marketga biriktirilmagan',
-        );
-      }
+      operatorMarketId = await this.singleOperatorMarket(
+        req.user,
+        'Operator hech qaysi marketga biriktirilmagan',
+      );
     }
     const response: unknown = await this.sendOrderWithTimeout(
       { cmd: 'order.extra_cost_approval.list' },
@@ -8039,12 +8098,10 @@ export class OrderGatewayController {
       roles.includes(RoleEnum.MARKET_OPERATOR) &&
       !roles.includes(RoleEnum.MARKET)
     ) {
-      operatorMarketId = await this.resolveMarketOperatorMarketId(user);
-      if (!operatorMarketId) {
-        throw new ForbiddenException(
-          'Operator hech qaysi marketga biriktirilmagan',
-        );
-      }
+      operatorMarketId = await this.singleOperatorMarket(
+        user,
+        'Operator hech qaysi marketga biriktirilmagan',
+      );
     }
     return {
       id: user.sub,
@@ -9240,12 +9297,10 @@ export class OrderGatewayController {
       !isSystemPrivileged &&
       roles.includes(RoleEnum.MARKET_OPERATOR)
     ) {
-      marketId = await this.resolveMarketOperatorMarketId(req.user);
-      if (!marketId) {
-        throw new ForbiddenException(
-          'Market operatori hech qaysi marketga biriktirilmagan',
-        );
-      }
+      marketId = await this.singleOperatorMarket(
+        req.user,
+        'Market operatori hech qaysi marketga biriktirilmagan',
+      );
     } else if (!isSystemPrivileged) {
       await this.assertOrderInRequesterBranch(
         req.user,

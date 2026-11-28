@@ -149,6 +149,22 @@ import { PICKUP_FIFO } from './pickup-visit/pickup-fifo.token';
  * ni mock qiladi, `BaseEntity` li entity'ni yuklash ularni yiqitardi.
  */
 const CASHBOX_RECEIPT_ENTITY = 'CashboxReceipt';
+
+/**
+ * Masofadagi servisda shu pattern uchun handler yo'q (eski identity — hali
+ * deploy qilinmagan). @nestjs/microservices RMQ server buni «no matching
+ * message handler» satri bilan qaytaradi.
+ */
+function isNoMessageHandler(error: unknown): boolean {
+  const message =
+    error && typeof error === 'object'
+      ? (error as { message?: unknown }).message
+      : error;
+  return (
+    typeof message === 'string' &&
+    message.toLowerCase().includes('no matching message handler')
+  );
+}
 import {
   SHIFT_REPORTS,
   type ShiftReportTrigger,
@@ -8275,7 +8291,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         return this.successRes(null, 200, 'no operator — earning skipped');
       }
 
-      const operator = await this.fetchOperatorCommission(operatorId);
+      // D3: stavka buyurtma marketidagi a'zolikdan (operator, market).
+      const operator = await this.fetchOperatorCommission(
+        operatorId,
+        input.market_id ? String(input.market_id) : null,
+      );
       const totalPrice = Number(input.total_price ?? 0);
       const amount = this.computeCommission(
         operator?.commission_type ?? null,
@@ -8451,11 +8471,25 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
       }
       const orders = [...byId.values()];
-      const operator = orders.length
-        ? await this.fetchOperatorCommission(operatorId)
-        : null;
-      const commissionType = operator?.commission_type ?? null;
-      const commissionValue = Number(operator?.commission_value ?? 0);
+      // D3: stavka har buyurtma marketidagi a'zolikdan (gateway bitta market
+      // buyurtmalarini yuboradi — odatda bitta so'rov).
+      const rates = new Map<
+        string,
+        { commission_type: string | null; commission_value: number } | null
+      >();
+      for (const marketKey of new Set(
+        orders.map((order) => order.market_id ?? ''),
+      )) {
+        rates.set(
+          marketKey,
+          await this.fetchOperatorCommission(operatorId, marketKey || null),
+        );
+      }
+      const rateOf = (order: { market_id: string | null }) =>
+        rates.get(order.market_id ?? '') ?? null;
+      const firstRate = orders.length ? rateOf(orders[0]) : null;
+      const commissionType = firstRate?.commission_type ?? null;
+      const commissionValue = Number(firstRate?.commission_value ?? 0);
 
       const existing = orders.length
         ? await this.earningRepo.find({
@@ -8472,8 +8506,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           amount:
             Math.round(
               this.computeCommission(
-                commissionType,
-                commissionValue,
+                rateOf(order)?.commission_type ?? null,
+                Number(rateOf(order)?.commission_value ?? 0),
                 order.total_price,
               ) * 100,
             ) / 100,
@@ -8512,8 +8546,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             order_id: order.order_id,
             market_id: order.market_id,
             amount,
-            commission_type: commissionType,
-            commission_value: commissionValue,
+            commission_type: rateOf(order)?.commission_type ?? null,
+            commission_value: Number(rateOf(order)?.commission_value ?? 0),
             order_total_price: order.total_price,
           })),
         )
@@ -8539,6 +8573,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         metadata: {
           reason: 'backfill',
           operator_id: operatorId,
+          // Audit: qaysi market(lar) buyurtmalari uchun yozildi.
+          market_ids: [...rates.keys()].filter(Boolean),
           commission_type: commissionType,
           commission_value: commissionValue,
           requested_by_id: input?.requested_by?.id ?? null,
@@ -8597,13 +8633,24 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * yozishi mumkin). Eski Elchi to'lovlari ham «to'langan» ga kiradi.
    */
   async findOperatorBalance(
-    input: { operator_id: string },
+    input: { operator_id: string; market_id?: string | null },
     // Tranzaksiya ichidan chaqirilganda — o'sha ulanish.
     manager?: EntityManager,
   ) {
     try {
       this.assertBigIntId(input.operator_id, 'operator_id');
       const operatorId = String(input.operator_id);
+      // 3-bosqich: operator bir nechta marketda — har marketga alohida qoldiq
+      // (har market o'z ulushini o'zi to'laydi, D3). `market_id` berilsa —
+      // faqat shu market; javobda doim `by_market` (market_id NULL — eski,
+      // biriktirilmagan qatorlar).
+      const marketId =
+        input.market_id != null && String(input.market_id).trim() !== ''
+          ? String(input.market_id).trim()
+          : null;
+      if (marketId) {
+        this.assertBigIntId(marketId, 'market_id');
+      }
       const earningRepo = manager
         ? manager.getRepository(OperatorEarning)
         : this.earningRepo;
@@ -8611,32 +8658,71 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         ? manager.getRepository(OperatorPayment)
         : this.paymentRepo;
 
-      const earnedRow = await earningRepo
+      const earnedQb = earningRepo
         .createQueryBuilder('e')
-        .select('COALESCE(SUM(e.amount), 0)', 'total')
+        .select('e.market_id::text', 'market_id')
+        .addSelect('COALESCE(SUM(e.amount), 0)', 'total')
         .where('e.operator_id = :operatorId', { operatorId })
-        .andWhere('e.is_deleted = false')
-        .getRawOne<{ total: string }>();
-
-      const paidRow = await paymentRepo
+        .andWhere('e.is_deleted = false');
+      const paidQb = paymentRepo
         .createQueryBuilder('p')
-        .select('COALESCE(SUM(p.amount), 0)', 'total')
+        .select('p.market_id::text', 'market_id')
+        .addSelect('COALESCE(SUM(p.amount), 0)', 'total')
         .where('p.operator_id = :operatorId', { operatorId })
         .andWhere('p.is_deleted = false')
         // F2qp6FtE: bekor qilingan yozuv «to'langan» ga kirmaydi.
-        .andWhere('p.cancelled_at IS NULL')
-        .getRawOne<{ total: string }>();
+        .andWhere('p.cancelled_at IS NULL');
+      if (marketId) {
+        earnedQb.andWhere('e.market_id = :marketId', { marketId });
+        paidQb.andWhere('p.market_id = :marketId', { marketId });
+      }
+      const [earnedRows, paidRows] = await Promise.all([
+        earnedQb
+          .groupBy('e.market_id')
+          .getRawMany<{ market_id: string | null; total: string }>(),
+        paidQb
+          .groupBy('p.market_id')
+          .getRawMany<{ market_id: string | null; total: string }>(),
+      ]);
 
       // Tiyin aniqligida (suzuvchi nuqta qoldig'i — 0.30000000000000004 emas).
-      const earnedCents = Math.round(Number(earnedRow?.total ?? 0) * 100);
-      const paidCents = Math.round(Number(paidRow?.total ?? 0) * 100);
+      const cents = (value: string) => Math.round(Number(value ?? 0) * 100);
+      const byMarket = new Map<string, { earned: number; paid: number }>();
+      const bucket = (key: string | null) => {
+        const id = key ?? '';
+        const found = byMarket.get(id) ?? { earned: 0, paid: 0 };
+        byMarket.set(id, found);
+        return found;
+      };
+      for (const row of earnedRows)
+        bucket(row.market_id).earned += cents(row.total);
+      for (const row of paidRows)
+        bucket(row.market_id).paid += cents(row.total);
+      let earnedCents = 0;
+      let paidCents = 0;
+      const markets = [...byMarket.entries()]
+        .sort(([a], [b]) =>
+          a === '' ? 1 : b === '' ? -1 : Number(BigInt(a) - BigInt(b)),
+        )
+        .map(([id, sums]) => {
+          earnedCents += sums.earned;
+          paidCents += sums.paid;
+          return {
+            market_id: id || null,
+            earned: sums.earned / 100,
+            paid: sums.paid / 100,
+            balance: (sums.earned - sums.paid) / 100,
+          };
+        });
 
       return this.successRes(
         {
           operator_id: operatorId,
+          ...(marketId ? { market_id: marketId } : {}),
           earned: earnedCents / 100,
           paid: paidCents / 100,
           balance: (earnedCents - paidCents) / 100,
+          by_market: markets,
         },
         200,
         'operator balance',
@@ -8648,15 +8734,22 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   async listOperatorEarnings(input: {
     operator_id: string;
+    /** 3-bosqich: faqat shu market yozuvlari (market sahifasi doim beradi). */
+    market_id?: string | null;
     limit?: number;
     offset?: number;
   }) {
     try {
       this.assertBigIntId(input.operator_id, 'operator_id');
+      const marketId = this.optionalMarketId(input.market_id);
       const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
       const skip = Math.max(Number(input.offset ?? 0), 0);
       const [rows, total] = await this.earningRepo.findAndCount({
-        where: { operator_id: String(input.operator_id), isDeleted: false },
+        where: {
+          operator_id: String(input.operator_id),
+          isDeleted: false,
+          ...(marketId ? { market_id: marketId } : {}),
+        },
         // Audit 2026-11-22 #23: backfill bitta INSERT bilan yozadi — hamma
         // qatorda createdAt bir xil; `id` siz LIMIT/OFFSET sahifalari bir-
         // biriga kirib ketadi (takror / yo'qolgan qatorlar).
@@ -8676,15 +8769,22 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
 
   async listOperatorPayments(input: {
     operator_id: string;
+    /** 3-bosqich: faqat shu market to'lovlari. */
+    market_id?: string | null;
     limit?: number;
     offset?: number;
   }) {
     try {
       this.assertBigIntId(input.operator_id, 'operator_id');
+      const marketId = this.optionalMarketId(input.market_id);
       const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
       const skip = Math.max(Number(input.offset ?? 0), 0);
       const [rows, total] = await this.paymentRepo.findAndCount({
-        where: { operator_id: String(input.operator_id), isDeleted: false },
+        where: {
+          operator_id: String(input.operator_id),
+          isDeleted: false,
+          ...(marketId ? { market_id: marketId } : {}),
+        },
         // F2qp6FtE: to'lov sanasi bo'yicha (market o'tgan kunga yozishi mumkin).
         order: { paid_at: 'DESC', id: 'DESC' },
         take,
@@ -8737,10 +8837,60 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     return 0;
   }
 
-  private async fetchOperatorCommission(operatorId: string): Promise<{
+  /** Ixtiyoriy market filtri: bo'sh — null; noto'g'ri — 400. */
+  private optionalMarketId(value: unknown): string | null {
+    const marketId =
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    if (!marketId && (value == null || typeof value === 'string')) {
+      return null;
+    }
+    this.assertBigIntId(marketId, 'market_id');
+    return marketId;
+  }
+
+  /**
+   * Operator komissiya stavkasi. D3 (har market alohida): `marketId` berilsa
+   * avval identity a'zoligidan (`identity.market_operator.commission` —
+   * operator marketdan chiqarilgan bo'lsa ham o'sha market stavkasi). A'zolik
+   * topilmasa yoki eski identity bu RPC'ni bilmasa — eski yo'l: operator
+   * qatoridagi yagona stavka (`find_by_id`, o'tish davrida a'zolik bilan bir
+   * xil). Boshqa xato — yuqoriga (outbox qayta urinadi, noto'g'ri stavka
+   * snapshot qilinmaydi).
+   */
+  private async fetchOperatorCommission(
+    operatorId: string,
+    marketId?: string | null,
+  ): Promise<{
     commission_type: string | null;
     commission_value: number;
   } | null> {
+    if (marketId && /^\d+$/.test(marketId)) {
+      const membership = await rmqSend<{
+        found?: boolean;
+        commission_type?: string | null;
+        commission_value?: number | null;
+      }>(
+        this.identityClient,
+        { cmd: 'identity.market_operator.commission' },
+        { operator_id: operatorId, market_id: marketId },
+      ).catch((err: unknown) => {
+        if (isNoMessageHandler(err)) {
+          return null;
+        }
+        this.logger.warn(
+          `fetchOperatorCommission (membership) failed for operator ${operatorId}, market ${marketId}: ${(err as Error)?.message ?? String(err)}`,
+        );
+        throw err;
+      });
+      if (membership?.found === true) {
+        return {
+          commission_type: membership.commission_type ?? null,
+          commission_value: Number(membership.commission_value ?? 0),
+        };
+      }
+    }
     try {
       const res = await rmqSend<{
         data?: {

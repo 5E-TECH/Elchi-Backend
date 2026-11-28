@@ -27,6 +27,7 @@ import { IsString, Matches } from 'class-validator';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { operatorBelongsToMarket } from './auth/market-operator-market';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 
@@ -136,19 +137,17 @@ export class OperatorEarningBackfillGatewayController {
     operatorId: string,
   ): Promise<{ name: string }> {
     const res = await this.send<{
-      data?: { role?: unknown; market_id?: unknown; name?: unknown };
+      data?: { role?: unknown; name?: unknown };
     }>(this.identityClient, 'identity.user.find_by_id', {
       id: operatorId,
     }).catch(() => null);
     const user = res?.data;
-    const ownMarket =
-      typeof user?.market_id === 'string' || typeof user?.market_id === 'number'
-        ? String(user.market_id)
-        : '';
+    // Bitta operator — bir nechta market: shu marketdagi a'zoligi (o'tish
+    // davrida `market_id`) — `auth/market-operator-market.ts`.
     if (
       !user ||
       user.role !== RoleEnum.MARKET_OPERATOR ||
-      ownMarket !== marketId
+      !operatorBelongsToMarket(user, marketId)
     ) {
       throw new NotFoundException('Operator topilmadi');
     }

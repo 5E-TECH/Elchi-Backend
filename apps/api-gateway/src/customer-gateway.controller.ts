@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Controller,
   GatewayTimeoutException,
   Get,
@@ -24,6 +25,13 @@ import {
 } from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import {
+  OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
+  OPERATOR_MARKET_FOREIGN_MESSAGE,
+  operatorMarketScopeFromProfile,
+  pickOperatorMarket,
+  type OperatorMarketScope,
+} from './auth/market-operator-market';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 
@@ -182,18 +190,21 @@ export class CustomerGatewayController {
     );
   }
 
-  private async resolveOperatorMarketId(user: JwtUser): Promise<string> {
+  /**
+   * Market operatori doirasi — faol a'zolik marketlari (`auth/market-
+   * operator-market.ts`, order-gateway bilan bir xil manba). Identity javob
+   * bermasa — bo'sh (rad etiladi, fail-closed).
+   */
+  private async operatorMarketScope(
+    user: JwtUser,
+  ): Promise<OperatorMarketScope> {
     const profile: unknown = await this.send(
       this.identityClient,
       { cmd: 'identity.user.find_by_id' },
       { id: user?.sub },
       'Identity',
     ).catch(() => null);
-    return (
-      text(
-        (profile as { data?: { market_id?: unknown } } | null)?.data?.market_id,
-      ) ?? ''
-    ).trim();
+    return operatorMarketScopeFromProfile(profile);
   }
 
   /**
@@ -221,13 +232,24 @@ export class CustomerGatewayController {
       return { marketId: own, scoped: true };
     }
     if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
-      const marketId = await this.resolveOperatorMarketId(user);
-      if (!ID_RE.test(marketId)) {
+      // Bitta faol market — o'sha (`market_id` e'tiborsiz, avvalgidek); 2+ —
+      // `market_id` majburiy va operatorning marketlaridan biri bo'lishi shart.
+      const pick = pickOperatorMarket(
+        await this.operatorMarketScope(user),
+        requested,
+        { ignoreRequestedWhenSingle: true },
+      );
+      if (!pick.ok) {
+        if (pick.reason === 'foreign') {
+          throw new ForbiddenException(OPERATOR_MARKET_FOREIGN_MESSAGE);
+        }
         throw new BadRequestException(
-          'Operator hech qaysi marketga biriktirilmagan',
+          pick.reason === 'unassigned'
+            ? 'Operator hech qaysi marketga biriktirilmagan'
+            : OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
         );
       }
-      return { marketId, scoped: true };
+      return { marketId: pick.marketId, scoped: true };
     }
     // REGISTRATOR / MANAGER / BRANCH (RolesGuard boshqasini o'tkazmaydi).
     if (!requested) {

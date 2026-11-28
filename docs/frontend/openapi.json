@@ -2661,7 +2661,7 @@
     },
     "/product/my-products": {
       "get": {
-        "description": "Market — o'z mahsulotlari; market operatori — biriktirilgan marketining mahsulotlari (biriktirilmagan bo'lsa 400). search/page/limit qo'llab-quvvatlanadi.",
+        "description": "Market — o'z mahsulotlari; market operatori — faol marketining mahsulotlari (biriktirilmagan bo'lsa 400). Bir nechta marketda ishlaydigan operator `market_id` bilan tanlaydi (o'z marketlaridan biri, aks holda 403; berilmasa — 400). Market uchun `market_id` e'tiborsiz. search/page/limit qo'llab-quvvatlanadi.",
         "operationId": "CatalogGatewayController_getMyProducts",
         "parameters": [
           {
@@ -2713,6 +2713,15 @@
                 "asc",
                 "desc"
               ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "Faqat market operatori: o'zi ishlaydigan marketlardan biri (bitta marketda — shart emas)",
+            "schema": {
               "type": "string"
             }
           }
@@ -13088,9 +13097,18 @@
     },
     "/finance/operators/me/balance": {
       "get": {
-        "description": "`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance }`, operator_id — JWT. Komissiya belgilanmagan operator — 0/0/0 (403 emas).",
+        "description": "`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance, by_market }`, operator_id — JWT. Bir nechta marketda ishlaydigan operator: `by_market: [{ market_id, earned, paid, balance }]` — har market o'z ulushini alohida to'laydi; ixtiyoriy `market_id` — faqat shu market. Komissiya belgilanmagan operator — 0/0/0 (403 emas).",
         "operationId": "FinanceGatewayController_findMyOperatorBalance",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -13127,6 +13145,15 @@
             "name": "offset",
             "required": false,
             "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "Ixtiyoriy: faqat shu market buyurtmalaridan daromad (o'z yozuvlari ichida)",
             "schema": {
               "type": "string"
             }
@@ -13168,6 +13195,15 @@
             "name": "offset",
             "required": false,
             "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "Ixtiyoriy: faqat shu market to'lovlari (o'z to'lovlari ichida)",
             "schema": {
               "type": "string"
             }

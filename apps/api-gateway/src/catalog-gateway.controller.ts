@@ -20,6 +20,14 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
 import { projectOrderContactsForRoles } from './auth/order-contact-projection';
+import {
+  EMPTY_OPERATOR_MARKET_SCOPE,
+  isOperatorMarket,
+  OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
+  pickOperatorMarket,
+  resolveOperatorMarketScope,
+  type OperatorMarketScope,
+} from './auth/market-operator-market';
 import { PRODUCT_BARCODE_MAX_LENGTH, Roles as RoleEnum } from '@app/common';
 import {
   ApiBody,
@@ -290,46 +298,59 @@ export class CatalogGatewayController {
   }
 
   /**
-   * tsEevElW: market operatori biriktirilgan market id'si — identity
-   * `user.market_id` (order-gateway `resolveMarketOperatorMarketId` bilan bir
-   * xil manba; BeePost product.service.ts:66-74). Topilmasa yoki identity
-   * javob bermasa — '' (chaqiruvchi rad etadi, fail-closed).
+   * tsEevElW: market operatori doirasi — faol a'zolik marketlari (order-
+   * gateway bilan bir xil manba, `auth/market-operator-market.ts`; BeePost
+   * product.service.ts:66-74). Identity javob bermasa — bo'sh (chaqiruvchi
+   * rad etadi, fail-closed).
    */
-  private async resolveOperatorMarketId(user: JwtUser): Promise<string> {
+  private async operatorMarketScope(
+    user: JwtUser,
+  ): Promise<OperatorMarketScope> {
     if (!this.identityClient) {
-      return '';
+      return EMPTY_OPERATOR_MARKET_SCOPE;
     }
-    const profile: unknown = await firstValueFrom(
-      this.identityClient
-        .send({ cmd: 'identity.user.find_by_id' }, { id: user?.sub })
-        .pipe(timeout(8000)),
-    ).catch(() => null);
-    const raw = (profile as { data?: { market_id?: unknown } } | null)?.data
-      ?.market_id;
-    return typeof raw === 'string' || typeof raw === 'number'
-      ? String(raw).trim()
-      : '';
+    return resolveOperatorMarketScope(this.identityClient, user?.sub);
   }
 
-  /** tsEevElW: biriktirilmagan operator — tushunarli 400 (TC4). */
-  private async requireOperatorMarketId(user: JwtUser): Promise<string> {
-    const marketId = await this.resolveOperatorMarketId(user);
-    if (!marketId) {
-      throw new BadRequestException(
-        "Operator hech qaysi marketga biriktirilmagan — mahsulot katalogi bilan ishlab bo'lmaydi",
-      );
+  /**
+   * tsEevElW: operatorning shu amal uchun marketi — `requested` berilsa uning
+   * faol marketlaridan biri (aks holda 403 `foreignMessage`), berilmasa —
+   * yagona faol market (2+ → 400). Biriktirilmagan — tushunarli 400 (TC4).
+   */
+  private async requireOperatorMarketId(
+    user: JwtUser,
+    requested?: string,
+    foreignMessage = "Market faqat o'z mahsulotlarini ko'ra oladi",
+  ): Promise<string> {
+    const pick = pickOperatorMarket(
+      await this.operatorMarketScope(user),
+      requested,
+    );
+    if (pick.ok) {
+      return pick.marketId;
     }
-    return marketId;
+    if (pick.reason === 'foreign') {
+      throw new ForbiddenException(foreignMessage);
+    }
+    throw new BadRequestException(
+      pick.reason === 'unassigned'
+        ? "Operator hech qaysi marketga biriktirilmagan — mahsulot katalogi bilan ishlab bo'lmaydi"
+        : OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
+    );
   }
 
   /**
    * tsEevElW: "o'z marketi" — MARKET uchun token `sub`, MARKET_OPERATOR uchun
-   * biriktirilgan market (yo'q bo'lsa 400). my-products va by-code shu id
-   * bilan cheklanadi (o'qish; Pc4CAFdB dan keyin market yozmaydi).
+   * faol marketi (`requested` — faqat operator tanlovi; yo'q bo'lsa 400).
+   * my-products va by-code shu id bilan cheklanadi (o'qish; Pc4CAFdB dan
+   * keyin market yozmaydi).
    */
-  private async resolveOwnMarketId(user: JwtUser): Promise<string> {
+  private async resolveOwnMarketId(
+    user: JwtUser,
+    requested?: string,
+  ): Promise<string> {
     if (this.isMarketOperatorRequester(user)) {
-      return this.requireOperatorMarketId(user);
+      return this.requireOperatorMarketId(user, requested);
     }
     return String(user?.sub ?? '').trim();
   }
@@ -652,7 +673,16 @@ export class CatalogGatewayController {
   @ApiOperation({
     summary: 'Get my products (market / market_operator)',
     description:
-      "Market — o'z mahsulotlari; market operatori — biriktirilgan marketining mahsulotlari (biriktirilmagan bo'lsa 400). search/page/limit qo'llab-quvvatlanadi.",
+      "Market — o'z mahsulotlari; market operatori — faol marketining mahsulotlari (biriktirilmagan bo'lsa 400). " +
+      "Bir nechta marketda ishlaydigan operator `market_id` bilan tanlaydi (o'z marketlaridan biri, aks holda 403; berilmasa — 400). " +
+      "Market uchun `market_id` e'tiborsiz. search/page/limit qo'llab-quvvatlanadi.",
+  })
+  @ApiQuery({
+    name: 'market_id',
+    required: false,
+    type: String,
+    description:
+      "Faqat market operatori: o'zi ishlaydigan marketlardan biri (bitta marketda — shart emas)",
   })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
@@ -672,9 +702,13 @@ export class CatalogGatewayController {
     @Query('limit') limit?: string,
     @Query('sort_by') sortBy?: string,
     @Query('sort_dir') sortDir?: string,
+    @Query('market_id') marketId?: string,
   ) {
     const sort = parseProductSort(sortBy, sortDir);
-    const ownMarketId = await this.resolveOwnMarketId(req.user);
+    const ownMarketId = await this.resolveOwnMarketId(
+      req.user,
+      typeof marketId === 'string' ? marketId.trim() : undefined,
+    );
     return firstValueFrom(
       this.catalogClient
         .send(
@@ -737,11 +771,15 @@ export class CatalogGatewayController {
 
     const requested = typeof marketId === 'string' ? marketId.trim() : '';
     let userId: string | undefined;
-    if (
-      this.isMarketOnlyRequester(req?.user) ||
-      this.isMarketOperatorRequester(req?.user)
-    ) {
-      // Market — token `sub`; operator — biriktirilgan market (yo'q — 400).
+    if (this.isMarketOperatorRequester(req?.user)) {
+      // Operator — faol marketlaridan biri (`market_id` berilsa — shu, doirada
+      // bo'lmasa 403; berilmasa — yagonasi; yo'q — 400).
+      userId = await this.requireOperatorMarketId(
+        req?.user as JwtUser,
+        requested || undefined,
+      );
+    } else if (this.isMarketOnlyRequester(req?.user)) {
+      // Market — token `sub`.
       const ownId = await this.resolveOwnMarketId(req?.user as JwtUser);
       if (!ownId || (requested && requested !== ownId)) {
         throw new ForbiddenException(
@@ -811,11 +849,15 @@ export class CatalogGatewayController {
         typeof rawOwner === 'string' || typeof rawOwner === 'number'
           ? String(rawOwner).trim()
           : '';
-      // tsEevElW: operator — biriktirilgan marketi; aniqlanmasa '' → rad.
-      const ownMarketId = isOperator
-        ? await this.resolveOperatorMarketId(req?.user as JwtUser)
-        : String(req?.user?.sub ?? '').trim();
-      if (!ownerId || !ownMarketId || ownerId !== ownMarketId) {
+      // tsEevElW: operator — mahsulot egasi uning faol marketlaridan biri;
+      // doira aniqlanmasa — rad.
+      const allowed = isOperator
+        ? isOperatorMarket(
+            await this.operatorMarketScope(req?.user as JwtUser),
+            ownerId,
+          )
+        : !!ownerId && ownerId === String(req?.user?.sub ?? '').trim();
+      if (!allowed) {
         throw new ForbiddenException(
           "Market faqat o'z mahsulotini ko'ra oladi",
         );

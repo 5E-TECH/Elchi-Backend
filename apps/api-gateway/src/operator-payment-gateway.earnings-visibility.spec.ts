@@ -124,7 +124,8 @@ describe('operator hisobi — buyurtmalar soni, o`chirilganlar, daromad qatorlar
     );
     expect(finance.send).toHaveBeenCalledWith(
       { cmd: 'finance.operator.market_balances' },
-      { operator_ids: ['41', '43', '47', '48'] },
+      // 3-bosqich: faqat shu market (JWT sub) puli.
+      { operator_ids: ['41', '43', '47', '48'], market_id: '12' },
     );
     expect(order.send).toHaveBeenCalledWith(
       { cmd: 'order.operator.order_counts' },
@@ -215,7 +216,8 @@ describe('operator hisobi — buyurtmalar soni, o`chirilganlar, daromad qatorlar
 
     expect(finance.send).toHaveBeenCalledWith(
       { cmd: 'finance.operator.earning.list' },
-      { operator_id: '47', limit: 10, offset: 10 },
+      // 3-bosqich: faqat shu market buyurtmalaridan daromad.
+      { operator_id: '47', market_id: '12', limit: 10, offset: 10 },
     );
     expect(res.body.data).toEqual({
       items: [

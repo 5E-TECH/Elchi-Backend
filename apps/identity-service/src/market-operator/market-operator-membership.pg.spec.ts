@@ -465,6 +465,61 @@ describePg(
       await expect(service.listForOperator('777')).resolves.toEqual([]);
     });
 
+    it('commissionFor (3-bosqich, D3): (operator, market) stavkasi — ochiq a`zolik birinchi, chiqarilgan bo`lsa ham o`sha market stavkasi; a`zolik yo`q — found: false', async () => {
+      await insertAdmin({
+        id: '801',
+        role: 'market_operator',
+        market_id: MARKET_A,
+        commission_type: 'percent',
+        commission_value: 5,
+      });
+      await runMigration();
+      // Boshqa marketda alohida stavka (keyingi bosqichlar yozadigan a'zolik).
+      await db.query(
+        `INSERT INTO identity_schema.market_operator_markets
+         (operator_id, market_id, status, is_primary, commission_type, commission_value)
+       VALUES (801, ${MARKET_B}, 'active', false, 'fixed', 3000)`,
+      );
+
+      await expect(service.commissionFor('801', MARKET_A)).resolves.toEqual({
+        found: true,
+        commission_type: 'percent',
+        commission_value: 5,
+      });
+      await expect(service.commissionFor(801, MARKET_B)).resolves.toEqual({
+        found: true,
+        commission_type: 'fixed',
+        commission_value: 3000,
+      });
+
+      // A marketdan chiqarildi (asosiy B ga o'tdi) — A dagi eski buyurtma
+      // sotilsa ham A stavkasi.
+      await updateAdmin('801', 'market_id = $1', [MARKET_C]);
+      await expect(service.commissionFor('801', MARKET_A)).resolves.toEqual({
+        found: true,
+        commission_type: 'percent',
+        commission_value: 5,
+      });
+      // C — asosiy (trigger `admins` stavkasini ko'chirdi).
+      await expect(service.commissionFor('801', MARKET_C)).resolves.toEqual({
+        found: true,
+        commission_type: 'percent',
+        commission_value: 5,
+      });
+
+      const none = {
+        found: false,
+        commission_type: null,
+        commission_value: null,
+      };
+      await expect(service.commissionFor('801', '999')).resolves.toEqual(none);
+      await expect(service.commissionFor('777', MARKET_A)).resolves.toEqual(
+        none,
+      );
+      await expect(service.commissionFor('x', MARKET_A)).resolves.toEqual(none);
+      await expect(service.commissionFor('801', null)).resolves.toEqual(none);
+    });
+
     it('down(): trigger, funksiya va jadval o`chadi; `admins` yozuvlari odatdagidek ishlaydi', async () => {
       await insertAdmin({
         id: '701',

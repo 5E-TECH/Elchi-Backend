@@ -122,6 +122,9 @@ describePg('E6iEOAVs — operator o`z daromadi (Postgres)', () => {
       earned: 12_000,
       paid: 4_000,
       balance: 8_000,
+      by_market: [
+        { market_id: '37', earned: 12_000, paid: 4_000, balance: 8_000 },
+      ],
     });
   });
 
@@ -178,6 +181,7 @@ describePg('E6iEOAVs — operator o`z daromadi (Postgres)', () => {
       earned: 0,
       paid: 0,
       balance: 0,
+      by_market: [],
     });
     expect(earnings.data).toMatchObject({ rows: [], total: 0 });
     expect(payments.data).toMatchObject({ rows: [], total: 0 });
