@@ -15,11 +15,15 @@ import { addDayKey } from '../time/business-day';
  *     ulushi − hamkor filial ulushi), uning qaytarilishi (`correction`,
  *     `rollback-extra:*` dan tashqari) va pickup haqi (`pickup_fee`).
  *   • XARAJAT (`opex`, musbat son) — qo'lda chiqim (`manual_expense`),
- *     ish haqi (`salary`), kommunal va boshqa hisoblar (`bills`), buyurtma
- *     qo'shimcha xarajati (`sell_extra_cost`, `cancel_extra_cost`) va uning
- *     qaytarilishi (`correction` + `rollback-extra:*`, xarajatni kamaytiradi).
- *     «Balans → Tahlil» xarajat hisobotidagi manbalar bilan bir xil.
+ *     ish haqi (`salary`), kommunal va boshqa hisoblar (`bills`).
  *   • SOF FOYDA (`net`) = daromad − xarajat.
+ *   • BUYURTMA QO'SHIMCHA XARAJATI (`sell_extra_cost`, `cancel_extra_cost`
+ *     va uning qaytarilishi `correction` + `rollback-extra:*`) — umuman
+ *     KIRMAYDI (ega 2026-11-28: «qo'shimcha xarajat bizning kassaga aloqasi
+ *     yo'q, u marketdan to'g'ridan-to'g'ri ayriladi»). Sotuvda kuryer (menejer
+ *     sotuvida — filial) pulni o'z kassasidan to'laydi va AYNI summa market
+ *     haqidan (`for_market`) ayriladi — kompaniyaga sof ta'siri nol. Daftardagi
+ *     −summa yozuvi pul izi, kompaniya xarajati emas.
  *   • BOSHQA KIRIM (`other_income`) — qo'lda kirim (`manual_income`, masalan
  *     kassani to'ldirish). Alohida ko'rsatiladi, sof foydaga QO'SHILMAYDI:
  *     ko'pincha bu egasi/investor qo'ygan pul, foyda emas (BeePost ham
@@ -57,8 +61,6 @@ const OPEX_SOURCES = [
   FinancialSource_type.MANUAL_EXPENSE,
   FinancialSource_type.SALARY,
   FinancialSource_type.BILLS,
-  FinancialSource_type.SELL_EXTRA_COST,
-  FinancialSource_type.CANCEL_EXTRA_COST,
 ] as const;
 
 const list = (values: readonly string[]) =>
@@ -76,8 +78,10 @@ export function pnlSql(alias: string) {
   return {
     /** Daftar qatori P&L ga kiradimi (investor to'lovi — yo'q). */
     included: `${key} NOT LIKE '${INVESTOR_PROFIT_DEDUP_PREFIX}%'`,
+    // `rollback-extra:*` (qo'shimcha xarajat qaytarilishi) — na daromad, na
+    // xarajat: qo'shimcha xarajatning o'zi ham P&L ga kirmaydi.
     gross: `(${source} IN (${list(GROSS_SOURCES)}) OR (${source} = ${correction} AND NOT (${extraRollback})))`,
-    opex: `(${source} IN (${list(OPEX_SOURCES)}) OR (${source} = ${correction} AND ${extraRollback}))`,
+    opex: `${source} IN (${list(OPEX_SOURCES)})`,
     otherIncome: `${source} = '${FinancialSource_type.MANUAL_INCOME}'`,
   };
 }
