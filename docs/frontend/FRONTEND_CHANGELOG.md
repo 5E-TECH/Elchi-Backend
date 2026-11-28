@@ -23,6 +23,23 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-28 — Bitta operator — bir nechta market, 3a: operator moliyasi market bo'yicha (ega D3)
+
+Deploy: **finance-service** + **identity-service** + **api-gateway**. **Migratsiya 257** (eski `market_id` NULL
+operator daromad/to'lov qatorlarini marketga biriktiradi — summa o'zgarmaydi). Env, qo'lda qadam yo'q.
+Hozir har operatorda bitta market — raqamlar o'zgarmaydi.
+
+- ✏️ [finance] Market «Operatorlar → To'lovlar»: `GET /finance/operator-payments/balances`, `…/earnings` va
+  to'lovlar tarixi endi FAQAT shu market daromad va to'lovlari bo'yicha (ilgari operatorning barcha marketlari —
+  bir nechta marketli operatorda boshqa market puli ko'rinardi). Eski Elchi (Asosiy kassadan) to'lovlari tarixda
+  avvalgidek, endi `market_id` bilan. O'chirilgan operatorga to'lov chegarasi — shu market qoldig'i.
+- 🆕 [gateway] `GET /finance/operators/me/balance` — `by_market: [{ market_id, earned, paid, balance }]` (har market
+  o'z ulushini alohida to'laydi; `market_id: null` — biriktirib bo'lmagan eski qatorlar). `me/balance`,
+  `me/earnings`, `me/payments` — ixtiyoriy `?market_id=` (o'z yozuvlari ichida filtr; noto'g'ri shakl — 400).
+- 🟢 [finance] Operator komissiyasi buyurtma marketidagi a'zolik stavkasidan olinadi (hozir operator stavkasi bilan
+  bir xil).
+- 🟢 Frontend: hozir o'zgarish shart emas. «Daromadim» sahifasida market bo'yicha bo'lish — FE bosqichida.
+
 ### 2026-11-28 — Bitta operator — bir nechta market, 2-bosqich: gateway operator doirasi (ega D1–D8)
 
 Deploy: **api-gateway** + **identity-service**. Migratsiya, env, backfill yo'q (jadval — #810, migratsiya 255).

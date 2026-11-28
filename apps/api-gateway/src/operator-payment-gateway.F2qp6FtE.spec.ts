@@ -236,7 +236,8 @@ describe('F2qp6FtE — /finance/operator-payments gateway', () => {
     expect(identity.send).toHaveBeenCalledTimes(2);
     expect(finance.send).toHaveBeenCalledWith(
       { cmd: 'finance.operator.market_balances' },
-      { operator_ids: ['41', '43'] },
+      // 3-bosqich: faqat shu market (JWT sub) puli.
+      { operator_ids: ['41', '43'], market_id: '12' },
     );
     expect(res.body.data.items).toEqual([
       expect.objectContaining({

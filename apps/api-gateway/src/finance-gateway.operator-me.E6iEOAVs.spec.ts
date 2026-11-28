@@ -142,6 +142,37 @@ describe('E6iEOAVs — GET /finance/operators/me/* (market operatori o`z daromad
     });
   });
 
+  it('3-bosqich: `market_id` — o`z yozuvlari ichida filtr (uchala yo`l), bo`sh — filtrsiz, noto`g`ri shakl — 400 (finance`ga bormaydi)', async () => {
+    await request(http()).get('/finance/operators/me/balance?market_id=20');
+    await request(http()).get(
+      '/finance/operators/me/earnings?market_id=20&limit=5',
+    );
+    await request(http()).get('/finance/operators/me/payments?market_id=');
+    expect(calls()).toEqual([
+      [
+        { cmd: 'finance.operator.balance.find' },
+        { operator_id: '77', market_id: '20' },
+      ],
+      [
+        { cmd: 'finance.operator.earning.list' },
+        { operator_id: '77', market_id: '20', limit: 5, offset: undefined },
+      ],
+      [
+        { cmd: 'finance.operator.payment.list' },
+        { operator_id: '77', limit: undefined, offset: undefined },
+      ],
+    ]);
+
+    finance.send.mockClear();
+    for (const path of ['balance', 'earnings', 'payments']) {
+      const bad = await request(http()).get(
+        `/finance/operators/me/${path}?market_id=1;drop`,
+      );
+      expect(bad.status).toBe(400);
+    }
+    expect(finance.send).not.toHaveBeenCalled();
+  });
+
   it('boshqa operator id sini query bilan so`rab bo`lmaydi — har doim JWT sub', async () => {
     await request(http()).get(
       '/finance/operators/me/earnings?operator_id=42&limit=5',
