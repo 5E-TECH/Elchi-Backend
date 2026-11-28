@@ -23,6 +23,24 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-28 — Tizim bo'yicha oylik daromad, xarajat, sof foyda (`GET /finance/pnl`) (ega)
+
+Deploy: **api-gateway** (+ **libs/common**). Migratsiya va env yo'q. `finance.pnl.series` (#811) allaqachon
+finance-service'da — qoidalar o'sha yerda, gateway qayta hisoblamaydi.
+
+- 🆕 [gateway] `GET /finance/pnl[?from_day&to_day&granularity=month|day]` — faqat superadmin/admin (boshqa rol 403).
+  Javob: `{from_day, to_day, granularity, items: [{period, gross, opex, net, other_income}], totals}`. `period` —
+  `YYYY-MM` (sukut) yoki `YYYY-MM-DD`. `items` — oraliqdagi HAR oy, qatori yo'q oy 0 bilan (grafikda bo'shliq yo'q).
+  Sukut: joriy oy bilan 12 oy (`from_day` = 11 oy oldingi oyning 1-kuni, `to_day` = bugungi ish kuni). Chetdagi
+  oylar chala bo'lishi mumkin (joriy oy — bugungacha).
+  - `gross` (Daromad) — sotuv foydasi + uning qaytarilishi + pickup haqi;
+  - `opex` (Xarajat, musbat) — qo'lda chiqim, ish haqi, hisoblar (buyurtma qo'shimcha xarajati KIRMAYDI — marketdan
+    ayriladi; BE #812);
+  - `net` (Sof foyda) = `gross` − `opex` (manfiy bo'lishi mumkin);
+  - `other_income` (qo'lda kirim) — alohida, sof foydaga KIRMAYDI; investorga foyda to'lovi umuman kirmaydi.
+  Noto'g'ri sana, `from_day` > `to_day`, oraliq > 3700 kun — 400.
+→ Frontend: superadmin/admin uchun oylik daromad / xarajat / sof foyda grafigi.
+
 ### 2026-11-27 — Kuryerdagi buyurtmalar: 72 soatdan oshgan, 48 soatga yaqin, kuryerlar bo'yicha + ogohlantirish (onXzDc5n)
 
 Deploy: **order-service** (migratsiya **1716000000254**: `orders.courier_hold_warned_at` + qism indeks

@@ -1,4 +1,5 @@
 import { FinancialSource_type } from '../enums';
+import { addDayKey } from '../time/business-day';
 
 /**
  * KOMPANIYA FOYDA-ZARAR (P&L) QOIDALARI — `financial_balance_history`
@@ -95,3 +96,69 @@ export type PnlPoint = {
 };
 
 export type PnlGranularity = 'day' | 'month';
+
+/** Tizim grafigi sukut oralig'i — joriy oy bilan 12 oy. */
+export const PNL_DEFAULT_MONTHS = 12;
+
+/** `YYYY-MM` oyiga `months` oy qo'shadi (manfiy — ayiradi). */
+function shiftMonth(month: string, months: number): string {
+  const total =
+    Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1 + months;
+  const year = Math.floor(total / 12);
+  const mm = String((total % 12) + 1).padStart(2, '0');
+  return `${String(year).padStart(4, '0')}-${mm}`;
+}
+
+/**
+ * `toDay` oyidan `months − 1` oy oldingi oyning 1-kuni: `('2026-11-28', 12)`
+ * → `'2025-12-01'` (joriy oy bilan 12 oy).
+ */
+export function pnlMonthsBackStart(toDay: string, months: number): string {
+  return `${shiftMonth(toDay.slice(0, 7), 1 - Math.max(1, months))}-01`;
+}
+
+/**
+ * Davr kalitlari skeleti — `fromDay`..`toDay` (ikkala chet ham) har kun yoki
+ * har oy. `finance.pnl.series` faqat qatori bor davrlarni qaytaradi; grafikda
+ * bo'sh oy/kun tushib qolmasligi uchun o'quvchi shu skeletga yoyadi.
+ */
+export function pnlPeriods(
+  fromDay: string,
+  toDay: string,
+  granularity: PnlGranularity,
+): string[] {
+  const periods: string[] = [];
+  if (fromDay > toDay) return periods;
+  if (granularity === 'month') {
+    const last = toDay.slice(0, 7);
+    for (let m = fromDay.slice(0, 7); m <= last; m = shiftMonth(m, 1)) {
+      periods.push(m);
+    }
+    return periods;
+  }
+  for (let d = fromDay; d <= toDay; d = addDayKey(d, 1)) periods.push(d);
+  return periods;
+}
+
+/**
+ * Seriyani skeletga yoyadi: qatori yo'q davr — hamma qiymat 0. Qiymatlar
+ * qayta hisoblanmaydi (qoidalar — `pnlSql`, `finance.pnl.series`).
+ */
+export function fillPnlSeries(
+  items: readonly PnlPoint[],
+  fromDay: string,
+  toDay: string,
+  granularity: PnlGranularity,
+): PnlPoint[] {
+  const byPeriod = new Map(items.map((item) => [item.period, item]));
+  return pnlPeriods(fromDay, toDay, granularity).map(
+    (period) =>
+      byPeriod.get(period) ?? {
+        period,
+        gross: 0,
+        opex: 0,
+        net: 0,
+        other_income: 0,
+      },
+  );
+}
