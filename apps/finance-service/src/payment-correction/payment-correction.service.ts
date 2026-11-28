@@ -138,6 +138,8 @@ const MESSAGES: Record<PaymentCorrectionErrorCode, string> = {
     "Eski yozuv: to'lov oyoqlari bog'lanmagan — qaytarib bo'lmaydi",
   ALREADY_CORRECTED: "To'lov allaqachon qaytarilgan yoki tuzatilgan",
   WINDOW_EXPIRED: "Tuzatish muddati o'tgan",
+  // (2026-11-28) Tuzatish smenaga bog'liq emas — bu ikki kod endi
+  // qaytmaydi; eski frontend xaritasi uchun ro'yxatda qoladi.
   SHIFT_REQUIRED: 'Asosiy kassada smena ochilmagan',
   BRANCH_SHIFT_REQUIRED: 'Filial kassasida smena ochilmagan',
   INSUFFICIENT_BALANCE:
@@ -478,14 +480,18 @@ export class PaymentCorrectionService {
       const marketBox = box(shape.marketLeg?.cashbox_id);
       const X = shape.amount;
 
-      // Smena — qabul qiluvchi kassada (kod bilan). C — MAIN da ham teskari
-      // qatorlar (iz) yoziladi: asosiy kassa smenasi ham ochiq bo'lsin.
-      await this.requireShift(tx, receiverBox);
-      if (shape.mainIncomeLeg) {
-        await this.requireShift(
-          tx,
-          box(shape.mainIncomeLeg.cashbox_id) as Cashbox,
-        );
+      // (2026-11-28, ega) Smena SHART EMAS: superadmin tuzatishi filial /
+      // asosiy kassa smenasi yopiq bo'lsa ham o'tadi (kechasi menejerga
+      // «smenani och» deb qo'ng'iroq qilinmaydi). Teskari qator yoziladigan
+      // har MAIN / filial kassasining smenasi OCHIQ bo'lsa — FOR SHARE bilan
+      // ushlanadi (yopilayotgan smena shu harakatni o'z jamisiga oladi); yopiq
+      // bo'lsa harakat keyingi smenaning ochilish qoldig'ida va hisobotida
+      // «Smenalar orasida (smenasiz)» bo'lib ko'rinadi.
+      for (const cashbox of locked.values()) {
+        await this.finance.holdOpenShiftIfAny(tx, {
+          user_id: String(cashbox.user_id ?? MAIN_CASHBOX_USER_ID),
+          cashbox_type: cashbox.cashbox_type,
+        });
       }
 
       // Tahrir chegaralari.
@@ -951,25 +957,6 @@ export class PaymentCorrectionService {
       insufficient();
     }
     return null;
-  }
-
-  private async requireShift(tx: EntityManager, receiver: Cashbox) {
-    try {
-      await this.finance.requireOpenShift(tx, {
-        user_id: String(receiver.user_id ?? MAIN_CASHBOX_USER_ID),
-        cashbox_type: receiver.cashbox_type,
-      });
-    } catch (error) {
-      if (error instanceof BadRequestException) {
-        failCode(
-          400,
-          receiver.cashbox_type === Cashbox_type.BRANCH
-            ? C.BRANCH_SHIFT_REQUIRED
-            : C.SHIFT_REQUIRED,
-        );
-      }
-      throw error;
-    }
   }
 
   // ───────────────────── bildirishnoma / realtime ─────────────────────

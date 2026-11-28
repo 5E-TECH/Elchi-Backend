@@ -11,16 +11,18 @@ import {
 import { FinanceServiceService } from './finance-service.service';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxCard } from './entities/cashbox-card.entity';
+import { CashboxCardMovement } from './entities/cashbox-card-movement.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { CashboxReceipt } from './entities/cashbox-receipt.entity';
 import { FinanceSetting } from './entities/finance-setting.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 import { PaymentCorrection } from './entities/payment-correction.entity';
-import { Shift } from './entities/shift.entity';
+import { Shift, ShiftStatus } from './entities/shift.entity';
 import { CashboxReceiptService } from './cashbox-receipt/cashbox-receipt.service';
 import { FinanceNotificationService } from './notification/finance-notification.service';
 import { FinanceRealtimeService } from './realtime/finance-realtime.service';
 import { PaymentCorrectionService } from './payment-correction/payment-correction.service';
+import { ShiftReportService } from './shift-report/shift-report.service';
 
 /**
  * (2026-11-11, Dilshod) «Marketga o'tkazma» FILIALDAN — HQ filial
@@ -39,6 +41,8 @@ const describePg = pgUri ? describe : describe.skip;
 
 const BRANCH = '15';
 const MARKET = '201';
+/** Filial menejeri (filial smenasini ochadi / yopadi). */
+const MANAGER = '15001';
 const SA = { requester_id: '1', requester_roles: ['superadmin'] };
 
 /** RpcException tanasi (toRpcError) yoki boshqa xato — o'zi. */
@@ -105,6 +109,7 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
         Cashbox,
         CashboxHistory,
         CashboxCard,
+        CashboxCardMovement,
         CashboxReceipt,
         FinancialBalanceHistory,
         FinanceSetting,
@@ -168,6 +173,7 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
 
   afterAll(async () => {
     delete process.env.RABBITMQ_GATEWAY_QUEUE;
+    delete process.env.FINANCE_REQUIRE_OPEN_SHIFT;
     if (db?.isInitialized) await db.destroy();
     if (admin?.isInitialized) {
       await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
@@ -176,6 +182,7 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
   });
 
   beforeEach(async () => {
+    delete process.env.FINANCE_REQUIRE_OPEN_SHIFT;
     outbox.enqueue.mockClear();
     activityLog.log.mockClear();
     followUp.mockClear();
@@ -758,6 +765,144 @@ describePg('Filialdan marketga o`tkazma — haqiqiy Postgres', () => {
       ),
     ).toMatchObject({ statusCode: 409, code: 'ALREADY_CORRECTED' });
     expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual(before.branch);
+  });
+
+  it('⭐ T6 (2026-11-28, ega): filial VA asosiy kassa smenasi YOPIQ — superadmin qaytarishi o`tadi (#3609 holati); yopilgan smenalar jamisi o`zgarmaydi; filialning keyingi smenasida «Smenalar orasida»; oddiy amallar darvozasi o`zgarmagan', async () => {
+    process.env.FINANCE_REQUIRE_OPEN_SHIFT = 'all';
+    const before = {
+      branch: await box(BRANCH, Cashbox_type.BRANCH),
+      main: await box('0', Cashbox_type.MAIN),
+      market: await box(MARKET, Cashbox_type.FOR_MARKET),
+      company: await companyCash(),
+    };
+    const mainShift: any = await service.openShift({ opened_by: '1' });
+    const branchShift: any = await service.openShift({
+      opened_by: MANAGER,
+      cashbox_user_id: BRANCH,
+    });
+    await toMarket(250_000, 'gw:bm-shift');
+    const original = await legs();
+    expect(original).toHaveLength(4);
+
+    const totals = (shift: Shift) => ({
+      status: shift.status,
+      total_income_cash: Number(shift.total_income_cash),
+      total_expense_cash: Number(shift.total_expense_cash),
+      total_income_card: Number(shift.total_income_card),
+      total_expense_card: Number(shift.total_expense_card),
+      expected_balance_cash: Number(shift.expected_balance_cash),
+      expected_balance_card: Number(shift.expected_balance_card),
+      discrepancy_cash: Number(shift.discrepancy_cash),
+    });
+    // Kechqurun ikkala smena yopiladi (sanalgan = kutilgan).
+    const mainClosed = totals(
+      (
+        (await service.closeShift({
+          closed_by: '1',
+          shift_id: String(mainShift.data.id),
+          closing_balance_cash: 2_000_000,
+          closing_balance_card: 500_000,
+        })) as any
+      ).data,
+    );
+    const branchClosed = totals(
+      (
+        (await service.closeShift({
+          closed_by: MANAGER,
+          cashbox_user_id: BRANCH,
+          closing_balance_cash: 50_000,
+        })) as any
+      ).data,
+    );
+    expect(branchClosed).toMatchObject({
+      status: ShiftStatus.CLOSED,
+      total_expense_cash: 250_000,
+      expected_balance_cash: 50_000,
+      discrepancy_cash: 0,
+    });
+    expect(mainClosed).toMatchObject({
+      status: ShiftStatus.CLOSED,
+      expected_balance_cash: 2_000_000,
+      expected_balance_card: 500_000,
+      discrepancy_cash: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Oddiy amallar smenasiz — avvalgidek 400 (darvozalar o'zgarmagan):
+    // HQ'ga topshiriq (MAIN smenasi) va filial kassasidan qo'lda chiqim.
+    expect(await errorBody(toMarket(10_000, 'gw:bm-shift-2'))).toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/^Smena/),
+    });
+    await expect(
+      service.updateBalance({
+        user_id: BRANCH,
+        amount: 10_000,
+        cashbox_type: Cashbox_type.BRANCH,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.MANUAL_EXPENSE,
+        require_open_shift: true,
+        created_by: MANAGER,
+      }),
+    ).rejects.toMatchObject({
+      error: {
+        statusCode: 400,
+        message: expect.stringMatching(/filial kassasida/),
+      },
+    });
+    expect(await legs()).toHaveLength(4);
+
+    // Superadmin qaytarishi (filial oyog'idan) — ikkala smena yopiq, o'tadi.
+    const branchLeg = original.find((leg) => leg.box === Cashbox_type.BRANCH)!;
+    const res: any = await corrections.reverse({
+      history_id: branchLeg.id,
+      reason: 'xatolik bo`ldi 2 marta urilgan',
+      idempotency_key: randomUUID(),
+      ...SA,
+    });
+    expect(res.statusCode).toBe(201);
+    expect(await box(BRANCH, Cashbox_type.BRANCH)).toEqual(before.branch);
+    expect(await box('0', Cashbox_type.MAIN)).toEqual(before.main);
+    expect(await box(MARKET, Cashbox_type.FOR_MARKET)).toEqual(before.market);
+    expect(await companyCash()).toBe(before.company);
+    for (const row of await db.getRepository(Cashbox).find()) {
+      expect(Number(row.balance)).toBeCloseTo(
+        Number(row.balance_cash) + Number(row.balance_card),
+        2,
+      );
+    }
+    expect(
+      await db
+        .getRepository(CashboxHistory)
+        .count({ where: { source_type: Source_type.PAYMENT_REVERSAL } }),
+    ).toBe(4);
+
+    // Yopilgan smenalar — jami va farq o'zgarmagan.
+    const reload = (id: unknown) =>
+      db.getRepository(Shift).findOneByOrFail({ id: String(id) });
+    expect(totals(await reload(mainShift.data.id))).toEqual(mainClosed);
+    expect(totals(await reload(branchShift.data.id))).toEqual(branchClosed);
+
+    // Ertalab menejer smenani ochadi: ochilish — jonli jami (300 000), hisobotda
+    // «Smenalar orasida»: filialga 250 000 kirim (teskari qator), 1 ta.
+    const nextShift: any = await service.openShift({
+      opened_by: MANAGER,
+      cashbox_user_id: BRANCH,
+    });
+    expect(Number(nextShift.data.opening_balance_cash)).toBe(300_000);
+    const reports = new ShiftReportService(
+      db,
+      activityLog as never,
+      { listForShift: jest.fn().mockResolvedValue([]) } as never,
+      {} as never,
+      { send: jest.fn(() => of({ data: [] })) } as never,
+    );
+    const snapshot = await reports.buildSnapshot(nextShift.data as Shift, 1);
+    expect(snapshot.between_shifts).toMatchObject({
+      income: 250_000,
+      expense: 0,
+      count: 1,
+    });
   });
 
   it('T6: oddiy filial → HQ topshirig`i (naqd) — tuzatish bloki yo`q, qaytarib bo`lmaydi', async () => {

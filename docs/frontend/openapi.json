@@ -11431,7 +11431,7 @@
     },
     "/finance/history/{id}/reverse": {
       "post": {
-        "description": "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN (yoki menejer yozganda filial) sof 0, market +X. Marketga to'lov: to'lagan kassa (MAIN yoki filial) +X, market +X. Filialdan marketga o'tkazma: filial +X, MAIN sof 0, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi; buyurtmalar daftari orqaga (outbox). 201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` / `IDEMPOTENCY_KEY_REQUIRED`.",
+        "description": "Har asl oyoqqa teskari qator (`payment_reversal`, `reverses_history_id`, `comment` = sabab); asl qatorlar o'zgarmaydi. Kuryer to'lovi: kuryer +X, qabul qiluvchi (MAIN/BRANCH) −X; click_to_market: + MAIN (yoki menejer yozganda filial) sof 0, market +X. Marketga to'lov: to'lagan kassa (MAIN yoki filial) +X, market +X. Filialdan marketga o'tkazma: filial +X, MAIN sof 0, market +X. Bitta tranzaksiya, xatoda pul o'zgarmaydi; buyurtmalar daftari orqaga (outbox). 201 `{ correction, cashboxes, idempotent: false }`; o'sha kalit → 200 `idempotent: true`; o'sha kalit boshqa so'rovda → 409 `IDEMPOTENCY_KEY_REUSED`. Xatolar (`code`): 404 `NOT_FOUND`; 409 `NOT_CORRECTABLE` / `LEGACY_UNLINKED` / `ALREADY_CORRECTED` / `WINDOW_EXPIRED` (+ `deadline`) / `INSUFFICIENT_BALANCE` / `CARD_ARCHIVED`; 400 `IDEMPOTENCY_KEY_REQUIRED`. (2026-11-28, ega) Smena SHART EMAS: filial yoki asosiy kassa smenasi yopiq bo'lsa ham o'tadi (`SHIFT_REQUIRED` / `BRANCH_SHIFT_REQUIRED` bu yo'lda qaytmaydi). Smena ochiq bo'lsa teskari qatorlar shu smena jamisiga kiradi; yopiq bo'lsa — keyingi smenaning ochilish qoldig'ida va hisobotida «Smenalar orasida (smenasiz)».",
         "operationId": "FinanceGatewayController_reversePayment",
         "parameters": [
           {
@@ -11532,7 +11532,7 @@
     },
     "/finance/history/{id}/correct-amount": {
       "post": {
-        "description": "Qaytarish + yangi summali to'lov (o'sha usul / karta / qabul qiluvchi), BITTA tranzaksiyada; kvitansiya (`finance.payment_received`) yo'q, tomonlarga `finance.payment_corrected`. Javob `/reverse` bilan bir xil shakl (`correction.action = edit`). Qo'shimcha xatolar: 409 `SAME_AMOUNT`; 409 `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi). Tahrirdan keyingi to'lovni yana tuzatish mumkin, muddat zanjirning birinchi to'lovidan.",
+        "description": "Qaytarish + yangi summali to'lov (o'sha usul / karta / qabul qiluvchi), BITTA tranzaksiyada; kvitansiya (`finance.payment_received`) yo'q, tomonlarga `finance.payment_corrected`. Javob `/reverse` bilan bir xil shakl (`correction.action = edit`). Qo'shimcha xatolar: 409 `SAME_AMOUNT`; 409 `AMOUNT_EXCEEDS` + `max` (kuryer qoldig'i + X; market qarzi + X — kichigi). Tahrirdan keyingi to'lovni yana tuzatish mumkin, muddat zanjirning birinchi to'lovidan. Smena shart emas (`/reverse` kabi).",
         "operationId": "FinanceGatewayController_correctPaymentAmount",
         "parameters": [
           {

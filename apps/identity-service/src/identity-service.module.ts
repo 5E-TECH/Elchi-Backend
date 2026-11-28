@@ -23,6 +23,8 @@ import { CourierRegion } from './entities/courier-region.entity';
 import { UserSession } from './entities/user-session.entity';
 import { UserActivity } from './entities/user-activity.entity';
 import { UserActivityService } from './activity/user-activity.service';
+import { MarketOperatorMembership } from './entities/market-operator-membership.entity';
+import { MarketOperatorMembershipService } from './market-operator/market-operator-membership.service';
 import { AppSetting } from './entities/app-setting.entity';
 import { ContactsService } from './contacts/contacts.service';
 import { ContactsController } from './contacts/contacts.controller';
@@ -64,6 +66,7 @@ import { TempPasswordService } from './temp-password/temp-password.service';
       UserSession,
       // (pe71yf8L) oxirgi kirish / oxirgi faollik.
       UserActivity,
+      MarketOperatorMembership,
       AuthLoginThrottle,
       AppSetting,
       // (aidsxJ2H) vaqtinchalik parol SMS jurnali.
@@ -86,6 +89,7 @@ import { TempPasswordService } from './temp-password/temp-password.service';
     AuthService,
     AuthSessionService,
     UserActivityService,
+    MarketOperatorMembershipService,
     SessionKickPublisher,
     LoginThrottleService,
     BcryptEncryption,
