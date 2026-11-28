@@ -176,27 +176,6 @@ describePg('finance.pnl.series — P&L seriyasi, haqiqiy Postgres', () => {
     ]);
   });
 
-  it('tizim grafigi (GET /finance/pnl): bo‘sh oktabr 0, qolgani o‘zgarishsiz', async () => {
-    const res: any = await service.financialPnlSeries({
-      from_day: '2026-10-01',
-      to_day: '2026-12-31',
-      granularity: 'month',
-    });
-    const filled = fillPnlSeries(
-      res.data.items,
-      res.data.from_day,
-      res.data.to_day,
-      res.data.granularity,
-    );
-    expect(
-      filled.map((i) => [i.period, i.gross, i.opex, i.net, i.other_income]),
-    ).toEqual([
-      ['2026-10', 0, 0, 0, 0],
-      ['2026-11', 52000, 56500, -4500, 1000000],
-      ['2026-12', 10000, 0, 10000, 0],
-    ]);
-  });
-
   it('oraliq chegarasi: to_day dan keyingi kun kirmaydi', async () => {
     const res: any = await service.financialPnlSeries({
       from_day: '2026-11-02',
@@ -213,5 +192,33 @@ describePg('finance.pnl.series — P&L seriyasi, haqiqiy Postgres', () => {
   ])('%p → 400', async (input) => {
     const err = await service.financialPnlSeries(input).catch((e) => e);
     expect(err?.getError?.()?.statusCode).toBe(400);
+  });
+
+  it('tizim grafigi (GET /finance/pnl): bo‘sh oktabr 0, bor oylar RPC bilan aynan', async () => {
+    const res: any = await service.financialPnlSeries({
+      from_day: '2026-10-01',
+      to_day: '2026-12-31',
+      granularity: 'month',
+    });
+    const filled = fillPnlSeries(
+      res.data.items,
+      res.data.from_day,
+      res.data.to_day,
+      res.data.granularity,
+    );
+    expect(filled.map((i) => i.period)).toEqual([
+      '2026-10',
+      '2026-11',
+      '2026-12',
+    ]);
+    expect(filled[0]).toEqual({
+      period: '2026-10',
+      gross: 0,
+      opex: 0,
+      net: 0,
+      other_income: 0,
+    });
+    // Qiymatlar qayta hisoblanmaydi — qoidalar faqat `pnlSql` da.
+    expect(filled.slice(1)).toEqual(res.data.items);
   });
 });

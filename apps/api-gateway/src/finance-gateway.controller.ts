@@ -3551,8 +3551,8 @@ export class FinanceGatewayController {
     description:
       "P&L daftari (`financial_balance_history`) bo'yicha har oy (yoki kun). `gross` — daromad: sotuv foydasi " +
       '(`sell_profit`), uning qaytarilishi (`correction`, `rollback-extra:*` dan tashqari), pickup haqi (`pickup_fee`). ' +
-      "`opex` — xarajat (musbat son): qo'lda chiqim, ish haqi, hisoblar, buyurtma qo'shimcha xarajati va uning " +
-      "qaytarilishi (kamaytiradi; qaytarilish ko'p bo'lsa manfiy bo'lishi mumkin). `net` = `gross` − `opex`. " +
+      "`opex` — xarajat (musbat son): qo'lda chiqim, ish haqi, hisoblar. Buyurtma qo'shimcha xarajati (va uning " +
+      "qaytarilishi) KIRMAYDI — marketdan ayriladi, kompaniyaga ta'siri nol. `net` = `gross` − `opex`. " +
       "`other_income` — qo'lda kirim (`manual_income`), alohida, sof foydaga KIRMAYDI. Investorga foyda to'lovi " +
       '(`investor-profit:*`) umuman kirmaydi. Kalit — Toshkent ish kuni. `items` — `from_day`..`to_day` dagi HAR oy ' +
       "(kun), qatori yo'g'i 0 bilan; chetdagi oylar chala bo'lishi mumkin (masalan joriy oy). Sukut: joriy oy bilan " +

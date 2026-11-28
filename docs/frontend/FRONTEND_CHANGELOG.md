@@ -34,7 +34,8 @@ finance-service'da — qoidalar o'sha yerda, gateway qayta hisoblamaydi.
   Sukut: joriy oy bilan 12 oy (`from_day` = 11 oy oldingi oyning 1-kuni, `to_day` = bugungi ish kuni). Chetdagi
   oylar chala bo'lishi mumkin (joriy oy — bugungacha).
   - `gross` (Daromad) — sotuv foydasi + uning qaytarilishi + pickup haqi;
-  - `opex` (Xarajat, musbat) — qo'lda chiqim, ish haqi, hisoblar, buyurtma qo'shimcha xarajati;
+  - `opex` (Xarajat, musbat) — qo'lda chiqim, ish haqi, hisoblar (buyurtma qo'shimcha xarajati KIRMAYDI — marketdan
+    ayriladi; BE #812);
   - `net` (Sof foyda) = `gross` − `opex` (manfiy bo'lishi mumkin);
   - `other_income` (qo'lda kirim) — alohida, sof foydaga KIRMAYDI; investorga foyda to'lovi umuman kirmaydi.
   Noto'g'ri sana, `from_day` > `to_day`, oraliq > 3700 kun — 400.
