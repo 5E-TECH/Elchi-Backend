@@ -1,6 +1,7 @@
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { Status } from '@app/common';
+import { makeTermRepo } from './testing/term-repo.mock';
 import { InvestorServiceService } from './investor-service.service';
 
 /**
@@ -43,6 +44,7 @@ function makeService(stored: Row | null = null) {
     {} as never, // profit share
     activityLog as never,
     financeClient as never,
+    makeTermRepo([], investorRepo) as never,
   );
   return { service, investorRepo };
 }

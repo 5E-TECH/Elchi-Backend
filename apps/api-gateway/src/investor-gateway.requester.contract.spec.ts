@@ -34,6 +34,12 @@ describe('GADgsW5G — investor gateway: barcha investor.* cmd`larida requester.
   const BODIES: Record<string, object> = {
     'POST investors': { name: 'Vali', phone_number: '+998901234567' },
     'PATCH investors/:id': { name: 'Vali 2' },
+    // Ega 2026-11-28: ulush sharti (foiz, asos, sanadan).
+    'PUT investors/:id/share-terms': {
+      share_percent: 10,
+      profit_basis: 'net',
+      effective_from: '2026-11-01',
+    },
     'POST investments': {
       investor_id: '5',
       amount: 100,
@@ -73,7 +79,7 @@ describe('GADgsW5G — investor gateway: barcha investor.* cmd`larida requester.
 
   type Route = {
     handler: string;
-    verb: 'get' | 'post' | 'patch' | 'delete';
+    verb: 'get' | 'post' | 'put' | 'patch' | 'delete';
     path: string;
     roles: string[];
   };
@@ -81,6 +87,7 @@ describe('GADgsW5G — investor gateway: barcha investor.* cmd`larida requester.
   const VERBS: Partial<Record<RequestMethod, Route['verb']>> = {
     [RequestMethod.GET]: 'get',
     [RequestMethod.POST]: 'post',
+    [RequestMethod.PUT]: 'put',
     [RequestMethod.PATCH]: 'patch',
     [RequestMethod.DELETE]: 'delete',
   };
@@ -144,8 +151,8 @@ describe('GADgsW5G — investor gateway: barcha investor.* cmd`larida requester.
 
   // vpKijXce: 21 + 5 ichki yo'l (ilgari ikki qavat dekorator ostida edi va
   // ro'yxatdan o'tmasdi) = 26.
-  it('metadata`dan barcha 26 handler topildi, har birida @Roles bor', () => {
-    expect(routes).toHaveLength(26);
+  it('metadata`dan barcha 27 handler topildi, har birida @Roles bor', () => {
+    expect(routes).toHaveLength(27);
     for (const r of routes) {
       // RolesGuard @Roles bo'lmagan marshrutni HAMMAGA ochadi.
       expect({ handler: r.handler, roles: r.roles.length > 0 }).toEqual({

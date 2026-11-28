@@ -28,7 +28,27 @@ export const AI_HINT_TEXT =
 export const AI_TEXT_TOO_LONG_TEXT = `✂️ Matn juda uzun (${AI_TEXT_MAX_CHARS} belgigacha) — qismlarga bo‘lib yuboring.`;
 
 /** Buyurtma matni emas (salomlashish va h.k.) — telefon raqami kabi 7+ raqam yo'q. */
-const looksLikeOrder = (text: string) => (text.match(/\d/g) ?? []).length >= 7;
+export const looksLikeOrder = (text: string) =>
+  (text.match(/\d/g) ?? []).length >= 7;
+
+/**
+ * Market menyusi va Telegram ulangandan keyingi ko'rsatma (ega 2026-11-27: bot
+ * orqali buyurtma imkoniyati hech qayerda aytilmagan, topilmagan edi).
+ */
+export const MARKET_AI_ORDER_HINT =
+  "📝 <b>Yangi buyurtma:</b> mijoz ismi, telefoni, manzili, mahsulot va narxini BITTA xabarda yuboring yoki rasmini tashlang — AI buyurtmani tayyorlab, tasdiqlashga ko'rsatadi.";
+
+/**
+ * Telegram'i XODIM (market emas) akkauntiga ulangan odam buyurtma matni yoki
+ * rasmini yubordi. Ilgari «Tushunarsiz buyruq … /status» chiqardi — `/status`
+ * esa faqat market buyrug'i.
+ */
+export const STAFF_AI_ORDER_TEXT =
+  "🛍️ Bot orqali buyurtmani faqat <b>market</b> yoki <b>market operatori</b> yaratadi. Bu Telegram xodim akkauntiga ulangan.\n\nMarket uchun: panelga market akkaunti bilan kiring → Profil → «Telegram'ni ulash».";
+
+/** Kuryerning o'z oqimi bor (isbot rasmlari) — unga buyurtma ko'rsatmasi berilmaydi. */
+const isStaffActor = (role: string) =>
+  !AI_ORDER_ROLES.includes(role) && role !== Roles.COURIER;
 
 /**
  * (e7KhaeOO) Market / operator shaxsiy chatda buyruq emas MATN yoki RASM
@@ -77,7 +97,13 @@ export class AiOrderHandler implements BotMessageHandler {
     const message = ctx.update.message;
     if (!message?.photo?.length && !message?.document) return false;
     const actor = await this.marketActor(ctx);
-    if (!actor) return false;
+    if (!actor) {
+      // Xodim buyurtma rasmini tashladi — jim qolmasin, kim yarata olishini aytamiz.
+      const other = ctx.isPrivate ? await ctx.actor() : null;
+      if (!other || !isStaffActor(other.role)) return false;
+      await ctx.reply(STAFF_AI_ORDER_TEXT, { parse_mode: 'HTML' });
+      return true;
+    }
     const caption = (message.caption ?? '').trim().slice(0, AI_TEXT_MAX_CHARS);
     if (message.photo?.length) {
       const size = pickPhotoSize(message.photo, AI_BOT_IMAGE_MAX_BYTES);

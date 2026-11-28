@@ -2065,6 +2065,37 @@ export class FinancialBalanceDailyQueryDto {
   toDate?: string;
 }
 
+/** GET /finance/pnl — tizim bo'yicha daromad / xarajat / sof foyda (ega 2026-11-28). */
+export class FinancePnlQueryDto {
+  @ApiPropertyOptional({
+    example: '2025-12-01',
+    description:
+      'Toshkent ish kuni (YYYY-MM-DD). Berilmasa — to_day oyi bilan 12 oy (11 oy oldingi oyning 1-kuni). Oraliq ≤ 3700 kun.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from_day?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-11-28',
+    description: 'Berilmasa — bugungi ish kuni.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to_day?: string;
+
+  @ApiPropertyOptional({
+    enum: ['month', 'day'],
+    default: 'month',
+    description: '`month` — `period` = `YYYY-MM`; `day` — `YYYY-MM-DD`.',
+  })
+  @IsOptional()
+  @IsIn(['month', 'day'])
+  granularity?: 'month' | 'day';
+}
+
 /** uzWcMR1C — GET /finance/cashbox/payments-meta. */
 export class PaymentsMetaQueryDto {
   @ApiPropertyOptional({

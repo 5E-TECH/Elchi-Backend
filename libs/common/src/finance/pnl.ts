@@ -1,0 +1,168 @@
+import { FinancialSource_type } from '../enums';
+import { addDayKey } from '../time/business-day';
+
+/**
+ * KOMPANIYA FOYDA-ZARAR (P&L) QOIDALARI — `financial_balance_history`
+ * (P&L daftari) qatorlarini «Daromad», «Xarajat», «Boshqa kirim» ga ajratish.
+ *
+ * Yagona manba: investor ulushi (`investor-service`) ham, kelajakdagi tizim
+ * bo'yicha «oylik daromad / sof foyda» grafigi ham shu qoidalardan o'qiydi —
+ * ikki joyda ikki xil «sof foyda» chiqmasin.
+ *
+ * BeePost bilan bir xil ma'no (ega 2026-11-28, «Beepostga qarab»):
+ *   • DAROMAD (`gross`, BeePost «Yalpi marja») — pochta foydasi, xarajat
+ *     ayrilmaydi: sotuv foydasi (`sell_profit` = market tarifi − kuryer
+ *     ulushi − hamkor filial ulushi), uning qaytarilishi (`correction`,
+ *     `rollback-extra:*` dan tashqari) va pickup haqi (`pickup_fee`).
+ *   • XARAJAT (`opex`, musbat son) — qo'lda chiqim (`manual_expense`),
+ *     ish haqi (`salary`), kommunal va boshqa hisoblar (`bills`).
+ *   • SOF FOYDA (`net`) = daromad − xarajat.
+ *   • BUYURTMA QO'SHIMCHA XARAJATI (`sell_extra_cost`, `cancel_extra_cost`
+ *     va uning qaytarilishi `correction` + `rollback-extra:*`) — umuman
+ *     KIRMAYDI (ega 2026-11-28: «qo'shimcha xarajat bizning kassaga aloqasi
+ *     yo'q, u marketdan to'g'ridan-to'g'ri ayriladi»). Sotuvda kuryer (menejer
+ *     sotuvida — filial) pulni o'z kassasidan to'laydi va AYNI summa market
+ *     haqidan (`for_market`) ayriladi — kompaniyaga sof ta'siri nol. Daftardagi
+ *     −summa yozuvi pul izi, kompaniya xarajati emas.
+ *   • BOSHQA KIRIM (`other_income`) — qo'lda kirim (`manual_income`, masalan
+ *     kassani to'ldirish). Alohida ko'rsatiladi, sof foydaga QO'SHILMAYDI:
+ *     ko'pincha bu egasi/investor qo'ygan pul, foyda emas (BeePost ham
+ *     hisoblamaydi).
+ *   • Investorga foyda to'lovi (`dedup_key` = `investor-profit:<id>`) —
+ *     xarajat EMAS, foydaning taqsimoti: umuman hisobga kirmaydi. Aks holda
+ *     investorga to'lov uning o'z keyingi ulushini kamaytirardi.
+ */
+
+export type ProfitBasis = 'net' | 'gross';
+
+export const PROFIT_BASES: readonly ProfitBasis[] = Object.freeze([
+  'net',
+  'gross',
+]);
+
+export const DEFAULT_PROFIT_BASIS: ProfitBasis = 'net';
+
+export function isProfitBasis(value: unknown): value is ProfitBasis {
+  return value === 'net' || value === 'gross';
+}
+
+/** Investor foyda to'lovining daftar kaliti (`markProfitPaid`). */
+export const INVESTOR_PROFIT_DEDUP_PREFIX = 'investor-profit:';
+
+/** Qo'shimcha xarajat qaytarilishi (`correction`) kaliti. */
+const EXTRA_COST_ROLLBACK_PREFIX = 'rollback-extra:';
+
+const GROSS_SOURCES = [
+  FinancialSource_type.SELL_PROFIT,
+  FinancialSource_type.PICKUP_FEE,
+] as const;
+
+const OPEX_SOURCES = [
+  FinancialSource_type.MANUAL_EXPENSE,
+  FinancialSource_type.SALARY,
+  FinancialSource_type.BILLS,
+] as const;
+
+const list = (values: readonly string[]) =>
+  values.map((value) => `'${value}'`).join(', ');
+
+/**
+ * SQL shartlari (`alias` — daftar jadvali taxallusi). Qiymatlar faqat
+ * enum'dan, foydalanuvchi matni kirmaydi.
+ */
+export function pnlSql(alias: string) {
+  const source = `${alias}.source_type`;
+  const key = `${alias}.dedup_key`;
+  const correction = `'${FinancialSource_type.CORRECTION}'`;
+  const extraRollback = `${key} LIKE '${EXTRA_COST_ROLLBACK_PREFIX}%'`;
+  return {
+    /** Daftar qatori P&L ga kiradimi (investor to'lovi — yo'q). */
+    included: `${key} NOT LIKE '${INVESTOR_PROFIT_DEDUP_PREFIX}%'`,
+    // `rollback-extra:*` (qo'shimcha xarajat qaytarilishi) — na daromad, na
+    // xarajat: qo'shimcha xarajatning o'zi ham P&L ga kirmaydi.
+    gross: `(${source} IN (${list(GROSS_SOURCES)}) OR (${source} = ${correction} AND NOT (${extraRollback})))`,
+    opex: `${source} IN (${list(OPEX_SOURCES)})`,
+    otherIncome: `${source} = '${FinancialSource_type.MANUAL_INCOME}'`,
+  };
+}
+
+/** Bitta davr (kun `YYYY-MM-DD` yoki oy `YYYY-MM`) bo'yicha P&L. */
+export type PnlPoint = {
+  period: string;
+  /** Daromad (pochta foydasi). */
+  gross: number;
+  /** Xarajatlar (musbat son; qaytarilish ko'p bo'lsa manfiy bo'lishi mumkin). */
+  opex: number;
+  /** Sof foyda = gross − opex. */
+  net: number;
+  /** Qo'lda kirim — sof foydaga kirmaydi. */
+  other_income: number;
+};
+
+export type PnlGranularity = 'day' | 'month';
+
+/** Tizim grafigi sukut oralig'i — joriy oy bilan 12 oy. */
+export const PNL_DEFAULT_MONTHS = 12;
+
+/** `YYYY-MM` oyiga `months` oy qo'shadi (manfiy — ayiradi). */
+function shiftMonth(month: string, months: number): string {
+  const total =
+    Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1 + months;
+  const year = Math.floor(total / 12);
+  const mm = String((total % 12) + 1).padStart(2, '0');
+  return `${String(year).padStart(4, '0')}-${mm}`;
+}
+
+/**
+ * `toDay` oyidan `months − 1` oy oldingi oyning 1-kuni: `('2026-11-28', 12)`
+ * → `'2025-12-01'` (joriy oy bilan 12 oy).
+ */
+export function pnlMonthsBackStart(toDay: string, months: number): string {
+  return `${shiftMonth(toDay.slice(0, 7), 1 - Math.max(1, months))}-01`;
+}
+
+/**
+ * Davr kalitlari skeleti — `fromDay`..`toDay` (ikkala chet ham) har kun yoki
+ * har oy. `finance.pnl.series` faqat qatori bor davrlarni qaytaradi; grafikda
+ * bo'sh oy/kun tushib qolmasligi uchun o'quvchi shu skeletga yoyadi.
+ */
+export function pnlPeriods(
+  fromDay: string,
+  toDay: string,
+  granularity: PnlGranularity,
+): string[] {
+  const periods: string[] = [];
+  if (fromDay > toDay) return periods;
+  if (granularity === 'month') {
+    const last = toDay.slice(0, 7);
+    for (let m = fromDay.slice(0, 7); m <= last; m = shiftMonth(m, 1)) {
+      periods.push(m);
+    }
+    return periods;
+  }
+  for (let d = fromDay; d <= toDay; d = addDayKey(d, 1)) periods.push(d);
+  return periods;
+}
+
+/**
+ * Seriyani skeletga yoyadi: qatori yo'q davr — hamma qiymat 0. Qiymatlar
+ * qayta hisoblanmaydi (qoidalar — `pnlSql`, `finance.pnl.series`).
+ */
+export function fillPnlSeries(
+  items: readonly PnlPoint[],
+  fromDay: string,
+  toDay: string,
+  granularity: PnlGranularity,
+): PnlPoint[] {
+  const byPeriod = new Map(items.map((item) => [item.period, item]));
+  return pnlPeriods(fromDay, toDay, granularity).map(
+    (period) =>
+      byPeriod.get(period) ?? {
+        period,
+        gross: 0,
+        opex: 0,
+        net: 0,
+        other_income: 0,
+      },
+  );
+}

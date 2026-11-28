@@ -32,6 +32,10 @@ const LINKED_USER_ID_RE = /^[1-9]\d{0,18}$/;
 const toIdString = ({ value }: { value: unknown }) =>
   typeof value === 'number' ? String(value) : value;
 
+/** Ulush sanasi — Toshkent kuni `YYYY-MM-DD`. */
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const PROFIT_BASIS_VALUES = ['net', 'gross'];
+
 export class CreateInvestorDto {
   @ApiProperty()
   @IsString()
@@ -75,6 +79,27 @@ export class CreateInvestorDto {
   @Min(0)
   @Max(100)
   share_percent?: number;
+
+  @ApiPropertyOptional({
+    enum: ['net', 'gross'],
+    default: 'net',
+    description:
+      "Foyda asosi: 'net' — sof foydadan (daromad − xarajatlar), 'gross' — daromaddan (xarajat ayrilmaydi)",
+  })
+  @IsOptional()
+  @IsIn(PROFIT_BASIS_VALUES)
+  profit_basis?: 'net' | 'gross';
+
+  @ApiPropertyOptional({
+    example: '2026-11-01',
+    description:
+      "«Investorlik sanasi» — ulush shu kundan hisoblanadi (Toshkent, `YYYY-MM-DD`; bo'sh — bugun). Kelajak sanasi — 400",
+  })
+  @IsOptional()
+  @Matches(DAY_KEY_RE, {
+    message: "share_started_at 'YYYY-MM-DD' bo'lishi kerak",
+  })
+  share_started_at?: string;
 }
 
 export class UpdateInvestorDto {
@@ -123,6 +148,71 @@ export class UpdateInvestorDto {
   @Min(0)
   @Max(100)
   share_percent?: number | null;
+
+  @ApiPropertyOptional({
+    enum: ['net', 'gross'],
+    description:
+      "Foyda asosi: 'net' — sof foydadan, 'gross' — daromaddan. Yangi shart `share_effective_from` (sukut bugun) dan",
+  })
+  @IsOptional()
+  @IsIn(PROFIT_BASIS_VALUES)
+  profit_basis?: 'net' | 'gross';
+
+  @ApiPropertyOptional({
+    example: '2026-12-01',
+    description:
+      "Ulush/asos o'zgarishi qaysi kundan (`YYYY-MM-DD`; bo'sh — bugun). O'tgan kunlar eski shart bilan qoladi",
+  })
+  @IsOptional()
+  @Matches(DAY_KEY_RE, {
+    message: "share_effective_from 'YYYY-MM-DD' bo'lishi kerak",
+  })
+  share_effective_from?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-11-01',
+    description:
+      '«Investorlik sanasi»ni tuzatish — birinchi ulush shartining boshi (`YYYY-MM-DD`)',
+  })
+  @IsOptional()
+  @Matches(DAY_KEY_RE, {
+    message: "share_started_at 'YYYY-MM-DD' bo'lishi kerak",
+  })
+  share_started_at?: string;
+}
+
+/** PUT /investors/:id/share-terms — «shu sanadan boshlab ulush X%, asos Y». */
+export class SetInvestorShareTermsDto {
+  @ApiProperty({ example: 10, minimum: 0, maximum: 100 })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  share_percent!: number;
+
+  @ApiPropertyOptional({
+    enum: ['net', 'gross'],
+    description:
+      "Foyda asosi: 'net' — sof foydadan, 'gross' — daromaddan. Bo'sh — joriy asos",
+  })
+  @IsOptional()
+  @IsIn(PROFIT_BASIS_VALUES)
+  profit_basis?: 'net' | 'gross';
+
+  @ApiPropertyOptional({
+    example: '2026-11-01',
+    description:
+      "Qaysi kundan (`YYYY-MM-DD`, bo'sh — bugun). Joriy shart boshidan keyin — yangi versiya (o'tgan kunlar o'zgarmaydi); teng yoki oldin — joriy shart tuzatiladi",
+  })
+  @IsOptional()
+  @Matches(DAY_KEY_RE, {
+    message: "effective_from 'YYYY-MM-DD' bo'lishi kerak",
+  })
+  effective_from?: string;
+
+  @ApiPropertyOptional({ description: 'Izoh (ixtiyoriy)' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
 
 export class CreateInvestmentDto {
@@ -319,4 +409,25 @@ export class CreateInvestorUserRequestDto {
   @Min(0)
   @Max(100)
   share_percent?: number;
+
+  @ApiPropertyOptional({
+    enum: ['net', 'gross'],
+    default: 'net',
+    description:
+      "Foyda asosi: 'net' — sof foydadan (daromad − xarajatlar), 'gross' — daromaddan (xarajat ayrilmaydi)",
+  })
+  @IsOptional()
+  @IsIn(PROFIT_BASIS_VALUES)
+  profit_basis?: 'net' | 'gross';
+
+  @ApiPropertyOptional({
+    example: '2026-11-01',
+    description:
+      "«Investorlik sanasi» — ulush shu kundan hisoblanadi (Toshkent, `YYYY-MM-DD`; bo'sh — bugun). Kelajak sanasi — 400",
+  })
+  @IsOptional()
+  @Matches(DAY_KEY_RE, {
+    message: "share_started_at 'YYYY-MM-DD' bo'lishi kerak",
+  })
+  share_started_at?: string;
 }
