@@ -209,9 +209,21 @@ describe('investor ulushi — belgilangan sanadan boshlab (dashboard)', () => {
     const lossy = {
       to_day: '2026-11-28',
       items: [
-        { period: '2026-11-01', gross: 1000, opex: 0, net: 1000, other_income: 0 },
+        {
+          period: '2026-11-01',
+          gross: 1000,
+          opex: 0,
+          net: 1000,
+          other_income: 0,
+        },
         // Ish haqi kuni: sof foyda −3000.
-        { period: '2026-11-05', gross: 500, opex: 3500, net: -3000, other_income: 0 },
+        {
+          period: '2026-11-05',
+          gross: 500,
+          opex: 3500,
+          net: -3000,
+          other_income: 0,
+        },
       ],
     };
     const loss = makeService({ terms: [TERM_NOV1], pnl: lossy });
@@ -235,7 +247,13 @@ describe('investor ulushi — belgilangan sanadan boshlab (dashboard)', () => {
         ...lossy,
         items: [
           ...lossy.items,
-          { period: '2026-11-20', gross: 6000, opex: 1000, net: 5000, other_income: 0 },
+          {
+            period: '2026-11-20',
+            gross: 6000,
+            opex: 1000,
+            net: 5000,
+            other_income: 0,
+          },
         ],
       },
     });
