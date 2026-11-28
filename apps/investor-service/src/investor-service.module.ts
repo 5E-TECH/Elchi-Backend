@@ -13,6 +13,7 @@ import {
 import { Investor } from './entities/investor.entity';
 import { Investment } from './entities/investment.entity';
 import { ProfitShare } from './entities/profit-share.entity';
+import { InvestorShareTerm } from './entities/investor-share-term.entity';
 
 @Module({
   imports: [
@@ -30,7 +31,12 @@ import { ProfitShare } from './entities/profit-share.entity';
     RmqModule.register({ name: 'FINANCE' }),
     DatabaseModule,
     ActivityLogModule.forService('investor-service'),
-    TypeOrmModule.forFeature([Investor, Investment, ProfitShare]),
+    TypeOrmModule.forFeature([
+      Investor,
+      Investment,
+      ProfitShare,
+      InvestorShareTerm,
+    ]),
   ],
   controllers: [InvestorServiceController],
   providers: [InvestorServiceService],

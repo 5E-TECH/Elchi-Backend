@@ -1,4 +1,5 @@
 import { of } from 'rxjs';
+import { makeTermRepo } from './testing/term-repo.mock';
 import { InvestorServiceService } from './investor-service.service';
 
 /**
@@ -59,6 +60,7 @@ function makeService(opts: {
     profitShareRepo,
     activityLog,
     financeClient,
+    makeTermRepo([], investorRepo),
   );
   return { service, profitShareRepo, savedRows, financeSent, financeClient };
 }

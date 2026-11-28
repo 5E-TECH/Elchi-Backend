@@ -615,6 +615,21 @@ export class FinanceServiceController {
     );
   }
 
+  /**
+   * Kompaniya P&L seriyasi (daromad / xarajat / sof foyda) — investor ulushi
+   * (investor-service) va tizim grafigi uchun. Gateway'da hozircha marshrut yo'q.
+   */
+  @MessagePattern({ cmd: 'finance.pnl.series' })
+  financialPnlSeries(
+    @Payload()
+    data: { from_day?: string; to_day?: string; granularity?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.financialPnlSeries(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'finance.financial_balance.top_impacts' })
   financialBalanceTopImpacts(
     @Payload()

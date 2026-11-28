@@ -1,4 +1,5 @@
 import { of } from 'rxjs';
+import { makeTermRepo } from './testing/term-repo.mock';
 import { InvestorServiceService } from './investor-service.service';
 import { InvestorServiceController } from './investor-service.controller';
 
@@ -38,6 +39,7 @@ function makeService() {
     {} as any,
     activityLog,
     { send: jest.fn(() => of({})) } as any,
+    makeTermRepo([], investorRepo),
   );
   return { service, investmentRepo, activityLog };
 }

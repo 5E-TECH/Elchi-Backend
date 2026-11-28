@@ -1,5 +1,6 @@
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { Status } from '@app/common';
+import { makeTermRepo } from './testing/term-repo.mock';
 import { InvestorServiceService } from './investor-service.service';
 import { InvestorServiceController } from './investor-service.controller';
 
@@ -48,8 +49,10 @@ function makeService(
     latestProfit?: any;
     investments?: any[];
     profits?: any[];
-    monthlyRows?: any[];
     investorById?: any;
+    terms?: any[];
+    pnl?: { to_day?: string; items?: any[] };
+    financeError?: boolean;
   } = {},
 ) {
   const investorRepo: any = {
@@ -97,7 +100,6 @@ function makeService(
       return qb;
     }),
     findOne: jest.fn().mockResolvedValue(opts.latestProfit ?? null),
-    find: jest.fn().mockResolvedValue(opts.monthlyRows ?? []),
     findAndCount: jest
       .fn()
       .mockResolvedValue([opts.profits ?? [], (opts.profits ?? []).length]),
@@ -106,16 +108,26 @@ function makeService(
     log: jest.fn().mockResolvedValue(undefined),
     logChange: jest.fn().mockResolvedValue(undefined),
   };
-  const financeClient: any = { send: jest.fn(() => of({ data: {} })) };
+  const financeClient: any = {
+    send: jest.fn(() =>
+      opts.financeError
+        ? throwError(() => ({ statusCode: 500, message: 'finance down' }))
+        : of({ data: opts.pnl ?? { to_day: '2026-11-28', items: [] } }),
+    ),
+  };
+  const termRepo = makeTermRepo(opts.terms ?? [], investorRepo);
   const service = new InvestorServiceService(
     investorRepo,
     investmentRepo,
     profitShareRepo,
     activityLog,
     financeClient,
+    termRepo,
   );
   return {
     service,
+    financeClient,
+    termRepo,
     investorRepo,
     investmentRepo,
     profitShareRepo,
@@ -213,11 +225,12 @@ describe('vpKijXce — GET /investors/me: profil + kartalar', () => {
         'id',
         'name',
         'phone_number',
+        'profit_basis',
         'share_percent',
         'status',
       ].sort(),
     );
-    // «Ulush (%)» investorga ko'rinadi; kiritilmagan bo'lsa — null.
+    // «Ulush (%)» va foyda asosi investorga ko'rinadi (o'z kelishuvi).
     expect(res.data.investor.share_percent).toBeNull();
     const json = JSON.stringify(res.data);
     expect(json).not.toContain('ICHKI');
@@ -258,8 +271,15 @@ describe('vpKijXce — GET /investors/me: profil + kartalar', () => {
       first_invested_at: new Date('2026-01-15T00:00:00.000Z'),
       last_invested_at: new Date('2026-06-01T00:00:00.000Z'),
       total_paid_profit: 4500000.1,
-      total_unpaid_profit: 1500000.2,
-      total_profit: 6000000.3,
+      // Shart yo'q — hisoblangan ulush 0, «kutilayotgan» = 0 − to'langan.
+      total_unpaid_profit: -4500000.1,
+      total_profit: 0,
+      accrued_profit: 0,
+      accrued_basis: 0,
+      accrued_through: null,
+      share_started_at: null,
+      profit_basis: 'net',
+      pending_payout_amount: 1500000.2,
       profit_shares_count: 4,
       current_percentage: 3.5,
       last_paid_at: new Date('2026-09-05T10:00:00.000Z'),
@@ -299,6 +319,12 @@ describe('vpKijXce — GET /investors/me: profil + kartalar', () => {
       total_paid_profit: 0,
       total_unpaid_profit: 0,
       total_profit: 0,
+      accrued_profit: 0,
+      accrued_basis: 0,
+      accrued_through: null,
+      share_started_at: null,
+      profit_basis: 'net',
+      pending_payout_amount: 0,
       profit_shares_count: 0,
       current_percentage: null,
       last_paid_at: null,
@@ -495,64 +521,77 @@ describe('vpKijXce — oylik foyda grafigi (Toshkent oyi)', () => {
   // 2026-10-14 12:00 Toshkent.
   const NOW = new Date('2026-10-14T07:00:00.000Z');
 
-  it('⭐ oylar Toshkent bo`yicha, bo`sh oylar 0, tiyinlarda aniq yig`indi', async () => {
-    const { service, profitShareRepo } = makeService({
-      monthlyRows: [
-        // 30-sentabr 23:30 Toshkent → sentabr.
+  it('⭐ oynada bo`sh oylar 0, to`lov eski oydan boshlab taqsimlanadi', () => {
+    const { service } = makeService();
+    const accrual = {
+      months: [
         {
-          amount: 0.1,
-          is_paid: true,
-          period_end: new Date('2026-09-30T18:30:00.000Z'),
+          month: '2026-07',
+          basisCents: 100000,
+          accruedCents: 10000,
+          sharePercent: 10,
+          profitBasis: 'net' as const,
         },
         {
-          amount: 0.2,
-          is_paid: true,
-          period_end: new Date('2026-09-15T00:00:00.000Z'),
+          month: '2026-09',
+          basisCents: 300000,
+          accruedCents: 30000,
+          sharePercent: 10,
+          profitBasis: 'net' as const,
         },
-        // UTC'da 30-sentabr, Toshkentda 1-oktabr 00:30 → oktabr.
         {
-          amount: 500,
-          is_paid: false,
-          period_end: new Date('2026-09-30T19:30:00.000Z'),
-        },
-        // Kelajak davri — oynadan tashqari.
-        {
-          amount: 999,
-          is_paid: false,
-          period_end: new Date('2026-12-31T00:00:00.000Z'),
+          month: '2026-10',
+          basisCents: 50000,
+          accruedCents: 5000,
+          sharePercent: 10,
+          profitBasis: 'net' as const,
         },
       ],
-    });
-    const items = await service.buildMonthlyProfits('7', 3, NOW);
+      totalCents: 45000,
+      totalBasisCents: 450000,
+    };
+    // To'langan 250 so'm: iyul (100) to'liq, sentabrdan 150.
+    const items = service.buildMonthlyProfits(accrual, 25000, 3, NOW);
 
     expect(items).toEqual([
-      { month: '2026-08', paid_amount: 0, unpaid_amount: 0, total_amount: 0 },
+      {
+        month: '2026-08',
+        accrued_amount: 0,
+        basis_amount: 0,
+        paid_amount: 0,
+        unpaid_amount: 0,
+        total_amount: 0,
+        share_percent: null,
+        profit_basis: null,
+      },
       {
         month: '2026-09',
-        paid_amount: 0.3,
-        unpaid_amount: 0,
-        total_amount: 0.3,
+        accrued_amount: 300,
+        basis_amount: 3000,
+        paid_amount: 150,
+        unpaid_amount: 150,
+        total_amount: 300,
+        share_percent: 10,
+        profit_basis: 'net',
       },
       {
         month: '2026-10',
+        accrued_amount: 50,
+        basis_amount: 500,
         paid_amount: 0,
-        unpaid_amount: 500,
-        total_amount: 500,
+        unpaid_amount: 50,
+        total_amount: 50,
+        share_percent: 10,
+        profit_basis: 'net',
       },
     ]);
-    const where = profitShareRepo.find.mock.calls[0][0].where;
-    expect(where.investor_id).toBe('7');
-    expect(where.isDeleted).toBe(false);
-    // Oyna boshi: 1-avgust 00:00 Toshkent = 31-iyul 19:00 UTC.
-    expect(where.period_end.value).toEqual(
-      new Date('2026-07-31T19:00:00.000Z'),
-    );
   });
 
-  it('yil chegarasidan o`tadi (yanvar → oldingi yil dekabri)', async () => {
-    const { service } = makeService({ monthlyRows: [] });
-    const items = await service.buildMonthlyProfits(
-      '7',
+  it('yil chegarasidan o`tadi (yanvar → oldingi yil dekabri)', () => {
+    const { service } = makeService();
+    const items = service.buildMonthlyProfits(
+      { months: [], totalCents: 0, totalBasisCents: 0 },
+      0,
       2,
       new Date('2026-01-05T00:00:00.000Z'),
     );
@@ -589,10 +628,13 @@ describe('vpKijXce — investorni login bilan bog`lash (admin)', () => {
 
   it('⭐ create: user_id saqlanadi (ilgari gateway uni o`tkazmasdi)', async () => {
     const { service, investorRepo } = makeService({ linked: [] });
-    await service.createInvestor({ ...base, user_id: '25' } as any, {
-      id: '1',
-      roles: ['superadmin'],
-    });
+    await service.createInvestor(
+      { ...base, user_id: '25' },
+      {
+        id: '1',
+        roles: ['superadmin'],
+      },
+    );
     expect(investorRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ user_id: '25' }),
     );
@@ -600,7 +642,7 @@ describe('vpKijXce — investorni login bilan bog`lash (admin)', () => {
 
   it('create: user_id berilmasa — 0 (bog`lanmagan, avvalgidek)', async () => {
     const { service, investorRepo } = makeService({ linked: [] });
-    await service.createInvestor(base as any);
+    await service.createInvestor(base);
     expect(investorRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ user_id: '0' }),
     );
@@ -608,19 +650,13 @@ describe('vpKijXce — investorni login bilan bog`lash (admin)', () => {
 
   it.each([['0'], ['abc'], ['-5']])('create: user_id=%s → 400', async (uid) => {
     const { service, investorRepo } = makeService({ linked: [] });
-    await expectStatus(
-      service.createInvestor({ ...base, user_id: uid } as any),
-      400,
-    );
+    await expectStatus(service.createInvestor({ ...base, user_id: uid }), 400);
     expect(investorRepo.save).not.toHaveBeenCalled();
   });
 
   it('⭐ create: login boshqa investorga bog`langan → 400', async () => {
     const { service, investorRepo } = makeService({ linked: [ME] });
-    await expectStatus(
-      service.createInvestor({ ...base, user_id: '25' } as any),
-      400,
-    );
+    await expectStatus(service.createInvestor({ ...base, user_id: '25' }), 400);
     expect(investorRepo.save).not.toHaveBeenCalled();
   });
 
@@ -628,10 +664,14 @@ describe('vpKijXce — investorni login bilan bog`lash (admin)', () => {
     const { service, investorRepo, activityLog } = makeService({
       investorById: { ...ME },
     });
-    await service.updateInvestor('7', { user_id: null } as any, {
-      id: '1',
-      roles: ['admin'],
-    });
+    await service.updateInvestor(
+      '7',
+      { user_id: null },
+      {
+        id: '1',
+        roles: ['admin'],
+      },
+    );
     expect(investorRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ user_id: '0' }),
     );
@@ -645,10 +685,7 @@ describe('vpKijXce — investorni login bilan bog`lash (admin)', () => {
       investorById: { ...ME, id: '8', user_id: '0' },
       linked: [ME],
     });
-    await expectStatus(
-      service.updateInvestor('8', { user_id: '25' } as any),
-      400,
-    );
+    await expectStatus(service.updateInvestor('8', { user_id: '25' }), 400);
     expect(investorRepo.save).not.toHaveBeenCalled();
   });
 
@@ -657,7 +694,7 @@ describe('vpKijXce — investorni login bilan bog`lash (admin)', () => {
       investorById: { ...ME },
       linked: [ME],
     });
-    await service.updateInvestor('7', { user_id: '25' } as any);
+    await service.updateInvestor('7', { user_id: '25' });
     expect(investorRepo.save).toHaveBeenCalled();
   });
 });
@@ -713,7 +750,7 @@ describe('vpKijXce — RMQ controller: payload investor_id o`qilmaydi', () => {
     );
     expect(svc.getMyProfile).toHaveBeenCalledWith(INVESTOR_REQ);
     await controller.meDashboard(
-      { requester: INVESTOR_REQ, query: { months: 6 } } as any,
+      { requester: INVESTOR_REQ, query: { months: 6 } },
       ctx,
     );
     expect(svc.getMyDashboard).toHaveBeenCalledWith(INVESTOR_REQ, 6);

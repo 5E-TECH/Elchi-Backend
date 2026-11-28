@@ -471,6 +471,59 @@ describe('vpKijXce — POST/GET /investor-users (investor logini, BeePost naqshi
     );
   });
 
+  it('⭐ foyda asosi va investorlik sanasi — investor yozuviga, login’ga emas (ega 2026-11-28)', async () => {
+    const requester = { id: '1', roles: ['superadmin'] };
+    const share = {
+      share_percent: 10,
+      profit_basis: 'gross',
+      share_started_at: '2026-11-01',
+    };
+
+    const res = await request(app.getHttpServer())
+      .post('/investor-users')
+      .send({ ...body, ...share });
+
+    expect(res.status).toBe(201);
+    expect(identitySend).toHaveBeenCalledWith(
+      { cmd: 'identity.investor_user.create' },
+      { dto: body, requester },
+    );
+    expect(investorSend).toHaveBeenNthCalledWith(
+      1,
+      { cmd: 'investor.login.attach' },
+      {
+        dto: { phone_number: '+998901234567', ...share, dry_run: true },
+        requester,
+      },
+    );
+    expect(investorSend).toHaveBeenNthCalledWith(
+      2,
+      { cmd: 'investor.login.attach' },
+      {
+        dto: {
+          user_id: '31',
+          name: 'Ali Investor',
+          phone_number: '+998901234567',
+          ...share,
+        },
+        requester,
+      },
+    );
+  });
+
+  it.each([
+    [{ profit_basis: 'revenue' }],
+    [{ share_started_at: '01.11.2026' }],
+  ])('%p → 400, login yaratilmaydi', async (extra) => {
+    const res = await request(app.getHttpServer())
+      .post('/investor-users')
+      .send({ ...body, share_percent: 10, ...extra });
+
+    expect(res.status).toBe(400);
+    expect(identitySend).not.toHaveBeenCalled();
+    expect(investorSend).not.toHaveBeenCalled();
+  });
+
   it.each([[101], [-0.5], [3.333]])(
     '«Ulush (%)» %p → 400, login yaratilmaydi',
     async (share) => {

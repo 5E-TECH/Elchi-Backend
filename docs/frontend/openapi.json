@@ -17863,6 +17863,49 @@
         ]
       }
     },
+    "/investors/{id}/share-terms": {
+      "put": {
+        "operationId": "InvestorGatewayController_setShareTerms",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetInvestorShareTermsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Investor ulush sharti: foiz, foyda asosi (net/gross) va qaysi kundan",
+        "tags": [
+          "Investor"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/investments": {
       "post": {
         "operationId": "InvestorGatewayController_createInvestment",
@@ -29397,6 +29440,20 @@
             "minimum": 0,
             "maximum": 100,
             "description": "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr"
+          },
+          "profit_basis": {
+            "type": "string",
+            "enum": [
+              "net",
+              "gross"
+            ],
+            "default": "net",
+            "description": "Foyda asosi: 'net' — sof foydadan (daromad − xarajatlar), 'gross' — daromaddan (xarajat ayrilmaydi)"
+          },
+          "share_started_at": {
+            "type": "string",
+            "example": "2026-11-01",
+            "description": "«Investorlik sanasi» — ulush shu kundan hisoblanadi (Toshkent, `YYYY-MM-DD`; bo'sh — bugun). Kelajak sanasi — 400"
           }
         },
         "required": [
@@ -37677,6 +37734,20 @@
             "minimum": 0,
             "maximum": 100,
             "description": "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr"
+          },
+          "profit_basis": {
+            "type": "string",
+            "enum": [
+              "net",
+              "gross"
+            ],
+            "default": "net",
+            "description": "Foyda asosi: 'net' — sof foydadan (daromad − xarajatlar), 'gross' — daromaddan (xarajat ayrilmaydi)"
+          },
+          "share_started_at": {
+            "type": "string",
+            "example": "2026-11-01",
+            "description": "«Investorlik sanasi» — ulush shu kundan hisoblanadi (Toshkent, `YYYY-MM-DD`; bo'sh — bugun). Kelajak sanasi — 400"
           }
         },
         "required": [
@@ -37716,8 +37787,57 @@
             "maximum": 100,
             "nullable": true,
             "description": "«Ulush (%)» — 0..100, ko'pi bilan 2 kasr (null — tozalash)"
+          },
+          "profit_basis": {
+            "type": "string",
+            "enum": [
+              "net",
+              "gross"
+            ],
+            "description": "Foyda asosi: 'net' — sof foydadan, 'gross' — daromaddan. Yangi shart `share_effective_from` (sukut bugun) dan"
+          },
+          "share_effective_from": {
+            "type": "string",
+            "example": "2026-12-01",
+            "description": "Ulush/asos o'zgarishi qaysi kundan (`YYYY-MM-DD`; bo'sh — bugun). O'tgan kunlar eski shart bilan qoladi"
+          },
+          "share_started_at": {
+            "type": "string",
+            "example": "2026-11-01",
+            "description": "«Investorlik sanasi»ni tuzatish — birinchi ulush shartining boshi (`YYYY-MM-DD`)"
           }
         }
+      },
+      "SetInvestorShareTermsDto": {
+        "type": "object",
+        "properties": {
+          "share_percent": {
+            "type": "number",
+            "example": 10,
+            "minimum": 0,
+            "maximum": 100
+          },
+          "profit_basis": {
+            "type": "string",
+            "enum": [
+              "net",
+              "gross"
+            ],
+            "description": "Foyda asosi: 'net' — sof foydadan, 'gross' — daromaddan. Bo'sh — joriy asos"
+          },
+          "effective_from": {
+            "type": "string",
+            "example": "2026-11-01",
+            "description": "Qaysi kundan (`YYYY-MM-DD`, bo'sh — bugun). Joriy shart boshidan keyin — yangi versiya (o'tgan kunlar o'zgarmaydi); teng yoki oldin — joriy shart tuzatiladi"
+          },
+          "note": {
+            "type": "string",
+            "description": "Izoh (ixtiyoriy)"
+          }
+        },
+        "required": [
+          "share_percent"
+        ]
       },
       "CreateInvestmentDto": {
         "type": "object",
