@@ -18,6 +18,10 @@ import {
 } from '@nestjs/swagger';
 import { Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import {
+  pickOperatorMarket,
+  resolveOperatorMarketScope,
+} from './auth/market-operator-market';
 import { Public } from './auth/public.decorator';
 import {
   LogistRegionScopeService,
@@ -74,10 +78,11 @@ export class SearchGatewayController {
   }
 
   /**
-   * ISeuwhfr — MARKET_OPERATOR qidiruvi biriktirilgan marketi doirasida:
-   * market identity `user.market_id` dan (so'rovdagi qiymatga ishonilmaydi).
-   * Admin/superadmin va boshqa rollar uchun so'ralmaydi (`null`).
-   * Biriktirilmagan / identity javob bermadi → '' — buyurtmalar chiqmaydi
+   * ISeuwhfr — MARKET_OPERATOR qidiruvi faol marketi doirasida: operator
+   * a'zoliklaridan (`auth/market-operator-market.ts`; so'rovdagi qiymatga
+   * ishonilmaydi). Admin/superadmin va boshqa rollar uchun so'ralmaydi
+   * (`null`). Biriktirilmagan / identity javob bermadi / 2+ faol market (hali
+   * to'plam bo'yicha qidiruv yo'q — 3-bosqich) → '' — buyurtmalar chiqmaydi
    * (fail-closed), qolgan qidiruv ishlayveradi.
    */
   private async resolveOperatorMarketId(
@@ -93,18 +98,10 @@ export class SearchGatewayController {
     ) {
       return null;
     }
-    const profile: unknown = await firstValueFrom(
-      this.identityClient
-        .send({ cmd: 'identity.user.find_by_id' }, { id: user?.sub })
-        .pipe(timeout(8000)),
-    ).catch(() => null);
-    const raw = (profile as { data?: { market_id?: unknown } } | null)?.data
-      ?.market_id;
-    const marketId =
-      typeof raw === 'string' || typeof raw === 'number'
-        ? String(raw).trim()
-        : '';
-    return MARKET_ID_RE.test(marketId) ? marketId : '';
+    const pick = pickOperatorMarket(
+      await resolveOperatorMarketScope(this.identityClient, user?.sub),
+    );
+    return pick.ok && MARKET_ID_RE.test(pick.marketId) ? pick.marketId : '';
   }
 
   @Public()

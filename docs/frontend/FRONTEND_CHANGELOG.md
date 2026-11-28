@@ -23,6 +23,27 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-28 — Bitta operator — bir nechta market, 2-bosqich: gateway operator doirasi (ega D1–D8)
+
+Deploy: **api-gateway** + **identity-service**. Migratsiya, env, backfill yo'q (jadval — #810, migratsiya 255).
+Hozir har operatorda bitta market — foydalanuvchi uchun hech narsa o'zgarmaydi.
+
+- 🟢 [gateway] Market operatorining marketi endi bitta joyda — uning **faol a'zoliklari**dan aniqlanadi (ilgari
+  7 joyda `user.market_id`). Bitta faol marketli operator uchun javoblar va xatolar AYNAN avvalgidek.
+- ✏️ [gateway] Ikkinchi market qo'shilganda (keyingi bosqich, hali yopiq) — operator uchun qoidalar:
+  - so'rovdagi `market_id` faqat uning faol marketlaridan biri bo'lishi mumkin (aks holda avvalgi 400/403 yoki
+    yangi 403 «Siz bu marketda operator emassiz»);
+  - bitta marketda bajariladigan amal (buyurtma yaratish, AI parse/confirm, «Almashtirish» ro'yxati, mijoz
+    takliflari, katalog, ombor) `market_id` siz — 400 «Siz bir nechta marketda ishlaysiz — marketni tanlang
+    (market_id)»;
+  - bitta buyurtmani ko'rish — operatorning istalgan faol marketidagi buyurtma.
+- 🆕 [gateway] `GET /product/my-products?market_id=` — faqat market operatori uchun ixtiyoriy tanlov (o'z
+  marketlaridan biri; bitta marketda shart emas). Market uchun e'tiborsiz.
+- ✏️ [identity] `GET /users/:id` — market operatori qatorida `operator_markets: [{ market_id, status,
+  is_primary, can_view_warehouse_stock }]` (ochiq a'zoliklar, asosiy birinchi). Eski `market` / `market_id`
+  saqlanadi.
+- 🟢 Frontend: hozir o'zgarish shart emas. Market almashtirgich va ro'yxatlardagi market ustuni — FE bosqichida.
+
 ### 2026-11-28 — To'lovni qaytarish / summani tuzatish smenaga bog'liq emas (T6, ega)
 
 Deploy: **finance-service** (+ **api-gateway** — faqat Swagger matni). Migratsiya, env, backfill yo'q.

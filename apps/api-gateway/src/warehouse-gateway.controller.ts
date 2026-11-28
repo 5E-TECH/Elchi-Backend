@@ -39,6 +39,12 @@ import {
   WAREHOUSE_RPC,
 } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import {
+  OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
+  pickOperatorMarket,
+  resolveOperatorMarketScope,
+  type OperatorMarketScope,
+} from './auth/market-operator-market';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
@@ -244,36 +250,14 @@ export class WarehouseGatewayController {
   }
 
   /**
-   * Market operatori biriktirilgan market (identity `user.market_id`) va
-   * «Ombordagi qoldiq» kaliti (`can_view_warehouse_stock`, XtcEyQjb).
+   * Market operatori doirasi — faol a'zolik marketlari va har biridagi
+   * «Ombordagi qoldiq» kaliti (`can_view_warehouse_stock`, XtcEyQjb — har
+   * market o'zi yoqadi). Manba: `auth/market-operator-market.ts`.
    */
-  private async operatorProfile(
+  private async operatorMarketScope(
     user: JwtUser,
-  ): Promise<{ marketId: string; canViewStock: boolean }> {
-    const profile: unknown = await firstValueFrom(
-      this.identityClient
-        .send({ cmd: 'identity.user.find_by_id' }, { id: user.sub })
-        .pipe(timeout(8000)),
-    ).catch(() => null);
-    const data = (
-      profile as {
-        data?: { market_id?: unknown; can_view_warehouse_stock?: unknown };
-      } | null
-    )?.data;
-    const raw = data?.market_id;
-    const marketId =
-      typeof raw === 'string' || typeof raw === 'number'
-        ? String(raw).trim()
-        : '';
-    if (!marketId) {
-      throw new BadRequestException(
-        'Operator hech qaysi marketga biriktirilmagan',
-      );
-    }
-    return {
-      marketId,
-      canViewStock: data?.can_view_warehouse_stock === true,
-    };
+  ): Promise<OperatorMarketScope> {
+    return resolveOperatorMarketScope(this.identityClient, user.sub);
   }
 
   /**
@@ -302,13 +286,24 @@ export class WarehouseGatewayController {
       return { marketId: own, marketSide: true };
     }
     if (!staff && roles.includes(RoleEnum.MARKET_OPERATOR)) {
-      const { marketId: own, canViewStock } = await this.operatorProfile(user);
-      if (wanted && wanted !== own) {
-        throw new ForbiddenException(
-          'Operator faqat biriktirilgan market mahsulotlari bilan ishlay oladi',
+      // Operator — faol marketlaridan biri (`market_id` berilsa — shu,
+      // berilmasa — yagonasi); ombor kaliti SHU market a'zoligidan.
+      const scope = await this.operatorMarketScope(user);
+      const pick = pickOperatorMarket(scope, wanted);
+      if (!pick.ok) {
+        if (pick.reason === 'foreign') {
+          throw new ForbiddenException(
+            'Operator faqat biriktirilgan market mahsulotlari bilan ishlay oladi',
+          );
+        }
+        throw new BadRequestException(
+          pick.reason === 'unassigned'
+            ? 'Operator hech qaysi marketga biriktirilmagan'
+            : OPERATOR_MARKET_AMBIGUOUS_MESSAGE,
         );
       }
-      if (options.stockAccess && !canViewStock) {
+      const own = pick.marketId;
+      if (options.stockAccess && scope.warehouseStock.get(own) !== true) {
         throw new ForbiddenException({
           statusCode: 403,
           message:
