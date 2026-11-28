@@ -11,6 +11,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { OrderGatewayController } from './order-gateway.controller';
+import { operatorMarketScopeFromProfile } from './auth/market-operator-market';
 
 /**
  * GaBIPi3Z — GET /orders/status-counts: holat tablari sonlari + «Qabul va
@@ -103,11 +104,12 @@ function setup(
   internals.isHqRegistrator = jest
     .fn()
     .mockResolvedValue(opts.hqRegistrator ?? false);
-  internals.resolveMarketOperatorMarketId = jest
-    .fn()
-    .mockResolvedValue(
-      opts.operatorMarketId === undefined ? '37' : opts.operatorMarketId,
-    );
+  internals.operatorMarketScope = jest.fn().mockResolvedValue(
+    operatorMarketScopeFromProfile({
+      market_id:
+        opts.operatorMarketId === undefined ? '37' : opts.operatorMarketId,
+    }),
+  );
   return { controller, order, logistics };
 }
 
@@ -381,7 +383,9 @@ describe('GaBIPi3Z — GET /orders/status-counts', () => {
       ...payload.query,
       cancel_stages: ['market'],
     });
-    expect(payload.returned_to_market_query?.courier_cancelled_tab).toBeUndefined();
+    expect(
+      payload.returned_to_market_query?.courier_cancelled_tab,
+    ).toBeUndefined();
   });
 
   it('⭐ logist: faqat o`z viloyatlari (region_ids), begona viloyat 400, viloyatsiz — nol (order-service`ga so`rov yo`q)', async () => {
