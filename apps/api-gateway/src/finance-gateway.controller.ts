@@ -61,13 +61,19 @@ import {
   CASHBOX_RECEIPT_MESSAGES,
   Roles as RoleEnum,
   Source_type,
+  PNL_DEFAULT_MONTHS,
+  businessDayKey,
+  fillPnlSeries,
   matchesDeclaredType,
+  pnlMonthsBackStart,
   stripImageMetadata,
   toPublicUserSummary,
   type AiBalanceScreenshotMediaType,
   type AiBalanceScreenshotResponse,
   type AiReceiptExtractResponse,
   type AiReceiptMediaType,
+  type PnlGranularity,
+  type PnlPoint,
 } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
@@ -85,6 +91,7 @@ import {
   FindCashboxByUserQueryDto,
   FindHistoryQueryDto,
   FinancialBalanceDailyQueryDto,
+  FinancePnlQueryDto,
   HistoryDailyQueryDto,
   PaymentsMetaQueryDto,
   FindShiftQueryDto,
@@ -3527,6 +3534,97 @@ export class FinanceGatewayController {
         to_date: query?.to_date ?? query?.toDate,
       },
     );
+  }
+
+  /**
+   * Tizim bo'yicha oylik daromad / xarajat / sof foyda grafigi (ega
+   * 2026-11-28). Qoidalar FAQAT `finance.pnl.series` da (`@app/common`
+   * `pnlSql` — investor ulushi bilan bir manba); gateway hech narsani qayta
+   * hisoblamaydi, faqat qatori yo'q oy/kunni 0 bilan to'ldiradi.
+   */
+  @Get('pnl')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Tizim P&L: oylik daromad, xarajat, sof foyda',
+    description:
+      "P&L daftari (`financial_balance_history`) bo'yicha har oy (yoki kun). `gross` — daromad: sotuv foydasi " +
+      '(`sell_profit`), uning qaytarilishi (`correction`, `rollback-extra:*` dan tashqari), pickup haqi (`pickup_fee`). ' +
+      "`opex` — xarajat (musbat son): qo'lda chiqim, ish haqi, hisoblar, buyurtma qo'shimcha xarajati va uning " +
+      "qaytarilishi (kamaytiradi; qaytarilish ko'p bo'lsa manfiy bo'lishi mumkin). `net` = `gross` − `opex`. " +
+      "`other_income` — qo'lda kirim (`manual_income`), alohida, sof foydaga KIRMAYDI. Investorga foyda to'lovi " +
+      '(`investor-profit:*`) umuman kirmaydi. Kalit — Toshkent ish kuni. `items` — `from_day`..`to_day` dagi HAR oy ' +
+      "(kun), qatori yo'g'i 0 bilan; chetdagi oylar chala bo'lishi mumkin (masalan joriy oy). Sukut: joriy oy bilan " +
+      "12 oy. Noto'g'ri sana, `from_day` > `to_day`, oraliq > 3700 kun — 400.",
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        statusCode: 200,
+        message: 'P&L series',
+        data: {
+          from_day: '2026-09-01',
+          to_day: '2026-11-28',
+          granularity: 'month',
+          items: [
+            {
+              period: '2026-09',
+              gross: 41250000,
+              opex: 18400000,
+              net: 22850000,
+              other_income: 5000000,
+            },
+            { period: '2026-10', gross: 0, opex: 0, net: 0, other_income: 0 },
+            {
+              period: '2026-11',
+              gross: 38900000,
+              opex: 21300000,
+              net: 17600000,
+              other_income: 0,
+            },
+          ],
+          totals: {
+            gross: 80150000,
+            opex: 39700000,
+            net: 40450000,
+            other_income: 5000000,
+          },
+        },
+      },
+    },
+  })
+  async pnlSeries(@Query() query: FinancePnlQueryDto) {
+    const granularity: PnlGranularity =
+      query?.granularity === 'day' ? 'day' : 'month';
+    const toDay = query?.to_day ?? businessDayKey(new Date());
+    const fromDay =
+      query?.from_day ?? pnlMonthsBackStart(toDay, PNL_DEFAULT_MONTHS);
+    const response = await this.send<{
+      data?: {
+        from_day: string;
+        to_day: string;
+        granularity: PnlGranularity;
+        items: PnlPoint[];
+      };
+    }>(
+      { cmd: 'finance.pnl.series' },
+      { from_day: fromDay, to_day: toDay, granularity },
+    );
+    const data = response?.data;
+    if (!data || !Array.isArray(data.items)) return response;
+    return {
+      ...response,
+      data: {
+        ...data,
+        items: fillPnlSeries(
+          data.items,
+          data.from_day,
+          data.to_day,
+          data.granularity,
+        ),
+      },
+    };
   }
 
   @Patch('cashbox/spend')

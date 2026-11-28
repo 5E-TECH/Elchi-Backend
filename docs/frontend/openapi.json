@@ -10597,6 +10597,110 @@
         ]
       }
     },
+    "/finance/pnl": {
+      "get": {
+        "description": "P&L daftari (`financial_balance_history`) bo'yicha har oy (yoki kun). `gross` — daromad: sotuv foydasi (`sell_profit`), uning qaytarilishi (`correction`, `rollback-extra:*` dan tashqari), pickup haqi (`pickup_fee`). `opex` — xarajat (musbat son): qo'lda chiqim, ish haqi, hisoblar, buyurtma qo'shimcha xarajati va uning qaytarilishi (kamaytiradi; qaytarilish ko'p bo'lsa manfiy bo'lishi mumkin). `net` = `gross` − `opex`. `other_income` — qo'lda kirim (`manual_income`), alohida, sof foydaga KIRMAYDI. Investorga foyda to'lovi (`investor-profit:*`) umuman kirmaydi. Kalit — Toshkent ish kuni. `items` — `from_day`..`to_day` dagi HAR oy (kun), qatori yo'g'i 0 bilan; chetdagi oylar chala bo'lishi mumkin (masalan joriy oy). Sukut: joriy oy bilan 12 oy. Noto'g'ri sana, `from_day` > `to_day`, oraliq > 3700 kun — 400.",
+        "operationId": "FinanceGatewayController_pnlSeries",
+        "parameters": [
+          {
+            "name": "from_day",
+            "required": false,
+            "in": "query",
+            "description": "Toshkent ish kuni (YYYY-MM-DD). Berilmasa — to_day oyi bilan 12 oy (11 oy oldingi oyning 1-kuni). Oraliq ≤ 3700 kun.",
+            "schema": {
+              "example": "2025-12-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_day",
+            "required": false,
+            "in": "query",
+            "description": "Berilmasa — bugungi ish kuni.",
+            "schema": {
+              "example": "2026-11-28",
+              "type": "string"
+            }
+          },
+          {
+            "name": "granularity",
+            "required": false,
+            "in": "query",
+            "description": "`month` — `period` = `YYYY-MM`; `day` — `YYYY-MM-DD`.",
+            "schema": {
+              "default": "month",
+              "type": "string",
+              "enum": [
+                "month",
+                "day"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 200,
+                    "message": "P&L series",
+                    "data": {
+                      "from_day": "2026-09-01",
+                      "to_day": "2026-11-28",
+                      "granularity": "month",
+                      "items": [
+                        {
+                          "period": "2026-09",
+                          "gross": 41250000,
+                          "opex": 18400000,
+                          "net": 22850000,
+                          "other_income": 5000000
+                        },
+                        {
+                          "period": "2026-10",
+                          "gross": 0,
+                          "opex": 0,
+                          "net": 0,
+                          "other_income": 0
+                        },
+                        {
+                          "period": "2026-11",
+                          "gross": 38900000,
+                          "opex": 21300000,
+                          "net": 17600000,
+                          "other_income": 0
+                        }
+                      ],
+                      "totals": {
+                        "gross": 80150000,
+                        "opex": 39700000,
+                        "net": 40450000,
+                        "other_income": 5000000
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tizim P&L: oylik daromad, xarajat, sof foyda",
+        "tags": [
+          "Finance"
+        ],
+        "x-roles": [
+          "superadmin",
+          "admin"
+        ]
+      }
+    },
     "/finance/cashbox/spend": {
       "patch": {
         "description": "Elchi Pochta №1 — `expense_category_id` MAJBURIY (`GET /finance/cashbox/expense-categories`, raqamli satr): yo'q/bo'sh/raqam emas → 400 «Xarajat kategoriyasini tanlang»; mavjud va o'chirilmagan bo'lishi shart (aks holda 400). `comment` ixtiyoriy (ljVOuNz4: `CASHBOX_SPEND_COMMENT_REQUIRED=on` bo'lsa bo'sh izoh → 400 «Izoh majburiy»). `data.history` va kassa tarixi qatorlarida `expense_category_id` + `expense_category_name` (snapshot); `data.financial_balance_entry.expense_category` — yopiq ro'yxatdagi mosi. (T3, BE-C — ega 2026-11-10) Chek FAQAT karta chiqimida (`type: \"click\"`): karta — `GET /finance/receipt-settings` → `manual_expense.photo_required` yoqiq bo'lsa `receipt_id` MAJBURIY (yo'q → 400 `RECEIPT_REQUIRED`), chek bog'lanadi va AI tahlili (avvalgidek). Naqd (`type` yo'q yoki `cash`) va `click_to_market` — chek so'ralmaydi (sozlama yoqiq bo'lsa ham), `receipt_id` → 400 `RECEIPT_NOT_APPLICABLE` «Bu operatsiyada chek qo'llanmaydi» (pul, tarix, P&L yozilmaydi). Javobda `data.receipt: { id, ai_status } | null` (naqd — doim `null`).",

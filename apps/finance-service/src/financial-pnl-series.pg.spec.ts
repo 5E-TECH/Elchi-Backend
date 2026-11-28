@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { FinancialSource_type } from '@app/common';
+import { FinancialSource_type, fillPnlSeries } from '@app/common';
 import { FinanceServiceService } from './finance-service.service';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
@@ -173,6 +173,27 @@ describePg('finance.pnl.series — P&L seriyasi, haqiqiy Postgres', () => {
     expect(res.data.items.map((i: any) => [i.period, i.gross, i.net])).toEqual([
       ['2026-11', 52000, -4500],
       ['2026-12', 10000, 10000],
+    ]);
+  });
+
+  it('tizim grafigi (GET /finance/pnl): bo‘sh oktabr 0, qolgani o‘zgarishsiz', async () => {
+    const res: any = await service.financialPnlSeries({
+      from_day: '2026-10-01',
+      to_day: '2026-12-31',
+      granularity: 'month',
+    });
+    const filled = fillPnlSeries(
+      res.data.items,
+      res.data.from_day,
+      res.data.to_day,
+      res.data.granularity,
+    );
+    expect(
+      filled.map((i) => [i.period, i.gross, i.opex, i.net, i.other_income]),
+    ).toEqual([
+      ['2026-10', 0, 0, 0, 0],
+      ['2026-11', 52000, 56500, -4500, 1000000],
+      ['2026-12', 10000, 0, 10000, 0],
     ]);
   });
 
