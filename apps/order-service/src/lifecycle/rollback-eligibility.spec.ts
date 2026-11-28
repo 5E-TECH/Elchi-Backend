@@ -395,3 +395,208 @@ describe('evaluateRollbackEligibility (D1–D4)', () => {
     ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED' });
   });
 });
+
+/**
+ * 2026-11-27 (ega): Toshkent (HQ) kuryeri sotgan, pul HQ'ga topshirilgan /
+ * market to'langan buyurtmani superadmin «Kutilmoqda» ga qaytara olmasdi —
+ * HQ sotuvi qatorida `branch_id` NULL, D2 settled yo'li esa faqat filial
+ * qatorini bilardi (CORRECTION_REQUIRED «Kuryer to'lovi filialsiz qatorda»).
+ */
+describe('HQ sotuvi (branch_id NULL) — superadmin settled yo`li', () => {
+  const HQ = '1';
+  const HQ_COURIER = {
+    id: '301',
+    roles: ['courier'],
+    branch_id: HQ,
+    can_sell_cancel: null,
+  };
+  const hqBase = (
+    status: SettlementStatus,
+    over: Partial<RollbackEligibilityContext> = {},
+  ) =>
+    base({
+      actor: SA,
+      order: withOrder({
+        status: Order_status.PAID,
+        holder_branch_id: HQ,
+        branch_id: HQ,
+      }),
+      sale: withSale({ status, branch_id: null }),
+      saleCourierBranchId: HQ,
+      hqBranchId: HQ,
+      saleCourierCarryBranchId: null,
+      saleCourierCarryAmount: 0,
+      ...over,
+    });
+
+  it.each([
+    [SettlementStatus.BRANCH_SETTLED, Order_status.SOLD],
+    [SettlementStatus.MARKET_SETTLED, Order_status.PAID],
+    [SettlementStatus.MARKET_SETTLED, Order_status.PARTLY_PAID],
+  ])('⭐ %s (%s): superadmin — ruxsat (settled)', (status, orderStatus) => {
+    expect(
+      evaluateRollbackEligibility(
+        hqBase(status, {
+          order: withOrder({
+            status: orderStatus,
+            holder_branch_id: HQ,
+            branch_id: HQ,
+          }),
+        }),
+      ),
+    ).toEqual({
+      allowed: true,
+      code: null,
+      message: null,
+      httpStatus: null,
+      path: 'settled',
+    });
+  });
+
+  it('kuryersiz HQ sotuvi (HQ menejeri) — superadmin ruxsat (settled)', () => {
+    expect(
+      evaluateRollbackEligibility(
+        hqBase(SettlementStatus.MARKET_SETTLED, {
+          postCourierId: null,
+          order: withOrder({
+            status: Order_status.PAID,
+            holder_type: 'BRANCH',
+            holder_courier_id: null,
+            courier_id: null,
+            holder_branch_id: HQ,
+            branch_id: HQ,
+          }),
+          sale: withSale({
+            status: SettlementStatus.MARKET_SETTLED,
+            courier_id: null,
+            branch_id: null,
+            courier_amount: 0,
+          }),
+        }),
+      ),
+    ).toMatchObject({ allowed: true, path: 'settled' });
+  });
+
+  it.each([
+    [
+      'kuryer endi viloyat filialida',
+      { saleCourierBranchId: BRANCH },
+      "Kuryer endi bosh ofis (HQ) kuryeri emas — HQ'ga topshirilgan summani uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi",
+    ],
+    [
+      'kuryer filialga biriktirilmagan',
+      { saleCourierBranchId: null },
+      "Kuryer endi bosh ofis (HQ) kuryeri emas — HQ'ga topshirilgan summani uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi",
+    ],
+    [
+      'kuryerda filialga bog`langan qoldiq',
+      { saleCourierCarryBranchId: BRANCH, saleCourierCarryAmount: 5000 },
+      'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
+    ],
+    [
+      'qoldiq jadvali yo`q',
+      { carryTablePresent: false },
+      "Hisob-kitob qoldig'i jadvali topilmadi — kuryer kreditini yozib bo'lmaydi, rollback bajarilmadi",
+    ],
+    ['daftar mos emas', { ledgerMismatch: 'mos kelmaydi' }, 'mos kelmaydi'],
+  ])(
+    'HQ qatori, %s — superadmin CORRECTION_REQUIRED',
+    (_label, over, message) => {
+      expect(
+        evaluateRollbackEligibility(
+          hqBase(SettlementStatus.MARKET_SETTLED, over),
+        ),
+      ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED', message });
+    },
+  );
+
+  it('HQ qatori, HQ qoldig`i (branch_id NULL, musbat yoki manfiy) — to`sqinlik emas', () => {
+    for (const amount of [5000, -5000]) {
+      expect(
+        evaluateRollbackEligibility(
+          hqBase(SettlementStatus.MARKET_SETTLED, {
+            saleCourierCarryBranchId: null,
+            saleCourierCarryAmount: amount,
+          }),
+        ),
+      ).toMatchObject({ allowed: true, path: 'settled' });
+    }
+  });
+
+  it('HQ qatorida manfiy (kredit) summa yoki filial to`lovi — CORRECTION_REQUIRED', () => {
+    expect(
+      evaluateRollbackEligibility(
+        hqBase(SettlementStatus.BRANCH_SETTLED, {
+          sale: withSale({
+            status: SettlementStatus.BRANCH_SETTLED,
+            branch_id: null,
+            courier_amount: -4000,
+          }),
+        }),
+      ),
+    ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED' });
+    expect(
+      evaluateRollbackEligibility(
+        hqBase(SettlementStatus.BRANCH_SETTLED, {
+          sale: withSale({
+            status: SettlementStatus.BRANCH_SETTLED,
+            branch_id: null,
+            market_paid_by_branch_amount: 1000,
+          }),
+        }),
+      ),
+    ).toMatchObject({ allowed: false, code: 'CORRECTION_REQUIRED' });
+  });
+
+  it('HQ kuryeri / HQ menejeri o`zi — SUPERADMIN_ONLY, xabarda market yo`q', () => {
+    const courier = evaluateRollbackEligibility(
+      hqBase(SettlementStatus.MARKET_SETTLED, { actor: HQ_COURIER }),
+    );
+    expect(courier).toMatchObject({ allowed: false, code: 'SUPERADMIN_ONLY' });
+    expect(courier.message).not.toMatch(/market/i);
+  });
+});
+
+/**
+ * Ega (2026-11-27): HQ marketga to'laganmi-yo'qmi — kuryer va menejerga
+ * ko'rinmaydi; rad xabari ham buni aytmaydi.
+ */
+describe('kuryer / menejer rad xabarida market to`lovi tilga olinmaydi', () => {
+  it.each([
+    ['menejer', base().actor],
+    ['kuryer', COURIER],
+  ])('%s: PAID va PARTLY_PAID — bir xil neytral xabar', (_label, actor) => {
+    for (const status of [Order_status.PAID, Order_status.PARTLY_PAID]) {
+      const res = evaluateRollbackEligibility(
+        base({ actor, order: withOrder({ status }) }),
+      );
+      expect(res).toMatchObject({
+        allowed: false,
+        code: 'SUPERADMIN_ONLY',
+        message:
+          'Bu buyurtmani faqat superadmin qaytara oladi — superadminga murojaat qiling',
+      });
+    }
+  });
+
+  it('kuryer: filial marketga to`lagan qator va 246 izi — neytral xabar; menejer o`z amalini ko`radi', () => {
+    const paidByBranch = withSale({
+      status: SettlementStatus.COURIER_SETTLED,
+      market_paid_by_branch_amount: 100000,
+    });
+    const courier = evaluateRollbackEligibility(
+      base({ actor: COURIER, sale: paidByBranch }),
+    );
+    expect(courier).toMatchObject({ code: 'SUPERADMIN_ONLY' });
+    expect(courier.message).not.toMatch(/market/i);
+    expect(
+      evaluateRollbackEligibility(base({ sale: paidByBranch })).message,
+    ).toContain('filial kassasidan');
+
+    const traced = evaluateRollbackEligibility(
+      base({ actor: COURIER, conversionTraced: true }),
+    );
+    expect(traced).toMatchObject({ code: 'SUPERADMIN_ONLY' });
+    expect(traced.message).not.toMatch(/market/i);
+  });
+});

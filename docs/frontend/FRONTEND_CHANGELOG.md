@@ -41,6 +41,20 @@ finance-service'da — qoidalar o'sha yerda, gateway qayta hisoblamaydi.
   Noto'g'ri sana, `from_day` > `to_day`, oraliq > 3700 kun — 400.
 → Frontend: superadmin/admin uchun oylik daromad / xarajat / sof foyda grafigi.
 
+### 2026-11-27 — Rollback: superadmin HQ (Toshkent) sotuvini ham qaytaradi; kuryer/menejer xabarida market yo'q
+
+Deploy: **order-service**. Migratsiya / env / backfill yo'q. FE o'zgarishi shart emas.
+
+- 🟢 [order] `POST /orders/rollback/:id` va ro'yxat/tafsilotdagi `rollback` maydoni: HQ sotuvi (HQ kuryeri
+  yoki HQ menejeri; hisob-kitob qatorida filial yo'q) pul HQ'ga topshirilgan / market to'langan bo'lsa ham
+  superadmin uchun endi `allowed: true` (ilgari `CORRECTION_REQUIRED` «Kuryer to'lovi filialsiz qatorda…»).
+  Naqd ko'chmaydi: kuryerga HQ krediti (keyingi HQ topshirig'ida), market oldindan olgan (keyingi to'lovidan).
+  HQ kuryeri boshqa filialga o'tkazilgan bo'lsa — `CORRECTION_REQUIRED` («…bosh ofis (HQ) kuryeri emas…»).
+- ✏️ [order] Kuryer / menejer uchun `PAID` / `PARTLY_PAID` rad xabari (`SUPERADMIN_ONLY`) endi bitta neytral matn:
+  «Bu buyurtmani faqat superadmin qaytara oladi — superadminga murojaat qiling» (ilgari «Market to'langan…» /
+  «Qisman to'langan…»). Kuryerga filial→market to'lovi va 246 izi ham aytilmaydi. Kod o'zgarmagan — FE matnni
+  `rollback.message` dan oladi.
+
 ### 2026-11-27 — Kuryerdagi buyurtmalar: 72 soatdan oshgan, 48 soatga yaqin, kuryerlar bo'yicha + ogohlantirish (onXzDc5n)
 
 Deploy: **order-service** (migratsiya **1716000000254**: `orders.courier_hold_warned_at` + qism indeks

@@ -19,7 +19,11 @@ import {
  *  • SUPERADMIN (D2) — SOLD / CANCELLED / CLOSED / PAID / PARTLY_PAID, har
  *    hisob-kitob bosqichida (kuryerda, filialda, HQ'da, market to'langan,
  *    filial marketga to'lagan). Daftar avtomatik teskari yozib bo'lmaydigan
- *    holat (M6 sabablari) — `CORRECTION_REQUIRED`.
+ *    holat (M6 sabablari) — `CORRECTION_REQUIRED`. HQ sotuvi (Toshkent
+ *    kuryeri yoki HQ menejeri; qatorda `branch_id` NULL — filial bo'g'ini
+ *    yo'q) ham (2026-11-27, `hqCourierCreditBlocker`).
+ *  • Kuryer / menejer rad xabarlari market to'lovini oshkor qilmaydi (ega,
+ *    2026-11-27): HQ ↔ market hisob-kitobi ularning ishi emas.
  *  • MENEJER — faqat o'z filiali, `can_sell_cancel` (D3, aks holda 403):
  *      – pul kuryerda (PENDING) — ruxsat;
  *      – kuryer filialga topshirgan (COURIER_SETTLED, D1) — ruxsat (M6 kredit
@@ -252,6 +256,64 @@ export function remittedCreditBlocker(
 }
 
 /**
+ * 2026-11-27 — HQ sotuvi qatori (`branch_id` NULL: `resolveSettlementBranchId`
+ * HQ uchun null yozadi) superadmin tomonidan qaytarilganda kuryer kreditining
+ * sharti. Filial bo'g'ini yo'q: HQ kuryeri naqdni to'g'ridan-to'g'ri HQ'ga
+ * topshiradi (qator darhol BRANCH_SETTLED), shuning uchun kredit kuryerning
+ * HQ qoldig'iga (`courier_to_branch`, `branch_id` NULL — FIFO HQ kuryeri
+ * uchun aynan shunday saqlaydi) yoziladi. `null` — xavfsiz; aks holda sabab.
+ * `prepareRemittedCourierCredit({ allowHq: true })` bilan AYNI shartlar.
+ */
+export function hqCourierCreditBlocker(
+  ctx: Pick<
+    RollbackEligibilityContext,
+    | 'sale'
+    | 'saleCourierBranchId'
+    | 'hqBranchId'
+    | 'carryTablePresent'
+    | 'saleCourierCarryBranchId'
+    | 'saleCourierCarryAmount'
+  >,
+): string | null {
+  const sale = ctx.sale;
+  if (!sale || !norm(sale.courier_id)) {
+    return 'Kuryer hisob-kitob qatori topilmadi — rollback bajarilmadi';
+  }
+  if (toTiyin(sale.courier_amount) <= 0) {
+    return REMITTED_CREDIT_ROW_MESSAGE;
+  }
+  if (!ctx.carryTablePresent) {
+    return (
+      "Hisob-kitob qoldig'i jadvali topilmadi — kuryer kreditini yozib bo'lmaydi, " +
+      'rollback bajarilmadi'
+    );
+  }
+  // Kredit HQ'da sarflanishi kerak: kuryer keyingi pulni yana HQ'ga
+  // topshirishi shart (boshqa filialga o'tgan bo'lsa — u yerda ishlatilmaydi).
+  if (
+    !norm(ctx.hqBranchId) ||
+    norm(ctx.saleCourierBranchId) !== norm(ctx.hqBranchId)
+  ) {
+    return (
+      "Kuryer endi bosh ofis (HQ) kuryeri emas — HQ'ga topshirilgan summani " +
+      "uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi"
+    );
+  }
+  // A-F8 bilan AYNI: filialga bog'langan noldan farqli qoldiq aralashmaydi.
+  if (
+    toTiyin(ctx.saleCourierCarryAmount ?? 0) !== 0 &&
+    norm(ctx.saleCourierCarryBranchId) !== ''
+  ) {
+    return 'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi';
+  }
+  return null;
+}
+
+/** Kuryer va menejerga: market to'lovi tilga olinmaydi (ega, 2026-11-27). */
+const SUPERADMIN_ONLY_NEUTRAL_MESSAGE =
+  'Bu buyurtmani faqat superadmin qaytara oladi — superadminga murojaat qiling';
+
+/**
  * D4 — bekor posilka hali o'z filialida yoki o'z filiali kuryerida turibdimi.
  * Jo'natilgan (`cancelled_sent` — bekorlar paketi / pochta) bu yerga
  * yetmaydi (status bosqichida rad etiladi).
@@ -317,12 +379,9 @@ export function evaluateRollbackEligibility(
       return deny(RB.PARCEL_NOT_IN_BRANCH);
     }
     if (status === Order_status.PAID || status === Order_status.PARTLY_PAID) {
-      return deny(
-        RB.SUPERADMIN_ONLY,
-        status === Order_status.PARTLY_PAID
-          ? "Qisman to'langan buyurtmani faqat superadmin qaytara oladi"
-          : "Market to'langan buyurtmani faqat superadmin qaytara oladi",
-      );
+      // Ega (2026-11-27): HQ marketga to'laganmi-yo'qmi — kuryer/menejerga
+      // ko'rinmaydi, xabar ham uni aytmaydi (to'liq / qisman farqi ham).
+      return deny(RB.SUPERADMIN_ONLY, SUPERADMIN_ONLY_NEUTRAL_MESSAGE);
     }
     if (status !== Order_status.SOLD && status !== Order_status.CANCELLED) {
       return deny(
@@ -410,8 +469,10 @@ export function evaluateRollbackEligibility(
   if (ctx.conversionTraced && sale) {
     return deny(
       isSuperAdmin ? RB.CORRECTION_REQUIRED : RB.SUPERADMIN_ONLY,
-      "Bu buyurtmaning filial → market to'lovi migratsiya 246 orqaga qaytarilganda " +
-        "konvertatsiya qilingan — avtomatik qaytarib bo'lmaydi, buxgalteriya tuzatishi kerak",
+      isCourier
+        ? SUPERADMIN_ONLY_NEUTRAL_MESSAGE
+        : "Bu buyurtmaning filial → market to'lovi migratsiya 246 orqaga qaytarilganda " +
+            "konvertatsiya qilingan — avtomatik qaytarib bo'lmaydi, buxgalteriya tuzatishi kerak",
     );
   }
   if (!sale || sale.status === SettlementStatus.PENDING) {
@@ -434,7 +495,11 @@ export function evaluateRollbackEligibility(
       RB.SUPERADMIN_ONLY,
       settledToHq
         ? "Buyurtma puli bosh ofisga o'tgan — faqat superadmin qaytara oladi"
-        : "Buyurtmaning market ulushi filial kassasidan to'langan — faqat superadmin qaytara oladi",
+        : // PR-C — filial marketga o'zi to'lagan: menejer buni biladi (o'z
+          // amali); kuryerga market to'lovi aytilmaydi (ega, 2026-11-27).
+          isManager
+          ? "Buyurtmaning market ulushi filial kassasidan to'langan — faqat superadmin qaytara oladi"
+          : SUPERADMIN_ONLY_NEUTRAL_MESSAGE,
     );
   }
   if (isCourier && remitted) {
@@ -442,17 +507,32 @@ export function evaluateRollbackEligibility(
   }
 
   if (settledToHq || branchPaidMarket) {
+    if (!norm(sale.branch_id)) {
+      // 2026-11-27 — HQ sotuvi (Toshkent kuryeri yoki HQ menejeri): filial
+      // bo'g'ini yo'q, naqd to'g'ridan-to'g'ri HQ'da. Kuryer bo'lsa — kredit
+      // uning HQ qoldig'iga; filialga kredit yo'q; market to'langan bo'lsa —
+      // market debeti (`planSettledRollbackLedger`).
+      if (branchPaidMarket) {
+        // HQ qatorida filial to'lovi bo'lishi mumkin emas — buzilgan qator.
+        return deny(
+          RB.CORRECTION_REQUIRED,
+          "HQ sotuvi qatorida filial to'lovi yozilgan — daftarni avtomatik teskari yozib bo'lmaydi",
+        );
+      }
+      if (norm(sale.courier_id)) {
+        const blocker = hqCourierCreditBlocker(ctx);
+        if (blocker) return deny(RB.CORRECTION_REQUIRED, blocker);
+      }
+      if (ctx.ledgerMismatch) {
+        return deny(RB.CORRECTION_REQUIRED, ctx.ledgerMismatch);
+      }
+      return allow('settled');
+    }
     // Superadmin, D2: kuryer qismi bo'lsa — M6 shartlari (kredit shu filialda).
     // Kuryersiz qator (menejer / filial sotgan) — kuryerga kredit yo'q.
     if (norm(sale.courier_id)) {
       const blocker = remittedCreditBlocker(ctx);
       if (blocker) return deny(RB.CORRECTION_REQUIRED, blocker);
-    }
-    if (!norm(sale.branch_id)) {
-      return deny(
-        RB.CORRECTION_REQUIRED,
-        "Filialsiz (HQ kuryeri) qator — daftarni avtomatik teskari yozib bo'lmaydi",
-      );
     }
     if (ctx.ledgerMismatch) {
       return deny(RB.CORRECTION_REQUIRED, ctx.ledgerMismatch);
