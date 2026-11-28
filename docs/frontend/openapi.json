@@ -2661,7 +2661,7 @@
     },
     "/product/my-products": {
       "get": {
-        "description": "Market — o'z mahsulotlari; market operatori — biriktirilgan marketining mahsulotlari (biriktirilmagan bo'lsa 400). search/page/limit qo'llab-quvvatlanadi.",
+        "description": "Market — o'z mahsulotlari; market operatori — faol marketining mahsulotlari (biriktirilmagan bo'lsa 400). Bir nechta marketda ishlaydigan operator `market_id` bilan tanlaydi (o'z marketlaridan biri, aks holda 403; berilmasa — 400). Market uchun `market_id` e'tiborsiz. search/page/limit qo'llab-quvvatlanadi.",
         "operationId": "CatalogGatewayController_getMyProducts",
         "parameters": [
           {
@@ -2713,6 +2713,15 @@
                 "asc",
                 "desc"
               ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "Faqat market operatori: o'zi ishlaydigan marketlardan biri (bitta marketda — shart emas)",
+            "schema": {
               "type": "string"
             }
           }
