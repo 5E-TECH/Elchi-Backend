@@ -10,9 +10,12 @@ import type { ProfitBasis } from '@app/common';
  *   asos         = shart 'net' bo'lsa — o'sha kungi sof foyda
  *                  (daromad − xarajat), 'gross' bo'lsa — daromad.
  *
- * Shart boshlanishidan oldingi kunlar hisobga kirmaydi. Zarar kuni (sof
- * foyda manfiy) ulushni ham kamaytiradi — BeePost bilan bir xil, simmetrik
- * `Math.round`. Pul — tiyinlarda butun son (float drift yo'q).
+ * Shart boshlanishidan oldingi kunlar hisobga kirmaydi. ZARAR HAM BO'LISHILADI
+ * (ega 2026-11-28 tasdiqladi, BeePost bilan bir xil): sof foyda manfiy kunda
+ * ulush ham manfiy — investor zarar ulushini ko'taradi. Hisob chiziqli, ya'ni
+ * kunlik yig'indi = davr sof foydasi × ulush%; jami manfiy bo'lsa (zarar
+ * foydadan ko'p), keyingi foyda avval shu zararni qoplaydi. Yaxlitlash
+ * simmetrik `Math.round`. Pul — tiyinlarda butun son (float drift yo'q).
  */
 
 export type ShareTermLike = {

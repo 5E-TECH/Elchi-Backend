@@ -205,6 +205,44 @@ describe('investor ulushi — belgilangan sanadan boshlab (dashboard)', () => {
     });
   });
 
+  it('⭐ zarar ham bo`lishiladi: zarar foydadan ko`p — ulush manfiy, keyingi foyda avval uni qoplaydi', async () => {
+    const lossy = {
+      to_day: '2026-11-28',
+      items: [
+        { period: '2026-11-01', gross: 1000, opex: 0, net: 1000, other_income: 0 },
+        // Ish haqi kuni: sof foyda −3000.
+        { period: '2026-11-05', gross: 500, opex: 3500, net: -3000, other_income: 0 },
+      ],
+    };
+    const loss = makeService({ terms: [TERM_NOV1], pnl: lossy });
+    const res: any = await loss.service.getInvestorDashboard('7', 1);
+    // (1000 − 3000) × 10% = −200: investor zarar ulushini ko'taradi.
+    expect(res.data.summary).toMatchObject({
+      accrued_profit: -200,
+      accrued_basis: -2000,
+      total_unpaid_profit: -200,
+    });
+    expect(res.data.monthly.items[0]).toMatchObject({
+      accrued_amount: -200,
+      paid_amount: 0,
+      unpaid_amount: -200,
+    });
+
+    // Keyingi kun +5000: avval 200 zarar qoplanadi, qolgani — 300.
+    const recovered = makeService({
+      terms: [TERM_NOV1],
+      pnl: {
+        ...lossy,
+        items: [
+          ...lossy.items,
+          { period: '2026-11-20', gross: 6000, opex: 1000, net: 5000, other_income: 0 },
+        ],
+      },
+    });
+    const after: any = await recovered.service.getInvestorDashboard('7', 1);
+    expect(after.data.summary.accrued_profit).toBe(300);
+  });
+
   it('shart yo`q — moliyaga so`rov ketmaydi, nollar', async () => {
     const { service, financeClient } = makeService({
       investor: { share_percent: null },

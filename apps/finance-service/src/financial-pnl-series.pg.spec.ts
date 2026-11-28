@@ -12,8 +12,10 @@ import { OperatorPayment } from './entities/operator-payment.entity';
  * `finance.pnl.series` — kompaniya P&L seriyasi HAQIQIY Postgres'da (ega
  * 2026-11-28: investor ulushi va tizim grafigi shu manbadan):
  *   • daromad — sotuv foydasi, uning qaytarilishi, pickup haqi;
- *   • xarajat — qo'lda chiqim, ish haqi, hisoblar, qo'shimcha xarajat va
- *     uning qaytarilishi (`rollback-extra:*`);
+ *   • xarajat — qo'lda chiqim, ish haqi, hisoblar;
+ *   • buyurtma qo'shimcha xarajati va uning qaytarilishi (`rollback-extra:*`)
+ *     — umuman kirmaydi: marketdan ayriladi, kompaniyaga ta'siri nol (ega
+ *     2026-11-28);
  *   • qo'lda kirim — alohida, sof foydaga kirmaydi;
  *   • investorga foyda to'lovi (`investor-profit:*`) — umuman kirmaydi;
  *   • kun — Toshkent ish kuni (19:30 UTC = ertasi 00:30 Toshkent).
@@ -92,7 +94,8 @@ describePg('finance.pnl.series — P&L seriyasi, haqiqiy Postgres', () => {
       ['2026-11-02T06:10:00Z', FinancialSource_type.BILLS, -1000],
       ['2026-11-02T06:20:00Z', FinancialSource_type.SELL_EXTRA_COST, -2000],
       ['2026-11-02T06:30:00Z', FinancialSource_type.CANCEL_EXTRA_COST, -500],
-      // Qo'shimcha xarajat qaytarildi — xarajat kamayadi.
+      // Qo'shimcha xarajat (yuqoridagi ikkitasi ham) va uning qaytarilishi —
+      // P&L ga kirmaydi.
       [
         '2026-11-02T06:40:00Z',
         FinancialSource_type.CORRECTION,
@@ -151,15 +154,17 @@ describePg('finance.pnl.series — P&L seriyasi, haqiqiy Postgres', () => {
       {
         period: '2026-11-02',
         gross: 5000 - 3000,
-        opex: 40000 + 1000 + 2000 + 500 - 2000,
-        net: 2000 - 41500,
+        // Faqat ish haqi va hisob; qo'shimcha xarajat (2000 + 500) va uning
+        // qaytarilishi (+2000) kirmaydi.
+        opex: 40000 + 1000,
+        net: 2000 - 41000,
         other_income: 0,
       },
     ]);
     expect(res.data.totals).toEqual({
       gross: 52000,
-      opex: 56500,
-      net: -4500,
+      opex: 56000,
+      net: -4000,
       other_income: 1000000,
     });
   });
@@ -171,7 +176,7 @@ describePg('finance.pnl.series — P&L seriyasi, haqiqiy Postgres', () => {
       granularity: 'month',
     });
     expect(res.data.items.map((i: any) => [i.period, i.gross, i.net])).toEqual([
-      ['2026-11', 52000, -4500],
+      ['2026-11', 52000, -4000],
       ['2026-12', 10000, 10000],
     ]);
   });
