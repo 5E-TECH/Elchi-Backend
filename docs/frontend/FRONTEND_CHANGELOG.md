@@ -23,6 +23,20 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-11-28 — To'lovni qaytarish / summani tuzatish smenaga bog'liq emas (T6, ega)
+
+Deploy: **finance-service** (+ **api-gateway** — faqat Swagger matni). Migratsiya, env, backfill yo'q.
+
+- ✏️ [finance] `POST /finance/history/:id/reverse` va `POST /finance/history/:id/correct-amount` (superadmin) endi
+  filial yoki asosiy kassa smenasi YOPIQ bo'lsa ham o'tadi — 400 `BRANCH_SHIFT_REQUIRED` / `SHIFT_REQUIRED` bu
+  yo'lda QAYTMAYDI (kechasi filial menejeriga «smenani och» deb qo'ng'iroq qilish shart emas). Smena ochiq bo'lsa
+  teskari qatorlar shu smena jamisiga kiradi (yopilayotgan smena tuzatish commit'ini kutadi); yopiq bo'lsa —
+  yopilgan smena hisoboti o'zgarmaydi, harakat keyingi smenaning ochilish qoldig'ida va hisobotida «Smenalar
+  orasida (smenasiz)» bo'lib ko'rinadi. Oddiy to'lovlar (kuryerdan qabul, HQ'ga topshiriq, marketga to'lov,
+  qo'lda kirim/chiqim) darvozasi O'ZGARMAGAN.
+- 🟢 Frontend: o'zgarish shart emas. Tasdiq oynasidagi «Filial smenasi ochilmagan» / «Smenani ochish» qutisi
+  endi bu yo'lda chiqmaydi (xato xaritasi eski BE bilan moslik uchun qolishi mumkin).
+
 ### 2026-11-28 — Tizim bo'yicha oylik daromad, xarajat, sof foyda (`GET /finance/pnl`) (ega)
 
 Deploy: **api-gateway** (+ **libs/common**). Migratsiya va env yo'q. `finance.pnl.series` (#811) allaqachon
