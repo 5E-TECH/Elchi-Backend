@@ -1,6 +1,7 @@
 import { Status } from '@app/common';
 import {
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsPhoneNumber,
@@ -34,4 +35,14 @@ export class CreateInvestorDto {
   @IsOptional()
   @IsString()
   user_id?: string;
+
+  /** Foyda asosi: 'net' — sof foydadan (sukut), 'gross' — daromaddan. */
+  @IsOptional()
+  @IsIn(['net', 'gross'])
+  profit_basis?: 'net' | 'gross';
+
+  /** «Investorlik sanasi» — ulush shu kundan hisoblanadi (`YYYY-MM-DD`; bo'sh — bugun). */
+  @IsOptional()
+  @IsString()
+  share_started_at?: string;
 }

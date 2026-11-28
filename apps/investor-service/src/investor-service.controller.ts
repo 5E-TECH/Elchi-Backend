@@ -91,6 +91,8 @@ export class InvestorServiceController {
         name?: unknown;
         phone_number?: unknown;
         share_percent?: unknown;
+        profit_basis?: unknown;
+        share_started_at?: unknown;
         dry_run?: boolean;
       };
       requester?: { id?: string; roles?: string[] };
@@ -131,6 +133,32 @@ export class InvestorServiceController {
     return this.executeAndAck(context, () =>
       this.investorService.updateInvestor(
         String(data?.id),
+        data?.dto ?? {},
+        data?.requester,
+      ),
+    );
+  }
+
+  /** PUT /investors/:id/share-terms — ulush sharti (foiz, asos, sanadan). */
+  @MessagePattern({ cmd: 'investor.share_terms.set' })
+  setShareTerms(
+    @Payload()
+    data: {
+      id?: string;
+      investor_id?: string;
+      dto?: {
+        share_percent?: unknown;
+        profit_basis?: unknown;
+        effective_from?: unknown;
+        note?: unknown;
+      };
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.investorService.setShareTerms(
+        String(data?.investor_id ?? data?.id),
         data?.dto ?? {},
         data?.requester,
       ),

@@ -1,4 +1,5 @@
 import { of } from 'rxjs';
+import { makeTermRepo } from './testing/term-repo.mock';
 import { InvestorServiceService } from './investor-service.service';
 
 /**
@@ -16,7 +17,7 @@ type Row = {
   share_percent?: number | null;
 };
 
-function makeService(rows: Row[] = []) {
+function makeService(rows: Row[] = [], terms: any[] = []) {
   const investorRepo: any = {
     findOne: jest.fn(({ where }: { where: Partial<Row> }) =>
       Promise.resolve(
@@ -42,14 +43,16 @@ function makeService(rows: Row[] = []) {
     log: jest.fn().mockResolvedValue(undefined),
     logChange: jest.fn().mockResolvedValue(undefined),
   };
+  const termRepo = makeTermRepo(terms, investorRepo);
   const service = new InvestorServiceService(
     investorRepo,
     {} as any,
     {} as any,
     activityLog,
     { send: jest.fn(() => of({})) } as any,
+    termRepo,
   );
-  return { service, investorRepo, activityLog };
+  return { service, investorRepo, activityLog, termRepo };
 }
 
 const statusOf = (err: unknown): number | undefined =>
@@ -213,8 +216,12 @@ describe('«Ulush (%)» — share_percent (BeePost investor formasi)', () => {
 
   it('shu loginga bog‘langan yozuv — ulush o‘zgarsa saqlanadi, o‘zgarmasa yo‘q', async () => {
     const linked = { ...unlinked, user_id: '31', share_percent: 10 };
-    const same = makeService([{ ...linked }]);
-    const changed = makeService([{ ...linked }]);
+    // Migratsiya 256 dan keyin ulushli investorda ochiq shart bor.
+    const terms = [
+      { investor_id: '5', share_percent: 10, effective_from: '2026-11-01' },
+    ];
+    const same = makeService([{ ...linked }], terms);
+    const changed = makeService([{ ...linked }], terms);
 
     const sameRes: any = await same.service.attachLogin(
       { user_id: '31', phone_number: PHONE, share_percent: 10 },

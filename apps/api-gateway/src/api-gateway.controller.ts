@@ -720,11 +720,22 @@ export class ApiGatewayController {
           .pipe(timeout(8000)),
       );
 
-    // «Ulush (%)» — investor yozuviga; identity (login) uni bilmaydi.
-    const { share_percent: sharePercent, ...loginDto } = dto;
+    // «Ulush (%)», foyda asosi va investorlik sanasi — investor yozuviga;
+    // identity (login) ularni bilmaydi.
+    const {
+      share_percent: sharePercent,
+      profit_basis: profitBasis,
+      share_started_at: shareStartedAt,
+      ...loginDto
+    } = dto;
+    const shareFields = {
+      share_percent: sharePercent,
+      profit_basis: profitBasis,
+      share_started_at: shareStartedAt,
+    };
     await attach({
       phone_number: dto.phone_number,
-      share_percent: sharePercent,
+      ...shareFields,
       dry_run: true,
     });
 
@@ -753,7 +764,7 @@ export class ApiGatewayController {
         user_id: userId,
         name: user?.name,
         phone_number: user?.phone_number,
-        share_percent: sharePercent,
+        ...shareFields,
       });
       return {
         ...(created as Record<string, unknown>),
