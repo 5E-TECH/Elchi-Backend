@@ -3765,6 +3765,34 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * (2026-11-28, ega) Smena SHART EMAS, lekin OCHIQ bo'lsa uni ushlab turadi:
+   * superadmin tuzatishi (T6 qaytarish / summa tahriri) kabi smenaga bog'liq
+   * bo'lmasligi kerak bo'lgan pul harakati uchun. Ochiq smena qatori FOR
+   * SHARE bilan o'qiladi — shu payt yopilayotgan `closeShift` (FOR UPDATE)
+   * bu harakat commit bo'lishini kutadi va uni o'z jamisiga qo'shadi; smena
+   * yopiq bo'lsa harakat ikki smena orasiga tushadi (keyingi smena ochilish
+   * qoldig'ida, hisobotda «Smenalar orasida (smenasiz)»). Smena yuritilmaydigan
+   * kassa (kuryer / market) — hech narsa qilinmaydi. Rad etmaydi.
+   */
+  async holdOpenShiftIfAny(
+    manager: EntityManager,
+    target: { user_id: string; cashbox_type?: Cashbox_type | null },
+  ): Promise<Shift | null> {
+    const cashboxType = target.cashbox_type ?? Cashbox_type.MAIN;
+    if (
+      cashboxType !== Cashbox_type.MAIN &&
+      cashboxType !== Cashbox_type.BRANCH
+    ) {
+      return null;
+    }
+    return this.findOpenShiftForCashbox(
+      manager,
+      String(target.user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID),
+      'pessimistic_read',
+    );
+  }
+
+  /**
    * (kfdfYDik) GET /finance/shift/current — kassaning (sukut MAIN) joriy ochiq
    * smenasi + darvoza yoqilganmi (`required`). Frontend "Smena ochiq" banneri
    * va "Smenani oching" holati shundan quriladi.
