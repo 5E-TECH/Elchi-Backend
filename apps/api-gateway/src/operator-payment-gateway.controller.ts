@@ -280,6 +280,9 @@ export class OperatorPaymentGatewayController {
         };
       }>(this.financeClient, 'finance.operator.market_balances', {
         operator_ids: operatorIds,
+        // 3-bosqich: faqat SHU market daromadi va to'lovlari (bir nechta
+        // marketli operatorning boshqa marketdagi puli ko'rinmaydi).
+        market_id: marketId,
       }),
       this.operatorOrderCounts(marketId, operatorIds),
     ]);
@@ -400,6 +403,8 @@ export class OperatorPaymentGatewayController {
       data?: { rows?: unknown; total?: unknown };
     }>(this.financeClient, 'finance.operator.earning.list', {
       operator_id: query.operator_id,
+      // 3-bosqich: faqat shu market buyurtmalaridan daromad.
+      market_id: marketId,
       limit,
       offset: (page - 1) * limit,
     });

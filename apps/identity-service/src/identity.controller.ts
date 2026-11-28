@@ -941,6 +941,26 @@ export class IdentityController {
     }));
   }
 
+  /**
+   * 3-bosqich (D3): operatorning shu marketdagi komissiyasi
+   * (`{ found, commission_type, commission_value }`). Ichki — finance earning
+   * yozishida; a'zolik yo'q bo'lsa finance eski `admins` stavkasiga tushadi.
+   */
+  @MessagePattern({ cmd: 'identity.market_operator.commission' })
+  findMarketOperatorCommission(
+    @Payload() data: { operator_id?: unknown; market_id?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(
+      context,
+      async () =>
+        (await this.memberships?.commissionFor(
+          data?.operator_id,
+          data?.market_id,
+        )) ?? { found: false, commission_type: null, commission_value: null },
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.market_operator.set_status' })
   setMarketOperatorStatus(
     @Payload() payload: SetMarketOperatorStatusPayload,

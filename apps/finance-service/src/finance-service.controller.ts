@@ -505,7 +505,7 @@ export class FinanceServiceController {
 
   @MessagePattern({ cmd: 'finance.operator.balance.find' })
   findOperatorBalance(
-    @Payload() data: { operator_id: string },
+    @Payload() data: { operator_id: string; market_id?: string | null },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -515,7 +515,13 @@ export class FinanceServiceController {
 
   @MessagePattern({ cmd: 'finance.operator.earning.list' })
   listOperatorEarnings(
-    @Payload() data: { operator_id: string; limit?: number; offset?: number },
+    @Payload()
+    data: {
+      operator_id: string;
+      market_id?: string | null;
+      limit?: number;
+      offset?: number;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -525,7 +531,13 @@ export class FinanceServiceController {
 
   @MessagePattern({ cmd: 'finance.operator.payment.list' })
   listOperatorPayments(
-    @Payload() data: { operator_id: string; limit?: number; offset?: number },
+    @Payload()
+    data: {
+      operator_id: string;
+      market_id?: string | null;
+      limit?: number;
+      offset?: number;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>

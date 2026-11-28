@@ -6503,6 +6503,20 @@ export class FinanceGatewayController {
   // operator_id sifatida o'sha marshrutga tushardi. operator_id FAQAT
   // JWT'dan (`sub`) — path/query'dagi id qabul qilinmaydi.
 
+  /**
+   * Operatorning o'z yozuvlari ichidagi market filtri (`operator_id` — JWT,
+   * shuning uchun a'zolik tekshiruvi shart emas: boshqa market id faqat bo'sh
+   * natija beradi). Noto'g'ri shakl — 400.
+   */
+  private static myMarketFilter(marketId?: string): { market_id?: string } {
+    const raw = typeof marketId === 'string' ? marketId.trim() : '';
+    if (!raw) return {};
+    if (!/^[1-9]\d{0,18}$/.test(raw)) {
+      throw new BadRequestException("market_id noto'g'ri");
+    }
+    return { market_id: raw };
+  }
+
   /** limit/offset query → son yoki undefined (raqam bo'lmasa — sukut). */
   private static toPageNumber(value?: string): number | undefined {
     if (value == null || String(value).trim() === '') return undefined;
@@ -6517,12 +6531,21 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: "Market operatori: o'z daromadi/to'lovi/balansi (E6iEOAVs)",
     description:
-      '`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance }`, operator_id — JWT. Komissiya belgilanmagan operator — 0/0/0 (403 emas).',
+      '`GET operators/:operator_id/balance` bilan AYNI shakl `{ operator_id, earned, paid, balance, by_market }`, operator_id — JWT. ' +
+      "Bir nechta marketda ishlaydigan operator: `by_market: [{ market_id, earned, paid, balance }]` — har market o'z ulushini alohida to'laydi; " +
+      'ixtiyoriy `market_id` — faqat shu market. Komissiya belgilanmagan operator — 0/0/0 (403 emas).',
   })
-  findMyOperatorBalance(@Req() req: { user: JwtUser }) {
+  @ApiQuery({ name: 'market_id', required: false })
+  findMyOperatorBalance(
+    @Req() req: { user: JwtUser },
+    @Query('market_id') marketId?: string,
+  ) {
     return this.send(
       { cmd: 'finance.operator.balance.find' },
-      { operator_id: String(req.user.sub) },
+      {
+        operator_id: String(req.user.sub),
+        ...FinanceGatewayController.myMarketFilter(marketId),
+      },
     );
   }
 
@@ -6537,15 +6560,23 @@ export class FinanceGatewayController {
   })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'offset', required: false })
+  @ApiQuery({
+    name: 'market_id',
+    required: false,
+    description:
+      "Ixtiyoriy: faqat shu market buyurtmalaridan daromad (o'z yozuvlari ichida)",
+  })
   listMyOperatorEarnings(
     @Req() req: { user: JwtUser },
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('market_id') marketId?: string,
   ) {
     return this.send(
       { cmd: 'finance.operator.earning.list' },
       {
         operator_id: String(req.user.sub),
+        ...FinanceGatewayController.myMarketFilter(marketId),
         limit: FinanceGatewayController.toPageNumber(limit),
         offset: FinanceGatewayController.toPageNumber(offset),
       },
@@ -6563,15 +6594,23 @@ export class FinanceGatewayController {
   })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'offset', required: false })
+  @ApiQuery({
+    name: 'market_id',
+    required: false,
+    description:
+      "Ixtiyoriy: faqat shu market to'lovlari (o'z to'lovlari ichida)",
+  })
   listMyOperatorPayments(
     @Req() req: { user: JwtUser },
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('market_id') marketId?: string,
   ) {
     return this.send(
       { cmd: 'finance.operator.payment.list' },
       {
         operator_id: String(req.user.sub),
+        ...FinanceGatewayController.myMarketFilter(marketId),
         limit: FinanceGatewayController.toPageNumber(limit),
         offset: FinanceGatewayController.toPageNumber(offset),
       },

@@ -286,6 +286,9 @@ describePg(
         earned: 20000,
         paid: 25000,
         balance: -5000,
+        by_market: [
+          { market_id: MARKET, earned: 20000, paid: 25000, balance: -5000 },
+        ],
       });
       const all: any = await payments.balances({
         operator_ids: ['42', '43', '44'],
@@ -500,8 +503,9 @@ describePg(
       await expectCashUntouched();
     });
 
-    it('eski Elchi yozuvi: «To`landi» ga kiradi, market tarixida ko`rinadi, lekin bekor qilinmaydi (409)', async () => {
-      const legacy = await insertLegacy();
+    it('eski Elchi yozuvi (migratsiya 257 da marketga biriktirilgan): «To`landi» ga kiradi, SHU market tarixida ko`rinadi, bekor qilinmaydi (409); biriktirilmagani (NULL) hech bir market tarixida yo`q', async () => {
+      const legacy = await insertLegacy({ market_id: MARKET });
+      const orphan = await insertLegacy({ amount: 500, paid_at: '2026-09-01' });
       await payments.record(base({ amount: 1000, paid_at: '2026-11-02' }));
       // Boshqa market yozgan yozuv bu marketga ko'rinmaydi.
       await payments.record(base({ market_id: OTHER_MARKET, amount: 300 }));
@@ -527,20 +531,25 @@ describePg(
       ]);
       expect(list.data.items[1]).toMatchObject({
         affects_cashbox: true,
-        market_id: null,
+        market_id: MARKET,
       });
+      // Ilgari `market_id IS NULL` qator operator bo'yicha HAR marketga
+      // chiqardi — endi hech biriga (bir nechta marketli operatorda boshqa
+      // market to'lovi ko'rinib qolmasin).
+      const other: any = await payments.list({
+        market_id: OTHER_MARKET,
+        operator_ids: ['42'],
+      });
+      expect(other.data.items.map((item: any) => item.amount)).toEqual([300]);
 
       await expect(
         payments.cancel({
           market_id: MARKET,
-          payment_id: String(legacy.id),
+          payment_id: String(orphan.id),
           reason: 'Xato',
           cancelled_by_id: MARKET,
         }),
       ).rejects.toMatchObject({ error: { statusCode: 404 } });
-      await db
-        .getRepository(OperatorPayment)
-        .update({ id: legacy.id }, { market_id: MARKET });
       await expect(
         payments.cancel({
           market_id: MARKET,
@@ -566,11 +575,93 @@ describePg(
         totalPages: 2,
       });
 
+      // Operatorning o'z jamisi — hammasi (biriktirilmagani ham, `by_market`
+      // da `market_id: null`).
       const balance: any = await finance.findOperatorBalance({
         operator_id: '42',
       });
-      // 20 000 − (eski 2 000 + market 1 000 + boshqa market 300).
-      expect(balance.data).toMatchObject({ paid: 3300, balance: 16700 });
+      // 20 000 − (eski 2 000 + eski 500 + market 1 000 + boshqa market 300).
+      expect(balance.data).toMatchObject({ paid: 3800, balance: 16200 });
+      expect(balance.data.by_market).toEqual([
+        { market_id: MARKET, earned: 20000, paid: 3000, balance: 17000 },
+        { market_id: OTHER_MARKET, earned: 0, paid: 300, balance: -300 },
+        { market_id: null, earned: 0, paid: 500, balance: -500 },
+      ]);
+    });
+
+    it('3-bosqich: bir nechta marketli operator — market sahifasi faqat SHU market daromadi va to`lovlari; o`chirilgan operatorga to`lov chegarasi — shu market qoldig`i', async () => {
+      const earnings = db.getRepository(OperatorEarning);
+      await earnings.save(
+        earnings.create({
+          operator_id: '42',
+          order_id: '7101',
+          market_id: OTHER_MARKET,
+          amount: 9000,
+        }),
+      );
+      await payments.record(base({ amount: 4000 }));
+      await payments.record(base({ market_id: OTHER_MARKET, amount: 1000 }));
+
+      const mine: any = await payments.balances({
+        operator_ids: ['42'],
+        market_id: MARKET,
+      });
+      expect(mine.data.items).toEqual([
+        expect.objectContaining({
+          operator_id: '42',
+          earned: 20000,
+          paid: 4000,
+          balance: 16000,
+          payments_count: 1,
+        }),
+      ]);
+      const theirs: any = await payments.balances({
+        operator_ids: ['42'],
+        market_id: OTHER_MARKET,
+      });
+      expect(theirs.data.items).toEqual([
+        expect.objectContaining({ earned: 9000, paid: 1000, balance: 8000 }),
+      ]);
+      // Eski gateway (market_id siz) — avvalgidek hamma marketlar.
+      const legacyAll: any = await payments.balances({ operator_ids: ['42'] });
+      expect(legacyAll.data.items[0]).toMatchObject({
+        earned: 29000,
+        paid: 5000,
+      });
+
+      // Market sahifasidagi daromad yozuvlari — faqat shu market.
+      const rows: any = await finance.listOperatorEarnings({
+        operator_id: '42',
+        market_id: OTHER_MARKET,
+      });
+      expect(rows.data.rows.map((row: any) => row.order_id)).toEqual(['7101']);
+
+      // O'chirilgan operator: OTHER_MARKET qoldig'i 8 000 — undan oshib
+      // bo'lmaydi (umumiy qoldiq 24 000 bo'lsa ham).
+      await expect(
+        payments.record(
+          base({
+            market_id: OTHER_MARKET,
+            amount: 8000.01,
+            operator_deleted: true,
+          }),
+        ),
+      ).rejects.toMatchObject({ error: { statusCode: 409 } });
+      const closing: any = await payments.record(
+        base({ market_id: OTHER_MARKET, amount: 8000, operator_deleted: true }),
+      );
+      expect(closing.statusCode).toBe(201);
+      await expect(
+        payments.record(
+          base({ market_id: OTHER_MARKET, amount: 1, operator_deleted: true }),
+        ),
+      ).rejects.toMatchObject({ error: { statusCode: 409 } });
+      // MARKET qoldig'iga ta'sir qilmadi.
+      const after: any = await payments.balances({
+        operator_ids: ['42'],
+        market_id: MARKET,
+      });
+      expect(after.data.items[0]).toMatchObject({ balance: 16000 });
     });
 
     it('DB CHECK: market yozuvi kassaga ta`sir qila olmaydi; eski yozuvni bekor qilib bo`lmaydi', async () => {
